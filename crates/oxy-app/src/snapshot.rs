@@ -56,7 +56,7 @@ pub fn save_png(device: &wgpu::Device, p: Pending, path: &Path) -> Result<(), St
     let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
     let mut rgb = Vec::with_capacity((p.width * p.height * 3) as usize);
     for row in data.chunks(p.padded_row as usize).take(p.height as usize) {
-        for px in row[..(p.width * 4) as usize].chunks_exact(4) {
+        for px in row[..(p.width * 4) as usize].as_chunks::<4>().0 {
             if p.bgra {
                 rgb.extend_from_slice(&[px[2], px[1], px[0]]);
             } else {

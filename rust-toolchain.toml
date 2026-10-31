@@ -1,0 +1,5 @@
+# Pinned so CI and every contributor (Windows and Linux) get the same
+# compiler and lints. Bump deliberately, fixing any new clippy lints at the same time.
+[toolchain]
+channel = "1.99.1"
+components = ["rustfmt", "clippy"]
