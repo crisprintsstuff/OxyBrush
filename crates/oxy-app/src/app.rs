@@ -6,10 +6,10 @@ use glam::Vec2;
 use oxy_render::{MatcapPreset, ViewportRenderer};
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, StartCause, TouchPhase, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
 
@@ -40,6 +40,7 @@ pub struct App {
     editor: Editor,
     applied_matcap: Option<MatcapPreset>,
     applied_theme: Option<(bool, f32)>,
+    applied_title: String,
     last_frame: Instant,
     initial_file: Option<PathBuf>,
     auto: AutoRun,
@@ -51,9 +52,17 @@ impl App {
         Self {
             gfx: None,
             egui_ctx: egui::Context::default(),
-            editor: Editor::default(),
+            editor: {
+                let mut e = Editor::default();
+                // Automated runs (CI screenshots) don't touch the user's autosave folder.
+                if auto.screenshot.is_none() {
+                    e.enable_autosave();
+                }
+                e
+            },
             applied_matcap: None,
             applied_theme: None,
+            applied_title: String::new(),
             last_frame: Instant::now(),
             initial_file,
             auto,
@@ -83,6 +92,7 @@ impl App {
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("oxybrush"),
             required_limits: adapter.limits(),
+            required_features: adapter.features() & oxy_render::optional_features(),
             ..Default::default()
         }))
         .map_err(|e| e.to_string())?;
@@ -110,6 +120,7 @@ impl App {
         surface.configure(&device, &config);
 
         let viewport = ViewportRenderer::new(&device, &queue, view_format);
+        log::info!("exact face-group colors: {}", viewport.exact_face_colors());
         // egui does its own gamma handling and prefers a non-sRGB target.
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
@@ -166,7 +177,23 @@ impl App {
             g.viewport.set_matcap(&g.queue, ed.matcap);
             self.applied_matcap = Some(ed.matcap);
         }
-        g.viewport.sync(&g.device, &g.queue, &mut ed.mesh);
+        ed.poll_job();
+        ed.tick_autosave();
+        let title = ed.title();
+        if self.applied_title != title {
+            g.window.set_title(&title);
+            self.applied_title = title;
+        }
+        let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
+        g.viewport.retain(|id| ids.contains(&id));
+        let active = ed.scene.active().id;
+        let mut items = Vec::new();
+        for p in ed.scene.pieces.iter_mut() {
+            g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
+            if p.visible {
+                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active });
+            }
+        }
 
         let frame = match g.surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(t) | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
@@ -202,6 +229,7 @@ impl App {
             &oxy_render::RenderTarget { view: &view, size: (g.config.width, g.config.height), viewport: ed.canvas },
             &ed.camera,
             &ed.view,
+            &items,
         );
         let extra = g.egui_renderer.update_buffers(&g.device, &g.queue, &mut encoder, &tris, &screen);
         {
@@ -251,18 +279,47 @@ impl App {
         if let Some(a) = action {
             self.run_action(a);
         }
-        if self.editor.quit_requested {
+        if self.editor.quit_now {
+            self.editor.autosaver.finish();
             event_loop.exit();
         }
     }
 
     fn run_action(&mut self, action: UiAction) {
         let ed = &mut self.editor;
+        let project_dialog = || rfd::FileDialog::new().add_filter("OxyBrush project", &[oxy_doc::format::EXTENSION]);
         match action {
             UiAction::Open => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("Meshes", &["obj", "stl", "OBJ", "STL"]).pick_file()
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("OxyBrush project or mesh", &["oxb", "obj", "stl", "OXB", "OBJ", "STL"])
+                    .pick_file()
                 {
                     ed.open(&p);
+                }
+            }
+            UiAction::Import => {
+                if let Some(p) = rfd::FileDialog::new().add_filter("Meshes", &["obj", "stl", "OBJ", "STL"]).pick_file()
+                {
+                    ed.import(&p);
+                }
+            }
+            UiAction::Save | UiAction::SaveThenContinue => {
+                let path = ed.path.clone().or_else(|| project_dialog().set_file_name("sculpt.oxb").save_file());
+                let saved = path.is_some_and(|p| ed.save(&p));
+                if action == UiAction::SaveThenContinue {
+                    if saved {
+                        if let Some(pending) = ed.pending.take() {
+                            ed.perform(pending);
+                        }
+                    } else {
+                        // Cancelled or failed: keep the document open.
+                        ed.pending = None;
+                    }
+                }
+            }
+            UiAction::SaveAs => {
+                if let Some(p) = project_dialog().set_file_name("sculpt.oxb").save_file() {
+                    ed.save(&p);
                 }
             }
             UiAction::Export => {
@@ -312,8 +369,15 @@ impl App {
                     ("z", true, false, _) => ed.undo(),
                     ("z", true, true, _) | ("y", true, _, _) => ed.redo(),
                     ("o", true, _, _) => return Some(UiAction::Open),
+                    ("s", true, true, _) => return Some(UiAction::SaveAs),
+                    ("s", true, false, _) => return Some(UiAction::Save),
                     ("e", true, _, _) => return Some(UiAction::Export),
-                    ("i", true, _, _) => ed.invert_mask(),
+                    ("i", true, true, _) => ed.invert_mask(),
+                    ("i", true, false, _) => return Some(UiAction::Import),
+                    ("r", true, _, _) => ed.remesh_active(),
+                    ("w", true, _, _) => ed.edit_faces("Group visible", oxy_mesh::Mesh::group_visible),
+                    ("s", false, _, true) => ed.solo_active(),
+                    ("g", false, _, false) => ed.view.show_groups = !ed.view.show_groups,
                     ("m", false, _, true) => ed.clear_mask(),
                     ("m", false, _, false) => ed.view.show_mask = !ed.view.show_mask,
                     ("f", false, ..) => ed.frame(),
@@ -322,13 +386,18 @@ impl App {
                         ed.symmetry.x = !ed.symmetry.x;
                         ed.status = format!("X symmetry {}", if ed.symmetry.x { "on" } else { "off" });
                     }
-                    ("d", false, ..) => ed.subdivide(true),
+                    ("d", false, true, _) => ed.subdivide(false),
+                    ("d", false, false, _) => ed.subdivide(true),
                     ("[", false, ..) => ed.adjust_radius(1.0 / 1.15),
                     ("]", false, ..) => ed.adjust_radius(1.15),
                     ("-", false, ..) => ed.adjust_strength(-0.05),
                     ("=", false, ..) | ("+", false, ..) => ed.adjust_strength(0.05),
                     (d, false, _, false) if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
-                        let i = (d.as_bytes()[0] - b'0') as usize;
+                        // 1–9 select brushes 1–9, 0 selects brush 10.
+                        let i = match (d.as_bytes()[0] - b'0') as usize {
+                            0 => 10,
+                            n => n,
+                        };
                         if (1..=oxy_sculpt::BrushKind::ALL.len()).contains(&i) {
                             ed.brush_kind = oxy_sculpt::BrushKind::ALL[i - 1];
                             ed.status = format!("{} brush", ed.brush_kind.label());
@@ -363,6 +432,18 @@ impl App {
             }
             ed.pointer_up();
         }
+        // Face groups from the mask, shown in color.
+        ed.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask);
+        ed.clear_mask();
+        ed.view.show_groups = true;
+        // A second piece beside the first: a ring of radial-symmetry dabs on a cube.
+        ed.add_primitive("cube");
+        let piece = ed.scene.active_mut();
+        let mut data = piece.mesh.to_data();
+        data.positions.iter_mut().for_each(|p| *p = *p * 0.55 + glam::Vec3::new(1.7, -0.4, 0.0));
+        piece.mesh = oxy_mesh::Mesh::from_data(data);
+        ed.scene.set_active(0);
+        ed.frame();
         ed.brush_kind = oxy_sculpt::BrushKind::Draw;
         ed.pointer = Some(c + Vec2::new(0.9, 0.1) * s);
         ed.status = "Demo strokes applied".into();
@@ -370,6 +451,20 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
+        if matches!(cause, StartCause::ResumeTimeReached { .. })
+            && let Some(g) = &self.gfx
+        {
+            g.window.request_redraw();
+        }
+    }
+
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // Wake up regularly to finish background jobs and autosave even when idle.
+        let wait = if self.editor.job.is_some() { Duration::from_millis(200) } else { Duration::from_secs(20) };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wait));
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gfx.is_some() {
             return;
@@ -398,7 +493,18 @@ impl ApplicationHandler for App {
         let mut redraw = response.repaint;
 
         match &event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                if self.auto.screenshot.is_some() {
+                    event_loop.exit();
+                } else {
+                    self.editor.request(crate::editor::Pending::Quit);
+                    if self.editor.quit_now {
+                        self.editor.autosaver.finish();
+                        event_loop.exit();
+                    }
+                    redraw = true;
+                }
+            }
             WindowEvent::Resized(size) => {
                 g.config.width = size.width.max(1);
                 g.config.height = size.height.max(1);

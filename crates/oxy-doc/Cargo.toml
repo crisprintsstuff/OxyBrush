@@ -1,0 +1,19 @@
+[package]
+name = "oxy-doc"
+description = "OxyBrush documents: scenes of pieces, the .oxb file format, autosave"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-mesh.workspace = true
+glam.workspace = true
+lz4_flex.workspace = true
+crc32fast.workspace = true
+dirs.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

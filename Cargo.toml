@@ -15,6 +15,8 @@ oxy-sculpt = { path = "crates/oxy-sculpt" }
 oxy-history = { path = "crates/oxy-history" }
 oxy-io = { path = "crates/oxy-io" }
 oxy-render = { path = "crates/oxy-render" }
+oxy-topo = { path = "crates/oxy-topo" }
+oxy-doc = { path = "crates/oxy-doc" }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"
@@ -28,6 +30,9 @@ egui-winit = { version = "0.37", features = ["accesskit"] }
 rfd = "0.17"
 pollster = "1"
 log = "0.4"
+lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+crc32fast = "1.5"
+dirs = "7"
 env_logger = "0.11"
 
 [workspace.lints.rust]

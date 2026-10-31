@@ -1,9 +1,10 @@
 //! Matcap viewport renderer.
 //!
-//! One global vertex buffer mirrors the mesh; because every chunk owns a
-//! contiguous vertex range, a dirty chunk is re-uploaded with a single
-//! `write_buffer` call. The index buffer is rebuilt only when the mesh's
-//! topology version changes.
+//! Each piece has its own GPU mesh. One vertex buffer mirrors the mesh;
+//! because every chunk owns a contiguous vertex range, a dirty chunk is
+//! re-uploaded with a single `write_buffer` call. Index and face-color
+//! buffers are rebuilt only when topology, face groups or visibility change
+//! (hidden triangles are left out of the index buffer).
 
 mod camera;
 pub mod matcap;
@@ -13,6 +14,7 @@ pub use matcap::MatcapPreset;
 
 use bytemuck::{Pod, Zeroable};
 use oxy_mesh::Mesh;
+use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
@@ -24,7 +26,7 @@ struct GpuVertex {
     position: [f32; 3],
     normal: [f32; 3],
     mask: f32,
-    _pad: f32,
+    group_color: u32,
 }
 
 #[repr(C)]
@@ -36,16 +38,23 @@ struct Uniforms {
     mask_color: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct PieceUniforms {
+    flags: [f32; 4],
+}
+
 /// Per-frame display options.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewSettings {
     pub show_mask: bool,
+    pub show_groups: bool,
     pub background: [f64; 3],
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
-        Self { show_mask: true, background: [0.012, 0.013, 0.016] }
+        Self { show_mask: true, show_groups: false, background: [0.012, 0.013, 0.016] }
     }
 }
 
@@ -58,27 +67,62 @@ pub struct RenderTarget<'a> {
     pub viewport: [f32; 4],
 }
 
+/// One piece to draw this frame.
+#[derive(Debug, Clone, Copy)]
+pub struct DrawItem {
+    pub id: u64,
+    pub active: bool,
+}
+
 struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    piece_uniforms: wgpu::Buffer,
+    bind_group: wgpu::BindGroup,
     topology_version: u64,
+    face_version: u64,
 }
 
 pub struct ViewportRenderer {
     pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
+    piece_layout: wgpu::BindGroupLayout,
     matcap: wgpu::Texture,
-    mesh: Option<GpuMesh>,
+    meshes: HashMap<u64, GpuMesh>,
     depth: Option<(wgpu::TextureView, u32, u32)>,
+    exact_face_colors: bool,
+}
+
+/// Features the renderer can use if the adapter offers them.
+pub fn optional_features() -> wgpu::Features {
+    wgpu::Features::PRIMITIVE_INDEX
+}
+
+/// Stable, well-spread color for a face group (packed RGBA8, little-endian).
+pub fn group_color(group: u32) -> u32 {
+    // Golden-ratio hue steps give distinct neighbors; medium saturation keeps
+    // the matcap shading readable.
+    let h = (group as f32 * 0.618_034 + 0.11).fract();
+    let s = 0.55;
+    let v = 0.95;
+    let k = |n: f32| {
+        let k = (n + h * 6.0) % 6.0;
+        v - v * s * k.min(4.0 - k).clamp(0.0, 1.0)
+    };
+    let (r, g, b) = (k(5.0), k(3.0), k(1.0));
+    (r * 255.0) as u32 | ((g * 255.0) as u32) << 8 | ((b * 255.0) as u32) << 16 | 0xff << 24
 }
 
 impl ViewportRenderer {
     pub fn new(device: &wgpu::Device, queue: &wgpu::Queue, color_format: wgpu::TextureFormat) -> Self {
+        let exact_face_colors = device.features().contains(wgpu::Features::PRIMITIVE_INDEX);
+        let src = include_str!("shader.wgsl");
+        let src = if exact_face_colors { src.replace("//PRIM ", "") } else { src.to_string() };
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("oxy viewport"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(src.into()),
         });
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -105,19 +149,20 @@ impl ViewportRenderer {
             ..Default::default()
         });
 
+        let uniform_entry = |binding, visibility| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
+            },
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("oxy viewport layout"),
             entries: &[
-                wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                uniform_entry(0, wgpu::ShaderStages::VERTEX_FRAGMENT),
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
@@ -136,6 +181,22 @@ impl ViewportRenderer {
                 },
             ],
         });
+        let piece_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("oxy piece layout"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
         let matcap_view = matcap.create_view(&Default::default());
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("oxy viewport bind group"),
@@ -149,10 +210,10 @@ impl ViewportRenderer {
 
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("oxy viewport pipeline layout"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), Some(&piece_layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32];
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Uint32];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("oxy viewport pipeline"),
             layout: Some(&pipeline_layout),
@@ -193,9 +254,23 @@ impl ViewportRenderer {
             cache: None,
         });
 
-        let mut r = Self { pipeline, uniforms, bind_group, matcap, mesh: None, depth: None };
+        let mut r = Self {
+            pipeline,
+            uniforms,
+            bind_group,
+            piece_layout,
+            matcap,
+            meshes: HashMap::new(),
+            depth: None,
+            exact_face_colors,
+        };
         r.set_matcap(queue, MatcapPreset::Terracotta);
         r
+    }
+
+    /// Whether face-group colors are exact per triangle (vs. per vertex).
+    pub fn exact_face_colors(&self) -> bool {
+        self.exact_face_colors
     }
 
     pub fn set_matcap(&mut self, queue: &wgpu::Queue, preset: MatcapPreset) {
@@ -208,10 +283,18 @@ impl ViewportRenderer {
         );
     }
 
-    /// Upload changes: full rebuild on topology change, otherwise dirty chunks only.
-    /// Returns the number of chunks uploaded.
-    pub fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, mesh: &mut Mesh) -> usize {
-        let rebuild = self.mesh.as_ref().is_none_or(|g| g.topology_version != mesh.topology_version());
+    /// Drop GPU meshes for pieces that no longer exist.
+    pub fn retain(&mut self, alive: impl Fn(u64) -> bool) {
+        self.meshes.retain(|id, _| alive(*id));
+    }
+
+    /// Upload changes for one piece: full rebuild on topology/face change,
+    /// otherwise dirty chunks only. Returns the number of chunks uploaded.
+    pub fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u64, mesh: &mut Mesh) -> usize {
+        let rebuild = self
+            .meshes
+            .get(&id)
+            .is_none_or(|g| g.topology_version != mesh.topology_version() || g.face_version != mesh.face_version());
         if rebuild {
             let verts: Vec<GpuVertex> = (0..mesh.vertex_count()).map(|i| vertex(mesh, i)).collect();
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -219,21 +302,57 @@ impl ViewportRenderer {
                 contents: bytemuck::cast_slice(&verts),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
-            let indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            // Visible triangles only; face colors in the same order.
+            let mut indices: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangle_count());
+            let mut face_colors: Vec<u32> = Vec::with_capacity(mesh.triangle_count());
+            for (t, tri) in mesh.triangles.iter().enumerate() {
+                if !mesh.hidden()[t] {
+                    indices.push(*tri);
+                    face_colors.push(group_color(mesh.groups()[t]));
+                }
+            }
+            if face_colors.is_empty() {
+                face_colors.push(0);
+            }
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy indices"),
-                contents: bytemuck::cast_slice(&mesh.triangles),
+                contents: if indices.is_empty() { &[0u8; 12] } else { bytemuck::cast_slice(&indices) },
                 usage: wgpu::BufferUsages::INDEX,
             });
-            self.mesh = Some(GpuMesh {
-                vertices,
-                indices,
-                index_count: mesh.triangle_count() as u32 * 3,
-                topology_version: mesh.topology_version(),
+            let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("oxy face colors"),
+                contents: bytemuck::cast_slice(&face_colors),
+                usage: wgpu::BufferUsages::STORAGE,
             });
-            let n = mesh.take_dirty().len();
-            return n;
+            let piece_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("oxy piece uniforms"),
+                size: std::mem::size_of::<PieceUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("oxy piece bind group"),
+                layout: &self.piece_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: piece_uniforms.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: faces.as_entire_binding() },
+                ],
+            });
+            self.meshes.insert(
+                id,
+                GpuMesh {
+                    vertices,
+                    indices: index_buffer,
+                    index_count: indices.len() as u32 * 3,
+                    piece_uniforms,
+                    bind_group,
+                    topology_version: mesh.topology_version(),
+                    face_version: mesh.face_version(),
+                },
+            );
+            return mesh.take_dirty().len();
         }
-        let gpu = self.mesh.as_ref().expect("checked above");
+        let gpu = &self.meshes[&id];
         let dirty = mesh.take_dirty();
         let mut staging = Vec::new();
         for &c in &dirty {
@@ -269,7 +388,8 @@ impl ViewportRenderer {
         self.depth = Some((tex.create_view(&Default::default()), width, height));
     }
 
-    /// Clear the target and draw the mesh into its viewport rectangle.
+    /// Clear the target and draw the given pieces into its viewport rectangle.
+    #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
         device: &wgpu::Device,
@@ -278,6 +398,7 @@ impl ViewportRenderer {
         target: &RenderTarget<'_>,
         camera: &Camera,
         settings: &ViewSettings,
+        items: &[DrawItem],
     ) {
         let RenderTarget { view: target, size: target_size, viewport } = *target;
         self.ensure_depth(device, target_size.0.max(1), target_size.1.max(1));
@@ -289,6 +410,18 @@ impl ViewportRenderer {
             mask_color: [0.25, 0.3, 0.45, 1.0],
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
+        let multiple = items.len() > 1;
+        for item in items {
+            if let Some(gpu) = self.meshes.get(&item.id) {
+                let flags = [
+                    if settings.show_groups { 1.0 } else { 0.0 },
+                    if item.active || !multiple { 1.0 } else { 0.0 },
+                    0.0,
+                    0.0,
+                ];
+                queue.write_buffer(&gpu.piece_uniforms, 0, bytemuck::bytes_of(&PieceUniforms { flags }));
+            }
+        }
 
         let [r, g, b] = settings.background;
         let depth = &self.depth.as_ref().expect("ensured").0;
@@ -312,7 +445,6 @@ impl ViewportRenderer {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        let Some(gpu) = &self.mesh else { return };
         let (w, h) = (target_size.0 as f32, target_size.1 as f32);
         let x = viewport[0].clamp(0.0, w - 1.0);
         let y = viewport[1].clamp(0.0, h - 1.0);
@@ -321,17 +453,42 @@ impl ViewportRenderer {
         pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
         pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-        pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-        pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        for item in items {
+            let Some(gpu) = self.meshes.get(&item.id) else { continue };
+            if gpu.index_count == 0 {
+                continue;
+            }
+            pass.set_bind_group(1, &gpu.bind_group, &[]);
+            pass.set_vertex_buffer(0, gpu.vertices.slice(..));
+            pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+        }
     }
 }
 
 fn vertex(mesh: &Mesh, i: usize) -> GpuVertex {
+    // Fallback per-vertex group color: the vertex's first triangle's group.
+    let group_color = mesh.vertex_triangles(i as u32).first().map_or(0, |&t| group_color(mesh.groups()[t as usize]));
     GpuVertex {
         position: mesh.positions[i].to_array(),
         normal: mesh.normals[i].to_array(),
         mask: mesh.mask[i],
-        _pad: 0.0,
+        group_color,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn group_colors_are_distinct_and_opaque() {
+        let colors: Vec<u32> = (0..12).map(group_color).collect();
+        for (i, a) in colors.iter().enumerate() {
+            assert_eq!(a >> 24, 0xff);
+            for b in &colors[i + 1..] {
+                assert_ne!(a, b);
+            }
+        }
     }
 }

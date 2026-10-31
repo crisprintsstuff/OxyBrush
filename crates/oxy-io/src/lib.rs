@@ -71,8 +71,8 @@ pub fn import_obj(path: &Path) -> Result<Mesh> {
     let mut tris = Vec::new();
     for m in models {
         let base = positions.len() as u32;
-        positions.extend(m.mesh.positions.chunks_exact(3).map(|p| Vec3::new(p[0], p[1], p[2])));
-        tris.extend(m.mesh.indices.chunks_exact(3).map(|t| [t[0] + base, t[1] + base, t[2] + base]));
+        positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
+        tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
     }
     finish(positions, tris)
 }
@@ -115,7 +115,7 @@ fn parse_binary_stl(bytes: &[u8]) -> Result<Vec<Vec3>> {
     }
     let f = |b: &[u8], i: usize| f32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
     let mut out = Vec::with_capacity(n * 3);
-    for t in body.chunks_exact(50).take(n) {
+    for t in body.as_chunks::<50>().0.iter().take(n) {
         for k in 0..3 {
             let o = 12 + k * 12;
             out.push(Vec3::new(f(t, o), f(t, o + 4), f(t, o + 8)));
