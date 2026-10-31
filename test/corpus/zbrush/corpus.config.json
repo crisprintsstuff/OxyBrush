@@ -1,0 +1,19 @@
+{
+  "_comment": "ZBrush corpus registry (TEMPLATE). Real ZBrush files are referenced by ABSOLUTE PATH, never copied into the repo (docs/formats/zbrush/LEGAL.md section 5). Keep your own entries in a private copy of this file and point OXY_ZTL_CORPUS at it; do not commit private paths. Entries whose path does not exist are skipped.",
+  "_format_note": "Each entry: { tag, path, file_type (ztl|zpr), zbrush_version, license_status (synthetic|owner), notes }. 'synthetic' files are trivially simple files created from scratch and dedicated CC0; only those may be committed, each with a .gitignore negation. CI (scripts/check_corpus_ip.py) fails the build otherwise.",
+  "files": [
+    {
+      "tag": "example_owner_tool",
+      "path": "C:\\path\\to\\your\\own\\sphere.ztl",
+      "file_type": "ztl",
+      "zbrush_version": "2025",
+      "license_status": "owner",
+      "notes": "EXAMPLE entry. Replace (in your private copy) with a local absolute path to one of YOUR OWN ZBrush files. Skipped when the path does not exist."
+    }
+  ],
+  "_to_add_later": [
+    "Twin saves of the same default sphere (same file name, copied out between saves) for the M0.5 non-determinism baseline",
+    "The same tool saved by ZBrush 2023, 2024 and 2025",
+    "Diff pairs from REVERSE_ENGINEERING.md section 1 (subdivision level, second SubTool, polygroup, mask, moved vertex)"
+  ]
+}

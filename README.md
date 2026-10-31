@@ -129,6 +129,7 @@ Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. 
 | 3 | Quick palette, keymap editor, accessibility audit, installers | ⏳ |
 | 4 | Hardening → **1.0** | ⏳ |
 | 1.x / 2.x | Multires, dynamic topology, layers, vertex color, plugin API | long-term |
+| Research | Read ZBrush `.ZTL` files ([process & rules](docs/formats/zbrush/README.md)) | M0 tooling only; nothing decoded yet |
 
 ## Contributing
 
@@ -138,4 +139,4 @@ Everyone is welcome, whether you write code, make art, write docs, translate, or
 
 Code is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Bundled assets are CC0.
 
-*OxyBrush is an independent project, not affiliated with any commercial sculpting software vendor.*
+*OxyBrush is an independent project, not affiliated with any commercial sculpting software vendor. ZBrush is a registered trademark of Maxon Computer GmbH; it is mentioned only to identify a file format OxyBrush aims to interoperate with.*

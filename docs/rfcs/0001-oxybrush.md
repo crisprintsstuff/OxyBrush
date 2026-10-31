@@ -48,7 +48,7 @@ OxyBrush is an open-source desktop app for sculpting high-resolution organic and
 
 - **1.x:** multiresolution, dynamic topology, sculpt layers, vertex color, alphas and stencils, curve brushes.
 - **2.x:** WASM component plugin API, quad auto-retopology, UVs and baking, live booleans, insert-mesh brushes, armature spheres, pose gizmo.
-- **Out of scope:** reading or writing proprietary formats such as ZBrush `.ZTL`/`.ZPR`. Interchange goes through open formats (OBJ, STL, PLY, glTF, later USD).
+- **Research track:** reading ZBrush `.ZTL`/`.ZPR` files by interoperability reverse engineering, following the SWFormat process (`docs/formats/zbrush/`). Open-ended; stops by rule if the data is encrypted. Open formats (OBJ, STL, PLY, glTF, later USD) remain the supported interchange.
 - **Exploratory:** GPU compute sculpting, USD, a Python bridge, OpenXR, opt-in AI plugins.
 
 ## 4. Architecture

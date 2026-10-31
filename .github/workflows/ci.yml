@@ -18,6 +18,8 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
+      - name: Corpus IP guard (no ZBrush files; docs/formats/zbrush/LEGAL.md)
+        run: python3 scripts/check_corpus_ip.py
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
