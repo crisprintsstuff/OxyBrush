@@ -26,8 +26,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # Windows and Linux are the supported targets; macOS is best-effort.
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'macos-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

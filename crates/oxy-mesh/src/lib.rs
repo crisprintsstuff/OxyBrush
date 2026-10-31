@@ -45,6 +45,20 @@ pub struct RayHit {
     pub normal: Vec3,
 }
 
+/// Plain mesh data, e.g. for file I/O or topology operations. Optional
+/// attribute vectors may be empty (meaning default values).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct MeshData {
+    pub positions: Vec<Vec3>,
+    pub triangles: Vec<[u32; 3]>,
+    /// Per vertex.
+    pub mask: Vec<f32>,
+    /// Per triangle face group id.
+    pub groups: Vec<u32>,
+    /// Per triangle visibility.
+    pub hidden: Vec<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
@@ -53,6 +67,13 @@ pub struct Mesh {
     pub mask: Vec<f32>,
     pub triangles: Vec<[u32; 3]>,
     pub chunks: Vec<Chunk>,
+    /// Per-triangle face group id.
+    groups: Vec<u32>,
+    /// Per-triangle hidden flag.
+    hidden: Vec<bool>,
+    /// A vertex is hidden when all of its triangles are hidden.
+    vertex_hidden: Vec<bool>,
+    face_version: u64,
     vertex_triangles: Csr,
     vertex_neighbors: Csr,
     vertex_chunk: Vec<u32>,
@@ -68,27 +89,44 @@ impl Mesh {
     /// Build a mesh from raw positions and triangles. Unreferenced vertices and
     /// degenerate (repeated-index) triangles are dropped.
     pub fn new(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>) -> Self {
-        Self::build(positions, triangles, None)
+        Self::from_data(MeshData { positions, triangles, ..Default::default() })
     }
 
-    fn build(positions: Vec<Vec3>, mut triangles: Vec<[u32; 3]>, mask: Option<Vec<f32>>) -> Self {
-        triangles.retain(|t| {
-            t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| (i as usize) < positions.len())
-        });
+    /// Build from [`MeshData`]. Triangles and vertices are reordered for
+    /// locality; per-triangle and per-vertex attributes follow them.
+    pub fn from_data(data: MeshData) -> Self {
+        let MeshData { positions, triangles, mask, groups, hidden } = data;
+        let mask = (mask.len() == positions.len()).then_some(mask);
+        let tri_attr = |i: usize| (groups.get(i).copied().unwrap_or(0), hidden.get(i).copied().unwrap_or(false));
+        let triangles: Vec<([u32; 3], (u32, bool))> = triangles
+            .into_iter()
+            .enumerate()
+            .map(|(i, t)| (t, tri_attr(i)))
+            .filter(|(t, _)| {
+                t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| (i as usize) < positions.len())
+            })
+            .collect();
 
         // Spatial sort of triangles by centroid Morton code.
         let bounds = Aabb::from_points(positions.iter().copied());
         let extent = bounds.extent().max(Vec3::splat(1e-12));
-        let mut keyed: Vec<(u32, [u32; 3])> = triangles
-            .iter()
-            .map(|t| {
+        let mut keyed: Vec<(u32, [u32; 3], (u32, bool))> = triangles
+            .into_iter()
+            .map(|(t, a)| {
                 let c = (positions[t[0] as usize] + positions[t[1] as usize] + positions[t[2] as usize]) / 3.0;
                 let n = ((c - bounds.min) / extent).clamp(Vec3::ZERO, Vec3::ONE);
-                (morton3(n), *t)
+                (morton3(n), t, a)
             })
             .collect();
         keyed.sort_unstable_by_key(|k| k.0);
-        let mut triangles: Vec<[u32; 3]> = keyed.into_iter().map(|k| k.1).collect();
+        let mut triangles = Vec::with_capacity(keyed.len());
+        let mut groups = Vec::with_capacity(keyed.len());
+        let mut hidden = Vec::with_capacity(keyed.len());
+        for (_, t, (g, h)) in keyed {
+            triangles.push(t);
+            groups.push(g);
+            hidden.push(h);
+        }
 
         // Assign vertex ownership in chunk order and renumber.
         let chunk_count = triangles.len().div_ceil(CHUNK_TRIANGLES).max(1);
@@ -140,6 +178,10 @@ impl Mesh {
             normals: vec![Vec3::Z; vcount],
             positions: new_positions,
             mask: new_mask,
+            groups,
+            hidden,
+            vertex_hidden: Vec::new(),
+            face_version: 0,
             dirty: vec![true; chunks.len()],
             chunks,
             triangles,
@@ -156,13 +198,153 @@ impl Mesh {
         for c in 0..mesh.chunks.len() {
             mesh.refit_chunk(c);
         }
+        mesh.faces_changed();
         mesh
     }
 
     /// Build a mesh carrying a per-vertex mask (indexed like `positions`).
     pub fn with_mask(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>, mask: Vec<f32>) -> Self {
         assert_eq!(positions.len(), mask.len());
-        Self::build(positions, triangles, Some(mask))
+        Self::from_data(MeshData { positions, triangles, mask, ..Default::default() })
+    }
+
+    /// Copy out plain data (in this mesh's vertex/triangle order).
+    pub fn to_data(&self) -> MeshData {
+        MeshData {
+            positions: self.positions.clone(),
+            triangles: self.triangles.clone(),
+            mask: self.mask.clone(),
+            groups: self.groups.clone(),
+            hidden: self.hidden.clone(),
+        }
+    }
+
+    // ---- face groups and visibility ----
+
+    /// Changes whenever face groups or visibility change (globally unique).
+    pub fn face_version(&self) -> u64 {
+        self.face_version
+    }
+
+    fn faces_changed(&mut self) {
+        self.vertex_hidden = (0..self.positions.len())
+            .map(|v| {
+                let ts = self.vertex_triangles.get(v);
+                !ts.is_empty() && ts.iter().all(|&t| self.hidden[t as usize])
+            })
+            .collect();
+        self.face_version = NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn groups(&self) -> &[u32] {
+        &self.groups
+    }
+
+    pub fn hidden(&self) -> &[bool] {
+        &self.hidden
+    }
+
+    pub fn is_vertex_hidden(&self, v: u32) -> bool {
+        self.vertex_hidden[v as usize]
+    }
+
+    pub fn any_hidden(&self) -> bool {
+        self.hidden.iter().any(|&h| h)
+    }
+
+    pub fn set_groups(&mut self, groups: Vec<u32>) {
+        assert_eq!(groups.len(), self.triangles.len());
+        self.groups = groups;
+        self.faces_changed();
+    }
+
+    pub fn set_hidden(&mut self, hidden: Vec<bool>) {
+        assert_eq!(hidden.len(), self.triangles.len());
+        self.hidden = hidden;
+        self.faces_changed();
+    }
+
+    /// Show only triangles of `group`.
+    pub fn isolate_group(&mut self, group: u32) {
+        let hidden = self.groups.iter().map(|&g| g != group).collect();
+        self.set_hidden(hidden);
+    }
+
+    /// Hide triangles of `group`, keeping everything else as is.
+    pub fn hide_group(&mut self, group: u32) {
+        let hidden = self.groups.iter().zip(&self.hidden).map(|(&g, &h)| h || g == group).collect();
+        self.set_hidden(hidden);
+    }
+
+    pub fn show_all(&mut self) {
+        self.set_hidden(vec![false; self.triangles.len()]);
+    }
+
+    /// Swap hidden and visible triangles.
+    pub fn invert_visibility(&mut self) {
+        let hidden = self.hidden.iter().map(|&h| !h).collect();
+        self.set_hidden(hidden);
+    }
+
+    /// Delete hidden triangles (a topology change).
+    pub fn delete_hidden(&self) -> Mesh {
+        let mut d = self.to_data();
+        let keep: Vec<bool> = d.hidden.iter().map(|&h| !h).collect();
+        let mut k = keep.iter();
+        d.triangles.retain(|_| *k.next().unwrap_or(&true));
+        let mut k = keep.iter();
+        d.groups.retain(|_| *k.next().unwrap_or(&true));
+        d.hidden.clear();
+        Mesh::from_data(d)
+    }
+
+    pub fn next_free_group(&self) -> u32 {
+        self.groups.iter().max().map_or(0, |m| m + 1)
+    }
+
+    /// Assign a new group to visible triangles whose vertices are all masked above 0.5.
+    pub fn group_from_mask(&mut self) {
+        let g = self.next_free_group();
+        let mut groups = self.groups.clone();
+        for (t, tri) in self.triangles.iter().enumerate() {
+            if !self.hidden[t] && tri.iter().all(|&v| self.mask[v as usize] > 0.5) {
+                groups[t] = g;
+            }
+        }
+        self.set_groups(groups);
+    }
+
+    /// One group per visible triangle set; hidden triangles keep their group.
+    pub fn group_visible(&mut self) {
+        let g = self.next_free_group();
+        let groups = self.groups.iter().zip(&self.hidden).map(|(&old, &h)| if h { old } else { g }).collect();
+        self.set_groups(groups);
+    }
+
+    /// One group per connected component.
+    pub fn groups_from_islands(&mut self) {
+        let mut group = vec![u32::MAX; self.triangles.len()];
+        let mut next = 0;
+        let mut stack = Vec::new();
+        for seed in 0..self.triangles.len() {
+            if group[seed] != u32::MAX {
+                continue;
+            }
+            group[seed] = next;
+            stack.push(seed as u32);
+            while let Some(t) = stack.pop() {
+                for &v in &self.triangles[t as usize] {
+                    for &n in self.vertex_triangles.get(v as usize) {
+                        if group[n as usize] == u32::MAX {
+                            group[n as usize] = next;
+                            stack.push(n);
+                        }
+                    }
+                }
+            }
+            next += 1;
+        }
+        self.set_groups(group);
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -347,6 +529,9 @@ impl Mesh {
             }
             let r = self.chunks[ci].triangles.clone();
             for ti in r {
+                if self.hidden[ti as usize] {
+                    continue;
+                }
                 let [a, b, c] = self.triangles[ti as usize];
                 let (a, b, c) = (self.positions[a as usize], self.positions[b as usize], self.positions[c as usize]);
                 if let Some(t) = ray_triangle(origin, dir, a, b, c)
@@ -435,6 +620,52 @@ mod tests {
         let hit = m.raycast(Vec3::new(0.0, 0.0, 5.0), -Vec3::Z).unwrap();
         assert!((hit.t - 4.0).abs() < 0.01, "t = {}", hit.t);
         assert!(m.raycast(Vec3::new(5.0, 5.0, 5.0), Vec3::Z).is_none());
+    }
+
+    #[test]
+    fn attributes_follow_reordering() {
+        let m = primitives::icosphere(3, 1.0);
+        let mut d = m.to_data();
+        // Group by hemisphere, hide the bottom.
+        d.groups = d.triangles.iter().map(|t| u32::from(d.positions[t[0] as usize].y > 0.0)).collect();
+        d.hidden = d.groups.iter().map(|&g| g == 0).collect();
+        // Shuffle triangle order to force a real reorder.
+        let n = d.triangles.len();
+        let perm: Vec<usize> = (0..n).map(|i| (i * 7919) % n).collect();
+        let d2 = MeshData {
+            triangles: perm.iter().map(|&i| d.triangles[i]).collect(),
+            groups: perm.iter().map(|&i| d.groups[i]).collect(),
+            hidden: perm.iter().map(|&i| d.hidden[i]).collect(),
+            ..d.clone()
+        };
+        let m2 = Mesh::from_data(d2);
+        for (t, tri) in m2.triangles.iter().enumerate() {
+            let up = m2.positions[tri[0] as usize].y > 0.0;
+            assert_eq!(m2.groups()[t], u32::from(up));
+            assert_eq!(m2.hidden()[t], !up);
+        }
+        // Rays hitting only hidden triangles miss.
+        assert!(m2.raycast(Vec3::new(0.0, -5.0, 0.0), Vec3::Y).is_some_and(|h| h.point.y > 0.0));
+    }
+
+    #[test]
+    fn islands_and_isolate() {
+        let a = primitives::icosphere(1, 1.0).to_data();
+        let mut b = a.clone();
+        let off = a.positions.len() as u32;
+        b.positions = a.positions.iter().map(|p| *p + Vec3::X * 3.0).collect();
+        let mut d = a.clone();
+        d.positions.extend(b.positions);
+        d.triangles.extend(b.triangles.iter().map(|t| t.map(|i| i + off)));
+        let mut m = Mesh::from_data(d);
+        m.groups_from_islands();
+        assert_eq!(m.next_free_group(), 2);
+        let v0 = m.face_version();
+        m.isolate_group(m.groups()[0]);
+        assert_ne!(v0, m.face_version());
+        assert_eq!(m.hidden().iter().filter(|&&h| h).count(), m.triangle_count() / 2);
+        let trimmed = m.delete_hidden();
+        assert_eq!(trimmed.triangle_count(), m.triangle_count() / 2);
     }
 
     #[test]

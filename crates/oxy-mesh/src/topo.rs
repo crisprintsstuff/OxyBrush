@@ -29,22 +29,23 @@ pub fn midpoint_subdivide(positions: &[Vec3], tris: &[[u32; 3]]) -> (Vec<Vec3>, 
 /// (a cheap stand-in for a true smooth subdivision scheme). Masks are carried over.
 pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
     let (pos, tris) = midpoint_subdivide(&mesh.positions, &mesh.triangles);
-    // Midpoints are appended after the original vertices; give them the mean
-    // mask of their two endpoints by re-deriving endpoints from the new tris.
+    // Midpoints are appended after the original vertices; each gets the
+    // larger mask of the original vertices it touches.
     let mut mask = mesh.mask.clone();
     mask.resize(pos.len(), 0.0);
     let n0 = mesh.vertex_count() as u32;
     for t in &tris {
         for k in 0..3 {
             let (a, b) = (t[k], t[(k + 1) % 3]);
-            // In each sub-triangle, a midpoint is adjacent to an original vertex
-            // of its edge; averaging over both hits approximates the edge mean.
             if a < n0 && b >= n0 {
                 mask[b as usize] = mask[b as usize].max(mesh.mask[a as usize]);
             }
         }
     }
-    let mut out = Mesh::with_mask(pos, tris, mask);
+    // Each parent triangle becomes four consecutive children.
+    let groups = mesh.groups().iter().flat_map(|&g| [g; 4]).collect();
+    let hidden = mesh.hidden().iter().flat_map(|&h| [h; 4]).collect();
+    let mut out = Mesh::from_data(crate::MeshData { positions: pos, triangles: tris, mask, groups, hidden });
     for _ in 0..smooth_passes {
         let prev = out.positions.clone();
         for v in 0..out.vertex_count() {

@@ -10,29 +10,40 @@ mod falloff;
 
 pub use falloff::Falloff;
 
-use glam::Vec3;
+use glam::{Mat3, Vec3};
 use oxy_mesh::Mesh;
 use rayon::prelude::*;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrushKind {
     Draw,
     Clay,
+    ClayStrips,
     Smooth,
     Inflate,
     Flatten,
+    Pinch,
+    Crease,
+    Layer,
     Grab,
+    SnakeHook,
     Mask,
 }
 
 impl BrushKind {
-    pub const ALL: [BrushKind; 7] = [
+    pub const ALL: [BrushKind; 12] = [
         BrushKind::Draw,
         BrushKind::Clay,
+        BrushKind::ClayStrips,
         BrushKind::Smooth,
         BrushKind::Inflate,
         BrushKind::Flatten,
+        BrushKind::Pinch,
+        BrushKind::Crease,
+        BrushKind::Layer,
         BrushKind::Grab,
+        BrushKind::SnakeHook,
         BrushKind::Mask,
     ];
 
@@ -40,6 +51,11 @@ impl BrushKind {
         match self {
             BrushKind::Draw => "Draw",
             BrushKind::Clay => "Clay",
+            BrushKind::ClayStrips => "Clay Strips",
+            BrushKind::Pinch => "Pinch",
+            BrushKind::Crease => "Crease",
+            BrushKind::Layer => "Layer",
+            BrushKind::SnakeHook => "Snake Hook",
             BrushKind::Smooth => "Smooth",
             BrushKind::Inflate => "Inflate",
             BrushKind::Flatten => "Flatten",
@@ -52,7 +68,8 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
-            BrushKind::Grab => 1.0,
+            BrushKind::Grab | BrushKind::SnakeHook => 1.0,
+            BrushKind::Pinch => 0.5,
             BrushKind::Mask => 0.8,
             _ => 0.4,
         }
@@ -95,27 +112,53 @@ impl Default for BrushSettings {
     }
 }
 
-/// Mirror planes through the object origin.
+/// Axis for radial symmetry.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Axis {
+    X,
+    #[default]
+    Y,
+    Z,
+}
+
+impl Axis {
+    pub fn vector(self) -> Vec3 {
+        match self {
+            Axis::X => Vec3::X,
+            Axis::Y => Vec3::Y,
+            Axis::Z => Vec3::Z,
+        }
+    }
+}
+
+/// Mirror planes and radial copies around the object origin.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Symmetry {
     pub x: bool,
     pub y: bool,
     pub z: bool,
+    /// Number of radial copies around `radial_axis`; 0 or 1 disables.
+    pub radial: u32,
+    pub radial_axis: Axis,
 }
 
 impl Symmetry {
-    /// All mirror sign combinations, the identity first.
-    pub fn mirrors(&self) -> Vec<Vec3> {
-        let mut out = vec![Vec3::ONE];
-        for (on, axis) in [
+    /// Every symmetry transform, the identity first.
+    pub fn transforms(&self) -> Vec<Mat3> {
+        let n = self.radial.clamp(1, 64);
+        let mut out: Vec<Mat3> = (0..n)
+            .map(|k| Mat3::from_axis_angle(self.radial_axis.vector(), k as f32 * std::f32::consts::TAU / n as f32))
+            .collect();
+        for (on, s) in [
             (self.x, Vec3::new(-1.0, 1.0, 1.0)),
             (self.y, Vec3::new(1.0, -1.0, 1.0)),
             (self.z, Vec3::new(1.0, 1.0, -1.0)),
         ] {
             if on {
-                let n = out.len();
-                for i in 0..n {
-                    out.push(out[i] * axis);
+                let mirror = Mat3::from_diagonal(s);
+                let len = out.len();
+                for i in 0..len {
+                    out.push(mirror * out[i]);
                 }
             }
         }
@@ -140,6 +183,22 @@ struct Dab {
     normal: Vec3,
     radius: f32,
     strength: f32,
+    /// Unit stroke direction (zero for the first dab).
+    direction: Vec3,
+    /// Movement since the previous dab (Snake Hook).
+    drag: Vec3,
+}
+
+impl Dab {
+    fn transformed(&self, m: Mat3) -> Dab {
+        Dab {
+            center: m * self.center,
+            normal: m * self.normal,
+            direction: m * self.direction,
+            drag: m * self.drag,
+            ..*self
+        }
+    }
 }
 
 /// (vertex, weight, original position)
@@ -147,24 +206,43 @@ type GrabVertex = (u32, f32, Vec3);
 
 struct GrabState {
     origin: Vec3,
-    /// Captured vertices per mirror sign.
-    captured: Vec<(Vec3, Vec<GrabVertex>)>,
+    /// Captured vertices per symmetry transform.
+    captured: Vec<(Mat3, Vec<GrabVertex>)>,
+}
+
+/// Per-vertex state for the Layer brush: original position, original
+/// normal, and the highest weight applied so far this stroke.
+#[derive(Default)]
+struct LayerState {
+    vertices: HashMap<u32, (Vec3, Vec3, f32)>,
 }
 
 /// An in-progress stroke.
 pub struct Stroke {
     settings: BrushSettings,
-    mirrors: Vec<Vec3>,
+    transforms: Vec<Mat3>,
     invert: bool,
     last: Option<StrokeSample>,
+    last_dab: Option<Vec3>,
     carry: f32,
     grab: Option<GrabState>,
+    layer: LayerState,
     dab_count: u32,
 }
 
 impl Stroke {
     pub fn new(settings: BrushSettings, symmetry: Symmetry, invert: bool) -> Self {
-        Self { settings, mirrors: symmetry.mirrors(), invert, last: None, carry: 0.0, grab: None, dab_count: 0 }
+        Self {
+            settings,
+            transforms: symmetry.transforms(),
+            invert,
+            last: None,
+            last_dab: None,
+            carry: 0.0,
+            grab: None,
+            layer: LayerState::default(),
+            dab_count: 0,
+        }
     }
 
     pub fn settings(&self) -> &BrushSettings {
@@ -212,39 +290,43 @@ impl Stroke {
             if self.settings.pressure_radius { self.settings.radius * (0.2 + 0.8 * p) } else { self.settings.radius };
         let strength =
             if self.settings.pressure_strength { self.settings.strength * p } else { self.settings.strength };
-        Dab { center: s.position, normal: s.normal, radius, strength }
+        let drag = self.last_dab.map_or(Vec3::ZERO, |l| s.position - l);
+        // Direction in the tangent plane.
+        let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
+        Dab { center: s.position, normal: s.normal, radius, strength, direction, drag }
     }
 
     fn apply_dab(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
         let base = self.make_dab(s);
+        self.last_dab = Some(s.position);
         self.dab_count += 1;
-        for &m in &self.mirrors.clone() {
-            let dab = Dab { center: base.center * m, normal: base.normal * m, ..base };
-            apply_kernel(mesh, &self.settings, self.settings.kind, self.invert, &dab, touch);
-            if self.settings.auto_smooth > 0.0
-                && self.settings.kind != BrushKind::Smooth
-                && self.settings.kind != BrushKind::Mask
-            {
+        let kind = self.settings.kind;
+        if kind == BrushKind::SnakeHook && base.drag == Vec3::ZERO {
+            return;
+        }
+        for &m in &self.transforms.clone() {
+            let dab = base.transformed(m);
+            apply_kernel(mesh, &self.settings, kind, self.invert, &dab, &mut self.layer, touch);
+            if self.settings.auto_smooth > 0.0 && !matches!(kind, BrushKind::Smooth | BrushKind::Mask) {
                 let smooth = Dab { strength: self.settings.auto_smooth, ..dab };
-                apply_kernel(mesh, &self.settings, BrushKind::Smooth, false, &smooth, touch);
+                apply_kernel(mesh, &self.settings, BrushKind::Smooth, false, &smooth, &mut self.layer, touch);
             }
         }
     }
 
     fn grab_sample(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
         let Some(grab) = &self.grab else {
-            // First sample: capture the vertices under each mirrored brush.
+            // First sample: capture the vertices under each transformed brush.
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
             let captured = self
-                .mirrors
+                .transforms
                 .iter()
                 .map(|&m| {
-                    let center = dab.center * m;
-                    let normal = dab.normal * m;
+                    let d = dab.transformed(m);
                     let mut verts = Vec::new();
-                    for c in mesh.chunks_in_sphere(center, dab.radius) {
+                    for c in mesh.chunks_in_sphere(d.center, d.radius) {
                         for v in mesh.chunks[c as usize].vertices.clone() {
-                            if let Some(w) = vertex_weight(mesh, &self.settings, &Dab { center, normal, ..dab }, v) {
+                            if let Some(w) = vertex_weight(mesh, &self.settings, &d, v) {
                                 verts.push((v, w, mesh.positions[v as usize]));
                             }
                         }
@@ -266,7 +348,7 @@ impl Stroke {
             touch(mesh, c);
         }
         for (m, verts) in &grab.captured {
-            let d = delta * *m;
+            let d = *m * delta;
             for &(v, w, orig) in verts {
                 mesh.positions[v as usize] = orig + d * w;
                 moved.push(v);
@@ -278,17 +360,35 @@ impl Stroke {
     }
 }
 
-/// Falloff weight × strength × (1 − mask) for a vertex, or None if outside.
+/// Query radius for a dab: square brushes reach into their corners.
+fn reach(kind: BrushKind, dab: &Dab) -> f32 {
+    if kind == BrushKind::ClayStrips { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius }
+}
+
+/// Falloff weight × (1 − mask) for a vertex, or None if outside the brush.
 fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, v: u32) -> Option<f32> {
+    if mesh.is_vertex_hidden(v) {
+        return None;
+    }
     let p = mesh.positions[v as usize];
-    let d2 = p.distance_squared(dab.center);
-    if d2 > dab.radius * dab.radius {
+    let offset = p - dab.center;
+    let d2 = offset.length_squared();
+    let r = reach(settings.kind, dab);
+    if d2 > r * r {
         return None;
     }
     if settings.front_faces_only && mesh.normals[v as usize].dot(dab.normal) < 0.0 {
         return None;
     }
-    let f = settings.falloff.eval(d2.sqrt() / dab.radius);
+    let f = if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
+        // Square footprint aligned with the stroke: soft only across it.
+        let side = dab.normal.cross(dab.direction);
+        let along = offset.dot(dab.direction).abs() / dab.radius;
+        let across = offset.dot(side).abs() / dab.radius;
+        if along > 1.0 || across > 1.0 { 0.0 } else { settings.falloff.eval(across).max(0.0) * (1.0 - along.powi(8)) }
+    } else {
+        settings.falloff.eval(d2.sqrt() / dab.radius)
+    };
     let mask = if settings.kind == BrushKind::Mask { 0.0 } else { mesh.mask[v as usize] };
     let w = f * (1.0 - mask);
     (w > 0.0).then_some(w)
@@ -300,9 +400,12 @@ fn apply_kernel(
     kind: BrushKind,
     invert: bool,
     dab: &Dab,
+    layer: &mut LayerState,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
-    let chunks = mesh.chunks_in_sphere(dab.center, dab.radius);
+    // Snake Hook pulls the region it was over at the previous dab.
+    let query = if kind == BrushKind::SnakeHook { Dab { center: dab.center - dab.drag, ..*dab } } else { *dab };
+    let chunks = mesh.chunks_in_sphere(query.center, reach(kind, &query));
     if chunks.is_empty() {
         return;
     }
@@ -318,7 +421,7 @@ fn apply_kernel(
                 m.chunks[c as usize]
                     .vertices
                     .clone()
-                    .filter_map(move |v| vertex_weight(m, &settings, dab, v).map(|w| (v, w)))
+                    .filter_map(move |v| vertex_weight(m, &settings, &query, v).map(|w| (v, w)))
             })
             .collect()
     };
@@ -350,12 +453,34 @@ fn apply_kernel(
     // Displacement scale: a full-strength dab moves the surface ~10% of the radius.
     let amount = dab.radius * 0.1 * dab.strength;
 
+    if kind == BrushKind::Layer {
+        // Raise to a fixed height above the stroke-start surface; overlapping
+        // dabs within one stroke don't stack.
+        let height = sign * dab.radius * 0.12 * settings.strength;
+        let mut moved = Vec::with_capacity(affected.len());
+        for &(v, w) in &affected {
+            let e = layer.vertices.entry(v).or_insert((mesh.positions[v as usize], mesh.normals[v as usize], 0.0));
+            let pressure_w = w * (dab.strength / settings.strength.max(1e-6)).min(1.0);
+            if pressure_w > e.2 {
+                e.2 = pressure_w;
+                mesh.positions[v as usize] = e.0 + e.1 * (height * e.2);
+                moved.push(v);
+            }
+        }
+        mesh.update_after_move(&moved);
+        return;
+    }
+
     let new_positions: Vec<(u32, Vec3)> = {
         let m: &Mesh = mesh;
         affected
             .par_iter()
             .map(|&(v, w)| {
                 let p = m.positions[v as usize];
+                let pinch = |p: Vec3| {
+                    let to_center = dab.center - p;
+                    (to_center - area_normal * to_center.dot(area_normal)) * (0.3 * w * dab.strength)
+                };
                 let np = match kind {
                     BrushKind::Draw => p + area_normal * (sign * amount * w),
                     BrushKind::Inflate => p + m.normals[v as usize] * (sign * amount * w),
@@ -368,13 +493,13 @@ fn apply_kernel(
                             p.lerp(avg, (w * dab.strength).min(1.0))
                         }
                     }
-                    BrushKind::Flatten | BrushKind::Clay => {
+                    BrushKind::Flatten | BrushKind::Clay | BrushKind::ClayStrips => {
                         // Clay builds toward a plane slightly above the surface;
                         // Flatten pulls everything onto the mean plane.
-                        let (plane, one_sided) = if kind == BrushKind::Clay {
-                            (area_center + area_normal * (sign * dab.radius * 0.15 * dab.strength), true)
-                        } else {
+                        let (plane, one_sided) = if kind == BrushKind::Flatten {
                             (area_center, false)
+                        } else {
+                            (area_center + area_normal * (sign * dab.radius * 0.15 * dab.strength), true)
                         };
                         let d = (plane - p).dot(area_normal);
                         if one_sided && d * sign < 0.0 {
@@ -383,7 +508,12 @@ fn apply_kernel(
                             p + area_normal * (d * (w * dab.strength).min(1.0))
                         }
                     }
-                    BrushKind::Grab | BrushKind::Mask => p,
+                    BrushKind::Pinch => p + pinch(p) * sign,
+                    // Crease carves a groove and pulls its walls together;
+                    // inverted it raises a sharp ridge.
+                    BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
+                    BrushKind::SnakeHook => p + dab.drag * (w * dab.strength.min(1.0)),
+                    BrushKind::Grab | BrushKind::Mask | BrushKind::Layer => p,
                 };
                 (v, np)
             })
@@ -493,6 +623,100 @@ mod tests {
         s.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
         s.add_sample(&mut mesh, StrokeSample { position: Vec3::Y * 1.5, ..top_sample() }, &mut |_, _| {});
         assert!(mesh.bounds().max.y > 1.4);
+    }
+
+    #[test]
+    fn radial_symmetry_transforms() {
+        let s = Symmetry { radial: 4, x: true, ..Default::default() };
+        let t = s.transforms();
+        assert_eq!(t.len(), 8);
+        assert_eq!(t[0], Mat3::IDENTITY);
+        let p = t[1] * Vec3::X;
+        assert!(p.distance(-Vec3::Z) < 1e-5, "{p}");
+    }
+
+    #[test]
+    fn radial_dabs_hit_every_copy() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let settings = BrushSettings { radius: 0.3, strength: 1.0, ..Default::default() };
+        let sym = Symmetry { radial: 4, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, false);
+        s.add_sample(&mut mesh, StrokeSample { position: Vec3::X, normal: Vec3::X, pressure: 1.0 }, &mut |_, _| {});
+        let b = mesh.bounds();
+        for v in [b.max.x, -b.min.x, b.max.z, -b.min.z] {
+            assert!(v > 1.01, "{b:?}");
+        }
+    }
+
+    fn drag_stroke(kind: BrushKind, invert: bool) -> (Mesh, Mesh) {
+        let mut mesh = primitives::icosphere(5, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind, radius: 0.25, strength: 1.0, spacing: 0.1, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry::default(), invert);
+        for i in 0..=10 {
+            let a = -0.3 + 0.06 * i as f32;
+            let p = Vec3::new(a.sin(), 0.0, a.cos());
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 1.0 }, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    fn max_radius(m: &Mesh) -> f32 {
+        m.positions.iter().map(|p| p.length()).fold(0.0, f32::max)
+    }
+
+    fn min_radius(m: &Mesh) -> f32 {
+        m.positions.iter().map(|p| p.length()).fold(f32::MAX, f32::min)
+    }
+
+    #[test]
+    fn layer_height_is_capped_within_a_stroke() {
+        let (b, a) = drag_stroke(BrushKind::Layer, false);
+        let h = max_radius(&a) - max_radius(&b);
+        // 12% of the radius, never more no matter how many dabs overlap.
+        assert!(h > 0.01 && h <= 0.25 * 0.12 + 1e-4, "{h}");
+    }
+
+    #[test]
+    fn crease_carves_and_pinch_contracts() {
+        let (b, a) = drag_stroke(BrushKind::Crease, false);
+        assert!(min_radius(&a) < min_radius(&b) - 0.005);
+        let (b, a) = drag_stroke(BrushKind::Pinch, false);
+        assert_ne!(b.positions, a.positions);
+    }
+
+    #[test]
+    fn clay_strips_build_up() {
+        let (b, a) = drag_stroke(BrushKind::ClayStrips, false);
+        assert!(max_radius(&a) > max_radius(&b) + 0.005);
+    }
+
+    #[test]
+    fn snake_hook_pulls_along_stroke() {
+        let mut mesh = primitives::icosphere(5, 1.0);
+        let settings = BrushSettings {
+            kind: BrushKind::SnakeHook,
+            radius: 0.25,
+            strength: 1.0,
+            spacing: 0.05,
+            ..Default::default()
+        };
+        let mut s = Stroke::new(settings, Symmetry::default(), false);
+        for i in 0..=10 {
+            let p = Vec3::Z * (1.0 + 0.05 * i as f32);
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: Vec3::Z, pressure: 1.0 }, &mut |_, _| {});
+        }
+        assert!(mesh.bounds().max.z > 1.2, "{:?}", mesh.bounds());
+    }
+
+    #[test]
+    fn hidden_vertices_are_protected() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        mesh.set_hidden(vec![true; mesh.triangle_count()]);
+        let before = mesh.positions.clone();
+        let mut s = Stroke::new(BrushSettings::default(), Symmetry::default(), false);
+        s.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
+        assert_eq!(before, mesh.positions);
     }
 
     #[test]

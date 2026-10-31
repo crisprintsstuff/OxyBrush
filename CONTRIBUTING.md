@@ -48,9 +48,9 @@ OxyBrush takes inspiration from how sculpting tools *feel*, never from their cod
 
 1. **Never** consult leaked, decompiled or disassembled proprietary code (ZBrush or any other).
 2. Do not copy third-party UI layouts, icons, materials, brushes or other assets. Everything we ship is original, CC0 or CC-BY 4.0.
-3. Do not use ZBrush or Maxon trademarks or proprietary feature names (for example DynaMesh, ZRemesher, ZSpheres, SubTool, Polypaint) in code, the UI or docs, except to describe file compatibility. Use the generic terms: voxel remesh, auto-retopology, armature spheres, pieces, vertex color.
+3. Do not use ZBrush or Maxon trademarks or proprietary feature names (for example DynaMesh, ZRemesher, ZSpheres, SubTool, Polypaint) in code, the UI or docs. Use the generic terms: voxel remesh, auto-retopology, armature spheres, pieces, vertex color.
 4. Blender is GPL. OxyBrush is MIT/Apache-2.0, so **do not copy Blender code**. Studying behavior and the published papers behind it is fine. Cite papers in code comments.
-5. **ZBrush file-format work** follows a separate, stricter process. See [docs/formats/zbrush-interop.md](docs/formats/zbrush-interop.md). Don't start on it before that document says the project is ready.
+5. Proprietary file formats (for example ZBrush `.ZTL`/`.ZPR`) are out of scope. Please don't submit reverse-engineering work for them. Interchange uses open formats.
 
 ## RFCs
 
