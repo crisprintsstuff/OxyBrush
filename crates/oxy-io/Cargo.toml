@@ -1,0 +1,16 @@
+[package]
+name = "oxy-io"
+description = "Mesh import/export (OBJ, STL) for OxyBrush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-mesh.workspace = true
+glam.workspace = true
+tobj.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+[package]
+name = "oxy-render"
+description = "wgpu matcap viewport renderer for OxyBrush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-mesh.workspace = true
+glam.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+log.workspace = true
+
+[lints]
+workspace = true

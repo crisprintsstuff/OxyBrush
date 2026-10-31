@@ -1,0 +1,32 @@
+[package]
+name = "oxy-app"
+description = "OxyBrush desktop application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "oxybrush"
+path = "src/main.rs"
+
+[dependencies]
+oxy-mesh.workspace = true
+oxy-sculpt.workspace = true
+oxy-history.workspace = true
+oxy-io.workspace = true
+oxy-render.workspace = true
+glam.workspace = true
+wgpu.workspace = true
+winit.workspace = true
+egui.workspace = true
+egui-wgpu.workspace = true
+egui-winit.workspace = true
+pollster.workspace = true
+log.workspace = true
+env_logger.workspace = true
+rfd.workspace = true
+
+[lints]
+workspace = true

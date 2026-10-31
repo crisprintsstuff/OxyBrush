@@ -1,0 +1,15 @@
+[package]
+name = "oxy-mesh"
+description = "Chunked triangle mesh, adjacency and spatial queries for OxyBrush"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glam.workspace = true
+rayon.workspace = true
+
+[lints]
+workspace = true
