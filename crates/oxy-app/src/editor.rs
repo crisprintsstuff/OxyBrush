@@ -872,12 +872,112 @@ impl Editor {
 
     // ---- topology ----
 
+    /// Replace the active piece's mesh with a new topology. Subdivision
+    /// levels no longer apply and are removed (undo restores them).
     fn replace_active_mesh(&mut self, label: &str, mesh: Mesh) {
         self.pointer_up();
         let piece = self.scene.active_mut();
         let id = piece.id;
         let prev = std::mem::replace(&mut piece.mesh, mesh);
-        self.history.record_topology(label, id, prev);
+        let prev_levels = piece.multires.take();
+        self.history.record_topology(label, id, prev, prev_levels);
+    }
+
+    // ---- multiresolution ----
+
+    /// (active level, level count) of the active piece, if it has levels.
+    pub fn multires_level(&self) -> Option<(usize, usize)> {
+        self.scene.active().multires.as_ref().map(|m| (m.active(), m.level_count()))
+    }
+
+    /// Apply a change to the active piece's level stack, producing a new
+    /// mesh, as one undoable step.
+    fn multires_op(
+        &mut self,
+        label: &str,
+        op: impl FnOnce(&mut oxy_mesh::multires::Multires, &Mesh) -> Option<oxy_mesh::MeshData>,
+    ) {
+        self.pointer_up();
+        let piece = self.scene.active_mut();
+        let id = piece.id;
+        let prev_levels = piece.multires.clone();
+        let mut mr = match piece.multires.take() {
+            Some(m) if m.is_bound_to(&piece.mesh) => m,
+            // No levels yet (or stale ones): start from the current mesh.
+            _ => oxy_mesh::multires::Multires::new(&piece.mesh),
+        };
+        let prev_mesh = match op(&mut mr, &piece.mesh) {
+            Some(data) => {
+                let mesh = Mesh::from_data(data);
+                mr.bind(&mesh);
+                std::mem::replace(&mut piece.mesh, mesh)
+            }
+            None => piece.mesh.clone(),
+        };
+        let (active, count) = (mr.active(), mr.level_count());
+        let tris = piece.mesh.triangle_count();
+        piece.multires = if count > 1 { Some(mr) } else { None };
+        self.history.record_topology(label, id, prev_mesh, prev_levels);
+        self.status = format!("{label}: level {} of {count}, {tris} triangles", active + 1);
+    }
+
+    /// Add a subdivision level on top and switch to it.
+    pub fn add_level(&mut self) {
+        let piece = self.scene.active();
+        let top_tris =
+            piece.multires.as_ref().map_or(piece.mesh.triangle_count(), |m| m.triangle_count(m.level_count() - 1));
+        if top_tris * 4 > MAX_TRIANGLES {
+            self.status = format!("Another level would have {} triangles (limit {MAX_TRIANGLES})", top_tris * 4);
+            return;
+        }
+        self.multires_op("Add subdivision level", |mr, mesh| {
+            if mr.active() + 1 < mr.level_count() {
+                // Go to the top first; the new level is built from it.
+                let data = mr.set_level(mesh, mr.level_count() - 1);
+                let top = Mesh::from_data(data);
+                mr.bind(&top);
+                Some(mr.add_level(&top))
+            } else {
+                Some(mr.add_level(mesh))
+            }
+        });
+    }
+
+    /// Step to another subdivision level (relative: +1 up, −1 down).
+    pub fn step_level(&mut self, delta: i32) {
+        let Some((active, count)) = self.multires_level() else {
+            self.status = "No subdivision levels yet: add one with Ctrl+D".into();
+            return;
+        };
+        let target = (active as i32 + delta).clamp(0, count as i32 - 1) as usize;
+        if target == active {
+            self.status = format!("Already at level {} of {count}", active + 1);
+            return;
+        }
+        let label = format!("Level {}", target + 1);
+        self.multires_op(&label, |mr, mesh| Some(mr.set_level(mesh, target)));
+    }
+
+    pub fn delete_higher_levels(&mut self) {
+        if self.multires_level().is_none_or(|(a, c)| a + 1 == c) {
+            self.status = "No higher levels to delete".into();
+            return;
+        }
+        self.multires_op("Delete higher levels", |mr, mesh| {
+            mr.delete_higher(mesh);
+            None
+        });
+    }
+
+    pub fn delete_lower_levels(&mut self) {
+        if self.multires_level().is_none_or(|(a, _)| a == 0) {
+            self.status = "No lower levels to delete".into();
+            return;
+        }
+        self.multires_op("Delete lower levels", |mr, mesh| {
+            mr.delete_lower(mesh);
+            None
+        });
     }
 
     pub fn subdivide(&mut self, smooth: bool) {
@@ -986,8 +1086,10 @@ impl Editor {
                     }
                 }
                 let target_index = self.scene.index_of(job.target).unwrap_or(target_index);
-                let prev = std::mem::replace(&mut self.scene.pieces[target_index].mesh, mesh);
-                steps.push(Step::Topology { piece: job.target, previous: prev });
+                let target_piece = &mut self.scene.pieces[target_index];
+                let prev = std::mem::replace(&mut target_piece.mesh, mesh);
+                let prev_levels = target_piece.multires.take();
+                steps.push(Step::Topology { piece: job.target, previous: prev, previous_multires: prev_levels });
                 self.scene.set_active(target_index);
                 self.history.record_compound(job.label.clone(), steps);
                 self.status = format!("{}: {tris} triangles in {secs:.1} s", job.label);
@@ -1305,6 +1407,110 @@ mod tests {
         e.add_alpha(Alpha::from_luma("mine", 8, 8, &[200; 64]).unwrap());
         assert_eq!(e.alphas.len(), n + 1);
         assert_eq!(e.alpha, Some(n));
+    }
+
+    #[test]
+    fn multires_levels_keep_detail_and_undo() {
+        let mut e = editor();
+        let base_tris = e.scene.active().mesh.triangle_count();
+        e.add_level();
+        e.add_level();
+        assert_eq!(e.multires_level(), Some((2, 3)));
+        assert_eq!(e.scene.active().mesh.triangle_count(), base_tris * 16);
+
+        // Sculpt at the top level.
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(430.0, 300.0));
+        e.pointer_up();
+        // Compare in level order: rebuilding a mesh may reorder its vertices.
+        let level_order = |m: &Mesh| {
+            let mut out = vec![Vec3::ZERO; m.vertex_count()];
+            for (v, &src) in m.source_vertices().iter().enumerate() {
+                out[src as usize] = m.positions[v];
+            }
+            out
+        };
+        let sculpted = level_order(&e.scene.active().mesh);
+
+        // Down to the base and back up: the sculpted detail is still there.
+        e.step_level(-1);
+        e.step_level(-1);
+        assert_eq!(e.multires_level(), Some((0, 3)));
+        assert_eq!(e.scene.active().mesh.triangle_count(), base_tris);
+        e.step_level(1);
+        e.step_level(1);
+        let back = level_order(&e.scene.active().mesh);
+        assert_eq!(back.len(), sculpted.len());
+        let max_err = sculpted.iter().zip(&back).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+        assert!(max_err < 1e-4, "detail lost: {max_err}");
+
+        // Undo walks back through the level switches.
+        e.undo();
+        assert_eq!(e.multires_level(), Some((1, 3)));
+        e.undo();
+        assert_eq!(e.multires_level(), Some((0, 3)));
+    }
+
+    #[test]
+    fn low_level_edit_moves_high_level_detail() {
+        let mut e = editor();
+        e.add_level();
+        // Sculpt detail at level 2, then inflate at level 1 and come back.
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        e.step_level(-1);
+        e.brush_kind = BrushKind::Inflate;
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        let before = e.scene.active().mesh.bounds().max;
+        e.step_level(1);
+        assert!(e.scene.active().mesh.bounds().max.z >= before.z - 0.01, "top level follows the base edit");
+    }
+
+    #[test]
+    fn topology_ops_remove_levels_and_undo_restores_them() {
+        let mut e = editor();
+        e.add_level();
+        assert!(e.multires_level().is_some());
+        e.subdivide(true);
+        assert!(e.multires_level().is_none(), "single-mesh subdivide removes levels");
+        e.undo();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        assert!(e.scene.active().multires.as_ref().unwrap().is_bound_to(&e.scene.active().mesh));
+    }
+
+    #[test]
+    fn delete_higher_and_lower_levels() {
+        let mut e = editor();
+        e.add_level();
+        e.add_level();
+        e.step_level(-1);
+        e.delete_higher_levels();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        e.delete_lower_levels();
+        assert_eq!(e.multires_level(), None, "a single remaining level means no stack");
+        e.undo();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+    }
+
+    #[test]
+    fn levels_are_saved_and_reopened() {
+        let dir = std::env::temp_dir().join(format!("oxy-mr-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = editor();
+        e.add_level();
+        e.add_level();
+        e.step_level(-1);
+        assert!(e.save(&dir.join("levels")));
+        let mut f = editor();
+        f.open(&dir.join("levels.oxb"));
+        assert_eq!(f.multires_level(), Some((1, 3)));
+        f.step_level(1);
+        assert_eq!(f.multires_level(), Some((2, 3)));
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

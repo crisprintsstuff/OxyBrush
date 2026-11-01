@@ -10,6 +10,12 @@
 //! - `PIEC`: one piece: `name_len:u32 name:utf8 visible:u8 vcount:u32
 //!   tcount:u32 positions:f32*3v triangles:u32*3t mask:f32*v groups:u32*t
 //!   hidden:u8*t`.
+//! - `MRES` (optional, since 0.2): subdivision levels of the **preceding**
+//!   `PIEC`: `levels:u32 active:u32 base_tcount:u32 base_triangles:u32*3t`
+//!   then per level `vcount:u32 positions:f32*3v`. Finer levels' topology
+//!   is derived by subdividing the base. When present, the preceding
+//!   `PIEC` stores the active level in level order. Older readers skip it
+//!   and simply load the active level as a plain mesh.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -18,6 +24,7 @@
 use crate::{PieceData, SceneData};
 use glam::Vec3;
 use oxy_mesh::MeshData;
+use oxy_mesh::multires::Multires;
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
@@ -66,6 +73,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
     sections.push((*b"META", meta.into_bytes()));
     for p in &scene.pieces {
         sections.push((*b"PIEC", encode_piece(p)));
+        if let Some(mr) = &p.multires {
+            sections.push((*b"MRES", encode_multires(mr)));
+        }
     }
 
     let mut out = Vec::new();
@@ -193,6 +203,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 }
             }
             b"PIEC" => scene.pieces.push(decode_piece(&raw)?),
+            b"MRES" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRES before any piece".into()))?;
+                let mr = decode_multires(&raw)?;
+                // The stack must describe exactly the saved active mesh; if
+                // not, keep the mesh and drop the levels rather than fail.
+                let tris_match = mr.active_triangles() == piece.mesh.triangles.as_slice();
+                let verts_match = mr.parts().1[mr.active()].len() == piece.mesh.positions.len();
+                if tris_match && verts_match {
+                    piece.multires = Some(mr);
+                } else {
+                    log::warn!("ignoring subdivision levels that don't match piece {:?}", piece.name);
+                }
+            }
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
@@ -227,7 +250,48 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
     m.mask = (0..v).map(|_| r.f32()).collect::<Result<_>>()?;
     m.groups = (0..t).map(|_| r.u32()).collect::<Result<_>>()?;
     m.hidden = (0..t).map(|_| r.u8().map(|b| b != 0)).collect::<Result<_>>()?;
-    Ok(PieceData { name, visible, mesh: m })
+    Ok(PieceData { name, visible, mesh: m, multires: None })
+}
+
+fn encode_multires(mr: &Multires) -> Vec<u8> {
+    let (tris, levels, active) = mr.parts();
+    let mut b = Vec::new();
+    b.extend_from_slice(&(levels.len() as u32).to_le_bytes());
+    b.extend_from_slice(&(active as u32).to_le_bytes());
+    b.extend_from_slice(&(tris.len() as u32).to_le_bytes());
+    for t in tris {
+        for i in t {
+            b.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    for pos in levels {
+        b.extend_from_slice(&(pos.len() as u32).to_le_bytes());
+        for p in pos {
+            for c in p.to_array() {
+                b.extend_from_slice(&c.to_le_bytes());
+            }
+        }
+    }
+    b
+}
+
+fn decode_multires(raw: &[u8]) -> Result<Multires> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let level_count = r.u32()? as usize;
+    let active = r.u32()? as usize;
+    if level_count == 0 || level_count > 16 || active >= level_count {
+        return Err(Error::Corrupt("bad subdivision level header".into()));
+    }
+    let t = r.u32()? as usize;
+    r.check(t, 12)?;
+    let tris = (0..t).map(|_| Ok([r.u32()?, r.u32()?, r.u32()?])).collect::<Result<Vec<_>>>()?;
+    let mut levels = Vec::with_capacity(level_count);
+    for _ in 0..level_count {
+        let v = r.u32()? as usize;
+        r.check(v, 12)?;
+        levels.push((0..v).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect::<Result<Vec<_>>>()?);
+    }
+    Multires::from_parts(tris, levels, active).ok_or_else(|| Error::Corrupt("subdivision levels don't match".into()))
 }
 
 /// Write atomically: temp file in the same directory, flush, then rename.
@@ -265,8 +329,8 @@ mod tests {
         let b = primitives::cube(4, 1.0).to_data();
         SceneData {
             pieces: vec![
-                PieceData { name: "Head".into(), visible: true, mesh: a },
-                PieceData { name: "Böx ✓".into(), visible: false, mesh: b },
+                PieceData { name: "Head".into(), visible: true, mesh: a, multires: None },
+                PieceData { name: "Böx ✓".into(), visible: false, mesh: b, multires: None },
             ],
             active: 1,
         }
@@ -307,6 +371,39 @@ mod tests {
         bytes.extend_from_slice(&crc32fast::hash(raw).to_le_bytes());
         bytes.extend_from_slice(&packed);
         assert_eq!(decode(&bytes).unwrap(), sample());
+    }
+
+    #[test]
+    fn multires_roundtrip_and_old_reader_compatibility() {
+        use crate::Piece;
+        // A piece with two subdivision levels, sculpted at the top, viewed at level 1.
+        let base = primitives::icosphere(1, 1.0);
+        let mut mr = Multires::new(&base);
+        let d = mr.add_level(&base);
+        let mut m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        let d = mr.add_level(&m);
+        m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        m.positions[5] += Vec3::Y * 0.3;
+        let d = mr.set_level(&m, 1);
+        m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        let piece = Piece { multires: Some(mr), ..Piece::new("Head", m) };
+        let scene = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let bytes = encode(&scene);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back, scene);
+        let restored = back.pieces[0].clone().into_piece();
+        let mr = restored.multires.as_ref().unwrap();
+        assert_eq!((mr.level_count(), mr.active()), (3, 1));
+        assert!(mr.is_bound_to(&restored.mesh));
+
+        // Without the MRES section (as an older reader sees it) the active level loads as a plain mesh.
+        let mut plain = scene.clone();
+        plain.pieces[0].multires = None;
+        let old = decode(&encode(&plain)).unwrap();
+        assert_eq!(old.pieces[0].mesh.triangles.len(), mr.triangle_count(1));
     }
 
     #[test]

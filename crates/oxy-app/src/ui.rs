@@ -258,10 +258,29 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 }
 
 fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    if ui.button("Subdivide  (Shift+D)").clicked() {
-        ed.subdivide(false);
+    ui.label(RichText::new("Subdivision levels").weak());
+    if ui.button("Add level  (Ctrl+D)").clicked() {
+        ed.add_level();
     }
-    if ui.button("Subdivide smooth  (D)").clicked() {
+    let levels = ed.multires_level();
+    if ui.add_enabled(levels.is_some_and(|(a, c)| a + 1 < c), egui::Button::new("Level up  (D)")).clicked() {
+        ed.step_level(1);
+    }
+    if ui.add_enabled(levels.is_some_and(|(a, _)| a > 0), egui::Button::new("Level down  (Shift+D)")).clicked() {
+        ed.step_level(-1);
+    }
+    if ui.add_enabled(levels.is_some_and(|(a, c)| a + 1 < c), egui::Button::new("Delete higher levels")).clicked() {
+        ed.delete_higher_levels();
+    }
+    if ui.add_enabled(levels.is_some_and(|(a, _)| a > 0), egui::Button::new("Delete lower levels")).clicked() {
+        ed.delete_lower_levels();
+    }
+    ui.separator();
+    if ui
+        .button("Subdivide (single mesh)")
+        .on_hover_text("Smooth subdivision without levels; removes existing levels")
+        .clicked()
+    {
         ed.subdivide(true);
     }
     ui.separator();
@@ -518,6 +537,29 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     ui.label(RichText::new("Topology").strong());
     ui.horizontal(|ui| {
+        match ed.multires_level() {
+            Some((a, c)) => {
+                ui.label(format!("Level {} of {c}", a + 1));
+                if ui
+                    .add_enabled(a > 0, egui::Button::new("Down").small())
+                    .on_hover_text("Level down (Shift+D)")
+                    .clicked()
+                {
+                    ed.step_level(-1);
+                }
+                if ui.add_enabled(a + 1 < c, egui::Button::new("Up").small()).on_hover_text("Level up (D)").clicked() {
+                    ed.step_level(1);
+                }
+            }
+            None => {
+                ui.label(RichText::new("No subdivision levels").weak());
+            }
+        }
+        if ui.small_button("+ Level").on_hover_text("Add a subdivision level (Ctrl+D)").clicked() {
+            ed.add_level();
+        }
+    });
+    ui.horizontal(|ui| {
         ui.label("Resolution");
         ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION));
     });
@@ -525,7 +567,11 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if ui.add_enabled(!busy, egui::Button::new("Remesh")).on_hover_text("Voxel remesh (Ctrl+R)").clicked() {
             ed.remesh_active();
         }
-        if ui.button("Subdivide").on_hover_text("Smooth subdivide (D)").clicked() {
+        if ui
+            .button("Subdivide once")
+            .on_hover_text("Smooth subdivision without levels (removes existing levels). For levels use + Level.")
+            .clicked()
+        {
             ed.subdivide(true);
         }
     });
@@ -800,7 +846,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("G", "Face group colors"),
     ("O", "Toggle orthographic"),
     ("Numpad 1/3/7", "Front / right / top view"),
-    ("D / Shift+D", "Subdivide smooth / linear"),
+    ("Ctrl+D", "Add subdivision level"),
+    ("D / Shift+D", "Subdivision level up / down"),
     ("Ctrl+R", "Voxel remesh"),
     ("Ctrl+W", "Group visible"),
     ("Alt+S", "Solo active piece / show all"),

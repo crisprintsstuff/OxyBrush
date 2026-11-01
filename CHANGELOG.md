@@ -6,6 +6,15 @@ All notable changes to OxyBrush. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Subdivision levels (multiresolution):** Ctrl+D adds a level, D / Shift+D step up and down. Sculpt at any level; changes on a lower level carry the higher-level detail along. Delete higher or lower levels from the Mesh menu. Levels are saved in `.oxb` projects (a new, skippable section, so older versions still open the file at the active level) and undo restores them after remesh or decimate.
+
+### Changed
+- **D** now steps up a subdivision level instead of subdividing the mesh in place; the old one-off subdivide is **Mesh > Subdivide (single mesh)**.
+
+### Known limitations
+- Switching to a very dense level (~5M triangles) pauses the UI for 2–4 seconds.
+
 ## [0.1.0-alpha] - 2026-11-01
 
 ### Added

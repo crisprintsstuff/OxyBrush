@@ -131,7 +131,12 @@ mod tests {
         assert!(!a.due(false));
         assert!(a.due(true));
         let scene = SceneData {
-            pieces: vec![PieceData { name: "s".into(), visible: true, mesh: primitives::icosphere(2, 1.0).to_data() }],
+            pieces: vec![PieceData {
+                name: "s".into(),
+                visible: true,
+                mesh: primitives::icosphere(2, 1.0).to_data(),
+                multires: None,
+            }],
             active: 0,
         };
         a.start(scene.clone());

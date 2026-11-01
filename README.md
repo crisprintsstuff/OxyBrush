@@ -48,7 +48,7 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
-3. Need more detail? **D** subdivides; **Remesh** (right panel) rebuilds even topology.
+3. Need more detail? **Ctrl+D** adds a subdivision level; **D** / **Shift+D** step up and down between levels, keeping your detail. **Remesh** (right panel) rebuilds even topology.
 4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports OBJ or STL (e.g. for 3D printing).
 5. **F1** shows every shortcut; **Help > Getting started guide** opens the full walkthrough.
 
@@ -68,6 +68,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Masking and selection:** box or lasso mask/unmask and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
 - **Symmetry:** X/Y/Z mirroring plus radial symmetry (up to 64 copies around any axis).
 - **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active.
+- **Subdivision levels (multiresolution):** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo.
 - **Voxel remesh:** rebuilds clean, even topology. "Merge visible" remeshes several pieces into one (a union).
 - **Decimation:** quadric edge collapse that keeps open borders and face-group borders.
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, delete hidden, and a group color overlay.
@@ -99,7 +100,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `[` `]` and `-` `=` | Radius and strength |
 | `X` | Toggle X symmetry |
 | `F` | Frame scene |
-| `D` | Subdivide |
+| Ctrl+D | Add subdivision level |
+| `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |
 | `G` | Face group colors |
 | Ctrl+S / Ctrl+O | Save / open project |
