@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.1-alpha"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/crisprintsstuff/OxyBrush"
@@ -49,3 +49,10 @@ opt-level = 3
 
 [profile.release]
 debug = 1
+
+# Published binaries: smaller and faster to download (no debug info).
+[profile.dist]
+inherits = "release"
+debug = 0
+strip = true
+lto = "thin"

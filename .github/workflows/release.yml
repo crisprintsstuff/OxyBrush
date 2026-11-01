@@ -1,7 +1,11 @@
 name: Release builds
 
-# Builds downloadable test binaries for Windows and Linux.
-# Manual runs upload workflow artifacts; pushing a `v*` tag also creates a GitHub release.
+# Builds Windows and Linux packages:
+#   - Windows: Inno Setup installer (.exe) and a portable .zip
+#   - Linux:   Flatpak bundle (.flatpak) and a portable .tar.gz
+# Manual runs (workflow_dispatch) upload them as workflow artifacts only.
+# Pushing a `v*` tag also publishes a GitHub release with SHA256SUMS
+# (marked pre-release when the tag contains a '-', e.g. v0.0.1-alpha).
 on:
   workflow_dispatch:
   push:
@@ -10,46 +14,154 @@ on:
 permissions:
   contents: write
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            archive: oxybrush-windows-x86_64.zip
-          # Older Ubuntu = older glibc, so the binary runs on more distros.
-          - os: ubuntu-22.04
-            target: x86_64-unknown-linux-gnu
-            archive: oxybrush-linux-x86_64.tar.gz
-    runs-on: ${{ matrix.os }}
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      numeric: ${{ steps.v.outputs.numeric }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: v
+        name: Read version from Cargo.toml
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          numeric="${version%%-*}.0"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "numeric=$numeric" >> "$GITHUB_OUTPUT"
+          echo "Version $version (numeric $numeric)"
+      - name: Tag must match Cargo.toml version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.version }}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${{ steps.v.outputs.version }}"
+            exit 1
+          fi
+
+  windows:
+    needs: version
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@1.99.1
-        with:
-          targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo build --release --locked -p oxy-app --target ${{ matrix.target }}
-      - name: Package (Windows)
-        if: runner.os == 'Windows'
+      - run: cargo build --locked --profile dist -p oxy-app --target x86_64-pc-windows-msvc
+      - name: Install Inno Setup
+        run: choco install innosetup --no-progress -y
+      - name: Build installer
         shell: pwsh
         run: |
-          New-Item -ItemType Directory dist | Out-Null
-          Copy-Item target/${{ matrix.target }}/release/oxybrush.exe, README.md, LICENSE-MIT, LICENSE-APACHE dist/
-          Compress-Archive -Path dist/* -DestinationPath ${{ matrix.archive }}
-      - name: Package (Linux)
-        if: runner.os == 'Linux'
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" `
+            /DAppVersion=${{ needs.version.outputs.version }} `
+            /DNumericVersion=${{ needs.version.outputs.numeric }} `
+            /DSourceDir=..\..\target\x86_64-pc-windows-msvc\dist `
+            packaging\windows\oxybrush.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Portable zip
+        shell: pwsh
         run: |
-          mkdir -p dist/oxybrush
-          cp target/${{ matrix.target }}/release/oxybrush README.md LICENSE-MIT LICENSE-APACHE dist/oxybrush/
-          tar -C dist -czf ${{ matrix.archive }} oxybrush
+          $name = "OxyBrush-${{ needs.version.outputs.version }}-windows-x86_64-portable"
+          New-Item -ItemType Directory "dist\$name" | Out-Null
+          Copy-Item target\x86_64-pc-windows-msvc\dist\oxybrush.exe, README.md "dist\$name\"
+          Copy-Item LICENSE-MIT "dist\$name\LICENSE-MIT.txt"
+          Copy-Item LICENSE-APACHE "dist\$name\LICENSE-APACHE.txt"
+          Compress-Archive -Path "dist\$name" -DestinationPath "dist\$name.zip"
+          Remove-Item -Recurse "dist\$name"
+          Get-ChildItem dist
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
-      - uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/v')
+          name: windows
+          path: dist/*
+
+  linux:
+    needs: version
+    # Older Ubuntu = older glibc, so the binary runs on more distros.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --profile dist -p oxy-app --target x86_64-unknown-linux-gnu
+      - name: Portable tarball
+        run: |
+          name="OxyBrush-${{ needs.version.outputs.version }}-linux-x86_64"
+          mkdir -p "dist/$name"
+          cp target/x86_64-unknown-linux-gnu/dist/oxybrush README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp packaging/icons/oxybrush-256.png "dist/$name/oxybrush.png"
+          tar -C dist -czf "dist/$name.tar.gz" "$name"
+          rm -r "dist/$name"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
         with:
-          files: ${{ matrix.archive }}
-          prerelease: true
+          name: linux
+          path: dist/*
+      # The exact binary goes into the Flatpak job.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binary
+          path: target/x86_64-unknown-linux-gnu/dist/oxybrush
+
+  flatpak:
+    needs: [version, linux]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binary
+          path: packaging/flatpak
+      - name: Install flatpak tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder appstream desktop-file-utils
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+      - name: Validate metadata
+        run: |
+          desktop-file-validate packaging/flatpak/io.github.crisprintsstuff.OxyBrush.desktop
+          appstreamcli validate --no-net packaging/flatpak/io.github.crisprintsstuff.OxyBrush.metainfo.xml
+      - name: Build bundle
+        run: |
+          chmod +x packaging/flatpak/oxybrush
+          flatpak-builder --user --install-deps-from=flathub --force-clean --disable-rofiles-fuse \
+            --repo=flatpak-repo flatpak-build packaging/flatpak/io.github.crisprintsstuff.OxyBrush.yml
+          mkdir -p dist
+          flatpak build-bundle flatpak-repo \
+            "dist/OxyBrush-${{ needs.version.outputs.version }}-linux-x86_64.flatpak" \
+            io.github.crisprintsstuff.OxyBrush \
+            --runtime-repo=https://dl.flathub.org/repo/flathub.flatpakrepo
+          ls -la dist
+      - name: Smoke test (install and query the bundle)
+        run: |
+          flatpak install --user -y --noninteractive dist/*.flatpak
+          flatpak info --user io.github.crisprintsstuff.OxyBrush
+          flatpak run --user --command=oxybrush io.github.crisprintsstuff.OxyBrush --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flatpak
+          path: dist/*
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [version, windows, linux, flatpak]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: |
+          cd dist
+          rm -f oxybrush   # raw binary artifact for the Flatpak job; not a release asset
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: OxyBrush ${{ needs.version.outputs.version }}
+          body_path: docs/releases/${{ github.ref_name }}.md
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          files: dist/*
