@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01 (iPad plan added to Phase 3)
+> **Last updated:** 2026-11-01 (multiresolution levels landed, 3.5)
 
 ## Status at a glance
 
@@ -14,7 +14,7 @@
 |---|---|
 | **Latest release** | v0.1.0-alpha (2026-11-01): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4 |
-| **Next** | Phase 3 — multiresolution (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
+| **Next** | Phase 3 — rebuilding lower levels (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
 | **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
 
@@ -54,7 +54,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
 | 3.3 | **Alphas and stencils** | Alphas ✅ (7 procedural CC0 + user PNGs, rotation, follow stroke). Stencils (screen-space overlays) ⏳ | 🚧 |
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
-| 3.5 | **Multiresolution** | Subdivision levels; sculpt at any level with detail propagated; rebuild lower levels from an imported dense mesh (6–10 wk) | ⏳ next |
+| 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level switches on ~5M triangles take 2–4 s on the UI thread (mesh rebuild; see 3.6) | 🚧 |
 | 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) (4–8 wk) | ⏳ |
 | 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys; touch-friendly layout with larger targets and no hover-dependent UI; save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | ⏳ |
 | 3.8 | **iPad build** | iPadOS target (wgpu/Metal, winit), small platform crate using `objc2` for iOS APIs, document picker and Files-app integration, generated Xcode project, CI job producing an `.ipa`. (1–2 wk) | ⏳ |
@@ -118,6 +118,7 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - Pen pressure unverified on real tablets (all platforms)
 - Decimation is slow on very dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
+- Subdivision levels: switching to a ~5M-triangle level pauses the UI for a few seconds; remesh, decimate and single subdivide remove the levels (undo restores them)
 - Settings are not remembered between sessions
 - Windows installer is not code-signed (SmartScreen warning)
 

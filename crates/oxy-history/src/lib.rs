@@ -2,7 +2,8 @@
 //!
 //! - Strokes snapshot only the chunks they touch (positions + mask), the
 //!   first time each chunk is touched.
-//! - Topology operations store the piece's previous mesh.
+//! - Topology operations store the piece's previous mesh and subdivision
+//!   levels (multiresolution stack), including switching levels.
 //! - Face-group/visibility edits store the previous per-triangle data.
 //! - Adding/removing pieces stores the removed piece.
 //!
@@ -13,6 +14,7 @@
 use glam::Vec3;
 use oxy_doc::{Piece, Scene};
 use oxy_mesh::Mesh;
+use oxy_mesh::multires::Multires;
 use std::collections::VecDeque;
 
 struct ChunkSnapshot {
@@ -29,6 +31,7 @@ enum Change {
     Topology {
         piece: u64,
         mesh: Box<Mesh>,
+        multires: Option<Box<Multires>>,
     },
     Faces {
         piece: u64,
@@ -48,7 +51,7 @@ enum Change {
 /// Building blocks for compound operations (e.g. merging pieces).
 pub enum Step {
     /// The piece's mesh was replaced; `previous` is the old mesh.
-    Topology { piece: u64, previous: Mesh },
+    Topology { piece: u64, previous: Mesh, previous_multires: Option<Multires> },
     /// A piece was inserted at `index`.
     Inserted { index: usize },
     /// `piece` was removed from `index`.
@@ -58,7 +61,9 @@ pub enum Step {
 impl From<Step> for Change {
     fn from(s: Step) -> Self {
         match s {
-            Step::Topology { piece, previous } => Change::Topology { piece, mesh: Box::new(previous) },
+            Step::Topology { piece, previous, previous_multires } => {
+                Change::Topology { piece, mesh: Box::new(previous), multires: previous_multires.map(Box::new) }
+            }
             Step::Inserted { index } => Change::Piece { index, piece: None },
             Step::Removed { index, piece } => Change::Piece { index, piece: Some(Box::new(piece)) },
         }
@@ -70,7 +75,9 @@ impl Change {
         let mesh_bytes = |m: &Mesh| m.vertex_count() * 44 + m.triangle_count() * 30;
         match self {
             Change::Chunks { snaps, .. } => snaps.iter().map(|s| s.positions.len() * 16 + 32).sum(),
-            Change::Topology { mesh, .. } => mesh_bytes(mesh),
+            Change::Topology { mesh, multires, .. } => {
+                mesh_bytes(mesh) + multires.as_ref().map_or(0, |m| m.approx_bytes())
+            }
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Compound(c) => c.iter().map(Change::bytes).sum(),
@@ -93,9 +100,11 @@ impl Change {
                 mesh.update_chunks(&chunks);
                 Some(*piece)
             }
-            Change::Topology { piece, mesh } => {
+            Change::Topology { piece, mesh, multires } => {
                 let p = scene.get_mut(*piece)?;
                 std::mem::swap(&mut p.mesh, mesh);
+                let current = p.multires.take().map(Box::new);
+                p.multires = std::mem::replace(multires, current).map(|b| *b);
                 p.mesh.mark_all_dirty();
                 Some(*piece)
             }
@@ -215,10 +224,18 @@ impl History {
         }
     }
 
-    /// Record a topology change; `previous` is the piece's mesh before it.
-    pub fn record_topology(&mut self, label: impl Into<String>, piece: u64, previous: Mesh) {
+    /// Record a topology change: `previous` and `previous_multires` are the
+    /// piece's mesh and subdivision levels before it.
+    pub fn record_topology(
+        &mut self,
+        label: impl Into<String>,
+        piece: u64,
+        previous: Mesh,
+        previous_multires: Option<Multires>,
+    ) {
         self.commit();
-        self.push(label.into(), Change::Topology { piece, mesh: Box::new(previous) });
+        let change = Change::Topology { piece, mesh: Box::new(previous), multires: previous_multires.map(Box::new) };
+        self.push(label.into(), change);
     }
 
     /// Record a face group / visibility edit with the previous values.
@@ -342,7 +359,7 @@ mod tests {
         let mut h = History::default();
         let new = oxy_mesh::topo::subdivide(&s.active().mesh, 0);
         let prev = std::mem::replace(&mut s.active_mut().mesh, new);
-        h.record_topology("Subdivide", id, prev);
+        h.record_topology("Subdivide", id, prev, None);
         h.undo(&mut s);
         assert_eq!(s.active().mesh.triangle_count(), 320);
         h.redo(&mut s);
@@ -383,7 +400,10 @@ mod tests {
         let prev = std::mem::replace(&mut s.pieces[0].mesh, primitives::icosphere(1, 1.0));
         h.record_compound(
             "Merge",
-            vec![Step::Removed { index: 1, piece: removed }, Step::Topology { piece: id0, previous: prev }],
+            vec![
+                Step::Removed { index: 1, piece: removed },
+                Step::Topology { piece: id0, previous: prev, previous_multires: None },
+            ],
         );
         h.undo(&mut s);
         assert_eq!(s.pieces.len(), 2);
@@ -393,6 +413,29 @@ mod tests {
         assert_eq!(s.pieces[0].mesh.triangle_count(), 80);
         h.undo(&mut s);
         assert_eq!(s.pieces.len(), 2);
+    }
+
+    #[test]
+    fn topology_undo_restores_subdivision_levels() {
+        let mut s = Scene::new(Piece::new("s", primitives::icosphere(1, 1.0)));
+        let id = s.active().id;
+        let mut h = History::default();
+        // Add a level: mesh and stack both change; undo must restore both.
+        let piece = s.active_mut();
+        let mut mr = Multires::new(&piece.mesh);
+        let data = mr.add_level(&piece.mesh);
+        let new_mesh = Mesh::from_data(data);
+        mr.bind(&new_mesh);
+        let prev_mesh = std::mem::replace(&mut piece.mesh, new_mesh);
+        let prev_mr = piece.multires.replace(mr);
+        h.record_topology("Add level", id, prev_mesh, prev_mr);
+        h.undo(&mut s);
+        assert!(s.active().multires.is_none());
+        assert_eq!(s.active().mesh.triangle_count(), 80);
+        h.redo(&mut s);
+        let mr = s.active().multires.as_ref().unwrap();
+        assert_eq!(mr.level_count(), 2);
+        assert!(mr.is_bound_to(&s.active().mesh));
     }
 
     #[test]

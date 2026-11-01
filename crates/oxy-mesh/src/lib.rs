@@ -8,6 +8,10 @@
 
 mod aabb;
 mod adjacency;
+pub mod multires;
+
+/// Per-triangle data carried through the spatial sort: face group, hidden, source index.
+type TriAttr = (u32, bool, u32);
 pub mod primitives;
 pub mod topo;
 
@@ -74,6 +78,10 @@ pub struct Mesh {
     /// A vertex is hidden when all of its triangles are hidden.
     vertex_hidden: Vec<bool>,
     face_version: u64,
+    /// Index of each vertex / triangle in the `MeshData` it was built from
+    /// (construction reorders both for locality).
+    source_vertex: Vec<u32>,
+    source_triangle: Vec<u32>,
     vertex_triangles: Csr,
     vertex_neighbors: Csr,
     vertex_chunk: Vec<u32>,
@@ -98,10 +106,13 @@ impl Mesh {
         let MeshData { positions, triangles, mask, groups, hidden } = data;
         let mask = (mask.len() == positions.len()).then_some(mask);
         let tri_attr = |i: usize| (groups.get(i).copied().unwrap_or(0), hidden.get(i).copied().unwrap_or(false));
-        let triangles: Vec<([u32; 3], (u32, bool))> = triangles
+        let triangles: Vec<([u32; 3], (u32, bool, u32))> = triangles
             .into_iter()
             .enumerate()
-            .map(|(i, t)| (t, tri_attr(i)))
+            .map(|(i, t)| {
+                let (g, h) = tri_attr(i);
+                (t, (g, h, i as u32))
+            })
             .filter(|(t, _)| {
                 t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| (i as usize) < positions.len())
             })
@@ -110,7 +121,8 @@ impl Mesh {
         // Spatial sort of triangles by centroid Morton code.
         let bounds = Aabb::from_points(positions.iter().copied());
         let extent = bounds.extent().max(Vec3::splat(1e-12));
-        let mut keyed: Vec<(u32, [u32; 3], (u32, bool))> = triangles
+        // (morton key, triangle, (face group, hidden, source triangle index))
+        let mut keyed: Vec<(u32, [u32; 3], TriAttr)> = triangles
             .into_iter()
             .map(|(t, a)| {
                 let c = (positions[t[0] as usize] + positions[t[1] as usize] + positions[t[2] as usize]) / 3.0;
@@ -122,10 +134,12 @@ impl Mesh {
         let mut triangles = Vec::with_capacity(keyed.len());
         let mut groups = Vec::with_capacity(keyed.len());
         let mut hidden = Vec::with_capacity(keyed.len());
-        for (_, t, (g, h)) in keyed {
+        let mut source_triangle = Vec::with_capacity(keyed.len());
+        for (_, t, (g, h, src)) in keyed {
             triangles.push(t);
             groups.push(g);
             hidden.push(h);
+            source_triangle.push(src);
         }
 
         // Assign vertex ownership in chunk order and renumber.
@@ -133,6 +147,7 @@ impl Mesh {
         let mut remap = vec![u32::MAX; positions.len()];
         let mut new_positions = Vec::with_capacity(positions.len());
         let mut new_mask = Vec::with_capacity(positions.len());
+        let mut source_vertex = Vec::with_capacity(positions.len());
         let mut chunks = Vec::with_capacity(chunk_count);
         for c in 0..chunk_count {
             let t0 = c * CHUNK_TRIANGLES;
@@ -145,6 +160,7 @@ impl Mesh {
                         remap[old] = new_positions.len() as u32;
                         new_positions.push(positions[old]);
                         new_mask.push(mask.as_ref().map_or(0.0, |m| m[old]));
+                        source_vertex.push(old as u32);
                     }
                     *i = remap[old];
                 }
@@ -182,6 +198,8 @@ impl Mesh {
             hidden,
             vertex_hidden: Vec::new(),
             face_version: 0,
+            source_vertex,
+            source_triangle,
             dirty: vec![true; chunks.len()],
             chunks,
             triangles,
@@ -337,6 +355,16 @@ impl Mesh {
             })
             .collect();
         self.set_hidden(hidden);
+    }
+
+    /// For each vertex, its index in the `MeshData` this mesh was built from.
+    pub fn source_vertices(&self) -> &[u32] {
+        &self.source_vertex
+    }
+
+    /// For each triangle, its index in the `MeshData` this mesh was built from.
+    pub fn source_triangles(&self) -> &[u32] {
+        &self.source_triangle
     }
 
     /// Changes whenever face groups or visibility change (globally unique).

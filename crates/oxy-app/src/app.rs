@@ -406,8 +406,9 @@ impl App {
                         ed.symmetry.x = !ed.symmetry.x;
                         ed.status = format!("X symmetry {}", if ed.symmetry.x { "on" } else { "off" });
                     }
-                    ("d", false, true, _) => ed.subdivide(false),
-                    ("d", false, false, _) => ed.subdivide(true),
+                    ("d", true, _, _) => ed.add_level(),
+                    ("d", false, true, _) => ed.step_level(-1),
+                    ("d", false, false, _) => ed.step_level(1),
                     ("[", false, ..) => ed.adjust_radius(1.0 / 1.15),
                     ("]", false, ..) => ed.adjust_radius(1.15),
                     ("-", false, ..) => ed.adjust_strength(-0.05),

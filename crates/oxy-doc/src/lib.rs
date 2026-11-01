@@ -8,6 +8,7 @@
 pub mod autosave;
 pub mod format;
 
+use oxy_mesh::multires::Multires;
 use oxy_mesh::{Aabb, Mesh, MeshData};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -24,15 +25,29 @@ pub struct Piece {
     pub name: String,
     pub visible: bool,
     pub mesh: Mesh,
+    /// Subdivision levels, when the piece uses multiresolution sculpting.
+    /// `mesh` then shows the active level.
+    pub multires: Option<Multires>,
 }
 
 impl Piece {
     pub fn new(name: impl Into<String>, mesh: Mesh) -> Self {
-        Self { id: new_piece_id(), name: name.into(), visible: true, mesh }
+        Self { id: new_piece_id(), name: name.into(), visible: true, mesh, multires: None }
     }
 
     pub fn to_data(&self) -> PieceData {
-        PieceData { name: self.name.clone(), visible: self.visible, mesh: self.mesh.to_data() }
+        match &self.multires {
+            // With levels, the mesh is saved in level order so it can be
+            // matched back to the stack on load.
+            Some(mr) => {
+                let mut mr = mr.clone();
+                let mesh = mr.export_active(&self.mesh);
+                PieceData { name: self.name.clone(), visible: self.visible, mesh, multires: Some(mr) }
+            }
+            None => {
+                PieceData { name: self.name.clone(), visible: self.visible, mesh: self.mesh.to_data(), multires: None }
+            }
+        }
     }
 }
 
@@ -42,11 +57,17 @@ pub struct PieceData {
     pub name: String,
     pub visible: bool,
     pub mesh: MeshData,
+    pub multires: Option<Multires>,
 }
 
 impl PieceData {
     pub fn into_piece(self) -> Piece {
-        Piece { id: new_piece_id(), name: self.name, visible: self.visible, mesh: Mesh::from_data(self.mesh) }
+        let mesh = Mesh::from_data(self.mesh);
+        let multires = self.multires.map(|mut mr| {
+            mr.bind(&mesh);
+            mr
+        });
+        Piece { id: new_piece_id(), name: self.name, visible: self.visible, mesh, multires }
     }
 }
 

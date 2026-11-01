@@ -34,7 +34,7 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 1. **Look around.** Drag on empty space to orbit, scroll to zoom, right-drag to pan. Press **F** to frame the model, **F1** for all shortcuts.
 2. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert. Resize the brush with **[** and **]**.
 3. **Undo** with **Ctrl+Z**, redo with **Ctrl+Shift+Z**.
-4. **More resolution:** press **D** to subdivide, or use **Remesh** in the right panel to rebuild even topology.
+4. **More resolution:** press **Ctrl+D** to add a subdivision level (a few times), sculpt some fine detail, then press **Shift+D** to go down a level and make a broad change; press **D** to go back up and check that the fine detail followed. **Remesh** in the right panel rebuilds even topology (it removes the levels).
 5. **Pieces:** in the right panel, **+ Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.
 6. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (OBJ or STL, e.g. for 3D printing).
 7. **New in 0.1.0:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
