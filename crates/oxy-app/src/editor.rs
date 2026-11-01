@@ -149,6 +149,8 @@ pub struct Editor {
     pub show_panels: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
+    /// Welcome window with starter shapes and the basics (shown at startup).
+    pub show_welcome: bool,
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
@@ -216,6 +218,7 @@ impl Default for Editor {
             show_panels: true,
             show_shortcuts: false,
             show_about: false,
+            show_welcome: true,
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],

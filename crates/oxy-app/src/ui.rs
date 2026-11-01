@@ -1,12 +1,11 @@
 //! egui panels, dialogs, theme and brush cursor.
 
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
+use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use oxy_mesh::Mesh;
 use oxy_render::MatcapPreset;
 use oxy_sculpt::{Axis, BrushKind, Falloff};
-
-const ACCENT: Color32 = Color32::from_rgb(0xE0, 0x7A, 0x4F);
 
 /// Actions that need the platform layer (file dialogs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,20 +26,58 @@ pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32) {
     let (bg, panel, text) = if high_contrast {
         (Color32::BLACK, Color32::from_gray(10), Color32::WHITE)
     } else {
-        (Color32::from_rgb(0x17, 0x18, 0x1B), Color32::from_rgb(0x1E, 0x20, 0x24), Color32::from_gray(225))
+        // Warm graphite: slightly brown-tinted grays that suit the clay material.
+        (Color32::from_rgb(0x16, 0x17, 0x1A), Color32::from_rgb(0x1F, 0x21, 0x25), Color32::from_gray(228))
     };
     v.panel_fill = panel;
-    v.window_fill = panel;
+    v.window_fill = Color32::from_rgb(0x24, 0x26, 0x2B);
     v.extreme_bg_color = bg;
+    v.faint_bg_color = Color32::from_rgb(0x25, 0x27, 0x2C);
     v.override_text_color = Some(text);
     v.selection.bg_fill = ACCENT.linear_multiply(0.55);
     v.selection.stroke = EStroke::new(1.0, ACCENT);
     v.hyperlink_color = ACCENT;
+    v.window_corner_radius = 10.into();
+    v.menu_corner_radius = 8.into();
+    v.window_stroke = EStroke::new(1.0, Color32::from_gray(60));
+    let radius = egui::CornerRadius::same(6);
+    for w in [
+        &mut v.widgets.noninteractive,
+        &mut v.widgets.inactive,
+        &mut v.widgets.hovered,
+        &mut v.widgets.active,
+        &mut v.widgets.open,
+    ] {
+        w.corner_radius = radius;
+    }
     if high_contrast {
         v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, Color32::WHITE);
         v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_gray(200));
+    } else {
+        v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, Color32::from_gray(48));
+        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x2C, 0x2E, 0x34);
+        v.widgets.inactive.bg_fill = Color32::from_rgb(0x34, 0x37, 0x3D);
+        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x37, 0x3A, 0x41);
+        v.widgets.hovered.bg_fill = Color32::from_rgb(0x40, 0x43, 0x4A);
+        v.widgets.hovered.bg_stroke = EStroke::new(1.0, ACCENT.linear_multiply(0.7));
+        v.widgets.active.weak_bg_fill = ACCENT.linear_multiply(0.6);
+        v.widgets.active.bg_fill = ACCENT;
     }
     ctx.set_visuals(v);
+    ctx.all_styles_mut(|s| {
+        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+        s.spacing.button_padding = egui::vec2(8.0, 4.0);
+        s.spacing.interact_size.y = 24.0;
+        s.spacing.slider_width = 130.0;
+        s.spacing.window_margin = egui::Margin::same(14);
+        s.spacing.menu_margin = egui::Margin::same(8);
+        s.spacing.indent = 14.0;
+        use egui::{FontFamily::Proportional, FontId, TextStyle};
+        s.text_styles.insert(TextStyle::Heading, FontId::new(20.0, Proportional));
+        s.text_styles.insert(TextStyle::Body, FontId::new(13.5, Proportional));
+        s.text_styles.insert(TextStyle::Button, FontId::new(13.5, Proportional));
+        s.text_styles.insert(TextStyle::Small, FontId::new(11.0, Proportional));
+    });
     ctx.set_zoom_factor(ui_scale);
 }
 
@@ -129,56 +166,36 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         });
     });
 
-    egui::Panel::bottom("status").show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let m = &ed.scene.active().mesh;
-            ui.label(format!(
-                "{} · {} tris ({} total) · {} verts · undo {:.1} MB · {:.1} ms",
-                ed.scene.active().name,
-                fmt_count(m.triangle_count()),
-                fmt_count(ed.scene.triangle_count()),
-                fmt_count(m.vertex_count()),
-                ed.history.used_bytes() as f64 / 1e6,
-                ed.frame_ms
-            ));
-            ui.separator();
-            if let Some(job) = &ed.job {
-                ui.spinner();
-                ui.label(format!("{}… {:.0} s", job.label, job.started.elapsed().as_secs_f32()));
-            } else {
-                ui.label(&ed.status);
-            }
-            if let Some(e) = &ed.autosaver.last_error {
-                ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
-            }
-        });
-    });
+    toolbar(ui, ed);
+    status_bar(ui, ed);
 
     if ed.show_panels {
-        egui::Panel::left("brushes").resizable(false).default_size(130.0).show(ui, |ui| {
-            ui.add_space(4.0);
-            ui.label(RichText::new("Brushes").strong());
+        egui::Panel::left("brushes").resizable(false).default_size(176.0).show(ui, |ui| {
+            ui.add_space(6.0);
+            ui.label(RichText::new("Brushes").strong().size(14.0));
             ui.add_space(4.0);
             egui::ScrollArea::vertical().show(ui, |ui| {
-                for (i, k) in BrushKind::ALL.iter().enumerate() {
-                    let key = match i {
-                        0..=8 => format!("{}", i + 1),
-                        9 => "0".into(),
-                        _ => " ".into(),
-                    };
-                    let label = format!("{key}  {}", k.label());
-                    let r = ui
-                        .add_sized([ui.available_width(), 24.0], egui::Button::selectable(ed.brush_kind == *k, label));
-                    if r.clicked() {
-                        ed.brush_kind = *k;
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for k in BrushKind::ALL {
+                    if widgets::brush_row(ui, k, ed.brush_kind == k).clicked() {
+                        ed.brush_kind = k;
                     }
                 }
-                ui.add_space(8.0);
-                ui.label(RichText::new("Shift: Smooth\nCtrl: Mask\nAlt: Invert\nCtrl+Shift: Group").weak().small());
+                ui.add_space(10.0);
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.label(RichText::new("Hold while sculpting").weak().small());
+                for (key, what) in
+                    [("Shift", "Smooth"), ("Ctrl", "Mask"), ("Alt", "Invert"), ("Ctrl+Shift", "Pick group")]
+                {
+                    ui.horizontal(|ui| {
+                        widgets::keycap(ui, key);
+                        ui.label(RichText::new(what).small());
+                    });
+                }
             });
         });
 
-        egui::Panel::right("inspector").resizable(true).default_size(270.0).show(ui, |ui| {
+        egui::Panel::right("inspector").resizable(true).default_size(290.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
         });
     }
@@ -193,11 +210,148 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     (action, canvas)
 }
 
+/// Quick-access bar under the menus: undo, brush size, symmetry, levels, view.
+fn toolbar(ui: &mut Ui, ed: &mut Editor) {
+    egui::Panel::top("toolbar").show(ui, |ui| {
+        ui.add_space(3.0);
+        ui.horizontal(|ui| {
+            if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), "Undo (Ctrl+Z)").clicked() {
+                ed.undo();
+            }
+            if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), "Redo (Ctrl+Shift+Z)").clicked() {
+                ed.redo();
+            }
+            ui.separator();
+
+            ui.label(RichText::new("Size").weak());
+            ui.spacing_mut().slider_width = 90.0;
+            ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).show_value(false))
+                .on_hover_text(format!("Brush radius: {:.0} pt  ([ and ])", ed.brush_radius_pt));
+            ui.label(RichText::new("Strength").weak());
+            let k = ed.brush_kind;
+            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).show_value(false))
+                .on_hover_text("Brush strength  (- and =)");
+            ui.separator();
+
+            ui.label(RichText::new("Mirror").weak());
+            widgets::chip(ui, &mut ed.symmetry.x, "X", "Mirror strokes across X (left/right)  (X)");
+            widgets::chip(ui, &mut ed.symmetry.y, "Y", "Mirror strokes across Y (top/bottom)");
+            widgets::chip(ui, &mut ed.symmetry.z, "Z", "Mirror strokes across Z (front/back)");
+            ui.separator();
+
+            let levels = ed.multires_level();
+            let text = match levels {
+                Some((a, c)) => format!("Level {} / {c}", a + 1),
+                None => "No levels".into(),
+            };
+            ui.label(RichText::new(text).weak())
+                .on_hover_text("Subdivision levels: sculpt big shapes on low levels and fine detail on high ones");
+            if widgets::icon_button(ui, Icon::Down, false, levels.is_some_and(|(a, _)| a > 0), "Level down (Shift+D)")
+                .clicked()
+            {
+                ed.step_level(-1);
+            }
+            if widgets::icon_button(ui, Icon::Up, false, levels.is_some_and(|(a, c)| a + 1 < c), "Level up (D)")
+                .clicked()
+            {
+                ed.step_level(1);
+            }
+            if widgets::icon_button(ui, Icon::Plus, false, ed.job.is_none(), "Add a subdivision level (Ctrl+D)")
+                .clicked()
+            {
+                ed.add_level();
+            }
+            ui.separator();
+
+            if widgets::icon_button(ui, Icon::Frame, false, true, "Frame the scene (F)").clicked() {
+                ed.frame();
+            }
+            let ortho = ed.camera.orthographic;
+            if widgets::icon_button(ui, Icon::Ortho, ortho, true, "Orthographic view (O)").clicked() {
+                ed.camera.orthographic = !ortho;
+            }
+            let mask = ed.view.show_mask;
+            if widgets::icon_button(ui, Icon::Mask, mask, true, "Show mask (M)").clicked() {
+                ed.view.show_mask = !mask;
+            }
+            let groups = ed.view.show_groups;
+            if widgets::icon_button(ui, Icon::Groups, groups, true, "Face group colors (G)").clicked() {
+                ed.view.show_groups = !groups;
+            }
+            egui::ComboBox::from_id_salt("material")
+                .selected_text(ed.matcap.label())
+                .width(110.0)
+                .show_ui(ui, |ui| {
+                    for m in MatcapPreset::ALL {
+                        ui.selectable_value(&mut ed.matcap, m, m.label());
+                    }
+                })
+                .response
+                .on_hover_text("Viewport material");
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, Icon::Help, ed.show_shortcuts, true, "Keyboard shortcuts (F1)").clicked() {
+                    ed.show_shortcuts = !ed.show_shortcuts;
+                }
+            });
+        });
+        ui.add_space(1.0);
+    });
+}
+
+/// What the modifier keys currently do, shown at the right of the status bar.
+pub fn context_hint(ed: &Editor) -> String {
+    let m = ed.modifiers;
+    match (m.ctrl, m.shift, m.alt) {
+        (true, true, true) => "Drag on empty space: hide the selection".into(),
+        (true, true, false) => "Click a face group to isolate it · drag on empty space: show only the selection".into(),
+        (true, false, true) => "Paint to unmask · drag on empty space: unmask a selection".into(),
+        (true, false, false) => {
+            "Paint to mask · drag on empty space: mask a selection · click empty space: blur".into()
+        }
+        (false, true, _) => "Smoothing".into(),
+        (false, false, true) => format!("{}, inverted", ed.brush_kind.label()),
+        _ => "Drag model: sculpt · drag empty space: orbit · right-drag: pan · wheel: zoom".into(),
+    }
+}
+
+fn status_bar(ui: &mut Ui, ed: &mut Editor) {
+    egui::Panel::bottom("status").show(ui, |ui| {
+        ui.horizontal(|ui| {
+            let m = &ed.scene.active().mesh;
+            ui.label(RichText::new(&ed.scene.active().name).strong());
+            ui.label(format!("{} triangles", fmt_count(m.triangle_count()))).on_hover_text(format!(
+                "{} vertices\n{} triangles in the scene\nUndo memory {:.1} MB\nFrame time {:.1} ms",
+                fmt_count(m.vertex_count()),
+                fmt_count(ed.scene.triangle_count()),
+                ed.history.used_bytes() as f64 / 1e6,
+                ed.frame_ms
+            ));
+            ui.separator();
+            if let Some(job) = &ed.job {
+                ui.spinner();
+                ui.label(format!("{}… {:.0} s", job.label, job.started.elapsed().as_secs_f32()));
+            } else {
+                ui.label(&ed.status);
+            }
+            if let Some(e) = &ed.autosaver.last_error {
+                ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(RichText::new(context_hint(ed)).weak());
+            });
+        });
+    });
+}
+
 fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     use crate::support::{REPO_URL, folder_url};
     let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     if ui.button("Getting started guide").clicked() {
         open(ui, format!("{REPO_URL}/blob/main/docs/TESTING_GUIDE.md"));
+    }
+    if ui.button("Welcome screen").clicked() {
+        ed.show_welcome = true;
     }
     if ui.button("Shortcuts  (F1)").clicked() {
         ed.show_shortcuts = true;
@@ -390,86 +544,130 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    // Pieces list.
     ui.add_space(4.0);
-    ui.label(RichText::new("Pieces").strong());
+    widgets::section(ui, "Pieces", true, |ui| pieces_section(ui, ed, busy));
+    let brush_title = format!("{} brush", ed.brush_kind.label());
+    widgets::section(ui, &brush_title, true, |ui| brush_section(ui, ed));
+    widgets::section(ui, "Stroke", false, |ui| stroke_section(ui, ed));
+    let alpha_title = match ed.alpha.and_then(|i| ed.alphas.get(i)) {
+        Some(a) => format!("Alpha: {}", a.name),
+        None => "Alpha".into(),
+    };
+    widgets::section(ui, &alpha_title, false, |ui| alpha_section(ui, ed));
+    widgets::section(ui, "Symmetry", false, |ui| symmetry_section(ui, ed));
+    widgets::section(ui, "Topology", true, |ui| topology_section(ui, ed, busy));
+    widgets::section(ui, "Groups & mask", false, |ui| groups_section(ui, ed));
+    widgets::section(ui, "History", false, |ui| history_section(ui, ed));
+}
+
+fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
-        ui.horizontal(|ui| {
-            let eye = if p.visible { "Hide" } else { "Show" };
-            if ui.small_button(eye).on_hover_text("Toggle piece visibility").clicked() {
-                p.visible = !p.visible;
-            }
-            if i == active {
-                ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(120.0));
-            } else if ui.add(egui::Button::selectable(false, &p.name)).clicked() {
-                select = Some(i);
-            }
-            ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+        let fill = if i == active { ACCENT.linear_multiply(0.18) } else { Color32::TRANSPARENT };
+        egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let (icon, tip) = if p.visible { (Icon::Eye, "Hide piece") } else { (Icon::EyeOff, "Show piece") };
+                if widgets::icon_button(ui, icon, false, true, tip).clicked() {
+                    p.visible = !p.visible;
+                }
+                if i == active {
+                    ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0))
+                        .on_hover_text("Active piece: click to rename");
+                } else if ui
+                    .add(egui::Button::selectable(false, &p.name))
+                    .on_hover_text("Make active (or Alt+click it in the viewport)")
+                    .clicked()
+                {
+                    select = Some(i);
+                }
+                ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+            });
         });
     }
     if let Some(i) = select {
         ed.scene.set_active(i);
     }
     ui.horizontal_wrapped(|ui| {
-        if ui.small_button("+ Sphere").clicked() {
-            ed.add_primitive("sphere");
-        }
-        if ui.small_button("Duplicate").clicked() {
+        ui.menu_button("+ Add", |ui| {
+            for (label, which) in [("Sphere", "sphere"), ("Cube", "cube"), ("Plane", "plane")] {
+                if ui.button(label).clicked() {
+                    ed.add_primitive(which);
+                }
+            }
+        })
+        .response
+        .on_hover_text("Add a new piece");
+        if ui.button("Duplicate").clicked() {
             ed.duplicate_active(false);
         }
-        if ui.add_enabled(ed.scene.pieces.len() > 1, egui::Button::new("Delete").small()).clicked() {
+        if ui.add_enabled(ed.scene.pieces.len() > 1, egui::Button::new("Delete")).clicked() {
             ed.delete_active();
         }
-        if ui.add_enabled(!busy && ed.scene.pieces.len() > 1, egui::Button::new("Merge").small()).clicked() {
+        if ui
+            .add_enabled(!busy && ed.scene.pieces.len() > 1, egui::Button::new("Merge"))
+            .on_hover_text("Voxel-remesh all visible pieces into the active one")
+            .clicked()
+        {
             ed.merge_visible();
         }
     });
+}
 
-    ui.separator();
-    ui.label(RichText::new(format!("{} brush", ed.brush_kind.label())).strong());
-    egui::Grid::new("brush").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+fn brush_section(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new(widgets::brush_description(ed.brush_kind)).weak().small());
+    ui.add_space(2.0);
+    egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Radius");
-        ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt"));
+        ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt"))
+            .on_hover_text("Brush size on screen  ([ and ])");
         ui.end_row();
         ui.label("Strength");
         let k = ed.brush_kind;
-        ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0));
+        ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)).on_hover_text("How strong each dab is  (- and =)");
         ui.end_row();
         ui.label("Falloff");
-        egui::ComboBox::from_id_salt("falloff").selected_text(ed.falloff.label()).show_ui(ui, |ui| {
-            for f in Falloff::ALL {
-                ui.selectable_value(&mut ed.falloff, f, f.label());
-            }
-        });
+        egui::ComboBox::from_id_salt("falloff")
+            .selected_text(ed.falloff.label())
+            .show_ui(ui, |ui| {
+                for f in Falloff::ALL {
+                    ui.selectable_value(&mut ed.falloff, f, f.label());
+                }
+            })
+            .response
+            .on_hover_text("How the effect fades from the center of the brush to its edge");
         ui.end_row();
         ui.label("Spacing");
-        ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0));
+        ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0))
+            .on_hover_text("Distance between dabs, as a fraction of the radius. Lower is smoother.");
         ui.end_row();
         ui.label("Auto smooth");
-        ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0));
+        ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0)).on_hover_text("Smooth a little after every dab");
         ui.end_row();
+        if ed.brush_kind == BrushKind::Noise {
+            ui.label("Noise scale");
+            ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)).on_hover_text("Size of the noise pattern");
+            ui.end_row();
+        }
     });
     ui.checkbox(&mut ed.pressure_strength, "Pen pressure sets strength");
     ui.checkbox(&mut ed.pressure_radius, "Pen pressure sets radius");
-    ui.checkbox(&mut ed.front_faces_only, "Front faces only");
-    if ed.brush_kind == oxy_sculpt::BrushKind::Noise {
-        ui.horizontal(|ui| {
-            ui.label("Noise scale");
-            ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0));
-        });
-    }
+    ui.checkbox(&mut ed.front_faces_only, "Front faces only")
+        .on_hover_text("Don't affect surfaces facing away from you (e.g. the back of a thin part)");
+}
 
-    ui.separator();
-    ui.label(RichText::new("Stroke").strong());
-    egui::Grid::new("stroke").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
+    egui::Grid::new("stroke").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Mode");
-        egui::ComboBox::from_id_salt("stroke_mode").selected_text(ed.stroke_mode.label()).show_ui(ui, |ui| {
-            for m in StrokeMode::ALL {
-                ui.selectable_value(&mut ed.stroke_mode, m, m.label());
-            }
-        });
+        egui::ComboBox::from_id_salt("stroke_mode")
+            .selected_text(ed.stroke_mode.label())
+            .show_ui(ui, |ui| {
+                for m in StrokeMode::ALL {
+                    ui.selectable_value(&mut ed.stroke_mode, m, m.label());
+                }
+            })
+            .response
+            .on_hover_text("Freehand: paint. Line: drag a straight line. Stamp: drag out a single dab.");
         ui.end_row();
         ui.label("Stabilizer");
         ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt"))
@@ -487,9 +685,9 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         });
         ui.end_row();
     });
+}
 
-    ui.separator();
-    ui.label(RichText::new("Alpha").strong());
+fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
     let current = ed.alpha.and_then(|i| ed.alphas.get(i)).map_or("None".to_string(), |a| a.name.clone());
     ui.horizontal(|ui| {
         egui::ComboBox::from_id_salt("alpha").selected_text(current).show_ui(ui, |ui| {
@@ -498,73 +696,86 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ui.selectable_value(&mut ed.alpha, Some(i), a.name.as_str());
             }
         });
-        if ui.small_button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
+        if ui.button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
             ed.request_load_alpha = true;
         }
     });
-    if let Some(a) = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
-        ui.horizontal(|ui| {
-            alpha_thumbnail(ui, &a);
-            ui.vertical(|ui| {
-                ui.add(egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"));
-                ui.checkbox(&mut ed.alpha_follow_stroke, "Follow stroke direction");
-                ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
+    match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
+        Some(a) => {
+            ui.horizontal(|ui| {
+                alpha_thumbnail(ui, &a);
+                ui.vertical(|ui| {
+                    ui.add(egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"));
+                    ui.checkbox(&mut ed.alpha_follow_stroke, "Follow stroke direction");
+                    ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
+                });
             });
-        });
+        }
+        None => {
+            ui.label(
+                RichText::new("An alpha is a grayscale image that shapes each dab (scales, pores, cracks…).")
+                    .weak()
+                    .small(),
+            );
+        }
     }
+}
 
-    ui.separator();
-    ui.label(RichText::new("Symmetry").strong());
+fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
     ui.horizontal(|ui| {
-        ui.toggle_value(&mut ed.symmetry.x, "X");
-        ui.toggle_value(&mut ed.symmetry.y, "Y");
-        ui.toggle_value(&mut ed.symmetry.z, "Z");
+        ui.label("Mirror");
+        widgets::chip(ui, &mut ed.symmetry.x, "X", "Mirror strokes across X (left/right)  (X)");
+        widgets::chip(ui, &mut ed.symmetry.y, "Y", "Mirror strokes across Y (top/bottom)");
+        widgets::chip(ui, &mut ed.symmetry.z, "Z", "Mirror strokes across Z (front/back)");
     });
     ui.horizontal(|ui| {
         ui.label("Radial");
         ui.add(egui::DragValue::new(&mut ed.symmetry.radial).range(0..=64).speed(0.1))
-            .on_hover_text("Number of copies around the axis (0 = off)");
-        egui::ComboBox::from_id_salt("radial_axis").selected_text(format!("{:?}", ed.symmetry.radial_axis)).show_ui(
-            ui,
-            |ui| {
+            .on_hover_text("Number of copies around the axis (0 = off). Great for flowers, wheels, crowns.");
+        egui::ComboBox::from_id_salt("radial_axis")
+            .selected_text(format!("{:?} axis", ed.symmetry.radial_axis))
+            .show_ui(ui, |ui| {
                 for a in [Axis::X, Axis::Y, Axis::Z] {
-                    ui.selectable_value(&mut ed.symmetry.radial_axis, a, format!("{a:?}"));
+                    ui.selectable_value(&mut ed.symmetry.radial_axis, a, format!("{a:?} axis"));
                 }
-            },
-        );
+            });
     });
+}
 
-    ui.separator();
-    ui.label(RichText::new("Topology").strong());
+fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    ui.label(RichText::new("Subdivision levels").small().weak());
     ui.horizontal(|ui| {
         match ed.multires_level() {
             Some((a, c)) => {
                 ui.label(format!("Level {} of {c}", a + 1));
-                if ui
-                    .add_enabled(a > 0, egui::Button::new("Down").small())
-                    .on_hover_text("Level down (Shift+D)")
-                    .clicked()
-                {
+                if widgets::icon_button(ui, Icon::Down, false, a > 0, "Level down (Shift+D)").clicked() {
                     ed.step_level(-1);
                 }
-                if ui.add_enabled(a + 1 < c, egui::Button::new("Up").small()).on_hover_text("Level up (D)").clicked() {
+                if widgets::icon_button(ui, Icon::Up, false, a + 1 < c, "Level up (D)").clicked() {
                     ed.step_level(1);
                 }
             }
             None => {
-                ui.label(RichText::new("No subdivision levels").weak());
+                ui.label(RichText::new("None yet").weak());
             }
         }
-        if ui.small_button("+ Level").on_hover_text("Add a subdivision level (Ctrl+D)").clicked() {
+        if ui.button("+ Level").on_hover_text("Add a subdivision level for finer detail (Ctrl+D)").clicked() {
             ed.add_level();
         }
     });
+    ui.add_space(4.0);
+    ui.label(RichText::new("Rebuild").small().weak());
     ui.horizontal(|ui| {
         ui.label("Resolution");
-        ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION));
+        ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION))
+            .on_hover_text("Voxel grid size for remeshing: higher keeps more detail");
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.add_enabled(!busy, egui::Button::new("Remesh")).on_hover_text("Voxel remesh (Ctrl+R)").clicked() {
+        if ui
+            .add_enabled(!busy, egui::Button::new("Remesh"))
+            .on_hover_text("Rebuild clean, even triangles (Ctrl+R). Removes subdivision levels.")
+            .clicked()
+        {
             ed.remesh_active();
         }
         if ui
@@ -577,20 +788,26 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     });
     ui.horizontal(|ui| {
         ui.label("Keep");
-        ui.add(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"));
-        if ui.add_enabled(!busy, egui::Button::new("Decimate")).clicked() {
+        ui.add(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))
+            .on_hover_text("Share of triangles to keep when decimating");
+        if ui
+            .add_enabled(!busy, egui::Button::new("Decimate"))
+            .on_hover_text("Reduce the triangle count while keeping the shape (e.g. before export)")
+            .clicked()
+        {
             ed.decimate_active();
         }
     });
+}
 
-    ui.separator();
-    ui.label(RichText::new("Groups & mask").strong());
-    ui.checkbox(&mut ed.view.show_groups, "Show face group colors");
+fn groups_section(ui: &mut Ui, ed: &mut Editor) {
+    ui.checkbox(&mut ed.view.show_groups, "Show face group colors  (G)");
+    ui.checkbox(&mut ed.view.show_mask, "Show mask  (M)");
     ui.horizontal(|ui| {
         ui.label("Selection");
         ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle");
         ui.selectable_value(&mut ed.selection_lasso, true, "Lasso");
-        ui.label(RichText::new("(L)").weak());
+        widgets::keycap(ui, "L");
     });
     ui.horizontal_wrapped(|ui| {
         if ui.button("Group visible").clicked() {
@@ -606,9 +823,10 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.clear_mask();
         }
     });
+    ui.label(RichText::new("More in the Groups and Mask menus.").weak().small());
+}
 
-    ui.separator();
-    ui.label(RichText::new("History").strong());
+fn history_section(ui: &mut Ui, ed: &mut Editor) {
     let undo: Vec<String> = ed.history.undo_labels().map(str::to_owned).collect();
     let redo: Vec<String> = ed.history.redo_labels().map(str::to_owned).collect();
     if undo.is_empty() && redo.is_empty() {
@@ -681,6 +899,10 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         ed.status = "System info copied to the clipboard".into();
     }
 
+    if ed.show_welcome && ed.pending.is_none() && ed.recoverable.is_empty() {
+        welcome(&ctx, ed, action);
+    }
+
     if let Some(pending) = ed.pending.clone() {
         let what = match &pending {
             Pending::Quit => "quitting",
@@ -721,6 +943,77 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 }
             });
         });
+    }
+}
+
+/// Startup window: starter shapes, open/import, and the basics.
+fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) {
+    let mut open = true;
+    let mut close = false;
+    egui::Window::new("Welcome to OxyBrush")
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.label(RichText::new("Sculpt digital clay. Pick a starting shape, or open your work.").size(15.0));
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                for (icon, title, sub, which) in [
+                    (Icon::Sphere, "Sphere", "Heads, creatures", "sphere"),
+                    (Icon::Cube, "Cube", "Hard surfaces", "cube"),
+                    (Icon::Plane, "Plane", "Reliefs, tiles", "plane"),
+                ] {
+                    if widgets::card(ui, icon, title, sub).clicked() {
+                        ed.request(Pending::New(which));
+                        close = true;
+                    }
+                }
+                if widgets::card(ui, Icon::Open, "Open…", "A .oxb project").clicked() {
+                    *action = Some(UiAction::Open);
+                    close = true;
+                }
+                if widgets::card(ui, Icon::Import, "Import…", "OBJ or STL mesh").clicked() {
+                    *action = Some(UiAction::Import);
+                    close = true;
+                }
+            });
+            ui.add_space(12.0);
+            ui.label(RichText::new("The basics").strong().size(14.0));
+            ui.add_space(2.0);
+            egui::Grid::new("welcome_basics").num_columns(2).spacing([16.0, 6.0]).show(ui, |ui| {
+                for (keys, what) in [
+                    (&["Drag on model"][..], "Sculpt with the current brush"),
+                    (&["Drag empty space"][..], "Orbit around the model"),
+                    (&["Right-drag", "Wheel"][..], "Pan and zoom"),
+                    (&["Shift", "Ctrl", "Alt"][..], "Hold to smooth, mask or invert"),
+                    (&["[", "]"][..], "Brush smaller / larger"),
+                    (&["1", "…", "0"][..], "Pick a brush"),
+                    (&["Ctrl+D"][..], "Add a subdivision level for more detail"),
+                    (&["F1"][..], "All shortcuts"),
+                ] {
+                    ui.horizontal(|ui| {
+                        for k in keys {
+                            widgets::keycap(ui, k);
+                        }
+                    });
+                    ui.label(what);
+                    ui.end_row();
+                }
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                let start = egui::Button::new(RichText::new("Start sculpting").strong().color(Color32::WHITE))
+                    .fill(ACCENT)
+                    .min_size(egui::vec2(140.0, 30.0));
+                if ui.add(start).on_hover_text("Keep the sphere and start").clicked() {
+                    close = true;
+                }
+                ui.label(RichText::new("Reopen this from Help > Welcome screen.").weak().small());
+            });
+        });
+    if close || !open {
+        ed.show_welcome = false;
     }
 }
 
@@ -862,3 +1155,55 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Tab", "Show/hide panels"),
     ("F1", "This window"),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run a few headless frames of the whole interface.
+    fn run_frames(ed: &mut Editor, frames: usize) {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx, false, 1.0);
+        for _ in 0..frames {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let (_, canvas) = draw(ui, ed);
+                assert!(canvas.width() > 400.0, "panels should leave room for the viewport: {canvas:?}");
+            });
+            // No GPU here: discard texture uploads (fonts, alpha previews).
+            out.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn interface_draws_in_every_main_state() {
+        let mut ed = Editor::default();
+        assert!(ed.show_welcome, "new users see the welcome window");
+        run_frames(&mut ed, 3);
+        ed.show_welcome = false;
+        ed.add_level();
+        ed.brush_kind = BrushKind::Noise;
+        ed.alpha = Some(0);
+        run_frames(&mut ed, 2);
+        ed.show_panels = false;
+        ed.high_contrast = true;
+        run_frames(&mut ed, 2);
+    }
+
+    #[test]
+    fn status_hint_follows_modifier_keys() {
+        let mut ed = Editor::default();
+        assert!(context_hint(&ed).contains("orbit"));
+        ed.modifiers.shift = true;
+        assert_eq!(context_hint(&ed), "Smoothing");
+        ed.modifiers = crate::editor::Modifiers { ctrl: true, ..Default::default() };
+        assert!(context_hint(&ed).contains("mask"));
+        ed.modifiers.alt = true;
+        assert!(context_hint(&ed).contains("unmask"));
+        ed.modifiers = crate::editor::Modifiers { alt: true, ..Default::default() };
+        assert!(context_hint(&ed).contains("inverted"));
+    }
+}

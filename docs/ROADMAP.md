@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01 (multiresolution levels landed, 3.5)
+> **Last updated:** 2026-11-01 (multiresolution levels landed, 3.5; friendlier interface pass)
 
 ## Status at a glance
 
@@ -80,7 +80,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
 | **Deformers and posing** | Bend, twist, taper, inflate; pose gizmo with topological masking | 4–6 wk |
 | **Viewport** | Shadows, ambient occlusion, wireframe overlay, floor grid, reference image planes, turntable export | 3–5 wk |
-| **Interface** | Quick palette at the cursor, keymap editor, custom shelves, remembered settings | 3–4 wk |
+| **Interface** | ✅ First friendliness pass (welcome window, brush icons and tooltips, toolbar, collapsible sections, status-bar hints). ⏳ Quick palette at the cursor, keymap editor, custom shelves, remembered settings | 3–4 wk |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
 ## Phase 5 — Hardening → 1.0 ⏳
