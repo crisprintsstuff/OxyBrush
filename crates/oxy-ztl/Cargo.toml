@@ -1,0 +1,17 @@
+[package]
+name = "oxy-ztl"
+description = "Interoperability research toward reading ZBrush .ZTL files (Milestone 0: container probe and tools)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+miniz_oxide.workspace = true
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

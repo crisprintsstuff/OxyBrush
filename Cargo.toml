@@ -17,6 +17,7 @@ oxy-io = { path = "crates/oxy-io" }
 oxy-render = { path = "crates/oxy-render" }
 oxy-topo = { path = "crates/oxy-topo" }
 oxy-doc = { path = "crates/oxy-doc" }
+oxy-ztl = { path = "crates/oxy-ztl" }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"
@@ -33,6 +34,8 @@ log = "0.4"
 lz4_flex = { version = "0.14", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
 crc32fast = "1.5"
 dirs = "7"
+miniz_oxide = "0.9"
+serde_json = "1"
 env_logger = "0.11"
 
 [workspace.lints.rust]

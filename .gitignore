@@ -1,3 +1,15 @@
 /target
 *.png.tmp
 .DS_Store
+
+# ZBrush files must never be committed (docs/formats/zbrush/LEGAL.md §5).
+# Synthetic CC0 fixtures may be whitelisted with an explicit negation, e.g.
+#   !test/corpus/zbrush/synthetic/default_sphere_2025.ztl
+*.[zZ][tT][lL]
+*.[zZ][pP][rR]
+*.[zZ][bB][rR]
+*.[zZ][sS][cC]
+*.[zZ][mM][tT]
+# Private corpus registries and research samples stay local.
+*.corpus.json
+docs/formats/zbrush/research/**/samples/
