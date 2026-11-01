@@ -99,6 +99,8 @@ pub struct Editor {
     pub job: Option<Job>,
     pub frame_ms: f32,
     pub quit_now: bool,
+    /// Machine details for bug reports (filled in by the app layer).
+    pub system_info: crate::support::SystemInfo,
 }
 
 impl Default for Editor {
@@ -149,6 +151,7 @@ impl Default for Editor {
             job: None,
             frame_ms: 0.0,
             quit_now: false,
+            system_info: Default::default(),
         }
     }
 }

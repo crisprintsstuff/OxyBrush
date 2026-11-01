@@ -2380,6 +2380,7 @@ dependencies = [
 name = "oxy-app"
 version = "0.0.1-alpha"
 dependencies = [
+ "dirs",
  "egui",
  "egui-wgpu",
  "egui-winit",

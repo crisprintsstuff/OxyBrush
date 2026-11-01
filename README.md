@@ -1,16 +1,65 @@
-# OxyBrush
+<p align="center">
+  <img src="packaging/icons/oxybrush-128.png" alt="OxyBrush icon" width="96">
+</p>
 
-**An open-source digital sculpting application written in Rust.**
+<h1 align="center">OxyBrush</h1>
 
-OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
+<p align="center"><strong>Open-source digital sculpting. Sculpt 3D models like digital clay.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="release" src="https://img.shields.io/github/v/release/crisprintsstuff/OxyBrush?include_prereleases&logo=github&label=release"></a>
+  <a href="https://github.com/crisprintsstuff/OxyBrush/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/crisprintsstuff/OxyBrush/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white"></a>
+  <img alt="stage" src="https://img.shields.io/badge/stage-alpha-orange">
+  <a href="rust-toolchain.toml"><img alt="language" src="https://img.shields.io/badge/language-Rust%201.99-dea584?logo=rust"></a>
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4">
+  <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-4c1"></a>
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/crisprintsstuff/OxyBrush/total?label=downloads"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/latest"><b>Download</b></a> ·
+  <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/issues/new?template=bug_report.yml">Report a bug</a>
+</p>
 
 ![OxyBrush with two pieces: a sculpted sphere with a face group, and a cube](docs/images/screenshot.png)
 
-> **Status: alpha ([v0.0.1-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha)).** Phases 0–2 are done: you can sculpt multi-piece scenes, remesh, decimate, save projects and export. Next up is Phase 3 (stabilizer, masking tools, alphas, multiresolution). Expect rough edges and don't rely on it for production work yet. See the [roadmap](#roadmap).
+OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
 
-**Platforms:** Windows 10/11 and Linux (X11 and Wayland) are the supported targets. macOS builds in CI but is best-effort.
+> **Alpha:** [v0.0.1-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha) is the first public build. You can sculpt multi-piece scenes, remesh, decimate, save projects and export for 3D printing. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
 
-## Features (current)
+## Download and install
+
+Get the latest build from **[Releases](https://github.com/crisprintsstuff/OxyBrush/releases/latest)**.
+
+| Platform | File | How |
+|---|---|---|
+| **Windows 10/11** (64-bit) | `…-windows-x86_64-setup.exe` | Run it. Installs for your user without admin rights; adds a Start-menu entry, an uninstaller and `.oxb` file association. Windows warns about an unknown publisher (not code-signed yet): **More info → Run anyway**. |
+| Windows, portable | `…-windows-x86_64-portable.zip` | Unzip and run `oxybrush.exe`. |
+| **Linux** (Flatpak) | `…-linux-x86_64.flatpak` | `flatpak install --user OxyBrush-*.flatpak`, then launch from your app menu. Needs the Flathub remote for the runtime. |
+| Linux, portable | `…-linux-x86_64.tar.gz` | Unpack and run `./oxybrush`. Needs a Vulkan or OpenGL driver and glibc ≥ 2.35. |
+
+Each release has `SHA256SUMS.txt` for verifying downloads. macOS isn't supported yet (it builds, but is untested).
+
+## Getting started
+
+1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
+2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
+3. Need more detail? **D** subdivides; **Remesh** (right panel) rebuilds even topology.
+4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports OBJ or STL (e.g. for 3D printing).
+5. **F1** shows every shortcut; **Help > Getting started guide** opens the full walkthrough.
+
+## Help test OxyBrush
+
+Testers are the most useful contribution right now — especially with **pen tablets**, **varied GPUs** and **3D printing workflows**.
+
+1. Follow the [alpha testing guide](docs/TESTING_GUIDE.md) (about 20 minutes).
+2. Report problems with **Help > Report a bug…** in the app — it opens a GitHub issue form with your version, OS and GPU already filled in. Attach the log from **Help > Open log folder**.
+3. Share impressions with **Help > Send feedback…**: what felt good, what was frustrating, what you missed.
+
+## Features
 
 - **12 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Mask. Each has falloff curves, spacing, auto-smooth and pen-pressure options.
 - **Symmetry:** X/Y/Z mirroring plus radial symmetry (up to 64 copies around any axis).
@@ -27,38 +76,47 @@ OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Pure Rust:** no C or C++ toolchain needed on Windows or Linux.
 
-## Performance status
+## Controls
 
-Measured with `cargo run --release -p oxy-sculpt --example dab_timing` on a 4-core cloud VM (CPU only), using a 1.3M-triangle sphere:
-
-| Dab | Time |
+| Input | Action |
 |---|---|
-| Small (~1k vertices) | ~0.7 ms |
-| Large (~15k vertices) | ~2 ms |
+| LMB on model | Sculpt the active piece |
+| Alt+LMB on another piece | Make it the active piece |
+| Ctrl+Shift+LMB | Isolate the face group under the cursor (on empty space: show all) |
+| LMB on empty space | Orbit |
+| Alt+LMB on empty space / RMB | Pan |
+| Wheel | Zoom |
+| Shift / Ctrl / Alt (hold) | Smooth / Mask / Invert |
+| `1`–`9`, `0` | Select brush |
+| `[` `]` and `-` `=` | Radius and strength |
+| `X` | Toggle X symmetry |
+| `F` | Frame scene |
+| `D` | Subdivide |
+| Ctrl+R | Voxel remesh |
+| `G` | Face group colors |
+| Ctrl+S / Ctrl+O | Save / open project |
+| Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
+| `F1` | Full shortcut list |
 
-Topology (`cargo run --release -p oxy-topo --example topo_timing`, same machine):
+## Roadmap
 
-| Operation | Time |
-|---|---|
-| Voxel remesh, 330k triangles in, ~1M out (resolution 320) | ~2.3 s |
-| Decimate 1.3M → 130k triangles | ~10 s |
+Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
-Still to do for 1.0: dab cost at ~100k vertices (target ≤8 ms), faster decimation (batched or parallel collapses), and measurement on the reference hardware.
-
-## Downloads
-
-Get the latest build from [Releases](https://github.com/crisprintsstuff/OxyBrush/releases):
-
-| Platform | File | Notes |
+| Phase | Goal | State |
 |---|---|---|
-| Windows 10/11 (x64) | `…-windows-x86_64-setup.exe` | Installer: Start-menu shortcut, uninstaller, `.oxb` association. Installs for the current user without admin rights (all-users optional). |
-| Windows (portable) | `…-windows-x86_64-portable.zip` | Unzip and run `oxybrush.exe`. |
-| Linux (Flatpak) | `…-linux-x86_64.flatpak` | `flatpak install --user OxyBrush-*.flatpak` (pulls the freedesktop runtime from Flathub). |
-| Linux (portable) | `…-linux-x86_64.tar.gz` | Needs a Vulkan or GL driver and glibc ≥ 2.35. |
+| 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
+| 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure on Windows/Linux still being verified) |
+| 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
+| — | Release packaging: Windows installer, Flatpak | ✅ v0.0.1-alpha |
+| 3 | **Sculpting depth:** stabilizer & stroke types, masking/selection tools, alphas, more brushes, multiresolution, 10M-triangle performance | ⏳ next |
+| 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
+| 5 | Hardening → **1.0** | ⏳ |
+| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
+| After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
 
-`SHA256SUMS.txt` lists checksums for every file. The Windows installer is not code-signed yet, so SmartScreen will warn ("More info" → "Run anyway").
+## For developers
 
-## Building
+### Building from source
 
 You need Rust 1.88 or newer ([rustup](https://rustup.rs)).
 
@@ -90,29 +148,7 @@ sudo apt install libxkbcommon-x11-0 libwayland-dev mesa-vulkan-drivers
 
 **macOS and Windows:** nothing extra (Metal and DX12/Vulkan are used automatically).
 
-## Controls
-
-| Input | Action |
-|---|---|
-| LMB on model | Sculpt the active piece |
-| Alt+LMB on another piece | Make it the active piece |
-| Ctrl+Shift+LMB | Isolate the face group under the cursor (on empty space: show all) |
-| LMB on empty space | Orbit |
-| Alt+LMB on empty space / RMB | Pan |
-| Wheel | Zoom |
-| Shift / Ctrl / Alt (hold) | Smooth / Mask / Invert |
-| `1`–`9`, `0` | Select brush |
-| `[` `]` and `-` `=` | Radius and strength |
-| `X` | Toggle X symmetry |
-| `F` | Frame scene |
-| `D` | Subdivide |
-| Ctrl+R | Voxel remesh |
-| `G` | Face group colors |
-| Ctrl+S / Ctrl+O | Save / open project |
-| Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
-| `F1` | Full shortcut list |
-
-## Architecture
+### Architecture
 
 ```
 crates/
@@ -128,21 +164,23 @@ crates/
 
 Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. The full design is in [RFC-0001](docs/rfcs/0001-oxybrush.md).
 
-## Roadmap
+### Performance status
 
-Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+Measured with `cargo run --release -p oxy-sculpt --example dab_timing` on a 4-core cloud VM (CPU only), using a 1.3M-triangle sphere:
 
-| Phase | Goal | State |
-|---|---|---|
-| 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
-| 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure on Windows/Linux still being verified) |
-| 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak | ✅ v0.0.1-alpha |
-| 3 | **Sculpting depth:** stabilizer & stroke types, masking/selection tools, alphas, more brushes, multiresolution, 10M-triangle performance | ⏳ next |
-| 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
-| 5 | Hardening → **1.0** | ⏳ |
-| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
-| After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
+| Dab | Time |
+|---|---|
+| Small (~1k vertices) | ~0.7 ms |
+| Large (~15k vertices) | ~2 ms |
+
+Topology (`cargo run --release -p oxy-topo --example topo_timing`, same machine):
+
+| Operation | Time |
+|---|---|
+| Voxel remesh, 330k triangles in, ~1M out (resolution 320) | ~2.3 s |
+| Decimate 1.3M → 130k triangles | ~10 s |
+
+Still to do for 1.0: dab cost at ~100k vertices (target ≤8 ms), faster decimation (batched or parallel collapses), and measurement on the reference hardware.
 
 ## Contributing
 

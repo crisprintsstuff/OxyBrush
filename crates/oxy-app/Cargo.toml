@@ -29,6 +29,7 @@ pollster.workspace = true
 log.workspace = true
 env_logger.workspace = true
 rfd.workspace = true
+dirs.workspace = true
 
 [lints]
 workspace = true

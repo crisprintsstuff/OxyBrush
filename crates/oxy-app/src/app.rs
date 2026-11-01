@@ -48,7 +48,7 @@ pub struct App {
 }
 
 impl App {
-    pub fn new(initial_file: Option<PathBuf>, auto: AutoRun) -> Self {
+    pub fn new(initial_file: Option<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
         Self {
             gfx: None,
             egui_ctx: egui::Context::default(),
@@ -58,6 +58,7 @@ impl App {
                 if auto.screenshot.is_none() {
                     e.enable_autosave();
                 }
+                e.system_info.log_path = log_path;
                 e
             },
             applied_matcap: None,
@@ -88,7 +89,12 @@ impl App {
             apply_limit_buckets: false,
         }))
         .map_err(|e| format!("no compatible GPU adapter: {e}"))?;
-        log::info!("GPU adapter: {:?}", adapter.get_info());
+        let info = adapter.get_info();
+        log::info!("GPU adapter: {info:?}");
+        let si = &mut self.editor.system_info;
+        si.gpu = Some(info.name.clone());
+        si.gpu_backend = Some(format!("{:?}", info.backend));
+        si.gpu_driver = Some(format!("{} {}", info.driver, info.driver_info).trim().to_string());
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
             label: Some("oxybrush"),
             required_limits: adapter.limits(),
@@ -121,6 +127,7 @@ impl App {
 
         let viewport = ViewportRenderer::new(&device, &queue, view_format);
         log::info!("exact face-group colors: {}", viewport.exact_face_colors());
+        self.editor.system_info.exact_face_colors = Some(viewport.exact_face_colors());
         // egui does its own gamma handling and prefers a non-sRGB target.
         let egui_renderer = egui_wgpu::Renderer::new(
             &device,
