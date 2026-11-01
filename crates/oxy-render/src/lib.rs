@@ -34,8 +34,12 @@ struct GpuVertex {
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
     view: [[f32; 4]; 4],
+    /// x: unused, y: mask overlay strength, z: viewport aspect (w / h)
     params: [f32; 4],
     mask_color: [f32; 4],
+    /// Background gradient: color at the center and at the edges (linear).
+    bg_center: [f32; 4],
+    bg_edge: [f32; 4],
 }
 
 #[repr(C)]
@@ -49,12 +53,21 @@ struct PieceUniforms {
 pub struct ViewSettings {
     pub show_mask: bool,
     pub show_groups: bool,
+    /// Background color at the viewport edges (linear RGB).
     pub background: [f64; 3],
+    /// Background color at the center (linear RGB); a soft radial gradient
+    /// to `background` keeps the model readable against the backdrop.
+    pub background_center: [f64; 3],
 }
 
 impl Default for ViewSettings {
     fn default() -> Self {
-        Self { show_mask: true, show_groups: false, background: [0.012, 0.013, 0.016] }
+        Self {
+            show_mask: true,
+            show_groups: false,
+            background: [0.010, 0.011, 0.013],
+            background_center: [0.062, 0.064, 0.070],
+        }
     }
 }
 
@@ -86,6 +99,7 @@ struct GpuMesh {
 
 pub struct ViewportRenderer {
     pipeline: wgpu::RenderPipeline,
+    background_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     piece_layout: wgpu::BindGroupLayout,
@@ -213,6 +227,43 @@ impl ViewportRenderer {
             bind_group_layouts: &[Some(&layout), Some(&piece_layout)],
             immediate_size: 0,
         });
+        // Background: a fullscreen triangle drawn first, behind everything.
+        let background_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("oxy background pipeline layout"),
+            bind_group_layouts: &[Some(&layout)],
+            immediate_size: 0,
+        });
+        let background_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("oxy background pipeline"),
+            layout: Some(&background_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_background"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Always),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_background"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: color_format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
         let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Uint32];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("oxy viewport pipeline"),
@@ -256,6 +307,7 @@ impl ViewportRenderer {
 
         let mut r = Self {
             pipeline,
+            background_pipeline,
             uniforms,
             bind_group,
             piece_layout,
@@ -406,8 +458,10 @@ impl ViewportRenderer {
         let u = Uniforms {
             view_proj: camera.view_projection(aspect).to_cols_array_2d(),
             view: camera.view().to_cols_array_2d(),
-            params: [0.0, if settings.show_mask { 1.0 } else { 0.0 }, 0.0, 0.0],
+            params: [0.0, if settings.show_mask { 1.0 } else { 0.0 }, aspect, 0.0],
             mask_color: [0.25, 0.3, 0.45, 1.0],
+            bg_center: rgba(settings.background_center),
+            bg_edge: rgba(settings.background),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         let multiple = items.len() > 1;
@@ -451,8 +505,10 @@ impl ViewportRenderer {
         let vw = viewport[2].min(w - x).max(1.0);
         let vh = viewport[3].min(h - y).max(1.0);
         pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
-        pass.set_pipeline(&self.pipeline);
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.background_pipeline);
+        pass.draw(0..3, 0..1);
+        pass.set_pipeline(&self.pipeline);
         for item in items {
             let Some(gpu) = self.meshes.get(&item.id) else { continue };
             if gpu.index_count == 0 {
@@ -464,6 +520,10 @@ impl ViewportRenderer {
             pass.draw_indexed(0..gpu.index_count, 0, 0..1);
         }
     }
+}
+
+fn rgba(c: [f64; 3]) -> [f32; 4] {
+    [c[0] as f32, c[1] as f32, c[2] as f32, 1.0]
 }
 
 fn vertex(mesh: &Mesh, i: usize) -> GpuVertex {

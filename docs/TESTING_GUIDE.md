@@ -33,7 +33,7 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 
 1. **Welcome window.** Click **Sphere** (or **Start sculpting**). You can reopen it from **Help > Welcome screen**. Tell us if anything in it is confusing.
 2. **Look around.** Drag on empty space to orbit, scroll to zoom, right-drag to pan. Press **F** to frame the model, **F1** for all shortcuts.
-3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert. Resize the brush with **[** and **]**.
+3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert (or switch **Raise / Carve** in the toolbar). Resize the brush with **[** and **]**. Click the brush, alpha or material preview at the top left to pick from thumbnails, and try the axis gizmo (top right of the viewport) and the drag buttons in the strip beside it.
 4. **Undo** with **Ctrl+Z**, redo with **Ctrl+Shift+Z**.
 5. **More resolution:** press **Ctrl+D** to add a subdivision level (a few times), sculpt some fine detail, then press **Shift+D** to go down a level and make a broad change; press **D** to go back up and check that the fine detail followed. **Remesh** in the right panel rebuilds even topology (it removes the levels).
 6. **Pieces:** in the right panel, **+ Add > Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.

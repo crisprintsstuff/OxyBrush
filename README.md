@@ -82,7 +82,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
 - **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets).
 - **Import/export:** OBJ and STL import (as new pieces). OBJ and binary STL export of all visible pieces (3D-printing ready).
-- **Friendly interface:** a welcome window with starter shapes and the basics, brush icons and tooltips, a toolbar for undo, brush size, symmetry, subdivision levels and view options, collapsible panel sections, and a status bar that explains what the held keys do.
+- **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Pure Rust:** no C or C++ toolchain needed on Windows, Linux or macOS.
 

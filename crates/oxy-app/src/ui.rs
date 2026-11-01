@@ -3,6 +3,7 @@
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
+use glam::Vec2;
 use oxy_mesh::Mesh;
 use oxy_render::MatcapPreset;
 use oxy_sculpt::{Axis, BrushKind, Falloff};
@@ -170,10 +171,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     status_bar(ui, ed);
 
     if ed.show_panels {
-        egui::Panel::left("brushes").resizable(false).default_size(176.0).show(ui, |ui| {
+        egui::Panel::left("brushes").resizable(false).default_size(206.0).show(ui, |ui| {
             ui.add_space(6.0);
-            ui.label(RichText::new("Brushes").strong().size(14.0));
+            current_tiles(ui, ed);
             ui.add_space(4.0);
+            ui.separator();
             egui::ScrollArea::vertical().show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for k in BrushKind::ALL {
@@ -198,6 +200,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         egui::Panel::right("inspector").resizable(true).default_size(290.0).show(ui, |ui| {
             egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
         });
+        view_strip(ui, ed);
     }
 
     if std::mem::take(&mut ed.request_load_alpha) {
@@ -206,6 +209,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
 
     let canvas = ui.available_rect_before_wrap();
+    if ed.show_panels {
+        orientation_gizmo(ui.ctx(), ed, canvas);
+    }
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
 }
@@ -223,13 +229,31 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
             ui.separator();
 
+            // Direction: large, obvious toggle (Alt flips it while held).
+            let raise =
+                egui::Button::selectable(!ed.carve, RichText::new("Raise").strong()).min_size(egui::vec2(58.0, 26.0));
+            if ui.add(raise).on_hover_text("Brushes add clay (Alt carves while held)").clicked() {
+                ed.carve = false;
+            }
+            let carve =
+                egui::Button::selectable(ed.carve, RichText::new("Carve").strong()).min_size(egui::vec2(58.0, 26.0));
+            if ui.add(carve).on_hover_text("Brushes remove clay (Alt raises while held)").clicked() {
+                ed.carve = true;
+            }
+            ui.separator();
+
+            ui.spacing_mut().slider_width = 110.0;
             ui.label(RichText::new("Size").weak());
-            ui.spacing_mut().slider_width = 90.0;
-            ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).show_value(false))
-                .on_hover_text(format!("Brush radius: {:.0} pt  ([ and ])", ed.brush_radius_pt));
+            ui.add(
+                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
+                    .logarithmic(true)
+                    .max_decimals(0)
+                    .trailing_fill(true),
+            )
+            .on_hover_text("Brush radius in points  ([ and ])");
             ui.label(RichText::new("Strength").weak());
             let k = ed.brush_kind;
-            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).show_value(false))
+            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true))
                 .on_hover_text("Brush strength  (- and =)");
             ui.separator();
 
@@ -261,11 +285,132 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             {
                 ed.add_level();
             }
-            ui.separator();
 
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if widgets::icon_button(ui, Icon::Help, ed.show_shortcuts, true, "Keyboard shortcuts (F1)").clicked() {
+                    ed.show_shortcuts = !ed.show_shortcuts;
+                }
+                ui.separator();
+                let active = ed.scene.active().mesh.triangle_count();
+                let total = ed.scene.triangle_count();
+                ui.label(
+                    RichText::new(format!("{} / {} tris", fmt_count(active), fmt_count(total))).monospace().small(),
+                )
+                .on_hover_text("Triangles in the active piece / in the whole scene");
+            });
+        });
+        ui.add_space(1.0);
+    });
+}
+
+/// Brush, alpha and material previews at the top of the left panel; each
+/// opens a picker with thumbnails.
+fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
+    let ctx = ui.ctx().clone();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let size = 58.0;
+        let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
+        let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), "Brush: click to pick", size);
+        egui::Popup::from_toggle_button_response(&r).show(|ui| {
+            ui.label(RichText::new("Brushes").strong());
+            egui::Grid::new("brush_picker").spacing([6.0, 6.0]).show(ui, |ui| {
+                for (i, k) in BrushKind::ALL.into_iter().enumerate() {
+                    let t = widgets::brush_texture(&ctx, k);
+                    if widgets::thumb(ui, Some(&t), k.label(), ed.brush_kind == k)
+                        .on_hover_text(widgets::brush_description(k))
+                        .clicked()
+                    {
+                        ed.brush_kind = k;
+                    }
+                    if i % 4 == 3 {
+                        ui.end_row();
+                    }
+                }
+            });
+        });
+
+        let alpha = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned();
+        let alpha_tex = alpha.as_ref().map(|a| alpha_texture(&ctx, a));
+        let caption = alpha.as_ref().map_or("No alpha".to_string(), |a| a.name.clone());
+        let r = widgets::tile(
+            ui,
+            alpha_tex.as_ref(),
+            &caption,
+            "Alpha: an image that shapes each dab. Click to pick.",
+            size,
+        );
+        egui::Popup::from_toggle_button_response(&r).show(|ui| {
+            ui.label(RichText::new("Alphas").strong());
+            egui::Grid::new("alpha_picker").spacing([6.0, 6.0]).show(ui, |ui| {
+                if widgets::thumb(ui, None, "None", ed.alpha.is_none()).clicked() {
+                    ed.alpha = None;
+                }
+                let alphas = ed.alphas.clone();
+                for (i, a) in alphas.iter().enumerate() {
+                    let t = alpha_texture(&ctx, a);
+                    if widgets::thumb(ui, Some(&t), &a.name, ed.alpha == Some(i)).clicked() {
+                        ed.alpha = Some(i);
+                    }
+                    if i % 4 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+            if ui.button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
+                ed.request_load_alpha = true;
+            }
+        });
+
+        let mat_tex = widgets::material_texture(&ctx, ed.matcap);
+        let r = widgets::tile(ui, Some(&mat_tex), ed.matcap.label(), "Viewport material: click to pick", size);
+        egui::Popup::from_toggle_button_response(&r).show(|ui| {
+            ui.label(RichText::new("Materials").strong());
+            ui.horizontal(|ui| {
+                for m in MatcapPreset::ALL {
+                    let t = widgets::material_texture(&ctx, m);
+                    if widgets::thumb(ui, Some(&t), m.label(), ed.matcap == m).clicked() {
+                        ed.matcap = m;
+                    }
+                }
+            });
+        });
+    });
+}
+
+/// Alpha preview texture (cached per alpha name and size).
+fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHandle {
+    widgets::cached_texture(ctx, ("alpha", a.name.clone(), a.size), || {
+        egui::ColorImage::from_gray([a.size as usize, a.size as usize], &a.to_luma8())
+    })
+}
+
+/// Vertical strip beside the viewport: navigation you can drag (useful with
+/// a pen or touch screen) and view toggles.
+fn view_strip(ui: &mut Ui, ed: &mut Editor) {
+    egui::Panel::right("view_strip").resizable(false).exact_size(46.0).show(ui, |ui| {
+        ui.add_space(6.0);
+        ui.vertical_centered(|ui| {
+            ui.spacing_mut().item_spacing.y = 6.0;
             if widgets::icon_button(ui, Icon::Frame, false, true, "Frame the scene (F)").clicked() {
                 ed.frame();
             }
+            let ppp = ed.pixels_per_point;
+            let r = widgets::drag_button(ui, Icon::Orbit, "Drag to orbit (or drag empty space in the viewport)");
+            if r.dragged() {
+                let d = r.drag_delta() * ppp;
+                ed.camera.orbit(Vec2::new(d.x, d.y));
+            }
+            let r = widgets::drag_button(ui, Icon::Pan, "Drag to pan (or right-drag in the viewport)");
+            if r.dragged() {
+                let d = r.drag_delta() * ppp;
+                ed.camera.pan(Vec2::new(d.x, d.y), ed.canvas[3]);
+            }
+            let r = widgets::drag_button(ui, Icon::Zoom, "Drag up/down to zoom (or use the mouse wheel)");
+            if r.dragged() {
+                ed.camera.zoom(-r.drag_delta().y * 0.05);
+            }
+            ui.separator();
             let ortho = ed.camera.orthographic;
             if widgets::icon_button(ui, Icon::Ortho, ortho, true, "Orthographic view (O)").clicked() {
                 ed.camera.orthographic = !ortho;
@@ -278,24 +423,71 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             if widgets::icon_button(ui, Icon::Groups, groups, true, "Face group colors (G)").clicked() {
                 ed.view.show_groups = !groups;
             }
-            egui::ComboBox::from_id_salt("material")
-                .selected_text(ed.matcap.label())
-                .width(110.0)
-                .show_ui(ui, |ui| {
-                    for m in MatcapPreset::ALL {
-                        ui.selectable_value(&mut ed.matcap, m, m.label());
-                    }
-                })
-                .response
-                .on_hover_text("Viewport material");
-
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if widgets::icon_button(ui, Icon::Help, ed.show_shortcuts, true, "Keyboard shortcuts (F1)").clicked() {
-                    ed.show_shortcuts = !ed.show_shortcuts;
-                }
-            });
+            let solo = ed.scene.pieces.iter().filter(|p| p.visible).count() == 1 && ed.scene.pieces.len() > 1;
+            if widgets::icon_button(
+                ui,
+                Icon::Solo,
+                solo,
+                ed.scene.pieces.len() > 1,
+                "Solo the active piece / show all (Alt+S)",
+            )
+            .clicked()
+            {
+                ed.solo_active();
+            }
         });
-        ui.add_space(1.0);
+    });
+}
+
+/// Axis gizmo in the viewport corner: shows the orientation; click an axis
+/// end to view the model from that side.
+fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    let size = 84.0;
+    let pos = canvas.right_top() + egui::vec2(-size - 10.0, 10.0);
+    egui::Area::new(egui::Id::unique("orientation_gizmo")).fixed_pos(pos).show(ctx, |ui| {
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+        let c = rect.center();
+        let len = size * 0.36;
+        let view = ed.camera.view();
+        let axes = [
+            (glam::Vec3::X, "X", Color32::from_rgb(0xE0, 0x5A, 0x50)),
+            (glam::Vec3::Y, "Y", Color32::from_rgb(0x7C, 0xC0, 0x5A)),
+            (glam::Vec3::Z, "Z", Color32::from_rgb(0x5A, 0x8C, 0xE6)),
+        ];
+        // (depth, screen position, axis, label, color, positive end)
+        let mut ends = Vec::new();
+        for (a, label, col) in axes {
+            for sign in [1.0f32, -1.0] {
+                let v = view.transform_vector3(a * sign);
+                ends.push((v.z, c + egui::vec2(v.x, -v.y) * len, a * sign, label, col, sign > 0.0));
+            }
+        }
+        ends.sort_by(|a, b| a.0.total_cmp(&b.0));
+        let hover = response.hover_pos();
+        let nearest = hover.and_then(|h| {
+            ends.iter().filter(|e| e.1.distance(h) < 11.0).max_by(|a, b| a.0.total_cmp(&b.0)).map(|e| e.2)
+        });
+        let p = ui.painter();
+        if response.hovered() {
+            p.circle_filled(c, size * 0.5, Color32::from_white_alpha(10));
+        }
+        for (_, at, dir, label, col, positive) in &ends {
+            let hot = nearest == Some(*dir);
+            if *positive {
+                p.line_segment([c, *at], EStroke::new(2.0, *col));
+                p.circle_filled(*at, if hot { 10.0 } else { 8.5 }, *col);
+                p.text(*at, egui::Align2::CENTER_CENTER, *label, egui::FontId::proportional(11.0), Color32::BLACK);
+            } else {
+                p.circle_filled(*at, if hot { 8.0 } else { 6.0 }, col.linear_multiply(0.35));
+                p.circle_stroke(*at, if hot { 8.0 } else { 6.0 }, EStroke::new(1.0, *col));
+            }
+        }
+        if response.clicked()
+            && let Some(dir) = nearest
+        {
+            ed.view_from_axis(dir);
+        }
+        response.on_hover_text("Click an axis to view from that side");
     });
 }
 
@@ -1191,6 +1383,48 @@ mod tests {
         ed.show_panels = false;
         ed.high_contrast = true;
         run_frames(&mut ed, 2);
+    }
+
+    /// Run frames with a click at `at` (points) in the second frame.
+    fn click_at(ed: &mut Editor, ctx: &egui::Context, at: egui::Pos2) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let frames = [
+            vec![egui::Event::PointerMoved(at)],
+            vec![egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: true,
+                modifiers: Default::default(),
+            }],
+            vec![egui::Event::PointerButton {
+                pos: at,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: Default::default(),
+            }],
+            vec![],
+        ];
+        for events in frames {
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn brush_tile_opens_the_picker() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        apply_theme(&ctx, false, 1.0);
+        // Lay out once with the pointer away from everything.
+        click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
+        assert!(!egui::Popup::is_any_open(&ctx));
+        // The brush tile is the first tile at the top of the left panel.
+        click_at(&mut ed, &ctx, egui::pos2(37.0, 105.0));
+        assert!(egui::Popup::is_any_open(&ctx), "clicking the brush tile opens the picker");
     }
 
     #[test]

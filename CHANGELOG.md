@@ -11,6 +11,9 @@ All notable changes to OxyBrush. The format follows
 
 ### Changed
 - **Friendlier interface:** a welcome window with starter shapes (sphere, cube, plane), open/import and the basics; drawn icons for every brush showing its effect, with descriptions in tooltips; a toolbar with undo/redo, brush size and strength, mirror axes, subdivision levels, view toggles and material; collapsible right-panel sections with explanations on hover; the status bar shows what the held modifier keys do; a warmer theme with more spacing and rounded controls. **Help > Welcome screen** reopens the welcome window.
+- **Previews and pickers:** large brush, alpha and material previews at the top of the left panel; click one for a grid of thumbnails (brush previews are rendered clay balls showing each brush's effect).
+- **Viewport:** a soft gradient background; an axis gizmo in the corner (click an axis to view from that side); a view strip with drag-to-orbit, pan and zoom buttons (useful with a pen or touch screen), frame, orthographic, mask, group colors and solo.
+- **Raise / Carve** toggle in the toolbar sets the default brush direction (Alt still flips it while held).
 - **D** now steps up a subdivision level instead of subdividing the mesh in place; the old one-off subdivide is **Mesh > Subdivide (single mesh)**.
 
 ### Known limitations

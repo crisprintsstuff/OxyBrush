@@ -186,6 +186,10 @@ pub enum Icon {
     Plane,
     Open,
     Import,
+    Orbit,
+    Pan,
+    Zoom,
+    Solo,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -334,6 +338,45 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 s,
             ));
         }
+        Icon::Orbit => {
+            // Two curved arrows chasing each other around a dot.
+            for (from, to) in [(0.15 * PI, 0.85 * PI), (1.15 * PI, 1.85 * PI)] {
+                let pts = arc(from, to, r * 0.7);
+                let tip = pts[pts.len() - 1];
+                let prev = pts[pts.len() - 3];
+                p.add(Shape::line(pts, s));
+                let d = (tip - prev).normalized() * r * 0.35;
+                let n = vec2(-d.y, d.x);
+                p.line_segment([tip, tip - d + n * 0.8], s);
+                p.line_segment([tip, tip - d - n * 0.8], s);
+            }
+            p.circle_filled(ctr, r * 0.14, c);
+        }
+        Icon::Pan => {
+            let l = r * 0.8;
+            for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
+                arrow(p, ctr + d * r * 0.15, ctr + d * l, s);
+            }
+        }
+        Icon::Zoom => {
+            let lens = ctr + vec2(-r * 0.18, -r * 0.18);
+            p.circle_stroke(lens, r * 0.5, s);
+            p.line_segment(
+                [lens + vec2(r * 0.36, r * 0.36), ctr + vec2(r * 0.8, r * 0.8)],
+                Stroke::new(s.width * 1.6, c),
+            );
+        }
+        Icon::Solo => {
+            p.circle_filled(ctr, r * 0.38, c);
+            for i in 0..3 {
+                let a = PI * 0.5 + i as f32 * PI * 2.0 / 3.0;
+                p.circle_stroke(
+                    ctr + vec2(a.cos(), -a.sin()) * r * 0.78,
+                    r * 0.16,
+                    Stroke::new(1.0, c.gamma_multiply(0.5)),
+                );
+            }
+        }
         Icon::Import => {
             let b = Rect::from_center_size(ctr + vec2(0.0, r * 0.45), vec2(r * 1.5, r * 0.6));
             p.add(Shape::line(vec![b.left_top(), b.left_bottom(), b.right_bottom(), b.right_top()], s));
@@ -462,6 +505,228 @@ pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> Response {
     response
 }
 
+/// Button you drag on to navigate (orbit, pan, zoom), like dragging in the
+/// viewport. Handy with a pen or touch screen. Read `drag_delta()`.
+pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    let size = Vec2::splat(30.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let bg = if response.dragged() {
+            ACCENT.linear_multiply(0.45)
+        } else if response.hovered() {
+            v.widgets.hovered.weak_bg_fill
+        } else {
+            v.widgets.inactive.weak_bg_fill
+        };
+        ui.painter().rect_filled(rect, 6.0, bg);
+        paint_icon(ui.painter(), rect.shrink(6.0), icon, v.text_color());
+    }
+    if response.hovered() || response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
+    response.on_hover_text(tooltip)
+}
+
+/// A brush preview: a clay ball with the brush's effect pressed into it,
+/// shaded with a fixed key light. Computed on the CPU (64 px, cached).
+pub fn brush_preview_image(k: BrushKind, size: usize) -> egui::ColorImage {
+    let asymmetric = matches!(k, BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove);
+    let height = |x: f32, y: f32| -> f32 {
+        let (u, v) = ((x + 0.05) / 1.05, (y - 0.08) / 1.05);
+        if asymmetric { brush_profile(k, u) * bump(v, 0.45) } else { brush_profile(k, (u * u + v * v).sqrt()) }
+    };
+    let key = egui::Vec2::new(-0.45, 0.55);
+    let key_z = 0.7f32;
+    let kl = (key.length_sq() + key_z * key_z).sqrt();
+    let mut px = Vec::with_capacity(size * size);
+    for j in 0..size {
+        for i in 0..size {
+            let x = (i as f32 + 0.5) / size as f32 * 2.0 - 1.0;
+            let y = 1.0 - (j as f32 + 0.5) / size as f32 * 2.0;
+            let (sx, sy) = (x / 0.92, y / 0.92);
+            let rr = sx * sx + sy * sy;
+            // Anti-aliased silhouette.
+            let edge = ((1.0 - rr.sqrt()) * size as f32 * 0.46).clamp(0.0, 1.0);
+            if edge <= 0.0 {
+                px.push(Color32::TRANSPARENT);
+                continue;
+            }
+            let nz = (1.0 - rr.min(1.0)).sqrt();
+            let e = 2.0 / size as f32;
+            let amp = 0.7;
+            let gx = (height(sx + e, sy) - height(sx - e, sy)) / (2.0 * e) * amp;
+            let gy = (height(sx, sy + e) - height(sx, sy - e)) / (2.0 * e) * amp;
+            let n = egui::Vec2::new(sx - gx * nz, sy - gy * nz);
+            let nzz = nz.max(0.05);
+            let nl = (n.length_sq() + nzz * nzz).sqrt();
+            let (nx, ny, nz2) = (n.x / nl, n.y / nl, nzz / nl);
+            let diffuse = ((nx * key.x + ny * key.y + nz2 * key_z) / kl).max(0.0);
+            let half = {
+                let (hx, hy, hz) = (key.x / kl, key.y / kl, key_z / kl + 1.0);
+                let hl = (hx * hx + hy * hy + hz * hz).sqrt();
+                ((nx * hx + ny * hy + nz2 * hz) / hl).max(0.0)
+            };
+            let spec = half.powf(28.0) * 0.35;
+            let rim = (1.0 - nz2).powi(3) * 0.2;
+            let masked = k == BrushKind::Mask && height(sx, sy) > 0.12;
+            // Planar Trim shares Flatten's profile; show its cut face as freshly trimmed (lighter).
+            let trimmed = k == BrushKind::PlanarTrim && height(sx, sy) > 0.275;
+            let base = if masked {
+                [0.18, 0.26, 0.6]
+            } else if trimmed {
+                [0.8, 0.45, 0.3]
+            } else {
+                [0.62, 0.26, 0.15]
+            };
+            let lin = |b: f32| b * (0.1 + diffuse * 0.95) + spec + rim * 0.5;
+            let srgb = |l: f32| {
+                let l = l.clamp(0.0, 1.0);
+                let s = if l <= 0.0031308 { l * 12.92 } else { 1.055 * l.powf(1.0 / 2.4) - 0.055 };
+                (s * 255.0 + 0.5) as u8
+            };
+            let a = (edge * 255.0) as u8;
+            px.push(Color32::from_rgba_unmultiplied(srgb(lin(base[0])), srgb(lin(base[1])), srgb(lin(base[2])), a));
+        }
+    }
+    egui::ColorImage::new([size, size], px)
+}
+
+/// The material's lit sphere as a round image.
+pub fn material_image(m: oxy_render::MatcapPreset, size: usize) -> egui::ColorImage {
+    let rgba = oxy_render::matcap::generate(m, size as u32);
+    let px = rgba
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            let (x, y) = ((i % size) as f32 + 0.5, (i / size) as f32 + 0.5);
+            let r = ((x / size as f32 * 2.0 - 1.0).powi(2) + (y / size as f32 * 2.0 - 1.0).powi(2)).sqrt();
+            let a = ((0.96 - r) * size as f32 * 0.5).clamp(0.0, 1.0);
+            Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (a * 255.0) as u8)
+        })
+        .collect();
+    egui::ColorImage::new([size, size], px)
+}
+
+/// Texture cached in egui memory under `key`, created once with `make`.
+pub fn cached_texture(
+    ctx: &egui::Context,
+    key: impl std::hash::Hash + std::fmt::Debug,
+    make: impl FnOnce() -> egui::ColorImage,
+) -> egui::TextureHandle {
+    let id = egui::Id::unique(("oxy_tex", key));
+    if let Some(t) = ctx.data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return t;
+    }
+    let t = ctx.load_texture(format!("{id:?}"), make(), egui::TextureOptions::LINEAR);
+    ctx.data_mut(|d| d.insert_temp(id, t.clone()));
+    t
+}
+
+/// Brush preview texture.
+pub fn brush_texture(ctx: &egui::Context, k: BrushKind) -> egui::TextureHandle {
+    cached_texture(ctx, ("brush", k.label()), || brush_preview_image(k, 64))
+}
+
+/// Material preview texture.
+pub fn material_texture(ctx: &egui::Context, m: oxy_render::MatcapPreset) -> egui::TextureHandle {
+    cached_texture(ctx, ("material", m.label()), || material_image(m, 64))
+}
+
+/// A large preview tile (brush, alpha, material) with a caption; click to pick.
+pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, tooltip: &str, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size + 16.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let img = Rect::from_min_size(rect.min, Vec2::splat(size));
+        let stroke =
+            if response.hovered() { Stroke::new(1.0, ACCENT) } else { Stroke::new(1.0, Color32::from_gray(52)) };
+        ui.painter().rect(img, 6.0, Color32::from_rgb(0x2A, 0x2C, 0x31), stroke, egui::StrokeKind::Inside);
+        match tex {
+            Some(t) => {
+                ui.painter().image(
+                    t.id(),
+                    img.shrink(4.0),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            }
+            None => {
+                ui.painter().text(
+                    img.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "None",
+                    egui::FontId::proportional(11.0),
+                    v.weak_text_color(),
+                );
+            }
+        }
+        // Small corner marker hints that the tile opens a picker.
+        let c = img.right_bottom() - vec2(6.0, 6.0);
+        ui.painter().add(Shape::convex_polygon(
+            vec![c + vec2(0.0, -5.0), c, c + vec2(-5.0, 0.0)],
+            v.weak_text_color(),
+            Stroke::NONE,
+        ));
+        let text = egui::RichText::new(caption).small();
+        let galley = egui::WidgetText::from(text).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            size,
+            egui::TextStyle::Small,
+        );
+        ui.painter().galley(pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 2.0), galley, v.text_color());
+    }
+    response.on_hover_text(tooltip)
+}
+
+/// Clickable thumbnail used inside the picker grids.
+pub fn thumb(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool) -> Response {
+    let size = 56.0;
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size + 14.0), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, label));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let img = Rect::from_min_size(rect.min, Vec2::splat(size));
+        let stroke = if selected {
+            Stroke::new(1.5, ACCENT)
+        } else if response.hovered() {
+            Stroke::new(1.0, Color32::from_gray(140))
+        } else {
+            Stroke::NONE
+        };
+        ui.painter().rect(img, 5.0, Color32::from_rgb(0x2A, 0x2C, 0x31), stroke, egui::StrokeKind::Inside);
+        if let Some(t) = tex {
+            ui.painter().image(
+                t.id(),
+                img.shrink(3.0),
+                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                Color32::WHITE,
+            );
+        } else {
+            ui.painter().text(
+                img.center(),
+                egui::Align2::CENTER_CENTER,
+                "None",
+                egui::FontId::proportional(11.0),
+                v.weak_text_color(),
+            );
+        }
+        let galley = egui::WidgetText::from(egui::RichText::new(label).size(10.0)).into_galley(
+            ui,
+            Some(egui::TextWrapMode::Truncate),
+            size,
+            egui::TextStyle::Small,
+        );
+        ui.painter().galley(pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 1.0), galley, v.text_color());
+    }
+    response.on_hover_text(label)
+}
+
 /// Collapsible inspector section with a consistent header style.
 pub fn section<R>(ui: &mut Ui, title: &str, default_open: bool, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
     let r = egui::CollapsingHeader::new(egui::RichText::new(title).strong().size(14.0))
@@ -498,5 +763,23 @@ mod tests {
         assert_eq!(brush_key(BrushKind::Draw), Some("1"));
         assert_eq!(brush_key(BrushKind::Grab), Some("0"));
         assert_eq!(brush_key(BrushKind::Mask), None);
+    }
+
+    #[test]
+    fn previews_are_round_and_distinct() {
+        let images: Vec<_> = BrushKind::ALL.iter().map(|k| brush_preview_image(*k, 32)).collect();
+        for (k, img) in BrushKind::ALL.iter().zip(&images) {
+            assert_eq!(img.pixels.len(), 32 * 32);
+            assert_eq!(img.pixels[0].a(), 0, "{k:?}: corners are transparent");
+            assert_eq!(img.pixels[16 * 32 + 16].a(), 255, "{k:?}: center is opaque");
+        }
+        for i in 0..images.len() {
+            for j in i + 1..images.len() {
+                assert!(images[i].pixels != images[j].pixels, "{:?} vs {:?}", BrushKind::ALL[i], BrushKind::ALL[j]);
+            }
+        }
+        let m = material_image(oxy_render::MatcapPreset::Jade, 32);
+        assert_eq!(m.pixels[0].a(), 0);
+        assert_eq!(m.pixels[16 * 32 + 16].a(), 255);
     }
 }
