@@ -6,22 +6,27 @@ All notable changes to OxyBrush. The format follows
 
 ## [Unreleased]
 
+## [0.2.0-alpha] - 2026-11-01
+
 ### Added
 - **Subdivision levels (multiresolution):** Ctrl+D adds a level, D / Shift+D step up and down. Sculpt at any level; changes on a lower level carry the higher-level detail along. Delete higher or lower levels from the Mesh menu. Levels are saved in `.oxb` projects (a new, skippable section, so older versions still open the file at the active level) and undo restores them after remesh or decimate.
+- **Welcome window:** starter shapes (sphere, cube, plane), open/import, the basics and a layout choice. It appears on the first start, then only if "Show at startup" is on; **Help > Welcome screen** reopens it.
+- **Previews and pickers:** large brush, alpha and material previews; click one for a grid of thumbnails (brush previews are rendered clay balls showing each brush's effect).
+- **Viewport:** a soft gradient background; an axis gizmo (click an axis to view from that side); a view strip with drag-to-orbit, pan and zoom buttons (useful with a pen or touch screen), frame, orthographic, mask, group colors and solo.
+- **Raise / Carve** toggle for the default brush direction (Alt still flips it while held), next to size and strength.
+- **Layouts:** **Standard**, **Compact** (small screens) or **Touch friendly** (large targets, brush tiles, on-screen Smooth / Mask / Invert toggles, undo/redo beside the viewport). Choose in Settings or the welcome window; `--layout standard|compact|touch` starts with one.
+- **Arrange the interface:** brush shelf on the left, bottom or right; settings panel on the right or left; size / strength / Raise-Carve floating at the center top (default) or bottom of the viewport, or in the toolbar. Settings > Arrange panels, or right-click the shelf or the bar.
+- **Rearrange brushes:** drag brushes in the shelf to reorder them; number keys 1–9, 0 follow your order. Settings > Arrange panels > Reset brush order restores the default.
+- **Settings are remembered:** layout, arrangement, brush order, interface scale, high contrast, material, autosave interval and "Show welcome window at startup" are saved in a small text file in your config folder. `--set key=value` overrides a setting at startup.
 
 ### Changed
-- **Friendlier interface:** a welcome window with starter shapes (sphere, cube, plane), open/import and the basics; drawn icons for every brush showing its effect, with descriptions in tooltips; a toolbar with undo/redo, brush size and strength, mirror axes, subdivision levels, view toggles and material; collapsible right-panel sections with explanations on hover; the status bar shows what the held modifier keys do; a warmer theme with more spacing and rounded controls. **Help > Welcome screen** reopens the welcome window.
-- **Previews and pickers:** large brush, alpha and material previews at the top of the left panel; click one for a grid of thumbnails (brush previews are rendered clay balls showing each brush's effect).
-- **Viewport:** a soft gradient background; an axis gizmo in the corner (click an axis to view from that side); a view strip with drag-to-orbit, pan and zoom buttons (useful with a pen or touch screen), frame, orthographic, mask, group colors and solo.
-- **Layouts:** choose **Standard**, **Compact** (small screens) or **Touch friendly** (large targets, brush tiles, on-screen Smooth / Mask / Invert toggles, undo/redo beside the viewport) in Settings or the welcome window. `--layout standard|compact|touch` starts with a layout.
-- **Settings are remembered:** layout, interface scale, high contrast, material, autosave interval and "Show welcome window at startup" are saved to a small text file in your config folder. The welcome window now appears only on the first start (or when you ask for it).
-- **Arrange the interface:** put the brush shelf on the left, bottom or right, the settings panel on the right or left, and size / strength / Raise-Carve floating at the center top or bottom of the viewport (new default: center top) or in the toolbar. Settings > Arrange panels, or right-click the shelf or the bar. `--set key=value` overrides a setting at startup.
-- **Rearrange brushes:** drag brushes in the shelf to reorder them; number keys 1–9, 0 follow the new order. Settings > Arrange panels > Reset brush order restores the default.
-- **Raise / Carve** toggle in the toolbar sets the default brush direction (Alt still flips it while held).
-- **D** now steps up a subdivision level instead of subdividing the mesh in place; the old one-off subdivide is **Mesh > Subdivide (single mesh)**.
+- **Friendlier interface:** drawn icons for every brush showing its effect, descriptions in tooltips, collapsible right-panel sections with explanations on hover, a status bar that explains what the held keys do, and a warmer theme with more spacing and rounded controls.
+- **D** now steps up a subdivision level instead of subdividing the mesh in place; the one-off subdivide is **Mesh > Subdivide (single mesh)**.
 
 ### Known limitations
-- Switching to a very dense level (~5M triangles) pauses the UI for 2–4 seconds.
+- Switching to or adding a very dense level (~5M triangles) pauses the UI for 2–4 seconds.
+- Touch layout: no multi-touch gestures (pinch zoom, two-finger orbit) yet; not tested on real touchscreens or tablets.
+- Brush settings (radius, strength, falloff) are not remembered between sessions.
 
 ## [0.1.0-alpha] - 2026-11-01
 
@@ -71,6 +76,7 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.1.0-alpha...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.2.0-alpha...HEAD
+[0.2.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.1.0-alpha...v0.2.0-alpha
 [0.1.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.0.1-alpha...v0.1.0-alpha
 [0.0.1-alpha]: https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha

@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.2.0-alpha" date="2026-11-01" type="development">
+      <description>
+        <p>Subdivision levels (multiresolution), a friendlier interface with
+        brush, alpha and material previews, Standard, Compact and Touch
+        layouts, arrangeable panels and brush order, and settings that are
+        remembered between sessions.</p>
+      </description>
+    </release>
     <release version="0.1.0-alpha" date="2026-11-01" type="development">
       <description>
         <p>New brushes (Polish, Planar Trim, Topological Move, Noise), alphas,

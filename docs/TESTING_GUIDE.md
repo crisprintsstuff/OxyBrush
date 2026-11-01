@@ -21,7 +21,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-0.0.1-alpha-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-0.2.0-alpha-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -33,12 +33,12 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 
 1. **Welcome window.** Click **Sphere** (or **Start sculpting**). Pick a **Layout** there too; on a touchscreen or tablet, try **Touch friendly**. The window only appears on the first start; reopen it from **Help > Welcome screen**, and switch layouts any time in **Settings > Layout**. Try **Settings > Arrange panels** (e.g. brushes at the bottom) and drag a brush in the shelf to a new position. Tell us if anything in it is confusing.
 2. **Look around.** Drag on empty space to orbit, scroll to zoom, right-drag to pan. Press **F** to frame the model, **F1** for all shortcuts.
-3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert (or switch **Raise / Carve** in the toolbar). Resize the brush with **[** and **]**. Click the brush, alpha or material preview at the top left to pick from thumbnails, and try the axis gizmo (top right of the viewport) and the drag buttons in the strip beside it.
+3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert (or switch **Raise / Carve** in the size/strength bar). Resize the brush with **[** and **]**. Click the brush, alpha or material preview at the top left to pick from thumbnails, and try the axis gizmo (top right of the viewport) and the drag buttons in the strip beside it.
 4. **Undo** with **Ctrl+Z**, redo with **Ctrl+Shift+Z**.
 5. **More resolution:** press **Ctrl+D** to add a subdivision level (a few times), sculpt some fine detail, then press **Shift+D** to go down a level and make a broad change; press **D** to go back up and check that the fine detail followed. **Remesh** in the right panel rebuilds even topology (it removes the levels).
 6. **Pieces:** in the right panel, **+ Add > Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.
 7. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (OBJ or STL, e.g. for 3D printing).
-8. **New in 0.1.0:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+8. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
 
 ## 3. What we most want to know
 
