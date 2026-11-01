@@ -15,6 +15,8 @@ All notable changes to OxyBrush. The format follows
 - **Viewport:** a soft gradient background; an axis gizmo in the corner (click an axis to view from that side); a view strip with drag-to-orbit, pan and zoom buttons (useful with a pen or touch screen), frame, orthographic, mask, group colors and solo.
 - **Layouts:** choose **Standard**, **Compact** (small screens) or **Touch friendly** (large targets, brush tiles, on-screen Smooth / Mask / Invert toggles, undo/redo beside the viewport) in Settings or the welcome window. `--layout standard|compact|touch` starts with a layout.
 - **Settings are remembered:** layout, interface scale, high contrast, material, autosave interval and "Show welcome window at startup" are saved to a small text file in your config folder. The welcome window now appears only on the first start (or when you ask for it).
+- **Arrange the interface:** put the brush shelf on the left, bottom or right, the settings panel on the right or left, and size / strength / Raise-Carve floating at the center top or bottom of the viewport (new default: center top) or in the toolbar. Settings > Arrange panels, or right-click the shelf or the bar. `--set key=value` overrides a setting at startup.
+- **Rearrange brushes:** drag brushes in the shelf to reorder them; number keys 1–9, 0 follow the new order. Settings > Arrange panels > Reset brush order restores the default.
 - **Raise / Carve** toggle in the toolbar sets the default brush direction (Alt still flips it while held).
 - **D** now steps up a subdivision level instead of subdividing the mesh in place; the old one-off subdivide is **Mesh > Subdivide (single mesh)**.
 

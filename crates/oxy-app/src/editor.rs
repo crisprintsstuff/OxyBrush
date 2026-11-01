@@ -160,6 +160,12 @@ pub struct Editor {
     /// On-screen Smooth / Mask / Invert toggles (touch layout); combined
     /// with the keyboard modifiers.
     pub touch_modifiers: Modifiers,
+    /// Where the brush shelf, the settings panel and the size/strength bar go.
+    pub shelf: crate::settings::ShelfPosition,
+    pub panels: crate::settings::PanelSide,
+    pub quick_bar: crate::settings::QuickBar,
+    /// Brush order in the shelf (user-arranged); number keys follow it.
+    pub brush_order: Vec<BrushKind>,
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
@@ -232,6 +238,10 @@ impl Default for Editor {
             layout: crate::settings::UiLayout::Standard,
             welcome_at_startup: false,
             touch_modifiers: Modifiers::default(),
+            shelf: Default::default(),
+            panels: Default::default(),
+            quick_bar: Default::default(),
+            brush_order: BrushKind::ALL.to_vec(),
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],
@@ -344,7 +354,31 @@ impl Editor {
             welcome_at_startup: self.welcome_at_startup,
             autosave_minutes: self.autosaver.interval.as_secs_f32() / 60.0,
             matcap: self.matcap,
+            shelf: self.shelf,
+            panels: self.panels,
+            quick_bar: self.quick_bar,
+            brush_order: self.brush_order.clone(),
         }
+    }
+
+    /// Move the brush at shelf position `from` to position `to`.
+    pub fn move_brush(&mut self, from: usize, to: usize) {
+        if from < self.brush_order.len() && to < self.brush_order.len() && from != to {
+            let k = self.brush_order.remove(from);
+            self.brush_order.insert(to, k);
+        }
+    }
+
+    /// Brush for number key `n` (1–9, then 0 for the tenth), in shelf order.
+    pub fn brush_for_number_key(&self, n: u32) -> Option<BrushKind> {
+        let i = if n == 0 { 9 } else { n as usize - 1 };
+        self.brush_order.get(i).copied()
+    }
+
+    /// Number key shown next to a brush in the shelf, if it has one.
+    pub fn number_key(&self, k: BrushKind) -> Option<&'static str> {
+        const KEYS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
+        self.brush_order.iter().position(|b| *b == k).and_then(|i| KEYS.get(i).copied())
     }
 
     /// Apply saved preferences.
@@ -355,6 +389,10 @@ impl Editor {
         self.welcome_at_startup = s.welcome_at_startup;
         self.autosaver.interval = Duration::from_secs_f32(s.autosave_minutes * 60.0);
         self.matcap = s.matcap;
+        self.shelf = s.shelf;
+        self.panels = s.panels;
+        self.quick_bar = s.quick_bar;
+        self.brush_order = s.brush_order.clone();
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
@@ -1677,10 +1715,34 @@ mod tests {
             welcome_at_startup: true,
             autosave_minutes: 7.0,
             matcap: MatcapPreset::Bronze,
+            shelf: crate::settings::ShelfPosition::Bottom,
+            panels: crate::settings::PanelSide::Left,
+            quick_bar: crate::settings::QuickBar::Toolbar,
+            brush_order: BrushKind::ALL.into_iter().rev().collect(),
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
         e.apply_settings(&s);
         assert_eq!(e.settings(), s);
+    }
+
+    #[test]
+    fn brushes_can_be_reordered_and_number_keys_follow() {
+        let mut e = Editor::default();
+        assert_eq!(e.brush_for_number_key(1), Some(BrushKind::Draw));
+        assert_eq!(e.number_key(BrushKind::Mask), None);
+        // Drag Mask (last) to the front.
+        let last = e.brush_order.len() - 1;
+        e.move_brush(last, 0);
+        assert_eq!(e.brush_order[0], BrushKind::Mask);
+        assert_eq!(e.brush_order[1], BrushKind::Draw);
+        assert_eq!(e.brush_for_number_key(1), Some(BrushKind::Mask));
+        assert_eq!(e.number_key(BrushKind::Mask), Some("1"));
+        assert_eq!(e.brush_for_number_key(0), Some(e.brush_order[9]));
+        // Out-of-range moves are ignored; nothing is lost.
+        e.move_brush(99, 0);
+        let mut sorted = e.brush_order.clone();
+        sorted.sort_by_key(|k| BrushKind::ALL.iter().position(|b| b == k));
+        assert_eq!(sorted, BrushKind::ALL.to_vec());
     }
 }
