@@ -14,7 +14,7 @@ import zlib
 from pathlib import Path
 
 OUT = Path(__file__).resolve().parent
-SIZES = [16, 24, 32, 48, 64, 128, 256, 512]
+SIZES = [16, 24, 32, 48, 64, 128, 256, 512, 1024]
 ICO_SIZES = [16, 24, 32, 48, 64, 128, 256]
 
 BG = (0x1E, 0x20, 0x24)
