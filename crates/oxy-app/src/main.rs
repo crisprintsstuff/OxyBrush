@@ -5,6 +5,7 @@
 
 mod app;
 mod editor;
+mod settings;
 mod snapshot;
 mod support;
 mod ui;
@@ -23,11 +24,23 @@ fn main() {
                 return;
             }
             "--help" | "-h" => {
-                println!("Usage: oxybrush [MESH.obj|MESH.stl] [--screenshot OUT.png] [--demo]");
+                println!(
+                    "Usage: oxybrush [MESH.obj|MESH.stl] [--layout standard|compact|touch] [--screenshot OUT.png] [--demo]"
+                );
                 return;
             }
             "--screenshot" => auto.screenshot = args.next().map(PathBuf::from),
             "--demo" => auto.demo = true,
+            "--layout" => {
+                let v = args.next().unwrap_or_default();
+                match settings::UiLayout::ALL.into_iter().find(|l| format!("{l:?}").eq_ignore_ascii_case(&v)) {
+                    Some(l) => auto.layout = Some(l),
+                    None => {
+                        eprintln!("unknown layout {v:?}: use standard, compact or touch");
+                        return;
+                    }
+                }
+            }
             _ => file = Some(PathBuf::from(a)),
         }
     }

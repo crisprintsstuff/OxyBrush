@@ -1,6 +1,7 @@
 //! egui panels, dialogs, theme and brush cursor.
 
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
+use crate::settings::UiLayout;
 use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::Vec2;
@@ -22,7 +23,64 @@ pub enum UiAction {
     LoadAlpha,
 }
 
-pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32) {
+/// Sizes that differ between the interface layouts.
+#[derive(Debug, Clone, Copy)]
+pub struct Metrics {
+    pub item_spacing: egui::Vec2,
+    pub button_padding: egui::Vec2,
+    pub interact_height: f32,
+    pub slider_width: f32,
+    pub body: f32,
+    pub small: f32,
+    pub heading: f32,
+    pub shelf_width: f32,
+    pub inspector_width: f32,
+    pub strip_width: f32,
+}
+
+pub fn metrics(layout: UiLayout) -> Metrics {
+    match layout {
+        UiLayout::Standard => Metrics {
+            item_spacing: egui::vec2(8.0, 6.0),
+            button_padding: egui::vec2(8.0, 4.0),
+            interact_height: 24.0,
+            slider_width: 130.0,
+            body: 13.5,
+            small: 11.0,
+            heading: 20.0,
+            shelf_width: 206.0,
+            inspector_width: 290.0,
+            strip_width: 46.0,
+        },
+        UiLayout::Compact => Metrics {
+            item_spacing: egui::vec2(5.0, 3.0),
+            button_padding: egui::vec2(5.0, 2.0),
+            interact_height: 20.0,
+            slider_width: 110.0,
+            body: 12.5,
+            small: 10.5,
+            heading: 17.0,
+            shelf_width: 176.0,
+            inspector_width: 250.0,
+            strip_width: 38.0,
+        },
+        UiLayout::Touch => Metrics {
+            item_spacing: egui::vec2(10.0, 10.0),
+            button_padding: egui::vec2(14.0, 9.0),
+            interact_height: 40.0,
+            slider_width: 150.0,
+            body: 16.0,
+            small: 13.0,
+            heading: 22.0,
+            shelf_width: 240.0,
+            inspector_width: 330.0,
+            strip_width: 64.0,
+        },
+    }
+}
+
+pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layout: UiLayout) {
+    let m = metrics(layout);
     let mut v = egui::Visuals::dark();
     let (bg, panel, text) = if high_contrast {
         (Color32::BLACK, Color32::from_gray(10), Color32::WHITE)
@@ -66,18 +124,25 @@ pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32) {
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(8.0, 4.0);
-        s.spacing.interact_size.y = 24.0;
-        s.spacing.slider_width = 130.0;
+        s.spacing.item_spacing = m.item_spacing;
+        s.spacing.button_padding = m.button_padding;
+        s.spacing.interact_size.y = m.interact_height;
+        s.spacing.slider_width = m.slider_width;
+        if layout == UiLayout::Touch {
+            // Fatter sliders and scroll bars are easier to hit with a finger.
+            s.spacing.slider_rail_height = 10.0;
+            s.spacing.scroll.bar_width = 14.0;
+            s.spacing.icon_width = 22.0;
+            s.spacing.icon_width_inner = 14.0;
+        }
         s.spacing.window_margin = egui::Margin::same(14);
         s.spacing.menu_margin = egui::Margin::same(8);
         s.spacing.indent = 14.0;
         use egui::{FontFamily::Proportional, FontId, TextStyle};
-        s.text_styles.insert(TextStyle::Heading, FontId::new(20.0, Proportional));
-        s.text_styles.insert(TextStyle::Body, FontId::new(13.5, Proportional));
-        s.text_styles.insert(TextStyle::Button, FontId::new(13.5, Proportional));
-        s.text_styles.insert(TextStyle::Small, FontId::new(11.0, Proportional));
+        s.text_styles.insert(TextStyle::Heading, FontId::new(m.heading, Proportional));
+        s.text_styles.insert(TextStyle::Body, FontId::new(m.body, Proportional));
+        s.text_styles.insert(TextStyle::Button, FontId::new(m.body, Proportional));
+        s.text_styles.insert(TextStyle::Small, FontId::new(m.small, Proportional));
     });
     ctx.set_zoom_factor(ui_scale);
 }
@@ -154,6 +219,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.checkbox(&mut ed.show_panels, "Show panels  (Tab)");
             });
             ui.menu_button("Settings", |ui| {
+                ui.label("Layout");
+                for l in UiLayout::ALL {
+                    ui.radio_value(&mut ed.layout, l, l.label()).on_hover_text(l.description());
+                }
+                ui.checkbox(&mut ed.welcome_at_startup, "Show welcome window at startup");
+                ui.separator();
                 ui.label("Interface scale");
                 ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05));
                 ui.checkbox(&mut ed.high_contrast, "High-contrast theme");
@@ -171,35 +242,30 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     status_bar(ui, ed);
 
     if ed.show_panels {
-        egui::Panel::left("brushes").resizable(false).default_size(206.0).show(ui, |ui| {
-            ui.add_space(6.0);
-            current_tiles(ui, ed);
-            ui.add_space(4.0);
-            ui.separator();
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                for k in BrushKind::ALL {
-                    if widgets::brush_row(ui, k, ed.brush_kind == k).clicked() {
-                        ed.brush_kind = k;
-                    }
+        let m = metrics(ed.layout);
+        // Panel ids include the layout so each layout starts at its own width.
+        let layout_key = format!("{:?}", ed.layout);
+        egui::Panel::left(format!("brushes_{layout_key}")).resizable(false).default_size(m.shelf_width).show(
+            ui,
+            |ui| {
+                ui.add_space(6.0);
+                current_tiles(ui, ed);
+                ui.add_space(4.0);
+                if ed.layout == UiLayout::Touch {
+                    // Always visible: there are no modifier keys on a tablet.
+                    touch_modifier_buttons(ui, ed);
                 }
-                ui.add_space(10.0);
-                ui.spacing_mut().item_spacing.y = 4.0;
-                ui.label(RichText::new("Hold while sculpting").weak().small());
-                for (key, what) in
-                    [("Shift", "Smooth"), ("Ctrl", "Mask"), ("Alt", "Invert"), ("Ctrl+Shift", "Pick group")]
-                {
-                    ui.horizontal(|ui| {
-                        widgets::keycap(ui, key);
-                        ui.label(RichText::new(what).small());
-                    });
-                }
-            });
-        });
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| brush_shelf(ui, ed));
+            },
+        );
 
-        egui::Panel::right("inspector").resizable(true).default_size(290.0).show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
-        });
+        egui::Panel::right(format!("inspector_{layout_key}")).resizable(true).default_size(m.inspector_width).show(
+            ui,
+            |ui| {
+                egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
+            },
+        );
         view_strip(ui, ed);
     }
 
@@ -209,7 +275,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
 
     let canvas = ui.available_rect_before_wrap();
-    if ed.show_panels {
+    // The gizmo is an overlay area: keep it out of the way of the welcome window.
+    if ed.show_panels && !ed.show_welcome {
         orientation_gizmo(ui.ctx(), ed, canvas);
     }
     draw_brush_cursor(ui, ed, canvas);
@@ -303,6 +370,80 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
+/// The brush list, in the form that suits the layout.
+fn brush_shelf(ui: &mut Ui, ed: &mut Editor) {
+    let ctx = ui.ctx().clone();
+    match ed.layout {
+        UiLayout::Standard => {
+            ui.spacing_mut().item_spacing.y = 2.0;
+            for k in BrushKind::ALL {
+                if widgets::brush_row(ui, k, ed.brush_kind == k).clicked() {
+                    ed.brush_kind = k;
+                }
+            }
+        }
+        UiLayout::Compact => {
+            // Icon-only grid; names and descriptions in tooltips.
+            egui::Grid::new("brush_grid").spacing([3.0, 3.0]).show(ui, |ui| {
+                for (i, k) in BrushKind::ALL.into_iter().enumerate() {
+                    if widgets::brush_icon_button(ui, k, ed.brush_kind == k, 38.0).clicked() {
+                        ed.brush_kind = k;
+                    }
+                    if i % 4 == 3 {
+                        ui.end_row();
+                    }
+                }
+            });
+        }
+        UiLayout::Touch => {
+            // Big preview tiles that are easy to hit with a finger.
+            egui::Grid::new("brush_tiles").spacing([8.0, 8.0]).show(ui, |ui| {
+                for (i, k) in BrushKind::ALL.into_iter().enumerate() {
+                    let t = widgets::brush_texture(&ctx, k);
+                    if widgets::thumb_sized(ui, Some(&t), k.label(), ed.brush_kind == k, 66.0).clicked() {
+                        ed.brush_kind = k;
+                    }
+                    if i % 3 == 2 {
+                        ui.end_row();
+                    }
+                }
+            });
+        }
+    }
+    ui.add_space(10.0);
+    if ed.layout != UiLayout::Touch {
+        ui.spacing_mut().item_spacing.y = 4.0;
+        ui.label(RichText::new("Hold while sculpting").weak().small());
+        for (key, what) in [("Shift", "Smooth"), ("Ctrl", "Mask"), ("Alt", "Invert"), ("Ctrl+Shift", "Pick group")] {
+            ui.horizontal(|ui| {
+                widgets::keycap(ui, key);
+                ui.label(RichText::new(what).small());
+            });
+        }
+    }
+}
+
+/// On-screen stand-ins for the Shift / Ctrl / Alt keys: tap to turn on,
+/// tap again to turn off. They stay on until turned off, so they work with
+/// one finger or a pen.
+fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor) {
+    let t = &mut ed.touch_modifiers;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let w = (ui.available_width() - 12.0) / 3.0;
+        for (on, label, tip) in [
+            (&mut t.shift, "Smooth", "Tap to make every stroke smooth (like holding Shift); tap again to stop"),
+            (&mut t.ctrl, "Mask", "Tap to make every stroke paint the mask (like holding Ctrl); tap again to stop"),
+            (&mut t.alt, "Invert", "Tap to make every stroke work the other way (like holding Alt); tap again to stop"),
+        ] {
+            let b = egui::Button::selectable(*on, RichText::new(label).strong()).min_size(egui::vec2(w, 44.0));
+            if ui.add(b).on_hover_text(tip).clicked() {
+                *on = !*on;
+            }
+        }
+    });
+}
+
 /// Brush, alpha and material previews at the top of the left panel; each
 /// opens a picker with thumbnails.
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
@@ -388,10 +529,21 @@ fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHan
 /// Vertical strip beside the viewport: navigation you can drag (useful with
 /// a pen or touch screen) and view toggles.
 fn view_strip(ui: &mut Ui, ed: &mut Editor) {
-    egui::Panel::right("view_strip").resizable(false).exact_size(46.0).show(ui, |ui| {
+    let m = metrics(ed.layout);
+    egui::Panel::right("view_strip").resizable(false).exact_size(m.strip_width).show(ui, |ui| {
         ui.add_space(6.0);
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
+            if ed.layout == UiLayout::Touch {
+                // Undo/redo within thumb reach (no keyboard on a tablet).
+                if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), "Undo").clicked() {
+                    ed.undo();
+                }
+                if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), "Redo").clicked() {
+                    ed.redo();
+                }
+                ui.separator();
+            }
             if widgets::icon_button(ui, Icon::Frame, false, true, "Frame the scene (F)").clicked() {
                 ed.frame();
             }
@@ -493,7 +645,7 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
-    let m = ed.modifiers;
+    let m = ed.active_modifiers();
     match (m.ctrl, m.shift, m.alt) {
         (true, true, true) => "Drag on empty space: hide the selection".into(),
         (true, true, false) => "Click a face group to isolate it · drag on empty space: show only the selection".into(),
@@ -503,6 +655,7 @@ pub fn context_hint(ed: &Editor) -> String {
         }
         (false, true, _) => "Smoothing".into(),
         (false, false, true) => format!("{}, inverted", ed.brush_kind.label()),
+        _ if ed.layout == UiLayout::Touch => "Drag model: sculpt · drag empty space: orbit · strip: pan, zoom".into(),
         _ => "Drag model: sculpt · drag empty space: orbit · right-drag: pan · wheel: zoom".into(),
     }
 }
@@ -523,14 +676,19 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
             if let Some(job) = &ed.job {
                 ui.spinner();
                 ui.label(format!("{}… {:.0} s", job.label, job.started.elapsed().as_secs_f32()));
-            } else {
-                ui.label(&ed.status);
             }
             if let Some(e) = &ed.autosaver.last_error {
                 ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
             }
+            // Hint on the right; the status message gets the space left over
+            // and is shortened with "…" rather than running into the hint.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(RichText::new(context_hint(ed)).weak());
+                if ed.job.is_none() {
+                    ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        ui.add(egui::Label::new(&ed.status).truncate()).on_hover_text(&ed.status);
+                    });
+                }
             });
         });
     });
@@ -1194,6 +1352,14 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                 }
             });
             ui.add_space(10.0);
+            ui.label(RichText::new("Layout").strong().size(14.0));
+            ui.horizontal(|ui| {
+                for l in UiLayout::ALL {
+                    ui.selectable_value(&mut ed.layout, l, l.label()).on_hover_text(l.description());
+                }
+            });
+            ui.label(RichText::new(ed.layout.description()).weak().small());
+            ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let start = egui::Button::new(RichText::new("Start sculpting").strong().color(Color32::WHITE))
                     .fill(ACCENT)
@@ -1201,7 +1367,10 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                 if ui.add(start).on_hover_text("Keep the sphere and start").clicked() {
                     close = true;
                 }
-                ui.label(RichText::new("Reopen this from Help > Welcome screen.").weak().small());
+                ui.checkbox(&mut ed.welcome_at_startup, "Show at startup");
+                ui.label(
+                    RichText::new("Reopen from Help > Welcome screen; change the layout in Settings.").weak().small(),
+                );
             });
         });
     if close || !open {
@@ -1262,7 +1431,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
         }
         _ => {}
     }
-    if ed.modifiers.ctrl && ed.modifiers.shift {
+    if ed.active_modifiers().ctrl && ed.active_modifiers().shift {
         // Group pick mode: crosshair instead of a brush ring.
         let c = Color32::from_rgb(230, 230, 120);
         painter.line_segment([pos - egui::vec2(8.0, 0.0), pos + egui::vec2(8.0, 0.0)], EStroke::new(1.5, c));
@@ -1355,7 +1524,7 @@ mod tests {
     /// Run a few headless frames of the whole interface.
     fn run_frames(ed: &mut Editor, frames: usize) {
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0);
+        apply_theme(&ctx, false, 1.0, ed.layout);
         for _ in 0..frames {
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -1383,6 +1552,18 @@ mod tests {
         ed.show_panels = false;
         ed.high_contrast = true;
         run_frames(&mut ed, 2);
+    }
+
+    #[test]
+    fn every_layout_draws_and_leaves_room_for_the_viewport() {
+        for layout in UiLayout::ALL {
+            let mut ed = Editor::default();
+            ed.layout = layout;
+            run_frames(&mut ed, 2);
+            ed.show_welcome = false;
+            ed.touch_modifiers.ctrl = layout == UiLayout::Touch;
+            run_frames(&mut ed, 2);
+        }
     }
 
     /// Run frames with a click at `at` (points) in the second frame.
@@ -1418,7 +1599,7 @@ mod tests {
         let mut ed = Editor::default();
         ed.show_welcome = false;
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0);
+        apply_theme(&ctx, false, 1.0, ed.layout);
         // Lay out once with the pointer away from everything.
         click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
         assert!(!egui::Popup::is_any_open(&ctx));

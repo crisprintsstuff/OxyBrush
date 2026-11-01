@@ -473,6 +473,25 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool) -> Response {
     response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
 }
 
+/// Square brush icon button (compact layout's icon grid).
+pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+    response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
+    if ui.is_rect_visible(rect) {
+        paint_brush_icon(ui.painter(), rect.shrink(2.0), k);
+        let stroke = if selected {
+            Stroke::new(1.5, ACCENT)
+        } else if response.hovered() {
+            Stroke::new(1.0, Color32::from_gray(150))
+        } else {
+            Stroke::NONE
+        };
+        ui.painter().rect_stroke(rect.shrink(1.0), 6.0, stroke, egui::StrokeKind::Inside);
+    }
+    let key = brush_key(k).map_or(String::new(), |k| format!("\nShortcut: {k}"));
+    response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
+}
+
 /// Large clickable card with an icon, a title and a one-line subtitle.
 pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(124.0, 112.0), Sense::click());
@@ -508,7 +527,7 @@ pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> Response {
 /// Button you drag on to navigate (orbit, pan, zoom), like dragging in the
 /// viewport. Handy with a pen or touch screen. Read `drag_delta()`.
 pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
-    let size = Vec2::splat(30.0);
+    let size = Vec2::splat(ui.spacing().interact_size.y.max(30.0));
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
     if ui.is_rect_visible(rect) {
@@ -686,7 +705,11 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
 
 /// Clickable thumbnail used inside the picker grids.
 pub fn thumb(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool) -> Response {
-    let size = 56.0;
+    thumb_sized(ui, tex, label, selected, 56.0)
+}
+
+/// Like [`thumb`] with a chosen image size.
+pub fn thumb_sized(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool, size: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size + 14.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, label));
     if ui.is_rect_visible(rect) {

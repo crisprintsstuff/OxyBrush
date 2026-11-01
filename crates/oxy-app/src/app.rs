@@ -32,6 +32,8 @@ pub struct AutoRun {
     pub screenshot: Option<PathBuf>,
     /// Perform a few scripted strokes first.
     pub demo: bool,
+    /// Start with this layout (`--layout`); remembered like choosing it in Settings.
+    pub layout: Option<crate::settings::UiLayout>,
 }
 
 pub struct App {
@@ -39,16 +41,26 @@ pub struct App {
     egui_ctx: egui::Context,
     editor: Editor,
     applied_matcap: Option<MatcapPreset>,
-    applied_theme: Option<(bool, f32)>,
+    applied_theme: Option<(bool, f32, crate::settings::UiLayout)>,
     applied_title: String,
     last_frame: Instant,
     initial_file: Option<PathBuf>,
     auto: AutoRun,
     frames: u32,
+    /// Where preferences are remembered (None for automated runs).
+    settings_path: Option<PathBuf>,
+    saved_settings: crate::settings::Settings,
+    /// When the preferences last changed without being saved yet.
+    settings_changed_at: Option<Instant>,
 }
 
 impl App {
     pub fn new(initial_file: Option<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
+        // Automated runs (CI screenshots) neither read nor write the user's settings.
+        let settings_path = if auto.screenshot.is_none() { crate::settings::Settings::default_path() } else { None };
+        let loaded = settings_path.as_deref().and_then(crate::settings::Settings::load);
+        let first_start = settings_path.is_some() && loaded.is_none();
+        let settings = loaded.unwrap_or_default();
         Self {
             gfx: None,
             egui_ctx: egui::Context::default(),
@@ -59,8 +71,21 @@ impl App {
                     e.enable_autosave();
                 }
                 e.system_info.log_path = log_path;
-                // Skip the welcome window when opening a file or running the demo.
-                e.show_welcome = initial_file.is_none() && !auto.demo;
+                e.apply_settings(&settings);
+                if let Some(l) = auto.layout {
+                    e.layout = l;
+                }
+                e.show_welcome = crate::settings::show_welcome(
+                    first_start,
+                    settings.welcome_at_startup,
+                    settings_path.is_none(),
+                    initial_file.is_some() || auto.demo,
+                );
+                log::info!(
+                    "layout {:?}, welcome window {}",
+                    e.layout,
+                    if e.show_welcome { "shown" } else { "skipped" }
+                );
                 e
             },
             applied_matcap: None,
@@ -70,6 +95,29 @@ impl App {
             initial_file,
             auto,
             frames: 0,
+            saved_settings: settings,
+            settings_path,
+            // Write the file on the first start so the welcome window isn't shown again.
+            settings_changed_at: first_start.then(Instant::now),
+        }
+    }
+
+    /// Save preferences once they've been stable for a moment (sliders change
+    /// every frame while dragged), or right away when `now` is set.
+    fn persist_settings(&mut self, now: bool) {
+        let Some(path) = &self.settings_path else { return };
+        let current = self.editor.settings();
+        if current != self.saved_settings && self.settings_changed_at.is_none() {
+            self.settings_changed_at = Some(Instant::now());
+        }
+        let due = self.settings_changed_at.is_some_and(|t| now || t.elapsed().as_secs_f32() > 1.0);
+        if due {
+            match current.save(path) {
+                Ok(()) => log::info!("saved settings to {}", path.display()),
+                Err(e) => log::warn!("could not save settings to {}: {e}", path.display()),
+            }
+            self.saved_settings = current;
+            self.settings_changed_at = None;
         }
     }
 
@@ -156,9 +204,9 @@ impl App {
         self.last_frame = now;
         self.editor.frame_ms = self.editor.frame_ms * 0.9 + dt * 0.1;
 
-        let theme = (self.editor.high_contrast, self.editor.ui_scale);
+        let theme = (self.editor.high_contrast, self.editor.ui_scale, self.editor.layout);
         if self.applied_theme != Some(theme) {
-            ui::apply_theme(&self.egui_ctx, theme.0, theme.1);
+            ui::apply_theme(&self.egui_ctx, theme.0, theme.1, theme.2);
             self.applied_theme = Some(theme);
         }
 
@@ -288,6 +336,7 @@ impl App {
         if let Some(a) = action {
             self.run_action(a);
         }
+        self.persist_settings(self.editor.quit_now);
         if self.editor.quit_now {
             self.editor.autosaver.finish();
             event_loop.exit();
@@ -492,8 +541,17 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        // Wake up regularly to finish background jobs and autosave even when idle.
-        let wait = if self.editor.job.is_some() { Duration::from_millis(200) } else { Duration::from_secs(20) };
+        // Save preferences once they settle, even if nothing redraws.
+        self.persist_settings(false);
+        // Wake up regularly to finish background jobs, pending settings and
+        // autosave even when idle.
+        let wait = if self.editor.job.is_some() {
+            Duration::from_millis(200)
+        } else if self.settings_changed_at.is_some() {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(20)
+        };
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wait));
     }
 
@@ -531,6 +589,7 @@ impl ApplicationHandler for App {
                 } else {
                     self.editor.request(crate::editor::Pending::Quit);
                     if self.editor.quit_now {
+                        self.persist_settings(true);
                         self.editor.autosaver.finish();
                         event_loop.exit();
                     }
