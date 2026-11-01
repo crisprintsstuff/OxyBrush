@@ -6,7 +6,7 @@ OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-
 
 ![OxyBrush with two pieces: a sculpted sphere with a face group, and a cube](docs/images/screenshot.png)
 
-> **Status: early development (Phase 2, tech preview).** You can sculpt multi-piece scenes, remesh, decimate, save projects and export today. Expect rough edges, and don't rely on it for production work yet. See the [roadmap](#roadmap).
+> **Status: alpha ([v0.0.1-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha)).** Phases 0–2 are done: you can sculpt multi-piece scenes, remesh, decimate, save projects and export. Next up is Phase 3 (stabilizer, masking tools, alphas, multiresolution). Expect rough edges and don't rely on it for production work yet. See the [roadmap](#roadmap).
 
 **Platforms:** Windows 10/11 and Linux (X11 and Wayland) are the supported targets. macOS builds in CI but is best-effort.
 
@@ -130,15 +130,19 @@ Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. 
 
 ## Roadmap
 
+Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
+
 | Phase | Goal | State |
 |---|---|---|
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
-| 1 | Sculpt core: brushes, symmetry, undo, pressure | 🚧 mostly done; Windows Ink / Linux tablet pressure still open |
-| 2 | Voxel remesh, decimation, multiple pieces, face groups, `.oxb` project files, autosave | ✅ (first pass) |
-| 3 | Quick palette, keymap editor, accessibility audit, installers | ⏳ |
-| 4 | Hardening → **1.0** | ⏳ |
-| 1.x / 2.x | Multires, dynamic topology, layers, vertex color, plugin API | long-term |
-| Research | Read ZBrush `.ZTL` files ([process & rules](docs/formats/zbrush/README.md)) | M0 tooling only; nothing decoded yet |
+| 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure on Windows/Linux still being verified) |
+| 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
+| — | Release packaging: Windows installer, Flatpak | ✅ v0.0.1-alpha |
+| 3 | **Sculpting depth:** stabilizer & stroke types, masking/selection tools, alphas, more brushes, multiresolution, 10M-triangle performance | ⏳ next |
+| 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
+| 5 | Hardening → **1.0** | ⏳ |
+| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
+| After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
 
 ## Contributing
 
