@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.crisprintsstuff.OxyBrush</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>OxyBrush</name>
+  <summary>Sculpt 3D models like digital clay</summary>
+  <developer id="io.github.crisprintsstuff">
+    <name>The OxyBrush Contributors</name>
+  </developer>
+  <description>
+    <p>
+      OxyBrush is an open-source digital sculpting application written in Rust.
+      The model fills the screen, tools appear when you need them, and brushes
+      respond immediately on dense meshes.
+    </p>
+    <ul>
+      <li>12 brushes including Clay, Clay Strips, Crease, Layer, Grab and Snake Hook</li>
+      <li>Mirror and radial symmetry</li>
+      <li>Multiple pieces per document, voxel remesh, merge and decimation</li>
+      <li>Face groups, masking and hiding</li>
+      <li>Project files with autosave and crash recovery; OBJ and STL import/export</li>
+    </ul>
+    <p>This is an early alpha release: expect rough edges.</p>
+  </description>
+  <launchable type="desktop-id">io.github.crisprintsstuff.OxyBrush.desktop</launchable>
+  <url type="homepage">https://github.com/crisprintsstuff/OxyBrush</url>
+  <url type="bugtracker">https://github.com/crisprintsstuff/OxyBrush/issues</url>
+  <url type="vcs-browser">https://github.com/crisprintsstuff/OxyBrush</url>
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/crisprintsstuff/OxyBrush/main/docs/images/screenshot.png</image>
+      <caption>Sculpting with two pieces and a face group</caption>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Graphics</category>
+    <category>3DGraphics</category>
+  </categories>
+  <provides>
+    <binary>oxybrush</binary>
+    <mediatype>application/x-oxybrush-project</mediatype>
+  </provides>
+  <requires>
+    <display_length compare="ge">768</display_length>
+  </requires>
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+    <control>tablet</control>
+  </supports>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.1-alpha" date="2026-11-01" type="development">
+      <description>
+        <p>First public alpha: sculpting core, multiple pieces, voxel remesh,
+        decimation, face groups, project files with autosave, Windows and
+        Linux builds.</p>
+      </description>
+    </release>
+  </releases>
+</component>

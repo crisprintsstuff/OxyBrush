@@ -47,7 +47,16 @@ Still to do for 1.0: dab cost at ~100k vertices (target ≤8 ms), faster decimat
 
 ## Downloads
 
-Test builds for Windows (`.zip`) and Linux (`.tar.gz`) come from the **Release builds** workflow (Actions tab → Release builds → Run workflow). Tagged versions (`v*`) are attached to GitHub Releases.
+Get the latest build from [Releases](https://github.com/crisprintsstuff/OxyBrush/releases):
+
+| Platform | File | Notes |
+|---|---|---|
+| Windows 10/11 (x64) | `…-windows-x86_64-setup.exe` | Installer: Start-menu shortcut, uninstaller, `.oxb` association. Installs for the current user without admin rights (all-users optional). |
+| Windows (portable) | `…-windows-x86_64-portable.zip` | Unzip and run `oxybrush.exe`. |
+| Linux (Flatpak) | `…-linux-x86_64.flatpak` | `flatpak install --user OxyBrush-*.flatpak` (pulls the freedesktop runtime from Flathub). |
+| Linux (portable) | `…-linux-x86_64.tar.gz` | Needs a Vulkan or GL driver and glibc ≥ 2.35. |
+
+`SHA256SUMS.txt` lists checksums for every file. The Windows installer is not code-signed yet, so SmartScreen will warn ("More info" → "Run anyway").
 
 ## Building
 

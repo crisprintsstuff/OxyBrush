@@ -1,0 +1,63 @@
+# Flatpak manifest for OxyBrush.
+#
+# Release builds (.github/workflows/release.yml) package the binary that the
+# Linux job already built and tested (copied here as ./oxybrush), so the
+# Flatpak contains exactly the released binary. A from-source manifest
+# (with generated cargo sources) is needed later for Flathub submission.
+#
+# Local build:
+#   cargo build --profile dist -p oxy-app && cp target/dist/oxybrush packaging/flatpak/
+#   flatpak-builder --user --install-deps-from=flathub --force-clean --install build-dir packaging/flatpak/io.github.crisprintsstuff.OxyBrush.yml
+app-id: io.github.crisprintsstuff.OxyBrush
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: oxybrush
+finish-args:
+  # Display: Wayland with X11 fallback; GPU access for wgpu (Vulkan/GL).
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # No broad filesystem access: open/save go through the file-chooser portal,
+  # autosave lives in the app's own data directory.
+modules:
+  - name: oxybrush
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 oxybrush /app/bin/oxybrush
+      - install -Dm644 io.github.crisprintsstuff.OxyBrush.desktop /app/share/applications/io.github.crisprintsstuff.OxyBrush.desktop
+      - install -Dm644 io.github.crisprintsstuff.OxyBrush.metainfo.xml /app/share/metainfo/io.github.crisprintsstuff.OxyBrush.metainfo.xml
+      - install -Dm644 io.github.crisprintsstuff.OxyBrush.mime.xml /app/share/mime/packages/io.github.crisprintsstuff.OxyBrush.xml
+      - for s in 16 24 32 48 64 128 256 512; do install -Dm644 oxybrush-$s.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.crisprintsstuff.OxyBrush.png; done
+      - install -Dm644 LICENSE-MIT /app/share/licenses/io.github.crisprintsstuff.OxyBrush/LICENSE-MIT
+      - install -Dm644 LICENSE-APACHE /app/share/licenses/io.github.crisprintsstuff.OxyBrush/LICENSE-APACHE
+    sources:
+      - type: file
+        path: oxybrush
+      - type: file
+        path: io.github.crisprintsstuff.OxyBrush.desktop
+      - type: file
+        path: io.github.crisprintsstuff.OxyBrush.metainfo.xml
+      - type: file
+        path: io.github.crisprintsstuff.OxyBrush.mime.xml
+      - type: file
+        path: ../../LICENSE-MIT
+      - type: file
+        path: ../../LICENSE-APACHE
+      - type: file
+        path: ../icons/oxybrush-16.png
+      - type: file
+        path: ../icons/oxybrush-24.png
+      - type: file
+        path: ../icons/oxybrush-32.png
+      - type: file
+        path: ../icons/oxybrush-48.png
+      - type: file
+        path: ../icons/oxybrush-64.png
+      - type: file
+        path: ../icons/oxybrush-128.png
+      - type: file
+        path: ../icons/oxybrush-256.png
+      - type: file
+        path: ../icons/oxybrush-512.png

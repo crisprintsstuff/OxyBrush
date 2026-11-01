@@ -13,3 +13,10 @@
 # Private corpus registries and research samples stay local.
 *.corpus.json
 docs/formats/zbrush/research/**/samples/
+
+# Release packaging scratch
+/dist/
+/packaging/flatpak/oxybrush
+/packaging/flatpak/build-dir/
+/packaging/flatpak/.flatpak-builder/
+/packaging/flatpak/repo/
