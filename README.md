@@ -118,7 +118,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
 | — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 / v0.1.0-alpha |
-| 3 | **Sculpting depth:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅ · multiresolution, 10M-triangle performance ⏳ | 🚧 v0.1.0-alpha |
+| 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅ · multiresolution, 10M-triangle performance, touch/tablet groundwork, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 v0.1.0-alpha |
 | 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
 | 5 | Hardening → **1.0** | ⏳ |
 | Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |

@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01 (v0.1.0-alpha)
+> **Last updated:** 2026-11-01 (iPad plan added to Phase 3)
 
 ## Status at a glance
 
@@ -14,9 +14,9 @@
 |---|---|
 | **Latest release** | v0.1.0-alpha (2026-11-01): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4 |
-| **Next** | Phase 3 — multiresolution (3.5) and performance (3.6) |
+| **Next** | Phase 3 — multiresolution (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
-| **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far) |
+| **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
 
 Legend: ✅ done · 🚧 in progress · ⏳ planned · 🔬 research
 
@@ -44,9 +44,9 @@ Inno Setup installer, Flatpak (`io.github.crisprintsstuff.OxyBrush`), macOS univ
 
 ---
 
-## Phase 3 — Sculpting depth 🚧 (3.1–3.4 shipped in v0.1.0-alpha)
+## Phase 3 — Sculpting depth and iPad 🚧 (3.1–3.4 shipped in v0.1.0-alpha)
 
-The fundamentals that most separate OxyBrush from mature sculpting tools. Ordered so each step ships something visible and multiresolution lands before the features that depend on it.
+The fundamentals that most separate OxyBrush from mature sculpting tools, plus the groundwork for an iPad version. Ordered so each step ships something visible and multiresolution lands before the features that depend on it.
 
 | # | Feature | Details | Status |
 |---|---|---|---|
@@ -56,8 +56,19 @@ The fundamentals that most separate OxyBrush from mature sculpting tools. Ordere
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
 | 3.5 | **Multiresolution** | Subdivision levels; sculpt at any level with detail propagated; rebuild lower levels from an imported dense mesh (6–10 wk) | ⏳ next |
 | 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) (4–8 wk) | ⏳ |
+| 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys; touch-friendly layout with larger targets and no hover-dependent UI; save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | ⏳ |
+| 3.8 | **iPad build** | iPadOS target (wgpu/Metal, winit), small platform crate using `objc2` for iOS APIs, document picker and Files-app integration, generated Xcode project, CI job producing an `.ipa`. (1–2 wk) | ⏳ |
+| 3.9 | **iPad and Apple Pencil polish** | Palm rejection (Pencil vs. finger), pressure tuning, simplified panel layout, testing on real iPads. (4–8 wk) | ⏳ |
+| 3.10 | **TestFlight beta** | Signing and upload from CI; internal testers, then a public beta link. **Blocked on maintainer:** Apple Developer Program membership and App Store Connect API key (planned for later). (~1 wk once unblocked) | ⏳ blocked |
 
-**Exit criteria:** sculpt at 60 fps on a 10M-triangle multires mesh on reference hardware; every item has tests; README and user docs updated.
+**Exit criteria:** sculpt at 60 fps on a 10M-triangle multires mesh on reference hardware; OxyBrush runs on an iPad with Apple Pencil pressure (distributed via TestFlight once 3.10 is unblocked); every item has tests; README and user docs updated.
+
+### iPad notes
+
+- **iPad only.** No iPhone build is planned; the screen is too small for sculpting.
+- **Order:** 3.7 needs no Apple account and benefits every platform, so it can start any time. 3.8–3.9 need a Mac or a macOS CI runner; 3.10 needs the paid Apple Developer Program.
+- **Decision pending (before 3.8):** calling iOS APIs from Rust needs `unsafe`, which AGENTS.md currently forbids workspace-wide. The proposal is to allow it only in one small, reviewed platform crate.
+- **Bonus of the Apple account:** the same membership allows notarizing the macOS app, removing the "Open Anyway" step for Mac users.
 
 ## Phase 4 — Workflow and experience ⏳ → 0.5
 
