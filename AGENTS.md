@@ -8,8 +8,8 @@ CONTRIBUTING.md and the documents it links win.
 ## Project in one paragraph
 
 OxyBrush is an open-source digital sculpting application in Rust
-(MIT OR Apache-2.0). Windows 10/11 and Linux are the supported platforms;
-macOS builds in CI but is best-effort. Current status and plan:
+(MIT OR Apache-2.0). Supported platforms: Windows 10/11, Linux (X11/Wayland)
+and macOS 11+ (universal: Apple Silicon and Intel). Current status and plan:
 [docs/ROADMAP.md](docs/ROADMAP.md). Design rationale:
 [docs/rfcs/0001-oxybrush.md](docs/rfcs/0001-oxybrush.md).
 
@@ -27,7 +27,7 @@ crates/
   oxy-render   wgpu matcap renderer, camera
   oxy-app      winit + egui desktop app, binary `oxybrush`
 docs/          ROADMAP.md, rfcs/, formats/zbrush/, releases/<tag>.md, images/
-packaging/     icons/ (generated), windows/ (Inno Setup), flatpak/
+packaging/     icons/ (generated), windows/ (Inno Setup), flatpak/, macos/ (app bundle + DMG)
 scripts/       check_corpus_ip.py (CI guard)
 test/corpus/   ZBrush corpus registry template (never ZBrush files)
 ```
@@ -81,8 +81,8 @@ alone don't show visual regressions.
 ## Hard rules
 
 - **No `unsafe`.** Forbidden workspace-wide.
-- **Pure Rust.** No dependencies that need a C/C++ toolchain on Windows or
-  Linux (that's why decimation is hand-written instead of using meshoptimizer).
+- **Pure Rust.** No dependencies that need a C/C++ toolchain on Windows,
+  Linux or macOS (that's why decimation is hand-written instead of using meshoptimizer).
   The only exception is `winresource`, a Windows-only build dependency that
   degrades gracefully.
 - **Licenses.** Dependencies and ported code must be MIT/Apache-2.0/BSD/
@@ -153,8 +153,9 @@ touching this area. In particular:
    (workflow_dispatch) on the branch.
 4. After merge, a maintainer publishes a GitHub release with tag
    `v<version>`. The workflow checks the tag matches `Cargo.toml`, builds the
-   Windows installer/zip and Linux Flatpak/tarball, and attaches them with
-   `SHA256SUMS.txt`. Tags containing `-` are marked pre-release.
+   Windows installer/zip, Linux Flatpak/tarball and macOS universal DMG, and
+   attaches them with `SHA256SUMS.txt`. Tags containing `-` are marked
+   pre-release.
 
 Regenerate icons with `python3 packaging/icons/make_icons.py` if the design
 changes; never hand-edit the generated PNG/ICO files.

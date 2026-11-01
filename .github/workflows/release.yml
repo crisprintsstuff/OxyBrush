@@ -3,6 +3,7 @@ name: Release builds
 # Builds Windows and Linux packages:
 #   - Windows: Inno Setup installer (.exe) and a portable .zip
 #   - Linux:   Flatpak bundle (.flatpak) and a portable .tar.gz
+#   - macOS:   universal .dmg (Apple Silicon + Intel), ad-hoc signed
 #
 # To release: publish a GitHub release whose tag is `v<Cargo.toml version>`
 # (e.g. v0.0.1-alpha). This workflow then builds everything from that tag
@@ -108,6 +109,46 @@ jobs:
           name: linux-binary
           path: target/x86_64-unknown-linux-gnu/dist/oxybrush
 
+  macos:
+    needs: version
+    # Apple Silicon runner; the Intel binary is cross-compiled and both are
+    # combined into one universal app.
+    runs-on: macos-latest
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "11.0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked --profile dist -p oxy-app --target aarch64-apple-darwin
+      - run: cargo build --locked --profile dist -p oxy-app --target x86_64-apple-darwin
+      - name: Build app bundle and disk image
+        run: packaging/macos/make_app.sh "${{ needs.version.outputs.version }}"
+      - name: Smoke test
+        run: |
+          lipo -archs dist/OxyBrush.app/Contents/MacOS/oxybrush | grep -q "x86_64 arm64"
+          dist/OxyBrush.app/Contents/MacOS/oxybrush --version
+          if /usr/bin/pgrep -q oahd; then arch -x86_64 dist/OxyBrush.app/Contents/MacOS/oxybrush --version; else echo "Rosetta not available on this runner; skipping Intel run"; fi
+      - name: Headless render (informational)
+        # macOS has no `timeout`; the app exits by itself after the screenshot.
+        continue-on-error: true
+        timeout-minutes: 3
+        run: |
+          dist/OxyBrush.app/Contents/MacOS/oxybrush --demo --screenshot dist-screenshot-macos.png
+          ls -la dist-screenshot-macos.png
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: macos-screenshot
+          path: dist-screenshot-macos.png
+          if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+
   flatpak:
     needs: [version, linux]
     runs-on: ubuntu-24.04
@@ -149,18 +190,19 @@ jobs:
 
   publish:
     if: github.event_name == 'release'
-    needs: [version, windows, linux, flatpak]
+    needs: [version, windows, linux, flatpak, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: "*"
           merge-multiple: true
       - name: Checksums
         run: |
           cd dist
-          rm -f oxybrush   # raw binary artifact for the Flatpak job; not a release asset
+          rm -f oxybrush dist-screenshot-macos.png   # job-internal artifacts, not release assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2

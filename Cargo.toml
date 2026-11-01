@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 
 [workspace.package]
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/crisprintsstuff/OxyBrush"
@@ -36,6 +36,7 @@ crc32fast = "1.5"
 dirs = "7"
 miniz_oxide = "0.9"
 serde_json = "1"
+png = "0.18"
 env_logger = "0.11"
 
 [workspace.lints.rust]

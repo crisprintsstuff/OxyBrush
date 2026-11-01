@@ -6,10 +6,10 @@ use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{Camera, MatcapPreset, ViewSettings};
-use oxy_sculpt::{BrushKind, BrushSettings, Falloff, Stroke, StrokeSample, Symmetry};
+use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
 use oxy_topo::RemeshOptions;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 /// Hard limit for subdivision so a click can't exhaust memory.
@@ -29,11 +29,65 @@ pub struct Modifiers {
     pub alt: bool,
 }
 
+/// How a primary-button drag on the model applies the brush.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum StrokeMode {
+    /// Dabs follow the pointer.
+    #[default]
+    Freehand,
+    /// Drag a straight line; the stroke is applied on release.
+    Line,
+    /// Drag out one dab: distance sets the size, direction sets the alpha rotation.
+    Stamp,
+}
+
+impl StrokeMode {
+    pub const ALL: [StrokeMode; 3] = [StrokeMode::Freehand, StrokeMode::Line, StrokeMode::Stamp];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            StrokeMode::Freehand => "Freehand",
+            StrokeMode::Line => "Line",
+            StrokeMode::Stamp => "Stamp (drag to size)",
+        }
+    }
+}
+
+/// What a box/lasso selection does on release.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectAction {
+    /// Hide everything outside the selection.
+    ShowOnly,
+    /// Hide the selection.
+    Hide,
+    Mask,
+    Unmask,
+}
+
 pub enum Drag {
     None,
     Orbit,
     Pan,
-    Stroke { stroke: Box<Stroke>, grab_plane: (Vec3, Vec3) },
+    Stroke {
+        stroke: Box<Stroke>,
+        grab_plane: (Vec3, Vec3),
+        /// Stabilizer: where the brush actually is (physical px), trailing the pointer.
+        lazy: Option<Vec2>,
+    },
+    /// Line / Stamp strokes: nothing changes until release.
+    Deferred {
+        mode: StrokeMode,
+        kind: BrushKind,
+        invert: bool,
+        start: Vec2,
+    },
+    /// Box or lasso selection; `points` are physical px (rect uses first and last).
+    Select {
+        action: SelectAction,
+        points: Vec<Vec2>,
+        lasso: bool,
+        click_group: Option<u32>,
+    },
 }
 
 /// Something that needs a "discard unsaved changes?" confirmation first.
@@ -69,6 +123,23 @@ pub struct Editor {
     pub pressure_radius: bool,
     pub front_faces_only: bool,
     pub auto_smooth: f32,
+    pub stroke_mode: StrokeMode,
+    /// Stabilizer ("lazy mouse") distance in logical points; 0 = off.
+    pub stabilizer_pt: f32,
+    pub spray: f32,
+    /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
+    pub pressure_gamma: f32,
+    pub noise_scale: f32,
+    /// Built-in alphas followed by user-loaded ones.
+    pub alphas: Vec<Arc<Alpha>>,
+    /// Index into `alphas`; None = no alpha.
+    pub alpha: Option<usize>,
+    pub alpha_rotation_deg: f32,
+    pub alpha_follow_stroke: bool,
+    /// Box/lasso selections use a lasso instead of a rectangle.
+    pub selection_lasso: bool,
+    /// Set by the UI to ask the platform layer for an alpha file dialog.
+    pub request_load_alpha: bool,
     pub symmetry: Symmetry,
     pub view: ViewSettings,
     pub matcap: MatcapPreset,
@@ -125,6 +196,17 @@ impl Default for Editor {
             pressure_radius: false,
             front_faces_only: true,
             auto_smooth: 0.0,
+            stroke_mode: StrokeMode::Freehand,
+            stabilizer_pt: 0.0,
+            spray: 0.0,
+            pressure_gamma: 1.0,
+            noise_scale: 3.0,
+            alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
+            alpha: None,
+            alpha_rotation_deg: 0.0,
+            alpha_follow_stroke: false,
+            selection_lasso: false,
+            request_load_alpha: false,
             symmetry: Symmetry { x: true, ..Default::default() },
             view: ViewSettings::default(),
             matcap: MatcapPreset::Terracotta,
@@ -158,6 +240,20 @@ impl Default for Editor {
 
 fn kind_index(k: BrushKind) -> usize {
     BrushKind::ALL.iter().position(|&x| x == k).unwrap_or(0)
+}
+
+/// Even-odd point-in-polygon test.
+fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
+    let mut inside = false;
+    let mut j = poly.len().wrapping_sub(1);
+    for i in 0..poly.len() {
+        let (a, b) = (poly[i], poly[j]);
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
 }
 
 /// Normal facing the viewer.
@@ -251,21 +347,28 @@ impl Editor {
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
         let m = self.modifiers;
 
-        // Ctrl+Shift+click: isolate the face group under the cursor; on empty space, show all.
+        let active = self.scene.active_index();
+        let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
+
+        // Ctrl+Shift+drag: box/lasso visibility (Alt hides the selection).
+        // A click without dragging isolates the group under the cursor, or
+        // shows everything on empty space.
         if m.ctrl && m.shift {
-            let active = self.scene.active_index();
-            match self.pick_piece(o, d).filter(|(i, _)| *i == active) {
-                Some((_, hit)) => {
-                    let g = self.scene.active().mesh.groups()[hit.triangle as usize];
-                    self.edit_faces("Isolate group", |mesh| mesh.isolate_group(g));
-                }
-                None => self.edit_faces("Show all", Mesh::show_all),
-            }
+            let click_group = self
+                .pick_piece(o, d)
+                .filter(|(i, _)| *i == active)
+                .map(|(_, hit)| self.scene.active().mesh.groups()[hit.triangle as usize]);
+            let action = if m.alt { SelectAction::Hide } else { SelectAction::ShowOnly };
+            self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
+            return;
+        }
+        // Ctrl+drag on empty space: box/lasso mask (Alt unmasks); a click blurs the mask.
+        if m.ctrl && active_hit.is_none() {
+            let action = if m.alt { SelectAction::Unmask } else { SelectAction::Mask };
+            self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group: None };
             return;
         }
 
-        let active = self.scene.active_index();
-        let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
         // Alt+click on another piece makes it active.
         if m.alt
             && let Some((i, _)) = self.pick_piece(o, d)
@@ -279,27 +382,25 @@ impl Editor {
 
         if let Some(hit) = active_hit {
             let (kind, invert) = self.effective_brush();
-            let radius = self.brush_radius_pt
-                * self.pixels_per_point
-                * self.camera.world_per_pixel(hit.point, self.canvas_size().y);
-            let settings = BrushSettings {
-                kind,
-                radius,
-                strength: self.strength(kind),
-                falloff: self.falloff,
-                spacing: self.spacing,
-                pressure_strength: self.pressure_strength,
-                pressure_radius: self.pressure_radius,
-                front_faces_only: self.front_faces_only,
-                auto_smooth: self.auto_smooth,
+            let mode = if kind.is_grab_like() || kind == BrushKind::SnakeHook || kind == BrushKind::Smooth || m.ctrl {
+                // Moving brushes, and the Shift/Ctrl stand-ins, always work freehand.
+                StrokeMode::Freehand
+            } else {
+                self.stroke_mode
             };
-            let mut stroke = Box::new(Stroke::new(settings, self.symmetry, invert));
+            if mode != StrokeMode::Freehand {
+                self.drag = Drag::Deferred { mode, kind, invert, start: p };
+                return;
+            }
+            let radius = self.world_radius(hit.point, self.brush_radius_pt);
+            let mut stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
+            let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
             let piece = self.scene.active_mut();
             self.history.begin(kind.label(), piece.id, &piece.mesh);
-            let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure };
             let history = &mut self.history;
             stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
-            self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()) };
+            let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
+            self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy };
         } else if m.alt {
             self.drag = Drag::Pan;
         } else {
@@ -307,11 +408,54 @@ impl Editor {
         }
     }
 
+    /// Pen pressure after the pressure curve.
+    pub fn pressure(&self) -> f32 {
+        self.pressure.clamp(0.0, 1.0).powf(self.pressure_gamma.clamp(0.2, 5.0))
+    }
+
+    /// Screen-space radius (logical points) to world units at `at`.
+    fn world_radius(&self, at: Vec3, radius_pt: f32) -> f32 {
+        radius_pt * self.pixels_per_point * self.camera.world_per_pixel(at, self.canvas_size().y)
+    }
+
+    fn new_stroke(&self, kind: BrushKind, invert: bool, radius: f32, extra_rotation: f32) -> Stroke {
+        let settings = BrushSettings {
+            kind,
+            radius,
+            strength: self.strength(kind),
+            falloff: self.falloff,
+            spacing: self.spacing,
+            pressure_strength: self.pressure_strength,
+            pressure_radius: self.pressure_radius,
+            front_faces_only: self.front_faces_only,
+            auto_smooth: self.auto_smooth,
+            spray: self.spray,
+            noise_scale: self.noise_scale,
+        };
+        // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
+        let stamp =
+            self.alpha.filter(|_| kind == self.brush_kind).and_then(|i| self.alphas.get(i)).map(|a| AlphaStamp {
+                alpha: a.clone(),
+                rotation: self.alpha_rotation_deg.to_radians() + extra_rotation,
+                follow_stroke: self.alpha_follow_stroke,
+                up: self.camera.up(),
+            });
+        Stroke::new(settings, self.symmetry, invert).with_alpha(stamp)
+    }
+
+    /// Add a user alpha and select it.
+    pub fn add_alpha(&mut self, alpha: Alpha) {
+        self.status = format!("Loaded alpha {}", alpha.name);
+        self.alphas.push(Arc::new(alpha));
+        self.alpha = Some(self.alphas.len() - 1);
+    }
+
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
         let delta = prev.map_or(Vec2::ZERO, |p| pos - p);
         let size = self.canvas_size();
+        let pressure_now = self.pressure();
         match &mut self.drag {
             Drag::None => false,
             Drag::Orbit => {
@@ -322,24 +466,51 @@ impl Editor {
                 self.camera.pan(delta, size.y);
                 true
             }
-            Drag::Stroke { stroke, grab_plane } => {
+            Drag::Deferred { .. } => true,
+            Drag::Select { points, lasso, .. } => {
+                if *lasso {
+                    if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
+                        points.push(pos);
+                    }
+                } else if points.len() < 2 {
+                    points.push(pos);
+                } else {
+                    points[1] = pos;
+                }
+                true
+            }
+            Drag::Stroke { stroke, grab_plane, lazy } => {
+                // Stabilizer: the brush trails the pointer on a string of fixed length.
+                let pos = match lazy {
+                    Some(b) => {
+                        let r = self.stabilizer_pt * self.pixels_per_point;
+                        let dist = b.distance(pos);
+                        if dist <= r {
+                            return true;
+                        }
+                        *b = pos - (pos - *b) / dist * r;
+                        *b
+                    }
+                    None => pos,
+                };
                 let local = pos - Vec2::new(self.canvas[0], self.canvas[1]);
                 let (o, d) = self.camera.ray(local, size);
                 let piece = self.scene.active_mut();
                 // Grab and Snake Hook follow the cursor off the surface, on a
                 // view-facing plane at the stroke's starting depth.
-                let sample = if matches!(stroke.settings().kind, BrushKind::Grab | BrushKind::SnakeHook) {
+                let sample = if stroke.settings().kind.is_grab_like() || stroke.settings().kind == BrushKind::SnakeHook
+                {
                     let (pp, pn) = *grab_plane;
                     let denom = d.dot(pn);
                     if denom.abs() < 1e-6 {
                         return false;
                     }
                     let t = (pp - o).dot(pn) / denom;
-                    StrokeSample { position: o + d * t, normal: -pn, pressure: self.pressure }
+                    StrokeSample { position: o + d * t, normal: -pn, pressure: pressure_now }
                 } else {
                     match piece.mesh.raycast(o, d) {
                         Some(hit) => {
-                            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure }
+                            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: pressure_now }
                         }
                         None => return false,
                     }
@@ -352,10 +523,135 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self) {
-        if let Drag::Stroke { .. } = self.drag {
-            self.history.commit();
+        match std::mem::replace(&mut self.drag, Drag::None) {
+            Drag::Stroke { .. } => self.history.commit(),
+            Drag::Deferred { mode, kind, invert, start } => {
+                if let Some(end) = self.pointer {
+                    self.finish_deferred(mode, kind, invert, start, end);
+                }
+            }
+            Drag::Select { action, points, lasso, click_group } => {
+                self.finish_select(action, points, lasso, click_group)
+            }
+            _ => {}
         }
-        self.drag = Drag::None;
+    }
+
+    /// Cancel an in-progress drag without applying it (Escape).
+    pub fn cancel_drag(&mut self) {
+        match std::mem::replace(&mut self.drag, Drag::None) {
+            Drag::Stroke { .. } => self.history.commit(),
+            _ => self.status = "Cancelled".into(),
+        }
+    }
+
+    fn finish_deferred(&mut self, mode: StrokeMode, kind: BrushKind, invert: bool, start: Vec2, end: Vec2) {
+        let size = self.canvas_size();
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let ray = |p: Vec2| self.camera.ray(p - origin, size);
+        let (o, d) = ray(start);
+        let Some(hit) = self.scene.active().mesh.raycast(o, d) else { return };
+        let pressure = self.pressure();
+        let (mut stroke, samples): (Stroke, Vec<StrokeSample>) = match mode {
+            StrokeMode::Stamp => {
+                // Drag distance is the radius; drag direction rotates the alpha.
+                let drag = end - start;
+                let radius_pt = (drag.length() / self.pixels_per_point).max(4.0);
+                let angle = -drag.y.atan2(drag.x);
+                let stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
+                (stroke, vec![StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure }])
+            }
+            _ => {
+                // Line: sample the straight screen segment every 2 px.
+                let stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, self.brush_radius_pt), 0.0);
+                let steps = ((end - start).length() / 2.0).ceil().max(1.0) as usize;
+                let mesh = &self.scene.active().mesh;
+                let samples = (0..=steps)
+                    .filter_map(|i| {
+                        let (o, d) = ray(start.lerp(end, i as f32 / steps as f32));
+                        mesh.raycast(o, d).map(|h| StrokeSample {
+                            position: h.point,
+                            normal: facing(h.normal, d),
+                            pressure,
+                        })
+                    })
+                    .collect();
+                (stroke, samples)
+            }
+        };
+        let piece = self.scene.active_mut();
+        self.history.begin(kind.label(), piece.id, &piece.mesh);
+        let history = &mut self.history;
+        for s in samples {
+            stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
+        }
+        self.history.commit();
+    }
+
+    fn finish_select(&mut self, action: SelectAction, points: Vec<Vec2>, lasso: bool, click_group: Option<u32>) {
+        let is_click = points.len() < 2 || points.iter().all(|p| p.distance(points[0]) < 4.0);
+        if is_click {
+            match (action, click_group) {
+                (SelectAction::ShowOnly | SelectAction::Hide, Some(g)) => {
+                    self.edit_faces("Isolate group", |mesh| mesh.isolate_group(g))
+                }
+                (SelectAction::ShowOnly | SelectAction::Hide, None) => self.edit_faces("Show all", Mesh::show_all),
+                (SelectAction::Mask | SelectAction::Unmask, _) => self.edit_mesh_mask("Blur mask", |m| m.blur_mask(1)),
+            }
+            return;
+        }
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let poly: Vec<Vec2> = if lasso {
+            points.iter().map(|p| *p - origin).collect()
+        } else {
+            let (a, b) = (points[0] - origin, points[points.len() - 1] - origin);
+            vec![a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]
+        };
+        let camera = self.camera;
+        let size = self.canvas_size();
+        let inside = move |p: Vec3| camera.project(p, size).is_some_and(|s| point_in_polygon(s, &poly));
+        match action {
+            SelectAction::Mask | SelectAction::Unmask => {
+                let value = if action == SelectAction::Mask { 1.0 } else { 0.0 };
+                let label = if action == SelectAction::Mask { "Mask selection" } else { "Unmask selection" };
+                self.edit_mesh_mask(label, |mesh| {
+                    for v in 0..mesh.vertex_count() {
+                        if !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]) {
+                            mesh.mask[v] = value;
+                        }
+                    }
+                });
+            }
+            SelectAction::ShowOnly | SelectAction::Hide => {
+                let label = if action == SelectAction::ShowOnly { "Show selection" } else { "Hide selection" };
+                self.edit_faces(label, |mesh| {
+                    let hidden = mesh
+                        .triangles
+                        .iter()
+                        .zip(mesh.hidden())
+                        .map(|(t, &h)| {
+                            let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
+                            let sel = inside(c);
+                            if action == SelectAction::ShowOnly { h || !sel } else { h || sel }
+                        })
+                        .collect();
+                    mesh.set_hidden(hidden);
+                });
+            }
+        }
+    }
+
+    /// Mask the face group under the pointer (keyboard shortcut).
+    pub fn mask_group_under_pointer(&mut self) {
+        let Some(p) = self.pointer else { return };
+        let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
+        match self.scene.active().mesh.raycast(o, d) {
+            Some(hit) => {
+                let g = self.scene.active().mesh.groups()[hit.triangle as usize];
+                self.edit_mesh_mask("Mask face group", |m| m.mask_group(g));
+            }
+            None => self.status = "Point at a face group on the active piece first".into(),
+        }
     }
 
     pub fn scroll(&mut self, steps: f32) {
@@ -715,13 +1011,20 @@ impl Editor {
     }
 
     fn edit_mask(&mut self, label: &str, f: impl Fn(f32) -> f32) {
-        self.pointer_up();
+        self.edit_mesh_mask(label, |mesh| mesh.mask.iter_mut().for_each(|m| *m = f(*m)));
+    }
+
+    /// Run a mask operation on the active piece, undoably.
+    pub fn edit_mesh_mask(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
+        if !matches!(self.drag, Drag::Select { .. }) {
+            self.pointer_up();
+        }
         let piece = self.scene.active_mut();
         self.history.begin(label, piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
             self.history.touch(&piece.mesh, c);
         }
-        piece.mesh.mask.iter_mut().for_each(|m| *m = f(*m));
+        f(&mut piece.mesh);
         piece.mesh.mark_all_dirty();
         self.history.commit();
         self.status = label.into();
@@ -853,12 +1156,155 @@ mod tests {
         e.modifiers = Modifiers { ctrl: true, shift: true, alt: false };
         center(&mut e);
         e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
         assert!(e.scene.active().mesh.any_hidden());
         e.pointer = Some(Vec2::new(5.0, 5.0));
         e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
         assert!(!e.scene.active().mesh.any_hidden());
         e.undo();
         assert!(e.scene.active().mesh.any_hidden());
+    }
+
+    fn drag(e: &mut Editor, from: Vec2, to: Vec2) {
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=10 {
+            e.pointer_moved(from.lerp(to, i as f32 / 10.0));
+        }
+        e.pointer_up();
+    }
+
+    fn masked(e: &Editor) -> usize {
+        e.scene.active().mesh.mask.iter().filter(|&&m| m > 0.5).count()
+    }
+
+    #[test]
+    fn box_mask_from_empty_space_and_undo() {
+        let mut e = editor();
+        e.modifiers.ctrl = true;
+        // Drag a box starting off the model, covering its left half.
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        let n = masked(&e);
+        assert!(n > 0 && n < e.scene.active().mesh.vertex_count());
+        // Every masked vertex projects inside the box.
+        let size = Vec2::new(800.0, 600.0);
+        for (p, &m) in e.scene.active().mesh.positions.iter().zip(&e.scene.active().mesh.mask) {
+            if m > 0.5 {
+                assert!(e.camera.project(*p, size).unwrap().x <= 401.0);
+            }
+        }
+        e.modifiers.alt = true;
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(795.0, 595.0));
+        assert_eq!(masked(&e), 0, "Ctrl+Alt box unmasks");
+        e.undo();
+        assert_eq!(masked(&e), n);
+    }
+
+    #[test]
+    fn lasso_hides_and_ctrl_click_blurs() {
+        let mut e = editor();
+        e.selection_lasso = true;
+        e.modifiers = Modifiers { ctrl: true, shift: true, alt: true };
+        // Triangle-shaped lasso around the center: hide it.
+        e.pointer = Some(Vec2::new(300.0, 200.0));
+        e.pointer_down(PointerButton::Primary);
+        for p in [Vec2::new(500.0, 200.0), Vec2::new(400.0, 420.0), Vec2::new(300.0, 201.0)] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        let hidden = e.scene.active().mesh.hidden().iter().filter(|&&h| h).count();
+        assert!(hidden > 0 && hidden < e.scene.active().mesh.triangle_count() / 2, "{hidden}");
+
+        // Ctrl+click on empty space blurs the mask.
+        let mut e = editor();
+        let top = e.scene.active().mesh.positions.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        let mask: Vec<f32> =
+            e.scene.active().mesh.positions.iter().map(|p| if p.y > top * 0.7 { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+        e.modifiers.ctrl = true;
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0 && m < 1.0));
+    }
+
+    #[test]
+    fn line_and_stamp_strokes_apply_on_release() {
+        for mode in [StrokeMode::Line, StrokeMode::Stamp] {
+            let mut e = editor();
+            e.stroke_mode = mode;
+            e.alpha = Some(0);
+            let before = e.scene.active().mesh.positions.clone();
+            e.pointer = Some(Vec2::new(360.0, 300.0));
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_moved(Vec2::new(440.0, 300.0));
+            assert_eq!(before, e.scene.active().mesh.positions, "{mode:?}: nothing until release");
+            e.pointer_up();
+            assert_ne!(before, e.scene.active().mesh.positions, "{mode:?}: applied on release");
+            e.undo();
+            assert_eq!(before, e.scene.active().mesh.positions);
+        }
+    }
+
+    #[test]
+    fn stabilizer_lags_behind_pointer() {
+        let mut e = editor();
+        e.stabilizer_pt = 50.0;
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        // Small wiggles inside the string length don't sculpt.
+        let after_first = e.scene.active().mesh.positions.clone();
+        e.pointer_moved(Vec2::new(420.0, 310.0));
+        assert_eq!(after_first, e.scene.active().mesh.positions);
+        // Moving further pulls the brush along, trailing by the string length.
+        e.pointer_moved(Vec2::new(480.0, 300.0));
+        assert_ne!(after_first, e.scene.active().mesh.positions);
+        match &e.drag {
+            Drag::Stroke { lazy: Some(b), .. } => assert!((b.distance(Vec2::new(480.0, 300.0)) - 50.0).abs() < 0.01),
+            _ => panic!("expected a stabilized stroke"),
+        }
+        e.pointer_up();
+    }
+
+    #[test]
+    fn pressure_curve() {
+        let mut e = editor();
+        e.pressure = 0.5;
+        e.pressure_gamma = 1.0;
+        assert!((e.pressure() - 0.5).abs() < 1e-6);
+        e.pressure_gamma = 2.0;
+        assert!((e.pressure() - 0.25).abs() < 1e-6);
+        e.pressure_gamma = 0.5;
+        assert!(e.pressure() > 0.7);
+    }
+
+    #[test]
+    fn mask_group_under_pointer() {
+        let mut e = editor();
+        let piece = e.scene.active_mut();
+        let groups =
+            piece.mesh.triangles.iter().map(|t| u32::from(piece.mesh.positions[t[0] as usize].x > 0.0)).collect();
+        piece.mesh.set_groups(groups);
+        e.pointer = Some(Vec2::new(500.0, 300.0)); // right side of the sphere: x > 0
+        e.mask_group_under_pointer();
+        let m = &e.scene.active().mesh;
+        assert!(m.positions.iter().zip(&m.mask).all(|(p, &k)| if p.x > 0.2 {
+            k == 1.0
+        } else if p.x < -0.2 {
+            k == 0.0
+        } else {
+            true
+        }));
+    }
+
+    #[test]
+    fn user_alpha_is_added_and_selected() {
+        let mut e = editor();
+        let n = e.alphas.len();
+        e.add_alpha(Alpha::from_luma("mine", 8, 8, &[200; 64]).unwrap());
+        assert_eq!(e.alphas.len(), n + 1);
+        assert_eq!(e.alpha, Some(n));
     }
 
     #[test]

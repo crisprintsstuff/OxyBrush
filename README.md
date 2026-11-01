@@ -11,7 +11,7 @@
   <a href="https://github.com/crisprintsstuff/OxyBrush/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/crisprintsstuff/OxyBrush/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white"></a>
   <img alt="stage" src="https://img.shields.io/badge/stage-alpha-orange">
   <a href="rust-toolchain.toml"><img alt="language" src="https://img.shields.io/badge/language-Rust%201.99-dea584?logo=rust"></a>
-  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux-0078d4">
+  <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078d4">
   <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-4c1"></a>
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/crisprintsstuff/OxyBrush/total?label=downloads"></a>
 </p>
@@ -28,7 +28,7 @@
 
 OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
 
-> **Alpha:** [v0.0.1-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha) is the first public build. You can sculpt multi-piece scenes, remesh, decimate, save projects and export for 3D printing. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
+> **Alpha:** [v0.1.0-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes, remesh, decimate, save projects and export for 3D printing. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
 
 ## Download and install
 
@@ -36,12 +36,13 @@ Get the latest build from **[Releases](https://github.com/crisprintsstuff/OxyBru
 
 | Platform | File | How |
 |---|---|---|
+| **macOS 11+** (Apple Silicon and Intel) | `…-macos-universal.dmg` | Open it and drag OxyBrush to Applications. The app isn't notarized yet, so the first launch is blocked: open **System Settings > Privacy & Security** and click **Open Anyway** (macOS 14 or older: right-click the app > **Open**). |
 | **Windows 10/11** (64-bit) | `…-windows-x86_64-setup.exe` | Run it. Installs for your user without admin rights; adds a Start-menu entry, an uninstaller and `.oxb` file association. Windows warns about an unknown publisher (not code-signed yet): **More info → Run anyway**. |
 | Windows, portable | `…-windows-x86_64-portable.zip` | Unzip and run `oxybrush.exe`. |
 | **Linux** (Flatpak) | `…-linux-x86_64.flatpak` | `flatpak install --user OxyBrush-*.flatpak`, then launch from your app menu. Needs the Flathub remote for the runtime. |
 | Linux, portable | `…-linux-x86_64.tar.gz` | Unpack and run `./oxybrush`. Needs a Vulkan or OpenGL driver and glibc ≥ 2.35. |
 
-Each release has `SHA256SUMS.txt` for verifying downloads. macOS isn't supported yet (it builds, but is untested).
+Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
@@ -61,7 +62,10 @@ Testers are the most useful contribution right now — especially with **pen tab
 
 ## Features
 
-- **12 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Mask. Each has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **16 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Topological Move, Polish, Planar Trim, Noise, Mask. Each has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **Stroke control:** stabilizer for smooth lines, Freehand / Line / Stamp stroke modes, spray, pressure curve.
+- **Alphas:** grayscale images shape each dab; seven built-in procedural alphas plus your own grayscale PNGs, with rotation and follow-stroke.
+- **Masking and selection:** box or lasso mask/unmask and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
 - **Symmetry:** X/Y/Z mirroring plus radial symmetry (up to 64 copies around any axis).
 - **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active.
 - **Voxel remesh:** rebuilds clean, even topology. "Merge visible" remeshes several pieces into one (a union).
@@ -74,7 +78,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets).
 - **Import/export:** OBJ and STL import (as new pieces). OBJ and binary STL export of all visible pieces (3D-printing ready).
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
-- **Pure Rust:** no C or C++ toolchain needed on Windows or Linux.
+- **Pure Rust:** no C or C++ toolchain needed on Windows, Linux or macOS.
 
 ## Controls
 
@@ -87,7 +91,11 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Alt+LMB on empty space / RMB | Pan |
 | Wheel | Zoom |
 | Shift / Ctrl / Alt (hold) | Smooth / Mask / Invert |
-| `1`–`9`, `0` | Select brush |
+| Ctrl+drag on empty space | Mask a rectangle or lasso (Ctrl+Alt: unmask; Ctrl+click: blur mask) |
+| Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
+| `L` | Rectangle / lasso selection |
+| Ctrl+M | Mask the face group under the cursor |
+| `1`–`9`, `0` | Select brushes 1–10 |
 | `[` `]` and `-` `=` | Radius and strength |
 | `X` | Toggle X symmetry |
 | `F` | Frame scene |
@@ -98,6 +106,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | `F1` | Full shortcut list |
 
+On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
+
 ## Roadmap
 
 Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
@@ -105,10 +115,10 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | Phase | Goal | State |
 |---|---|---|
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
-| 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure on Windows/Linux still being verified) |
+| 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak | ✅ v0.0.1-alpha |
-| 3 | **Sculpting depth:** stabilizer & stroke types, masking/selection tools, alphas, more brushes, multiresolution, 10M-triangle performance | ⏳ next |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 / v0.1.0-alpha |
+| 3 | **Sculpting depth:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅ · multiresolution, 10M-triangle performance ⏳ | 🚧 v0.1.0-alpha |
 | 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
 | 5 | Hardening → **1.0** | ⏳ |
 | Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |

@@ -1,6 +1,6 @@
 //! egui panels, dialogs, theme and brush cursor.
 
-use crate::editor::{Drag, Editor, Pending};
+use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use oxy_mesh::Mesh;
 use oxy_render::MatcapPreset;
@@ -18,6 +18,8 @@ pub enum UiAction {
     Export,
     /// Save, then perform the pending action (from the unsaved-changes prompt).
     SaveThenContinue,
+    /// Load a grayscale image as a brush alpha.
+    LoadAlpha,
 }
 
 pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32) {
@@ -89,15 +91,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             ui.menu_button("Pieces", |ui| piece_actions(ui, ed, busy));
             ui.menu_button("Mesh", |ui| mesh_actions(ui, ed, busy));
             ui.menu_button("Groups", |ui| group_actions(ui, ed));
-            ui.menu_button("Mask", |ui| {
-                if ui.button("Invert  (Ctrl+Shift+I)").clicked() {
-                    ed.invert_mask();
-                }
-                if ui.button("Clear  (Alt+M)").clicked() {
-                    ed.clear_mask();
-                }
-                ui.checkbox(&mut ed.view.show_mask, "Show mask  (M)");
-            });
+            ui.menu_button("Mask", |ui| mask_actions(ui, ed));
             ui.menu_button("View", |ui| {
                 if ui.button("Frame scene  (F)").clicked() {
                     ed.frame();
@@ -189,6 +183,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         });
     }
 
+    if std::mem::take(&mut ed.request_load_alpha) {
+        action = Some(UiAction::LoadAlpha);
+    }
     dialogs(ui, ed, &mut action);
 
     let canvas = ui.available_rect_before_wrap();
@@ -300,6 +297,77 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     if ui.button("Invert visibility").clicked() {
         ed.edit_faces("Invert visibility", Mesh::invert_visibility);
     }
+    if ui.button("Grow visible").clicked() {
+        ed.edit_faces("Grow visible", |m| m.grow_visible(true));
+    }
+    if ui.button("Shrink visible").clicked() {
+        ed.edit_faces("Shrink visible", |m| m.grow_visible(false));
+    }
+    ui.separator();
+    ui.label(
+        RichText::new("Ctrl+Shift+drag: show only the selection\nCtrl+Shift+Alt+drag: hide the selection")
+            .weak()
+            .small(),
+    );
+}
+
+/// Small plot of the pressure response curve.
+fn pressure_curve_plot(ui: &mut Ui, gamma: f32) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 24.0), egui::Sense::hover());
+    let p = ui.painter();
+    p.rect_stroke(rect, 2.0, EStroke::new(1.0, Color32::from_gray(80)), egui::StrokeKind::Inside);
+    let pts: Vec<egui::Pos2> = (0..=16)
+        .map(|i| {
+            let x = i as f32 / 16.0;
+            egui::pos2(rect.left() + x * rect.width(), rect.bottom() - x.powf(gamma) * rect.height())
+        })
+        .collect();
+    p.add(egui::Shape::line(pts, EStroke::new(1.5, ACCENT)));
+}
+
+/// Preview of an alpha (texture cached per alpha name).
+fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha) {
+    let id = egui::Id::unique(("alpha_tex", alpha.name.as_str(), alpha.size));
+    let tex = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
+        let img = egui::ColorImage::from_gray([alpha.size as usize, alpha.size as usize], &alpha.to_luma8());
+        let t = ui.ctx().load_texture(format!("alpha {}", alpha.name), img, egui::TextureOptions::LINEAR);
+        ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
+        t
+    });
+    ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0))));
+}
+
+fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
+    if ui.button("Invert  (Ctrl+Shift+I)").clicked() {
+        ed.invert_mask();
+    }
+    if ui.button("Clear  (Alt+M)").clicked() {
+        ed.clear_mask();
+    }
+    ui.separator();
+    if ui.button("Blur  (Ctrl+click empty space)").clicked() {
+        ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
+    }
+    if ui.button("Sharpen").clicked() {
+        ed.edit_mesh_mask("Sharpen mask", Mesh::sharpen_mask);
+    }
+    if ui.button("Grow").clicked() {
+        ed.edit_mesh_mask("Grow mask", |m| m.grow_mask(true));
+    }
+    if ui.button("Shrink").clicked() {
+        ed.edit_mesh_mask("Shrink mask", |m| m.grow_mask(false));
+    }
+    ui.separator();
+    if ui.button("Mask cavities").on_hover_text("Mask concave areas: creases, pores, crevices").clicked() {
+        ed.edit_mesh_mask("Mask cavities", |m| m.mask_by_curvature(true));
+    }
+    if ui.button("Mask peaks").on_hover_text("Mask convex areas: ridges and edges").clicked() {
+        ed.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false));
+    }
+    ui.label(RichText::new("Mask a face group: point at it and press Ctrl+M").weak().small());
+    ui.separator();
+    ui.checkbox(&mut ed.view.show_mask, "Show mask  (M)");
+    ui.label(RichText::new("Ctrl+drag on empty space: mask selection\nCtrl+Alt+drag: unmask selection").weak().small());
 }
 
 fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
@@ -367,6 +435,64 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.checkbox(&mut ed.pressure_strength, "Pen pressure sets strength");
     ui.checkbox(&mut ed.pressure_radius, "Pen pressure sets radius");
     ui.checkbox(&mut ed.front_faces_only, "Front faces only");
+    if ed.brush_kind == oxy_sculpt::BrushKind::Noise {
+        ui.horizontal(|ui| {
+            ui.label("Noise scale");
+            ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0));
+        });
+    }
+
+    ui.separator();
+    ui.label(RichText::new("Stroke").strong());
+    egui::Grid::new("stroke").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+        ui.label("Mode");
+        egui::ComboBox::from_id_salt("stroke_mode").selected_text(ed.stroke_mode.label()).show_ui(ui, |ui| {
+            for m in StrokeMode::ALL {
+                ui.selectable_value(&mut ed.stroke_mode, m, m.label());
+            }
+        });
+        ui.end_row();
+        ui.label("Stabilizer");
+        ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt"))
+            .on_hover_text("Lazy mouse: the brush trails the cursor on a string for smooth lines (0 = off)");
+        ui.end_row();
+        ui.label("Spray");
+        ui.add(egui::Slider::new(&mut ed.spray, 0.0..=1.0))
+            .on_hover_text("Scatter dab position, rotation and strength");
+        ui.end_row();
+        ui.label("Pressure curve");
+        ui.horizontal(|ui| {
+            ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))
+                .on_hover_text("Below 1: soft (light touch goes further). Above 1: firm.");
+            pressure_curve_plot(ui, ed.pressure_gamma);
+        });
+        ui.end_row();
+    });
+
+    ui.separator();
+    ui.label(RichText::new("Alpha").strong());
+    let current = ed.alpha.and_then(|i| ed.alphas.get(i)).map_or("None".to_string(), |a| a.name.clone());
+    ui.horizontal(|ui| {
+        egui::ComboBox::from_id_salt("alpha").selected_text(current).show_ui(ui, |ui| {
+            ui.selectable_value(&mut ed.alpha, None, "None");
+            for (i, a) in ed.alphas.iter().enumerate() {
+                ui.selectable_value(&mut ed.alpha, Some(i), a.name.as_str());
+            }
+        });
+        if ui.small_button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
+            ed.request_load_alpha = true;
+        }
+    });
+    if let Some(a) = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
+        ui.horizontal(|ui| {
+            alpha_thumbnail(ui, &a);
+            ui.vertical(|ui| {
+                ui.add(egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"));
+                ui.checkbox(&mut ed.alpha_follow_stroke, "Follow stroke direction");
+                ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
+            });
+        });
+    }
 
     ui.separator();
     ui.label(RichText::new("Symmetry").strong());
@@ -414,6 +540,12 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     ui.label(RichText::new("Groups & mask").strong());
     ui.checkbox(&mut ed.view.show_groups, "Show face group colors");
+    ui.horizontal(|ui| {
+        ui.label("Selection");
+        ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle");
+        ui.selectable_value(&mut ed.selection_lasso, true, "Lasso");
+        ui.label(RichText::new("(L)").weak());
+    });
     ui.horizontal_wrapped(|ui| {
         if ui.button("Group visible").clicked() {
             ed.edit_faces("Group visible", Mesh::group_visible);
@@ -556,6 +688,49 @@ fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
         return;
     }
     let painter = ui.painter().with_clip_rect(canvas);
+    let to_pt = |v: glam::Vec2| egui::pos2(v.x, v.y) / ed.pixels_per_point;
+    match &ed.drag {
+        Drag::Select { points, lasso, action, .. } => {
+            let c = match action {
+                crate::editor::SelectAction::Mask => Color32::from_rgb(110, 150, 255),
+                crate::editor::SelectAction::Unmask => Color32::from_rgb(200, 200, 255),
+                crate::editor::SelectAction::ShowOnly => Color32::from_rgb(230, 230, 120),
+                crate::editor::SelectAction::Hide => Color32::from_rgb(240, 120, 100),
+            };
+            let stroke = EStroke::new(1.5, c);
+            if *lasso {
+                let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
+                pts.push(pos);
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            } else {
+                let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
+                painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
+            }
+            return;
+        }
+        Drag::Deferred { mode, start, .. } => {
+            let s = to_pt(*start);
+            let c = ACCENT;
+            if *mode == StrokeMode::Stamp {
+                let r = s.distance(pos).max(4.0);
+                painter.circle_stroke(s, r, EStroke::new(1.5, c));
+                painter.line_segment([s, pos], EStroke::new(1.0, c.linear_multiply(0.6)));
+            } else {
+                painter.line_segment([s, pos], EStroke::new(2.0, c));
+                painter.circle_stroke(pos, ed.brush_radius_pt, EStroke::new(1.0, c.linear_multiply(0.5)));
+            }
+            return;
+        }
+        Drag::Stroke { lazy: Some(b), .. } => {
+            // Stabilizer: show the brush position and the string to the cursor.
+            let bp = to_pt(*b);
+            painter.line_segment([bp, pos], EStroke::new(1.0, Color32::from_gray(160)));
+            painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, ACCENT));
+            painter.circle_filled(bp, 2.0, ACCENT);
+            return;
+        }
+        _ => {}
+    }
     if ed.modifiers.ctrl && ed.modifiers.shift {
         // Group pick mode: crosshair instead of a brush ring.
         let c = Color32::from_rgb(230, 230, 120);
@@ -610,7 +785,14 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl (hold)", "Mask brush (Alt: unmask)"),
     ("Alt (hold)", "Invert brush"),
     ("Ctrl+Shift+click", "Isolate face group (empty: show all)"),
-    ("1 – 9, 0", "Select brush"),
+    ("Ctrl+Shift+drag", "Show only the selection"),
+    ("Ctrl+Shift+Alt+drag", "Hide the selection"),
+    ("Ctrl+drag on empty", "Mask the selection (Alt: unmask)"),
+    ("Ctrl+click on empty", "Blur mask"),
+    ("Ctrl+M", "Mask the face group under the cursor"),
+    ("L", "Selection: rectangle / lasso"),
+    ("Esc", "Cancel a selection or line/stamp"),
+    ("1 – 9, 0", "Select brushes 1–10"),
     ("[  ]", "Brush radius"),
     ("-  =", "Brush strength"),
     ("X", "Toggle X symmetry"),

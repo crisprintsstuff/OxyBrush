@@ -15,7 +15,9 @@
       respond immediately on dense meshes.
     </p>
     <ul>
-      <li>12 brushes including Clay, Clay Strips, Crease, Layer, Grab and Snake Hook</li>
+      <li>16 brushes including Clay, Clay Strips, Crease, Layer, Polish and Topological Move</li>
+      <li>Alphas, stroke stabilizer, line and stamp strokes</li>
+      <li>Box and lasso masking and selection</li>
       <li>Mirror and radial symmetry</li>
       <li>Multiple pieces per document, voxel remesh, merge and decimation</li>
       <li>Face groups, masking and hiding</li>
@@ -51,6 +53,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.1.0-alpha" date="2026-11-01" type="development">
+      <description>
+        <p>New brushes (Polish, Planar Trim, Topological Move, Noise), alphas,
+        stroke stabilizer and stroke modes, box/lasso masking and selection,
+        and tester tools (log file, bug-report links).</p>
+      </description>
+    </release>
     <release version="0.0.1-alpha" date="2026-11-01" type="development">
       <description>
         <p>First public alpha: sculpting core, multiple pieces, voxel remesh,

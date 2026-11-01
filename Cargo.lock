@@ -2378,7 +2378,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-app"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "dirs",
  "egui",
@@ -2394,6 +2394,7 @@ dependencies = [
  "oxy-render",
  "oxy-sculpt",
  "oxy-topo",
+ "png",
  "pollster 1.0.1",
  "rfd",
  "wgpu",
@@ -2403,7 +2404,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-doc"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "crc32fast",
  "dirs",
@@ -2415,7 +2416,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-history"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "glam",
  "oxy-doc",
@@ -2424,7 +2425,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-io"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2433,7 +2434,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-mesh"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "glam",
  "rayon",
@@ -2441,7 +2442,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-render"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "bytemuck",
  "glam",
@@ -2452,7 +2453,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-sculpt"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2461,7 +2462,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-topo"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2470,7 +2471,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-ztl"
-version = "0.0.1-alpha"
+version = "0.1.0-alpha"
 dependencies = [
  "miniz_oxide 0.9.1",
  "serde_json",

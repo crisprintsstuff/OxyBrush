@@ -324,6 +324,14 @@ impl App {
                     }
                 }
             }
+            UiAction::LoadAlpha => {
+                if let Some(p) = rfd::FileDialog::new().add_filter("PNG image", &["png", "PNG"]).pick_file() {
+                    match crate::support::load_alpha_png(&p) {
+                        Ok(alpha) => ed.add_alpha(alpha),
+                        Err(e) => ed.status = format!("Could not load {}: {e}", p.display()),
+                    }
+                }
+            }
             UiAction::SaveAs => {
                 if let Some(p) = project_dialog().set_file_name("sculpt.oxb").save_file() {
                     ed.save(&p);
@@ -369,7 +377,7 @@ impl App {
         match &event.logical_key {
             Key::Named(NamedKey::Tab) => ed.show_panels = !ed.show_panels,
             Key::Named(NamedKey::F1) => ed.show_shortcuts = !ed.show_shortcuts,
-            Key::Named(NamedKey::Escape) => ed.pointer_up(),
+            Key::Named(NamedKey::Escape) => ed.cancel_drag(),
             Key::Character(c) => {
                 let c = c.to_lowercase();
                 match (c.as_str(), ctrl, m.shift, m.alt) {
@@ -383,6 +391,11 @@ impl App {
                     ("i", true, false, _) => return Some(UiAction::Import),
                     ("r", true, _, _) => ed.remesh_active(),
                     ("w", true, _, _) => ed.edit_faces("Group visible", oxy_mesh::Mesh::group_visible),
+                    ("m", true, false, _) => ed.mask_group_under_pointer(),
+                    ("l", false, ..) => {
+                        ed.selection_lasso = !ed.selection_lasso;
+                        ed.status = format!("Selection: {}", if ed.selection_lasso { "lasso" } else { "rectangle" });
+                    }
                     ("s", false, _, true) => ed.solo_active(),
                     ("g", false, _, false) => ed.view.show_groups = !ed.view.show_groups,
                     ("m", false, _, true) => ed.clear_mask(),
@@ -439,6 +452,15 @@ impl App {
             }
             ed.pointer_up();
         }
+        // An alpha stamp (Scales) dragged out on the lower right.
+        ed.alpha = ed.alphas.iter().position(|a| a.name == "Scales");
+        ed.stroke_mode = crate::editor::StrokeMode::Stamp;
+        ed.brush_kind = oxy_sculpt::BrushKind::Draw;
+        ed.pointer = Some(c + Vec2::new(0.45, 0.05) * s);
+        ed.pointer_down(PointerButton::Primary);
+        ed.pointer_moved(c + Vec2::new(0.95, 0.05) * s);
+        ed.pointer_up();
+        ed.stroke_mode = crate::editor::StrokeMode::Freehand;
         // Face groups from the mask, shown in color.
         ed.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask);
         ed.clear_mask();

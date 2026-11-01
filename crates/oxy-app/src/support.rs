@@ -142,6 +142,35 @@ pub fn encode(s: &str) -> String {
     out
 }
 
+/// Load a PNG as a brush alpha (luminance; transparent pixels count as black).
+pub fn load_alpha_png(path: &std::path::Path) -> Result<oxy_sculpt::Alpha, String> {
+    let file = File::open(path).map_err(|e| e.to_string())?;
+    let mut decoder = png::Decoder::new_with_limits(io::BufReader::new(file), png::Limits { bytes: 256 << 20 });
+    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
+    let mut buf = vec![0; reader.output_buffer_size().ok_or("image too large")?];
+    let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
+    let (w, h) = (info.width, info.height);
+    let px = &buf[..info.buffer_size()];
+    let luma: Vec<u8> = match info.color_type {
+        png::ColorType::Grayscale => px.to_vec(),
+        png::ColorType::GrayscaleAlpha => {
+            px.as_chunks::<2>().0.iter().map(|p| ((p[0] as u16 * p[1] as u16) / 255) as u8).collect()
+        }
+        png::ColorType::Rgb => px.as_chunks::<3>().0.iter().map(|p| luminance(p)).collect(),
+        png::ColorType::Rgba => {
+            px.as_chunks::<4>().0.iter().map(|p| ((luminance(p) as u16 * p[3] as u16) / 255) as u8).collect()
+        }
+        other => return Err(format!("unsupported PNG color type {other:?}")),
+    };
+    let name = path.file_stem().map_or("Alpha".into(), |s| s.to_string_lossy().into_owned());
+    oxy_sculpt::Alpha::from_luma(name, w, h, &luma).ok_or_else(|| "empty image".to_string())
+}
+
+fn luminance(p: &[u8]) -> u8 {
+    (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8
+}
+
 /// `file://` URL for a local folder (opened by the OS file manager).
 pub fn folder_url(path: &std::path::Path) -> String {
     let p = path.to_string_lossy().replace('\\', "/");
@@ -167,6 +196,36 @@ mod tests {
         assert!(url.starts_with("https://github.com/crisprintsstuff/OxyBrush/issues/new?template=bug_report.yml"));
         assert!(url.contains("&gpu=Test%20GPU%20%28Vulkan%29"));
         assert!(info.text().contains("GPU: Test GPU (Vulkan)"));
+    }
+
+    #[test]
+    fn loads_png_alphas() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // RGBA gradient, left black to right white, fully opaque.
+        let (w, h) = (32u32, 16u32);
+        let mut px = Vec::new();
+        for _y in 0..h {
+            for x in 0..w {
+                let v = (x * 255 / (w - 1)) as u8;
+                px.extend_from_slice(&[v, v, v, 255]);
+            }
+        }
+        let path = dir.join("grad.png");
+        {
+            let f = File::create(&path).unwrap();
+            let mut enc = png::Encoder::new(io::BufWriter::new(f), w, h);
+            enc.set_color(png::ColorType::Rgba);
+            enc.set_depth(png::BitDepth::Eight);
+            enc.write_header().unwrap().write_image_data(&px).unwrap();
+        }
+        let a = load_alpha_png(&path).unwrap();
+        assert_eq!(a.name, "grad");
+        assert!(a.sample(glam::Vec2::new(-0.95, 0.0)) < 0.1);
+        assert!(a.sample(glam::Vec2::new(0.95, 0.0)) > 0.9);
+        std::fs::write(dir.join("bad.png"), b"not a png").unwrap();
+        assert!(load_alpha_png(&dir.join("bad.png")).is_err());
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

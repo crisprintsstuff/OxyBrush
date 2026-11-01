@@ -219,7 +219,125 @@ impl Mesh {
         }
     }
 
+    // ---- mask operations (all respect hidden vertices: they are left alone) ----
+
+    /// Average each visible vertex's mask with its neighbors' (`passes` times).
+    pub fn blur_mask(&mut self, passes: u32) {
+        for _ in 0..passes {
+            let prev = self.mask.clone();
+            for v in 0..self.positions.len() {
+                if self.vertex_hidden[v] {
+                    continue;
+                }
+                let n = self.vertex_neighbors.get(v);
+                if !n.is_empty() {
+                    let avg = n.iter().map(|&i| prev[i as usize]).sum::<f32>() / n.len() as f32;
+                    self.mask[v] = (prev[v] + avg) * 0.5;
+                }
+            }
+        }
+    }
+
+    /// Push mask values toward 0 or 1 (inverse of blur).
+    pub fn sharpen_mask(&mut self) {
+        for (m, &h) in self.mask.iter_mut().zip(&self.vertex_hidden) {
+            if !h {
+                *m = ((*m - 0.5) * 2.0 + 0.5).clamp(0.0, 1.0);
+            }
+        }
+    }
+
+    /// Grow (`grow = true`) or shrink the masked area by one ring of vertices.
+    pub fn grow_mask(&mut self, grow: bool) {
+        let prev = self.mask.clone();
+        for v in 0..self.positions.len() {
+            if self.vertex_hidden[v] {
+                continue;
+            }
+            let n = self.vertex_neighbors.get(v).iter().map(|&i| prev[i as usize]);
+            self.mask[v] = if grow { n.fold(prev[v], f32::max) } else { n.fold(prev[v], f32::min) };
+        }
+    }
+
+    /// Mask by surface curvature: `cavities = true` masks concave areas
+    /// (creases, pores), otherwise convex peaks. Strength is normalised so
+    /// the strongest 5% of the mesh reaches a full mask.
+    pub fn mask_by_curvature(&mut self, cavities: bool) {
+        // Signed mean-curvature proxy: how far the neighbor average lies
+        // above (concave) or below (convex) the vertex along its normal,
+        // relative to the local edge length.
+        let curv: Vec<f32> = (0..self.positions.len())
+            .map(|v| {
+                let n = self.vertex_neighbors.get(v);
+                if n.is_empty() {
+                    return 0.0;
+                }
+                let p = self.positions[v];
+                let avg = n.iter().map(|&i| self.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
+                let edge = n.iter().map(|&i| self.positions[i as usize].distance(p)).sum::<f32>() / n.len() as f32;
+                let c = (avg - p).dot(self.normals[v]) / edge.max(1e-12);
+                if cavities { c } else { -c }
+            })
+            .collect();
+        let mut sorted: Vec<f32> = curv.iter().copied().filter(|&c| c > 0.0).collect();
+        sorted.sort_unstable_by(f32::total_cmp);
+        let scale = sorted.get(sorted.len().saturating_sub(1) * 95 / 100).copied().unwrap_or(1.0).max(1e-6);
+        for (v, c) in curv.into_iter().enumerate() {
+            if !self.vertex_hidden[v] {
+                self.mask[v] = (c / scale).clamp(0.0, 1.0);
+            }
+        }
+    }
+
+    /// Fully mask every vertex of face group `group`; unmask the rest.
+    pub fn mask_group(&mut self, group: u32) {
+        let mut in_group = vec![false; self.positions.len()];
+        for (t, tri) in self.triangles.iter().enumerate() {
+            if self.groups[t] == group {
+                for &v in tri {
+                    in_group[v as usize] = true;
+                }
+            }
+        }
+        for (v, &g) in in_group.iter().enumerate() {
+            if !self.vertex_hidden[v] {
+                self.mask[v] = if g { 1.0 } else { 0.0 };
+            }
+        }
+    }
+
     // ---- face groups and visibility ----
+
+    /// Grow the visible area by one ring of triangles (`grow = true`) or
+    /// shrink it by hiding triangles on its border.
+    pub fn grow_visible(&mut self, grow: bool) {
+        let n = self.positions.len();
+        // Vertices touching at least one visible / at least one hidden triangle.
+        let mut touches_visible = vec![false; n];
+        let mut touches_hidden = vec![false; n];
+        for (t, tri) in self.triangles.iter().enumerate() {
+            for &v in tri {
+                if self.hidden[t] {
+                    touches_hidden[v as usize] = true;
+                } else {
+                    touches_visible[v as usize] = true;
+                }
+            }
+        }
+        let hidden = self
+            .triangles
+            .iter()
+            .zip(&self.hidden)
+            .map(|(tri, &h)| {
+                if grow {
+                    h && !tri.iter().any(|&v| touches_visible[v as usize])
+                } else {
+                    h || tri.iter().any(|&v| touches_hidden[v as usize])
+                }
+            })
+            .collect();
+        self.set_hidden(hidden);
+    }
 
     /// Changes whenever face groups or visibility change (globally unique).
     pub fn face_version(&self) -> u64 {
@@ -666,6 +784,69 @@ mod tests {
         assert_eq!(m.hidden().iter().filter(|&&h| h).count(), m.triangle_count() / 2);
         let trimmed = m.delete_hidden();
         assert_eq!(trimmed.triangle_count(), m.triangle_count() / 2);
+    }
+
+    #[test]
+    fn mask_operations() {
+        let mut m = primitives::icosphere(3, 1.0);
+        // Mask the top cap, then grow/shrink/blur/sharpen it.
+        for (i, p) in m.positions.iter().enumerate() {
+            m.mask[i] = if p.y > 0.8 { 1.0 } else { 0.0 };
+        }
+        let count = |m: &Mesh| m.mask.iter().filter(|&&x| x > 0.5).count();
+        let base = count(&m);
+        m.grow_mask(true);
+        assert!(count(&m) > base);
+        m.grow_mask(false);
+        m.grow_mask(false);
+        assert!(count(&m) < base);
+        m.blur_mask(2);
+        assert!(m.mask.iter().any(|&x| x > 0.0 && x < 1.0), "blur creates soft values");
+        m.sharpen_mask();
+        m.sharpen_mask();
+        m.sharpen_mask();
+        assert!(m.mask.iter().filter(|&&x| x > 0.05 && x < 0.95).count() < 10);
+    }
+
+    #[test]
+    fn curvature_masks() {
+        // A sphere with one vertex pushed in: the dent is a cavity, the rest is convex.
+        let mut m = primitives::icosphere(3, 1.0);
+        let dent = 0;
+        m.positions[dent] *= 0.8;
+        m.refresh_all();
+        m.mask_by_curvature(true);
+        assert!(m.mask[dent] > 0.9, "dent should be masked as a cavity: {}", m.mask[dent]);
+        let far = (0..m.vertex_count())
+            .max_by(|&a, &b| {
+                m.positions[a].distance(m.positions[dent]).total_cmp(&m.positions[b].distance(m.positions[dent]))
+            })
+            .unwrap();
+        assert!(m.mask[far] < 0.1);
+        m.mask_by_curvature(false);
+        assert!(m.mask[dent] < 0.1, "dent is not a peak");
+    }
+
+    #[test]
+    fn group_mask_and_visibility_growth() {
+        let mut m = primitives::icosphere(3, 1.0);
+        let groups = m.triangles.iter().map(|t| u32::from(m.positions[t[0] as usize].x > 0.0)).collect();
+        m.set_groups(groups);
+        m.mask_group(1);
+        assert!(m.positions.iter().zip(&m.mask).all(|(p, &k)| p.x <= 0.0 || k == 1.0 || p.x.abs() < 0.2));
+        m.isolate_group(1);
+        let visible = |m: &Mesh| m.hidden().iter().filter(|&&h| !h).count();
+        let v0 = visible(&m);
+        m.grow_visible(true);
+        assert!(visible(&m) > v0);
+        m.grow_visible(false);
+        m.grow_visible(false);
+        assert!(visible(&m) < v0);
+        // Masking skips hidden vertices.
+        let hidden_vertex = (0..m.vertex_count() as u32).find(|&v| m.is_vertex_hidden(v)).unwrap();
+        let before = m.mask[hidden_vertex as usize];
+        m.mask_by_curvature(true);
+        assert_eq!(m.mask[hidden_vertex as usize], before);
     }
 
     #[test]

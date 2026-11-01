@@ -6,17 +6,17 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01
+> **Last updated:** 2026-11-01 (v0.1.0-alpha)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | [v0.0.1-alpha](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.0.1-alpha) (2026-11-01): Windows installer + portable zip, Linux Flatpak + tarball |
-| **Done** | Phases 0, 1 and 2 (first pass), release packaging |
-| **Next** | Phase 3 — sculpting depth |
+| **Latest release** | v0.1.0-alpha (2026-11-01): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4 |
+| **Next** | Phase 3 — multiresolution (3.5) and performance (3.6) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
-| **Supported platforms** | Windows 10/11 and Linux (X11/Wayland); macOS builds in CI, best-effort |
+| **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far) |
 
 Legend: ✅ done · 🚧 in progress · ⏳ planned · 🔬 research
 
@@ -40,22 +40,22 @@ Workspace, CI (Windows/Linux/macOS), wgpu matcap renderer, chunked mesh core, he
 - ✅ Background jobs for remesh/merge/decimate; scene-wide undo
 
 ### Release packaging ✅
-Inno Setup installer, Flatpak (`io.github.crisprintsstuff.OxyBrush`), portable archives, app icon, SHA-256 checksums, release-triggered workflow. *(Originally planned for Phase 3.)*
+Inno Setup installer, Flatpak (`io.github.crisprintsstuff.OxyBrush`), macOS universal app + DMG (0.1.0), portable archives, app icon, SHA-256 checksums, release-triggered workflow. *(Originally planned for Phase 3.)*
 
 ---
 
-## Phase 3 — Sculpting depth ⏳ (next; ~3–4 months) → 0.1
+## Phase 3 — Sculpting depth 🚧 (3.1–3.4 shipped in v0.1.0-alpha)
 
 The fundamentals that most separate OxyBrush from mature sculpting tools. Ordered so each step ships something visible and multiresolution lands before the features that depend on it.
 
-| # | Feature | Details | Effort |
+| # | Feature | Details | Status |
 |---|---|---|---|
-| 3.1 | **Stroke control** | Stabilizer (lazy mouse), drag-to-place stamp, spray, straight line, pressure-curve editor | 2–3 wk |
-| 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, curvature, face group; blur/sharpen mask; grow/shrink visible area | 2–3 wk |
-| 3.3 | **Alphas and stencils** | Grayscale image shapes each dab; bundled CC0 alpha set; user alphas | 2–3 wk |
-| 3.4 | **More brushes** | Polish, Planar Trim, Topological Move (moves connected surface only), Dam-style crease, Noise | 2–4 wk |
-| 3.5 | **Multiresolution** | Subdivision levels; sculpt at any level with detail propagated; rebuild lower levels from an imported dense mesh | 6–10 wk |
-| 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) | 4–8 wk, ongoing |
+| 3.1 | **Stroke control** | Stabilizer (lazy mouse), Stamp (drag to size), spray, Line, pressure curve | ✅ 0.1.0 |
+| 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
+| 3.3 | **Alphas and stencils** | Alphas ✅ (7 procedural CC0 + user PNGs, rotation, follow stroke). Stencils (screen-space overlays) ⏳ | 🚧 |
+| 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
+| 3.5 | **Multiresolution** | Subdivision levels; sculpt at any level with detail propagated; rebuild lower levels from an imported dense mesh (6–10 wk) | ⏳ next |
+| 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) (4–8 wk) | ⏳ |
 
 **Exit criteria:** sculpt at 60 fps on a 10M-triangle multires mesh on reference hardware; every item has tests; README and user docs updated.
 
@@ -74,7 +74,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools. Ordere
 
 ## Phase 5 — Hardening → 1.0 ⏳
 
-All RFC-0001 performance gates met on reference hardware; file-format freeze (`.oxb` v1 compatibility promise); no open P0/P1 bugs; user guide; signed Windows installer; Flathub submission (from-source Flatpak manifest).
+All RFC-0001 performance gates met on reference hardware; file-format freeze (`.oxb` v1 compatibility promise); no open P0/P1 bugs; user guide; signed Windows installer; notarized macOS app; Flathub submission (from-source Flatpak manifest).
 
 ## Parallel tracks
 
@@ -101,9 +101,10 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v0.0.1-alpha)
+## Known limitations (v0.1.0-alpha)
 
-- Pen pressure unverified on Windows/Linux tablets
+- macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
+- Pen pressure unverified on real tablets (all platforms)
 - Decimation is slow on very dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
 - Settings are not remembered between sessions
