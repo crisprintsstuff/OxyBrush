@@ -2,6 +2,8 @@
 
 Thank you for helping! This guide covers how to contribute and the project's legal ground rules.
 
+> **Using an AI coding agent?** Point it at [AGENTS.md](AGENTS.md): it summarises these rules, the architecture invariants and the commands to run.
+
 ## Ways to help
 
 - **Code:** look for issues labeled `good first issue`.

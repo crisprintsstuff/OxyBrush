@@ -22,6 +22,8 @@ OxyBrush is an open-source desktop app for sculpting high-resolution organic and
 
 ## 2. 1.0 scope (required)
 
+> **Update (2026-11-01):** the current plan in [docs/ROADMAP.md](../ROADMAP.md) moves multiresolution, alphas and stencils, masking/selection tools, stroke stabilizer, dynamic topology, vertex color and sculpt layers *into* 1.0 (Phases 3–4), because they are core to a competitive sculpting workflow. The table below is the original Phase 0–2 scope.
+
 | Area | Features |
 |---|---|
 | Scene | Up to ~32 pieces. Show, hide, isolate, duplicate, merge, mirror. |
@@ -94,6 +96,8 @@ Bevy was rejected: sculpting needs exact control over the render loop and latenc
 **Long-term:** spoken mesh statistics, voice commands, switch/eye-tracker access, 3D mouse support.
 
 ## 6. Schedule (≈3 full-time-equivalent developers)
+
+> **Superseded:** the current phases and status live in [docs/ROADMAP.md](../ROADMAP.md). Phases 0–2 are done and v0.0.1-alpha shipped on 2026-11-01.
 
 | Phase | Months | Exit criterion |
 |---|---|---|
