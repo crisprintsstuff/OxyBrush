@@ -132,9 +132,11 @@ jobs:
           dist/OxyBrush.app/Contents/MacOS/oxybrush --version
           if /usr/bin/pgrep -q oahd; then arch -x86_64 dist/OxyBrush.app/Contents/MacOS/oxybrush --version; else echo "Rosetta not available on this runner; skipping Intel run"; fi
       - name: Headless render (informational)
+        # macOS has no `timeout`; the app exits by itself after the screenshot.
         continue-on-error: true
+        timeout-minutes: 3
         run: |
-          timeout 120 dist/OxyBrush.app/Contents/MacOS/oxybrush --demo --screenshot dist-screenshot-macos.png
+          dist/OxyBrush.app/Contents/MacOS/oxybrush --demo --screenshot dist-screenshot-macos.png
           ls -la dist-screenshot-macos.png
       - uses: actions/upload-artifact@v4
         if: always()

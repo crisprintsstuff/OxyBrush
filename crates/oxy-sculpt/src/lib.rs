@@ -6,14 +6,17 @@
 //! parallelized per chunk; before a chunk is modified the caller's `touch`
 //! callback runs so undo can snapshot it.
 
+pub mod alpha;
 mod falloff;
 
+pub use alpha::{Alpha, BuiltinAlpha};
 pub use falloff::Falloff;
 
-use glam::{Mat3, Vec3};
+use glam::{Mat3, Vec2, Vec3};
 use oxy_mesh::Mesh;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BrushKind {
@@ -29,10 +32,15 @@ pub enum BrushKind {
     Grab,
     SnakeHook,
     Mask,
+    Polish,
+    PlanarTrim,
+    TopoMove,
+    Noise,
 }
 
 impl BrushKind {
-    pub const ALL: [BrushKind; 12] = [
+    /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
+    pub const ALL: [BrushKind; 16] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -44,8 +52,17 @@ impl BrushKind {
         BrushKind::Layer,
         BrushKind::Grab,
         BrushKind::SnakeHook,
+        BrushKind::TopoMove,
+        BrushKind::Polish,
+        BrushKind::PlanarTrim,
+        BrushKind::Noise,
         BrushKind::Mask,
     ];
+
+    /// Brushes that move a captured region with the pointer instead of dabbing.
+    pub fn is_grab_like(self) -> bool {
+        matches!(self, BrushKind::Grab | BrushKind::TopoMove)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
@@ -61,6 +78,10 @@ impl BrushKind {
             BrushKind::Flatten => "Flatten",
             BrushKind::Grab => "Grab",
             BrushKind::Mask => "Mask",
+            BrushKind::Polish => "Polish",
+            BrushKind::PlanarTrim => "Planar Trim",
+            BrushKind::TopoMove => "Topological Move",
+            BrushKind::Noise => "Noise",
         }
     }
 
@@ -68,8 +89,9 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
-            BrushKind::Grab | BrushKind::SnakeHook => 1.0,
-            BrushKind::Pinch => 0.5,
+            BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove => 1.0,
+            BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
+            BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
             _ => 0.4,
         }
@@ -94,6 +116,10 @@ pub struct BrushSettings {
     pub front_faces_only: bool,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
+    /// Random scatter of dab position, rotation and strength, 0..=1.
+    pub spray: f32,
+    /// Noise brush: features per brush radius.
+    pub noise_scale: f32,
 }
 
 impl Default for BrushSettings {
@@ -108,8 +134,23 @@ impl Default for BrushSettings {
             pressure_radius: false,
             front_faces_only: true,
             auto_smooth: 0.0,
+            spray: 0.0,
+            noise_scale: 3.0,
         }
     }
+}
+
+/// An alpha applied to a stroke, and how it is oriented on the surface.
+#[derive(Debug, Clone)]
+pub struct AlphaStamp {
+    pub alpha: Arc<Alpha>,
+    /// Extra rotation around the dab normal, radians.
+    pub rotation: f32,
+    /// Align the alpha's x axis with the stroke direction.
+    pub follow_stroke: bool,
+    /// World "up" used to orient the alpha when not following the stroke
+    /// (typically the camera's up vector, so the alpha appears upright).
+    pub up: Vec3,
 }
 
 /// Axis for radial symmetry.
@@ -187,6 +228,9 @@ struct Dab {
     direction: Vec3,
     /// Movement since the previous dab (Snake Hook).
     drag: Vec3,
+    /// Alpha axes in the tangent plane (x right, y up).
+    tangent: Vec3,
+    bitangent: Vec3,
 }
 
 impl Dab {
@@ -196,6 +240,17 @@ impl Dab {
             normal: m * self.normal,
             direction: m * self.direction,
             drag: m * self.drag,
+            tangent: m * self.tangent,
+            bitangent: m * self.bitangent,
+            ..*self
+        }
+    }
+
+    fn rotated(&self, angle: f32) -> Dab {
+        let (s, c) = angle.sin_cos();
+        Dab {
+            tangent: self.tangent * c + self.bitangent * s,
+            bitangent: self.bitangent * c - self.tangent * s,
             ..*self
         }
     }
@@ -228,6 +283,8 @@ pub struct Stroke {
     grab: Option<GrabState>,
     layer: LayerState,
     dab_count: u32,
+    alpha: Option<AlphaStamp>,
+    rng: u64,
 }
 
 impl Stroke {
@@ -242,7 +299,23 @@ impl Stroke {
             grab: None,
             layer: LayerState::default(),
             dab_count: 0,
+            alpha: None,
+            rng: 0x9e37_79b9_7f4a_7c15,
         }
+    }
+
+    /// Shape every dab with an alpha.
+    pub fn with_alpha(mut self, alpha: Option<AlphaStamp>) -> Self {
+        self.alpha = alpha;
+        self
+    }
+
+    /// Uniform random number in 0..1 (xorshift; deterministic per stroke).
+    fn random(&mut self) -> f32 {
+        self.rng ^= self.rng << 13;
+        self.rng ^= self.rng >> 7;
+        self.rng ^= self.rng << 17;
+        (self.rng >> 40) as f32 / (1u64 << 24) as f32
     }
 
     pub fn settings(&self) -> &BrushSettings {
@@ -256,7 +329,7 @@ impl Stroke {
     /// Feed a pointer sample. `touch(mesh, chunk)` is called once per chunk
     /// before it is first modified by this call.
     pub fn add_sample(&mut self, mesh: &mut Mesh, sample: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
-        if self.settings.kind == BrushKind::Grab {
+        if self.settings.kind.is_grab_like() {
             self.grab_sample(mesh, sample, touch);
             return;
         }
@@ -293,23 +366,47 @@ impl Stroke {
         let drag = self.last_dab.map_or(Vec3::ZERO, |l| s.position - l);
         // Direction in the tangent plane.
         let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
-        Dab { center: s.position, normal: s.normal, radius, strength, direction, drag }
+        let n = s.normal;
+        let (tangent, bitangent) = match &self.alpha {
+            Some(a) if a.follow_stroke && direction != Vec3::ZERO => (direction, n.cross(direction)),
+            other => {
+                let up = other.as_ref().map_or(Vec3::Y, |a| a.up);
+                let mut b = up - n * up.dot(n);
+                if b.length_squared() < 1e-8 {
+                    b = n.any_orthonormal_vector();
+                }
+                let b = b.normalize();
+                (b.cross(n), b)
+            }
+        };
+        let dab = Dab { center: s.position, normal: n, radius, strength, direction, drag, tangent, bitangent };
+        dab.rotated(self.alpha.as_ref().map_or(0.0, |a| a.rotation))
     }
 
     fn apply_dab(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
-        let base = self.make_dab(s);
+        let mut base = self.make_dab(s);
         self.last_dab = Some(s.position);
         self.dab_count += 1;
         let kind = self.settings.kind;
         if kind == BrushKind::SnakeHook && base.drag == Vec3::ZERO {
             return;
         }
+        if self.settings.spray > 0.0 && kind != BrushKind::SnakeHook {
+            // Scatter within the tangent plane; vary strength and alpha rotation.
+            let spray = self.settings.spray.clamp(0.0, 1.0);
+            let (a, r) = (self.random() * std::f32::consts::TAU, self.random().sqrt() * spray);
+            base.center += (base.tangent * a.cos() + base.bitangent * a.sin()) * (r * base.radius);
+            base.strength *= 1.0 - spray * 0.5 * self.random();
+            base = base.rotated((self.random() - 0.5) * std::f32::consts::TAU * spray);
+        }
+        let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
         for &m in &self.transforms.clone() {
             let dab = base.transformed(m);
-            apply_kernel(mesh, &self.settings, kind, self.invert, &dab, &mut self.layer, touch);
+            apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_deref(), &mut self.layer, touch);
             if self.settings.auto_smooth > 0.0 && !matches!(kind, BrushKind::Smooth | BrushKind::Mask) {
                 let smooth = Dab { strength: self.settings.auto_smooth, ..dab };
-                apply_kernel(mesh, &self.settings, BrushKind::Smooth, false, &smooth, &mut self.layer, touch);
+                let smooth_settings = BrushSettings { kind: BrushKind::Smooth, ..self.settings };
+                apply_kernel(mesh, &smooth_settings, false, &smooth, None, &mut self.layer, touch);
             }
         }
     }
@@ -318,18 +415,23 @@ impl Stroke {
         let Some(grab) = &self.grab else {
             // First sample: capture the vertices under each transformed brush.
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
+            let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
+            let topological = self.settings.kind == BrushKind::TopoMove;
             let captured = self
                 .transforms
                 .iter()
                 .map(|&m| {
                     let d = dab.transformed(m);
                     let mut verts = Vec::new();
-                    for c in mesh.chunks_in_sphere(d.center, d.radius) {
+                    for c in mesh.chunks_in_sphere(d.center, reach(self.settings.kind, &d, alpha.is_some())) {
                         for v in mesh.chunks[c as usize].vertices.clone() {
-                            if let Some(w) = vertex_weight(mesh, &self.settings, &d, v) {
+                            if let Some(w) = vertex_weight(mesh, &self.settings, &d, alpha.as_deref(), v) {
                                 verts.push((v, w, mesh.positions[v as usize]));
                             }
                         }
+                    }
+                    if topological {
+                        verts = connected_to_nearest(mesh, d.center, verts);
                     }
                     (m, verts)
                 })
@@ -360,20 +462,43 @@ impl Stroke {
     }
 }
 
-/// Query radius for a dab: square brushes reach into their corners.
-fn reach(kind: BrushKind, dab: &Dab) -> f32 {
-    if kind == BrushKind::ClayStrips { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius }
+/// Keep only captured vertices connected (through captured vertices) to
+/// the one nearest `center`: Topological Move moves an arm without
+/// dragging along the nearby torso.
+fn connected_to_nearest(mesh: &Mesh, center: Vec3, verts: Vec<GrabVertex>) -> Vec<GrabVertex> {
+    let Some(seed) =
+        verts.iter().min_by(|a, b| a.2.distance_squared(center).total_cmp(&b.2.distance_squared(center))).map(|v| v.0)
+    else {
+        return verts;
+    };
+    let inside: HashSet<u32> = verts.iter().map(|v| v.0).collect();
+    let mut reached = HashSet::from([seed]);
+    let mut stack = vec![seed];
+    while let Some(v) = stack.pop() {
+        for &n in mesh.neighbors(v) {
+            if inside.contains(&n) && reached.insert(n) {
+                stack.push(n);
+            }
+        }
+    }
+    verts.into_iter().filter(|v| reached.contains(&v.0)).collect()
 }
 
-/// Falloff weight × (1 − mask) for a vertex, or None if outside the brush.
-fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, v: u32) -> Option<f32> {
+/// Query radius for a dab: square footprints (Clay Strips, alphas) reach
+/// into their corners.
+fn reach(kind: BrushKind, dab: &Dab, has_alpha: bool) -> f32 {
+    if kind == BrushKind::ClayStrips || has_alpha { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius }
+}
+
+/// Falloff weight × alpha × (1 − mask) for a vertex, or None if outside the brush.
+fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option<&Alpha>, v: u32) -> Option<f32> {
     if mesh.is_vertex_hidden(v) {
         return None;
     }
     let p = mesh.positions[v as usize];
     let offset = p - dab.center;
     let d2 = offset.length_squared();
-    let r = reach(settings.kind, dab);
+    let r = reach(settings.kind, dab, alpha.is_some());
     if d2 > r * r {
         return None;
     }
@@ -386,30 +511,40 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, v: u32) -> Op
         let along = offset.dot(dab.direction).abs() / dab.radius;
         let across = offset.dot(side).abs() / dab.radius;
         if along > 1.0 || across > 1.0 { 0.0 } else { settings.falloff.eval(across).max(0.0) * (1.0 - along.powi(8)) }
+    } else if alpha.is_some() {
+        // With an alpha the image defines the footprint; falloff still softens it.
+        settings.falloff.eval((d2.sqrt() / (dab.radius * std::f32::consts::SQRT_2)).min(1.0))
     } else {
         settings.falloff.eval(d2.sqrt() / dab.radius)
+    };
+    let f = match alpha {
+        Some(a) => f * a.sample(Vec2::new(offset.dot(dab.tangent), offset.dot(dab.bitangent)) / dab.radius),
+        None => f,
     };
     let mask = if settings.kind == BrushKind::Mask { 0.0 } else { mesh.mask[v as usize] };
     let w = f * (1.0 - mask);
     (w > 0.0).then_some(w)
 }
 
+/// Apply one dab. `settings.kind` selects the kernel (callers override it
+/// for auto-smooth).
 fn apply_kernel(
     mesh: &mut Mesh,
     settings: &BrushSettings,
-    kind: BrushKind,
     invert: bool,
     dab: &Dab,
+    alpha: Option<&Alpha>,
     layer: &mut LayerState,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     // Snake Hook pulls the region it was over at the previous dab.
+    let kind = settings.kind;
     let query = if kind == BrushKind::SnakeHook { Dab { center: dab.center - dab.drag, ..*dab } } else { *dab };
-    let chunks = mesh.chunks_in_sphere(query.center, reach(kind, &query));
+    let chunks = mesh.chunks_in_sphere(query.center, reach(kind, &query, alpha.is_some()));
     if chunks.is_empty() {
         return;
     }
-    let settings = BrushSettings { kind, ..*settings };
+    let settings = *settings;
     let sign = if invert { -1.0 } else { 1.0 };
 
     // Gather affected vertices and weights in parallel per chunk.
@@ -421,7 +556,7 @@ fn apply_kernel(
                 m.chunks[c as usize]
                     .vertices
                     .clone()
-                    .filter_map(move |v| vertex_weight(m, &settings, &query, v).map(|w| (v, w)))
+                    .filter_map(move |v| vertex_weight(m, &settings, &query, alpha, v).map(|w| (v, w)))
             })
             .collect()
     };
@@ -513,7 +648,29 @@ fn apply_kernel(
                     // inverted it raises a sharp ridge.
                     BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
                     BrushKind::SnakeHook => p + dab.drag * (w * dab.strength.min(1.0)),
-                    BrushKind::Grab | BrushKind::Mask | BrushKind::Layer => p,
+                    // Polish: smooth only along the normal, so bumps flatten
+                    // without the surface shrinking or sliding sideways.
+                    BrushKind::Polish => {
+                        let n = m.neighbors(v);
+                        if n.is_empty() {
+                            p
+                        } else {
+                            let avg = n.iter().map(|&i| m.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
+                            let nv = m.normals[v as usize];
+                            p + nv * ((avg - p).dot(nv) * (w * dab.strength).min(1.0))
+                        }
+                    }
+                    // Planar Trim: cut everything above the mean plane down to
+                    // it (inverted: fill everything below up to it).
+                    BrushKind::PlanarTrim => {
+                        let d = (area_center - p).dot(area_normal);
+                        if d * sign < 0.0 { p + area_normal * (d * (w * dab.strength * 1.5).min(1.0)) } else { p }
+                    }
+                    BrushKind::Noise => {
+                        let n = alpha::noise3(p * (settings.noise_scale / dab.radius));
+                        p + m.normals[v as usize] * (sign * n * amount * 1.5 * w)
+                    }
+                    BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Layer => p,
                 };
                 (v, np)
             })
@@ -717,6 +874,115 @@ mod tests {
         let mut s = Stroke::new(BrushSettings::default(), Symmetry::default(), false);
         s.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
         assert_eq!(before, mesh.positions);
+    }
+
+    #[test]
+    fn polish_flattens_without_shrinking() {
+        let (b, a) = drag_stroke(BrushKind::Polish, false);
+        // Sphere vertices barely move inward on average (no volume loss like Smooth).
+        let shrink = max_radius(&b) - max_radius(&a);
+        assert!(shrink.abs() < 0.01, "{shrink}");
+        let (b, a) = drag_stroke(BrushKind::Smooth, false);
+        assert!(max_radius(&b) - max_radius(&a) >= 0.0);
+    }
+
+    #[test]
+    fn planar_trim_only_cuts() {
+        let (b, a) = drag_stroke(BrushKind::PlanarTrim, false);
+        for (p0, p1) in b.positions.iter().zip(&a.positions) {
+            assert!(p1.length() <= p0.length() + 1e-4, "trim must not add material");
+        }
+        let trimmed = b.positions.iter().zip(&a.positions).filter(|(p0, p1)| p1.length() < p0.length() - 1e-3).count();
+        assert!(trimmed > 0, "some material must be cut");
+    }
+
+    #[test]
+    fn noise_displaces_both_ways() {
+        let (b, a) = drag_stroke(BrushKind::Noise, false);
+        let deltas: Vec<f32> = b.positions.iter().zip(&a.positions).map(|(p0, p1)| p1.length() - p0.length()).collect();
+        assert!(deltas.iter().any(|&d| d > 1e-4) && deltas.iter().any(|&d| d < -1e-4));
+    }
+
+    #[test]
+    fn topological_move_ignores_disconnected_parts() {
+        // Two separate spheres close together; grab one at its edge.
+        let mut d = primitives::icosphere(3, 0.5).to_data();
+        let n = d.positions.len() as u32;
+        let other: Vec<Vec3> = d.positions.iter().map(|p| *p + Vec3::X * 1.05).collect();
+        d.positions.extend(other);
+        let tris: Vec<[u32; 3]> = d.triangles.iter().map(|t| t.map(|i| i + n)).collect();
+        d.triangles.extend(tris);
+        let mut mesh = Mesh::from_data(d);
+        let before = mesh.positions.clone();
+        let hit = Vec3::new(0.5, 0.0, 0.0);
+        for kind in [BrushKind::TopoMove, BrushKind::Grab] {
+            mesh.positions.clone_from(&before);
+            mesh.refresh_all();
+            let settings =
+                BrushSettings { kind, radius: 0.4, strength: 1.0, front_faces_only: false, ..Default::default() };
+            let mut s = Stroke::new(settings, Symmetry::default(), false);
+            s.add_sample(&mut mesh, StrokeSample { position: hit, normal: Vec3::X, pressure: 1.0 }, &mut |_, _| {});
+            s.add_sample(
+                &mut mesh,
+                StrokeSample { position: hit + Vec3::Y * 0.3, normal: Vec3::X, pressure: 1.0 },
+                &mut |_, _| {},
+            );
+            let moved_right =
+                mesh.positions.iter().zip(&before).filter(|(p1, p0)| p0.x > 0.6 && p1.distance(**p0) > 1e-5).count();
+            if kind == BrushKind::TopoMove {
+                assert_eq!(moved_right, 0, "topological move must not drag the other piece");
+            } else {
+                assert!(moved_right > 0, "plain grab does move nearby geometry");
+            }
+        }
+    }
+
+    #[test]
+    fn alpha_shapes_the_dab() {
+        // Stripes alpha: displacement varies across the dab instead of a smooth bump.
+        let mut plain = primitives::plane(120, 2.0);
+        let mut striped = plain.clone();
+        let settings = BrushSettings { radius: 0.5, strength: 1.0, falloff: Falloff::Constant, ..Default::default() };
+        let sample = StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 };
+        Stroke::new(settings, Symmetry::default(), false).add_sample(&mut plain, sample, &mut |_, _| {});
+        let stamp = AlphaStamp {
+            alpha: Arc::new(BuiltinAlpha::Stripes.generate(128)),
+            rotation: 0.0,
+            follow_stroke: false,
+            up: Vec3::Z,
+        };
+        Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp)).add_sample(
+            &mut striped,
+            sample,
+            &mut |_, _| {},
+        );
+        let heights = |m: &Mesh| -> Vec<f32> {
+            m.positions.iter().filter(|p| p.x.abs() < 0.3 && p.z.abs() < 0.02).map(|p| p.y).collect()
+        };
+        let (hp, hs) = (heights(&plain), heights(&striped));
+        let spread =
+            |h: &[f32]| h.iter().cloned().fold(f32::MIN, f32::max) - h.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            spread(&hs) > spread(&hp) * 0.5 && spread(&hs) > 1e-3,
+            "stripes should vary: {} vs {}",
+            spread(&hs),
+            spread(&hp)
+        );
+    }
+
+    #[test]
+    fn spray_scatters_deterministically() {
+        let run = || {
+            let mut m = primitives::icosphere(4, 1.0);
+            let settings = BrushSettings { radius: 0.2, spray: 1.0, ..Default::default() };
+            let mut s = Stroke::new(settings, Symmetry::default(), false);
+            s.add_sample(&mut m, top_sample(), &mut |_, _| {});
+            m.positions
+        };
+        let base = primitives::icosphere(4, 1.0).positions;
+        let (a, b) = (run(), run());
+        assert_eq!(a, b, "same stroke, same result");
+        assert_ne!(a, base);
     }
 
     #[test]
