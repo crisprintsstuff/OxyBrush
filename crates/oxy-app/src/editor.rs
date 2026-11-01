@@ -149,6 +149,10 @@ pub struct Editor {
     pub show_panels: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
+    /// Welcome window with starter shapes and the basics (shown at startup).
+    pub show_welcome: bool,
+    /// Carve instead of raise by default (Alt still flips it while held).
+    pub carve: bool,
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
@@ -216,6 +220,8 @@ impl Default for Editor {
             show_panels: true,
             show_shortcuts: false,
             show_about: false,
+            show_welcome: true,
+            carve: false,
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],
@@ -320,8 +326,25 @@ impl Editor {
         } else if m.shift {
             (BrushKind::Smooth, false)
         } else {
-            (self.brush_kind, m.alt)
+            (self.brush_kind, m.alt != self.carve)
         }
+    }
+
+    /// Snap the camera to look at the scene from the side `axis` points to
+    /// (e.g. +X: view from the right). Used by the orientation gizmo.
+    pub fn view_from_axis(&mut self, axis: Vec3) {
+        use std::f32::consts::{FRAC_PI_2, PI};
+        let candidates = [(0.0, 0.0), (FRAC_PI_2, 0.0), (PI, 0.0), (-FRAC_PI_2, 0.0), (0.0, 1.55), (0.0, -1.55)];
+        let mut best = (f32::MIN, (0.0, 0.0));
+        for (yaw, pitch) in candidates {
+            self.camera.snap(yaw, pitch);
+            // The camera looks along `forward`, so it sits on the -forward side.
+            let score = (-self.camera.forward()).dot(axis.normalize_or_zero());
+            if score > best.0 {
+                best = (score, (yaw, pitch));
+            }
+        }
+        self.camera.snap(best.1.0, best.1.1);
     }
 
     /// Nearest visible piece under a ray: (index, hit).
@@ -1565,5 +1588,30 @@ mod tests {
         f.open(&dir.join("test.oxb"));
         assert!(matches!(f.pending, Some(Pending::OpenProject(_))));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn carve_toggle_flips_brush_direction() {
+        let mut e = Editor::default();
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, false));
+        e.carve = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, true));
+        // Alt flips it back while held; Ctrl (mask) and Shift (smooth) ignore it.
+        e.modifiers.alt = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, false));
+        e.modifiers = Modifiers { ctrl: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, false));
+        e.modifiers = Modifiers { shift: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Smooth, false));
+    }
+
+    #[test]
+    fn gizmo_views_from_each_axis() {
+        let mut e = Editor::default();
+        for axis in [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z] {
+            e.view_from_axis(axis);
+            // The camera sits on the side the axis points to, looking back at the model.
+            assert!((-e.camera.forward()).dot(axis) > 0.99, "{axis:?}: forward {:?}", e.camera.forward());
+        }
     }
 }

@@ -6,9 +6,11 @@
 struct Uniforms {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
-    // y: mask overlay strength
+    // y: mask overlay strength, z: viewport aspect
     params: vec4<f32>,
     mask_color: vec4<f32>,
+    bg_center: vec4<f32>,
+    bg_edge: vec4<f32>,
 };
 
 struct Piece {
@@ -81,4 +83,28 @@ fn fs_main(
     let m = clamp(i.mask, 0.0, 1.0) * u.params.y;
     color = mix(color, color * u.mask_color.rgb, m);
     return vec4<f32>(color, 1.0);
+}
+
+// Viewport background: a soft radial gradient, slightly above center, so
+// the model reads well against it.
+struct BgOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) p: vec2<f32>,
+};
+
+@vertex
+fn vs_background(@builtin(vertex_index) i: u32) -> BgOut {
+    // Fullscreen triangle covering the viewport.
+    let p = vec2<f32>(f32((i << 1u) & 2u), f32(i & 2u)) * 2.0 - 1.0;
+    var o: BgOut;
+    o.clip = vec4<f32>(p, 1.0, 1.0);
+    o.p = p;
+    return o;
+}
+
+@fragment
+fn fs_background(i: BgOut) -> @location(0) vec4<f32> {
+    let d = length(vec2<f32>(i.p.x * max(u.params.z, 0.1) * 0.7, i.p.y - 0.2));
+    let t = smoothstep(0.0, 1.35, d);
+    return vec4<f32>(mix(u.bg_center.rgb, u.bg_edge.rgb, t), 1.0);
 }

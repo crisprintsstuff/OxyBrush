@@ -8,6 +8,7 @@ mod editor;
 mod snapshot;
 mod support;
 mod ui;
+mod widgets;
 
 use std::path::PathBuf;
 

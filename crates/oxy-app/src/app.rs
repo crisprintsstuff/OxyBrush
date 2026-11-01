@@ -59,6 +59,8 @@ impl App {
                     e.enable_autosave();
                 }
                 e.system_info.log_path = log_path;
+                // Skip the welcome window when opening a file or running the demo.
+                e.show_welcome = initial_file.is_none() && !auto.demo;
                 e
             },
             applied_matcap: None,

@@ -24,7 +24,7 @@
   <a href="https://github.com/crisprintsstuff/OxyBrush/issues/new?template=bug_report.yml">Report a bug</a>
 </p>
 
-![OxyBrush with two pieces: a sculpted sphere with a face group, and a cube](docs/images/screenshot.png)
+![OxyBrush with two pieces: a sculpted sphere and a cube, with the brush shelf on the left, the toolbar on top and the settings panel on the right](docs/images/screenshot.png)
 
 OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
 
@@ -46,8 +46,12 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
+OxyBrush opens with a welcome window: pick a starting shape (sphere, cube or plane), open a project or import a mesh. Hover over any brush or control for a short explanation.
+
+![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
+
 1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
-2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
+2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf (each brush has an icon showing what it does to the surface); hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
 3. Need more detail? **Ctrl+D** adds a subdivision level; **D** / **Shift+D** step up and down between levels, keeping your detail. **Remesh** (right panel) rebuilds even topology.
 4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports OBJ or STL (e.g. for 3D printing).
 5. **F1** shows every shortcut; **Help > Getting started guide** opens the full walkthrough.
@@ -78,6 +82,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
 - **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets).
 - **Import/export:** OBJ and STL import (as new pieces). OBJ and binary STL export of all visible pieces (3D-printing ready).
+- **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Pure Rust:** no C or C++ toolchain needed on Windows, Linux or macOS.
 
