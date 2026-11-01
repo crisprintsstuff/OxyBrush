@@ -1,0 +1,52 @@
+name: Tester feedback
+description: How did OxyBrush feel to use? Not a bug, just your impressions.
+labels: ["feedback"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying OxyBrush! Honest impressions — good and bad — shape what gets built next. See the [roadmap](https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/ROADMAP.md) for what's already planned.
+  - type: input
+    id: version
+    attributes:
+      label: OxyBrush version
+      placeholder: 0.0.1-alpha
+  - type: dropdown
+    id: experience
+    attributes:
+      label: Your sculpting background
+      options:
+        - New to digital sculpting
+        - Hobbyist
+        - Professional / studio
+        - 3D printing / miniatures
+        - Developer, mostly curious
+  - type: dropdown
+    id: input-device
+    attributes:
+      label: What did you sculpt with?
+      multiple: true
+      options:
+        - Mouse
+        - Pen tablet
+        - Pen display
+        - Touchpad
+  - type: textarea
+    id: tried
+    attributes:
+      label: What did you try to make?
+    validations:
+      required: true
+  - type: textarea
+    id: good
+    attributes:
+      label: What felt good?
+  - type: textarea
+    id: bad
+    attributes:
+      label: What was frustrating, confusing or slow?
+  - type: textarea
+    id: missing
+    attributes:
+      label: What did you miss most?
+      description: The one or two features that would make the biggest difference for you.

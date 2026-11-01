@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Alpha testing guide
+    url: https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/TESTING_GUIDE.md
+    about: How to install, what to try, and what to look out for.
+  - name: Roadmap
+    url: https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/ROADMAP.md
+    about: What's done and what's planned.

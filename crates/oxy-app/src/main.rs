@@ -6,16 +6,12 @@
 mod app;
 mod editor;
 mod snapshot;
+mod support;
 mod ui;
 
 use std::path::PathBuf;
 
 fn main() {
-    env_logger::Builder::from_env(
-        env_logger::Env::default().default_filter_or("info,wgpu_core=warn,wgpu_hal=warn,naga=warn"),
-    )
-    .init();
-
     let mut file = None;
     let mut auto = app::AutoRun::default();
     let mut args = std::env::args().skip(1);
@@ -35,16 +31,18 @@ fn main() {
         }
     }
 
+    let log_path = support::init_logging();
+
     let event_loop = match winit::event_loop::EventLoop::new() {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("oxybrush: could not create event loop: {e}");
+            log::error!("could not create event loop: {e}");
             std::process::exit(1);
         }
     };
-    let mut app = app::App::new(file, auto);
+    let mut app = app::App::new(file, auto, log_path);
     if let Err(e) = event_loop.run_app(&mut app) {
-        eprintln!("oxybrush: {e}");
+        log::error!("event loop failed: {e}");
         std::process::exit(1);
     }
 }

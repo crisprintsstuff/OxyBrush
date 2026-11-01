@@ -1,0 +1,25 @@
+name: Feature request
+description: Suggest a feature or improvement
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [roadmap](https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/ROADMAP.md) first — it may already be planned. Larger changes become RFCs.
+  - type: textarea
+    id: goal
+    attributes:
+      label: What are you trying to sculpt or do?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help?
+    validations:
+      required: true
+  - type: textarea
+    id: elsewhere
+    attributes:
+      label: How do other tools you know handle it?
+      description: Describe the behavior in words. Please don't paste screenshots of proprietary interfaces.

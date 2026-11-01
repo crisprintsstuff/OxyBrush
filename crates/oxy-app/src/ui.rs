@@ -131,14 +131,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
                 }
             });
-            ui.menu_button("Help", |ui| {
-                if ui.button("Shortcuts  (F1)").clicked() {
-                    ed.show_shortcuts = true;
-                }
-                if ui.button("About OxyBrush").clicked() {
-                    ed.show_about = true;
-                }
-            });
+            ui.menu_button("Help", |ui| help_menu(ui, ed));
         });
     });
 
@@ -201,6 +194,41 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let canvas = ui.available_rect_before_wrap();
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
+}
+
+fn help_menu(ui: &mut Ui, ed: &mut Editor) {
+    use crate::support::{REPO_URL, folder_url};
+    let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
+    if ui.button("Getting started guide").clicked() {
+        open(ui, format!("{REPO_URL}/blob/main/docs/TESTING_GUIDE.md"));
+    }
+    if ui.button("Shortcuts  (F1)").clicked() {
+        ed.show_shortcuts = true;
+    }
+    ui.separator();
+    if ui.button("Report a bug…").on_hover_text("Opens a pre-filled GitHub issue form in your browser").clicked() {
+        open(ui, ed.system_info.bug_report_url());
+    }
+    if ui.button("Send feedback…").clicked() {
+        open(ui, ed.system_info.feedback_url());
+    }
+    if ui.button("Copy system info").on_hover_text("Version, OS and GPU, for bug reports").clicked() {
+        ui.ctx().copy_text(ed.system_info.text());
+        ed.status = "System info copied to the clipboard".into();
+    }
+    let log_dir = ed.system_info.log_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
+    if ui.add_enabled(log_dir.is_some(), egui::Button::new("Open log folder")).clicked()
+        && let Some(dir) = log_dir
+    {
+        open(ui, folder_url(&dir));
+    }
+    ui.separator();
+    if ui.button("Changelog").clicked() {
+        open(ui, format!("{REPO_URL}/blob/main/CHANGELOG.md"));
+    }
+    if ui.button("About OxyBrush").clicked() {
+        ed.show_about = true;
+    }
 }
 
 fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
@@ -430,11 +458,38 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         });
     });
 
+    let info = ed.system_info.clone();
+    let mut copied = false;
     egui::Window::new("About OxyBrush").open(&mut ed.show_about).resizable(false).show(&ctx, |ui| {
-        ui.label(format!("OxyBrush {}", env!("CARGO_PKG_VERSION")));
+        ui.heading(format!("OxyBrush {}", env!("CARGO_PKG_VERSION")));
         ui.label("An open-source digital sculpting application written in Rust.");
         ui.label("Licensed under MIT OR Apache-2.0.");
-        ui.hyperlink("https://github.com/crisprintsstuff/OxyBrush");
+        ui.hyperlink(crate::support::REPO_URL);
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new(
+                "This is an alpha. Thank you for testing! Please report anything odd via Help > Report a bug.",
+            )
+            .weak(),
+        );
+        ui.add_space(6.0);
+        egui::Grid::new("about_info").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+            ui.label("OS");
+            ui.label(crate::support::SystemInfo::os());
+            ui.end_row();
+            ui.label("GPU");
+            ui.label(info.gpu_summary());
+            ui.end_row();
+            if let Some(p) = &info.log_path {
+                ui.label("Log file");
+                ui.label(p.display().to_string());
+                ui.end_row();
+            }
+        });
+        if ui.button("Copy system info").clicked() {
+            ui.ctx().copy_text(info.text());
+            copied = true;
+        }
         ui.add_space(6.0);
         ui.label(
             RichText::new(
@@ -444,6 +499,9 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             .weak(),
         );
     });
+    if copied {
+        ed.status = "System info copied to the clipboard".into();
+    }
 
     if let Some(pending) = ed.pending.clone() {
         let what = match &pending {

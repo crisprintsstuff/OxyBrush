@@ -1,0 +1,101 @@
+name: Bug report
+description: Something crashed, broke, or behaved wrongly
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing OxyBrush! Tip: in the app, **Help > Report a bug…** opens this form with your version, OS and GPU already filled in, and **Help > Copy system info** copies the rest.
+        Please **don't attach ZBrush or other proprietary files**, or files you don't have the right to share.
+  - type: input
+    id: version
+    attributes:
+      label: OxyBrush version
+      description: Help > About, or `oxybrush --version`
+      placeholder: 0.0.1-alpha
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install it?
+      options:
+        - Windows installer (setup.exe)
+        - Windows portable zip
+        - Linux Flatpak
+        - Linux tarball
+        - Built from source
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Operating system
+      placeholder: "Windows 11 23H2 / Ubuntu 24.04 (Wayland) / Fedora 41 (X11)…"
+    validations:
+      required: true
+  - type: input
+    id: gpu
+    attributes:
+      label: Graphics card and driver
+      placeholder: "NVIDIA RTX 3060, driver 560 / AMD Radeon 680M (Mesa 25.1) / Intel Iris Xe…"
+  - type: dropdown
+    id: input-device
+    attributes:
+      label: Input device
+      multiple: true
+      options:
+        - Mouse
+        - Pen tablet (e.g. Wacom, XP-Pen, Huion)
+        - Pen display
+        - Touchpad
+        - Touch screen
+        - Other
+  - type: input
+    id: tablet
+    attributes:
+      label: Tablet model and driver (if any)
+      placeholder: "Wacom Intuos S, Windows Ink on / OpenTabletDriver 0.6 / libinput"
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Screenshots or a short screen recording help a lot.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. New > Sphere
+        2. Select the Clay brush
+        3. Drag across the model with the pen
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect instead?
+  - type: textarea
+    id: system-info
+    attributes:
+      label: System info
+      description: Paste from Help > Copy system info.
+      render: text
+  - type: textarea
+    id: log
+    attributes:
+      label: Log file
+      description: |
+        Help > Open log folder, then attach `oxybrush.log` (or `oxybrush.previous.log` if the app crashed and you restarted it) by dragging it here.
+        Locations: Windows `%LOCALAPPDATA%\OxyBrush\logs` · Linux `~/.local/share/oxybrush/logs` · Flatpak `~/.var/app/io.github.crisprintsstuff.OxyBrush/data/oxybrush/logs`
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched existing issues and this isn't a duplicate.
+          required: true
+        - label: I didn't attach proprietary files or files I don't have the right to share.
+          required: true
