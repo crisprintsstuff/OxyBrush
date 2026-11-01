@@ -153,6 +153,13 @@ pub struct Editor {
     pub show_welcome: bool,
     /// Carve instead of raise by default (Alt still flips it while held).
     pub carve: bool,
+    /// Interface layout (Standard / Compact / Touch).
+    pub layout: crate::settings::UiLayout,
+    /// Show the welcome window at every start (remembered setting).
+    pub welcome_at_startup: bool,
+    /// On-screen Smooth / Mask / Invert toggles (touch layout); combined
+    /// with the keyboard modifiers.
+    pub touch_modifiers: Modifiers,
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
@@ -222,6 +229,9 @@ impl Default for Editor {
             show_about: false,
             show_welcome: true,
             carve: false,
+            layout: crate::settings::UiLayout::Standard,
+            welcome_at_startup: false,
+            touch_modifiers: Modifiers::default(),
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],
@@ -319,8 +329,36 @@ impl Editor {
     }
 
     /// The brush that a primary-button press would use right now.
+    /// Keyboard modifiers combined with the on-screen touch toggles.
+    pub fn active_modifiers(&self) -> Modifiers {
+        let (k, t) = (self.modifiers, self.touch_modifiers);
+        Modifiers { shift: k.shift || t.shift, ctrl: k.ctrl || t.ctrl, alt: k.alt || t.alt }
+    }
+
+    /// Current preferences, for saving.
+    pub fn settings(&self) -> crate::settings::Settings {
+        crate::settings::Settings {
+            layout: self.layout,
+            ui_scale: self.ui_scale,
+            high_contrast: self.high_contrast,
+            welcome_at_startup: self.welcome_at_startup,
+            autosave_minutes: self.autosaver.interval.as_secs_f32() / 60.0,
+            matcap: self.matcap,
+        }
+    }
+
+    /// Apply saved preferences.
+    pub fn apply_settings(&mut self, s: &crate::settings::Settings) {
+        self.layout = s.layout;
+        self.ui_scale = s.ui_scale;
+        self.high_contrast = s.high_contrast;
+        self.welcome_at_startup = s.welcome_at_startup;
+        self.autosaver.interval = Duration::from_secs_f32(s.autosave_minutes * 60.0);
+        self.matcap = s.matcap;
+    }
+
     pub fn effective_brush(&self) -> (BrushKind, bool) {
-        let m = self.modifiers;
+        let m = self.active_modifiers();
         if m.ctrl {
             (BrushKind::Mask, m.alt)
         } else if m.shift {
@@ -362,13 +400,13 @@ impl Editor {
         let Some(p) = self.pointer else { return };
         if button != PointerButton::Primary {
             self.drag = match button {
-                PointerButton::Middle if !self.modifiers.shift => Drag::Orbit,
+                PointerButton::Middle if !self.active_modifiers().shift => Drag::Orbit,
                 _ => Drag::Pan,
             };
             return;
         }
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
-        let m = self.modifiers;
+        let m = self.active_modifiers();
 
         let active = self.scene.active_index();
         let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
@@ -1613,5 +1651,36 @@ mod tests {
             // The camera sits on the side the axis points to, looking back at the model.
             assert!((-e.camera.forward()).dot(axis) > 0.99, "{axis:?}: forward {:?}", e.camera.forward());
         }
+    }
+
+    #[test]
+    fn touch_toggles_act_like_modifier_keys() {
+        let mut e = Editor::default();
+        e.touch_modifiers.shift = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Smooth, false));
+        e.touch_modifiers = Modifiers { ctrl: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, false));
+        e.touch_modifiers = Modifiers { alt: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, true));
+        // Keyboard and touch combine.
+        e.modifiers.ctrl = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, true));
+    }
+
+    #[test]
+    fn settings_round_trip_through_the_editor() {
+        use crate::settings::{Settings, UiLayout};
+        let s = Settings {
+            layout: UiLayout::Touch,
+            ui_scale: 1.25,
+            high_contrast: true,
+            welcome_at_startup: true,
+            autosave_minutes: 7.0,
+            matcap: MatcapPreset::Bronze,
+        };
+        let mut e = Editor::default();
+        assert_ne!(e.settings(), s);
+        e.apply_settings(&s);
+        assert_eq!(e.settings(), s);
     }
 }

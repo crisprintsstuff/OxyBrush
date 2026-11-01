@@ -31,7 +31,7 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 
 ## 2. First ten minutes
 
-1. **Welcome window.** Click **Sphere** (or **Start sculpting**). You can reopen it from **Help > Welcome screen**. Tell us if anything in it is confusing.
+1. **Welcome window.** Click **Sphere** (or **Start sculpting**). Pick a **Layout** there too; on a touchscreen or tablet, try **Touch friendly**. The window only appears on the first start; reopen it from **Help > Welcome screen**, and switch layouts any time in **Settings > Layout**. Tell us if anything in it is confusing.
 2. **Look around.** Drag on empty space to orbit, scroll to zoom, right-drag to pan. Press **F** to frame the model, **F1** for all shortcuts.
 3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert (or switch **Raise / Carve** in the toolbar). Resize the brush with **[** and **]**. Click the brush, alpha or material preview at the top left to pick from thumbnails, and try the axis gizmo (top right of the viewport) and the drag buttons in the strip beside it.
 4. **Undo** with **Ctrl+Z**, redo with **Ctrl+Shift+Z**.
@@ -69,7 +69,7 @@ Log locations if the app won't start:
 
 ## 5. Known limitations
 
-See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, very dense meshes decimate slowly, remesh resets masks and face groups, and settings aren't remembered between sessions yet.
+See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, very dense meshes decimate slowly, remesh resets masks and face groups, and brush settings aren't remembered between sessions yet (interface settings are).
 
 ## Uninstalling
 

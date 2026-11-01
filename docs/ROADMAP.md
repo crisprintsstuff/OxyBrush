@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01 (multiresolution levels landed, 3.5; friendlier interface pass)
+> **Last updated:** 2026-11-01 (multiresolution levels landed, 3.5; friendlier interface pass; layouts and remembered settings)
 
 ## Status at a glance
 
@@ -56,7 +56,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
 | 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level switches on ~5M triangles take 2–4 s on the UI thread (mesh rebuild; see 3.6) | 🚧 |
 | 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) (4–8 wk) | ⏳ |
-| 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys; touch-friendly layout with larger targets and no hover-dependent UI; save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | ⏳ |
+| 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys ✅; touch-friendly layout with larger targets ✅ (no hover-dependent UI ⏳); save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | 🚧 |
 | 3.8 | **iPad build** | iPadOS target (wgpu/Metal, winit), small platform crate using `objc2` for iOS APIs, document picker and Files-app integration, generated Xcode project, CI job producing an `.ipa`. (1–2 wk) | ⏳ |
 | 3.9 | **iPad and Apple Pencil polish** | Palm rejection (Pencil vs. finger), pressure tuning, simplified panel layout, testing on real iPads. (4–8 wk) | ⏳ |
 | 3.10 | **TestFlight beta** | Signing and upload from CI; internal testers, then a public beta link. **Blocked on maintainer:** Apple Developer Program membership and App Store Connect API key (planned for later). (~1 wk once unblocked) | ⏳ blocked |
@@ -80,7 +80,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
 | **Deformers and posing** | Bend, twist, taper, inflate; pose gizmo with topological masking | 4–6 wk |
 | **Viewport** | Shadows, ambient occlusion, wireframe overlay, floor grid, reference image planes, turntable export | 3–5 wk |
-| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). ⏳ Quick palette at the cursor, keymap editor, custom shelves, remembered settings | 3–4 wk |
+| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch) and remembered interface settings ✅. ⏳ Quick palette at the cursor, keymap editor, custom shelves, remembering brush settings | 3–4 wk |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
 ## Phase 5 — Hardening → 1.0 ⏳
@@ -119,7 +119,7 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - Decimation is slow on very dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
 - Subdivision levels: switching to a ~5M-triangle level pauses the UI for a few seconds; remesh, decimate and single subdivide remove the levels (undo restores them)
-- Settings are not remembered between sessions
+- Only interface settings are remembered between sessions (not brush settings)
 - Windows installer is not code-signed (SmartScreen warning)
 
 ---

@@ -46,7 +46,19 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-OxyBrush opens with a welcome window: pick a starting shape (sphere, cube or plane), open a project or import a mesh. Hover over any brush or control for a short explanation.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. Hover over any brush or control for a short explanation.
+
+**Layouts** (Settings > Layout, or in the welcome window):
+
+| Layout | For |
+|---|---|
+| **Standard** | Mouse and keyboard: brush list with names and icons |
+| **Compact** | Small screens: tighter spacing and an icon-only brush grid |
+| **Touch friendly** | Touch screens and pen tablets: large buttons, a brush tile grid, on-screen **Smooth / Mask / Invert** toggles instead of modifier keys, and undo/redo beside the viewport |
+
+Your layout, interface scale, theme, material, autosave interval and whether the welcome window appears at startup are remembered between sessions.
+
+![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 
 ![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
 
