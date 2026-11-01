@@ -3,13 +3,17 @@ name: Release builds
 # Builds Windows and Linux packages:
 #   - Windows: Inno Setup installer (.exe) and a portable .zip
 #   - Linux:   Flatpak bundle (.flatpak) and a portable .tar.gz
-# Manual runs (workflow_dispatch) upload them as workflow artifacts only.
-# Pushing a `v*` tag also publishes a GitHub release with SHA256SUMS
-# (marked pre-release when the tag contains a '-', e.g. v0.0.1-alpha).
+#
+# To release: publish a GitHub release whose tag is `v<Cargo.toml version>`
+# (e.g. v0.0.1-alpha). This workflow then builds everything from that tag
+# and attaches the files, SHA256SUMS.txt and the notes from
+# docs/releases/<tag>.md to the release (marked pre-release when the tag
+# contains a '-'). Manual runs (workflow_dispatch) only upload workflow
+# artifacts, which is how packaging changes are tested.
 on:
   workflow_dispatch:
-  push:
-    tags: ["v*"]
+  release:
+    types: [published]
 
 permissions:
   contents: write
@@ -34,7 +38,7 @@ jobs:
           echo "numeric=$numeric" >> "$GITHUB_OUTPUT"
           echo "Version $version (numeric $numeric)"
       - name: Tag must match Cargo.toml version
-        if: startsWith(github.ref, 'refs/tags/v')
+        if: github.event_name == 'release'
         run: |
           if [ "${GITHUB_REF_NAME}" != "v${{ steps.v.outputs.version }}" ]; then
             echo "::error::Tag ${GITHUB_REF_NAME} does not match Cargo.toml version ${{ steps.v.outputs.version }}"
@@ -144,7 +148,7 @@ jobs:
           path: dist/*
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'release'
     needs: [version, windows, linux, flatpak]
     runs-on: ubuntu-latest
     steps:
@@ -161,6 +165,7 @@ jobs:
           cat SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name }}
           name: OxyBrush ${{ needs.version.outputs.version }}
           body_path: docs/releases/${{ github.ref_name }}.md
           prerelease: ${{ contains(github.ref_name, '-') }}
