@@ -1,7 +1,7 @@
 //! egui panels, dialogs, theme and brush cursor.
 
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
-use crate::settings::UiLayout;
+use crate::settings::{Choice, PanelSide, QuickBar, ShelfPosition, UiLayout};
 use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::Vec2;
@@ -223,6 +223,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 for l in UiLayout::ALL {
                     ui.radio_value(&mut ed.layout, l, l.label()).on_hover_text(l.description());
                 }
+                ui.menu_button("Arrange panels", |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
                 ui.checkbox(&mut ed.welcome_at_startup, "Show welcome window at startup");
                 ui.separator();
                 ui.label("Interface scale");
@@ -238,34 +239,59 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         });
     });
 
+    apply_arrangement(ui.ctx(), ed);
     toolbar(ui, ed);
     status_bar(ui, ed);
 
     if ed.show_panels {
         let m = metrics(ed.layout);
-        // Panel ids include the layout so each layout starts at its own width.
-        let layout_key = format!("{:?}", ed.layout);
-        egui::Panel::left(format!("brushes_{layout_key}")).resizable(false).default_size(m.shelf_width).show(
-            ui,
-            |ui| {
-                ui.add_space(6.0);
-                current_tiles(ui, ed);
-                ui.add_space(4.0);
-                if ed.layout == UiLayout::Touch {
-                    // Always visible: there are no modifier keys on a tablet.
-                    touch_modifier_buttons(ui, ed);
-                }
-                ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| brush_shelf(ui, ed));
-            },
-        );
+        // Panel ids include the layout and position so each arrangement
+        // starts at its own default size.
+        let key = format!("{:?}_{:?}_{:?}", ed.layout, ed.shelf, ed.panels);
+        // Outer panels first: the shelf sits at the window edge, the settings
+        // panel and view strip inside it when they share a side.
+        match ed.shelf {
+            ShelfPosition::Bottom => {
+                let height = if ed.layout == UiLayout::Touch { 160.0 } else { 104.0 };
+                egui::Panel::bottom(format!("shelf_{key}")).resizable(false).exact_size(height).show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        current_tiles(ui, ed);
+                        if ed.layout == UiLayout::Touch {
+                            ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
+                        }
+                        ui.separator();
+                        egui::ScrollArea::horizontal().show(ui, |ui| brush_shelf(ui, ed, true));
+                    });
+                });
+            }
+            side => {
+                let panel = if side == ShelfPosition::Left {
+                    egui::Panel::left(format!("shelf_{key}"))
+                } else {
+                    egui::Panel::right(format!("shelf_{key}"))
+                };
+                panel.resizable(false).default_size(m.shelf_width).show(ui, |ui| {
+                    ui.add_space(6.0);
+                    current_tiles(ui, ed);
+                    ui.add_space(4.0);
+                    if ed.layout == UiLayout::Touch {
+                        // Always visible: there are no modifier keys on a tablet.
+                        let w = (ui.available_width() - 12.0) / 3.0;
+                        ui.horizontal(|ui| touch_modifier_buttons(ui, ed, w));
+                    }
+                    ui.separator();
+                    egui::ScrollArea::vertical().show(ui, |ui| brush_shelf(ui, ed, false));
+                });
+            }
+        }
 
-        egui::Panel::right(format!("inspector_{layout_key}")).resizable(true).default_size(m.inspector_width).show(
-            ui,
-            |ui| {
-                egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
-            },
-        );
+        let inspector_panel = match ed.panels {
+            PanelSide::Right => egui::Panel::right(format!("inspector_{key}")),
+            PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
+        };
+        inspector_panel.resizable(true).default_size(m.inspector_width).show(ui, |ui| {
+            egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
+        });
         view_strip(ui, ed);
     }
 
@@ -275,9 +301,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
 
     let canvas = ui.available_rect_before_wrap();
-    // The gizmo is an overlay area: keep it out of the way of the welcome window.
-    if ed.show_panels && !ed.show_welcome {
-        orientation_gizmo(ui.ctx(), ed, canvas);
+    // Overlays: keep them out of the way of the welcome window.
+    if !ed.show_welcome {
+        if ed.show_panels {
+            orientation_gizmo(ui.ctx(), ed, canvas);
+        }
+        if ed.quick_bar != QuickBar::Toolbar {
+            floating_quick_bar(ui.ctx(), ed, canvas);
+        }
     }
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
@@ -296,33 +327,11 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
             ui.separator();
 
-            // Direction: large, obvious toggle (Alt flips it while held).
-            let raise =
-                egui::Button::selectable(!ed.carve, RichText::new("Raise").strong()).min_size(egui::vec2(58.0, 26.0));
-            if ui.add(raise).on_hover_text("Brushes add clay (Alt carves while held)").clicked() {
-                ed.carve = false;
+            if ed.quick_bar == QuickBar::Toolbar {
+                ui.spacing_mut().slider_width = 110.0;
+                quick_controls(ui, ed);
+                ui.separator();
             }
-            let carve =
-                egui::Button::selectable(ed.carve, RichText::new("Carve").strong()).min_size(egui::vec2(58.0, 26.0));
-            if ui.add(carve).on_hover_text("Brushes remove clay (Alt raises while held)").clicked() {
-                ed.carve = true;
-            }
-            ui.separator();
-
-            ui.spacing_mut().slider_width = 110.0;
-            ui.label(RichText::new("Size").weak());
-            ui.add(
-                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
-                    .logarithmic(true)
-                    .max_decimals(0)
-                    .trailing_fill(true),
-            )
-            .on_hover_text("Brush radius in points  ([ and ])");
-            ui.label(RichText::new("Strength").weak());
-            let k = ed.brush_kind;
-            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true))
-                .on_hover_text("Brush strength  (- and =)");
-            ui.separator();
 
             ui.label(RichText::new("Mirror").weak());
             widgets::chip(ui, &mut ed.symmetry.x, "X", "Mirror strokes across X (left/right)  (X)");
@@ -371,66 +380,223 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// The brush list, in the form that suits the layout.
-fn brush_shelf(ui: &mut Ui, ed: &mut Editor) {
+fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     let ctx = ui.ctx().clone();
-    match ed.layout {
-        UiLayout::Standard => {
-            ui.spacing_mut().item_spacing.y = 2.0;
-            for k in BrushKind::ALL {
-                if widgets::brush_row(ui, k, ed.brush_kind == k).clicked() {
-                    ed.brush_kind = k;
+    let order = ed.brush_order.clone();
+    let mut picked = None;
+    let mut moved = None;
+    let mut item = |ui: &mut Ui, i: usize, k: BrushKind, ed: &Editor| {
+        let selected = ed.brush_kind == k;
+        let key = ed.number_key(k);
+        let r = match (ed.layout, horizontal) {
+            (UiLayout::Standard, false) => widgets::brush_row(ui, k, selected, key),
+            (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
+            (layout, _) => {
+                let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
+                let t = widgets::brush_texture(&ctx, k);
+                let tip = match key {
+                    Some(n) => format!("{}\nShortcut: {n}", widgets::brush_description(k)),
+                    None => widgets::brush_description(k).to_string(),
+                };
+                widgets::thumb_sized(ui, Some(&t), k.label(), selected, size).on_hover_text(tip)
+            }
+        };
+        if r.clicked() {
+            picked = Some(k);
+        }
+        if let Some(m) = reorder(ui, &r, i, horizontal) {
+            moved = Some(m);
+        }
+        r.context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
+    };
+    if horizontal {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for (i, k) in order.iter().enumerate() {
+                item(ui, i, *k, ed);
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Drag to rearrange.\nRight-click for placement.").weak().small());
+        });
+    } else {
+        match ed.layout {
+            UiLayout::Standard => {
+                ui.spacing_mut().item_spacing.y = 2.0;
+                for (i, k) in order.iter().enumerate() {
+                    item(ui, i, *k, ed);
                 }
             }
-        }
-        UiLayout::Compact => {
-            // Icon-only grid; names and descriptions in tooltips.
-            egui::Grid::new("brush_grid").spacing([3.0, 3.0]).show(ui, |ui| {
-                for (i, k) in BrushKind::ALL.into_iter().enumerate() {
-                    if widgets::brush_icon_button(ui, k, ed.brush_kind == k, 38.0).clicked() {
-                        ed.brush_kind = k;
+            layout => {
+                let (cols, gap) = if layout == UiLayout::Compact { (4, 3.0) } else { (3, 8.0) };
+                egui::Grid::new("brush_grid").spacing([gap, gap]).show(ui, |ui| {
+                    for (i, k) in order.iter().enumerate() {
+                        item(ui, i, *k, ed);
+                        if i % cols == cols - 1 {
+                            ui.end_row();
+                        }
                     }
-                    if i % 4 == 3 {
-                        ui.end_row();
-                    }
-                }
-            });
-        }
-        UiLayout::Touch => {
-            // Big preview tiles that are easy to hit with a finger.
-            egui::Grid::new("brush_tiles").spacing([8.0, 8.0]).show(ui, |ui| {
-                for (i, k) in BrushKind::ALL.into_iter().enumerate() {
-                    let t = widgets::brush_texture(&ctx, k);
-                    if widgets::thumb_sized(ui, Some(&t), k.label(), ed.brush_kind == k, 66.0).clicked() {
-                        ed.brush_kind = k;
-                    }
-                    if i % 3 == 2 {
-                        ui.end_row();
-                    }
-                }
-            });
+                });
+            }
         }
     }
-    ui.add_space(10.0);
-    if ed.layout != UiLayout::Touch {
-        ui.spacing_mut().item_spacing.y = 4.0;
-        ui.label(RichText::new("Hold while sculpting").weak().small());
-        for (key, what) in [("Shift", "Smooth"), ("Ctrl", "Mask"), ("Alt", "Invert"), ("Ctrl+Shift", "Pick group")] {
-            ui.horizontal(|ui| {
-                widgets::keycap(ui, key);
-                ui.label(RichText::new(what).small());
-            });
+    if let Some(k) = picked {
+        ed.brush_kind = k;
+    }
+    if let Some((from, to)) = moved {
+        ed.move_brush(from, to);
+        ed.status = format!("Moved {} in the shelf", ed.brush_order[to].label());
+    }
+    if !horizontal {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Drag brushes to rearrange. Right-click for placement.").weak().small());
+        if ed.layout != UiLayout::Touch {
+            ui.add_space(6.0);
+            ui.spacing_mut().item_spacing.y = 4.0;
+            ui.label(RichText::new("Hold while sculpting").weak().small());
+            for (key, what) in [("Shift", "Smooth"), ("Ctrl", "Mask"), ("Alt", "Invert"), ("Ctrl+Shift", "Pick group")]
+            {
+                ui.horizontal(|ui| {
+                    widgets::keycap(ui, key);
+                    ui.label(RichText::new(what).small());
+                });
+            }
         }
     }
+}
+
+/// Drag-and-drop reordering for shelf item `i`. Returns (from, to) when a
+/// dragged brush is dropped on this item.
+fn reorder(ui: &Ui, r: &egui::Response, i: usize, horizontal: bool) -> Option<(usize, usize)> {
+    if r.dragged() {
+        r.dnd_set_drag_payload(i);
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    let pointer = ui.ctx().pointer_interact_pos()?;
+    // Drop before this item in its first half, after it in the second.
+    let after = if horizontal { pointer.x > r.rect.center().x } else { pointer.y > r.rect.center().y };
+    if r.dnd_hover_payload::<usize>().is_some_and(|from| *from != i) {
+        let stroke = EStroke::new(2.5, ACCENT);
+        let p = ui.painter();
+        if horizontal {
+            let x = if after { r.rect.right() + 2.0 } else { r.rect.left() - 2.0 };
+            p.vline(x, r.rect.y_range(), stroke);
+        } else {
+            let y = if after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
+            p.hline(r.rect.x_range(), y, stroke);
+        }
+    }
+    let from = *r.dnd_release_payload::<usize>()?;
+    let mut to = if after { i + 1 } else { i };
+    if from < to {
+        to -= 1; // the item is removed before it's re-inserted
+    }
+    (from != to).then_some((from, to))
+}
+
+/// Snapshot of the arrangement for menus built inside borrowed closures.
+#[derive(Clone, Copy)]
+struct Arrangement {
+    shelf: ShelfPosition,
+    panels: PanelSide,
+    quick_bar: QuickBar,
+}
+
+fn ed_layout_snapshot(ed: &Editor) -> Arrangement {
+    Arrangement { shelf: ed.shelf, panels: ed.panels, quick_bar: ed.quick_bar }
+}
+
+/// Arrangement choices; the chosen values are stored for the next frame
+/// (`ARRANGE_ID`) because menus can be opened from places that only borrow
+/// the editor.
+fn arrange_menu(ui: &mut Ui, current: Arrangement) {
+    let mut a = current;
+    ui.label(RichText::new("Brush shelf").strong());
+    for c in ShelfPosition::ALL {
+        ui.radio_value(&mut a.shelf, *c, c.label());
+    }
+    ui.label(RichText::new("Settings panel").strong());
+    for c in PanelSide::ALL {
+        ui.radio_value(&mut a.panels, *c, c.label());
+    }
+    ui.label(RichText::new("Size & strength").strong());
+    for c in QuickBar::ALL {
+        ui.radio_value(&mut a.quick_bar, *c, c.label());
+    }
+    let reset = ui.button("Reset brush order").clicked();
+    if a.shelf != current.shelf || a.panels != current.panels || a.quick_bar != current.quick_bar || reset {
+        ui.ctx().data_mut(|d| d.insert_temp(arrange_id(), (a.shelf, a.panels, a.quick_bar, reset)));
+    }
+}
+
+fn arrange_id() -> egui::Id {
+    egui::Id::unique("oxy_arrange_request")
+}
+
+/// Apply a choice made in `arrange_menu` (called once per frame).
+fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
+    let req = ctx.data_mut(|d| d.remove_temp::<(ShelfPosition, PanelSide, QuickBar, bool)>(arrange_id()));
+    if let Some((shelf, panels, quick_bar, reset)) = req {
+        ed.shelf = shelf;
+        ed.panels = panels;
+        ed.quick_bar = quick_bar;
+        if reset {
+            ed.brush_order = BrushKind::ALL.to_vec();
+            ed.status = "Brush order reset".into();
+        }
+    }
+}
+
+/// Raise / Carve, size and strength: the controls used most while sculpting.
+fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
+    let raise = egui::Button::selectable(!ed.carve, RichText::new("Raise").strong()).min_size(egui::vec2(58.0, 26.0));
+    if ui.add(raise).on_hover_text("Brushes add clay (Alt carves while held)").clicked() {
+        ed.carve = false;
+    }
+    let carve = egui::Button::selectable(ed.carve, RichText::new("Carve").strong()).min_size(egui::vec2(58.0, 26.0));
+    if ui.add(carve).on_hover_text("Brushes remove clay (Alt raises while held)").clicked() {
+        ed.carve = true;
+    }
+    ui.separator();
+    ui.label(RichText::new("Size").weak());
+    ui.add(
+        egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0).trailing_fill(true),
+    )
+    .on_hover_text("Brush radius in points  ([ and ])");
+    ui.label(RichText::new("Strength").weak());
+    let k = ed.brush_kind;
+    ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true))
+        .on_hover_text("Brush strength  (- and =)");
+}
+
+/// The quick controls floating over the center of the viewport, close to
+/// where you sculpt.
+fn floating_quick_bar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    let (pivot, pos) = match ed.quick_bar {
+        QuickBar::ViewportBottom => (egui::Align2::CENTER_BOTTOM, canvas.center_bottom() - egui::vec2(0.0, 12.0)),
+        _ => (egui::Align2::CENTER_TOP, canvas.center_top() + egui::vec2(0.0, 10.0)),
+    };
+    egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+        egui::Frame::popup(ui.style())
+            .corner_radius(10.0)
+            .inner_margin(egui::Margin::symmetric(10, 6))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().slider_width = if ed.layout == UiLayout::Touch { 180.0 } else { 140.0 };
+                    quick_controls(ui, ed);
+                });
+            })
+            .response
+            .context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
+    });
 }
 
 /// On-screen stand-ins for the Shift / Ctrl / Alt keys: tap to turn on,
 /// tap again to turn off. They stay on until turned off, so they work with
 /// one finger or a pen.
-fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor) {
+fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
     let t = &mut ed.touch_modifiers;
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
-        let w = (ui.available_width() - 12.0) / 3.0;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
         for (on, label, tip) in [
             (&mut t.shift, "Smooth", "Tap to make every stroke smooth (like holding Shift); tap again to stop"),
             (&mut t.ctrl, "Mask", "Tap to make every stroke paint the mask (like holding Ctrl); tap again to stop"),
@@ -530,7 +696,12 @@ fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHan
 /// a pen or touch screen) and view toggles.
 fn view_strip(ui: &mut Ui, ed: &mut Editor) {
     let m = metrics(ed.layout);
-    egui::Panel::right("view_strip").resizable(false).exact_size(m.strip_width).show(ui, |ui| {
+    // The strip sits on the same side as the settings panel, next to the viewport.
+    let panel = match ed.panels {
+        PanelSide::Right => egui::Panel::right("view_strip_right"),
+        PanelSide::Left => egui::Panel::left("view_strip_left"),
+    };
+    panel.resizable(false).exact_size(m.strip_width).show(ui, |ui| {
         ui.add_space(6.0);
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
@@ -1492,7 +1663,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+M", "Mask the face group under the cursor"),
     ("L", "Selection: rectangle / lasso"),
     ("Esc", "Cancel a selection or line/stamp"),
-    ("1 – 9, 0", "Select brushes 1–10"),
+    ("1 – 9, 0", "Select the first ten brushes in the shelf (drag to rearrange)"),
     ("[  ]", "Brush radius"),
     ("-  =", "Brush strength"),
     ("X", "Toggle X symmetry"),
@@ -1606,6 +1777,83 @@ mod tests {
         // The brush tile is the first tile at the top of the left panel.
         click_at(&mut ed, &ctx, egui::pos2(37.0, 105.0));
         assert!(egui::Popup::is_any_open(&ctx), "clicking the brush tile opens the picker");
+    }
+
+    /// Press at `from`, move to `to` over several frames, release.
+    fn drag(ed: &mut Editor, ctx: &egui::Context, from: egui::Pos2, to: egui::Pos2) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        let mut frames = vec![vec![egui::Event::PointerMoved(from)], vec![button(from, true)]];
+        for i in 1..=10 {
+            frames.push(vec![egui::Event::PointerMoved(from + (to - from) * (i as f32 / 10.0))]);
+        }
+        frames.push(vec![button(to, false)]);
+        frames.push(vec![]);
+        for events in frames {
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn dragging_a_brush_rearranges_the_shelf() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        apply_theme(&ctx, false, 1.0, ed.layout);
+        click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
+        // Find the rows from the layout: Draw is the first row, Pinch the seventh.
+        let row = |ed: &Editor, k: BrushKind| ed.brush_order.iter().position(|b| *b == k).unwrap();
+        assert_eq!(row(&ed, BrushKind::Draw), 0);
+        // Rows are 36 pt tall plus 2 pt spacing; the first starts below the previews.
+        let first = 192.0;
+        let y = |i: usize| first + 38.0 * i as f32;
+        // Drag Draw down onto the upper half of the fourth row (Smooth).
+        drag(&mut ed, &ctx, egui::pos2(100.0, y(0)), egui::pos2(100.0, y(3) - 8.0));
+        assert_eq!(row(&ed, BrushKind::Draw), 2, "order: {:?}", ed.brush_order);
+        assert_eq!(ed.brush_order[0], BrushKind::Clay);
+        assert_eq!(ed.number_key(BrushKind::Draw), Some("3"));
+    }
+
+    #[test]
+    fn arrange_menu_choice_is_applied() {
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.move_brush(0, 5);
+        ctx.data_mut(|d| {
+            d.insert_temp(arrange_id(), (ShelfPosition::Bottom, PanelSide::Left, QuickBar::Toolbar, true))
+        });
+        apply_arrangement(&ctx, &mut ed);
+        assert_eq!((ed.shelf, ed.panels, ed.quick_bar), (ShelfPosition::Bottom, PanelSide::Left, QuickBar::Toolbar));
+        assert_eq!(ed.brush_order, BrushKind::ALL.to_vec(), "reset brush order");
+        // Applied once only.
+        ed.shelf = ShelfPosition::Left;
+        apply_arrangement(&ctx, &mut ed);
+        assert_eq!(ed.shelf, ShelfPosition::Left);
+    }
+
+    #[test]
+    fn every_arrangement_draws() {
+        for shelf in ShelfPosition::ALL {
+            for panels in PanelSide::ALL {
+                for quick_bar in QuickBar::ALL {
+                    for layout in UiLayout::ALL {
+                        let mut ed = Editor::default();
+                        ed.show_welcome = false;
+                        (ed.shelf, ed.panels, ed.quick_bar, ed.layout) = (*shelf, *panels, *quick_bar, layout);
+                        run_frames(&mut ed, 1);
+                    }
+                }
+            }
+        }
     }
 
     #[test]

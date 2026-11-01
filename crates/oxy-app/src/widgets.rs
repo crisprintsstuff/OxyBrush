@@ -40,12 +40,6 @@ pub fn brush_description(k: BrushKind) -> &'static str {
     }
 }
 
-/// Number-key shortcut for a brush, if it has one.
-pub fn brush_key(k: BrushKind) -> Option<&'static str> {
-    const KEYS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-    BrushKind::ALL.iter().position(|b| *b == k).and_then(|i| KEYS.get(i).copied())
-}
-
 fn bump(x: f32, w: f32) -> f32 {
     (-(x / w) * (x / w)).exp()
 }
@@ -436,8 +430,9 @@ pub fn keycap(ui: &mut Ui, text: &str) {
 }
 
 /// One row of the brush shelf: icon, name and shortcut key.
-pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click());
+pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -> Response {
+    // Click to pick; drag to rearrange the shelf.
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
@@ -459,7 +454,7 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool) -> Response {
             egui::TextStyle::Button.resolve(ui.style()),
             text_color,
         );
-        if let Some(key) = brush_key(k) {
+        if let Some(key) = key {
             ui.painter().text(
                 pos2(rect.right() - 8.0, rect.center().y),
                 egui::Align2::RIGHT_CENTER,
@@ -469,13 +464,13 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool) -> Response {
             );
         }
     }
-    let key = brush_key(k).map_or(String::new(), |k| format!("\nShortcut: {k}"));
+    let key = key.map_or(String::new(), |k| format!("\nShortcut: {k}"));
     response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
 }
 
 /// Square brush icon button (compact layout's icon grid).
-pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32) -> Response {
-    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click());
+pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, key: Option<&str>) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         paint_brush_icon(ui.painter(), rect.shrink(2.0), k);
@@ -488,7 +483,7 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32) -
         };
         ui.painter().rect_stroke(rect.shrink(1.0), 6.0, stroke, egui::StrokeKind::Inside);
     }
-    let key = brush_key(k).map_or(String::new(), |k| format!("\nShortcut: {k}"));
+    let key = key.map_or(String::new(), |k| format!("\nShortcut: {k}"));
     response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
 }
 
@@ -710,7 +705,7 @@ pub fn thumb(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, select
 
 /// Like [`thumb`] with a chosen image size.
 pub fn thumb_sized(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool, size: f32) -> Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(size, size + 14.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(size, size + 14.0), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, label));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
@@ -783,9 +778,6 @@ mod tests {
                 assert_ne!(sample(*a), sample(*b), "{a:?} and {b:?} icons look identical");
             }
         }
-        assert_eq!(brush_key(BrushKind::Draw), Some("1"));
-        assert_eq!(brush_key(BrushKind::Grab), Some("0"));
-        assert_eq!(brush_key(BrushKind::Mask), None);
     }
 
     #[test]

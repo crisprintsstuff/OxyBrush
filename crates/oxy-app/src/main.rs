@@ -25,12 +25,13 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: oxybrush [MESH.obj|MESH.stl] [--layout standard|compact|touch] [--screenshot OUT.png] [--demo]"
+                    "Usage: oxybrush [MESH.obj|MESH.stl] [--layout standard|compact|touch] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo]\n\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)"
                 );
                 return;
             }
             "--screenshot" => auto.screenshot = args.next().map(PathBuf::from),
             "--demo" => auto.demo = true,
+            "--set" => auto.overrides.extend(args.next()),
             "--layout" => {
                 let v = args.next().unwrap_or_default();
                 match settings::UiLayout::ALL.into_iter().find(|l| format!("{l:?}").eq_ignore_ascii_case(&v)) {

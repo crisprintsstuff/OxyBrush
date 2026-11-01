@@ -56,7 +56,15 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 | **Compact** | Small screens: tighter spacing and an icon-only brush grid |
 | **Touch friendly** | Touch screens and pen tablets: large buttons, a brush tile grid, on-screen **Smooth / Mask / Invert** toggles instead of modifier keys, and undo/redo beside the viewport |
 
-Your layout, interface scale, theme, material, autosave interval and whether the welcome window appears at startup are remembered between sessions.
+**Arrange it your way** (Settings > Arrange panels, or right-click the brush shelf or the size/strength bar):
+
+- **Brush shelf:** left, bottom (a horizontal strip of brush previews) or right. **Drag brushes** to put the ones you use most first; number keys 1–9, 0 follow your order.
+- **Settings panel and view strip:** right or left.
+- **Size, strength and Raise/Carve:** floating at the center top or center bottom of the viewport (default: center top, where your eyes are), or in the toolbar.
+
+![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
+
+Your layout, arrangement, brush order, interface scale, theme, material, autosave interval and whether the welcome window appears at startup are remembered between sessions.
 
 ![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 
@@ -113,7 +121,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
 | `L` | Rectangle / lasso selection |
 | Ctrl+M | Mask the face group under the cursor |
-| `1`–`9`, `0` | Select brushes 1–10 |
+| `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
 | `[` `]` and `-` `=` | Radius and strength |
 | `X` | Toggle X symmetry |
 | `F` | Frame scene |

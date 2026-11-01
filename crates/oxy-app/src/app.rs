@@ -34,6 +34,8 @@ pub struct AutoRun {
     pub demo: bool,
     /// Start with this layout (`--layout`); remembered like choosing it in Settings.
     pub layout: Option<crate::settings::UiLayout>,
+    /// `--set key=value` lines applied on top of the saved settings.
+    pub overrides: Vec<String>,
 }
 
 pub struct App {
@@ -72,6 +74,10 @@ impl App {
                 }
                 e.system_info.log_path = log_path;
                 e.apply_settings(&settings);
+                if !auto.overrides.is_empty() {
+                    let text = format!("{}\n{}", e.settings().to_text(), auto.overrides.join("\n"));
+                    e.apply_settings(&crate::settings::Settings::from_text(&text));
+                }
                 if let Some(l) = auto.layout {
                     e.layout = l;
                 }
@@ -465,14 +471,11 @@ impl App {
                     ("-", false, ..) => ed.adjust_strength(-0.05),
                     ("=", false, ..) | ("+", false, ..) => ed.adjust_strength(0.05),
                     (d, false, _, false) if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
-                        // 1–9 select brushes 1–9, 0 selects brush 10.
-                        let i = match (d.as_bytes()[0] - b'0') as usize {
-                            0 => 10,
-                            n => n,
-                        };
-                        if (1..=oxy_sculpt::BrushKind::ALL.len()).contains(&i) {
-                            ed.brush_kind = oxy_sculpt::BrushKind::ALL[i - 1];
-                            ed.status = format!("{} brush", ed.brush_kind.label());
+                        // 1–9 select the first nine brushes in the shelf, 0 the tenth
+                        // (the shelf order can be rearranged by dragging).
+                        if let Some(k) = ed.brush_for_number_key((d.as_bytes()[0] - b'0') as u32) {
+                            ed.brush_kind = k;
+                            ed.status = format!("{} brush", k.label());
                         }
                     }
                     _ => {}
