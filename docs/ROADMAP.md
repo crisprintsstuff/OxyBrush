@@ -6,13 +6,13 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-02 (performance first pass, 3.6; viewport ambient occlusion and cavity shading; new Phase 4 items)
+> **Last updated:** 2026-11-02 (v0.3.0-alpha: viewport shading, performance first pass)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | v0.2.0-alpha (2026-11-01): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Latest release** | v0.3.0-alpha (2026-11-02): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), interface pass |
 | **Next** | Phase 3 — rebuilding lower levels (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
@@ -44,7 +44,7 @@ Inno Setup installer, Flatpak (`io.github.crisprintsstuff.OxyBrush`), macOS univ
 
 ---
 
-## Phase 3 — Sculpting depth and iPad 🚧 (3.1–3.4 shipped in v0.1.0-alpha; subdivision levels and touch layout in v0.2.0-alpha)
+## Phase 3 — Sculpting depth and iPad 🚧 (3.1–3.4 shipped in v0.1.0-alpha; subdivision levels and touch layout in v0.2.0-alpha; performance first pass in v0.3.0-alpha)
 
 The fundamentals that most separate OxyBrush from mature sculpting tools, plus the groundwork for an iPad version. Ordered so each step ships something visible and multiresolution lands before the features that depend on it.
 
@@ -117,7 +117,7 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v0.2.0-alpha)
+## Known limitations (v0.3.0-alpha)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Pen pressure unverified on real tablets (all platforms)
