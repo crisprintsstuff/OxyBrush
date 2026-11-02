@@ -18,6 +18,9 @@ use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+/// View normal (xyz) and linear depth (w) for the screen-space shading passes.
+const NORMAL_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
 const MATCAP_SIZE: u32 = 256;
 
 #[repr(C)]
@@ -44,6 +47,17 @@ struct Uniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct PostUniforms {
+    /// 1/P[0][0], 1/P[1][1], orthographic flag, unused
+    proj: [f32; 4],
+    /// Viewport rectangle in framebuffer pixels.
+    viewport: [f32; 4],
+    /// Obscurance strength, cavity strength, obscurance radius (world), unused.
+    params: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct PieceUniforms {
     flags: [f32; 4],
 }
@@ -58,6 +72,12 @@ pub struct ViewSettings {
     /// Background color at the center (linear RGB); a soft radial gradient
     /// to `background` keeps the model readable against the backdrop.
     pub background_center: [f64; 3],
+    /// Ambient occlusion strength, 0 (off) to 1: darkens areas that other
+    /// parts of the surface shade, such as the inside of folds.
+    pub ambient_occlusion: f32,
+    /// Cavity strength, 0 (off) to 1: darkens creases and pores and
+    /// brightens edges, so fine detail reads clearly.
+    pub cavity: f32,
 }
 
 impl Default for ViewSettings {
@@ -67,6 +87,8 @@ impl Default for ViewSettings {
             show_groups: false,
             background: [0.010, 0.011, 0.013],
             background_center: [0.062, 0.064, 0.070],
+            ambient_occlusion: 0.7,
+            cavity: 0.6,
         }
     }
 }
@@ -107,6 +129,25 @@ pub struct ViewportRenderer {
     meshes: HashMap<u64, GpuMesh>,
     depth: Option<(wgpu::TextureView, u32, u32)>,
     exact_face_colors: bool,
+    color_format: wgpu::TextureFormat,
+    post_uniforms: wgpu::Buffer,
+    post_layout: wgpu::BindGroupLayout,
+    ao_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
+    /// 1x1 stand-in bound as the obscurance input while the obscurance pass
+    /// itself renders (a texture can't be read and written in one pass).
+    dummy_ao: wgpu::TextureView,
+    targets: Option<ShadingTargets>,
+}
+
+/// Offscreen targets for the shading passes, sized to the window.
+struct ShadingTargets {
+    size: (u32, u32),
+    color: wgpu::TextureView,
+    normal_depth: wgpu::TextureView,
+    ao: wgpu::TextureView,
+    ao_group: wgpu::BindGroup,
+    composite_group: wgpu::BindGroup,
 }
 
 /// Features the renderer can use if the adapter offers them.
@@ -255,11 +296,18 @@ impl ViewportRenderer {
                 module: &shader,
                 entry_point: Some("fs_background"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: NORMAL_DEPTH_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
             }),
             multiview_mask: None,
             cache: None,
@@ -295,19 +343,110 @@ impl ViewportRenderer {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: color_format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: NORMAL_DEPTH_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                ],
             }),
             multiview_mask: None,
             cache: None,
         });
 
+        // Screen-space shading passes (obscurance, then blur + cavity + composite).
+        let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxy shading"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shading.wgsl").into()),
+        });
+        let post_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("oxy post uniforms"),
+            size: std::mem::size_of::<PostUniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let texture_entry = |binding| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            count: None,
+        };
+        let post_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("oxy post layout"),
+            entries: &[
+                uniform_entry(0, wgpu::ShaderStages::FRAGMENT),
+                texture_entry(1),
+                texture_entry(2),
+                texture_entry(3),
+            ],
+        });
+        let post_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("oxy post pipeline layout"),
+            bind_group_layouts: &[Some(&post_layout)],
+            immediate_size: 0,
+        });
+        let post_pipeline = |label, entry, format| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&post_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &post_shader,
+                    entry_point: Some("vs_fullscreen"),
+                    compilation_options: Default::default(),
+                    buffers: &[],
+                },
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &post_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let ao_pipeline = post_pipeline("oxy ambient occlusion", "fs_ao", AO_FORMAT);
+        let composite_pipeline = post_pipeline("oxy composite", "fs_composite", color_format);
+        let dummy_ao = device
+            .create_texture(&wgpu::TextureDescriptor {
+                label: Some("oxy dummy ao"),
+                size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: AO_FORMAT,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            })
+            .create_view(&Default::default());
+
         let mut r = Self {
             pipeline,
             background_pipeline,
+            color_format,
+            post_uniforms,
+            post_layout,
+            ao_pipeline,
+            composite_pipeline,
+            dummy_ao,
+            targets: None,
             uniforms,
             bind_group,
             piece_layout,
@@ -440,6 +579,45 @@ impl ViewportRenderer {
         self.depth = Some((tex.create_view(&Default::default()), width, height));
     }
 
+    fn ensure_targets(&mut self, device: &wgpu::Device, width: u32, height: u32) {
+        if self.targets.as_ref().is_some_and(|t| t.size == (width, height)) {
+            return;
+        }
+        let make = |label, format| {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let color = make("oxy scene color", self.color_format);
+        let normal_depth = make("oxy normal depth", NORMAL_DEPTH_FORMAT);
+        let ao = make("oxy ambient occlusion", AO_FORMAT);
+        let group = |ao_view: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("oxy post bind group"),
+                layout: &self.post_layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.post_uniforms.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&color) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&normal_depth) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(ao_view) },
+                ],
+            })
+        };
+        let ao_group = group(&self.dummy_ao);
+        let composite_group = group(&ao);
+        self.targets =
+            Some(ShadingTargets { size: (width, height), color, normal_depth, ao, ao_group, composite_group });
+    }
+
     /// Clear the target and draw the given pieces into its viewport rectangle.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
@@ -477,48 +655,104 @@ impl ViewportRenderer {
             }
         }
 
-        let [r, g, b] = settings.background;
-        let depth = &self.depth.as_ref().expect("ensured").0;
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("oxy viewport pass"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
-                stencil_ops: None,
-            }),
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
         let (w, h) = (target_size.0 as f32, target_size.1 as f32);
         let x = viewport[0].clamp(0.0, w - 1.0);
         let y = viewport[1].clamp(0.0, h - 1.0);
         let vw = viewport[2].min(w - x).max(1.0);
         let vh = viewport[3].min(h - y).max(1.0);
-        pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
-        pass.set_bind_group(0, &self.bind_group, &[]);
-        pass.set_pipeline(&self.background_pipeline);
-        pass.draw(0..3, 0..1);
-        pass.set_pipeline(&self.pipeline);
-        for item in items {
-            let Some(gpu) = self.meshes.get(&item.id) else { continue };
-            if gpu.index_count == 0 {
-                continue;
+
+        let proj = camera.projection(aspect).to_cols_array_2d();
+        let shading = [settings.ambient_occlusion.clamp(0.0, 1.0), settings.cavity.clamp(0.0, 1.0)];
+        let post = PostUniforms {
+            proj: [1.0 / proj[0][0], 1.0 / proj[1][1], if camera.orthographic { 1.0 } else { 0.0 }, 0.0],
+            viewport: [x, y, vw, vh],
+            // The obscurance radius follows the camera distance, so it picks
+            // up broad forms when zoomed out and fine detail when zoomed in.
+            params: [shading[0], shading[1], camera.distance * 0.035, 0.0],
+        };
+        queue.write_buffer(&self.post_uniforms, 0, bytemuck::bytes_of(&post));
+        self.ensure_targets(device, target_size.0.max(1), target_size.1.max(1));
+        let t = self.targets.as_ref().expect("ensured");
+
+        let [r, g, b] = settings.background;
+        let bg = wgpu::Color { r, g, b, a: 1.0 };
+        let depth = &self.depth.as_ref().expect("ensured").0;
+        let attachment = |view, clear| {
+            Some(wgpu::RenderPassColorAttachment {
+                view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+            })
+        };
+        // With shading off, the matcap pass draws straight into the window
+        // (no offscreen copy), so turning shading off costs nothing.
+        let shaded = shading[0] > 0.0 || shading[1] > 0.0;
+        let scene_color = if shaded { &t.color } else { target };
+        {
+            // 1. Matcap shading into the color + normal/depth targets.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxy viewport pass"),
+                color_attachments: &[
+                    attachment(scene_color, bg),
+                    attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            pass.set_pipeline(&self.background_pipeline);
+            pass.draw(0..3, 0..1);
+            pass.set_pipeline(&self.pipeline);
+            for item in items {
+                let Some(gpu) = self.meshes.get(&item.id) else { continue };
+                if gpu.index_count == 0 {
+                    continue;
+                }
+                pass.set_bind_group(1, &gpu.bind_group, &[]);
+                pass.set_vertex_buffer(0, gpu.vertices.slice(..));
+                pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..gpu.index_count, 0, 0..1);
             }
-            pass.set_bind_group(1, &gpu.bind_group, &[]);
-            pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-            pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..gpu.index_count, 0, 0..1);
         }
+        if shading[0] > 0.0 {
+            // 2. Ambient obscurance (skipped when switched off).
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxy ambient occlusion pass"),
+                color_attachments: &[attachment(&t.ao, wgpu::Color::WHITE)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_pipeline(&self.ao_pipeline);
+            pass.set_bind_group(0, &t.ao_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        if !shaded {
+            return;
+        }
+        // 3. Blur + cavity + composite into the window.
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("oxy composite pass"),
+            color_attachments: &[attachment(target, bg)],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        });
+        pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+        pass.set_pipeline(&self.composite_pipeline);
+        pass.set_bind_group(0, &t.composite_group, &[]);
+        pass.draw(0..3, 0..1);
     }
 }
 
@@ -540,6 +774,29 @@ fn vertex(mesh: &Mesh, i: usize) -> GpuVertex {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn validate(name: &str, src: &str) {
+        let module = naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{name}: {}", e.emit_to_string(src)));
+        naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
+            .validate(&module)
+            .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+
+    #[test]
+    fn shaders_are_valid_wgsl() {
+        // Both variants of the viewport shader: with exact per-face colors and without.
+        let src = include_str!("shader.wgsl");
+        validate("shader.wgsl", src);
+        validate("shader.wgsl (primitive_index)", &src.replace("//PRIM ", ""));
+        validate("shading.wgsl", include_str!("shading.wgsl"));
+    }
+
+    #[test]
+    fn uniform_layouts_match_wgsl() {
+        // std140-style sizes the shaders expect (vec4/mat4 aligned).
+        assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 4 * 16);
+        assert_eq!(std::mem::size_of::<PostUniforms>(), 3 * 16);
+    }
 
     #[test]
     fn group_colors_are_distinct_and_opaque() {

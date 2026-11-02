@@ -36,6 +36,14 @@ struct VsOut {
     @location(0) view_normal: vec3<f32>,
     @location(1) mask: f32,
     @location(2) @interpolate(flat) group_color: u32,
+    @location(3) view_depth: f32,
+};
+
+// Two targets: the shaded color, and view normal (xyz) + linear depth (w)
+// for the screen-space shading passes (shading.wgsl).
+struct FsOut {
+    @location(0) color: vec4<f32>,
+    @location(1) normal_depth: vec4<f32>,
 };
 
 @vertex
@@ -45,6 +53,7 @@ fn vs_main(v: VsIn) -> VsOut {
     o.view_normal = (u.view * vec4<f32>(v.normal, 0.0)).xyz;
     o.mask = v.mask;
     o.group_color = v.group_color;
+    o.view_depth = -(u.view * vec4<f32>(v.position, 1.0)).z;
     return o;
 }
 
@@ -57,7 +66,7 @@ fn fs_main(
     i: VsOut,
     @builtin(front_facing) front: bool,
     //PRIM @builtin(primitive_index) prim: u32,
-) -> @location(0) vec4<f32> {
+) -> FsOut {
     var n = normalize(i.view_normal);
     if (!front) {
         n = -n;
@@ -82,7 +91,10 @@ fn fs_main(
     }
     let m = clamp(i.mask, 0.0, 1.0) * u.params.y;
     color = mix(color, color * u.mask_color.rgb, m);
-    return vec4<f32>(color, 1.0);
+    var out: FsOut;
+    out.color = vec4<f32>(color, 1.0);
+    out.normal_depth = vec4<f32>(n, i.view_depth);
+    return out;
 }
 
 // Viewport background: a soft radial gradient, slightly above center, so
@@ -103,8 +115,11 @@ fn vs_background(@builtin(vertex_index) i: u32) -> BgOut {
 }
 
 @fragment
-fn fs_background(i: BgOut) -> @location(0) vec4<f32> {
+fn fs_background(i: BgOut) -> FsOut {
     let d = length(vec2<f32>(i.p.x * max(u.params.z, 0.1) * 0.7, i.p.y - 0.2));
     let t = smoothstep(0.0, 1.35, d);
-    return vec4<f32>(mix(u.bg_center.rgb, u.bg_edge.rgb, t), 1.0);
+    var out: FsOut;
+    out.color = vec4<f32>(mix(u.bg_center.rgb, u.bg_edge.rgb, t), 1.0);
+    out.normal_depth = vec4<f32>(0.0);
+    return out;
 }

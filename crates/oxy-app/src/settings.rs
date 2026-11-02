@@ -200,6 +200,9 @@ pub struct Settings {
     pub quick_bar: QuickBar,
     /// Brush order in the shelf; number keys 1–9, 0 follow it.
     pub brush_order: Vec<BrushKind>,
+    /// Viewport ambient occlusion and cavity strengths, 0 (off) to 1.
+    pub ambient_occlusion: f32,
+    pub cavity: f32,
 }
 
 impl Default for Settings {
@@ -215,6 +218,8 @@ impl Default for Settings {
             panels: PanelSide::Right,
             quick_bar: QuickBar::ViewportTop,
             brush_order: BrushKind::ALL.to_vec(),
+            ambient_occlusion: 0.7,
+            cavity: 0.6,
         }
     }
 }
@@ -241,7 +246,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -252,6 +257,8 @@ impl Settings {
             self.panels.key(),
             self.quick_bar.key(),
             self.brush_order.iter().map(|k| brush_key(*k)).collect::<Vec<_>>().join(", "),
+            self.ambient_occlusion,
+            self.cavity,
         )
     }
 
@@ -296,6 +303,20 @@ impl Settings {
                 "panels" => s.panels = PanelSide::from_key(v).unwrap_or(s.panels),
                 "quick_bar" => s.quick_bar = QuickBar::from_key(v).unwrap_or(s.quick_bar),
                 "brush_order" => s.brush_order = parse_brush_order(v),
+                "ambient_occlusion" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=1.0).contains(&x)
+                    {
+                        s.ambient_occlusion = x;
+                    }
+                }
+                "cavity" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=1.0).contains(&x)
+                    {
+                        s.cavity = x;
+                    }
+                }
                 _ => {}
             }
         }
@@ -358,6 +379,8 @@ mod tests {
             panels: PanelSide::Left,
             quick_bar: QuickBar::ViewportBottom,
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
+            ambient_occlusion: 0.25,
+            cavity: 0.0,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Unknown keys, junk lines and out-of-range values fall back to defaults.

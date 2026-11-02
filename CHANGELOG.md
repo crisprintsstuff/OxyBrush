@@ -6,6 +6,13 @@ All notable changes to OxyBrush. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Viewport shading:** screen-space ambient occlusion (folds and the inside of shapes darken) and cavity shading (creases and pores darken, edges catch light), so sculpted detail reads clearly. On by default; toggle it in the view strip and set strengths in **View > Shading** (remembered between sessions). With both at 0 the viewport renders exactly as before.
+
+### Developers
+- `cargo run --release -p oxy-render --example shading_timing` measures the viewport passes on your GPU.
+- Shaders are validated in `cargo test` (naga), no GPU needed.
+
 ## [0.2.0-alpha] - 2026-11-01
 
 ### Added
