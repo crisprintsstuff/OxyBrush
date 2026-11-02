@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-02 (viewport ambient occlusion and cavity shading; new Phase 4 items: transform gizmo, brush presets, insert-mesh and curve brushes, hard-surface tools, more masking)
+> **Last updated:** 2026-11-02 (performance first pass, 3.6; viewport ambient occlusion and cavity shading; new Phase 4 items)
 
 ## Status at a glance
 
@@ -54,8 +54,8 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
 | 3.3 | **Alphas and stencils** | Alphas ✅ (7 procedural CC0 + user PNGs, rotation, follow stroke). Stencils (screen-space overlays) ⏳ | 🚧 |
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
-| 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level switches on ~5M triangles take 2–4 s on the UI thread (mesh rebuild; see 3.6) | 🚧 |
-| 3.6 | **Performance to 10M triangles** | SIMD brush kernels, parallel normal/bounds updates, chunk frustum culling, faster decimation (current: ~10 s for 1.3M→130k) (4–8 wk) | ⏳ |
+| 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level changes above 1M triangles run in the background (5.2M: ~0.7 s to switch, ~2–4 s to add) | 🚧 |
+| 3.6 | **Performance to 10M triangles** | First pass ✅: parallel mesh build (3–4× faster level switches), parallel subdivision, grow-only chunk bounds per dab, level changes off the UI thread, ~2× faster decimation (1.3M→130k: ~6 s). ⏳ SIMD brush kernels, chunk frustum culling, faster remesh at high resolution, measurements on real hardware at 10M | 🚧 |
 | 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys ✅; touch-friendly layout with larger targets ✅ (no hover-dependent UI ⏳); save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | 🚧 |
 | 3.8 | **iPad build** | iPadOS target (wgpu/Metal, winit), small platform crate using `objc2` for iOS APIs, document picker and Files-app integration, generated Xcode project, CI job producing an `.ipa`. (1–2 wk) | ⏳ |
 | 3.9 | **iPad and Apple Pencil polish** | Palm rejection (Pencil vs. finger), pressure tuning, simplified panel layout, testing on real iPads. (4–8 wk) | ⏳ |
@@ -121,9 +121,9 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Pen pressure unverified on real tablets (all platforms)
-- Decimation is slow on very dense meshes (runs in the background)
+- Decimation takes a few seconds on dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
-- Subdivision levels: switching to a ~5M-triangle level pauses the UI for a few seconds; remesh, decimate and single subdivide remove the levels (undo restores them)
+- Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
 - Only interface settings are remembered between sessions (not brush settings)
 - Touch layout: no multi-touch gestures yet; untested on real touchscreens and tablets
 - Windows installer is not code-signed (SmartScreen warning)

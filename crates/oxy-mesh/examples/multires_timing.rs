@@ -34,4 +34,18 @@ fn main() {
             (t.elapsed() - t_stack).as_secs_f64() * 1e3
         );
     }
+    // Background level changes do only `prepare` on the UI thread (sync the
+    // mesh into the stack, copy its attributes); the stack then moves to the
+    // worker, which also makes the undo copy.
+    let t = Instant::now();
+    let prepared = mr.prepare(&mesh);
+    println!(
+        "UI-thread part of a background level change ({} tris): {:.0} ms",
+        mesh.triangle_count(),
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    let t = Instant::now();
+    let undo_copy = mr.clone();
+    println!("undo copy of the level stack (on the worker): {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    drop((prepared, undo_copy));
 }

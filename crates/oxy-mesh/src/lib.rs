@@ -10,8 +10,6 @@ mod aabb;
 mod adjacency;
 pub mod multires;
 
-/// Per-triangle data carried through the spatial sort: face group, hidden, source index.
-type TriAttr = (u32, bool, u32);
 pub mod primitives;
 pub mod topo;
 
@@ -87,6 +85,9 @@ pub struct Mesh {
     vertex_chunk: Vec<u32>,
     triangle_chunk: Vec<u32>,
     dirty: Vec<bool>,
+    /// Chunks whose bounds were only grown during a stroke (still correct,
+    /// possibly loose); `tighten_bounds` recomputes them exactly.
+    loose_bounds: Vec<bool>,
     topology_version: u64,
     tri_stamp: Vec<u32>,
     vert_stamp: Vec<u32>,
@@ -105,42 +106,33 @@ impl Mesh {
     pub fn from_data(data: MeshData) -> Self {
         let MeshData { positions, triangles, mask, groups, hidden } = data;
         let mask = (mask.len() == positions.len()).then_some(mask);
-        let tri_attr = |i: usize| (groups.get(i).copied().unwrap_or(0), hidden.get(i).copied().unwrap_or(false));
-        let triangles: Vec<([u32; 3], (u32, bool, u32))> = triangles
-            .into_iter()
-            .enumerate()
-            .map(|(i, t)| {
-                let (g, h) = tri_attr(i);
-                (t, (g, h, i as u32))
-            })
-            .filter(|(t, _)| {
-                t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| (i as usize) < positions.len())
-            })
-            .collect();
-
-        // Spatial sort of triangles by centroid Morton code.
+        // Valid triangles (no repeated or out-of-range corners), keyed by the
+        // Morton code of their centroid for a spatial sort. Sorting packed
+        // (key, index) u64s in parallel is far cheaper than sorting the full
+        // records; the records are gathered in sorted order afterwards.
+        let valid = |t: &[u32; 3]| {
+            t[0] != t[1] && t[1] != t[2] && t[0] != t[2] && t.iter().all(|&i| (i as usize) < positions.len())
+        };
         let bounds = Aabb::from_points(positions.iter().copied());
         let extent = bounds.extent().max(Vec3::splat(1e-12));
-        // (morton key, triangle, (face group, hidden, source triangle index))
-        let mut keyed: Vec<(u32, [u32; 3], TriAttr)> = triangles
-            .into_iter()
-            .map(|(t, a)| {
+        let mut keyed: Vec<u64> = triangles
+            .par_iter()
+            .enumerate()
+            .filter(|(_, t)| valid(t))
+            .map(|(i, t)| {
                 let c = (positions[t[0] as usize] + positions[t[1] as usize] + positions[t[2] as usize]) / 3.0;
                 let n = ((c - bounds.min) / extent).clamp(Vec3::ZERO, Vec3::ONE);
-                (morton3(n), t, a)
+                ((morton3(n) as u64) << 32) | i as u64
             })
             .collect();
-        keyed.sort_unstable_by_key(|k| k.0);
-        let mut triangles = Vec::with_capacity(keyed.len());
-        let mut groups = Vec::with_capacity(keyed.len());
-        let mut hidden = Vec::with_capacity(keyed.len());
-        let mut source_triangle = Vec::with_capacity(keyed.len());
-        for (_, t, (g, h, src)) in keyed {
-            triangles.push(t);
-            groups.push(g);
-            hidden.push(h);
-            source_triangle.push(src);
-        }
+        keyed.par_sort_unstable();
+        let source_triangle: Vec<u32> = keyed.par_iter().map(|&k| k as u32).collect();
+        drop(keyed);
+        let mut triangles: Vec<[u32; 3]> = source_triangle.par_iter().map(|&i| triangles[i as usize]).collect();
+        let groups: Vec<u32> =
+            source_triangle.par_iter().map(|&i| groups.get(i as usize).copied().unwrap_or(0)).collect();
+        let hidden: Vec<bool> =
+            source_triangle.par_iter().map(|&i| hidden.get(i as usize).copied().unwrap_or(false)).collect();
 
         // Assign vertex ownership in chunk order and renumber.
         let chunk_count = triangles.len().div_ceil(CHUNK_TRIANGLES).max(1);
@@ -201,6 +193,7 @@ impl Mesh {
             source_vertex,
             source_triangle,
             dirty: vec![true; chunks.len()],
+            loose_bounds: vec![false; chunks.len()],
             chunks,
             triangles,
             vertex_triangles,
@@ -213,8 +206,9 @@ impl Mesh {
             stamp: 0,
         };
         mesh.recompute_all_normals();
-        for c in 0..mesh.chunks.len() {
-            mesh.refit_chunk(c);
+        let bounds: Vec<Aabb> = (0..mesh.chunks.len()).into_par_iter().map(|c| mesh.chunk_bounds(c)).collect();
+        for (chunk, aabb) in mesh.chunks.iter_mut().zip(bounds) {
+            chunk.aabb = aabb;
         }
         mesh.faces_changed();
         mesh
@@ -506,8 +500,12 @@ impl Mesh {
         self.topology_version
     }
 
+    /// Exact bounds of the mesh (chunks grown during a stroke are measured
+    /// precisely here, so the result never includes stale extents).
     pub fn bounds(&self) -> Aabb {
-        self.chunks.iter().fold(Aabb::EMPTY, |a, c| a.union(&c.aabb))
+        (0..self.chunks.len()).fold(Aabb::EMPTY, |a, c| {
+            a.union(&if self.loose_bounds[c] { self.chunk_bounds(c) } else { self.chunks[c].aabb })
+        })
     }
 
     pub fn neighbors(&self, v: u32) -> &[u32] {
@@ -592,17 +590,28 @@ impl Mesh {
             self.dirty[self.vertex_chunk[v as usize] as usize] = true;
         }
 
-        let mut chunk_seen = vec![false; self.chunks.len()];
-        let mut chunks = Vec::new();
+        // Bounds only need to contain every corner of the chunk's triangles,
+        // so growing them by the affected triangles keeps them correct; a
+        // full refit of each 4096-triangle chunk per dab is not needed.
+        // INVARIANT: chunk bounds contain all corners of the chunk's triangles.
         for &t in &tris {
-            let c = self.triangle_chunk[t as usize];
-            if !std::mem::replace(&mut chunk_seen[c as usize], true) {
-                chunks.push(c);
+            let c = self.triangle_chunk[t as usize] as usize;
+            let chunk = &mut self.chunks[c];
+            for v in self.triangles[t as usize] {
+                chunk.aabb.grow(self.positions[v as usize]);
             }
+            self.loose_bounds[c] = true;
         }
-        let boxes: Vec<Aabb> = chunks.par_iter().map(|&c| self.chunk_bounds(c as usize)).collect();
-        for (c, b) in chunks.into_iter().zip(boxes) {
-            self.chunks[c as usize].aabb = b;
+    }
+
+    /// Recompute exact bounds for chunks that were only grown (call at the
+    /// end of a stroke, so later strokes and ray casts test tight boxes).
+    pub fn tighten_bounds(&mut self) {
+        let loose: Vec<usize> = (0..self.chunks.len()).filter(|&c| self.loose_bounds[c]).collect();
+        let boxes: Vec<Aabb> = loose.par_iter().map(|&c| self.chunk_bounds(c)).collect();
+        for (c, b) in loose.into_iter().zip(boxes) {
+            self.chunks[c].aabb = b;
+            self.loose_bounds[c] = false;
         }
     }
 
@@ -875,6 +884,35 @@ mod tests {
         let before = m.mask[hidden_vertex as usize];
         m.mask_by_curvature(true);
         assert_eq!(m.mask[hidden_vertex as usize], before);
+    }
+
+    #[test]
+    fn bounds_grow_during_strokes_and_tighten_after() {
+        let mut m = primitives::icosphere(5, 1.0);
+        let exact: Vec<Aabb> = m.chunks.iter().map(|c| c.aabb).collect();
+        // Pull a patch far out, then back: grown bounds stay large but valid.
+        let patch: Vec<u32> = (0..m.vertex_count() as u32).filter(|&v| m.positions[v as usize].z > 0.95).collect();
+        for &v in &patch {
+            m.positions[v as usize] *= 2.0;
+        }
+        m.update_after_move(&patch);
+        for &v in &patch {
+            m.positions[v as usize] *= 0.5;
+        }
+        m.update_after_move(&patch);
+        for (ci, c) in m.chunks.iter().enumerate() {
+            for t in c.triangles.clone() {
+                for v in m.triangles[t as usize] {
+                    assert!(c.aabb.contains(m.positions[v as usize]), "chunk {ci} must contain its corners");
+                }
+            }
+        }
+        let grown = m.chunks.iter().zip(&exact).any(|(c, e)| c.aabb.max.z > e.max.z + 0.5);
+        assert!(grown, "bounds were grown, not refit, during the stroke");
+        m.tighten_bounds();
+        for (c, e) in m.chunks.iter().zip(&exact) {
+            assert!((c.aabb.min - e.min).length() < 1e-5 && (c.aabb.max - e.max).length() < 1e-5);
+        }
     }
 
     #[test]

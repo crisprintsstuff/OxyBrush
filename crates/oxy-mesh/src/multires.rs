@@ -26,7 +26,6 @@
 use crate::{Mesh, MeshData};
 use glam::Vec3;
 use rayon::prelude::*;
-use std::collections::HashMap;
 
 const NONE: u32 = u32::MAX;
 
@@ -86,6 +85,9 @@ impl PartialEq for Multires {
         self.active == other.active && self.levels == other.levels
     }
 }
+
+/// Mesh state captured by [`Multires::prepare`] for a level change.
+pub struct Prepared(Attributes);
 
 impl Multires {
     /// Start a stack whose base is `mesh` (in its current vertex order).
@@ -165,9 +167,23 @@ impl Multires {
     /// Add a finer level on top. The active level must be the top one.
     /// Returns the data to build the new active mesh from.
     pub fn add_level(&mut self, mesh: &Mesh) -> MeshData {
-        assert_eq!(self.active, self.levels.len() - 1, "add levels from the top level");
+        let prepared = self.prepare(mesh);
+        self.add_level_prepared(prepared)
+    }
+
+    /// Take what level changes need from the active mesh: sync its
+    /// positions into the stack and copy its mask, face groups and
+    /// visibility. Cheap compared to the change itself, so the change can
+    /// then run on another thread without the mesh.
+    pub fn prepare(&mut self, mesh: &Mesh) -> Prepared {
         self.sync_from(mesh);
-        let attrs = self.attributes_from(mesh);
+        Prepared(self.attributes_from(mesh))
+    }
+
+    /// `add_level` from a `prepare`d state.
+    pub fn add_level_prepared(&mut self, prepared: Prepared) -> MeshData {
+        assert_eq!(self.active, self.levels.len() - 1, "add levels from the top level");
+        let attrs = prepared.0;
         let top = self.levels.last().expect("non-empty");
         let (triangles, refinement) = refine(&top.triangles, top.positions.len());
         let positions = loop_positions(&top.positions, &refinement);
@@ -180,9 +196,14 @@ impl Multires {
 
     /// Switch the active level. Returns the data to build the new active mesh from.
     pub fn set_level(&mut self, mesh: &Mesh, target: usize) -> MeshData {
+        let prepared = self.prepare(mesh);
+        self.set_level_prepared(prepared, target)
+    }
+
+    /// `set_level` from a `prepare`d state.
+    pub fn set_level_prepared(&mut self, prepared: Prepared, target: usize) -> MeshData {
         let target = target.min(self.levels.len() - 1);
-        self.sync_from(mesh);
-        let mut attrs = self.attributes_from(mesh);
+        let mut attrs = prepared.0;
         while self.active < target {
             attrs = self.attributes_up(self.active + 1, attrs);
             self.active += 1;
@@ -197,12 +218,22 @@ impl Multires {
     /// Remove all levels above the active one.
     pub fn delete_higher(&mut self, mesh: &Mesh) {
         self.sync_from(mesh);
+        self.delete_higher_prepared();
+    }
+
+    /// `delete_higher` after `prepare` (the mesh is already synced).
+    pub fn delete_higher_prepared(&mut self) {
         self.levels.truncate(self.active + 1);
     }
 
     /// Make the active level the new base (remove the levels below it).
     pub fn delete_lower(&mut self, mesh: &Mesh) {
         self.sync_from(mesh);
+        self.delete_lower_prepared();
+    }
+
+    /// `delete_lower` after `prepare` (the mesh is already synced).
+    pub fn delete_lower_prepared(&mut self) {
         self.levels.drain(..self.active);
         self.active = 0;
         let base = &mut self.levels[0];
@@ -325,30 +356,74 @@ impl Multires {
 /// Subdivide topology: every triangle splits into four at its edge
 /// midpoints. New vertex `n_prev + i` is edge `i`, numbered in first-seen
 /// order over triangles and their edges (ab, bc, ca).
+///
+/// INVARIANT: the numbering is part of the saved format (MRES level
+/// positions are stored in this order), so it must never change. It is
+/// computed with a parallel sort instead of a hash map: half-edge
+/// occurrence `o = 3 * triangle + k` (k = 0 ab, 1 bc, 2 ca); an edge's id is
+/// the rank of its first occurrence, and its opposite vertices come from
+/// its first two occurrences, exactly as a first-seen hash map assigns them
+/// (`refine_reference` in the tests).
 fn refine(tris: &[[u32; 3]], n_prev: usize) -> (Vec<[u32; 3]>, Refinement) {
-    let mut index: HashMap<(u32, u32), u32> = HashMap::with_capacity(tris.len() * 3 / 2);
-    let mut edges: Vec<EdgeRec> = Vec::with_capacity(tris.len() * 3 / 2);
-    let mut edge = |a: u32, b: u32, opp: u32| -> u32 {
-        let key = (a.min(b), a.max(b));
-        let id = *index.entry(key).or_insert_with(|| {
-            edges.push(EdgeRec { a: key.0, b: key.1, opp: [NONE; 2] });
-            edges.len() as u32 - 1
-        });
-        let e = &mut edges[id as usize];
-        if e.opp[0] == NONE {
-            e.opp[0] = opp;
-        } else if e.opp[1] == NONE {
-            e.opp[1] = opp;
+    let occurrences = tris.len() * 3;
+    let key = |a: u32, b: u32| ((a.min(b) as u64) << 32) | a.max(b) as u64;
+    let half_edge = |o: usize| -> (u32, u32, u32) {
+        let [a, b, c] = tris[o / 3];
+        match o % 3 {
+            0 => (a, b, c),
+            1 => (b, c, a),
+            _ => (c, a, b),
         }
-        n_prev as u32 + id
     };
-    let mut out = Vec::with_capacity(tris.len() * 4);
-    for &[a, b, c] in tris {
-        let ab = edge(a, b, c);
-        let bc = edge(b, c, a);
-        let ca = edge(c, a, b);
-        out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
+    // (edge key, occurrence), sorted: groups by edge, ascending occurrence.
+    let mut he: Vec<(u64, u32)> = (0..occurrences)
+        .into_par_iter()
+        .map(|o| {
+            let (a, b, _) = half_edge(o);
+            (key(a, b), o as u32)
+        })
+        .collect();
+    he.par_sort_unstable();
+    // One entry per edge: (first occurrence, start of its group in `he`).
+    let mut groups: Vec<(u32, u32)> = Vec::with_capacity(occurrences / 2 + 1);
+    for (i, &(k, o)) in he.iter().enumerate() {
+        if i == 0 || he[i - 1].0 != k {
+            groups.push((o, i as u32));
+        }
     }
+    // First-seen order = ascending first occurrence.
+    groups.par_sort_unstable();
+    let edges: Vec<EdgeRec> = groups
+        .par_iter()
+        .map(|&(first, start)| {
+            let k = he[start as usize].0;
+            let (a, b) = ((k >> 32) as u32, k as u32);
+            let opp0 = half_edge(first as usize).2;
+            let s1 = start as usize + 1;
+            let opp1 = if s1 < he.len() && he[s1].0 == k { half_edge(he[s1].1 as usize).2 } else { NONE };
+            EdgeRec { a, b, opp: [opp0, opp1] }
+        })
+        .collect();
+    // Edge id of every occurrence.
+    let mut occ_edge = vec![0u32; occurrences];
+    for (id, &(_, start)) in groups.iter().enumerate() {
+        let k = he[start as usize].0;
+        for &(hk, o) in &he[start as usize..] {
+            if hk != k {
+                break;
+            }
+            occ_edge[o as usize] = n_prev as u32 + id as u32;
+        }
+    }
+    drop(he);
+    let out: Vec<[u32; 3]> = tris
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(t, &[a, b, c])| {
+            let (ab, bc, ca) = (occ_edge[3 * t], occ_edge[3 * t + 1], occ_edge[3 * t + 2]);
+            [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
+        })
+        .collect();
 
     // Coarse vertex neighbors and boundary neighbors (from edges with one triangle).
     let mut counts = vec![0u32; n_prev + 1];
@@ -424,12 +499,65 @@ fn loop_positions(prev: &[Vec3], r: &Refinement) -> Vec<Vec3> {
 mod tests {
     use super::*;
     use crate::primitives;
+    use std::collections::HashMap;
 
     /// Build the active mesh the way the editor does.
     fn rebuild(m: &mut Multires, data: MeshData) -> Mesh {
         let mesh = Mesh::from_data(data);
         m.bind(&mesh);
         mesh
+    }
+
+    /// The original first-seen hash-map numbering, kept as the reference
+    /// the parallel `refine` must reproduce exactly (saved files depend on it).
+    /// (a, b, opposite vertices) per edge.
+    type EdgeList = Vec<(u32, u32, [u32; 2])>;
+
+    fn refine_reference(tris: &[[u32; 3]], n_prev: usize) -> (Vec<[u32; 3]>, EdgeList) {
+        let mut index: HashMap<(u32, u32), u32> = HashMap::new();
+        let mut edges: Vec<(u32, u32, [u32; 2])> = Vec::new();
+        let mut edge = |a: u32, b: u32, opp: u32| -> u32 {
+            let key = (a.min(b), a.max(b));
+            let id = *index.entry(key).or_insert_with(|| {
+                edges.push((key.0, key.1, [NONE; 2]));
+                edges.len() as u32 - 1
+            });
+            let e = &mut edges[id as usize].2;
+            if e[0] == NONE {
+                e[0] = opp;
+            } else if e[1] == NONE {
+                e[1] = opp;
+            }
+            n_prev as u32 + id
+        };
+        let mut out = Vec::new();
+        for &[a, b, c] in tris {
+            let ab = edge(a, b, c);
+            let bc = edge(b, c, a);
+            let ca = edge(c, a, b);
+            out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
+        }
+        (out, edges)
+    }
+
+    #[test]
+    fn parallel_refine_matches_first_seen_numbering() {
+        // Closed, open and non-manifold inputs, in scrambled triangle order.
+        let sphere = primitives::icosphere(3, 1.0);
+        let plane = primitives::plane(12, 1.0);
+        let mut fan = vec![[0, 1, 2], [0, 2, 3], [0, 3, 1], [1, 2, 4], [1, 2, 5]];
+        fan.reverse();
+        for (tris, n) in [
+            (sphere.triangles.clone(), sphere.vertex_count()),
+            (plane.triangles.iter().rev().copied().collect::<Vec<_>>(), plane.vertex_count()),
+            (fan, 6),
+        ] {
+            let (out, r) = refine(&tris, n);
+            let (ref_out, ref_edges) = refine_reference(&tris, n);
+            assert_eq!(out, ref_out);
+            let edges: EdgeList = r.edges.iter().map(|e| (e.a, e.b, e.opp)).collect();
+            assert_eq!(edges, ref_edges);
+        }
     }
 
     #[test]
