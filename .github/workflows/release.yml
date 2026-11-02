@@ -192,6 +192,11 @@ jobs:
     if: github.event_name == 'release'
     needs: [version, windows, linux, flatpak, macos]
     runs-on: ubuntu-latest
+    env:
+      # Optional: an ed25519 key that signs SHA256SUMS.txt for the in-app
+      # updater (docs/rfcs/0002-updates.md). Without it, releases are
+      # published unsigned, as before.
+      OXY_UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: actions/download-artifact@v4
@@ -205,6 +210,11 @@ jobs:
           rm -f oxybrush dist-screenshot-macos.png   # job-internal artifacts, not release assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
+      - uses: dtolnay/rust-toolchain@1.99.1
+        if: env.OXY_UPDATE_SIGNING_KEY != ''
+      - name: Sign checksums for the updater
+        if: env.OXY_UPDATE_SIGNING_KEY != ''
+        run: cargo run --locked --release -p oxy-update --bin oxy-update-sign -- sign dist/SHA256SUMS.txt
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}

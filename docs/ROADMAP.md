@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-02 (v0.3.0-alpha: viewport shading, performance first pass)
+> **Last updated:** 2026-11-02 (opt-in update checks, RFC 0002)
 
 ## Status at a glance
 
@@ -86,6 +86,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
 | **Viewport** | Screen-space ambient occlusion and cavity shading ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, user-imported matcaps, material per piece | 3–5 wk |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. ⏳ Quick palette at the cursor, keymap editor, custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
+| **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
 ## Phase 5 — Hardening → 1.0 ⏳

@@ -18,6 +18,7 @@ oxy-render = { path = "crates/oxy-render" }
 oxy-topo = { path = "crates/oxy-topo" }
 oxy-doc = { path = "crates/oxy-doc" }
 oxy-ztl = { path = "crates/oxy-ztl" }
+oxy-update = { path = "crates/oxy-update", default-features = false }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"
@@ -36,6 +37,12 @@ crc32fast = "1.5"
 dirs = "7"
 miniz_oxide = "0.9"
 serde_json = "1"
+# Opt-in updater (see docs/rfcs/0002-updates.md). ureq/rustls/ring are the
+# documented exception to the pure-Rust rule (ring compiles a little C/asm).
+ureq = { version = "3", default-features = false, features = ["rustls"] }
+sha2 = "0.10"
+ed25519-dalek = "2"
+getrandom = "0.3"
 png = "0.18"
 env_logger = "0.11"
 

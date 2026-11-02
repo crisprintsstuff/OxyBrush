@@ -11,6 +11,12 @@ rust-version.workspace = true
 name = "oxybrush"
 path = "src/main.rs"
 
+[features]
+# Opt-in update checks and downloads (docs/rfcs/0002-updates.md). Build with
+# --no-default-features for a copy with no network code at all.
+default = ["updater"]
+updater = ["oxy-update/network"]
+
 [dependencies]
 oxy-mesh.workspace = true
 oxy-sculpt.workspace = true
@@ -31,6 +37,7 @@ env_logger.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 png.workspace = true
+oxy-update.workspace = true
 
 [lints]
 workspace = true

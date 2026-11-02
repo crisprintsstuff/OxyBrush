@@ -104,7 +104,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Import/export:** OBJ and STL import (as new pieces). OBJ and binary STL export of all visible pieces (3D-printing ready).
 - **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
-- **Pure Rust:** no C or C++ toolchain needed on Windows, Linux or macOS.
+- **Optional updates:** off by default. Settings > Updates can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Help > Check for updates checks once on demand. Only GitHub is contacted and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
+- **Rust:** a standard Rust toolchain is all you need on Windows, Linux or macOS (the optional updater's TLS library compiles a little C with the compiler Rust already uses).
 
 ## Controls
 

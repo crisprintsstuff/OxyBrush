@@ -24,6 +24,7 @@ crates/
   oxy-history  scene-wide undo/redo                                                 (no GPU)
   oxy-io       OBJ/STL import/export                                                (no GPU)
   oxy-ztl      ZBrush format research tools (see "ZBrush rules" below)              (no GPU)
+  oxy-update   opt-in update checks: release choice, verification, HTTPS, signing (no GPU)
   oxy-render   wgpu matcap renderer, camera
   oxy-app      winit + egui desktop app, binary `oxybrush`
 docs/          ROADMAP.md, rfcs/, formats/zbrush/, releases/<tag>.md, images/
@@ -47,7 +48,7 @@ python3 scripts/check_corpus_ip.py
 Useful extras:
 
 ```bash
-cargo check --workspace --target x86_64-pc-windows-gnu     # Windows type-check from Linux (rustup target add first)
+cargo check --workspace --target x86_64-pc-windows-gnu     # Windows type-check from Linux (rustup target add + mingw-w64 gcc for ring)
 cargo run -p oxy-app -- --demo --screenshot out.png        # headless screenshot (Linux: xvfb-run + mesa-vulkan-drivers)
 cargo run --release -p oxy-sculpt --example dab_timing     # brush performance
 cargo run --release -p oxy-topo --example topo_timing      # remesh/decimate performance
@@ -85,8 +86,9 @@ alone don't show visual regressions.
 - **No `unsafe`.** Forbidden workspace-wide.
 - **Pure Rust.** No dependencies that need a C/C++ toolchain on Windows,
   Linux or macOS (that's why decimation is hand-written instead of using meshoptimizer).
-  The only exception is `winresource`, a Windows-only build dependency that
-  degrades gracefully.
+  Exceptions: `winresource`, a Windows-only build dependency that degrades
+  gracefully, and `ring` (via `ureq`/`rustls`) for the opt-in updater's
+  HTTPS, behind the `updater` feature ([RFC 0002](docs/rfcs/0002-updates.md)).
 - **Licenses.** Dependencies and ported code must be MIT/Apache-2.0/BSD/
   zlib-compatible. **Never copy GPL code**, including Blender's; studying
   behavior and published papers is fine (cite the paper in a comment).
@@ -98,7 +100,11 @@ alone don't show visual regressions.
   UI or docs. Use generic names: voxel remesh, auto-retopology, armature
   spheres, pieces, vertex color. Naming ZBrush only to identify its file
   format or to compare features is fine.
-- **No telemetry or network calls** in the app.
+- **No telemetry. No network calls**, except the opt-in updater in
+  `oxy-update` ([RFC 0002](docs/rfcs/0002-updates.md)): it is off by
+  default, contacts only GitHub releases, sends nothing but a version
+  User-Agent, and automated runs (`--screenshot`) never enable it. Don't add
+  other network access.
 - **Performance is a feature.** Don't add work to the per-dab or per-frame
   path without measuring (`dab_timing`). Report numbers when you touch hot
   paths.

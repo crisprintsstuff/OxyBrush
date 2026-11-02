@@ -81,6 +81,10 @@ impl App {
                 if let Some(l) = auto.layout {
                     e.layout = l;
                 }
+                // Automated runs (CI screenshots) never connect anywhere.
+                if auto.screenshot.is_some() {
+                    e.updater.mode = crate::settings::UpdateMode::Off;
+                }
                 e.show_welcome = crate::settings::show_welcome(
                     first_start,
                     settings.welcome_at_startup,
@@ -242,6 +246,7 @@ impl App {
         }
         ed.poll_job();
         ed.tick_autosave();
+        ed.updater.tick(crate::updates::now_secs());
         let title = ed.title();
         if self.applied_title != title {
             g.window.set_title(&title);
@@ -548,7 +553,7 @@ impl ApplicationHandler for App {
         self.persist_settings(false);
         // Wake up regularly to finish background jobs, pending settings and
         // autosave even when idle.
-        let wait = if self.editor.job.is_some() {
+        let wait = if self.editor.job.is_some() || self.editor.updater.busy() {
             Duration::from_millis(200)
         } else if self.settings_changed_at.is_some() {
             Duration::from_millis(500)

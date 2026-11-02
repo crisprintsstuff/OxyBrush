@@ -233,6 +233,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
                 ui.menu_button("Arrange panels", |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
                 ui.checkbox(&mut ed.welcome_at_startup, "Show welcome window at startup");
+                ui.menu_button("Updates", |ui| update_menu(ui, ed));
                 ui.separator();
                 ui.label("Interface scale");
                 ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05));
@@ -871,6 +872,17 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
             if let Some(e) = &ed.autosaver.last_error {
                 ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
             }
+            if let Some(u) = ed.updater.offered() {
+                let text = match &ed.updater.phase {
+                    crate::updates::Phase::Ready { .. } => format!("Update {} ready to install", u.release.version),
+                    crate::updates::Phase::Downloading { .. } => ed.updater.summary(),
+                    _ => format!("Update {} available", u.release.version),
+                };
+                let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.linear_multiply(0.8));
+                if ui.add(b).on_hover_text("Open the update details").clicked() {
+                    ed.updater.show_window = true;
+                }
+            }
             // Hint on the right; the status message gets the space left over
             // and is shortened with "…" rather than running into the hint.
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -915,6 +927,12 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
         open(ui, folder_url(&dir));
     }
     ui.separator();
+    if ui.button("Check for updates…").clicked() {
+        ed.updater.show_window = true;
+        if !ed.updater.managed_by_flatpak() {
+            ed.updater.check(crate::updates::now_secs());
+        }
+    }
     if ui.button("Changelog").clicked() {
         open(ui, format!("{REPO_URL}/blob/main/CHANGELOG.md"));
     }
@@ -1440,6 +1458,9 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         ed.status = "System info copied to the clipboard".into();
     }
 
+    if ed.updater.show_window {
+        updates_window(&ctx, ed);
+    }
     if ed.show_welcome && ed.pending.is_none() && ed.recoverable.is_empty() {
         welcome(&ctx, ed, action);
     }
@@ -1484,6 +1505,134 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 }
             });
         });
+    }
+}
+
+/// Settings > Updates: the opt-in choice, and a manual check.
+fn update_menu(ui: &mut Ui, ed: &mut Editor) {
+    use crate::settings::UpdateMode;
+    if ed.updater.managed_by_flatpak() {
+        ui.label("This copy is updated by Flatpak:");
+        ui.label(RichText::new("flatpak update").monospace());
+        return;
+    }
+    if !crate::updates::AVAILABLE {
+        ui.label("This build was made without the updater.");
+        return;
+    }
+    for m in UpdateMode::ALL {
+        ui.radio_value(&mut ed.updater.mode, *m, m.label());
+    }
+    ui.label(
+        RichText::new("Checks ask GitHub about once a day; nothing about you or your work is sent.").weak().small(),
+    );
+    ui.separator();
+    if ui.button("Check now").clicked() {
+        ed.updater.show_window = true;
+        ed.updater.check(crate::updates::now_secs());
+    }
+}
+
+/// Update details: state, notes link, download / install / skip.
+fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
+    use crate::updates::{InstallStep, Phase, install_step};
+    let mut open = true;
+    let mut action: Option<&str> = None;
+    egui::Window::new("Updates").open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+        ui.label(format!("You have OxyBrush {}.", env!("CARGO_PKG_VERSION")));
+        if ed.updater.managed_by_flatpak() {
+            ui.label("This copy is installed with Flatpak, which keeps it up to date. Run:");
+            ui.label(RichText::new("flatpak update io.github.crisprintsstuff.OxyBrush").monospace());
+            return;
+        }
+        ui.add_space(4.0);
+        ui.label(RichText::new(ed.updater.summary()).strong());
+        if let Phase::Downloading { received, total, .. } = &ed.updater.phase {
+            let fraction = if *total > 0 { *received as f32 / *total as f32 } else { 0.0 };
+            ui.add(egui::ProgressBar::new(fraction).show_percentage());
+        }
+        if ed.updater.busy() {
+            ui.spinner();
+        }
+        ui.add_space(6.0);
+        let phase = ed.updater.phase.clone();
+        ui.horizontal_wrapped(|ui| {
+            match &phase {
+                Phase::Available(u) => {
+                    ui.hyperlink_to("Release notes", &u.release.page_url);
+                    if u.downloadable() {
+                        if ui.button("Download").on_hover_text(format!("Save it to {}", crate::updates::download_dir().display())).clicked() {
+                            action = Some("download");
+                        }
+                    } else {
+                        ui.hyperlink_to("Download page", &u.release.page_url);
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        action = Some("skip");
+                    }
+                }
+                Phase::Ready { update, path } => {
+                    ui.hyperlink_to("Release notes", &update.release.page_url);
+                    let label = match install_step(ed.updater.kind, path.clone()) {
+                        InstallStep::RunInstaller(_) => "Install and restart",
+                        InstallStep::ShowFile { .. } => "Show the file",
+                    };
+                    if ui.button(RichText::new(label).strong()).clicked() {
+                        action = Some("install");
+                    }
+                    if ui.button("Skip this version").clicked() {
+                        action = Some("skip");
+                    }
+                }
+                _ => {
+                    if ui.add_enabled(!ed.updater.busy(), egui::Button::new("Check now")).clicked() {
+                        action = Some("check");
+                    }
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.separator();
+        ui.label("Automatic checks");
+        for m in crate::settings::UpdateMode::ALL {
+            ui.radio_value(&mut ed.updater.mode, *m, m.label());
+        }
+        ui.label(
+            RichText::new(
+                "OxyBrush only connects to GitHub when checks are on or you click Check now. Downloads are verified (SHA-256) before you can install them.",
+            )
+            .weak()
+            .small(),
+        );
+    });
+    match action {
+        Some("check") => ed.updater.check(crate::updates::now_secs()),
+        Some("download") => ed.updater.download(),
+        Some("skip") => {
+            ed.updater.skip_offered();
+            ed.status = "This version will not be offered again".into();
+        }
+        Some("install") => {
+            if let Phase::Ready { path, .. } = ed.updater.phase.clone() {
+                match install_step(ed.updater.kind, path) {
+                    InstallStep::RunInstaller(exe) => match std::process::Command::new(&exe).spawn() {
+                        Ok(_) => {
+                            ed.status = "Installer started; OxyBrush will close (you'll be asked to save first)".into();
+                            ed.request(Pending::Quit);
+                        }
+                        Err(e) => ed.status = format!("Could not start the installer: {e}"),
+                    },
+                    InstallStep::ShowFile { folder, how } => {
+                        ctx.open_url(egui::OpenUrl::new_tab(crate::support::folder_url(&folder)));
+                        ed.status = how.into();
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    if !open {
+        ed.updater.show_window = false;
     }
 }
 
@@ -1873,6 +2022,41 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn updates_window_draws_in_every_state() {
+        use crate::updates::Phase;
+        use oxy_update::release::{Asset, Release, Update};
+        let asset = |n: &str| Asset { name: n.into(), url: format!("https://example.invalid/{n}"), size: 10 };
+        let update = Box::new(Update {
+            release: Release {
+                version: oxy_update::Version::parse("9.9.9-alpha").unwrap(),
+                tag: "v9.9.9-alpha".into(),
+                page_url: "https://example.invalid/release".into(),
+                prerelease: true,
+                assets: Vec::new(),
+            },
+            file: Some(asset("OxyBrush-9.9.9-alpha-linux-x86_64.tar.gz")),
+            checksums: Some(asset("SHA256SUMS.txt")),
+            signature: None,
+        });
+        for phase in [
+            Phase::Idle,
+            Phase::UpToDate,
+            Phase::Available(update.clone()),
+            Phase::Downloading { update: update.clone(), received: 3, total: 10 },
+            Phase::Ready { update: update.clone(), path: "/tmp/x.tar.gz".into() },
+            Phase::Failed("offline".into()),
+        ] {
+            let mut ed = Editor::default();
+            ed.show_welcome = false;
+            ed.updater.show_window = true;
+            ed.updater.phase = phase;
+            run_frames(&mut ed, 2);
+            assert!(ed.updater.show_window);
+            assert!(!ed.updater.busy(), "drawing the window never starts a network request");
         }
     }
 

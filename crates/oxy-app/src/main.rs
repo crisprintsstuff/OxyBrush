@@ -9,6 +9,7 @@ mod settings;
 mod snapshot;
 mod support;
 mod ui;
+mod updates;
 mod widgets;
 
 use std::path::PathBuf;

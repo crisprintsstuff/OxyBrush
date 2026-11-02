@@ -193,6 +193,8 @@ pub struct Editor {
     pub touch_modifiers: Modifiers,
     /// Level changes above this many triangles run in the background.
     pub(crate) level_job_triangles: usize,
+    /// Opt-in update checks (off unless the user turns them on).
+    pub updater: crate::updates::Updater,
     /// Where the brush shelf, the settings panel and the size/strength bar go.
     pub shelf: crate::settings::ShelfPosition,
     pub panels: crate::settings::PanelSide,
@@ -274,6 +276,7 @@ impl Default for Editor {
             welcome_at_startup: false,
             touch_modifiers: Modifiers::default(),
             level_job_triangles: LEVEL_JOB_TRIANGLES,
+            updater: Default::default(),
             shelf: Default::default(),
             panels: Default::default(),
             quick_bar: Default::default(),
@@ -397,6 +400,9 @@ impl Editor {
             brush_order: self.brush_order.clone(),
             ambient_occlusion: self.view.ambient_occlusion,
             cavity: self.view.cavity,
+            updates: self.updater.mode,
+            update_last_check: self.updater.last_check,
+            update_skip: self.updater.skip.clone(),
         }
     }
 
@@ -453,6 +459,9 @@ impl Editor {
         self.brush_order = s.brush_order.clone();
         self.view.ambient_occlusion = s.ambient_occlusion;
         self.view.cavity = s.cavity;
+        self.updater.mode = s.updates;
+        self.updater.last_check = s.update_last_check;
+        self.updater.skip = s.update_skip.clone();
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
@@ -1867,6 +1876,9 @@ mod tests {
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
             ambient_occlusion: 0.3,
             cavity: 0.9,
+            updates: crate::settings::UpdateMode::Download,
+            update_last_check: 42,
+            update_skip: "1.2.3".into(),
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
