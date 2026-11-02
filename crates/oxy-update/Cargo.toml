@@ -1,0 +1,28 @@
+[package]
+name = "oxy-update"
+description = "Opt-in update checks for OxyBrush: release selection, verification, download"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[features]
+# HTTPS checks and downloads. Without it the crate has no network code at
+# all (version logic, verification and the signing tool still build), so
+# distributions can ship OxyBrush without the updater.
+network = ["dep:ureq"]
+
+[dependencies]
+serde_json.workspace = true
+sha2.workspace = true
+ed25519-dalek.workspace = true
+getrandom.workspace = true
+ureq = { workspace = true, optional = true }
+
+[[bin]]
+name = "oxy-update-sign"
+path = "src/bin/sign.rs"
+
+[lints]
+workspace = true

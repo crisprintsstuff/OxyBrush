@@ -6,6 +6,12 @@ All notable changes to OxyBrush. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Optional update checks** (off by default): Settings > Updates > *Tell me about new versions* checks GitHub about once a day and shows a notice; *Download new versions automatically* also downloads the file. Help > Check for updates checks once. Downloads are verified against the release's SHA-256 checksums (and an ed25519 signature once release signing is set up). The Windows installer build can install and restart; portable, macOS and Linux builds get the verified file shown in its folder. Flatpak installs keep updating through Flatpak. See [RFC 0002](docs/rfcs/0002-updates.md).
+
+### Developers
+- New crate `oxy-update`; `cargo build -p oxy-app --no-default-features` builds without any network code.
+
 ## [0.3.0-alpha] - 2026-11-02
 
 ### Added

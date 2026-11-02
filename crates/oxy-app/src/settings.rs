@@ -81,6 +81,18 @@ pub enum QuickBar {
     Toolbar,
 }
 
+/// Whether OxyBrush looks for new versions (it never does unless asked).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum UpdateMode {
+    /// No network access at all (the default). "Check now" still works.
+    #[default]
+    Off,
+    /// Check about once a day and show a notice when a new version is out.
+    Notify,
+    /// Also download it in the background (installing still waits for you).
+    Download,
+}
+
 /// Labels and file keys for the arrangement options.
 pub trait Choice: Copy + PartialEq + 'static {
     const ALL: &'static [Self];
@@ -121,6 +133,24 @@ impl Choice for PanelSide {
         match self {
             PanelSide::Right => "right",
             PanelSide::Left => "left",
+        }
+    }
+}
+
+impl Choice for UpdateMode {
+    const ALL: &'static [Self] = &[UpdateMode::Off, UpdateMode::Notify, UpdateMode::Download];
+    fn label(self) -> &'static str {
+        match self {
+            UpdateMode::Off => "Off (never connect)",
+            UpdateMode::Notify => "Tell me about new versions",
+            UpdateMode::Download => "Download new versions automatically",
+        }
+    }
+    fn key(self) -> &'static str {
+        match self {
+            UpdateMode::Off => "off",
+            UpdateMode::Notify => "notify",
+            UpdateMode::Download => "download",
         }
     }
 }
@@ -203,6 +233,12 @@ pub struct Settings {
     /// Viewport ambient occlusion and cavity strengths, 0 (off) to 1.
     pub ambient_occlusion: f32,
     pub cavity: f32,
+    /// Update checks (off unless the user turns them on).
+    pub updates: UpdateMode,
+    /// When updates were last checked (seconds since 1970), to check at most daily.
+    pub update_last_check: u64,
+    /// A version the user chose to skip ("" for none).
+    pub update_skip: String,
 }
 
 impl Default for Settings {
@@ -220,6 +256,9 @@ impl Default for Settings {
             brush_order: BrushKind::ALL.to_vec(),
             ambient_occlusion: 0.7,
             cavity: 0.6,
+            updates: UpdateMode::Off,
+            update_last_check: 0,
+            update_skip: String::new(),
         }
     }
 }
@@ -246,7 +285,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -259,6 +298,9 @@ impl Settings {
             self.brush_order.iter().map(|k| brush_key(*k)).collect::<Vec<_>>().join(", "),
             self.ambient_occlusion,
             self.cavity,
+            self.updates.key(),
+            self.update_last_check,
+            self.update_skip,
         )
     }
 
@@ -316,6 +358,11 @@ impl Settings {
                     {
                         s.cavity = x;
                     }
+                }
+                "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
+                "update_last_check" => s.update_last_check = v.parse().unwrap_or(0),
+                "update_skip" if v.is_empty() || oxy_update::Version::parse(v).is_some() => {
+                    s.update_skip = v.to_owned();
                 }
                 _ => {}
             }
@@ -381,6 +428,9 @@ mod tests {
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
             ambient_occlusion: 0.25,
             cavity: 0.0,
+            updates: UpdateMode::Notify,
+            update_last_check: 1_800_000_000,
+            update_skip: "0.4.0-alpha".into(),
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Unknown keys, junk lines and out-of-range values fall back to defaults.
