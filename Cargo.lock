@@ -2447,7 +2447,9 @@ dependencies = [
  "bytemuck",
  "glam",
  "log",
+ "naga",
  "oxy-mesh",
+ "pollster 1.0.1",
  "wgpu",
 ]
 

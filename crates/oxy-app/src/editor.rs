@@ -166,6 +166,8 @@ pub struct Editor {
     pub quick_bar: crate::settings::QuickBar,
     /// Brush order in the shelf (user-arranged); number keys follow it.
     pub brush_order: Vec<BrushKind>,
+    /// Shading strengths to restore when the shading toggle turns it back on.
+    shading_restore: (f32, f32),
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
@@ -242,6 +244,7 @@ impl Default for Editor {
             panels: Default::default(),
             quick_bar: Default::default(),
             brush_order: BrushKind::ALL.to_vec(),
+            shading_restore: (0.7, 0.6),
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],
@@ -358,6 +361,27 @@ impl Editor {
             panels: self.panels,
             quick_bar: self.quick_bar,
             brush_order: self.brush_order.clone(),
+            ambient_occlusion: self.view.ambient_occlusion,
+            cavity: self.view.cavity,
+        }
+    }
+
+    /// Whether viewport shading (ambient occlusion or cavity) is on.
+    pub fn shading_on(&self) -> bool {
+        self.view.ambient_occlusion > 0.0 || self.view.cavity > 0.0
+    }
+
+    /// Turn viewport shading off, or back on at the strengths it had.
+    pub fn toggle_shading(&mut self) {
+        if self.shading_on() {
+            self.shading_restore = (self.view.ambient_occlusion, self.view.cavity);
+            (self.view.ambient_occlusion, self.view.cavity) = (0.0, 0.0);
+            self.status = "Shading off: plain material".into();
+        } else {
+            let (ao, cavity) = self.shading_restore;
+            (self.view.ambient_occlusion, self.view.cavity) =
+                if ao > 0.0 || cavity > 0.0 { (ao, cavity) } else { (0.7, 0.6) };
+            self.status = "Shading on: ambient occlusion and cavity".into();
         }
     }
 
@@ -393,6 +417,8 @@ impl Editor {
         self.panels = s.panels;
         self.quick_bar = s.quick_bar;
         self.brush_order = s.brush_order.clone();
+        self.view.ambient_occlusion = s.ambient_occlusion;
+        self.view.cavity = s.cavity;
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
@@ -1719,6 +1745,8 @@ mod tests {
             panels: crate::settings::PanelSide::Left,
             quick_bar: crate::settings::QuickBar::Toolbar,
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
+            ambient_occlusion: 0.3,
+            cavity: 0.9,
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
@@ -1744,5 +1772,22 @@ mod tests {
         let mut sorted = e.brush_order.clone();
         sorted.sort_by_key(|k| BrushKind::ALL.iter().position(|b| b == k));
         assert_eq!(sorted, BrushKind::ALL.to_vec());
+    }
+
+    #[test]
+    fn shading_toggle_restores_strengths() {
+        let mut e = Editor::default();
+        assert!(e.shading_on(), "shading is on by default");
+        e.view.ambient_occlusion = 0.4;
+        e.view.cavity = 0.2;
+        e.toggle_shading();
+        assert!(!e.shading_on());
+        e.toggle_shading();
+        assert_eq!((e.view.ambient_occlusion, e.view.cavity), (0.4, 0.2));
+        // Turned off with the sliders: the toggle brings back the defaults.
+        e.view.ambient_occlusion = 0.0;
+        e.view.cavity = 0.0;
+        e.toggle_shading();
+        assert!(e.shading_on());
     }
 }

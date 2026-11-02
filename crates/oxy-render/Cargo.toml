@@ -14,5 +14,10 @@ wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true
 
+[dev-dependencies]
+# Validates the WGSL shaders in tests without a GPU (pure Rust, part of wgpu).
+naga = { version = "30", features = ["wgsl-in"] }
+pollster.workspace = true
+
 [lints]
 workspace = true

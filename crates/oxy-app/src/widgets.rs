@@ -184,6 +184,7 @@ pub enum Icon {
     Pan,
     Zoom,
     Solo,
+    Shading,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -359,6 +360,12 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 [lens + vec2(r * 0.36, r * 0.36), ctr + vec2(r * 0.8, r * 0.8)],
                 Stroke::new(s.width * 1.6, c),
             );
+        }
+        Icon::Shading => {
+            // A ball with a shaded hollow: ambient occlusion and cavity.
+            p.circle_stroke(ctr, r * 0.75, s);
+            p.circle_filled(ctr + vec2(r * 0.18, r * 0.2), r * 0.36, c.gamma_multiply(0.55));
+            p.circle_filled(ctr + vec2(-r * 0.3, -r * 0.32), r * 0.12, c);
         }
         Icon::Solo => {
             p.circle_filled(ctr, r * 0.38, c);

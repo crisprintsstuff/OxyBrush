@@ -211,6 +211,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.checkbox(&mut ed.camera.orthographic, "Orthographic  (O)");
                 ui.checkbox(&mut ed.view.show_groups, "Face group colors  (G)");
                 ui.separator();
+                ui.label("Shading");
+                ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))
+                    .on_hover_text(
+                        "Darkens places other parts of the surface shade, such as folds and the inside of ears",
+                    );
+                ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))
+                    .on_hover_text("Darkens creases and pores and brightens edges, so fine detail reads clearly");
+                ui.separator();
                 ui.label("Material");
                 for m in MatcapPreset::ALL {
                     ui.radio_value(&mut ed.matcap, m, m.label());
@@ -745,6 +753,18 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             let groups = ed.view.show_groups;
             if widgets::icon_button(ui, Icon::Groups, groups, true, "Face group colors (G)").clicked() {
                 ed.view.show_groups = !groups;
+            }
+            let shading = ed.shading_on();
+            if widgets::icon_button(
+                ui,
+                Icon::Shading,
+                shading,
+                true,
+                "Shading: ambient occlusion and cavity (strengths in View > Shading)",
+            )
+            .clicked()
+            {
+                ed.toggle_shading();
             }
             let solo = ed.scene.pieces.iter().filter(|p| p.visible).count() == 1 && ed.scene.pieces.len() > 1;
             if widgets::icon_button(

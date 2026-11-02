@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-01 (v0.2.0-alpha released: subdivision levels, interface pass, layouts, arrangeable panels, remembered settings)
+> **Last updated:** 2026-11-02 (viewport ambient occlusion and cavity shading; new Phase 4 items: transform gizmo, brush presets, insert-mesh and curve brushes, hard-surface tools, more masking)
 
 ## Status at a glance
 
@@ -79,7 +79,12 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Sculpt layers** | Detail layers with strength sliders; morph target | 4–6 wk |
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
 | **Deformers and posing** | Bend, twist, taper, inflate; pose gizmo with topological masking | 4–6 wk |
-| **Viewport** | Shadows, ambient occlusion, wireframe overlay, floor grid, reference image planes, turntable export | 3–5 wk |
+| **Transform gizmo** | Move, rotate and scale pieces and masked regions in the viewport | 1–2 wk |
+| **Brush presets and editor** | Save brushes (kernel, alpha, falloff, settings) as presets; custom shelves of favorites | 2–3 wk |
+| **Insert-mesh and curve brushes** | Stamp small meshes (eyes, bolts, teeth) onto the surface; draw tubes and straps along a curve | 3–5 wk |
+| **Hard-surface tools** | Clip, slice and trim brushes; edge-preserving polish | 2–4 wk |
+| **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
+| **Viewport** | Screen-space ambient occlusion and cavity shading ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, user-imported matcaps, material per piece | 3–5 wk |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. ⏳ Quick palette at the cursor, keymap editor, custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
