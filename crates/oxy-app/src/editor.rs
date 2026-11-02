@@ -106,8 +106,39 @@ pub struct Job {
     target: u64,
     /// Other pieces consumed by the job (merged away on success).
     consumed: Vec<u64>,
-    rx: mpsc::Receiver<Result<Mesh, String>>,
+    /// The job holds the target piece's subdivision levels (moved out of
+    /// the piece while it runs), so saving must wait for it.
+    holds_levels: bool,
+    rx: mpsc::Receiver<Result<JobResult, String>>,
 }
+
+/// What a background job produces for its target piece.
+pub enum JobResult {
+    /// A new mesh (remesh, merge, decimate); subdivision levels are dropped.
+    Mesh(Mesh),
+    /// A subdivision level change: the new active-level mesh, the stack,
+    /// and the stack as it was before (for undo; None if there were no levels).
+    Levels {
+        mesh: Mesh,
+        multires: Option<oxy_mesh::multires::Multires>,
+        previous: Option<oxy_mesh::multires::Multires>,
+    },
+}
+
+/// A change to the active piece's subdivision levels.
+#[derive(Debug, Clone, Copy)]
+enum LevelChange {
+    /// Go to the top level (if needed) and add one above it.
+    Add,
+    /// Switch to this level.
+    Set(usize),
+    DeleteHigher,
+    DeleteLower,
+}
+
+/// Level changes that produce more triangles than this run on a worker
+/// thread so the window stays responsive (smaller ones are instant).
+const LEVEL_JOB_TRIANGLES: usize = 1_000_000;
 
 pub struct Editor {
     pub scene: Scene,
@@ -160,6 +191,8 @@ pub struct Editor {
     /// On-screen Smooth / Mask / Invert toggles (touch layout); combined
     /// with the keyboard modifiers.
     pub touch_modifiers: Modifiers,
+    /// Level changes above this many triangles run in the background.
+    pub(crate) level_job_triangles: usize,
     /// Where the brush shelf, the settings panel and the size/strength bar go.
     pub shelf: crate::settings::ShelfPosition,
     pub panels: crate::settings::PanelSide,
@@ -240,6 +273,7 @@ impl Default for Editor {
             layout: crate::settings::UiLayout::Standard,
             welcome_at_startup: false,
             touch_modifiers: Modifiers::default(),
+            level_job_triangles: LEVEL_JOB_TRIANGLES,
             shelf: Default::default(),
             panels: Default::default(),
             quick_bar: Default::default(),
@@ -505,6 +539,12 @@ impl Editor {
             return;
         }
 
+        if active_hit.is_some() && self.job_blocks_active() {
+            let label = self.job.as_ref().map_or(String::new(), |j| j.label.clone());
+            self.status = format!("Wait for \"{label}\" to finish before editing this piece");
+            self.drag = Drag::Orbit;
+            return;
+        }
         if let Some(hit) = active_hit {
             let (kind, invert) = self.effective_brush();
             let mode = if kind.is_grab_like() || kind == BrushKind::SnakeHook || kind == BrushKind::Smooth || m.ctrl {
@@ -660,6 +700,8 @@ impl Editor {
             }
             _ => {}
         }
+        // Strokes only grow chunk bounds per dab; tighten them once at the end.
+        self.scene.active_mut().mesh.tighten_bounds();
     }
 
     /// Cancel an in-progress drag without applying it (Escape).
@@ -785,6 +827,10 @@ impl Editor {
 
     pub fn undo(&mut self) {
         self.pointer_up();
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish before undoing".into();
+            return;
+        }
         self.status = match self.history.undo(&mut self.scene) {
             Some(l) => format!("Undid {l}"),
             None => "Nothing to undo".into(),
@@ -793,6 +839,10 @@ impl Editor {
 
     pub fn redo(&mut self) {
         self.pointer_up();
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish before redoing".into();
+            return;
+        }
         self.status = match self.history.redo(&mut self.scene) {
             Some(l) => format!("Redid {l}"),
             None => "Nothing to redo".into(),
@@ -879,6 +929,10 @@ impl Editor {
     }
 
     pub fn save(&mut self, path: &Path) -> bool {
+        if let Some(job) = self.job.as_ref().filter(|j| j.holds_levels) {
+            self.status = format!("Wait for \"{}\" to finish, then save", job.label);
+            return false;
+        }
         let path = if path.extension().is_none() { path.with_extension(format::EXTENSION) } else { path.to_path_buf() };
         match format::save(&self.scene.to_data(), &path) {
             Ok(()) => {
@@ -914,7 +968,9 @@ impl Editor {
     /// Start a background autosave if one is due. Call once per frame.
     pub fn tick_autosave(&mut self) {
         let changed = self.history.revision() != self.autosaved_revision && self.is_modified();
-        if !self.is_stroking() && self.autosaver.due(changed) {
+        // A level job holds a piece's levels: autosave after it finishes.
+        let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
+        if !self.is_stroking() && !levels_out && self.autosaver.due(changed) {
             self.autosaved_revision = self.history.revision();
             self.autosaver.start(self.scene.to_data());
         }
@@ -974,6 +1030,10 @@ impl Editor {
     }
 
     pub fn delete_active(&mut self) {
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish before deleting this piece".into();
+            return;
+        }
         if self.scene.pieces.len() < 2 {
             self.status = "Can't delete the only piece".into();
             return;
@@ -1017,21 +1077,72 @@ impl Editor {
 
     /// Apply a change to the active piece's level stack, producing a new
     /// mesh, as one undoable step.
-    fn multires_op(
-        &mut self,
-        label: &str,
-        op: impl FnOnce(&mut oxy_mesh::multires::Multires, &Mesh) -> Option<oxy_mesh::MeshData>,
-    ) {
+    fn multires_op(&mut self, label: &str, result_triangles: usize, change: LevelChange) {
+        use oxy_mesh::multires::Multires;
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
         self.pointer_up();
+        let background = result_triangles > self.level_job_triangles;
         let piece = self.scene.active_mut();
         let id = piece.id;
-        let prev_levels = piece.multires.clone();
+        let had_levels = piece.multires.is_some();
         let mut mr = match piece.multires.take() {
             Some(m) if m.is_bound_to(&piece.mesh) => m,
             // No levels yet (or stale ones): start from the current mesh.
-            _ => oxy_mesh::multires::Multires::new(&piece.mesh),
+            _ => Multires::new(&piece.mesh),
         };
-        let prev_mesh = match op(&mut mr, &piece.mesh) {
+        // Cheap and needs the mesh: done here. The rest runs without it.
+        let prepared = mr.prepare(&piece.mesh);
+        let apply = move |mr: &mut Multires, prepared| -> Option<oxy_mesh::MeshData> {
+            match change {
+                LevelChange::Add => {
+                    if mr.active() + 1 < mr.level_count() {
+                        // Go to the top first; the new level is built from it.
+                        let top = mr.level_count() - 1;
+                        let data = mr.set_level_prepared(prepared, top);
+                        let top_mesh = Mesh::from_data(data);
+                        mr.bind(&top_mesh);
+                        Some(mr.add_level(&top_mesh))
+                    } else {
+                        Some(mr.add_level_prepared(prepared))
+                    }
+                }
+                LevelChange::Set(target) => Some(mr.set_level_prepared(prepared, target)),
+                LevelChange::DeleteHigher => {
+                    mr.delete_higher_prepared();
+                    None
+                }
+                LevelChange::DeleteLower => {
+                    mr.delete_lower_prepared();
+                    None
+                }
+            }
+        };
+        if background {
+            // The stack moves into the worker (no copy); the undo copy is made
+            // there too. Edits to this piece and saving wait (`job_blocks_active`,
+            // `holds_levels`) until the result is applied in `poll_job`.
+            let snapshot_needed = matches!(change, LevelChange::DeleteHigher | LevelChange::DeleteLower);
+            let current = snapshot_needed.then(|| piece.mesh.clone());
+            self.start_job(label.to_string(), Vec::new(), move || {
+                let previous = had_levels.then(|| mr.clone());
+                let mesh = match apply(&mut mr, prepared) {
+                    Some(data) => Mesh::from_data(data),
+                    None => current.expect("kept for in-place changes"),
+                };
+                mr.bind(&mesh);
+                let multires = (mr.level_count() > 1).then_some(mr);
+                Ok(JobResult::Levels { mesh, multires, previous })
+            });
+            if let Some(job) = &mut self.job {
+                job.holds_levels = true;
+            }
+            return;
+        }
+        let prev_levels = had_levels.then(|| mr.clone());
+        let prev_mesh = match apply(&mut mr, prepared) {
             Some(data) => {
                 let mesh = Mesh::from_data(data);
                 mr.bind(&mesh);
@@ -1046,6 +1157,14 @@ impl Editor {
         self.status = format!("{label}: level {} of {count}, {tris} triangles", active + 1);
     }
 
+    /// Whether a running background job is rebuilding the active piece, so
+    /// edits to it must wait (they would be overwritten by the result).
+    pub fn job_blocks_active(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|j| j.target == self.scene.active().id || j.consumed.contains(&self.scene.active().id))
+    }
+
     /// Add a subdivision level on top and switch to it.
     pub fn add_level(&mut self) {
         let piece = self.scene.active();
@@ -1055,17 +1174,7 @@ impl Editor {
             self.status = format!("Another level would have {} triangles (limit {MAX_TRIANGLES})", top_tris * 4);
             return;
         }
-        self.multires_op("Add subdivision level", |mr, mesh| {
-            if mr.active() + 1 < mr.level_count() {
-                // Go to the top first; the new level is built from it.
-                let data = mr.set_level(mesh, mr.level_count() - 1);
-                let top = Mesh::from_data(data);
-                mr.bind(&top);
-                Some(mr.add_level(&top))
-            } else {
-                Some(mr.add_level(mesh))
-            }
-        });
+        self.multires_op("Add subdivision level", top_tris * 4, LevelChange::Add);
     }
 
     /// Step to another subdivision level (relative: +1 up, −1 down).
@@ -1080,7 +1189,8 @@ impl Editor {
             return;
         }
         let label = format!("Level {}", target + 1);
-        self.multires_op(&label, |mr, mesh| Some(mr.set_level(mesh, target)));
+        let tris = self.scene.active().multires.as_ref().map_or(0, |m| m.triangle_count(target));
+        self.multires_op(&label, tris, LevelChange::Set(target));
     }
 
     pub fn delete_higher_levels(&mut self) {
@@ -1088,10 +1198,7 @@ impl Editor {
             self.status = "No higher levels to delete".into();
             return;
         }
-        self.multires_op("Delete higher levels", |mr, mesh| {
-            mr.delete_higher(mesh);
-            None
-        });
+        self.multires_op("Delete higher levels", 0, LevelChange::DeleteHigher);
     }
 
     pub fn delete_lower_levels(&mut self) {
@@ -1099,10 +1206,7 @@ impl Editor {
             self.status = "No lower levels to delete".into();
             return;
         }
-        self.multires_op("Delete lower levels", |mr, mesh| {
-            mr.delete_lower(mesh);
-            None
-        });
+        self.multires_op("Delete lower levels", 0, LevelChange::DeleteLower);
     }
 
     pub fn subdivide(&mut self, smooth: bool) {
@@ -1133,7 +1237,7 @@ impl Editor {
         &mut self,
         label: String,
         consumed: Vec<u64>,
-        work: impl FnOnce() -> Result<Mesh, String> + Send + 'static,
+        work: impl FnOnce() -> Result<JobResult, String> + Send + 'static,
     ) {
         if self.job.is_some() {
             self.status = "Another operation is still running".into();
@@ -1149,7 +1253,7 @@ impl Editor {
             })
             .expect("spawn worker thread");
         self.status = format!("{label}…");
-        self.job = Some(Job { label, started: Instant::now(), target, consumed, rx });
+        self.job = Some(Job { label, started: Instant::now(), target, consumed, holds_levels: false, rx });
     }
 
     /// Voxel-remesh the active piece.
@@ -1157,7 +1261,7 @@ impl Editor {
         let mesh = self.scene.active().mesh.clone();
         let opts = RemeshOptions { resolution: self.remesh_resolution, smooth_passes: 1 };
         self.start_job(format!("Remesh ({})", opts.resolution), Vec::new(), move || {
-            oxy_topo::voxel_remesh(&[&mesh], opts).map_err(|e| e.to_string())
+            oxy_topo::voxel_remesh(&[&mesh], opts).map(JobResult::Mesh).map_err(|e| e.to_string())
         });
     }
 
@@ -1174,7 +1278,7 @@ impl Editor {
         let opts = RemeshOptions { resolution: self.remesh_resolution, smooth_passes: 1 };
         self.start_job(format!("Merge {} pieces", meshes.len()), consumed, move || {
             let refs: Vec<&Mesh> = meshes.iter().collect();
-            oxy_topo::voxel_remesh(&refs, opts).map_err(|e| e.to_string())
+            oxy_topo::voxel_remesh(&refs, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
         });
     }
 
@@ -1182,7 +1286,7 @@ impl Editor {
         let mesh = self.scene.active().mesh.clone();
         let target = ((mesh.triangle_count() as f32 * self.decimate_percent / 100.0) as usize).max(4);
         self.start_job(format!("Decimate to {target} triangles"), Vec::new(), move || {
-            Ok(oxy_topo::decimate(&mesh, target))
+            Ok(JobResult::Mesh(oxy_topo::decimate(&mesh, target)))
         });
     }
 
@@ -1197,7 +1301,23 @@ impl Editor {
         let job = self.job.take().expect("checked");
         let secs = job.started.elapsed().as_secs_f32();
         match result {
-            Ok(mesh) => {
+            Ok(JobResult::Levels { mesh, multires, previous }) => {
+                let Some(index) = self.scene.index_of(job.target) else {
+                    self.status = format!("{}: the piece was deleted meanwhile", job.label);
+                    return true;
+                };
+                let piece = &mut self.scene.pieces[index];
+                let level = multires.as_ref().map(|m| (m.active(), m.level_count()));
+                let tris = mesh.triangle_count();
+                let prev_mesh = std::mem::replace(&mut piece.mesh, mesh);
+                piece.multires = multires;
+                self.history.record_topology(&job.label, job.target, prev_mesh, previous);
+                self.status = match level {
+                    Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
+                    None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
+                };
+            }
+            Ok(JobResult::Mesh(mesh)) => {
                 let Some(target_index) = self.scene.index_of(job.target) else {
                     self.status = format!("{}: the piece was deleted meanwhile", job.label);
                     return true;
@@ -1789,5 +1909,38 @@ mod tests {
         e.view.cavity = 0.0;
         e.toggle_shading();
         assert!(e.shading_on());
+    }
+
+    #[test]
+    fn large_level_changes_run_in_the_background() {
+        let mut e = editor();
+        e.level_job_triangles = 0; // treat every level change as large
+        let base = e.scene.active().mesh.triangle_count();
+        e.add_level();
+        assert!(e.job.is_some(), "the level is built on a worker thread");
+        // Sculpting the piece waits; undo waits.
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Orbit), "no stroke while the piece is being rebuilt");
+        assert!(e.status.contains("Wait"), "{}", e.status);
+        e.pointer_up();
+        e.undo();
+        assert!(e.status.contains("Wait"), "{}", e.status);
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.triangle_count(), base * 4);
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        // Level down in the background too, then undo restores level 2.
+        e.step_level(-1);
+        wait_job(&mut e);
+        assert_eq!(e.multires_level(), Some((0, 2)));
+        assert_eq!(e.scene.active().mesh.triangle_count(), base);
+        e.undo();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        assert_eq!(e.scene.active().mesh.triangle_count(), base * 4);
+        // Sculpting works again once nothing is running.
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Stroke { .. }));
+        e.pointer_up();
     }
 }

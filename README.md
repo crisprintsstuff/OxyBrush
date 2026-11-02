@@ -203,21 +203,31 @@ Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. 
 
 ### Performance status
 
-Measured with `cargo run --release -p oxy-sculpt --example dab_timing` on a 4-core cloud VM (CPU only), using a 1.3M-triangle sphere:
+Measured on a 4-core cloud VM (CPU only; numbers vary ±10–20% between runs there). Brushes (`cargo run --release -p oxy-sculpt --example dab_timing`, 1.3M-triangle sphere):
 
 | Dab | Time |
 |---|---|
-| Small (~1k vertices) | ~0.7 ms |
-| Large (~15k vertices) | ~2 ms |
+| Small (~1k vertices) | ~0.6 ms |
+| Large (~15k vertices) | ~2–2.4 ms |
 
-Topology (`cargo run --release -p oxy-topo --example topo_timing`, same machine):
+Subdivision levels (`cargo run --release -p oxy-mesh --example multires_timing`):
 
 | Operation | Time |
 |---|---|
-| Voxel remesh, 330k triangles in, ~1M out (resolution 320) | ~2.3 s |
-| Decimate 1.3M → 130k triangles | ~10 s |
+| Switch to a 5.2M-triangle level | ~0.7 s, in the background |
+| Add a level up to 5.2M triangles | ~2–4 s, in the background |
+| UI-thread work for either | ~60 ms |
 
-Still to do for 1.0: dab cost at ~100k vertices (target ≤8 ms), faster decimation (batched or parallel collapses), and measurement on the reference hardware.
+Topology (`cargo run --release -p oxy-topo --example topo_timing`):
+
+| Operation | Time |
+|---|---|
+| Voxel remesh, 330k triangles in, ~1M out (resolution 320) | ~4 s |
+| Decimate 1.3M → 130k triangles | ~6 s |
+
+Viewport passes on your own GPU: `cargo run --release -p oxy-render --example shading_timing`.
+
+Still to do for 1.0: dab cost at ~100k vertices (target ≤8 ms), SIMD brush kernels, chunk frustum culling, faster high-resolution remesh, and measurement on the reference hardware at 10M triangles.
 
 ## Contributing
 

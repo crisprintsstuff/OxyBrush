@@ -9,6 +9,17 @@ All notable changes to OxyBrush. The format follows
 ### Added
 - **Viewport shading:** screen-space ambient occlusion (folds and the inside of shapes darken) and cavity shading (creases and pores darken, edges catch light), so sculpted detail reads clearly. On by default; toggle it in the view strip and set strengths in **View > Shading** (remembered between sessions). With both at 0 the viewport renders exactly as before.
 
+### Changed
+- **Faster with dense meshes** (measured on a 4-core cloud machine):
+  - Switching to a 5.2M-triangle subdivision level: ~2.3 s → ~0.7 s; adding it: ~8 s → ~2–4 s.
+  - Level changes above 1M triangles now run in the background, so the window stays responsive (the UI thread does ~60 ms of work at 5.2M). The piece can't be edited, deleted or saved until the change finishes; orbiting and other pieces still work.
+  - Decimation: 1.3M → 131k triangles ~12 s → ~6 s.
+  - Small brush dabs ~40% faster (chunk bounds are grown per dab and tightened when the stroke ends).
+  - Opening projects and finishing remesh/decimate also build their meshes faster (parallel mesh build).
+
+### Fixed
+- Sculpting a piece while a remesh or decimation of it was running was silently overwritten by the result; edits to that piece (and undo) now wait for the job.
+
 ### Developers
 - `cargo run --release -p oxy-render --example shading_timing` measures the viewport passes on your GPU.
 - Shaders are validated in `cargo test` (naga), no GPU needed.

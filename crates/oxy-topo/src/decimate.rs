@@ -8,8 +8,7 @@
 
 use glam::{DVec3, Vec3};
 use oxy_mesh::{Mesh, MeshData};
-use std::cmp::Ordering;
-use std::collections::BinaryHeap;
+use rayon::prelude::*;
 
 #[derive(Clone, Copy, Default)]
 struct Quadric([f64; 10]);
@@ -42,30 +41,104 @@ impl Quadric {
     }
 }
 
+/// A queued edge collapse (the payload; its cost lives in the queue key).
+#[derive(Clone, Copy)]
 struct Candidate {
-    cost: f64,
     a: u32,
     b: u32,
-    target: DVec3,
     stamp_a: u32,
     stamp_b: u32,
 }
 
-impl PartialEq for Candidate {
-    fn eq(&self, o: &Self) -> bool {
-        self.cost == o.cost
-    }
+/// Min-priority queue of edge collapses: a 4-ary heap of packed u64 keys
+/// (cost bits in the high half, payload index in the low half).
+///
+/// Most queued collapses go stale before they are popped (a collapse
+/// re-queues every edge around the merged vertex), so the queue sees about
+/// ten pops per accepted collapse. Small integer keys and a shallow heap
+/// keep those pops cache-friendly; this queue was ~60% of decimation time
+/// with `BinaryHeap<48-byte struct>`.
+struct Queue {
+    heap: Vec<u64>,
+    payload: Vec<Candidate>,
 }
-impl Eq for Candidate {}
-impl PartialOrd for Candidate {
-    fn partial_cmp(&self, o: &Self) -> Option<Ordering> {
-        Some(self.cmp(o))
+
+impl Queue {
+    fn with_capacity(n: usize) -> Self {
+        Self { heap: Vec::with_capacity(n), payload: Vec::with_capacity(n) }
     }
-}
-impl Ord for Candidate {
-    // Min-heap on cost.
-    fn cmp(&self, o: &Self) -> Ordering {
-        o.cost.total_cmp(&self.cost)
+
+    /// f32 bits mapped so that unsigned integer order equals float order.
+    fn ordered_bits(cost: f64) -> u64 {
+        let bits = (cost as f32).to_bits();
+        (if bits >> 31 == 1 { !bits } else { bits | 0x8000_0000 }) as u64
+    }
+
+    fn key(&mut self, cost: f64, c: Candidate) -> u64 {
+        let index = self.payload.len() as u64;
+        assert!(index < u32::MAX as u64, "too many queued collapses");
+        self.payload.push(c);
+        (Self::ordered_bits(cost) << 32) | index
+    }
+
+    /// Build from unordered entries in O(n).
+    fn heapify(&mut self) {
+        let n = self.heap.len();
+        for i in (0..n.div_ceil(4) + 1).rev() {
+            self.sift_down(i);
+        }
+    }
+
+    fn push(&mut self, cost: f64, c: Candidate) {
+        let k = self.key(cost, c);
+        self.heap.push(k);
+        let mut i = self.heap.len() - 1;
+        while i > 0 {
+            let parent = (i - 1) / 4;
+            if self.heap[parent] <= k {
+                break;
+            }
+            self.heap[i] = self.heap[parent];
+            i = parent;
+        }
+        self.heap[i] = k;
+    }
+
+    fn pop(&mut self) -> Option<Candidate> {
+        let top = *self.heap.first()?;
+        let last = self.heap.pop().expect("non-empty");
+        if !self.heap.is_empty() {
+            self.heap[0] = last;
+            self.sift_down(0);
+        }
+        Some(self.payload[(top & 0xFFFF_FFFF) as usize])
+    }
+
+    fn sift_down(&mut self, mut i: usize) {
+        let n = self.heap.len();
+        if i >= n {
+            return;
+        }
+        let k = self.heap[i];
+        loop {
+            let first = 4 * i + 1;
+            if first >= n {
+                break;
+            }
+            let last = (first + 4).min(n);
+            let (mut best, mut best_key) = (first, self.heap[first]);
+            for c in first + 1..last {
+                if self.heap[c] < best_key {
+                    (best, best_key) = (c, self.heap[c]);
+                }
+            }
+            if best_key >= k {
+                break;
+            }
+            self.heap[i] = best_key;
+            i = best;
+        }
+        self.heap[i] = k;
     }
 }
 
@@ -91,23 +164,31 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     // Lock open-boundary and group-border vertices.
     let mut locked = vec![false; vcount];
     {
-        let mut edge_count: std::collections::HashMap<(u32, u32), (u32, u32)> = Default::default();
-        for (t, tri) in tris.iter().enumerate() {
-            for k in 0..3 {
-                let (a, b) = (tri[k], tri[(k + 1) % 3]);
-                let e = edge_count.entry((a.min(b), a.max(b))).or_insert((0, groups[t]));
-                e.0 += 1;
-                if e.1 != groups[t] {
-                    locked[a as usize] = true;
-                    locked[b as usize] = true;
-                }
+        // Sort the half-edges by edge so each edge's triangles are adjacent:
+        // an edge not shared by exactly two triangles is an open boundary
+        // (or non-manifold), and one whose triangles differ in face group is
+        // a group border.
+        let mut he: Vec<(u64, u32)> = (0..tris.len() * 3)
+            .into_par_iter()
+            .map(|o| {
+                let tri = tris[o / 3];
+                let (a, b) = (tri[o % 3], tri[(o + 1) % 3]);
+                (((a.min(b) as u64) << 32) | a.max(b) as u64, groups[o / 3])
+            })
+            .collect();
+        he.par_sort_unstable();
+        let mut i = 0;
+        while i < he.len() {
+            let mut j = i + 1;
+            while j < he.len() && he[j].0 == he[i].0 {
+                j += 1;
             }
-        }
-        for ((a, b), (n, _)) in edge_count {
-            if n != 2 {
-                locked[a as usize] = true;
-                locked[b as usize] = true;
+            if j - i != 2 || he[i].1 != he[j - 1].1 {
+                let (a, b) = ((he[i].0 >> 32) as usize, he[i].0 as u32 as usize);
+                locked[a] = true;
+                locked[b] = true;
             }
+            i = j;
         }
     }
 
@@ -127,8 +208,9 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     }
 
     let mut stamp = vec![0u32; vcount];
-    let mut heap = BinaryHeap::new();
-    let candidate = |a: u32, b: u32, pos: &[DVec3], quadrics: &[Quadric], locked: &[bool], stamp: &[u32]| {
+    // Best collapse position and its error for edge (a, b): a locked vertex
+    // stays put; otherwise the cheaper of the endpoints and the midpoint.
+    let best = |a: u32, b: u32, pos: &[DVec3], quadrics: &[Quadric], locked: &[bool]| -> Option<(f64, DVec3)> {
         if locked[a as usize] && locked[b as usize] {
             return None;
         }
@@ -142,20 +224,30 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         } else {
             &[pa, pb, (pa + pb) * 0.5]
         };
-        let (cost, target) =
-            options.iter().map(|&p| (q.error(p), p)).min_by(|x, y| x.0.total_cmp(&y.0)).expect("non-empty");
-        Some(Candidate { cost, a, b, target, stamp_a: stamp[a as usize], stamp_b: stamp[b as usize] })
+        options.iter().map(|&p| (q.error(p), p)).min_by(|x, y| x.0.total_cmp(&y.0))
     };
-    for tri in &tris {
-        for k in 0..3 {
-            let (a, b) = (tri[k], tri[(k + 1) % 3]);
-            if a < b
-                && let Some(c) = candidate(a, b, &pos, &quadrics, &locked, &stamp)
-            {
-                heap.push(c);
-            }
-        }
+    let candidate = |a: u32, b: u32, pos: &[DVec3], quadrics: &[Quadric], locked: &[bool], stamp: &[u32]| {
+        best(a, b, pos, quadrics, locked)
+            .map(|(cost, _)| (cost, Candidate { a, b, stamp_a: stamp[a as usize], stamp_b: stamp[b as usize] }))
+    };
+    // Initial queue: every edge once (from the triangle where a < b),
+    // computed in parallel and heapified in one O(n) pass.
+    let initial: Vec<(f64, Candidate)> = tris
+        .par_iter()
+        .flat_map_iter(|tri| {
+            let (pos, quadrics, locked, stamp) = (&pos, &quadrics, &locked, &stamp);
+            (0..3).filter_map(move |k| {
+                let (a, b) = (tri[k], tri[(k + 1) % 3]);
+                if a < b { candidate(a, b, pos, quadrics, locked, stamp) } else { None }
+            })
+        })
+        .collect();
+    let mut heap = Queue::with_capacity(initial.len() * 3);
+    for (cost, c) in initial {
+        let k = heap.key(cost, c);
+        heap.heap.push(k);
     }
+    heap.heapify();
 
     let mut neighbors_a = Vec::new();
     let mut neighbors_b = Vec::new();
@@ -165,6 +257,8 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         if stamp[a as usize] != c.stamp_a || stamp[b as usize] != c.stamp_b {
             continue;
         }
+        // Same inputs as when queued (stamps match), so the same result.
+        let Some((_, target)) = best(a, b, &pos, &quadrics, &locked) else { continue };
         // Edge must still exist.
         if !vt[a as usize].iter().any(|&t| tris[t as usize].contains(&b)) {
             continue;
@@ -185,7 +279,7 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
                 }
                 let p = tri.map(|i| pos[i as usize]);
                 let before = (p[1] - p[0]).cross(p[2] - p[0]);
-                let q = tri.map(|i| if i == v { c.target } else { pos[i as usize] });
+                let q = tri.map(|i| if i == v { target } else { pos[i as usize] });
                 let after = (q[1] - q[0]).cross(q[2] - q[0]);
                 before.dot(after) <= 0.0 || after.length_squared() < 1e-6 * before.length_squared()
             })
@@ -195,7 +289,7 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         }
 
         // Collapse b into a.
-        pos[a as usize] = c.target;
+        pos[a as usize] = target;
         mask[a as usize] = mask[a as usize].max(mask[b as usize]);
         let qb = quadrics[b as usize];
         quadrics[a as usize].add(&qb);
@@ -228,8 +322,8 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         stamp[b as usize] += 1;
         ring(&vt[a as usize], &tris, a, &mut neighbors_a);
         for &n in &neighbors_a {
-            if let Some(cand) = candidate(a.min(n), a.max(n), &pos, &quadrics, &locked, &stamp) {
-                heap.push(cand);
+            if let Some((cost, cand)) = candidate(a.min(n), a.max(n), &pos, &quadrics, &locked, &stamp) {
+                heap.push(cost, cand);
             }
         }
     }
@@ -261,6 +355,30 @@ fn ring(vt: &[u32], tris: &[[u32; 3]], v: u32, out: &mut Vec<u32>) {
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+
+    #[test]
+    fn queue_pops_in_cost_order() {
+        let mut q = Queue::with_capacity(0);
+        let costs = [3.0, -1.0, 0.5, 1e-9, 2.0, 0.0, 7.5, -0.25, 1e6, 0.5];
+        for (i, &c) in costs.iter().enumerate() {
+            let cand = Candidate { a: i as u32, b: 0, stamp_a: 0, stamp_b: 0 };
+            if i < 5 {
+                q.push(c, cand);
+            } else {
+                // The rest go in unordered and are heapified, as at startup.
+                let k = q.key(c, cand);
+                q.heap.push(k);
+            }
+        }
+        q.heapify();
+        let mut popped = Vec::new();
+        while let Some(c) = q.pop() {
+            popped.push(costs[c.a as usize]);
+        }
+        let mut sorted = costs.to_vec();
+        sorted.sort_by(f64::total_cmp);
+        assert_eq!(popped, sorted);
+    }
 
     #[test]
     fn sphere_decimates_and_keeps_shape() {
