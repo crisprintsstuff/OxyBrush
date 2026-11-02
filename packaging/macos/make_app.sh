@@ -50,8 +50,22 @@ cp -R "$APP" "$STAGE/"
 ln -s /Applications "$STAGE/Applications"
 cp "$ROOT/README.md" "$STAGE/README.md"
 DMG="$OUT/OxyBrush-$VERSION-macos-universal.dmg"
-hdiutil create -volname "OxyBrush $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
-hdiutil verify "$DMG"
+# hdiutil intermittently fails on CI runners with "Resource temporarily
+# unavailable" (the image is briefly held by another process), so retry a
+# few times before giving up.
+retry() {
+  local attempt
+  for attempt in 1 2 3 4 5; do
+    if "$@"; then
+      return 0
+    fi
+    echo "attempt $attempt of: $* failed; retrying in $((attempt * 5)) s" >&2
+    sleep $((attempt * 5))
+  done
+  return 1
+}
+retry hdiutil create -volname "OxyBrush $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG"
+retry hdiutil verify "$DMG"
 
 # Keep the bundle for the smoke test.
 rm -rf "$OUT/OxyBrush.app"
