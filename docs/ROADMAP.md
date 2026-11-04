@@ -6,14 +6,14 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (brush presets; glTF/GLB and PLY export, LOD chain, split pieces, command-line tool; command palette, brush finder, recent files, built-in guide; vertex color painting, transform gizmo and mask-driven posing; flat shading, custom matcaps, separate objects on import, 45° view steps, strokes from empty space; quick menu at the cursor, grab through, move along the normal, middle-drag panel scrolling)
+> **Last updated:** 2026-11-04 (v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide, viewing and input requests from the discussions)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | v0.3.0-alpha (2026-11-02): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
-| **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), interface pass |
+| **Latest release** | v0.4.0-alpha (2026-11-04): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), performance first pass (3.6), interface pass; first Phase 4 items in v0.4.0-alpha (vertex color, transform gizmo and posing, brush presets, viewport and input requests) and pipeline basics (glTF/GLB, PLY, LOD chains, CLI) |
 | **Next** | Phase 3 — rebuilding lower levels (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
 | **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
@@ -70,7 +70,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - **Decision pending (before 3.8):** calling iOS APIs from Rust needs `unsafe`, which AGENTS.md currently forbids workspace-wide. The proposal is to allow it only in one small, reviewed platform crate.
 - **Bonus of the Apple account:** the same membership allows notarizing the macOS app, removing the "Open Anyway" step for Mac users.
 
-## Phase 4 — Workflow and experience ⏳ → 0.5
+## Phase 4 — Workflow and experience 🚧 → 0.5 (first items in v0.4.0-alpha)
 
 | Feature | Details | Effort |
 |---|---|---|
@@ -119,14 +119,16 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v0.3.0-alpha)
+## Known limitations (v0.4.0-alpha)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Pen pressure unverified on real tablets (all platforms)
 - Decimation takes a few seconds on dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
-- Only interface settings are remembered between sessions (not brush settings)
+- Only interface settings are remembered between sessions (save brushes as presets to keep them)
+- Vertex color isn't exported yet, and remesh, decimate and merge drop it
+- Hotkeys and navigation can't be customised yet (planned next)
 - Touch layout: no multi-touch gestures yet; untested on real touchscreens and tablets
 - Windows installer is not code-signed (SmartScreen warning)
 
