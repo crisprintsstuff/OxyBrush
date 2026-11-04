@@ -1065,6 +1065,21 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if ui.button("Solo / show all  (Alt+S)").clicked() {
         ed.solo_active();
     }
+    ui.separator();
+    if ui.button("Split by face groups").on_hover_text("One piece per face group (undoable)").clicked() {
+        ed.split_active(false);
+    }
+    if ui.button("Split into loose parts").on_hover_text("One piece per separate surface (undoable)").clicked() {
+        ed.split_active(true);
+    }
+    if ui
+        .add_enabled(!busy, egui::Button::new("Make LOD chain"))
+        .on_hover_text("Add 3 lighter copies (1/2, 1/4 and 1/8 of the triangles) for games and engines")
+        .clicked()
+    {
+        ed.make_lod_chain(3);
+    }
+    ui.separator();
     if ui
         .add_enabled(!busy, egui::Button::new("Merge visible (remesh)"))
         .on_hover_text("Voxel-remesh all visible pieces into the active one")
