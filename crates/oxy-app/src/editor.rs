@@ -1,6 +1,7 @@
 //! Editor state and pointer/keyboard interaction, independent of the GPU and
 //! window so it can be unit-tested.
 
+use crate::pose::{self, GizmoMode, Handle};
 use glam::{Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
@@ -97,6 +98,8 @@ pub enum Drag {
         invert: bool,
         start: Vec2,
     },
+    /// Dragging a transform gizmo handle.
+    Gizmo(Box<GizmoDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -104,6 +107,20 @@ pub enum Drag {
         lasso: bool,
         click_group: Option<u32>,
     },
+}
+
+/// State of a gizmo drag: the mesh as it was, and how each vertex follows.
+pub struct GizmoDrag {
+    handle: Handle,
+    start: Vec2,
+    pivot: Vec3,
+    original: Vec<Vec3>,
+    weights: Vec<f32>,
+    screen_axis: Option<Vec2>,
+    length: f32,
+    world_per_px: f32,
+    /// Transform applied so far.
+    current: pose::Transform,
 }
 
 /// Something that needs a "discard unsaved changes?" confirmation first.
@@ -263,6 +280,12 @@ pub struct Editor {
     pub matcap_dir: Option<PathBuf>,
     /// Set by the UI to ask the platform layer for a matcap file dialog.
     pub request_load_matcap: bool,
+    /// Paint brush and fill color (sRGB, 0..=1).
+    pub paint_color: Vec3,
+    /// Transform gizmo mode; None hides the gizmo.
+    pub gizmo: Option<GizmoMode>,
+    /// Cached gizmo pivot, keyed by (piece id, history revision, vertex count).
+    gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -353,6 +376,9 @@ impl Default for Editor {
             custom_matcap: None,
             matcap_dir: None,
             request_load_matcap: false,
+            paint_color: Vec3::new(0.75, 0.22, 0.18),
+            gizmo: None,
+            gizmo_pivot: None,
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
@@ -583,6 +609,9 @@ impl Editor {
             };
             return;
         }
+        if self.gizmo.is_some() && self.start_gizmo_drag(p) {
+            return;
+        }
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
         let m = self.active_modifiers();
 
@@ -659,7 +688,12 @@ impl Editor {
         let mut stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
         let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
         let piece = self.scene.active_mut();
-        self.history.begin(kind.label(), piece.id, &piece.mesh);
+        self.history.begin_with(
+            kind.label(),
+            piece.id,
+            &piece.mesh,
+            kind == BrushKind::Paint || piece.mesh.is_painted(),
+        );
         let history = &mut self.history;
         stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
         let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
@@ -698,7 +732,7 @@ impl Editor {
                 follow_stroke: self.alpha_follow_stroke,
                 up: self.camera.up(),
             });
-        Stroke::new(settings, self.symmetry, invert).with_alpha(stamp)
+        Stroke::new(settings, self.symmetry, invert).with_alpha(stamp).with_paint_color(self.paint_color)
     }
 
     /// The current brush as a preset named `name`.
@@ -850,6 +884,25 @@ impl Editor {
                 true
             }
             Drag::Deferred { .. } => true,
+            Drag::Gizmo(g) => {
+                let input = pose::DragInput {
+                    mode: self.gizmo.unwrap_or(GizmoMode::Move),
+                    handle: g.handle,
+                    delta: pos - g.start,
+                    screen_axis: g.screen_axis,
+                    length: g.length,
+                    right: self.camera.forward().cross(self.camera.up()).normalize_or(Vec3::X),
+                    up: self.camera.up(),
+                    forward: self.camera.forward(),
+                    world_per_px: g.world_per_px,
+                };
+                let t = pose::drag_transform(&input);
+                let mesh = &mut self.scene.active_mut().mesh;
+                let moved = pose::apply(mesh, &g.original, &g.weights, g.pivot, &t);
+                g.current = t;
+                mesh.update_after_move(&moved);
+                true
+            }
             Drag::Select { points, lasso, .. } => {
                 if *lasso {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
@@ -908,7 +961,7 @@ impl Editor {
     pub fn pointer_up(&mut self) {
         self.snap_orbit = None;
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { .. } => self.history.commit(),
+            Drag::Stroke { .. } | Drag::Gizmo(_) => self.history.commit(),
             Drag::Deferred { mode, kind, invert, start } => {
                 if let Some(end) = self.pointer {
                     self.finish_deferred(mode, kind, invert, start, end);
@@ -927,6 +980,15 @@ impl Editor {
     pub fn cancel_drag(&mut self) {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } => self.history.commit(),
+            Drag::Gizmo(g) => {
+                let mesh = &mut self.scene.active_mut().mesh;
+                mesh.positions.copy_from_slice(&g.original);
+                let all: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
+                mesh.update_after_move(&all);
+                mesh.tighten_bounds();
+                self.history.cancel();
+                self.status = "Transform cancelled".into();
+            }
             _ => self.status = "Cancelled".into(),
         }
     }
@@ -966,7 +1028,12 @@ impl Editor {
             }
         };
         let piece = self.scene.active_mut();
-        self.history.begin(kind.label(), piece.id, &piece.mesh);
+        self.history.begin_with(
+            kind.label(),
+            piece.id,
+            &piece.mesh,
+            kind == BrushKind::Paint || piece.mesh.is_painted(),
+        );
         let history = &mut self.history;
         for s in samples {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
@@ -1728,6 +1795,94 @@ impl Editor {
         self.edit_mesh_mask(label, |mesh| mesh.mask.iter_mut().for_each(|m| *m = f(*m)));
     }
 
+    /// Where the transform gizmo is drawn (canvas-local physical px), or
+    /// None when it is off or there is nothing to move.
+    pub fn gizmo_layout(&mut self) -> Option<pose::Layout> {
+        self.gizmo?;
+        let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
+        let pivot = match self.gizmo_pivot {
+            Some((k, p)) if k == key => p,
+            _ => {
+                let mesh = &self.scene.active().mesh;
+                let p = pose::pivot(mesh, &pose::weights(mesh));
+                self.gizmo_pivot = Some((key, p));
+                p
+            }
+        };
+        // While dragging, the gizmo follows the transformed pivot.
+        let pivot = match &self.drag {
+            Drag::Gizmo(g) => g.pivot + g.current.translate,
+            _ => pivot?,
+        };
+        let size = self.canvas_size();
+        let center = self.camera.project(pivot, size)?;
+        let length = pose::HANDLE_PT * self.pixels_per_point * self.camera.world_per_pixel(pivot, size.y);
+        let axes = pose::AXES.map(|a| {
+            self.camera.project(pivot + a * length, size).filter(|e| e.distance(center) > 12.0 * self.pixels_per_point)
+        });
+        Some(pose::Layout { pivot, center, axes, length })
+    }
+
+    /// Start dragging a gizmo handle under `p` (window physical px).
+    fn start_gizmo_drag(&mut self, p: Vec2) -> bool {
+        let Some(layout) = self.gizmo_layout() else { return false };
+        let local = self.canvas_local(p);
+        let Some(handle) = layout.pick(local, pose::PICK_PT * self.pixels_per_point) else { return false };
+        if self.job_blocks_active() {
+            self.status = "Wait for the background job to finish before transforming this piece".into();
+            return true;
+        }
+        let mode = self.gizmo.unwrap_or(GizmoMode::Move);
+        let world_per_px = self.camera.world_per_pixel(layout.pivot, self.canvas_size().y);
+        let piece = self.scene.active_mut();
+        self.history.begin(mode.label(), piece.id, &piece.mesh);
+        for c in 0..piece.mesh.chunks.len() as u32 {
+            self.history.touch(&piece.mesh, c);
+        }
+        let weights = pose::weights(&piece.mesh);
+        let screen_axis = match handle {
+            Handle::Axis(a) => layout.axes[a].map(|e| e - layout.center),
+            Handle::Center => None,
+        };
+        self.drag = Drag::Gizmo(Box::new(GizmoDrag {
+            handle,
+            start: p,
+            pivot: layout.pivot,
+            original: piece.mesh.positions.clone(),
+            weights,
+            screen_axis,
+            length: layout.length,
+            world_per_px,
+            current: pose::Transform::IDENTITY,
+        }));
+        true
+    }
+
+    /// Turn the gizmo on in `mode`, or off if it is already in that mode.
+    pub fn toggle_gizmo(&mut self, mode: GizmoMode) {
+        self.gizmo = if self.gizmo == Some(mode) { None } else { Some(mode) };
+        self.status = match self.gizmo {
+            Some(m) => {
+                format!("{} gizmo: drag an axis handle or the centre. Mask parts to hold them still.", m.label())
+            }
+            None => "Gizmo off".into(),
+        };
+    }
+
+    /// Run a vertex color operation on the active piece, undoably.
+    pub fn edit_color(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
+        self.pointer_up();
+        let piece = self.scene.active_mut();
+        self.history.begin_with(label, piece.id, &piece.mesh, true);
+        for c in 0..piece.mesh.chunks.len() as u32 {
+            self.history.touch(&piece.mesh, c);
+        }
+        f(&mut piece.mesh);
+        piece.mesh.mark_all_dirty();
+        self.history.commit();
+        self.status = label.into();
+    }
+
     /// Run a mask operation on the active piece, undoably.
     pub fn edit_mesh_mask(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
         if !matches!(self.drag, Drag::Select { .. }) {
@@ -2253,9 +2408,9 @@ mod tests {
         let mut e = Editor::default();
         assert_eq!(e.brush_for_number_key(1), Some(BrushKind::Draw));
         assert_eq!(e.number_key(BrushKind::Mask), None);
-        // Drag Mask (last) to the front.
-        let last = e.brush_order.len() - 1;
-        e.move_brush(last, 0);
+        // Drag Mask (near the end) to the front.
+        let mask = e.brush_order.iter().position(|&k| k == BrushKind::Mask).unwrap();
+        e.move_brush(mask, 0);
         assert_eq!(e.brush_order[0], BrushKind::Mask);
         assert_eq!(e.brush_order[1], BrushKind::Draw);
         assert_eq!(e.brush_for_number_key(1), Some(BrushKind::Mask));
@@ -2317,6 +2472,97 @@ mod tests {
         assert!(matches!(e.drag, Drag::Stroke { .. }));
         e.pointer_up();
     }
+    #[test]
+    fn paint_brush_and_fills_are_undoable_and_respect_the_mask() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::Paint;
+        e.paint_color = Vec3::new(1.0, 0.0, 0.0);
+        drag(&mut e, Vec2::new(380.0, 300.0), Vec2::new(420.0, 300.0));
+        let mesh = &e.scene.active().mesh;
+        assert!(mesh.is_painted(), "the stroke paints");
+        let red = mesh.color.iter().filter(|c| c.y < 0.5).count();
+        assert!(red > 0 && red < mesh.vertex_count() / 2, "only under the brush: {red}");
+        let positions_unchanged = mesh.positions.clone();
+        e.undo();
+        assert!(!e.scene.active().mesh.is_painted(), "undo removes the paint");
+        e.redo();
+        assert_eq!(e.scene.active().mesh.positions, positions_unchanged, "painting never moves the surface");
+
+        // A fill leaves masked vertices alone.
+        let mesh = &mut e.scene.active_mut().mesh;
+        let n = mesh.vertex_count();
+        for v in 0..n {
+            mesh.mask[v] = if mesh.positions[v].y > 0.0 { 1.0 } else { 0.0 };
+        }
+        let before = mesh.color.clone();
+        e.paint_color = Vec3::new(0.0, 0.0, 1.0);
+        let c = e.paint_color;
+        e.edit_color("Fill color", |m| m.fill_color(c, 1.0));
+        let mesh = &e.scene.active().mesh;
+        for (v, old) in before.iter().enumerate().take(n) {
+            if mesh.mask[v] == 1.0 {
+                assert_eq!(mesh.color[v], *old);
+            } else {
+                assert_eq!(mesh.color[v], c);
+            }
+        }
+        e.undo();
+        assert_eq!(e.scene.active().mesh.color, before);
+    }
+
+    #[test]
+    fn gizmo_moves_the_unmasked_part_and_undoes() {
+        let mut e = editor();
+        e.toggle_gizmo(GizmoMode::Move);
+        // Hold the lower half still.
+        let mesh = &mut e.scene.active_mut().mesh;
+        for v in 0..mesh.vertex_count() {
+            mesh.mask[v] = if mesh.positions[v].y < 0.0 { 1.0 } else { 0.0 };
+        }
+        let before = e.scene.active().mesh.positions.clone();
+        let layout = e.gizmo_layout().expect("gizmo is shown");
+        // Drag the X handle to the right by its own length.
+        let end = layout.axes[0].expect("X handle visible from the front");
+        let to = end + (end - layout.center);
+        drag(&mut e, end, to);
+        let mesh = &e.scene.active().mesh;
+        let mut moved_up = 0;
+        for (v, old) in before.iter().enumerate() {
+            let d = mesh.positions[v] - *old;
+            if old.y < 0.0 {
+                assert_eq!(d, Vec3::ZERO, "masked vertices stay put");
+            } else {
+                assert!(d.y.abs() < 1e-5 && d.z.abs() < 1e-5, "moves along X only: {d}");
+                if d.x > layout.length * 0.5 {
+                    moved_up += 1;
+                }
+            }
+        }
+        assert!(moved_up > 0);
+        assert_eq!(e.history.undo_labels().last(), Some("Move"));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+
+        // Rotate, then cancel with Esc: nothing changes and nothing is recorded.
+        e.toggle_gizmo(GizmoMode::Rotate);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[2].or(layout.axes[1]).unwrap();
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + Vec2::new(0.0, 80.0));
+        assert_ne!(e.scene.active().mesh.positions, before);
+        let undo_steps = e.history.undo_labels().count();
+        e.cancel_drag();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        assert_eq!(e.history.undo_labels().count(), undo_steps);
+
+        // Clicking away from the handles still sculpts.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        assert!(e.is_stroking() || matches!(e.drag, Drag::Gizmo(_)));
+        e.pointer_up();
+    }
+
     #[test]
     fn recent_files_follow_saves_and_forget_missing_files() {
         let dir = std::env::temp_dir().join(format!("oxy-recent-{}", std::process::id()));

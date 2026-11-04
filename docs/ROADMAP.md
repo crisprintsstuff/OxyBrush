@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (brush presets; glTF/GLB and PLY export, LOD chain, split pieces, command-line tool; command palette, brush finder, recent files, built-in guide; flat shading, custom matcaps, separate objects on import, 45° view steps, strokes from empty space)
+> **Last updated:** 2026-11-04 (brush presets; glTF/GLB and PLY export, LOD chain, split pieces, command-line tool; command palette, brush finder, recent files, built-in guide; vertex color painting, transform gizmo and mask-driven posing; flat shading, custom matcaps, separate objects on import, 45° view steps, strokes from empty space)
 
 ## Status at a glance
 
@@ -75,11 +75,11 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | Feature | Details | Effort |
 |---|---|---|
 | **Dynamic topology** | Brush adds/removes triangles locally, so you can sketch from a sphere without remeshing | 4–6 wk |
-| **Vertex color painting** | Paint color per vertex; materials per region | 3–4 wk |
+| **Vertex color painting** | ✅ Paint brush, fills (all / cavities / peaks) respecting the mask, saved in projects. ⏳ Color in exports, color-aware remesh/decimate, materials per region | 3–4 wk |
 | **Sculpt layers** | Detail layers with strength sliders; morph target | 4–6 wk |
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
-| **Deformers and posing** | Bend, twist, taper, inflate; pose gizmo with topological masking | 4–6 wk |
-| **Transform gizmo** | Move, rotate and scale pieces and masked regions in the viewport | 1–2 wk |
+| **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ⏳ Bend, twist, taper, inflate; topological masking from a click | 4–6 wk |
+| **Transform gizmo** | ✅ Move, rotate and scale pieces and masked regions in the viewport. ⏳ Numeric input, snapping, local axes | 1–2 wk |
 | **Brush presets and editor** | Save brushes (kernel, alpha, falloff, settings) as presets; custom shelves of favorites | 2–3 wk |
 | **Insert-mesh and curve brushes** | Stamp small meshes (eyes, bolts, teeth) onto the surface; draw tubes and straps along a curve | 3–5 wk |
 | **Hard-surface tools** | Clip, slice and trim brushes; edge-preserving polish | 2–4 wk |

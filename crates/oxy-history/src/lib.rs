@@ -1,6 +1,7 @@
 //! Undo/redo for scenes.
 //!
-//! - Strokes snapshot only the chunks they touch (positions + mask), the
+//! - Strokes snapshot only the chunks they touch (positions + mask, and
+//!   vertex color when the mesh is painted or being painted), the
 //!   first time each chunk is touched.
 //! - Topology operations store the piece's previous mesh and subdivision
 //!   levels (multiresolution stack), including switching levels.
@@ -21,6 +22,8 @@ struct ChunkSnapshot {
     chunk: u32,
     positions: Vec<Vec3>,
     mask: Vec<f32>,
+    /// Empty unless the stroke records color.
+    color: Vec<Vec3>,
 }
 
 enum Change {
@@ -74,7 +77,9 @@ impl Change {
     fn bytes(&self) -> usize {
         let mesh_bytes = |m: &Mesh| m.vertex_count() * 44 + m.triangle_count() * 30;
         match self {
-            Change::Chunks { snaps, .. } => snaps.iter().map(|s| s.positions.len() * 16 + 32).sum(),
+            Change::Chunks { snaps, .. } => {
+                snaps.iter().map(|s| s.positions.len() * 16 + s.color.len() * 12 + 32).sum()
+            }
             Change::Topology { mesh, multires, .. } => {
                 mesh_bytes(mesh) + multires.as_ref().map_or(0, |m| m.approx_bytes())
             }
@@ -94,7 +99,10 @@ impl Change {
                     let r = mesh.chunks[s.chunk as usize].vertices.clone();
                     let r = r.start as usize..r.end as usize;
                     mesh.positions[r.clone()].swap_with_slice(&mut s.positions);
-                    mesh.mask[r].swap_with_slice(&mut s.mask);
+                    mesh.mask[r.clone()].swap_with_slice(&mut s.mask);
+                    if !s.color.is_empty() {
+                        mesh.color[r].swap_with_slice(&mut s.color);
+                    }
                     chunks.push(s.chunk);
                 }
                 mesh.update_chunks(&chunks);
@@ -156,6 +164,7 @@ struct Pending {
     piece: u64,
     touched: Vec<bool>,
     snapshots: Vec<ChunkSnapshot>,
+    color: bool,
 }
 
 pub struct History {
@@ -188,9 +197,18 @@ impl History {
         self.enforce_budget();
     }
 
-    /// Start recording a stroke on `piece`.
+    /// Start recording a stroke on `piece`. Vertex color is recorded too
+    /// if the mesh is painted.
     pub fn begin(&mut self, label: impl Into<String>, piece: u64, mesh: &Mesh) {
+        let color = mesh.is_painted();
+        self.begin_with(label, piece, mesh, color);
+    }
+
+    /// Start recording; `color` forces vertex color into the snapshots
+    /// (for painting an unpainted mesh).
+    pub fn begin_with(&mut self, label: impl Into<String>, piece: u64, mesh: &Mesh, color: bool) {
         self.pending = Some(Pending {
+            color,
             label: label.into(),
             piece,
             touched: vec![false; mesh.chunks.len()],
@@ -211,8 +229,15 @@ impl History {
         p.snapshots.push(ChunkSnapshot {
             chunk,
             positions: mesh.positions[r.clone()].to_vec(),
-            mask: mesh.mask[r].to_vec(),
+            mask: mesh.mask[r.clone()].to_vec(),
+            color: if p.color { mesh.color[r].to_vec() } else { Vec::new() },
         });
+    }
+
+    /// Drop the stroke being recorded without adding an undo step (the
+    /// caller has already restored the mesh).
+    pub fn cancel(&mut self) {
+        self.pending = None;
     }
 
     /// Finish the stroke. Empty strokes are discarded.
@@ -327,6 +352,34 @@ mod tests {
 
     fn scene() -> Scene {
         Scene::new(Piece::new("Sphere", primitives::icosphere(5, 1.0)))
+    }
+
+    #[test]
+    fn paint_strokes_undo_color() {
+        let mut s = scene();
+        let id = s.active().id;
+        let mut h = History::default();
+        // First paint on an unpainted mesh: color must be recorded explicitly.
+        let mesh = &mut s.active_mut().mesh;
+        h.begin_with("Paint", id, mesh, true);
+        h.touch(mesh, 0);
+        for v in mesh.chunks[0].vertices.clone() {
+            mesh.color[v as usize] = Vec3::new(1.0, 0.0, 0.0);
+        }
+        h.commit();
+        let painted = s.active().mesh.color.clone();
+        // A later sculpt stroke on the painted mesh records color automatically.
+        let mesh = &mut s.active_mut().mesh;
+        h.begin("Draw", id, mesh);
+        h.touch(mesh, 0);
+        mesh.color[0] = Vec3::ZERO;
+        h.commit();
+        h.undo(&mut s);
+        assert_eq!(s.active().mesh.color, painted);
+        h.undo(&mut s);
+        assert!(!s.active().mesh.is_painted());
+        h.redo(&mut s);
+        assert_eq!(s.active().mesh.color, painted);
     }
 
     #[test]

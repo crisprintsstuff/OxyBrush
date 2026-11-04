@@ -192,6 +192,7 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::PlanarTrim => "planar_trim",
         BrushKind::Noise => "noise",
         BrushKind::Mask => "mask",
+        BrushKind::Paint => "paint",
     }
 }
 
