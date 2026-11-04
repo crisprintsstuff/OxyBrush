@@ -251,6 +251,10 @@ pub struct Settings {
     pub background_style: BackgroundStyle,
     pub background: [f64; 3],
     pub background_center: [f64; 3],
+    /// Perspective lens, 35mm-equivalent focal length in millimeters.
+    /// Orthographic view does not use it. Missing or invalid values keep
+    /// the default lens (35° vertical).
+    pub focal_mm: f32,
     /// Recently used files, most recent first (one `recent = ` line each).
     pub recent_files: Vec<PathBuf>,
 }
@@ -283,6 +287,7 @@ impl Default for Settings {
             background_style: view.background_style,
             background: view.background,
             background_center: view.background_center,
+            focal_mm: oxy_render::default_focal_mm(),
             recent_files: Vec::new(),
         }
     }
@@ -329,10 +334,13 @@ impl Settings {
 
     /// Serialize as `key = value` lines.
     pub fn to_text(&self) -> String {
+        let focal_mm = format!("{:.4}", oxy_render::quantize_focal_mm(self.focal_mm));
+        let background = format_rgb(self.background);
+        let background_center = format_rgb(self.background_center);
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -352,8 +360,9 @@ impl Settings {
             self.stroke_from_empty,
             self.custom_matcap,
             self.background_style.key(),
-            format_rgb(self.background),
-            format_rgb(self.background_center),
+            background,
+            background_center,
+            focal_mm,
         ) + &self
             .recent_files
             .iter()
@@ -425,6 +434,13 @@ impl Settings {
                 "background_style" => s.background_style = BackgroundStyle::from_key(v).unwrap_or(s.background_style),
                 "background" => s.background = parse_rgb(v).unwrap_or(s.background),
                 "background_center" => s.background_center = parse_rgb(v).unwrap_or(s.background_center),
+                "focal_mm" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (oxy_render::FOCAL_MM_MIN..=oxy_render::FOCAL_MM_MAX).contains(&x)
+                    {
+                        s.focal_mm = oxy_render::quantize_focal_mm(x);
+                    }
+                }
                 "recent" if !v.is_empty() && s.recent_files.len() < MAX_RECENT => {
                     let p = PathBuf::from(v);
                     if !s.recent_files.contains(&p) {
@@ -508,6 +524,7 @@ mod tests {
             background_style: BackgroundStyle::Flat,
             background: [0.2, 0.25, 0.3],
             background_center: [0.4, 0.45, 0.5],
+            focal_mm: 85.0,
             recent_files: vec![PathBuf::from("/work/head = v2.oxb"), PathBuf::from("C:\\Sculpts\\Dragon.obj")],
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
@@ -528,10 +545,17 @@ mod tests {
         assert_eq!(bad.background_style, BackgroundStyle::Gradient);
         assert_eq!(bad.background, Settings::default().background);
         assert_eq!(bad.background_center, Settings::default().background_center);
-        // The built-in gradient survives a save, so a restart doesn't shift it.
-        let d = Settings::default();
-        assert_eq!(Settings::from_text(&d.to_text()).background, d.background);
-        assert_eq!(Settings::from_text(&d.to_text()).background_center, d.background_center);
+        // The built-in gradient and the default lens survive a save.
+        let defaults = Settings::default();
+        let saved = Settings::from_text(&defaults.to_text());
+        assert_eq!(saved.background, defaults.background);
+        assert_eq!(saved.background_center, defaults.background_center);
+        assert_eq!(saved.focal_mm, defaults.focal_mm);
+        assert!((oxy_render::fov_y_from_focal_mm(defaults.focal_mm) - oxy_render::DEFAULT_FOV_Y).abs() < 1e-6);
+        let ignored = Settings::from_text("focal_mm = 3\nfocal_mm = wide\nfocal_mm = 200.1\n");
+        assert_eq!(ignored.focal_mm, defaults.focal_mm);
+        assert!((Settings::from_text("focal_mm = 18\n").focal_mm - 18.0).abs() < 1e-6);
+        assert!((Settings::from_text("focal_mm = 200\n").focal_mm - 200.0).abs() < 1e-4);
     }
 
     #[test]

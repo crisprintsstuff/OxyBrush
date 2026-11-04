@@ -6,7 +6,7 @@ use glam::{Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, primitives, topo};
-use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings};
+use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
 use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
 use oxy_topo::RemeshOptions;
 use std::path::{Path, PathBuf};
@@ -310,6 +310,11 @@ pub struct Editor {
     pub guide: crate::guide::GuideState,
     /// Recently opened or saved files, most recent first (remembered).
     pub recent_files: Vec<PathBuf>,
+    /// Perspective lens, 35mm-equivalent millimeters. The camera's field
+    /// of view is derived from this; orthographic view does not use it.
+    pub focal_mm: f32,
+    /// Focal-length window, opened from the view strip, View menu or palette.
+    pub show_focal_length: bool,
     /// Machine details for bug reports (filled in by the app layer).
     pub system_info: crate::support::SystemInfo,
 }
@@ -404,6 +409,8 @@ impl Default for Editor {
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
+            focal_mm: default_focal_mm(),
+            show_focal_length: false,
             quit_now: false,
             system_info: Default::default(),
         }
@@ -518,6 +525,7 @@ impl Editor {
             background_style: self.view.background_style,
             background: self.view.background,
             background_center: self.view.background_center,
+            focal_mm: self.focal_mm,
             recent_files: self.recent_files.clone(),
         }
     }
@@ -532,6 +540,36 @@ impl Editor {
     pub fn reset_background(&mut self) {
         self.view.reset_background();
         self.status = "Viewport background reset to the default gradient".into();
+    }
+
+    /// Apply a focal length. `announce` updates the status bar; loading
+    /// settings stays quiet so the welcome text is not replaced.
+    fn apply_focal_mm(&mut self, mm: f32, announce: bool) {
+        let mm = quantize_focal_mm(mm);
+        if (mm - self.focal_mm).abs() < 1e-4 {
+            return;
+        }
+        self.camera.set_focal_length_mm(mm);
+        self.focal_mm = mm;
+        if announce {
+            let deg = self.camera.fov_y.to_degrees();
+            self.status = if self.camera.orthographic {
+                format!("Focal length {mm:.2} mm ({deg:.1}°). Orthographic view is unchanged.")
+            } else {
+                format!("Focal length {mm:.2} mm, {deg:.1}° vertical field of view")
+            };
+        }
+    }
+
+    /// Set the perspective lens. The subject at the orbit target keeps its
+    /// size; zoom (the camera distance the wheel changes) is left as it was.
+    pub fn set_focal_mm(&mut self, mm: f32) {
+        self.apply_focal_mm(mm, true);
+    }
+
+    /// Back to the lens the viewport shipped with (35° vertical).
+    pub fn reset_focal_length(&mut self) {
+        self.apply_focal_mm(default_focal_mm(), true);
     }
 
     /// Whether viewport shading (ambient occlusion or cavity) is on.
@@ -595,6 +633,7 @@ impl Editor {
         self.view.background = s.background;
         self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
+        self.apply_focal_mm(s.focal_mm, false);
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
@@ -2449,6 +2488,7 @@ mod tests {
             background_style: BackgroundStyle::Flat,
             background: [0.15, 0.16, 0.18],
             background_center: [0.3, 0.32, 0.34],
+            focal_mm: 50.0,
             recent_files: vec![std::path::PathBuf::from("/tmp/a.oxb")],
         };
         let mut e = Editor::default();
@@ -2876,5 +2916,55 @@ mod tests {
         };
         assert_eq!(back_moved(false), 0);
         assert!(back_moved(true) > 10);
+    }
+
+    #[test]
+    fn focal_length_is_remembered_and_leaves_zoom_working() {
+        let mut e = editor();
+        let vp = Vec2::new(e.canvas[2], e.canvas[3]);
+        let on_plane = e.camera.target + e.camera.up() * 0.4;
+        let before = e.camera.project(on_plane, vp).unwrap();
+        e.set_focal_mm(18.0);
+        let after = e.camera.project(on_plane, vp).unwrap();
+        assert!(before.distance(after) < 0.5, "{before} -> {after}");
+        assert!((e.focal_mm - 18.0).abs() < 1e-4);
+        assert!(e.status.contains("18.00"));
+        assert!((e.camera.fov_y - oxy_render::fov_y_from_focal_mm(18.0)).abs() < 1e-5);
+
+        // Orthographic framing does not move when the lens changes.
+        e.camera.orthographic = true;
+        let ortho = e.camera.project(on_plane, vp).unwrap();
+        e.set_focal_mm(135.0);
+        let ortho_after = e.camera.project(on_plane, vp).unwrap();
+        assert!(ortho.distance(ortho_after) < 0.05, "{ortho} -> {ortho_after}");
+        assert!(e.status.contains("Orthographic"));
+
+        e.reset_focal_length();
+        assert!((e.camera.fov_y - oxy_render::DEFAULT_FOV_Y).abs() < 1e-6);
+        assert!((e.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-6);
+
+        e.camera.orthographic = false;
+        e.set_focal_mm(50.0);
+        let saved = e.settings();
+        assert!((saved.focal_mm - 50.0).abs() < 1e-4);
+        let mut next = editor();
+        let span = next.camera.distance * (next.camera.fov_y * 0.5).tan();
+        next.apply_settings(&saved);
+        assert!((next.focal_mm - 50.0).abs() < 1e-4);
+        assert!((next.camera.fov_y - oxy_render::fov_y_from_focal_mm(50.0)).abs() < 1e-5);
+        let span_after = next.camera.distance * (next.camera.fov_y * 0.5).tan();
+        assert!((span - span_after).abs() / span < 1e-3, "loading a lens keeps the framed size");
+        // The wheel still zooms.
+        next.camera.zoom(1.0);
+        let zoomed = next.camera.distance * (next.camera.fov_y * 0.5).tan();
+        assert!(zoomed < span_after * 0.95);
+
+        // Out of range clamps; the default text value is not a second lens.
+        e.set_focal_mm(1.0);
+        assert!((e.focal_mm - 15.0).abs() < 1e-4);
+        e.set_focal_mm(9_999.0);
+        assert!((e.focal_mm - 200.0).abs() < 1e-3);
+        e.set_focal_mm(f32::NAN);
+        assert!((e.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-6);
     }
 }

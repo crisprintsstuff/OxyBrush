@@ -7,7 +7,7 @@ use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
-use oxy_render::{BackgroundStyle, MatcapPreset};
+use oxy_render::{BackgroundStyle, FOCAL_MM_MAX, FOCAL_MM_MIN, FOCAL_PRESETS_MM, MatcapPreset};
 use oxy_sculpt::{Axis, BrushKind, Falloff};
 
 /// Actions that need the platform layer (file dialogs).
@@ -226,6 +226,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.camera.snap(0.0, 1.55);
                 }
                 ui.checkbox(&mut ed.camera.orthographic, "Orthographic  (O)");
+                ui.menu_button("Focal length", |ui| {
+                    ui.set_min_width(280.0);
+                    focal_length_controls(ui, ed);
+                });
                 ui.checkbox(&mut ed.view.show_groups, "Face group colors  (G)");
                 ui.separator();
                 ui.label("Shading");
@@ -359,6 +363,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
     background_window(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
+    focal_length_window(ui.ctx(), ed);
     if let Some(a) = crate::palette::window(ui.ctx(), ed) {
         action = Some(a);
     }
@@ -950,6 +955,102 @@ fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHan
     })
 }
 
+fn focal_preset_name(mm: f32) -> &'static str {
+    match mm.round() as i32 {
+        18 => "wide",
+        35 => "moderate wide",
+        50 => "natural",
+        85 => "short telephoto",
+        135 => "telephoto",
+        _ => "lens",
+    }
+}
+
+/// Slider, typed millimeters, field of view, presets and reset.
+fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("35mm equivalent").weak().small());
+    let mut mm = ed.focal_mm;
+    ui.spacing_mut().slider_width = 160.0;
+    let slider = ui
+        .add(
+            egui::Slider::new(&mut mm, FOCAL_MM_MIN..=FOCAL_MM_MAX)
+                .logarithmic(true)
+                .suffix(" mm")
+                .max_decimals(2)
+                .min_decimals(2),
+        )
+        .on_hover_text(
+            "Shorter is wider, with more perspective. Longer flattens depth. The model stays the same size.",
+        );
+    let typed = ui
+        .horizontal(|ui| {
+            let r = ui
+                .add(
+                    egui::DragValue::new(&mut mm)
+                        .range(FOCAL_MM_MIN..=FOCAL_MM_MAX)
+                        .speed(0.05)
+                        .max_decimals(2)
+                        .min_decimals(2)
+                        .suffix(" mm"),
+                )
+                .on_hover_text("Type a focal length from 15 to 200 mm");
+            let aspect = ed.canvas[2] / ed.canvas[3].max(1.0);
+            let (horizontal, vertical) = ed.camera.fov_degrees(aspect);
+            ui.label(format!("{vertical:.1}° vertical")).on_hover_text(format!(
+                "Field of view: {vertical:.1}° vertical, {horizontal:.1}° horizontal at this window's shape"
+            ));
+            r
+        })
+        .inner;
+    if slider.changed() || typed.changed() {
+        ed.set_focal_mm(mm);
+    }
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for preset in FOCAL_PRESETS_MM {
+            let on = (ed.focal_mm - preset).abs() < 0.05;
+            let label = format!("{preset:.0}");
+            if ui
+                .selectable_label(on, label)
+                .on_hover_text(format!("{preset:.0} mm, {}", focal_preset_name(preset)))
+                .clicked()
+            {
+                ed.set_focal_mm(preset);
+            }
+        }
+        let at_default = (ed.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-3;
+        if ui
+            .add_enabled(!at_default, egui::Button::new("Reset"))
+            .on_hover_text("Back to the default lens: 35° vertical, about 38.06 mm")
+            .clicked()
+        {
+            ed.reset_focal_length();
+        }
+    });
+    let note = if ed.camera.orthographic {
+        "Orthographic view ignores the lens. It applies again in perspective."
+    } else {
+        "Zoom is separate: the wheel still moves you closer or further."
+    };
+    ui.label(RichText::new(note).weak().small());
+}
+
+/// Floating copy of the lens controls, for the view strip and command palette.
+fn focal_length_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_focal_length {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Focal length")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .default_width(300.0)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-64.0, 48.0))
+        .show(ctx, |ui| focal_length_controls(ui, ed));
+    ed.show_focal_length = open;
+}
+
 /// Vertical strip beside the viewport: navigation you can drag (useful with
 /// a pen or touch screen) and view toggles.
 fn view_strip(ui: &mut Ui, ed: &mut Editor) {
@@ -995,6 +1096,17 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             let ortho = ed.camera.orthographic;
             if widgets::icon_button(ui, Icon::Ortho, ortho, true, "Orthographic view (O)").clicked() {
                 ed.camera.orthographic = !ortho;
+            }
+            if widgets::icon_button(
+                ui,
+                Icon::Lens,
+                ed.show_focal_length,
+                true,
+                "Focal length: perspective lens in millimeters. Orthographic view is unchanged.",
+            )
+            .clicked()
+            {
+                ed.show_focal_length = !ed.show_focal_length;
             }
             let mask = ed.view.show_mask;
             if widgets::icon_button(ui, Icon::Mask, mask, true, "Show mask (M)").clicked() {
@@ -2499,6 +2611,8 @@ mod tests {
         ed.show_panels = true;
         ed.guide.open = true;
         ed.guide.query = "mask".into();
+        ed.show_focal_length = true;
+        ed.camera.orthographic = true;
         ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
         run_frames(&mut ed, 2);
         assert!(ed.palette.is_some(), "the palette stays open until something is chosen");

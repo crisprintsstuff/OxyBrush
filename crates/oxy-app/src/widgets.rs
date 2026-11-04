@@ -198,6 +198,8 @@ pub enum Icon {
     Solo,
     Shading,
     Transform,
+    /// Perspective lens (focal length).
+    Lens,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -403,6 +405,12 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             let b = Rect::from_center_size(ctr + vec2(0.0, r * 0.45), vec2(r * 1.5, r * 0.6));
             p.add(Shape::line(vec![b.left_top(), b.left_bottom(), b.right_bottom(), b.right_top()], s));
             arrow(p, ctr + vec2(0.0, -r * 0.85), ctr + vec2(0.0, r * 0.35), s);
+        }
+        Icon::Lens => {
+            // A lens barrel: two rings and a focal-length index mark.
+            p.circle_stroke(ctr, r * 0.62, s);
+            p.circle_stroke(ctr, r * 0.28, s);
+            p.line_segment([ctr + vec2(0.0, -r * 0.62), ctr + vec2(0.0, -r * 0.95)], s);
         }
     }
 }
