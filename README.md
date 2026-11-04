@@ -101,8 +101,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Background jobs:** remesh, merge and decimate run on a worker thread, so the UI stays responsive.
 - **Chunked mesh engine:** a stroke only re-computes, re-uploads and snapshots the regions it touches.
 - **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
-- **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets), with **ambient occlusion and cavity shading** that darken folds, creases and pores so fine detail reads clearly (toggle in the view strip, strengths in View > Shading).
-- **Import/export:** OBJ and STL import (as new pieces). OBJ and binary STL export of all visible pieces (3D-printing ready).
+- **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets), with **ambient occlusion and cavity shading** that darken folds, creases and pores so fine detail reads clearly (toggle in the view strip, strengths in View > Shading). Load your own matcaps (PNG or JPEG) from the material picker, and switch to **flat shading** in the View menu to see every polygon.
+- **Import/export:** OBJ and STL import (each object in an OBJ file becomes its own piece). OBJ and binary STL export of all visible pieces (3D-printing ready).
 - **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Optional updates:** off by default. Settings > Updates can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Help > Check for updates checks once on demand. Only GitHub is contacted and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
@@ -131,6 +131,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |
 | `G` | Face group colors |
+| Shift+drag on empty space | Orbit in 45° steps |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | `F1` | Full shortcut list |

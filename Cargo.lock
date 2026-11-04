@@ -2561,6 +2561,7 @@ dependencies = [
  "wgpu",
  "winit",
  "winresource",
+ "zune-jpeg",
 ]
 
 [[package]]

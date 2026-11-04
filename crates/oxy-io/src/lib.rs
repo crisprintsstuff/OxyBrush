@@ -48,6 +48,48 @@ pub fn import(path: &Path) -> Result<Mesh> {
     }
 }
 
+/// Import by file extension, keeping separate objects apart: each named
+/// OBJ object (`o`) or group (`g`) becomes its own `(name, mesh)`; STL files
+/// give one. Objects with the same name are combined, and objects without
+/// triangles are skipped.
+pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
+    let stem = path.file_stem().map_or("Imported".into(), |s| s.to_string_lossy().into_owned());
+    match extension(path).as_str() {
+        "obj" => import_obj_pieces(path, &stem),
+        "stl" => Ok(vec![(stem, import_stl(&std::fs::read(path)?)?)]),
+        other => Err(Error::Unsupported(other.to_string())),
+    }
+}
+
+fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
+    let opts = tobj::LoadOptions { triangulate: true, single_index: false, ..Default::default() };
+    let (models, _) = tobj::load_obj(path, &opts).map_err(Error::Obj)?;
+    // (name, positions, triangles) in file order, merged by name.
+    let mut parts: Vec<(String, Vec<Vec3>, Vec<[u32; 3]>)> = Vec::new();
+    for m in models {
+        if m.mesh.indices.len() < 3 {
+            continue;
+        }
+        let name =
+            if m.name.trim().is_empty() || m.name == "unnamed_object" { stem.to_owned() } else { m.name.clone() };
+        let i = match parts.iter().position(|p| p.0 == name) {
+            Some(i) => i,
+            None => {
+                parts.push((name, Vec::new(), Vec::new()));
+                parts.len() - 1
+            }
+        };
+        let (_, positions, tris) = &mut parts[i];
+        let base = positions.len() as u32;
+        positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
+        tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
+    }
+    if parts.is_empty() {
+        return Err(Error::Format("no triangles".into()));
+    }
+    parts.into_iter().map(|(name, positions, tris)| Ok((name, finish(positions, tris)?))).collect()
+}
+
 /// Export by file extension.
 pub fn export(mesh: &Mesh, path: &Path) -> Result<()> {
     let mut w = BufWriter::new(std::fs::File::create(path)?);
@@ -183,6 +225,32 @@ pub fn write_stl(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+
+    #[test]
+    fn obj_objects_become_separate_pieces() {
+        let dir = std::env::temp_dir().join(format!("oxy-io-pieces-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("scene.obj");
+        let tri = |o: f32| format!("v {o} 0 0\nv {} 0 0\nv {o} 1 0\nv {} 1 0\n", o + 1.0, o + 1.0);
+        let text = format!(
+            "o Head\n{}f 1 2 3\nf 2 4 3\no Hat\n{}f 5 6 7\nf 6 8 7\ng Head\n{}f 9 10 11\no Empty\n",
+            tri(0.0),
+            tri(5.0),
+            tri(10.0)
+        );
+        std::fs::write(&p, text).unwrap();
+        let pieces = import_pieces(&p).unwrap();
+        let names: Vec<&str> = pieces.iter().map(|(n, _)| n.as_str()).collect();
+        assert_eq!(names, ["Head", "Hat"], "same names combine, empty objects are skipped");
+        assert_eq!(pieces[0].1.triangle_count(), 3);
+        assert_eq!(pieces[1].1.triangle_count(), 2);
+        // The single-mesh import still combines everything.
+        assert_eq!(import(&p).unwrap().triangle_count(), 5);
+        // A file without object names is one piece named after the file.
+        std::fs::write(&p, format!("{}f 1 2 3\n", tri(0.0))).unwrap();
+        assert_eq!(import_pieces(&p).unwrap()[0].0, "scene");
+        std::fs::remove_dir_all(dir).ok();
+    }
 
     #[test]
     fn stl_roundtrip_welds() {

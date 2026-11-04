@@ -42,7 +42,8 @@ pub struct App {
     gfx: Option<Gfx>,
     egui_ctx: egui::Context,
     editor: Editor,
-    applied_matcap: Option<MatcapPreset>,
+    /// Material last uploaded: a built-in preset, or a custom matcap's name.
+    applied_matcap: Option<(MatcapPreset, Option<String>)>,
     applied_theme: Option<(bool, f32, crate::settings::UiLayout)>,
     applied_title: String,
     last_frame: Instant,
@@ -78,6 +79,10 @@ impl App {
                     e.preset_dir = crate::presets::library_dir();
                     if let Some(dir) = &e.preset_dir {
                         e.presets = crate::presets::load_all(dir);
+                    }
+                    e.matcap_dir = crate::matcaps::library_dir();
+                    if let Some(dir) = &e.matcap_dir {
+                        e.custom_matcaps = crate::matcaps::load_all(dir);
                     }
                 }
                 e.apply_settings(&settings);
@@ -247,9 +252,14 @@ impl App {
         ed.pixels_per_point = ppp;
         ed.canvas = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
 
-        if self.applied_matcap != Some(ed.matcap) {
-            g.viewport.set_matcap(&g.queue, ed.matcap);
-            self.applied_matcap = Some(ed.matcap);
+        let custom = ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i));
+        let want = (ed.matcap, custom.map(|m| m.name.clone()));
+        if self.applied_matcap.as_ref() != Some(&want) {
+            match custom {
+                Some(m) => g.viewport.set_matcap_pixels(&g.queue, &m.pixels),
+                None => g.viewport.set_matcap(&g.queue, ed.matcap),
+            }
+            self.applied_matcap = Some(want);
         }
         ed.poll_job();
         ed.tick_autosave();
@@ -390,6 +400,26 @@ impl App {
                     } else {
                         // Cancelled or failed: keep the document open.
                         ed.pending = None;
+                    }
+                }
+            }
+            UiAction::LoadMatcap => {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Matcap image", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"])
+                    .pick_file()
+                {
+                    // Copy into the library so it is there next time; without a
+                    // library folder, just use it for this session.
+                    let loaded = match &ed.matcap_dir {
+                        Some(dir) => crate::matcaps::import(dir, &p),
+                        None => crate::matcaps::decode(&p).map(|(w, h, rgba)| crate::matcaps::CustomMatcap {
+                            name: p.file_stem().map_or("Matcap".into(), |s| s.to_string_lossy().into_owned()),
+                            pixels: std::sync::Arc::new(crate::matcaps::to_matcap(w, h, &rgba)),
+                        }),
+                    };
+                    match loaded {
+                        Ok(m) => ed.add_custom_matcap(m),
+                        Err(e) => ed.status = format!("Could not load {}: {e}", p.display()),
                     }
                 }
             }

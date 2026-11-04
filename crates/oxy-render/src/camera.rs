@@ -90,6 +90,17 @@ impl Camera {
         self.pitch = (self.pitch + delta_pixels.y * 0.008).clamp(-1.55, 1.55);
     }
 
+    /// Orbit in `step`-radian increments. `free` carries the unsnapped
+    /// angles between calls (start it at the current yaw and pitch), so
+    /// slow drags still reach the next step.
+    pub fn orbit_snapped(&mut self, free: &mut (f32, f32), delta_pixels: Vec2, step: f32) {
+        free.0 -= delta_pixels.x * 0.008;
+        free.1 = (free.1 + delta_pixels.y * 0.008).clamp(-1.55, 1.55);
+        self.yaw = (free.0 / step).round() * step;
+        // Straight down/up is just short of ±90° (the camera keeps an up vector).
+        self.pitch = ((free.1 / step).round() * step).clamp(-1.55, 1.55);
+    }
+
     pub fn pan(&mut self, delta_pixels: Vec2, viewport_height: f32) {
         let s = self.world_per_pixel(self.target, viewport_height);
         let right = self.forward().cross(self.up());
@@ -120,6 +131,20 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn snapped_orbit_lands_on_steps_and_accumulates() {
+        let mut c = Camera { yaw: 0.0, pitch: 0.0, ..Default::default() };
+        let mut free = (c.yaw, c.pitch);
+        let step = std::f32::consts::FRAC_PI_4;
+        // Small moves accumulate until the next step is closer.
+        for _ in 0..20 {
+            c.orbit_snapped(&mut free, Vec2::new(-5.0, 0.0), step);
+        }
+        assert!((c.yaw - step).abs() < 1e-6, "{}", c.yaw);
+        c.orbit_snapped(&mut free, Vec2::new(0.0, 1000.0), step);
+        assert!((c.pitch - 1.55).abs() < 1e-6, "pitch stops just short of straight down");
+    }
 
     #[test]
     fn ray_through_center_hits_target() {

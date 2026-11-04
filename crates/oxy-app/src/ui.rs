@@ -21,6 +21,8 @@ pub enum UiAction {
     SaveThenContinue,
     /// Load a grayscale image as a brush alpha.
     LoadAlpha,
+    /// Load a PNG/JPEG image as a custom matcap.
+    LoadMatcap,
     /// Import a brush preset file.
     ImportBrush,
     /// Export `Editor::request_export_preset` to a file.
@@ -222,10 +224,23 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     );
                 ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))
                     .on_hover_text("Darkens creases and pores and brightens edges, so fine detail reads clearly");
+                ui.checkbox(&mut ed.view.flat_shading, "Flat shading")
+                    .on_hover_text("Show each polygon as a flat facet instead of a smooth surface");
                 ui.separator();
                 ui.label("Material");
                 for m in MatcapPreset::ALL {
-                    ui.radio_value(&mut ed.matcap, m, m.label());
+                    if ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()).clicked() {
+                        ed.matcap = m;
+                        ed.custom_matcap = None;
+                    }
+                }
+                for i in 0..ed.custom_matcaps.len() {
+                    if ui.radio(ed.custom_matcap == Some(i), ed.custom_matcaps[i].name.as_str()).clicked() {
+                        ed.custom_matcap = Some(i);
+                    }
+                }
+                if ui.button("Load matcap…").on_hover_text("A PNG or JPEG image of a lit sphere").clicked() {
+                    ed.request_load_matcap = true;
                 }
                 ui.separator();
                 ui.checkbox(&mut ed.show_panels, "Show panels  (Tab)");
@@ -237,6 +252,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
                 ui.menu_button("Arrange panels", |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
                 ui.checkbox(&mut ed.welcome_at_startup, "Show welcome window at startup");
+                ui.checkbox(&mut ed.stroke_from_empty, "Strokes can start on empty space").on_hover_text(
+                    "Drag from beside the model onto it to sculpt. Orbit with the middle mouse button or the view strip.",
+                );
                 ui.menu_button("Updates", |ui| update_menu(ui, ed));
                 ui.separator();
                 ui.label("Interface scale");
@@ -310,6 +328,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 
     if std::mem::take(&mut ed.request_load_alpha) {
         action = Some(UiAction::LoadAlpha);
+    }
+    if std::mem::take(&mut ed.request_load_matcap) {
+        action = Some(UiAction::LoadMatcap);
     }
     if std::mem::take(&mut ed.request_import_preset) {
         action = Some(UiAction::ImportBrush);
@@ -688,20 +709,72 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             }
         });
 
-        let mat_tex = widgets::material_texture(&ctx, ed.matcap);
-        let r = widgets::tile(ui, Some(&mat_tex), ed.matcap.label(), "Viewport material: click to pick", size);
+        let mat_tex = match ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i)) {
+            Some(m) => custom_matcap_texture(&ctx, m),
+            None => widgets::material_texture(&ctx, ed.matcap),
+        };
+        let label = ed.material_label();
+        let r = widgets::tile(ui, Some(&mat_tex), &label, "Viewport material: click to pick", size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Materials").strong());
             ui.horizontal(|ui| {
                 for m in MatcapPreset::ALL {
                     let t = widgets::material_texture(&ctx, m);
-                    if widgets::thumb(ui, Some(&t), m.label(), ed.matcap == m).clicked() {
+                    if widgets::thumb(ui, Some(&t), m.label(), ed.custom_matcap.is_none() && ed.matcap == m).clicked() {
                         ed.matcap = m;
+                        ed.custom_matcap = None;
                     }
                 }
             });
+            if !ed.custom_matcaps.is_empty() {
+                ui.label(RichText::new("Yours (right-click to remove)").weak().small());
+                let mut remove = None;
+                ui.horizontal_wrapped(|ui| {
+                    for i in 0..ed.custom_matcaps.len() {
+                        let m = &ed.custom_matcaps[i];
+                        let t = custom_matcap_texture(&ctx, m);
+                        let r = widgets::thumb(ui, Some(&t), &m.name, ed.custom_matcap == Some(i));
+                        if r.clicked() {
+                            ed.custom_matcap = Some(i);
+                        }
+                        r.context_menu(|ui| {
+                            if ui.button("Remove").clicked() {
+                                remove = Some(i);
+                            }
+                        });
+                    }
+                });
+                if let Some(i) = remove {
+                    ed.remove_custom_matcap(i);
+                }
+            }
+            if ui.button("Load matcap…").on_hover_text("A PNG or JPEG image of a lit sphere").clicked() {
+                ed.request_load_matcap = true;
+            }
         });
     });
+}
+
+/// Preview of a custom matcap as a round image (cached per name).
+fn custom_matcap_texture(ctx: &egui::Context, m: &crate::matcaps::CustomMatcap) -> egui::TextureHandle {
+    // Keyed by the pixel buffer too, so a re-imported matcap with the same name refreshes.
+    widgets::cached_texture(ctx, ("custom_matcap", m.name.clone(), std::sync::Arc::as_ptr(&m.pixels) as usize), || {
+        let n = oxy_render::MATCAP_SIZE as usize;
+        let px = m
+            .pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .enumerate()
+            .map(|(i, c)| {
+                let (x, y) = ((i % n) as f32 + 0.5, (i / n) as f32 + 0.5);
+                let r = ((x / n as f32 * 2.0 - 1.0).powi(2) + (y / n as f32 * 2.0 - 1.0).powi(2)).sqrt();
+                let a = ((0.96 - r) * n as f32 * 0.5).clamp(0.0, 1.0);
+                Color32::from_rgba_unmultiplied(c[0], c[1], c[2], (a * 255.0) as u8)
+            })
+            .collect();
+        egui::ColorImage::new([n, n], px)
+    })
 }
 
 /// Alpha preview texture (cached per alpha name and size).
@@ -855,8 +928,11 @@ pub fn context_hint(ed: &Editor) -> String {
         (true, false, false) => {
             "Paint to mask · drag on empty space: mask a selection · click empty space: blur".into()
         }
-        (false, true, _) => "Smoothing".into(),
+        (false, true, _) => "Smoothing · drag empty space: orbit in 45° steps".into(),
         (false, false, true) => format!("{}, inverted", ed.brush_kind.label()),
+        _ if ed.stroke_from_empty => {
+            "Drag (also from empty space): sculpt · middle-drag: orbit · right-drag: pan · wheel: zoom".into()
+        }
         _ if ed.layout == UiLayout::Touch => "Drag model: sculpt · drag empty space: orbit · strip: pan, zoom".into(),
         _ => "Drag model: sculpt · drag empty space: orbit · right-drag: pan · wheel: zoom".into(),
     }
@@ -1933,6 +2009,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+LMB empty / RMB", "Pan"),
     ("Alt+LMB on piece", "Make that piece active"),
     ("MMB", "Orbit (Shift: pan)"),
+    ("Shift+drag on empty", "Orbit in 45° steps"),
     ("Wheel", "Zoom"),
     ("Shift (hold)", "Smooth brush"),
     ("Ctrl (hold)", "Mask brush (Alt: unmask)"),
@@ -2178,7 +2255,7 @@ mod tests {
         let mut ed = Editor::default();
         assert!(context_hint(&ed).contains("orbit"));
         ed.modifiers.shift = true;
-        assert_eq!(context_hint(&ed), "Smoothing");
+        assert!(context_hint(&ed).starts_with("Smoothing") && context_hint(&ed).contains("45°"));
         ed.modifiers = crate::editor::Modifiers { ctrl: true, ..Default::default() };
         assert!(context_hint(&ed).contains("mask"));
         ed.modifiers.alt = true;

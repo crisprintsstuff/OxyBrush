@@ -6,7 +6,7 @@
 struct Uniforms {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
-    // y: mask overlay strength, z: viewport aspect
+    // x: flat shading, y: mask overlay strength, z: viewport aspect
     params: vec4<f32>,
     mask_color: vec4<f32>,
     bg_center: vec4<f32>,
@@ -37,6 +37,7 @@ struct VsOut {
     @location(1) mask: f32,
     @location(2) @interpolate(flat) group_color: u32,
     @location(3) view_depth: f32,
+    @location(4) view_pos: vec3<f32>,
 };
 
 // Two targets: the shaded color, and view normal (xyz) + linear depth (w)
@@ -53,7 +54,9 @@ fn vs_main(v: VsIn) -> VsOut {
     o.view_normal = (u.view * vec4<f32>(v.normal, 0.0)).xyz;
     o.mask = v.mask;
     o.group_color = v.group_color;
-    o.view_depth = -(u.view * vec4<f32>(v.position, 1.0)).z;
+    let vp = (u.view * vec4<f32>(v.position, 1.0)).xyz;
+    o.view_depth = -vp.z;
+    o.view_pos = vp;
     return o;
 }
 
@@ -70,6 +73,12 @@ fn fs_main(
     var n = normalize(i.view_normal);
     if (!front) {
         n = -n;
+    }
+    if (u.params.x > 0.5) {
+        // Flat shading: the triangle's own normal from screen-space
+        // derivatives of the view position. It always faces the viewer, so
+        // back faces need no flip.
+        n = normalize(cross(dpdy(i.view_pos), dpdx(i.view_pos)));
     }
     let uv = vec2<f32>(n.x * 0.49 + 0.5, 0.5 - n.y * 0.49);
     var color = textureSample(matcap_tex, matcap_sampler, uv).rgb;
