@@ -7,7 +7,7 @@ use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
-use oxy_render::MatcapPreset;
+use oxy_render::{BackgroundStyle, MatcapPreset};
 use oxy_sculpt::{Axis, BrushKind, Falloff};
 
 /// Actions that need the platform layer (file dialogs).
@@ -238,6 +238,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.checkbox(&mut ed.view.flat_shading, "Flat shading")
                     .on_hover_text("Show each polygon as a flat facet instead of a smooth surface");
                 ui.separator();
+                ui.label("Background");
+                background_menu(ui, ed);
+                ui.separator();
                 ui.label("Material");
                 for m in MatcapPreset::ALL {
                     if ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()).clicked() {
@@ -271,6 +274,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.label("Interface scale");
                 ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05));
                 ui.checkbox(&mut ed.high_contrast, "High-contrast theme");
+                ui.separator();
+                ui.label("Viewport background");
+                background_menu(ui, ed);
+                ui.separator();
                 ui.label("Autosave every");
                 let mut mins = ed.autosaver.interval.as_secs_f32() / 60.0;
                 if ui.add(egui::Slider::new(&mut mins, 1.0..=30.0).suffix(" min")).changed() {
@@ -350,6 +357,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         action = Some(UiAction::ExportBrush);
     }
     dialogs(ui, ed, &mut action);
+    background_window(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     if let Some(a) = crate::palette::window(ui.ctx(), ed) {
         action = Some(a);
@@ -371,6 +379,110 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
+}
+
+/// Style and reset in the View menu and in Settings. Color pickers open in
+/// a window: a menu closes on the click that would open the picker.
+fn background_menu(ui: &mut Ui, ed: &mut Editor) {
+    let before = ed.view.background_style;
+    for style in BackgroundStyle::ALL {
+        let tip = match style {
+            BackgroundStyle::Gradient => {
+                "Soft radial gradient, lighter toward the middle. Remembered between sessions."
+            }
+            BackgroundStyle::Flat => "One solid color. Remembered between sessions.",
+        };
+        ui.radio_value(&mut ed.view.background_style, style, style.label()).on_hover_text(tip);
+    }
+    if ed.view.background_style != before {
+        ed.status = format!("Viewport background: {}", ed.view.background_style.label().to_lowercase());
+    }
+    if ui.button("Colors…").on_hover_text("Center and edge for a gradient, or one color when flat").clicked() {
+        ed.show_background = true;
+    }
+    if ui.button("Reset to default").on_hover_text("Restore the built-in gradient and its colors").clicked() {
+        ed.reset_background();
+    }
+}
+
+fn background_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_background {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Viewport background")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .default_pos(egui::pos2(280.0, 80.0))
+        .show(ctx, |ui| {
+            ui.label(RichText::new("Remembered between sessions.").weak().small());
+            background_controls(ui, ed);
+        });
+    if !open {
+        ed.show_background = false;
+    }
+}
+
+/// Viewport backdrop: gradient (center and edge) or one flat color, plus a reset.
+fn background_controls(ui: &mut Ui, ed: &mut Editor) {
+    let before = ed.view.background_style;
+    for style in BackgroundStyle::ALL {
+        let tip = match style {
+            BackgroundStyle::Gradient => {
+                "Soft radial gradient, lighter toward the middle. Remembered between sessions."
+            }
+            BackgroundStyle::Flat => "One solid color. Remembered between sessions.",
+        };
+        ui.radio_value(&mut ed.view.background_style, style, style.label()).on_hover_text(tip);
+    }
+    if ed.view.background_style != before {
+        ed.status = format!("Viewport background: {}", ed.view.background_style.label().to_lowercase());
+    }
+    match ed.view.background_style {
+        BackgroundStyle::Gradient => {
+            ui.horizontal(|ui| {
+                ui.label("Center");
+                edit_linear_color(ui, &mut ed.view.background_center)
+                    .on_hover_text("Color at the middle of the viewport");
+                ui.label("Edge");
+                edit_linear_color(ui, &mut ed.view.background).on_hover_text("Color toward the edges of the viewport");
+            });
+        }
+        BackgroundStyle::Flat => {
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                edit_linear_color(ui, &mut ed.view.background).on_hover_text("Solid viewport color");
+            });
+        }
+    }
+    if ui.button("Reset to default").on_hover_text("Restore the built-in gradient and its colors").clicked() {
+        ed.reset_background();
+    }
+}
+
+/// sRGB byte to linear light, the space `ViewSettings` background colors use.
+fn srgb_byte_to_linear(b: u8) -> f64 {
+    let s = b as f64 / 255.0;
+    if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+}
+
+fn linear_to_srgb_byte(x: f64) -> u8 {
+    let x = x.clamp(0.0, 1.0);
+    let s = if x <= 0.0031308 { x * 12.92 } else { 1.055 * x.powf(1.0 / 2.4) - 0.055 };
+    (s * 255.0).round().clamp(0.0, 255.0) as u8
+}
+
+/// Color button for a linear RGB color. The stored value changes only when
+/// the picked sRGB bytes change, so opening the button doesn't quantize a
+/// default that wasn't edited.
+fn edit_linear_color(ui: &mut Ui, color: &mut [f64; 3]) -> egui::Response {
+    let mut bytes = color.map(linear_to_srgb_byte);
+    let response = ui.color_edit_button_srgb(&mut bytes);
+    if response.changed() {
+        *color = bytes.map(srgb_byte_to_linear);
+    }
+    response
 }
 
 /// Quick-access bar under the menus: undo, brush size, symmetry, levels, view.
@@ -2358,6 +2470,13 @@ mod tests {
             });
             // No GPU here: discard texture uploads (fonts, alpha previews).
             out.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn srgb_bytes_round_trip_through_linear() {
+        for b in 0..=255 {
+            assert_eq!(linear_to_srgb_byte(srgb_byte_to_linear(b)), b, "byte {b}");
         }
     }
 

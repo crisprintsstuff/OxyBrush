@@ -40,7 +40,8 @@ struct GpuVertex {
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
     view: [[f32; 4]; 4],
-    /// x: flat shading (1) or smooth (0), y: mask overlay strength, z: viewport aspect (w / h)
+    /// x: flat shading (1) or smooth (0), y: mask overlay strength,
+    /// z: viewport aspect (w / h), w: flat background (1) or gradient (0).
     params: [f32; 4],
     mask_color: [f32; 4],
     /// Background gradient: color at the center and at the edges (linear).
@@ -65,15 +66,53 @@ struct PieceUniforms {
     flags: [f32; 4],
 }
 
+/// Viewport backdrop: a soft radial gradient, or one flat color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BackgroundStyle {
+    /// Soft radial gradient from `background_center` to `background`.
+    #[default]
+    Gradient,
+    /// A single color, `background`. The center color is kept so switching
+    /// back to a gradient restores it.
+    Flat,
+}
+
+impl BackgroundStyle {
+    pub const ALL: [Self; 2] = [Self::Gradient, Self::Flat];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Gradient => "Gradient",
+            Self::Flat => "Flat",
+        }
+    }
+
+    /// Key in the settings file.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Gradient => "gradient",
+            Self::Flat => "flat",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.key() == k)
+    }
+}
+
 /// Per-frame display options.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ViewSettings {
     pub show_mask: bool,
     pub show_groups: bool,
-    /// Background color at the viewport edges (linear RGB).
+    /// How the viewport backdrop is drawn.
+    pub background_style: BackgroundStyle,
+    /// Background color at the viewport edges, or the only color when
+    /// `background_style` is flat (linear RGB).
     pub background: [f64; 3],
-    /// Background color at the center (linear RGB); a soft radial gradient
-    /// to `background` keeps the model readable against the backdrop.
+    /// Background color at the center of a gradient (linear RGB). A soft
+    /// radial falloff to `background` keeps the model readable. Ignored
+    /// while the style is flat, and kept so the gradient can come back.
     pub background_center: [f64; 3],
     /// Ambient occlusion strength, 0 (off) to 1: darkens areas that other
     /// parts of the surface shade, such as the inside of folds.
@@ -86,11 +125,22 @@ pub struct ViewSettings {
     pub flat_shading: bool,
 }
 
+impl ViewSettings {
+    /// Put the backdrop back to the built-in gradient and its colors.
+    pub fn reset_background(&mut self) {
+        let d = Self::default();
+        self.background_style = d.background_style;
+        self.background = d.background;
+        self.background_center = d.background_center;
+    }
+}
+
 impl Default for ViewSettings {
     fn default() -> Self {
         Self {
             show_mask: true,
             show_groups: false,
+            background_style: BackgroundStyle::Gradient,
             background: [0.010, 0.011, 0.013],
             background_center: [0.062, 0.064, 0.070],
             ambient_occlusion: 0.7,
@@ -653,7 +703,7 @@ impl ViewportRenderer {
                 if settings.flat_shading { 1.0 } else { 0.0 },
                 if settings.show_mask { 1.0 } else { 0.0 },
                 aspect,
-                0.0,
+                if settings.background_style == BackgroundStyle::Flat { 1.0 } else { 0.0 },
             ],
             mask_color: [0.25, 0.3, 0.45, 1.0],
             bg_center: rgba(settings.background_center),
@@ -820,6 +870,27 @@ mod tests {
         // std140-style sizes the shaders expect (vec4/mat4 aligned).
         assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 4 * 16);
         assert_eq!(std::mem::size_of::<PostUniforms>(), 3 * 16);
+    }
+
+    #[test]
+    fn background_reset_restores_the_gradient_without_touching_shading() {
+        let mut s = ViewSettings {
+            background_style: BackgroundStyle::Flat,
+            background: [0.2, 0.3, 0.4],
+            background_center: [0.8, 0.7, 0.6],
+            flat_shading: true,
+            ambient_occlusion: 0.1,
+            ..Default::default()
+        };
+        s.reset_background();
+        let d = ViewSettings::default();
+        assert_eq!(s.background_style, BackgroundStyle::Gradient);
+        assert_eq!(s.background, d.background);
+        assert_eq!(s.background_center, d.background_center);
+        assert!(s.flat_shading);
+        assert_eq!(s.ambient_occlusion, 0.1);
+        assert_eq!(BackgroundStyle::from_key("flat"), Some(BackgroundStyle::Flat));
+        assert_eq!(BackgroundStyle::from_key("nope"), None);
     }
 
     #[test]
