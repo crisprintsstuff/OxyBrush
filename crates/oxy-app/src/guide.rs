@@ -22,8 +22,10 @@ pub const TOPICS: &[Topic] = &[
         body: "Drag on empty space to orbit around the model. Right-drag (or Alt+drag on empty space) pans, and the mouse wheel zooms. With a pen, use the drag buttons in the strip beside the viewport.\n\n\
 - F frames the whole scene.\n\
 - Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others.\n\
+- Hold Shift while orbiting to snap the view to 45° steps.\n\
 - O switches between perspective and orthographic.\n\
-- Tab hides the panels to give the model the whole window.",
+- Tab hides the panels to give the model the whole window.\n\n\
+Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.",
     },
     Topic {
         title: "Sculpting basics",
@@ -123,7 +125,7 @@ OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it eve
     Topic {
         title: "Importing and exporting",
         keywords: "export import obj stl gltf glb ply 3d print file other programs game engine lod split cli",
-        body: "Ctrl+I imports an OBJ or STL file as a new piece. Ctrl+E exports every visible piece (hidden faces are left out): glTF/GLB keeps each piece as its own object for game engines and other 3D tools, OBJ writes one object per piece, and STL and PLY combine them (STL is the usual choice for 3D printing).\n\n\
+        body: "Ctrl+I imports an OBJ or STL file; each object in an OBJ file becomes its own piece. Ctrl+E exports every visible piece (hidden faces are left out): glTF/GLB keeps each piece as its own object for game engines and other 3D tools, OBJ writes one object per piece, and STL and PLY combine them (STL is the usual choice for 3D printing).\n\n\
 - Pieces > Make LOD chain adds lighter copies at 1/2, 1/4 and 1/8 of the triangles.\n\
 - Pieces > Split by face groups or Split into loose parts turns one piece into several.\n\
 - The oxybrush-cli command-line tool converts, remeshes, decimates, makes LODs and splits files without opening the app.",
@@ -136,8 +138,10 @@ Interface scale and a high-contrast theme are in Settings too. All of these are 
     },
     Topic {
         title: "Shading and materials",
-        keywords: "material matcap ambient occlusion cavity view look",
-        body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.",
+        keywords: "material matcap ambient occlusion cavity view look flat faceted custom image",
+        body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.\n\n\
+- Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
+- View > Flat shading shows every polygon as a flat facet.",
     },
     Topic {
         title: "Updates and privacy",

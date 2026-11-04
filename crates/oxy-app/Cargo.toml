@@ -37,6 +37,8 @@ env_logger.workspace = true
 rfd.workspace = true
 dirs.workspace = true
 png.workspace = true
+# JPEG matcaps (pure Rust; MIT OR Apache-2.0 OR Zlib).
+zune-jpeg = "0.5"
 oxy-update.workspace = true
 
 [lints]

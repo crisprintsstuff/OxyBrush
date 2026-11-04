@@ -81,6 +81,9 @@ pub enum SelectAction {
 pub enum Drag {
     None,
     Orbit,
+    /// Pressed on empty space with "strokes from empty space" on: the
+    /// stroke starts once the pointer reaches the model.
+    PendingStroke,
     Pan,
     Stroke {
         stroke: Box<Stroke>,
@@ -279,6 +282,19 @@ pub struct Editor {
     pub quick_menu: Option<QuickMenu>,
     /// Where the right button went down, to tell a click from a pan.
     rmb_press: Option<Vec2>,
+    /// Let a drag on empty space start a stroke when it reaches the model
+    /// (orbit with the middle mouse button instead).
+    pub stroke_from_empty: bool,
+    /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
+    snap_orbit: Option<(f32, f32)>,
+    /// User matcaps (from the library folder), and which one is in use
+    /// instead of the built-in `matcap`.
+    pub custom_matcaps: Vec<crate::matcaps::CustomMatcap>,
+    pub custom_matcap: Option<usize>,
+    /// Library folder for custom matcaps; None in automated runs.
+    pub matcap_dir: Option<PathBuf>,
+    /// Set by the UI to ask the platform layer for a matcap file dialog.
+    pub request_load_matcap: bool,
     /// Paint brush and fill color (sRGB, 0..=1).
     pub paint_color: Vec3,
     /// Transform gizmo mode; None hides the gizmo.
@@ -372,6 +388,12 @@ impl Default for Editor {
             grab_through: false,
             quick_menu: None,
             rmb_press: None,
+            stroke_from_empty: false,
+            snap_orbit: None,
+            custom_matcaps: Vec::new(),
+            custom_matcap: None,
+            matcap_dir: None,
+            request_load_matcap: false,
             paint_color: Vec3::new(0.75, 0.22, 0.18),
             gizmo: None,
             gizmo_pivot: None,
@@ -483,6 +505,12 @@ impl Editor {
             updates: self.updater.mode,
             update_last_check: self.updater.last_check,
             update_skip: self.updater.skip.clone(),
+            flat_shading: self.view.flat_shading,
+            stroke_from_empty: self.stroke_from_empty,
+            custom_matcap: self
+                .custom_matcap
+                .and_then(|i| self.custom_matcaps.get(i))
+                .map_or(String::new(), |m| m.name.clone()),
             recent_files: self.recent_files.clone(),
         }
     }
@@ -543,6 +571,11 @@ impl Editor {
         self.updater.mode = s.updates;
         self.updater.last_check = s.update_last_check;
         self.updater.skip = s.update_skip.clone();
+        self.view.flat_shading = s.flat_shading;
+        self.stroke_from_empty = s.stroke_from_empty;
+        // The library is loaded first, so the remembered matcap can be found by name.
+        self.custom_matcap =
+            self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
         self.recent_files = s.recent_files.clone();
     }
 
@@ -642,36 +675,49 @@ impl Editor {
             return;
         }
         if let Some(hit) = active_hit {
-            let (kind, invert) = self.effective_brush();
-            let mode = if kind.is_grab_like() || kind == BrushKind::SnakeHook || kind == BrushKind::Smooth || m.ctrl {
-                // Moving brushes, and the Shift/Ctrl stand-ins, always work freehand.
-                StrokeMode::Freehand
-            } else {
-                self.stroke_mode
-            };
-            if mode != StrokeMode::Freehand {
-                self.drag = Drag::Deferred { mode, kind, invert, start: p };
-                return;
-            }
-            let radius = self.world_radius(hit.point, self.brush_radius_pt);
-            let mut stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
-            let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
-            let piece = self.scene.active_mut();
-            self.history.begin_with(
-                kind.label(),
-                piece.id,
-                &piece.mesh,
-                kind == BrushKind::Paint || piece.mesh.is_painted(),
-            );
-            let history = &mut self.history;
-            stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
-            let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
-            self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy };
+            self.start_stroke_at(p, hit, d);
         } else if m.alt {
             self.drag = Drag::Pan;
+        } else if self.stroke_from_empty && self.scene.active().visible && !self.job_blocks_active() {
+            // The stroke starts once the pointer reaches the model.
+            self.drag = Drag::PendingStroke;
         } else {
             self.drag = Drag::Orbit;
         }
+    }
+
+    /// Start a stroke (or a line/stamp) at `hit`, under window pixel `p`
+    /// along ray direction `d`.
+    fn start_stroke_at(&mut self, p: Vec2, hit: oxy_mesh::RayHit, d: Vec3) {
+        let (kind, invert) = self.effective_brush();
+        let mode = if kind.is_grab_like()
+            || kind == BrushKind::SnakeHook
+            || kind == BrushKind::Smooth
+            || self.active_modifiers().ctrl
+        {
+            // Moving brushes, and the Shift/Ctrl stand-ins, always work freehand.
+            StrokeMode::Freehand
+        } else {
+            self.stroke_mode
+        };
+        if mode != StrokeMode::Freehand {
+            self.drag = Drag::Deferred { mode, kind, invert, start: p };
+            return;
+        }
+        let radius = self.world_radius(hit.point, self.brush_radius_pt);
+        let mut stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
+        let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
+        let piece = self.scene.active_mut();
+        self.history.begin_with(
+            kind.label(),
+            piece.id,
+            &piece.mesh,
+            kind == BrushKind::Paint || piece.mesh.is_painted(),
+        );
+        let history = &mut self.history;
+        stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
+        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy };
     }
 
     /// Pen pressure after the pressure curve.
@@ -840,7 +886,21 @@ impl Editor {
         match &mut self.drag {
             Drag::None => false,
             Drag::Orbit => {
-                self.camera.orbit(delta);
+                // Holding Shift snaps the view to 45° steps.
+                if self.modifiers.shift {
+                    let free = self.snap_orbit.get_or_insert((self.camera.yaw, self.camera.pitch));
+                    self.camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
+                } else {
+                    self.snap_orbit = None;
+                    self.camera.orbit(delta);
+                }
+                true
+            }
+            Drag::PendingStroke => {
+                let (o, d) = self.camera.ray(self.canvas_local(pos), size);
+                if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                    self.start_stroke_at(pos, hit, d);
+                }
                 true
             }
             Drag::Pan => {
@@ -928,6 +988,7 @@ impl Editor {
         {
             self.quick_menu = Some(QuickMenu { pos: p0, held: false });
         }
+        self.snap_orbit = None;
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } | Drag::Gizmo(_) => self.history.commit(),
             Drag::Deferred { mode, kind, invert, start } => {
@@ -1188,17 +1249,65 @@ impl Editor {
         }
     }
 
+    /// Import a mesh file. Each object in it becomes its own piece (one
+    /// undo step for all of them).
     pub fn import(&mut self, path: &Path) {
-        match oxy_io::import(path) {
-            Ok(mesh) => {
-                let base = path.file_stem().map_or("Imported".into(), |s| s.to_string_lossy().into_owned());
-                let tris = mesh.triangle_count();
-                self.add_piece(Piece::new(self.scene.unique_name(&base), mesh), "Import");
+        match oxy_io::import_pieces(path) {
+            Ok(parts) => {
+                self.pointer_up();
+                let tris: usize = parts.iter().map(|(_, m)| m.triangle_count()).sum();
+                let n = parts.len();
+                let mut steps = Vec::with_capacity(n);
+                for (name, mesh) in parts {
+                    let index = self.scene.pieces.len();
+                    let name = self.scene.unique_name(&name);
+                    self.scene.pieces.push(Piece::new(name, mesh));
+                    steps.push(Step::Inserted { index });
+                }
+                // Make the first imported piece active.
+                self.scene.set_active(self.scene.pieces.len() - n);
+                self.history.record_compound("Import", steps);
                 self.camera.frame(self.scene.bounds());
-                self.status = format!("Imported {} ({tris} triangles)", path.display());
+                let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
+                self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
                 self.remember_recent(path);
             }
             Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
+        }
+    }
+
+    /// Add a custom matcap to the list and use it.
+    pub fn add_custom_matcap(&mut self, m: crate::matcaps::CustomMatcap) {
+        self.status = format!("Loaded matcap {}", m.name);
+        self.custom_matcaps.push(m);
+        self.custom_matcap = Some(self.custom_matcaps.len() - 1);
+    }
+
+    /// Remove custom matcap `i` (and its library file).
+    pub fn remove_custom_matcap(&mut self, i: usize) {
+        if i >= self.custom_matcaps.len() {
+            return;
+        }
+        let m = self.custom_matcaps.remove(i);
+        if let Some(dir) = &self.matcap_dir
+            && let Err(e) = crate::matcaps::remove(dir, &m.name)
+        {
+            self.status = format!("Could not delete matcap {}: {e}", m.name);
+        } else {
+            self.status = format!("Removed matcap {}", m.name);
+        }
+        self.custom_matcap = match self.custom_matcap {
+            Some(c) if c == i => None,
+            Some(c) if c > i => Some(c - 1),
+            c => c,
+        };
+    }
+
+    /// Name of the material in use.
+    pub fn material_label(&self) -> String {
+        match self.custom_matcap.and_then(|i| self.custom_matcaps.get(i)) {
+            Some(m) => m.name.clone(),
+            None => self.matcap.label().to_owned(),
         }
     }
 
@@ -2312,6 +2421,9 @@ mod tests {
             updates: crate::settings::UpdateMode::Download,
             update_last_check: 42,
             update_skip: "1.2.3".into(),
+            flat_shading: true,
+            stroke_from_empty: true,
+            custom_matcap: String::new(),
             recent_files: vec![std::path::PathBuf::from("/tmp/a.oxb")],
         };
         let mut e = Editor::default();
@@ -2542,6 +2654,102 @@ mod tests {
         assert!(!f.paste_preset_code("garbage"));
         f.save_preset("   ");
         assert!(f.status.contains("name"), "{}", f.status);
+    }
+    #[test]
+    fn strokes_can_start_on_empty_space_when_enabled() {
+        let mut e = editor();
+        let corner = Vec2::new(20.0, 20.0);
+        e.pointer = Some(corner);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Orbit), "off by default: empty space orbits");
+        e.pointer_up();
+
+        e.stroke_from_empty = true;
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer = Some(corner);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::PendingStroke));
+        e.pointer_moved(Vec2::new(200.0, 150.0));
+        assert!(matches!(e.drag, Drag::PendingStroke), "still off the model");
+        for i in 0..=20 {
+            e.pointer_moved(Vec2::new(250.0 + i as f32 * 10.0, 300.0));
+        }
+        assert!(e.is_stroking(), "the stroke starts on reaching the model");
+        e.pointer_up();
+        assert_ne!(e.scene.active().mesh.positions, before);
+        assert_eq!(e.history.undo_labels().count(), 1);
+        // Ctrl+drag on empty space still makes a selection.
+        e.modifiers.ctrl = true;
+        e.pointer = Some(corner);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Select { .. }));
+        e.cancel_drag();
+    }
+
+    #[test]
+    fn shift_orbit_snaps_to_45_degrees() {
+        let mut e = editor();
+        e.pointer = Some(Vec2::new(20.0, 20.0));
+        e.modifiers.shift = true;
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Orbit));
+        for i in 1..=30 {
+            e.pointer_moved(Vec2::new(20.0 + i as f32 * 3.0, 20.0 + i as f32));
+            let q = std::f32::consts::FRAC_PI_4;
+            assert!(((e.camera.yaw / q) - (e.camera.yaw / q).round()).abs() < 1e-4, "yaw {}", e.camera.yaw);
+        }
+        assert!(e.camera.yaw.abs() > 0.1, "a long drag reaches the next step");
+        e.pointer_up();
+        // Without Shift, orbiting is free again.
+        e.modifiers.shift = false;
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(e.pointer.unwrap() + Vec2::new(7.0, 0.0));
+        let q = std::f32::consts::FRAC_PI_4;
+        assert!(((e.camera.yaw / q) - (e.camera.yaw / q).round()).abs() > 1e-3);
+    }
+
+    #[test]
+    fn importing_a_file_with_objects_adds_one_piece_each() {
+        let dir = std::env::temp_dir().join(format!("oxy-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("figure.obj");
+        std::fs::write(&p, "o Body\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\no Arm\nv 2 0 0\nv 3 0 0\nv 2 1 0\nf 4 5 6\n")
+            .unwrap();
+        let mut e = editor();
+        e.import(&p);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Body", "Arm"]);
+        assert_eq!(e.scene.active().name, "Body");
+        assert!(e.status.contains("2 pieces"), "{}", e.status);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "one undo step removes the whole import");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn custom_matcaps_are_remembered_by_name() {
+        use crate::matcaps::CustomMatcap;
+        let px = |v: u8| Arc::new(vec![v; (oxy_render::MATCAP_SIZE * oxy_render::MATCAP_SIZE * 4) as usize]);
+        let mut e = Editor::default();
+        e.add_custom_matcap(CustomMatcap { name: "Wax".into(), pixels: px(10) });
+        e.add_custom_matcap(CustomMatcap { name: "Chalk".into(), pixels: px(200) });
+        assert_eq!(e.material_label(), "Chalk");
+        let s = e.settings();
+        assert_eq!(s.custom_matcap, "Chalk");
+        // Next start: the library loads first, then settings pick the same one.
+        let mut f = Editor { custom_matcaps: e.custom_matcaps.clone(), ..Default::default() };
+        f.apply_settings(&s);
+        assert_eq!(f.custom_matcap, Some(1));
+        // Removing an earlier matcap keeps the selection on the same one.
+        f.remove_custom_matcap(0);
+        assert_eq!(f.material_label(), "Chalk");
+        f.remove_custom_matcap(0);
+        assert_eq!(f.custom_matcap, None);
+        assert_eq!(f.material_label(), f.matcap.label());
+        // A remembered matcap that is gone falls back to the built-in one.
+        let mut g = Editor::default();
+        g.apply_settings(&s);
+        assert_eq!(g.custom_matcap, None);
     }
 
     #[test]

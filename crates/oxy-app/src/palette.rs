@@ -143,6 +143,13 @@ fn commands() -> Vec<Entry> {
         cmd("Toggle orthographic", "O", "view camera perspective", |e| e.camera.orthographic = !e.camera.orthographic),
         cmd("Face group colors", "G", "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd("Shading on / off", "", "view ambient occlusion cavity", Editor::toggle_shading),
+        cmd("Flat shading on / off", "", "view faceted polygons smooth", |e| {
+            e.view.flat_shading = !e.view.flat_shading
+        }),
+        cmd("Load matcap…", "", "material image custom", |e| e.request_load_matcap = true),
+        cmd("Strokes from empty space on / off", "", "navigation orbit middle mouse", |e| {
+            e.stroke_from_empty = !e.stroke_from_empty
+        }),
         cmd("Show / hide panels", "Tab", "view interface", |e| e.show_panels = !e.show_panels),
         cmd("Shortcuts", "F1", "help keys keyboard", |e| e.show_shortcuts = true),
         cmd("Guide", "F2", "help manual documentation", |e| e.guide.open = true),
