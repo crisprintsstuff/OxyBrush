@@ -6,7 +6,8 @@
 struct Uniforms {
     view_proj: mat4x4<f32>,
     view: mat4x4<f32>,
-    // x: flat shading, y: mask overlay strength, z: viewport aspect
+    // x: flat shading, y: mask overlay strength, z: viewport aspect,
+    // w: flat background (1) or gradient (0)
     params: vec4<f32>,
     mask_color: vec4<f32>,
     bg_center: vec4<f32>,
@@ -117,8 +118,8 @@ fn fs_main(
     return out;
 }
 
-// Viewport background: a soft radial gradient, slightly above center, so
-// the model reads well against it.
+// Viewport background. A gradient is a soft radial falloff, slightly above
+// center, so the model reads well against it. Flat uses the edge color alone.
 struct BgOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) p: vec2<f32>,
@@ -137,7 +138,9 @@ fn vs_background(@builtin(vertex_index) i: u32) -> BgOut {
 @fragment
 fn fs_background(i: BgOut) -> FsOut {
     let d = length(vec2<f32>(i.p.x * max(u.params.z, 0.1) * 0.7, i.p.y - 0.2));
-    let t = smoothstep(0.0, 1.35, d);
+    // params.w > 0.5 forces t = 1, so the backdrop is the edge color only.
+    // With the flag off this is the same smoothstep as before.
+    let t = select(smoothstep(0.0, 1.35, d), 1.0, u.params.w > 0.5);
     var out: FsOut;
     out.color = vec4<f32>(mix(u.bg_center.rgb, u.bg_edge.rgb, t), 1.0);
     out.normal_depth = vec4<f32>(0.0);

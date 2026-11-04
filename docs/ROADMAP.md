@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide, viewing and input requests from the discussions)
+> **Last updated:** 2026-11-04 (v0.4.0-alpha; viewport background can be a gradient or a flat color)
 
 ## Status at a glance
 
@@ -84,7 +84,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Insert-mesh and curve brushes** | Stamp small meshes (eyes, bolts, teeth) onto the surface; draw tubes and straps along a curve | 3–5 wk |
 | **Hard-surface tools** | Clip, slice and trim brushes; edge-preserving polish | 2–4 wk |
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
-| **Viewport** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
+| **Viewport** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅, gradient or flat background with colors ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. ⏳ Keymap editor and navigation presets, custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |

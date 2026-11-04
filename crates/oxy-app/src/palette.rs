@@ -9,6 +9,7 @@ use crate::editor::{Editor, Pending};
 use crate::ui::UiAction;
 use crate::widgets;
 use egui::{RichText, Ui};
+use oxy_render::BackgroundStyle;
 use oxy_sculpt::BrushKind;
 use std::path::PathBuf;
 
@@ -146,6 +147,14 @@ fn commands() -> Vec<Entry> {
         cmd("Flat shading on / off", "", "view faceted polygons smooth", |e| {
             e.view.flat_shading = !e.view.flat_shading
         }),
+        cmd("Viewport background…", "", "view color picker backdrop", |e| e.show_background = true),
+        cmd("Viewport background: gradient", "", "view color backdrop", |e| {
+            e.set_background_style(BackgroundStyle::Gradient)
+        }),
+        cmd("Viewport background: flat", "", "view color backdrop solid", |e| {
+            e.set_background_style(BackgroundStyle::Flat)
+        }),
+        cmd("Reset viewport background", "", "view color default backdrop", Editor::reset_background),
         cmd("Load matcap…", "", "material image custom", |e| e.request_load_matcap = true),
         cmd("Strokes from empty space on / off", "", "navigation orbit middle mouse", |e| {
             e.stroke_from_empty = !e.stroke_from_empty
@@ -438,5 +447,15 @@ mod tests {
         run(&mut ed, Act::Guide(2));
         assert!(ed.guide.open);
         assert_eq!(ed.guide.topic, 2);
+        ed.view.background = [0.2, 0.3, 0.4];
+        let flat = ranked(entries(&ed, PaletteMode::Everything), "background flat")[0].act.clone();
+        run(&mut ed, flat);
+        assert_eq!(ed.view.background_style, BackgroundStyle::Flat);
+        // The flat color is kept; only the style changes.
+        assert_eq!(ed.view.background, [0.2, 0.3, 0.4]);
+        let reset = ranked(entries(&ed, PaletteMode::Everything), "reset viewport background")[0].act.clone();
+        run(&mut ed, reset);
+        assert_eq!(ed.view.background_style, BackgroundStyle::Gradient);
+        assert_eq!(ed.view.background, oxy_render::ViewSettings::default().background);
     }
 }

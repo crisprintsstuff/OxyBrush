@@ -6,6 +6,10 @@ All notable changes to OxyBrush. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Viewport background:** View > Background (and Settings) switches between a soft gradient and one flat color. Colors… sets the center and edge, or the single flat color, and Reset to default restores the original gradient. The choice is remembered between sessions. The command palette (Ctrl+K) can open the colors, switch the style or reset it, and the guide (F2) describes it.
+
 ### Fixed
 
 - **Grab across symmetry:** with mirror or radial symmetry on, Grab and Topological Move no longer tear the mesh open when the brush reaches the symmetry plane. A vertex covered by more than one symmetry copy was overwritten by whichever copy ran last, so neighbours along that overlap were pulled apart into a stair-step crack. Those copies are blended into one move, and the seam stays continuous. Snake Hook, Pinch and Crease use the same blend, including Grab through and holding Alt to move along the normal.

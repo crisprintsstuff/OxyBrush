@@ -7,7 +7,7 @@
 //! Unknown keys and invalid values are ignored, so older and newer versions
 //! can share the file. Writes are atomic (temp file + rename).
 
-use oxy_render::MatcapPreset;
+use oxy_render::{BackgroundStyle, MatcapPreset, ViewSettings};
 use oxy_sculpt::BrushKind;
 use std::path::{Path, PathBuf};
 
@@ -246,6 +246,11 @@ pub struct Settings {
     pub stroke_from_empty: bool,
     /// Name of the custom matcap in use ("" for a built-in material).
     pub custom_matcap: String,
+    /// Viewport backdrop: gradient (center and edge) or one flat color.
+    /// Colors are linear RGB, 0..=1, the same values the renderer uses.
+    pub background_style: BackgroundStyle,
+    pub background: [f64; 3],
+    pub background_center: [f64; 3],
     /// Recently used files, most recent first (one `recent = ` line each).
     pub recent_files: Vec<PathBuf>,
 }
@@ -255,6 +260,7 @@ pub const MAX_RECENT: usize = 10;
 
 impl Default for Settings {
     fn default() -> Self {
+        let view = ViewSettings::default();
         Self {
             layout: UiLayout::Standard,
             ui_scale: 1.0,
@@ -274,9 +280,34 @@ impl Default for Settings {
             flat_shading: false,
             stroke_from_empty: false,
             custom_matcap: String::new(),
+            background_style: view.background_style,
+            background: view.background,
+            background_center: view.background_center,
             recent_files: Vec::new(),
         }
     }
+}
+
+fn format_rgb(c: [f64; 3]) -> String {
+    format!("{}, {}, {}", c[0], c[1], c[2])
+}
+
+/// Three linear RGB channels in `0..=1`. Anything else is rejected so a
+/// bad line keeps the default instead of painting the viewport with NaN.
+fn parse_rgb(v: &str) -> Option<[f64; 3]> {
+    let parts: Vec<&str> = v.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let mut c = [0.0; 3];
+    for (i, p) in parts.iter().enumerate() {
+        let x = p.parse::<f64>().ok()?;
+        if !x.is_finite() || !(0.0..=1.0).contains(&x) {
+            return None;
+        }
+        c[i] = x;
+    }
+    Some(c)
 }
 
 fn matcap_key(m: MatcapPreset) -> &'static str {
@@ -301,7 +332,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\ncustom_matcap = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -320,6 +351,9 @@ impl Settings {
             self.flat_shading,
             self.stroke_from_empty,
             self.custom_matcap,
+            self.background_style.key(),
+            format_rgb(self.background),
+            format_rgb(self.background_center),
         ) + &self
             .recent_files
             .iter()
@@ -388,6 +422,9 @@ impl Settings {
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "custom_matcap" => s.custom_matcap = v.to_owned(),
+                "background_style" => s.background_style = BackgroundStyle::from_key(v).unwrap_or(s.background_style),
+                "background" => s.background = parse_rgb(v).unwrap_or(s.background),
+                "background_center" => s.background_center = parse_rgb(v).unwrap_or(s.background_center),
                 "recent" if !v.is_empty() && s.recent_files.len() < MAX_RECENT => {
                     let p = PathBuf::from(v);
                     if !s.recent_files.contains(&p) {
@@ -468,6 +505,9 @@ mod tests {
             flat_shading: true,
             stroke_from_empty: true,
             custom_matcap: "Red Wax".into(),
+            background_style: BackgroundStyle::Flat,
+            background: [0.2, 0.25, 0.3],
+            background_center: [0.4, 0.45, 0.5],
             recent_files: vec![PathBuf::from("/work/head = v2.oxb"), PathBuf::from("C:\\Sculpts\\Dragon.obj")],
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
@@ -481,6 +521,17 @@ mod tests {
         assert_eq!(p.ui_scale, 1.0);
         assert!(p.high_contrast);
         assert_eq!(Settings::from_text(""), Settings::default());
+        // A bad color or style keeps the default backdrop (the one screenshots use).
+        let bad = Settings::from_text(
+            "background_style = stripes\nbackground = 2, 0, 0\nbackground_center = no\nbackground = 0.5, 0.5\n",
+        );
+        assert_eq!(bad.background_style, BackgroundStyle::Gradient);
+        assert_eq!(bad.background, Settings::default().background);
+        assert_eq!(bad.background_center, Settings::default().background_center);
+        // The built-in gradient survives a save, so a restart doesn't shift it.
+        let d = Settings::default();
+        assert_eq!(Settings::from_text(&d.to_text()).background, d.background);
+        assert_eq!(Settings::from_text(&d.to_text()).background_center, d.background_center);
     }
 
     #[test]

@@ -138,10 +138,11 @@ Interface scale and a high-contrast theme are in Settings too. All of these are 
     },
     Topic {
         title: "Shading and materials",
-        keywords: "material matcap ambient occlusion cavity view look flat faceted custom image",
+        keywords: "material matcap ambient occlusion cavity view look flat faceted custom image background gradient color backdrop",
         body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.\n\n\
 - Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
-- View > Flat shading shows every polygon as a flat facet.",
+- View > Flat shading shows every polygon as a flat facet.\n\
+- View > Background (also under Settings) switches between a soft gradient and one flat color. Colors… sets the center and the edge, or the single flat color. Reset to default puts the original gradient back. The command palette can open the colors, switch the style or reset it. The choice is remembered.",
     },
     Topic {
         title: "Updates and privacy",

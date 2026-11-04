@@ -6,7 +6,7 @@ use glam::{Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, primitives, topo};
-use oxy_render::{Camera, MatcapPreset, ViewSettings};
+use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings};
 use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
 use oxy_topo::RemeshOptions;
 use std::path::{Path, PathBuf};
@@ -223,6 +223,9 @@ pub struct Editor {
     pub show_panels: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
+    /// Color pickers for the viewport backdrop. A menu closes on click, so
+    /// the pickers live in this window (opened from View and Settings).
+    pub show_background: bool,
     /// Welcome window with starter shapes and the basics (shown at startup).
     pub show_welcome: bool,
     /// Carve instead of raise by default (Alt still flips it while held).
@@ -353,6 +356,7 @@ impl Default for Editor {
             show_panels: true,
             show_shortcuts: false,
             show_about: false,
+            show_background: false,
             show_welcome: true,
             carve: false,
             layout: crate::settings::UiLayout::Standard,
@@ -511,8 +515,23 @@ impl Editor {
                 .custom_matcap
                 .and_then(|i| self.custom_matcaps.get(i))
                 .map_or(String::new(), |m| m.name.clone()),
+            background_style: self.view.background_style,
+            background: self.view.background,
+            background_center: self.view.background_center,
             recent_files: self.recent_files.clone(),
         }
+    }
+
+    /// Gradient or flat viewport backdrop.
+    pub fn set_background_style(&mut self, style: BackgroundStyle) {
+        self.view.background_style = style;
+        self.status = format!("Viewport background: {}", style.label().to_lowercase());
+    }
+
+    /// Built-in gradient and its colors.
+    pub fn reset_background(&mut self) {
+        self.view.reset_background();
+        self.status = "Viewport background reset to the default gradient".into();
     }
 
     /// Whether viewport shading (ambient occlusion or cavity) is on.
@@ -572,6 +591,9 @@ impl Editor {
         self.updater.last_check = s.update_last_check;
         self.updater.skip = s.update_skip.clone();
         self.view.flat_shading = s.flat_shading;
+        self.view.background_style = s.background_style;
+        self.view.background = s.background;
+        self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
@@ -2424,12 +2446,22 @@ mod tests {
             flat_shading: true,
             stroke_from_empty: true,
             custom_matcap: String::new(),
+            background_style: BackgroundStyle::Flat,
+            background: [0.15, 0.16, 0.18],
+            background_center: [0.3, 0.32, 0.34],
             recent_files: vec![std::path::PathBuf::from("/tmp/a.oxb")],
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
         e.apply_settings(&s);
         assert_eq!(e.settings(), s);
+        e.reset_background();
+        assert_eq!(e.view.background_style, BackgroundStyle::Gradient);
+        assert_eq!(e.view.background, ViewSettings::default().background);
+        assert_eq!(e.view.background_center, ViewSettings::default().background_center);
+        // Reset does not put the other preferences back.
+        assert_eq!(e.layout, UiLayout::Touch);
+        assert!(e.view.flat_shading);
     }
 
     #[test]
