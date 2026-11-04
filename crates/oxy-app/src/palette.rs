@@ -6,6 +6,7 @@
 //! is just the fast path for people who know what they want.
 
 use crate::editor::{Editor, Pending};
+use crate::keymap::CommandId;
 use crate::ui::UiAction;
 use crate::widgets;
 use egui::{RichText, Ui};
@@ -55,131 +56,156 @@ pub struct Entry {
     pub act: Act,
 }
 
-fn cmd(label: &str, detail: &str, keywords: &'static str, f: fn(&mut Editor)) -> Entry {
-    Entry { label: label.into(), detail: detail.into(), keywords, act: Act::Run(f) }
+fn cmd(ed: &Editor, label: &str, id: Option<CommandId>, keywords: &'static str, f: fn(&mut Editor)) -> Entry {
+    Entry {
+        label: label.into(),
+        detail: id.map(|id| ed.keymap.primary(id)).unwrap_or_default(),
+        keywords,
+        act: Act::Run(f),
+    }
 }
 
-fn ui_cmd(label: &str, detail: &str, keywords: &'static str, a: UiAction) -> Entry {
-    Entry { label: label.into(), detail: detail.into(), keywords, act: Act::Ui(a) }
+fn ui_cmd(ed: &Editor, label: &str, id: CommandId, keywords: &'static str, a: UiAction) -> Entry {
+    Entry { label: label.into(), detail: ed.keymap.primary(id), keywords, act: Act::Ui(a) }
 }
 
 /// Every command the palette offers (menus have the same actions).
-fn commands() -> Vec<Entry> {
+fn commands(ed: &Editor) -> Vec<Entry> {
     vec![
-        ui_cmd("Open…", "Ctrl+O", "file project load", UiAction::Open),
-        ui_cmd("Import mesh as piece…", "Ctrl+I", "obj stl file", UiAction::Import),
-        ui_cmd("Save", "Ctrl+S", "file project", UiAction::Save),
-        ui_cmd("Save as…", "Ctrl+Shift+S", "file project", UiAction::SaveAs),
-        ui_cmd("Export visible pieces…", "Ctrl+E", "obj stl gltf glb ply print file", UiAction::Export),
-        cmd("New sphere", "", "file document start", |e| e.request(Pending::New("sphere"))),
-        cmd("New cube", "", "file document start", |e| e.request(Pending::New("cube"))),
-        cmd("New plane", "", "file document start", |e| e.request(Pending::New("plane"))),
-        cmd("Undo", "Ctrl+Z", "edit", Editor::undo),
-        cmd("Redo", "Ctrl+Shift+Z", "edit", Editor::redo),
-        cmd("Add sphere piece", "", "pieces primitive", |e| e.add_primitive("sphere")),
-        cmd("Add cube piece", "", "pieces primitive", |e| e.add_primitive("cube")),
-        cmd("Add plane piece", "", "pieces primitive", |e| e.add_primitive("plane")),
-        cmd("Duplicate piece", "", "pieces copy", |e| e.duplicate_active(false)),
-        cmd("Mirror duplicate piece", "", "pieces copy symmetry x", |e| e.duplicate_active(true)),
-        cmd("Delete piece", "", "pieces remove", Editor::delete_active),
-        cmd("Solo piece / show all", "Alt+S", "pieces isolate", Editor::solo_active),
-        cmd("Merge visible pieces", "", "pieces union combine", Editor::merge_visible),
-        cmd("Split by face groups", "", "pieces separate", |e| e.split_active(false)),
-        cmd("Split into loose parts", "", "pieces separate islands", |e| e.split_active(true)),
-        cmd("Make LOD chain", "", "pieces level of detail decimate game", |e| e.make_lod_chain(3)),
-        cmd("Add subdivision level", "Ctrl+D", "multires divide detail", Editor::add_level),
-        cmd("Subdivision level up", "D", "multires", |e| e.step_level(1)),
-        cmd("Subdivision level down", "Shift+D", "multires", |e| e.step_level(-1)),
-        cmd("Delete higher levels", "", "multires", Editor::delete_higher_levels),
-        cmd("Delete lower levels", "", "multires", Editor::delete_lower_levels),
-        cmd("Voxel remesh", "Ctrl+R", "topology rebuild even", Editor::remesh_active),
-        cmd("Decimate", "", "topology reduce polygons triangles", Editor::decimate_active),
-        cmd("Delete hidden faces", "", "topology visibility", Editor::delete_hidden),
-        cmd("Group visible", "Ctrl+W", "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
-        cmd("Group from mask", "", "face groups", |e| e.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask)),
-        cmd("Group by islands", "", "face groups loose parts", |e| {
+        ui_cmd(ed, "Open…", CommandId::Open, "file project load", UiAction::Open),
+        ui_cmd(ed, "Import mesh as piece…", CommandId::Import, "obj stl file", UiAction::Import),
+        ui_cmd(ed, "Save", CommandId::Save, "file project", UiAction::Save),
+        ui_cmd(ed, "Save as…", CommandId::SaveAs, "file project", UiAction::SaveAs),
+        ui_cmd(ed, "Export visible pieces…", CommandId::Export, "obj stl gltf glb ply print file", UiAction::Export),
+        cmd(ed, "New sphere", None, "file document start", |e| e.request(Pending::New("sphere"))),
+        cmd(ed, "New cube", None, "file document start", |e| e.request(Pending::New("cube"))),
+        cmd(ed, "New plane", None, "file document start", |e| e.request(Pending::New("plane"))),
+        cmd(ed, "Undo", Some(CommandId::Undo), "edit", Editor::undo),
+        cmd(ed, "Redo", Some(CommandId::Redo), "edit", Editor::redo),
+        cmd(ed, "Add sphere piece", None, "pieces primitive", |e| e.add_primitive("sphere")),
+        cmd(ed, "Add cube piece", None, "pieces primitive", |e| e.add_primitive("cube")),
+        cmd(ed, "Add plane piece", None, "pieces primitive", |e| e.add_primitive("plane")),
+        cmd(ed, "Duplicate piece", None, "pieces copy", |e| e.duplicate_active(false)),
+        cmd(ed, "Mirror duplicate piece", None, "pieces copy symmetry x", |e| e.duplicate_active(true)),
+        cmd(ed, "Delete piece", None, "pieces remove", Editor::delete_active),
+        cmd(ed, "Solo piece / show all", Some(CommandId::Solo), "pieces isolate", Editor::solo_active),
+        cmd(ed, "Merge visible pieces", None, "pieces union combine", Editor::merge_visible),
+        cmd(ed, "Split by face groups", None, "pieces separate", |e| e.split_active(false)),
+        cmd(ed, "Split into loose parts", None, "pieces separate islands", |e| e.split_active(true)),
+        cmd(ed, "Make LOD chain", None, "pieces level of detail decimate game", |e| e.make_lod_chain(3)),
+        cmd(ed, "Add subdivision level", Some(CommandId::AddLevel), "multires divide detail", Editor::add_level),
+        cmd(ed, "Subdivision level up", Some(CommandId::LevelUp), "multires", |e| e.step_level(1)),
+        cmd(ed, "Subdivision level down", Some(CommandId::LevelDown), "multires", |e| e.step_level(-1)),
+        cmd(ed, "Delete higher levels", None, "multires", Editor::delete_higher_levels),
+        cmd(ed, "Delete lower levels", None, "multires", Editor::delete_lower_levels),
+        cmd(ed, "Voxel remesh", Some(CommandId::Remesh), "topology rebuild even", Editor::remesh_active),
+        cmd(ed, "Decimate", None, "topology reduce polygons triangles", Editor::decimate_active),
+        cmd(ed, "Delete hidden faces", None, "topology visibility", Editor::delete_hidden),
+        cmd(ed, "Group visible", Some(CommandId::GroupVisible), "face groups", |e| {
+            e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)
+        }),
+        cmd(ed, "Group from mask", None, "face groups", |e| {
+            e.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask)
+        }),
+        cmd(ed, "Group by islands", None, "face groups loose parts", |e| {
             e.edit_faces("Group by islands", oxy_mesh::Mesh::groups_from_islands)
         }),
-        cmd("Show all faces", "", "visibility unhide", |e| e.edit_faces("Show all", oxy_mesh::Mesh::show_all)),
-        cmd("Invert visibility", "", "hide show", |e| {
+        cmd(ed, "Show all faces", None, "visibility unhide", |e| e.edit_faces("Show all", oxy_mesh::Mesh::show_all)),
+        cmd(ed, "Invert visibility", None, "hide show", |e| {
             e.edit_faces("Invert visibility", oxy_mesh::Mesh::invert_visibility)
         }),
-        cmd("Invert mask", "Ctrl+Shift+I", "masking", Editor::invert_mask),
-        cmd("Clear mask", "Alt+M", "masking", Editor::clear_mask),
-        cmd("Blur mask", "", "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
-        cmd("Sharpen mask", "", "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
-        cmd("Mask cavities", "", "masking concave creases", |e| {
+        cmd(ed, "Invert mask", Some(CommandId::InvertMask), "masking", Editor::invert_mask),
+        cmd(ed, "Clear mask", Some(CommandId::ClearMask), "masking", Editor::clear_mask),
+        cmd(ed, "Blur mask", None, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
+        cmd(ed, "Sharpen mask", None, "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
+        cmd(ed, "Mask cavities", None, "masking concave creases", |e| {
             e.edit_mesh_mask("Mask cavities", |m| m.mask_by_curvature(true))
         }),
-        cmd("Mask peaks", "", "masking convex ridges", |e| {
+        cmd(ed, "Mask peaks", None, "masking convex ridges", |e| {
             e.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false))
         }),
-        cmd("Show / hide mask", "M", "masking view", |e| e.view.show_mask = !e.view.show_mask),
-        cmd("Transform: move", "T", "gizmo pose translate", |e| e.toggle_gizmo(crate::pose::GizmoMode::Move)),
-        cmd("Transform: rotate", "", "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
-        cmd("Transform: scale", "", "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
-        cmd("Fill color", "", "paint vertex color", |e| {
+        cmd(ed, "Show / hide mask", Some(CommandId::ShowMask), "masking view", |e| {
+            e.view.show_mask = !e.view.show_mask
+        }),
+        cmd(ed, "Transform: move", Some(CommandId::GizmoCycle), "gizmo pose translate", |e| {
+            e.toggle_gizmo(crate::pose::GizmoMode::Move)
+        }),
+        cmd(ed, "Transform: rotate", None, "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
+        cmd(ed, "Transform: scale", None, "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
+        cmd(ed, "Fill color", None, "paint vertex color", |e| {
             let c = e.paint_color;
             e.edit_color("Fill color", |m| m.fill_color(c, 1.0))
         }),
-        cmd("Fill cavities with color", "", "paint vertex color dirt", |e| {
+        cmd(ed, "Fill cavities with color", None, "paint vertex color dirt", |e| {
             let c = e.paint_color;
             e.edit_color("Fill cavities", |m| m.fill_color_by_curvature(c, 1.0, true))
         }),
-        cmd("Fill peaks with color", "", "paint vertex color edges", |e| {
+        cmd(ed, "Fill peaks with color", None, "paint vertex color edges", |e| {
             let c = e.paint_color;
             e.edit_color("Fill peaks", |m| m.fill_color_by_curvature(c, 1.0, false))
         }),
-        cmd("Clear color", "", "paint vertex color remove", |e| {
+        cmd(ed, "Clear color", None, "paint vertex color remove", |e| {
             e.edit_color("Clear color", oxy_mesh::Mesh::clear_color)
         }),
-        cmd("Toggle X symmetry", "X", "mirror", |e| e.symmetry.x = !e.symmetry.x),
-        cmd("Toggle Y symmetry", "", "mirror", |e| e.symmetry.y = !e.symmetry.y),
-        cmd("Toggle Z symmetry", "", "mirror", |e| e.symmetry.z = !e.symmetry.z),
-        cmd("Raise / carve", "", "invert direction", |e| e.carve = !e.carve),
-        cmd("Frame scene", "F", "view camera zoom fit", Editor::frame),
-        cmd("Front view", "Numpad 1", "view camera", |e| e.camera.snap(0.0, 0.0)),
-        cmd("Right view", "Numpad 3", "view camera side", |e| e.camera.snap(std::f32::consts::FRAC_PI_2, 0.0)),
-        cmd("Top view", "Numpad 7", "view camera", |e| e.camera.snap(0.0, 1.55)),
-        cmd("Toggle orthographic", "O", "view camera perspective", |e| e.camera.orthographic = !e.camera.orthographic),
-        cmd("Focal length…", "", "view camera lens fov field of view mm", |e| e.show_focal_length = true),
-        cmd("Focal length 18 mm", "wide", "view camera lens fov", |e| e.set_focal_mm(18.0)),
-        cmd("Focal length 35 mm", "", "view camera lens fov", |e| e.set_focal_mm(35.0)),
-        cmd("Focal length 50 mm", "natural", "view camera lens fov", |e| e.set_focal_mm(50.0)),
-        cmd("Focal length 85 mm", "", "view camera lens fov", |e| e.set_focal_mm(85.0)),
-        cmd("Focal length 135 mm", "telephoto", "view camera lens fov", |e| e.set_focal_mm(135.0)),
-        cmd("Reset focal length", "", "view camera lens fov default", Editor::reset_focal_length),
-        cmd("Face group colors", "G", "view", |e| e.view.show_groups = !e.view.show_groups),
-        cmd("Shading on / off", "", "view ambient occlusion cavity", Editor::toggle_shading),
-        cmd("Flat shading on / off", "", "view faceted polygons smooth", |e| {
+        cmd(ed, "Toggle X symmetry", Some(CommandId::SymmetryX), "mirror", |e| e.symmetry.x = !e.symmetry.x),
+        cmd(ed, "Toggle Y symmetry", None, "mirror", |e| e.symmetry.y = !e.symmetry.y),
+        cmd(ed, "Toggle Z symmetry", None, "mirror", |e| e.symmetry.z = !e.symmetry.z),
+        cmd(ed, "Raise / carve", None, "invert direction", |e| e.carve = !e.carve),
+        cmd(ed, "Frame scene", Some(CommandId::Frame), "view camera zoom fit", Editor::frame),
+        cmd(ed, "Front view", Some(CommandId::ViewFront), "view camera", |e| e.camera.snap(0.0, 0.0)),
+        cmd(ed, "Back view", Some(CommandId::ViewBack), "view camera", |e| e.camera.snap(std::f32::consts::PI, 0.0)),
+        cmd(ed, "Left view", Some(CommandId::ViewLeft), "view camera side", |e| {
+            e.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0)
+        }),
+        cmd(ed, "Right view", Some(CommandId::ViewRight), "view camera side", |e| {
+            e.camera.snap(std::f32::consts::FRAC_PI_2, 0.0)
+        }),
+        cmd(ed, "Top view", Some(CommandId::ViewTop), "view camera", |e| e.camera.snap(0.0, 1.55)),
+        cmd(ed, "Bottom view", Some(CommandId::ViewBottom), "view camera", |e| e.camera.snap(0.0, -1.55)),
+        cmd(ed, "Toggle orthographic", Some(CommandId::Orthographic), "view camera perspective", |e| {
+            e.camera.orthographic = !e.camera.orthographic
+        }),
+        cmd(ed, "Focal length…", None, "view camera lens fov field of view mm", |e| e.show_focal_length = true),
+        cmd(ed, "Focal length 18 mm", None, "wide view camera lens fov", |e| e.set_focal_mm(18.0)),
+        cmd(ed, "Focal length 35 mm", None, "view camera lens fov", |e| e.set_focal_mm(35.0)),
+        cmd(ed, "Focal length 50 mm", None, "natural view camera lens fov", |e| e.set_focal_mm(50.0)),
+        cmd(ed, "Focal length 85 mm", None, "view camera lens fov", |e| e.set_focal_mm(85.0)),
+        cmd(ed, "Focal length 135 mm", None, "telephoto view camera lens fov", |e| e.set_focal_mm(135.0)),
+        cmd(ed, "Reset focal length", None, "view camera lens fov default", Editor::reset_focal_length),
+        cmd(ed, "Face group colors", Some(CommandId::ShowGroups), "view", |e| e.view.show_groups = !e.view.show_groups),
+        cmd(ed, "Shading on / off", None, "view ambient occlusion cavity", Editor::toggle_shading),
+        cmd(ed, "Flat shading on / off", None, "view faceted polygons smooth", |e| {
             e.view.flat_shading = !e.view.flat_shading
         }),
-        cmd("Viewport background…", "", "view color picker backdrop", |e| e.show_background = true),
-        cmd("Viewport background: gradient", "", "view color backdrop", |e| {
+        cmd(ed, "Viewport background…", None, "view color picker backdrop", |e| e.show_background = true),
+        cmd(ed, "Viewport background: gradient", None, "view color backdrop", |e| {
             e.set_background_style(BackgroundStyle::Gradient)
         }),
-        cmd("Viewport background: flat", "", "view color backdrop solid", |e| {
+        cmd(ed, "Viewport background: flat", None, "view color backdrop solid", |e| {
             e.set_background_style(BackgroundStyle::Flat)
         }),
-        cmd("Reset viewport background", "", "view color default backdrop", Editor::reset_background),
-        cmd("Align cursor to surface on / off", "", "view brush cursor ring normal tangent", |e| {
+        cmd(ed, "Reset viewport background", None, "view color default backdrop", Editor::reset_background),
+        cmd(ed, "Align cursor to surface on / off", None, "view brush cursor ring normal tangent", |e| {
             e.toggle_surface_cursor()
         }),
-        cmd("Load matcap…", "", "material image custom", |e| e.request_load_matcap = true),
-        cmd("Strokes from empty space on / off", "", "navigation orbit middle mouse", |e| {
+        cmd(ed, "Load matcap…", None, "material image custom", |e| e.request_load_matcap = true),
+        cmd(ed, "Strokes from empty space on / off", None, "navigation orbit middle mouse", |e| {
             e.stroke_from_empty = !e.stroke_from_empty
         }),
-        cmd("Show / hide panels", "Tab", "view interface", |e| e.show_panels = !e.show_panels),
-        cmd("Shortcuts", "F1", "help keys keyboard", |e| e.show_shortcuts = true),
-        cmd("Guide", "F2", "help manual documentation", |e| e.guide.open = true),
-        cmd("Welcome screen", "", "help start", |e| e.show_welcome = true),
-        cmd("Check for updates…", "", "help version", |e| {
+        cmd(ed, "Show / hide panels", Some(CommandId::TogglePanels), "view interface", |e| {
+            e.show_panels = !e.show_panels
+        }),
+        cmd(ed, "Shortcuts", Some(CommandId::Shortcuts), "help keys keyboard", |e| e.show_shortcuts = true),
+        cmd(ed, "Keymap", None, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
+        cmd(ed, "Guide", Some(CommandId::Guide), "help manual documentation", |e| e.guide.open = true),
+        cmd(ed, "Welcome screen", None, "help start", |e| e.show_welcome = true),
+        cmd(ed, "Check for updates…", None, "help version", |e| {
             e.updater.show_window = true;
             if !e.updater.managed_by_flatpak() {
                 e.updater.check(crate::updates::now_secs());
             }
         }),
-        cmd("Quit", "", "exit close", |e| e.request(Pending::Quit)),
+        cmd(ed, "Quit", None, "exit close", |e| e.request(Pending::Quit)),
     ]
 }
 
@@ -188,7 +214,7 @@ fn brush_entries(ed: &Editor, prefix: &str) -> Vec<Entry> {
         .iter()
         .map(|&k| Entry {
             label: format!("{prefix}{}", k.label()),
-            detail: ed.number_key(k).unwrap_or("").into(),
+            detail: ed.number_key(k).unwrap_or_default(),
             keywords: widgets::brush_description(k),
             act: Act::Brush(k),
         })
@@ -200,7 +226,7 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
     match mode {
         PaletteMode::Brushes => brush_entries(ed, ""),
         PaletteMode::Everything => {
-            let mut v = commands();
+            let mut v = commands(ed);
             v.extend(brush_entries(ed, "Brush: "));
             v.extend(ed.recent_files.iter().map(|p| Entry {
                 label: format!(

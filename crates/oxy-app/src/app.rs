@@ -1,6 +1,7 @@
 //! Window, GPU and event-loop glue.
 
 use crate::editor::{Editor, Modifiers, PointerButton};
+use crate::keymap::{self, Chord, CommandEffect, CommandId, KeyId};
 use crate::ui::{self, UiAction};
 use glam::Vec2;
 use oxy_render::{MatcapPreset, ViewportRenderer};
@@ -36,6 +37,8 @@ pub struct AutoRun {
     pub layout: Option<crate::settings::UiLayout>,
     /// `--set key=value` lines applied on top of the saved settings.
     pub overrides: Vec<String>,
+    /// Open the keymap editor on startup. `Some` selects that navigation preset.
+    pub open_keymap: Option<crate::keymap::Preset>,
 }
 
 pub struct App {
@@ -54,7 +57,10 @@ pub struct App {
     frames: u32,
     /// Where preferences are remembered (None for automated runs).
     settings_path: Option<PathBuf>,
+    keymap_path: Option<PathBuf>,
     saved_settings: crate::settings::Settings,
+    /// Canonical keymap text last written, so an unchanged keymap is not rewritten.
+    saved_keymap: String,
     /// When the preferences last changed without being saved yet.
     settings_changed_at: Option<Instant>,
 }
@@ -63,6 +69,16 @@ impl App {
     pub fn new(initial_file: Option<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
         // Automated runs (CI screenshots) neither read nor write the user's settings.
         let settings_path = if auto.screenshot.is_none() { crate::settings::Settings::default_path() } else { None };
+        let keymap_path = if settings_path.is_some() { keymap::Keymap::default_path() } else { None };
+        let mut keymap = keymap_path
+            .as_deref()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| keymap::Keymap::from_text(&t))
+            .unwrap_or_default();
+        if let Some(preset) = auto.open_keymap {
+            keymap.apply_navigation_preset(preset);
+        }
+        let saved_keymap = keymap.to_text();
         let loaded = settings_path.as_deref().and_then(crate::settings::Settings::load);
         let first_start = settings_path.is_some() && loaded.is_none();
         let settings = loaded.unwrap_or_default();
@@ -99,12 +115,17 @@ impl App {
                 if auto.screenshot.is_some() {
                     e.updater.mode = crate::settings::UpdateMode::Off;
                 }
+                e.keymap = keymap;
                 e.show_welcome = crate::settings::show_welcome(
                     first_start,
                     settings.welcome_at_startup,
                     settings_path.is_none(),
                     initial_file.is_some() || auto.demo,
                 );
+                if auto.open_keymap.is_some() {
+                    e.show_welcome = false;
+                    e.show_keymap = true;
+                }
                 log::info!(
                     "layout {:?}, welcome window {}",
                     e.layout,
@@ -122,6 +143,8 @@ impl App {
             frames: 0,
             saved_settings: settings,
             settings_path,
+            keymap_path,
+            saved_keymap,
             // Write the file on the first start so the welcome window isn't shown again.
             settings_changed_at: first_start.then(Instant::now),
         }
@@ -144,6 +167,20 @@ impl App {
             self.saved_settings = current;
             self.settings_changed_at = None;
         }
+        self.persist_keymap();
+    }
+
+    fn persist_keymap(&mut self) {
+        let Some(path) = &self.keymap_path else { return };
+        let text = self.editor.keymap.to_text();
+        if text == self.saved_keymap {
+            return;
+        }
+        match self.editor.keymap.save(path) {
+            Ok(()) => log::info!("saved keymap to {}", path.display()),
+            Err(e) => log::warn!("could not save keymap to {}: {e}", path.display()),
+        }
+        self.saved_keymap = text;
     }
 
     fn init_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
@@ -467,6 +504,41 @@ impl App {
                     ed.save(&p);
                 }
             }
+            UiAction::ImportKeymap => {
+                if let Some(p) =
+                    rfd::FileDialog::new().add_filter("OxyBrush keymap", &[keymap::EXTENSION, "txt"]).pick_file()
+                {
+                    ed.status = match std::fs::read_to_string(&p) {
+                        Ok(text) => match keymap::Keymap::import_text(&text) {
+                            Ok(map) => {
+                                let n = map.conflicts().len() + map.nav_conflicts().len();
+                                ed.keymap = map;
+                                ed.keymap_capture = None;
+                                if n == 0 {
+                                    format!("Imported keymap from {}", p.display())
+                                } else {
+                                    format!("Imported keymap from {} ({n} conflicts to resolve)", p.display())
+                                }
+                            }
+                            Err(e) => e.to_string(),
+                        },
+                        Err(e) => format!("Could not import {}: {e}", p.display()),
+                    };
+                }
+            }
+            UiAction::ExportKeymap => {
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("OxyBrush keymap", &[keymap::EXTENSION])
+                    .set_file_name("oxybrush.oxkeys")
+                    .save_file()
+                {
+                    let p = if p.extension().is_none() { p.with_extension(keymap::EXTENSION) } else { p };
+                    ed.status = match ed.keymap.save(&p) {
+                        Ok(()) => format!("Exported keymap to {}", p.display()),
+                        Err(e) => format!("Could not export: {e}"),
+                    };
+                }
+            }
             UiAction::Export => {
                 let name = ed
                     .path
@@ -493,109 +565,72 @@ impl App {
     }
 
     fn handle_key(&mut self, event: &KeyEvent) -> Option<UiAction> {
-        // Hold Q: quick menu at the cursor while the key is down.
-        if event.physical_key == PhysicalKey::Code(KeyCode::KeyQ) {
-            let ed = &mut self.editor;
-            let m = ed.modifiers;
-            match event.state {
-                ElementState::Pressed if !event.repeat && !m.ctrl && !m.alt && !m.shift => {
-                    if let Some(pos) = ed.pointer {
-                        ed.quick_menu = Some(crate::editor::QuickMenu { pos, held: true });
-                    }
-                }
-                ElementState::Released if ed.quick_menu.is_some_and(|q| q.held) => ed.quick_menu = None,
-                _ => {}
+        let key = key_id(event);
+        if self.editor.keymap_capture.is_some() {
+            if event.state == ElementState::Pressed && !event.repeat {
+                self.capture_key(key);
             }
             return None;
+        }
+        // The quick menu is held: it opens on the press and closes when that key is released.
+        if let Some(key) = key {
+            let chord = self.chord(key);
+            if event.state == ElementState::Released && self.editor.quick_menu_key == Some(key) {
+                self.editor.quick_menu = None;
+                self.editor.quick_menu_key = None;
+                return None;
+            }
+            if event.state == ElementState::Pressed
+                && !event.repeat
+                && self.editor.keymap.chords(CommandId::QuickMenu).contains(&chord)
+            {
+                if let Some(pos) = self.editor.pointer {
+                    self.editor.quick_menu = Some(crate::editor::QuickMenu { pos, held: true });
+                    self.editor.quick_menu_key = Some(key);
+                }
+                return None;
+            }
         }
         if event.state != ElementState::Pressed {
             return None;
         }
-        let ed = &mut self.editor;
-        let m = ed.modifiers;
-        let ctrl = m.ctrl;
-        if let PhysicalKey::Code(code) = event.physical_key {
-            match code {
-                KeyCode::Numpad1 => ed.camera.snap(0.0, 0.0),
-                KeyCode::Numpad3 => ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0),
-                KeyCode::Numpad7 => ed.camera.snap(0.0, 1.55),
-                _ => {}
-            }
+        let key = key?;
+        let chord = self.chord(key);
+        let cmd = self.editor.keymap.command_for(chord)?;
+        if cmd == CommandId::QuickMenu || (cmd == CommandId::BrushFinder && self.editor.palette.is_some()) {
+            return None;
         }
-        match &event.logical_key {
-            Key::Named(NamedKey::Tab) => ed.show_panels = !ed.show_panels,
-            Key::Named(NamedKey::F1) => ed.show_shortcuts = !ed.show_shortcuts,
-            Key::Named(NamedKey::F2) => ed.guide.open = !ed.guide.open,
-            Key::Named(NamedKey::Space) if !ctrl && !m.alt && ed.palette.is_none() => {
-                ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
-            }
-            Key::Named(NamedKey::Escape) => ed.cancel_drag(),
-            Key::Character(c) => {
-                let c = c.to_lowercase();
-                match (c.as_str(), ctrl, m.shift, m.alt) {
-                    ("z", true, false, _) => ed.undo(),
-                    ("z", true, true, _) | ("y", true, _, _) => ed.redo(),
-                    ("o", true, _, _) => return Some(UiAction::Open),
-                    ("k", true, _, _) => {
-                        ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
-                    }
-                    ("s", true, true, _) => return Some(UiAction::SaveAs),
-                    ("s", true, false, _) => return Some(UiAction::Save),
-                    ("e", true, _, _) => return Some(UiAction::Export),
-                    ("i", true, true, _) => ed.invert_mask(),
-                    ("i", true, false, _) => return Some(UiAction::Import),
-                    ("r", true, _, _) => ed.remesh_active(),
-                    ("w", true, _, _) => ed.edit_faces("Group visible", oxy_mesh::Mesh::group_visible),
-                    ("m", true, false, _) => ed.mask_group_under_pointer(),
-                    ("l", false, ..) => {
-                        ed.selection_lasso = !ed.selection_lasso;
-                        ed.status = format!("Selection: {}", if ed.selection_lasso { "lasso" } else { "rectangle" });
-                    }
-                    ("s", false, _, true) => ed.solo_active(),
-                    ("g", false, _, false) => ed.view.show_groups = !ed.view.show_groups,
-                    ("m", false, _, true) => ed.clear_mask(),
-                    ("m", false, _, false) => ed.view.show_mask = !ed.view.show_mask,
-                    ("f", false, ..) => ed.frame(),
-                    ("t", false, false, false) => {
-                        // T cycles Move → Rotate → Scale → off.
-                        use crate::pose::GizmoMode;
-                        ed.gizmo = match ed.gizmo {
-                            None => Some(GizmoMode::Move),
-                            Some(GizmoMode::Move) => Some(GizmoMode::Rotate),
-                            Some(GizmoMode::Rotate) => Some(GizmoMode::Scale),
-                            Some(GizmoMode::Scale) => None,
-                        };
-                        ed.status = match ed.gizmo {
-                            Some(m) => format!("{} gizmo (T for the next mode)", m.label()),
-                            None => "Gizmo off".into(),
-                        };
-                    }
-                    ("o", false, ..) => ed.camera.orthographic = !ed.camera.orthographic,
-                    ("x", false, ..) => {
-                        ed.symmetry.x = !ed.symmetry.x;
-                        ed.status = format!("X symmetry {}", if ed.symmetry.x { "on" } else { "off" });
-                    }
-                    ("d", true, _, _) => ed.add_level(),
-                    ("d", false, true, _) => ed.step_level(-1),
-                    ("d", false, false, _) => ed.step_level(1),
-                    ("[", false, ..) => ed.adjust_radius(1.0 / 1.15),
-                    ("]", false, ..) => ed.adjust_radius(1.15),
-                    ("-", false, ..) => ed.adjust_strength(-0.05),
-                    ("=", false, ..) | ("+", false, ..) => ed.adjust_strength(0.05),
-                    (d, false, _, false) if d.len() == 1 && d.as_bytes()[0].is_ascii_digit() => {
-                        // 1–9 select the first nine brushes in the shelf, 0 the tenth
-                        // (the shelf order can be rearranged by dragging).
-                        if let Some(k) = ed.brush_for_number_key((d.as_bytes()[0] - b'0') as u32) {
-                            ed.brush_kind = k;
-                            ed.status = format!("{} brush", k.label());
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            _ => {}
+        let effect = self.editor.perform_command(cmd);
+        effect_to_action(effect)
+    }
+
+    fn chord(&self, key: KeyId) -> Chord {
+        let m = self.editor.modifiers;
+        Chord { ctrl: m.ctrl, shift: m.shift, alt: m.alt, key }
+    }
+
+    fn capture_key(&mut self, key: Option<KeyId>) {
+        let Some((id, slot)) = self.editor.keymap_capture else { return };
+        let bare_esc = key == Some(KeyId::Escape)
+            && !self.editor.modifiers.ctrl
+            && !self.editor.modifiers.shift
+            && !self.editor.modifiers.alt;
+        if bare_esc {
+            self.editor.keymap_capture = None;
+            self.editor.status = "Key unchanged".into();
+            return;
         }
-        None
+        let Some(key) = key else { return };
+        let chord = self.chord(key);
+        self.editor.keymap.set_chord(id, slot, chord);
+        self.editor.keymap_capture = None;
+        let overlaps = self.editor.keymap.overlaps_with(id);
+        self.editor.status = if overlaps.is_empty() {
+            format!("{} is now {}", keymap::command_name(id), chord.label())
+        } else {
+            let names: Vec<&str> = overlaps.iter().map(|o| keymap::command_name(*o)).collect();
+            format!("{} is now {} (also used by {})", keymap::command_name(id), chord.label(), names.join(", "))
+        };
     }
 
     fn run_demo(&mut self) {
@@ -807,13 +842,15 @@ impl ApplicationHandler for App {
                 self.editor.scroll(steps);
                 redraw = true;
             }
-            // Releasing Q always closes a held quick menu, even if a slider in it took focus.
+            // A keymap capture, or releasing the quick-menu key, wins over a focused
+            // slider so the key the user pressed is the one that gets bound.
             WindowEvent::KeyboardInput { event, .. }
-                if event.state == ElementState::Released
-                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyQ)
-                    && self.editor.quick_menu.is_some_and(|q| q.held) =>
+                if self.editor.keymap_capture.is_some()
+                    || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held)) =>
             {
-                self.editor.quick_menu = None;
+                if let Some(a) = self.handle_key(event) {
+                    self.run_action(a);
+                }
                 redraw = true;
             }
             WindowEvent::KeyboardInput { event, .. } if !self.egui_ctx.egui_wants_keyboard_input() => {
@@ -827,5 +864,166 @@ impl ApplicationHandler for App {
         if redraw && let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
+    }
+}
+
+/// The key a keymap chord is built from. Numpad, function and symbol keys use
+/// the physical key so they stay distinct (Numpad 1 is not the number row).
+/// Letters and digits use the character the layout produces.
+fn effect_to_action(effect: CommandEffect) -> Option<UiAction> {
+    match effect {
+        CommandEffect::None => None,
+        CommandEffect::Open => Some(UiAction::Open),
+        CommandEffect::Import => Some(UiAction::Import),
+        CommandEffect::Save => Some(UiAction::Save),
+        CommandEffect::SaveAs => Some(UiAction::SaveAs),
+        CommandEffect::Export => Some(UiAction::Export),
+    }
+}
+
+fn key_id(event: &KeyEvent) -> Option<KeyId> {
+    if let PhysicalKey::Code(code) = event.physical_key {
+        if is_modifier(code) {
+            return None;
+        }
+        if let Some(id) = physical_key(code) {
+            return Some(id);
+        }
+    }
+    match &event.logical_key {
+        Key::Named(named) => named_key(*named),
+        Key::Character(s) => character_key(s),
+        _ => None,
+    }
+}
+
+fn is_modifier(code: KeyCode) -> bool {
+    matches!(
+        code,
+        KeyCode::ShiftLeft
+            | KeyCode::ShiftRight
+            | KeyCode::ControlLeft
+            | KeyCode::ControlRight
+            | KeyCode::AltLeft
+            | KeyCode::AltRight
+            | KeyCode::SuperLeft
+            | KeyCode::SuperRight
+    )
+}
+
+fn physical_key(code: KeyCode) -> Option<KeyId> {
+    let numpad = match code {
+        KeyCode::Numpad0 => Some(0),
+        KeyCode::Numpad1 => Some(1),
+        KeyCode::Numpad2 => Some(2),
+        KeyCode::Numpad3 => Some(3),
+        KeyCode::Numpad4 => Some(4),
+        KeyCode::Numpad5 => Some(5),
+        KeyCode::Numpad6 => Some(6),
+        KeyCode::Numpad7 => Some(7),
+        KeyCode::Numpad8 => Some(8),
+        KeyCode::Numpad9 => Some(9),
+        _ => None,
+    };
+    if let Some(n) = numpad {
+        return Some(KeyId::Numpad(n));
+    }
+    let function = match code {
+        KeyCode::F1 => Some(1),
+        KeyCode::F2 => Some(2),
+        KeyCode::F3 => Some(3),
+        KeyCode::F4 => Some(4),
+        KeyCode::F5 => Some(5),
+        KeyCode::F6 => Some(6),
+        KeyCode::F7 => Some(7),
+        KeyCode::F8 => Some(8),
+        KeyCode::F9 => Some(9),
+        KeyCode::F10 => Some(10),
+        KeyCode::F11 => Some(11),
+        KeyCode::F12 => Some(12),
+        _ => None,
+    };
+    if let Some(n) = function {
+        return Some(KeyId::F(n));
+    }
+    Some(match code {
+        KeyCode::Tab => KeyId::Tab,
+        KeyCode::Space => KeyId::Space,
+        KeyCode::Escape => KeyId::Escape,
+        KeyCode::ArrowUp => KeyId::Up,
+        KeyCode::ArrowDown => KeyId::Down,
+        KeyCode::ArrowLeft => KeyId::Left,
+        KeyCode::ArrowRight => KeyId::Right,
+        KeyCode::Home => KeyId::Home,
+        KeyCode::End => KeyId::End,
+        KeyCode::PageUp => KeyId::PageUp,
+        KeyCode::PageDown => KeyId::PageDown,
+        KeyCode::Insert => KeyId::Insert,
+        KeyCode::Delete => KeyId::Delete,
+        KeyCode::Backspace => KeyId::Backspace,
+        KeyCode::Minus => KeyId::Char('-'),
+        KeyCode::Equal => KeyId::Char('='),
+        KeyCode::BracketLeft => KeyId::Char('['),
+        KeyCode::BracketRight => KeyId::Char(']'),
+        _ => return None,
+    })
+}
+
+fn named_key(named: NamedKey) -> Option<KeyId> {
+    Some(match named {
+        NamedKey::Tab => KeyId::Tab,
+        NamedKey::Space => KeyId::Space,
+        NamedKey::Escape => KeyId::Escape,
+        NamedKey::ArrowUp => KeyId::Up,
+        NamedKey::ArrowDown => KeyId::Down,
+        NamedKey::ArrowLeft => KeyId::Left,
+        NamedKey::ArrowRight => KeyId::Right,
+        NamedKey::Home => KeyId::Home,
+        NamedKey::End => KeyId::End,
+        NamedKey::PageUp => KeyId::PageUp,
+        NamedKey::PageDown => KeyId::PageDown,
+        NamedKey::Insert => KeyId::Insert,
+        NamedKey::Delete => KeyId::Delete,
+        NamedKey::Backspace => KeyId::Backspace,
+        NamedKey::F1 => KeyId::F(1),
+        NamedKey::F2 => KeyId::F(2),
+        NamedKey::F3 => KeyId::F(3),
+        NamedKey::F4 => KeyId::F(4),
+        NamedKey::F5 => KeyId::F(5),
+        NamedKey::F6 => KeyId::F(6),
+        NamedKey::F7 => KeyId::F(7),
+        NamedKey::F8 => KeyId::F(8),
+        NamedKey::F9 => KeyId::F(9),
+        NamedKey::F10 => KeyId::F(10),
+        NamedKey::F11 => KeyId::F(11),
+        NamedKey::F12 => KeyId::F(12),
+        _ => return None,
+    })
+}
+
+/// Map a shifted symbol back to the key that produced it, so Shift+1 is the 1 key.
+fn character_key(s: &str) -> Option<KeyId> {
+    let c = s.chars().next()?;
+    let c = match c {
+        '!' => '1',
+        '@' => '2',
+        '#' => '3',
+        '$' => '4',
+        '%' => '5',
+        '^' => '6',
+        '&' => '7',
+        '*' => '8',
+        '(' => '9',
+        ')' => '0',
+        '+' => '=',
+        '_' => '-',
+        '{' => '[',
+        '}' => ']',
+        other => other,
+    };
+    if c.is_ascii_alphanumeric() || matches!(c, '[' | ']' | '-' | '=') {
+        Some(KeyId::Char(c.to_ascii_lowercase()))
+    } else {
+        None
     }
 }
