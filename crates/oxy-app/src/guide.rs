@@ -105,8 +105,11 @@ OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it eve
     },
     Topic {
         title: "Importing and exporting",
-        keywords: "export import obj stl 3d print file other programs",
-        body: "Ctrl+I imports an OBJ or STL file as a new piece. Ctrl+E exports every visible piece (hidden faces are left out) as OBJ or binary STL, for 3D printing or other programs.",
+        keywords: "export import obj stl gltf glb ply 3d print file other programs game engine lod split cli",
+        body: "Ctrl+I imports an OBJ or STL file as a new piece. Ctrl+E exports every visible piece (hidden faces are left out): glTF/GLB keeps each piece as its own object for game engines and other 3D tools, OBJ writes one object per piece, and STL and PLY combine them (STL is the usual choice for 3D printing).\n\n\
+- Pieces > Make LOD chain adds lighter copies at 1/2, 1/4 and 1/8 of the triangles.\n\
+- Pieces > Split by face groups or Split into loose parts turns one piece into several.\n\
+- The oxybrush-cli command-line tool converts, remeshes, decimates, makes LODs and splits files without opening the app.",
     },
     Topic {
         title: "Layouts and panels",
