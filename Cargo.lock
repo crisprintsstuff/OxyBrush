@@ -2538,7 +2538,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-app"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "dirs",
  "egui",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-cli"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "oxy-doc",
  "oxy-io",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-doc"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "crc32fast",
  "dirs",
@@ -2588,7 +2588,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-history"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "glam",
  "oxy-doc",
@@ -2597,7 +2597,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-io"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2607,7 +2607,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-mesh"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "glam",
  "rayon",
@@ -2615,7 +2615,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-render"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "bytemuck",
  "glam",
@@ -2628,7 +2628,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-sculpt"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "glam",
  "miniz_oxide 0.9.1",
@@ -2638,7 +2638,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-topo"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2647,7 +2647,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-update"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -2658,7 +2658,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-ztl"
-version = "0.3.0-alpha"
+version = "0.4.0-alpha"
 dependencies = [
  "miniz_oxide 0.9.1",
  "serde_json",
