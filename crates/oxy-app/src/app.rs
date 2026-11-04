@@ -44,6 +44,8 @@ pub struct App {
     editor: Editor,
     /// Material last uploaded: a built-in preset, or a custom matcap's name.
     applied_matcap: Option<(MatcapPreset, Option<String>)>,
+    /// Middle button held over a panel: last pointer position, for drag-scrolling.
+    mmb_scroll: Option<Vec2>,
     applied_theme: Option<(bool, f32, crate::settings::UiLayout)>,
     applied_title: String,
     last_frame: Instant,
@@ -111,6 +113,7 @@ impl App {
                 e
             },
             applied_matcap: None,
+            mmb_scroll: None,
             applied_theme: None,
             applied_title: String::new(),
             last_frame: Instant::now(),
@@ -490,6 +493,21 @@ impl App {
     }
 
     fn handle_key(&mut self, event: &KeyEvent) -> Option<UiAction> {
+        // Hold Q: quick menu at the cursor while the key is down.
+        if event.physical_key == PhysicalKey::Code(KeyCode::KeyQ) {
+            let ed = &mut self.editor;
+            let m = ed.modifiers;
+            match event.state {
+                ElementState::Pressed if !event.repeat && !m.ctrl && !m.alt && !m.shift => {
+                    if let Some(pos) = ed.pointer {
+                        ed.quick_menu = Some(crate::editor::QuickMenu { pos, held: true });
+                    }
+                }
+                ElementState::Released if ed.quick_menu.is_some_and(|q| q.held) => ed.quick_menu = None,
+                _ => {}
+            }
+            return None;
+        }
         if event.state != ElementState::Pressed {
             return None;
         }
@@ -713,6 +731,21 @@ impl ApplicationHandler for App {
                     Modifiers { shift: s.shift_key(), ctrl: s.control_key() || s.super_key(), alt: s.alt_key() };
                 redraw = true;
             }
+            WindowEvent::CursorMoved { position, .. } if self.mmb_scroll.is_some() => {
+                // Middle-drag over a panel scrolls it, like grabbing the page.
+                let pos = Vec2::new(position.x as f32, position.y as f32);
+                let last = self.mmb_scroll.replace(pos).unwrap_or(pos);
+                let d = (pos - last) / self.editor.pixels_per_point.max(0.1);
+                g.egui_state.egui_input_mut().events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(d.x, d.y),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: Default::default(),
+                });
+                self.editor.pointer = Some(pos);
+                redraw = true;
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.editor.pressure = 1.0;
                 self.editor.pointer_moved(Vec2::new(position.x as f32, position.y as f32));
@@ -731,6 +764,12 @@ impl ApplicationHandler for App {
                     MouseButton::Right => Some(PointerButton::Secondary),
                     _ => None,
                 };
+                if *button == MouseButton::Middle {
+                    self.mmb_scroll = match state {
+                        ElementState::Pressed if over_egui => self.editor.pointer,
+                        _ => None,
+                    };
+                }
                 if let Some(b) = b {
                     match state {
                         ElementState::Pressed if !over_egui && self.editor.pointer_in_canvas() => {
@@ -766,6 +805,15 @@ impl ApplicationHandler for App {
                     MouseScrollDelta::PixelDelta(p) => p.y as f32 / 40.0,
                 };
                 self.editor.scroll(steps);
+                redraw = true;
+            }
+            // Releasing Q always closes a held quick menu, even if a slider in it took focus.
+            WindowEvent::KeyboardInput { event, .. }
+                if event.state == ElementState::Released
+                    && event.physical_key == PhysicalKey::Code(KeyCode::KeyQ)
+                    && self.editor.quick_menu.is_some_and(|q| q.held) =>
+            {
+                self.editor.quick_menu = None;
                 redraw = true;
             }
             WindowEvent::KeyboardInput { event, .. } if !self.egui_ctx.egui_wants_keyboard_input() => {

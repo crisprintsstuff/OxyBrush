@@ -31,7 +31,7 @@ Prefer starting strokes beside the model? Turn on Settings > Strokes can start o
         title: "Sculpting basics",
         keywords: "start first stroke clay brush size strength radius",
         body: "Drag on the model to sculpt with the current brush. Raise adds material and Carve removes it; hold Alt to flip for one stroke.\n\n\
-- [ and ] make the brush smaller and larger; - and = change its strength. The size/strength bar does the same with the mouse.\n\
+- [ and ] make the brush smaller and larger; - and = change its strength. The size/strength bar does the same with the mouse, and so does the quick menu: right-click the model or hold Q.\n\
 - Hold Shift to smooth with any brush, Ctrl to mask.\n\
 - With a pen, pressure sets the strength (and the radius, if you turn that on in the brush settings).\n\
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it.",
@@ -40,7 +40,10 @@ Prefer starting strokes beside the model? Turn on Settings > Strokes can start o
         title: "Choosing brushes",
         keywords: "brush picker shelf number keys space find",
         body: "Click a brush in the shelf, press its number key (1–9 and 0 select the first ten), or press Space and type part of its name: \"cs\" finds Clay Strips, Enter picks it.\n\n\
-Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover a brush for a one-line description.",
+Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover a brush for a one-line description.\n\n\
+- Grab, Topological Move and Snake Hook: hold Alt to move the surface along its normal.\n\
+- Grab through (Grab settings) moves everything under the brush circle, front to back.\n\
+- Middle-drag over a panel scrolls it, handy with a pen side button.",
     },
     Topic {
         title: "Command palette",
