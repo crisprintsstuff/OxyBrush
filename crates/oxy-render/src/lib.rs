@@ -144,8 +144,13 @@ impl Default for ViewSettings {
             show_mask: true,
             show_groups: false,
             background_style: BackgroundStyle::Gradient,
-            background: [0.010, 0.011, 0.013],
-            background_center: [0.062, 0.064, 0.070],
+            // Neutral linear gray. The previous defaults raised blue
+            // (0.010, 0.011, 0.013 and 0.062, 0.064, 0.070); after the sRGB
+            // framebuffer encodes them that is a cool cast across the
+            // viewport. These keep the old luminance (the green channel).
+            // Gradient and flat both start from these; flat draws `background` only.
+            background: [0.011, 0.011, 0.011],
+            background_center: [0.064, 0.064, 0.064],
             ambient_occlusion: 0.7,
             cavity: 0.6,
             flat_shading: false,
@@ -894,6 +899,15 @@ mod tests {
         assert_eq!(s.ambient_occlusion, 0.1);
         assert_eq!(BackgroundStyle::from_key("flat"), Some(BackgroundStyle::Flat));
         assert_eq!(BackgroundStyle::from_key("nope"), None);
+    }
+
+    #[test]
+    fn default_viewport_background_is_neutral() {
+        let v = ViewSettings::default();
+        for (name, c) in [("edge", v.background), ("center", v.background_center)] {
+            assert!((c[0] - c[1]).abs() < 1e-9 && (c[1] - c[2]).abs() < 1e-9, "{name} background is tinted: {c:?}");
+        }
+        assert!(v.background_center[0] > v.background[0], "the gradient still lightens toward the center");
     }
 
     #[test]
