@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OxyBrush — High-Performance 3D Digital Sculpting in Rust</title>
-  <meta name="description" content="OxyBrush is a lightweight, open-source 3D digital sculpting app written in Rust. Features multiresolution subdivision, 16 brushes, SSAO viewport shading, and background meshing.">
+  <meta name="description" content="OxyBrush is a lightweight, open-source 3D digital sculpting app written in Rust. Features multiresolution subdivision, 17 brushes, vertex color painting, posing, glTF export, SSAO viewport shading, and background meshing.">
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -104,18 +104,18 @@
         </div>
         <div class="flex items-center gap-2">
           <span class="font-bold text-lg tracking-tight text-white font-mono">OxyBrush</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan font-medium">v0.3.0-alpha</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan font-medium" data-latest-version>v0.4.0-alpha</span>
         </div>
       </a>
 
       <!-- Desktop Nav -->
       <nav class="hidden lg:flex items-center gap-8 text-xs font-mono text-slate-400">
-        <a href="#v030-highlights" class="hover:text-slate-200 transition-colors flex items-center gap-1.5">
+        <a href="#latest-highlights" class="hover:text-slate-200 transition-colors flex items-center gap-1.5">
           <span class="w-1.5 h-1.5 rounded-full bg-accent-emerald"></span>
-          <span>v0.3.0 Highlights</span>
+          <span>What's new</span>
         </a>
         <a href="#features" class="hover:text-slate-200 transition-colors">Sculpting System</a>
-        <a href="#brushes" class="hover:text-slate-200 transition-colors">16 Brushes</a>
+        <a href="#brushes" class="hover:text-slate-200 transition-colors">17 Brushes</a>
         <a href="#performance" class="hover:text-slate-200 transition-colors">Performance</a>
         <a href="#architecture" class="hover:text-slate-200 transition-colors">Architecture</a>
         <a href="#changelog" class="hover:text-slate-200 transition-colors">Changelog</a>
@@ -125,7 +125,7 @@
       <div class="flex items-center gap-3">
         <a href="#downloads" class="px-4 py-2 rounded-lg bg-accent-cyan hover:bg-sky-400 text-dark-950 font-semibold text-xs font-mono transition-all flex items-center gap-1.5 shadow-md shadow-accent-cyan/20">
           <i data-lucide="download" class="w-3.5 h-3.5"></i>
-          <span>Get v0.3.0</span>
+          <span data-latest-version data-short>Get v0.4.0</span>
         </a>
         <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white transition-all" title="GitHub Repository">
           <!-- GitHub mark from Primer Octicons (MIT); Lucide no longer ships brand icons -->
@@ -163,14 +163,14 @@
         </h1>
 
         <p class="text-slate-400 text-base sm:text-lg max-w-3xl mx-auto mb-10 font-normal leading-relaxed">
-          OxyBrush is a lightweight, responsive desktop 3D sculpting studio built for speed and stability. Sculpt at dense multiresolution levels without UI lockup, render instant viewport ambient occlusion and cavity details, and paint organic forms with 16 dedicated tools.
+          OxyBrush is a lightweight, responsive desktop 3D sculpting studio built for speed and stability. Sculpt at dense multiresolution levels without UI lockup, render instant viewport ambient occlusion and cavity details, and paint organic forms with 17 dedicated tools, including vertex color.
         </p>
 
         <!-- CTA Downloads / Commands -->
         <div class="flex flex-wrap items-center justify-center gap-4 mb-12">
           <a href="#downloads" class="px-6 py-3.5 rounded-xl bg-white hover:bg-slate-100 text-dark-950 font-bold text-sm font-mono transition-all flex items-center gap-2 shadow-xl hover:shadow-2xl hover:scale-[1.02]">
             <i data-lucide="download-cloud" class="w-4 h-4 text-accent-cyan"></i>
-            <span>Download v0.3.0-alpha</span>
+            <span>Download <span data-latest-version>v0.4.0-alpha</span></span>
           </a>
           <button onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" class="px-6 py-3.5 rounded-xl bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white font-mono text-xs font-medium transition-all flex items-center gap-2.5">
             <i data-lucide="terminal" class="w-4 h-4 text-accent-cyan"></i>
@@ -190,7 +190,7 @@
             <div class="text-xs text-slate-400">Level Switch Speedup</div>
           </div>
           <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
-            <div class="text-2xl font-bold font-mono text-accent-emerald mb-1">16 Tools</div>
+            <div class="text-2xl font-bold font-mono text-accent-emerald mb-1">17 Tools</div>
             <div class="text-xs text-slate-400">Dedicated Sculpting Brushes</div>
           </div>
           <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
@@ -202,19 +202,19 @@
       </div>
     </section>
 
-    <!-- v0.3.0-alpha Major Release Banner -->
-    <section id="v030-highlights" class="py-16 border-b border-dark-800 bg-gradient-to-b from-dark-900/80 to-dark-950">
+    <!-- Latest release highlights (update with each release; the version badge and links update themselves) -->
+    <section id="latest-highlights" class="py-16 border-b border-dark-800 bg-gradient-to-b from-dark-900/80 to-dark-950">
       <div class="max-w-6xl mx-auto px-4 sm:px-6">
         
         <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
           <div>
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-accent-emerald/10 border border-accent-emerald/30 text-accent-emerald font-mono text-xs font-semibold uppercase tracking-wider mb-3">
               <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
-              What's New in v0.3.0-alpha
+              What's New in v0.4.0-alpha
             </div>
-            <h2 class="text-3xl font-extrabold text-white tracking-tight">Real-Time Viewport Shading &amp; Dense Mesh Upgrades</h2>
+            <h2 class="text-3xl font-extrabold text-white tracking-tight">Paint, Pose &amp; Export to Game Engines</h2>
           </div>
-          <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="text-xs font-mono text-accent-cyan hover:underline flex items-center gap-1.5 self-start md:self-end">
+          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.4.0-alpha" target="_blank" class="text-xs font-mono text-accent-cyan hover:underline flex items-center gap-1.5 self-start md:self-end">
             <span>View GitHub Release</span>
             <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i>
           </a>
@@ -222,57 +222,54 @@
 
         <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
           
-          <!-- Card 1 -->
           <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-cyan/10 rounded-full blur-2xl group-hover:bg-accent-cyan/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-cyan mb-4">
-                <i data-lucide="eye" class="w-5 h-5"></i>
+                <i data-lucide="palette" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Screen-Space Ambient Occlusion (SSAO)</h3>
+              <h3 class="text-lg font-bold text-white mb-2">Vertex Color &amp; Posing</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Folds, hollows, and undercuts darken naturally in screen space. Toggled on by default in the view strip or tweaked in <code class="font-mono text-slate-300">View &gt; Shading</code> with zero degradation when set to 0.
+                A new <strong class="text-slate-300">Paint</strong> brush with mask-aware fills for the whole piece, its cavities or its peaks. Press <code class="font-mono text-slate-300">T</code> for a transform gizmo: masked parts stay put and a soft mask edge bends smoothly, so you can pose an arm at the shoulder.
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-cyan">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Accentuates deep crevice readability</span>
+              <span>Saved in projects &amp; subdivision levels</span>
             </div>
           </div>
 
-          <!-- Card 2 -->
           <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-violet/10 rounded-full blur-2xl group-hover:bg-accent-violet/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-violet mb-4">
-                <i data-lucide="sun" class="w-5 h-5"></i>
+                <i data-lucide="command" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Dynamic Cavity Shading</h3>
+              <h3 class="text-lg font-bold text-white mb-2">Faster Workflow</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Creases, pores, and micro-grooves darken while ridges and high-curvature edges catch specular highlights, allowing subtle surface texture to read clearly during sculpting.
+                A command palette (<code class="font-mono text-slate-300">Ctrl+K</code>) finds any command, brush or file as you type; <code class="font-mono text-slate-300">Space</code> finds a brush. Brush presets you can share as one-line codes, a quick menu at the cursor, recent files and a built-in offline guide (<code class="font-mono text-slate-300">F2</code>).
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-violet">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>High-frequency pores &amp; wrinkles</span>
+              <span>Flat shading &amp; custom matcaps too</span>
             </div>
           </div>
 
-          <!-- Card 3 -->
           <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-emerald/10 rounded-full blur-2xl group-hover:bg-accent-emerald/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-emerald mb-4">
-                <i data-lucide="zap" class="w-5 h-5"></i>
+                <i data-lucide="package" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Asynchronous Level Changes</h3>
+              <h3 class="text-lg font-bold text-white mb-2">glTF, LODs &amp; CLI</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Subdivision changes above 1M triangles execute in background threads. The main UI thread spends only ~60ms at 5.2M triangles, meaning camera orbit and piece switching remain fluid.
+                Export to <strong class="text-slate-300">glTF/GLB</strong> with every piece as its own object, plus OBJ, STL and PLY. Make LOD chains, split pieces by face group or loose parts, and batch-process files with the new <code class="font-mono text-slate-300">oxybrush-cli</code>.
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-emerald">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Small dabs ~40% faster via tight chunk bounds</span>
+              <span>Validated with the Khronos glTF validator</span>
             </div>
           </div>
 
@@ -365,7 +362,7 @@
         <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
           <div>
             <div class="text-xs font-mono text-accent-violet uppercase tracking-wider mb-2 font-semibold">Brush Palette</div>
-            <h2 class="text-3xl font-extrabold text-white tracking-tight">16 Purpose-Built Sculpting Tools</h2>
+            <h2 class="text-3xl font-extrabold text-white tracking-tight">17 Purpose-Built Sculpting Tools</h2>
             <p class="text-slate-400 text-sm mt-1">Rendered clay ball previews, number-key shortcuts (1–9, 0) that follow your shelf order, and draggable shelf ordering.</p>
           </div>
           <div class="text-xs font-mono text-slate-400 bg-dark-850 px-3 py-1.5 rounded-lg border border-dark-700">
@@ -487,6 +484,13 @@
             <span class="text-[10px] text-accent-cyan font-mono">Procedural grain</span>
           </div>
 
+          <!-- Brush 17 (v0.4.0) -->
+          <div class="p-3 rounded-xl bg-dark-900 border border-accent-emerald/40 flex flex-col items-center text-center group hover:border-accent-emerald transition-all">
+            <div class="w-12 h-12 rounded-full matcap-pearl mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
+            <span class="text-xs font-bold text-white">Paint</span>
+            <span class="text-[10px] text-accent-emerald font-mono">Vertex color</span>
+          </div>
+
         </div>
 
       </div>
@@ -559,7 +563,7 @@
         
         <div class="text-center mb-12">
           <div class="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-2 font-semibold">Get Started</div>
-          <h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">Download OxyBrush v0.3.0-alpha</h2>
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">Download OxyBrush <span data-latest-version>v0.4.0-alpha</span></h2>
           <p class="text-slate-400 text-sm max-w-xl mx-auto">
             Binary releases are pre-compiled and published on GitHub Releases with SHA-256 checksums for integrity verification.
           </p>
@@ -578,14 +582,14 @@
               <p class="text-xs text-slate-400 mb-6">Windows 10 / 11 with DirectX 12 or Vulkan support.</p>
               
               <div class="space-y-2">
-                <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
+                <a data-asset="windows-setup" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
                   <span class="flex items-center gap-2">
                     <i data-lucide="package" class="w-3.5 h-3.5 text-accent-cyan"></i>
                     <span>Installer (.exe)</span>
                   </span>
                   <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
                 </a>
-                <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
+                <a data-asset="windows-portable" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
                   <span class="flex items-center gap-2">
                     <i data-lucide="file-archive" class="w-3.5 h-3.5 text-slate-400"></i>
                     <span>Portable (.zip)</span>
@@ -611,7 +615,7 @@
               <p class="text-xs text-slate-400 mb-6">macOS 11+ running Apple Silicon (M1/M2/M3/M4) &amp; Intel.</p>
               
               <div class="space-y-2">
-                <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-violet/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
+                <a data-asset="macos-dmg" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-violet/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
                   <span class="flex items-center gap-2">
                     <i data-lucide="disc" class="w-3.5 h-3.5 text-accent-violet"></i>
                     <span>Universal DMG (.dmg)</span>
@@ -637,14 +641,14 @@
               <p class="text-xs text-slate-400 mb-6">Modern desktop distributions via Flatpak or standalone tarball.</p>
               
               <div class="space-y-2">
-                <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
+                <a data-asset="linux-flatpak" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
                   <span class="flex items-center gap-2">
                     <i data-lucide="box" class="w-3.5 h-3.5 text-accent-emerald"></i>
                     <span>Flatpak Bundle</span>
                   </span>
                   <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
                 </a>
-                <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
+                <a data-asset="linux-tarball" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
                   <span class="flex items-center gap-2">
                     <i data-lucide="file-archive" class="w-3.5 h-3.5 text-slate-400"></i>
                     <span>Portable (.tar.gz)</span>
@@ -686,14 +690,38 @@
 
         <div class="space-y-4">
           
+          <!-- v0.4.0-alpha -->
+          <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
+            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="font-mono font-bold text-white text-sm">0.4.0-alpha</span>
+                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
+                <span class="px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono font-semibold">LATEST</span>
+              </div>
+            </div>
+            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Sculpting &amp; Painting</span>
+                <p class="text-slate-400">Paint brush and mask-aware color fills, a transform gizmo for posing, quick menu at the cursor, grab through the model, Alt to move along the normal, and brush presets with shareable codes.</p>
+              </div>
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Viewing &amp; Workflow</span>
+                <p class="text-slate-400">Flat shading, custom matcaps, 45° view steps, command palette, brush finder, recent files, built-in guide, strokes from empty space and opt-in update checks.</p>
+              </div>
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Pipeline</span>
+                <p class="text-slate-400">glTF/GLB and PLY export, OBJ objects imported as separate pieces, LOD chains, splitting pieces, and the oxybrush-cli command-line tool.</p>
+              </div>
+            </div>
+          </div>
+
           <!-- v0.3.0-alpha -->
           <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
             <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
               <div class="flex items-center gap-3">
                 <span class="font-mono font-bold text-white text-sm">0.3.0-alpha</span>
                 <span class="text-xs text-slate-400 font-mono">2026-11-02</span>
-                <span class="px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono font-semibold">LATEST</span>
-              </div>
+                              </div>
             </div>
             <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
               <div>
@@ -797,7 +825,7 @@
       </div>
       <div class="flex items-center gap-6">
         <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" class="hover:text-slate-300 transition-colors">Changelog</a>
-        <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.3.0-alpha" target="_blank" class="hover:text-slate-300 transition-colors">Release Notes</a>
+        <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="hover:text-slate-300 transition-colors">Release Notes</a>
         <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" class="hover:text-slate-300 transition-colors">GitHub</a>
       </div>
     </div>
@@ -806,6 +834,39 @@
   <!-- Script Logic -->
   <script>
     lucide.createIcons();
+
+    // Keep the version and download links pointing at the newest release.
+    // The page works without this (static fallback text and a link to the
+    // releases list); with it, each button downloads the right file directly.
+    (async function latestRelease() {
+      const patterns = {
+        'windows-setup': /-windows-x86_64-setup\.exe$/,
+        'windows-portable': /-windows-x86_64-portable\.zip$/,
+        'macos-dmg': /-macos-universal\.dmg$/,
+        'linux-flatpak': /-linux-x86_64\.flatpak$/,
+        'linux-tarball': /-linux-x86_64\.tar\.gz$/,
+      };
+      try {
+        // All releases so far are pre-releases, which /releases/latest skips.
+        const r = await fetch('https://api.github.com/repos/crisprintsstuff/OxyBrush/releases?per_page=10', {
+          headers: { Accept: 'application/vnd.github+json' },
+        });
+        if (!r.ok) return;
+        const release = (await r.json()).find((x) => !x.draft && x.assets && x.assets.length);
+        if (!release) return;
+        const tag = release.tag_name;
+        document.querySelectorAll('[data-latest-version]').forEach((el) => {
+          el.textContent = el.hasAttribute('data-short') ? 'Get ' + tag.replace(/-.*$/, '') : tag;
+        });
+        document.querySelectorAll('[data-release-link]').forEach((el) => { el.href = release.html_url; });
+        document.querySelectorAll('[data-asset]').forEach((el) => {
+          const asset = release.assets.find((a) => patterns[el.dataset.asset]?.test(a.name));
+          el.href = asset ? asset.browser_download_url : release.html_url;
+        });
+      } catch (e) {
+        // Offline or rate-limited: keep the static links.
+      }
+    })();
 
     function copyCommand(text) {
       const textarea = document.createElement('textarea');
