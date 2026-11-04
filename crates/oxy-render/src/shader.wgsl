@@ -29,6 +29,7 @@ struct VsIn {
     @location(1) normal: vec3<f32>,
     @location(2) mask: f32,
     @location(3) group_color: u32,
+    @location(4) paint: u32,
 };
 
 struct VsOut {
@@ -37,6 +38,7 @@ struct VsOut {
     @location(1) mask: f32,
     @location(2) @interpolate(flat) group_color: u32,
     @location(3) view_depth: f32,
+    @location(4) paint: vec3<f32>,
 };
 
 // Two targets: the shaded color, and view normal (xyz) + linear depth (w)
@@ -53,6 +55,8 @@ fn vs_main(v: VsIn) -> VsOut {
     o.view_normal = (u.view * vec4<f32>(v.normal, 0.0)).xyz;
     o.mask = v.mask;
     o.group_color = v.group_color;
+    // Paint is stored as the sRGB color the user picked; shade in linear.
+    o.paint = pow(unpack(v.paint), vec3<f32>(2.2));
     o.view_depth = -(u.view * vec4<f32>(v.position, 1.0)).z;
     return o;
 }
@@ -73,6 +77,13 @@ fn fs_main(
     }
     let uv = vec2<f32>(n.x * 0.49 + 0.5, 0.5 - n.y * 0.49);
     var color = textureSample(matcap_tex, matcap_sampler, uv).rgb;
+    // Vertex color: tint by the paint while keeping the material's shading.
+    // White (unpainted) leaves the material exactly as it is.
+    let paint_w = clamp(distance(i.paint, vec3<f32>(1.0)) * 4.0, 0.0, 1.0);
+    if (paint_w > 0.0) {
+        let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+        color = mix(color, i.paint * lum * 1.6, paint_w);
+    }
     if (piece.flags.x > 0.5) {
         var gc = i.group_color;
         //PRIM gc = face_colors[prim];

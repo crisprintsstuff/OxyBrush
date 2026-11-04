@@ -114,6 +114,24 @@ fn commands() -> Vec<Entry> {
             e.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false))
         }),
         cmd("Show / hide mask", "M", "masking view", |e| e.view.show_mask = !e.view.show_mask),
+        cmd("Transform: move", "T", "gizmo pose translate", |e| e.toggle_gizmo(crate::pose::GizmoMode::Move)),
+        cmd("Transform: rotate", "", "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
+        cmd("Transform: scale", "", "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
+        cmd("Fill color", "", "paint vertex color", |e| {
+            let c = e.paint_color;
+            e.edit_color("Fill color", |m| m.fill_color(c, 1.0))
+        }),
+        cmd("Fill cavities with color", "", "paint vertex color dirt", |e| {
+            let c = e.paint_color;
+            e.edit_color("Fill cavities", |m| m.fill_color_by_curvature(c, 1.0, true))
+        }),
+        cmd("Fill peaks with color", "", "paint vertex color edges", |e| {
+            let c = e.paint_color;
+            e.edit_color("Fill peaks", |m| m.fill_color_by_curvature(c, 1.0, false))
+        }),
+        cmd("Clear color", "", "paint vertex color remove", |e| {
+            e.edit_color("Clear color", oxy_mesh::Mesh::clear_color)
+        }),
         cmd("Toggle X symmetry", "X", "mirror", |e| e.symmetry.x = !e.symmetry.x),
         cmd("Toggle Y symmetry", "", "mirror", |e| e.symmetry.y = !e.symmetry.y),
         cmd("Toggle Z symmetry", "", "mirror", |e| e.symmetry.z = !e.symmetry.z),

@@ -42,10 +42,27 @@ pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
             }
         }
     }
+    // Midpoint colors are the average of their edge's end points, appended
+    // in the order midpoint_subdivide creates them.
+    let color = if mesh.is_painted() {
+        let mut color = mesh.color.clone();
+        let mut seen = std::collections::HashSet::with_capacity(mesh.triangles.len() * 3 / 2);
+        for &[a, b, c] in &mesh.triangles {
+            for (x, y) in [(a, b), (b, c), (c, a)] {
+                if seen.insert((x.min(y), x.max(y))) {
+                    color.push((mesh.color[x as usize] + mesh.color[y as usize]) * 0.5);
+                }
+            }
+        }
+        debug_assert_eq!(color.len(), pos.len());
+        color
+    } else {
+        Vec::new()
+    };
     // Each parent triangle becomes four consecutive children.
     let groups = mesh.groups().iter().flat_map(|&g| [g; 4]).collect();
     let hidden = mesh.hidden().iter().flat_map(|&h| [h; 4]).collect();
-    let mut out = Mesh::from_data(crate::MeshData { positions: pos, triangles: tris, mask, groups, hidden });
+    let mut out = Mesh::from_data(crate::MeshData { positions: pos, triangles: tris, mask, groups, hidden, color });
     for _ in 0..smooth_passes {
         let prev = out.positions.clone();
         for v in 0..out.vertex_count() {

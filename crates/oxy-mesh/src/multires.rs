@@ -63,6 +63,8 @@ struct Level {
 /// Per-level copies of mask, face groups and visibility, in level order.
 struct Attributes {
     mask: Vec<f32>,
+    /// Empty when the mesh is unpainted.
+    color: Vec<Vec3>,
     groups: Vec<u32>,
     hidden: Vec<bool>,
 }
@@ -248,13 +250,23 @@ impl Multires {
         if self.identity {
             return Attributes {
                 mask: mesh.mask.clone(),
+                color: if mesh.is_painted() { mesh.color.clone() } else { Vec::new() },
                 groups: mesh.groups().to_vec(),
                 hidden: mesh.hidden().to_vec(),
             };
         }
-        let mut a = Attributes { mask: vec![0.0; nv], groups: vec![0; nt], hidden: vec![false; nt] };
+        let painted = mesh.is_painted();
+        let mut a = Attributes {
+            mask: vec![0.0; nv],
+            color: if painted { vec![crate::WHITE; nv] } else { Vec::new() },
+            groups: vec![0; nt],
+            hidden: vec![false; nt],
+        };
         for (v, &src) in mesh.source_vertices().iter().enumerate() {
             a.mask[src as usize] = mesh.mask[v];
+            if painted {
+                a.color[src as usize] = mesh.color[v];
+            }
         }
         for (t, &src) in mesh.source_triangles().iter().enumerate() {
             a.groups[src as usize] = mesh.groups()[t];
@@ -269,10 +281,16 @@ impl Multires {
         let mut mask = a.mask;
         let edge_mask: Vec<f32> = r.edges.iter().map(|e| (mask[e.a as usize] + mask[e.b as usize]) * 0.5).collect();
         mask.extend(edge_mask);
+        let mut color = a.color;
+        if !color.is_empty() {
+            let edge_color: Vec<Vec3> =
+                r.edges.iter().map(|e| (color[e.a as usize] + color[e.b as usize]) * 0.5).collect();
+            color.extend(edge_color);
+        }
         // Each coarse triangle becomes four consecutive children.
         let groups = a.groups.iter().flat_map(|&g| [g; 4]).collect();
         let hidden = a.hidden.iter().flat_map(|&h| [h; 4]).collect();
-        Attributes { mask, groups, hidden }
+        Attributes { mask, color, groups, hidden }
     }
 
     /// Attributes of level `k` carried down to level `k − 1`.
@@ -280,9 +298,11 @@ impl Multires {
         let n_prev = self.levels[k - 1].positions.len();
         let mut mask = a.mask;
         mask.truncate(n_prev);
+        let mut color = a.color;
+        color.truncate(n_prev);
         let groups = a.groups.chunks(4).map(|c| c[0]).collect();
         let hidden = a.hidden.chunks(4).map(|c| c.iter().all(|&h| h)).collect();
-        Attributes { mask, groups, hidden }
+        Attributes { mask, color, groups, hidden }
     }
 
     fn level_data(&self, a: Attributes) -> MeshData {
@@ -293,6 +313,7 @@ impl Multires {
             mask: a.mask,
             groups: a.groups,
             hidden: a.hidden,
+            color: a.color,
         }
     }
 
