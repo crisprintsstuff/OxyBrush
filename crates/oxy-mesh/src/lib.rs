@@ -463,6 +463,13 @@ impl Mesh {
 
     /// One group per connected component.
     pub fn groups_from_islands(&mut self) {
+        let group = self.island_ids();
+        self.set_groups(group);
+    }
+
+    /// Connected-component id of every triangle (triangles sharing a vertex
+    /// are connected), numbered from 0 in order of first triangle.
+    pub fn island_ids(&self) -> Vec<u32> {
         let mut group = vec![u32::MAX; self.triangles.len()];
         let mut next = 0;
         let mut stack = Vec::new();
@@ -484,7 +491,38 @@ impl Mesh {
             }
             next += 1;
         }
-        self.set_groups(group);
+        group
+    }
+
+    /// Plain data for the triangles where `keep(t)` holds, with unused
+    /// vertices dropped (mask, groups and visibility carried along).
+    pub fn extract(&self, keep: impl Fn(usize) -> bool) -> MeshData {
+        let mut remap = vec![u32::MAX; self.positions.len()];
+        let mut out = MeshData::default();
+        for t in (0..self.triangles.len()).filter(|&t| keep(t)) {
+            let tri = self.triangles[t].map(|v| {
+                let r = &mut remap[v as usize];
+                if *r == u32::MAX {
+                    *r = out.positions.len() as u32;
+                    out.positions.push(self.positions[v as usize]);
+                    out.mask.push(self.mask[v as usize]);
+                }
+                *r
+            });
+            out.triangles.push(tri);
+            out.groups.push(self.groups[t]);
+            out.hidden.push(self.hidden[t]);
+        }
+        out
+    }
+
+    /// Split into one mesh per value of `key(t)` (e.g. face group or island),
+    /// ordered by key. Returns (key, data) pairs.
+    pub fn split_by(&self, key: &[u32]) -> Vec<(u32, MeshData)> {
+        let mut keys: Vec<u32> = key.to_vec();
+        keys.sort_unstable();
+        keys.dedup();
+        keys.into_iter().map(|k| (k, self.extract(|t| key[t] == k))).collect()
     }
 
     pub fn vertex_count(&self) -> usize {
@@ -884,6 +922,30 @@ mod tests {
         let before = m.mask[hidden_vertex as usize];
         m.mask_by_curvature(true);
         assert_eq!(m.mask[hidden_vertex as usize], before);
+    }
+
+    #[test]
+    fn extract_and_split_keep_attributes() {
+        // Two separate spheres in one mesh.
+        let a = primitives::icosphere(2, 1.0).to_data();
+        let mut data = a.clone();
+        let n = a.positions.len() as u32;
+        data.positions.extend(a.positions.iter().map(|p| *p + Vec3::X * 5.0));
+        data.triangles.extend(a.triangles.iter().map(|t| t.map(|v| v + n)));
+        data.mask = vec![0.0; data.positions.len()];
+        data.mask[0] = 1.0;
+        let m = Mesh::from_data(data);
+        let islands = m.island_ids();
+        let parts = m.split_by(&islands);
+        assert_eq!(parts.len(), 2);
+        for (_, d) in &parts {
+            assert_eq!(d.triangles.len(), a.triangles.len());
+            assert_eq!(d.positions.len(), a.positions.len(), "unused vertices dropped");
+            assert!(d.triangles.iter().flatten().all(|&v| (v as usize) < d.positions.len()));
+        }
+        let masked: f32 = parts.iter().map(|(_, d)| d.mask.iter().sum::<f32>()).sum();
+        assert_eq!(masked, 1.0, "mask carried to the right part");
+        assert!(m.extract(|_| false).triangles.is_empty());
     }
 
     #[test]

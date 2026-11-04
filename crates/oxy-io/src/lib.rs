@@ -1,14 +1,23 @@
 //! Mesh import and export.
 //!
-//! Supported: OBJ import/export, binary/ASCII STL import, binary STL export.
+//! Supported: OBJ import/export, binary/ASCII STL import, binary STL export,
+//! PLY export, glTF 2.0 export (`.glb` and self-contained `.gltf`). Several
+//! pieces at once go through [`export_pieces`].
 //! Imported geometry is triangulated and welded so it can be sculpted as one
 //! continuous surface.
 
 use glam::Vec3;
 use oxy_mesh::{Mesh, primitives::weld};
 use std::fmt;
-use std::io::{self, BufWriter, Write};
+use std::io::{self, Write};
 use std::path::Path;
+
+mod gltf;
+mod ply;
+mod scene;
+
+pub use ply::write_ply;
+pub use scene::{ExportPiece, ExportStats, export_pieces, write_atomic};
 
 #[derive(Debug)]
 pub enum Error {
@@ -90,17 +99,14 @@ fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
     parts.into_iter().map(|(name, positions, tris)| Ok((name, finish(positions, tris)?))).collect()
 }
 
-/// Export by file extension.
+/// Export one mesh by file extension (`obj`, `stl`, `ply`, `glb`, `gltf`),
+/// written atomically.
 pub fn export(mesh: &Mesh, path: &Path) -> Result<()> {
-    let mut w = BufWriter::new(std::fs::File::create(path)?);
-    match extension(path).as_str() {
-        "obj" => write_obj(mesh, &mut w)?,
-        "stl" => write_stl(mesh, &mut w)?,
-        other => return Err(Error::Unsupported(other.to_string())),
-    }
-    w.flush()?;
-    Ok(())
+    export_pieces(&[ExportPiece { name: "OxyBrush", mesh }], path).map(|_| ())
 }
+
+/// File extensions `export`/`export_pieces` can write.
+pub const EXPORT_EXTENSIONS: [&str; 5] = ["glb", "gltf", "obj", "stl", "ply"];
 
 fn extension(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
