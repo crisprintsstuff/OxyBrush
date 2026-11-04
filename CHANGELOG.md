@@ -10,6 +10,7 @@ All notable changes to OxyBrush. The format follows
 
 - **Viewport background:** View > Background (and Settings) switches between a soft gradient and one flat color. Colors… sets the center and edge, or the single flat color, and Reset to default restores the original gradient. The choice is remembered between sessions. The command palette (Ctrl+K) can open the colors, switch the style or reset it, and the guide (F2) describes it.
 - **Focal length:** the perspective lens is a 35mm-equivalent focal length, from 15 to 200 mm. Set it in **View > Focal length**, with the lens button in the view strip, or from the command palette. A slider and a numeric field (hundredths of a millimeter), presets at 18, 35, 50, 85 and 135 mm, and the matching field of view in degrees. Reset returns to the original view (35° vertical). The model stays the same size when the lens changes; the mouse wheel is still zoom. Orthographic view is unaffected. The choice is remembered with the other interface settings.
+- **Surface-aligned brush cursor** (View and Settings > *Align cursor to surface*, or the command palette; off by default and remembered): the brush ring lies in the surface under the pointer, sized to the brush, with a short line for the surface normal. The normal is averaged around the pointer and eased as it moves, so it stays steady on dense meshes. Off the model the ring stays flat to the screen. The built-in guide (F2) has a topic for it.
 
 ### Fixed
 

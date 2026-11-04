@@ -18,6 +18,7 @@ pub use glam::Vec3;
 
 use adjacency::Csr;
 use rayon::prelude::*;
+use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -804,6 +805,115 @@ impl Mesh {
         }
         best
     }
+
+    /// Distance-weighted average of the vertex normals within `radius` of
+    /// `point`, walked outward from `triangle`.
+    ///
+    /// A single triangle's geometric normal jumps from facet to facet on a
+    /// dense mesh. Averaging the vertices under the brush, with a smooth
+    /// falloff that is 1 at `point` and 0 at `radius`, stays put when the
+    /// pointer steps onto the next tiny triangle and when a vertex crosses
+    /// the rim of the disc.
+    ///
+    /// `toward` (the direction toward the camera) drops vertices that face
+    /// the other way, so the two sides of a thin part are not blended into
+    /// nothing. The walk stops after a few hundred vertices: further samples
+    /// are the same neighborhood and only cost time on a dense mesh. This
+    /// is a cursor query, not a brush dab.
+    ///
+    /// PRECONDITION: `triangle` indexes a triangle of this mesh. A radius of
+    /// zero or less returns the normal at the hit point.
+    ///
+    /// RETURNS: a unit normal, facing `toward` when `toward` is not zero.
+    /// When the neighborhood is empty or cancels out, the barycentric blend
+    /// of the hit triangle's vertex normals, then that triangle's geometric
+    /// normal.
+    pub fn averaged_normal(&self, triangle: u32, point: Vec3, radius: f32, toward: Vec3) -> Vec3 {
+        let toward = toward.normalize_or_zero();
+        if triangle as usize >= self.triangles.len() {
+            return orient_normal(Vec3::Y, toward);
+        }
+        let geometric = self.face_normal_unnormalized(triangle).normalize_or(Vec3::Y);
+        let interpolated = self.interpolated_normal(triangle, point);
+        let fallback = if interpolated.length_squared() > 0.5 { interpolated } else { geometric };
+        if radius <= 1e-8 {
+            return orient_normal(fallback, toward);
+        }
+
+        // The first rings around the hit decide the average. Capping the walk
+        // keeps a large brush on a dense mesh to a few thousand neighbor lookups.
+        const MAX_VERTICES: usize = 512;
+        let radius_sq = radius * radius;
+        let mut seen = HashSet::new();
+        let mut queue = VecDeque::new();
+        for v in self.triangles[triangle as usize] {
+            if seen.insert(v) {
+                queue.push_back(v);
+            }
+        }
+
+        let mut sum = fallback;
+        let mut weight = 1.0;
+        let mut counted = 0usize;
+        while let Some(v) = queue.pop_front() {
+            let vi = v as usize;
+            if vi >= self.positions.len() || self.vertex_hidden[vi] {
+                continue;
+            }
+            let dist_sq = self.positions[vi].distance_squared(point);
+            if dist_sq > radius_sq {
+                continue;
+            }
+            if counted >= MAX_VERTICES {
+                break;
+            }
+            counted += 1;
+            let n = self.normals[vi];
+            if toward == Vec3::ZERO || n.dot(toward) > 0.0 {
+                let t = (dist_sq.sqrt() / radius).clamp(0.0, 1.0);
+                let u = 1.0 - t;
+                // Smoothstep: zero slope at the hit and at the rim, so a vertex
+                // sliding into the disc does not tug the average.
+                let w = u * u * (3.0 - 2.0 * u);
+                sum += n * w;
+                weight += w;
+            }
+            for &nb in self.neighbors(v) {
+                if seen.insert(nb) {
+                    queue.push_back(nb);
+                }
+            }
+        }
+        orient_normal((sum / weight).normalize_or(geometric), toward)
+    }
+
+    /// Barycentric blend of the triangle's vertex normals at `point`.
+    fn interpolated_normal(&self, triangle: u32, point: Vec3) -> Vec3 {
+        let [ia, ib, ic] = self.triangles[triangle as usize];
+        let (a, b, c) = (self.positions[ia as usize], self.positions[ib as usize], self.positions[ic as usize]);
+        let v0 = b - a;
+        let v1 = c - a;
+        let v2 = point - a;
+        let d00 = v0.dot(v0);
+        let d01 = v0.dot(v1);
+        let d11 = v1.dot(v1);
+        let denom = d00 * d11 - d01 * d01;
+        if denom.abs() < 1e-20 {
+            return self.normals[ia as usize].normalize_or_zero();
+        }
+        let d20 = v2.dot(v0);
+        let d21 = v2.dot(v1);
+        let bv = (d11 * d20 - d01 * d21) / denom;
+        let bw = (d00 * d21 - d01 * d20) / denom;
+        let bu = 1.0 - bv - bw;
+        (self.normals[ia as usize] * bu + self.normals[ib as usize] * bv + self.normals[ic as usize] * bw)
+            .normalize_or_zero()
+    }
+}
+
+/// Flip `normal` so it points with `toward`. A zero `toward` leaves it alone.
+fn orient_normal(normal: Vec3, toward: Vec3) -> Vec3 {
+    if toward != Vec3::ZERO && normal.dot(toward) < 0.0 { -normal } else { normal }
 }
 
 /// Möller–Trumbore ray/triangle intersection, two-sided.
@@ -924,6 +1034,41 @@ mod tests {
         let hit = m.raycast(Vec3::new(0.0, 0.0, 5.0), -Vec3::Z).unwrap();
         assert!((hit.t - 4.0).abs() < 0.01, "t = {}", hit.t);
         assert!(m.raycast(Vec3::new(5.0, 5.0, 5.0), Vec3::Z).is_none());
+    }
+
+    #[test]
+    fn averaged_normal_follows_a_sphere_and_faces_the_camera() {
+        let m = primitives::icosphere(4, 1.0);
+        let hit = m.raycast(Vec3::new(0.2, 0.1, 4.0), -Vec3::Z).unwrap();
+        let n = m.averaged_normal(hit.triangle, hit.point, 0.3, Vec3::Z);
+        assert!((n.length() - 1.0).abs() < 1e-4, "{n}");
+        assert!(n.dot(hit.point.normalize()) > 0.98, "outward: {n} vs {}", hit.point.normalize());
+        // Samples that face away are dropped; the result still faces `toward`.
+        let away = m.averaged_normal(hit.triangle, hit.point, 0.3, -Vec3::Z);
+        assert!(away.dot(-Vec3::Z) > 0.5, "{away}");
+        let at_point = m.averaged_normal(hit.triangle, hit.point, 0.0, Vec3::Z);
+        assert!((at_point.length() - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn averaged_normal_stays_steady_across_bumps() {
+        let mut data = primitives::plane(48, 2.0).to_data();
+        for p in &mut data.positions {
+            p.y += (p.x * 80.0).sin() * (p.z * 80.0).cos() * 0.05;
+        }
+        let m = Mesh::from_data(data);
+        let h1 = m.raycast(Vec3::new(0.04, 3.0, 0.02), -Vec3::Y).unwrap();
+        let h2 = m.raycast(Vec3::new(0.09, 3.0, 0.07), -Vec3::Y).unwrap();
+        let a1 = m.averaged_normal(h1.triangle, h1.point, 0.35, Vec3::Y);
+        let a2 = m.averaged_normal(h2.triangle, h2.point, 0.35, Vec3::Y);
+        assert!(
+            h1.normal.dot(h2.normal) < 0.995,
+            "neighboring facets should actually tilt: {}",
+            h1.normal.dot(h2.normal)
+        );
+        assert!(a1.dot(a2) > 0.999, "averaged normals twitched: {}", a1.dot(a2));
+        assert!(a1.dot(Vec3::Y) > 0.95, "bumps leaked into the average: {a1}");
+        assert!(a2.dot(Vec3::Y) > 0.95, "{a2}");
     }
 
     #[test]

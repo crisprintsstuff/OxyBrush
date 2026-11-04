@@ -183,6 +183,24 @@ enum LevelChange {
 /// thread so the window stays responsive (smaller ones are instant).
 const LEVEL_JOB_TRIANGLES: usize = 1_000_000;
 
+/// One sample of the brush cursor's surface plane. The next sample eases
+/// toward a new normal instead of snapping to it.
+#[derive(Clone, Copy)]
+struct CursorSmooth {
+    piece: u64,
+    point: Vec3,
+    normal: Vec3,
+}
+
+/// Where the surface-aligned brush cursor sits, in world space.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CursorPlane {
+    pub point: Vec3,
+    pub normal: Vec3,
+    /// World-space radius of the ring (the brush size at this depth).
+    pub radius: f32,
+}
+
 pub struct Editor {
     pub scene: Scene,
     pub history: History,
@@ -288,6 +306,11 @@ pub struct Editor {
     /// Let a drag on empty space start a stroke when it reaches the model
     /// (orbit with the middle mouse button instead).
     pub stroke_from_empty: bool,
+    /// Draw the brush cursor in the tangent plane of the surface under it.
+    /// Off (the default): the ring lies flat on the screen.
+    pub surface_cursor: bool,
+    /// Previous cursor normal, eased toward the latest sample.
+    cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
     snap_orbit: Option<(f32, f32)>,
     /// User matcaps (from the library folder), and which one is in use
@@ -398,6 +421,8 @@ impl Default for Editor {
             quick_menu: None,
             rmb_press: None,
             stroke_from_empty: false,
+            surface_cursor: false,
+            cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
             custom_matcap: None,
@@ -438,6 +463,33 @@ fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
 /// Normal facing the viewer.
 fn facing(normal: Vec3, ray_dir: Vec3) -> Vec3 {
     if normal.dot(ray_dir) > 0.0 { -normal } else { normal }
+}
+
+/// Ease a cursor normal toward a new sample.
+///
+/// `raw` is already a distance-weighted average, so a one-pixel step on a
+/// dense mesh barely changes it. The ease covers what that average cannot:
+/// a hard edge, where the average turns quickly, and a stroke that reshapes
+/// the surface under a pointer that is hardly moving. Travel of about one
+/// brush radius catches up. A resting pointer takes a tenth of the new
+/// normal per sample, little enough that one noisy sample cannot twitch
+/// the plane. A normal that has flipped (the other side of a thin part)
+/// snaps, because blending through zero would collapse the plane.
+fn ease_cursor_normal(prev: Vec3, prev_point: Vec3, raw: Vec3, point: Vec3, radius: f32) -> Vec3 {
+    let raw = raw.normalize_or_zero();
+    if raw == Vec3::ZERO {
+        return prev.normalize_or(Vec3::Y);
+    }
+    // Only a reversal (the other side of a thin part) snaps. A right-angle
+    // turn, like a cube edge, still eases; blending that does not pass
+    // through zero.
+    if prev.dot(raw) < 0.0 {
+        return raw;
+    }
+    let travel = prev_point.distance(point);
+    let follow = 1.0 - (-travel / radius.max(1e-5) * 8.0).exp();
+    let alpha = follow.max(0.1);
+    prev.lerp(raw, alpha).normalize_or(raw)
 }
 
 impl Editor {
@@ -518,6 +570,7 @@ impl Editor {
             update_skip: self.updater.skip.clone(),
             flat_shading: self.view.flat_shading,
             stroke_from_empty: self.stroke_from_empty,
+            surface_cursor: self.surface_cursor,
             custom_matcap: self
                 .custom_matcap
                 .and_then(|i| self.custom_matcaps.get(i))
@@ -634,6 +687,7 @@ impl Editor {
         self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
         self.apply_focal_mm(s.focal_mm, false);
+        self.surface_cursor = s.surface_cursor;
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
@@ -789,6 +843,52 @@ impl Editor {
     /// Screen-space radius (logical points) to world units at `at`.
     fn world_radius(&self, at: Vec3, radius_pt: f32) -> f32 {
         radius_pt * self.pixels_per_point * self.camera.world_per_pixel(at, self.canvas_size().y)
+    }
+
+    /// Surface under a viewport pixel for the brush cursor.
+    ///
+    /// `None` when the ring should stay flat to the screen: the option is
+    /// off, or the ray misses every visible piece. The normal is the
+    /// distance-weighted average under the brush, then eased so it does not
+    /// twitch from frame to frame.
+    pub(crate) fn cursor_plane(&mut self, pixel: Vec2, radius_pt: f32) -> Option<CursorPlane> {
+        if !self.surface_cursor {
+            self.cursor_smooth = None;
+            return None;
+        }
+        let (origin, dir) = self.camera.ray(self.canvas_local(pixel), self.canvas_size());
+        let Some((index, hit)) = self.pick_piece(origin, dir) else {
+            self.cursor_smooth = None;
+            return None;
+        };
+        let id = self.scene.pieces[index].id;
+        let radius = self.world_radius(hit.point, radius_pt.max(1.0)).max(1e-5);
+        let raw = facing(self.scene.pieces[index].mesh.averaged_normal(hit.triangle, hit.point, radius, -dir), dir);
+        let normal = match self.cursor_smooth {
+            Some(prev) if prev.piece == id => ease_cursor_normal(prev.normal, prev.point, raw, hit.point, radius),
+            _ => raw,
+        };
+        self.cursor_smooth = Some(CursorSmooth { piece: id, point: hit.point, normal });
+        Some(CursorPlane { point: hit.point, normal, radius })
+    }
+
+    /// Drop the eased cursor normal (the option was turned off, or the
+    /// pointer left the model and the next hit should start fresh).
+    pub(crate) fn forget_cursor_plane(&mut self) {
+        self.cursor_smooth = None;
+    }
+
+    /// View / Settings / command palette: toggle the surface-aligned cursor.
+    pub fn toggle_surface_cursor(&mut self) {
+        self.surface_cursor = !self.surface_cursor;
+        if !self.surface_cursor {
+            self.cursor_smooth = None;
+        }
+        self.status = if self.surface_cursor {
+            "Brush cursor follows the surface".into()
+        } else {
+            "Brush cursor stays flat to the screen".into()
+        };
     }
 
     fn new_stroke(&self, kind: BrushKind, invert: bool, radius: f32, extra_rotation: f32) -> Stroke {
@@ -2464,6 +2564,43 @@ mod tests {
     }
 
     #[test]
+    fn surface_cursor_is_optional_and_steady_on_bumps() {
+        let mut e = editor();
+        assert!(!e.surface_cursor, "the ring lies flat on the screen until asked");
+        assert!(e.cursor_plane(Vec2::new(400.0, 300.0), 40.0).is_none());
+
+        e.surface_cursor = true;
+        let front = e.cursor_plane(Vec2::new(400.0, 300.0), 40.0).expect("the sphere fills the view");
+        assert!(front.normal.dot(-e.camera.forward()) > 0.8, "faces the camera: {}", front.normal);
+        assert!(front.radius > 0.0);
+
+        let mut data = primitives::plane(48, 2.0).to_data();
+        for p in &mut data.positions {
+            p.y += (p.x * 80.0).sin() * (p.z * 80.0).cos() * 0.05;
+        }
+        e.scene = Scene::new(Piece::new("Plane", Mesh::from_data(data)));
+        e.camera.snap(0.0, 1.55);
+        e.frame();
+        let a = e.cursor_plane(Vec2::new(400.0, 300.0), 60.0).expect("the plane");
+        let b = e.cursor_plane(Vec2::new(403.0, 302.0), 60.0).expect("still on the plane");
+        assert!(a.normal.dot(b.normal) > 0.995, "cursor normal twitched: {} vs {}", a.normal, b.normal);
+        assert!(a.normal.dot(Vec3::Y) > 0.9, "averaged normal left the bumps: {}", a.normal);
+        assert!(e.cursor_plane(Vec2::new(2.0, 2.0), 40.0).is_none(), "off the model");
+        let back = e.cursor_plane(Vec2::new(400.0, 300.0), 60.0).expect("back on the plane");
+        assert!(back.normal.dot(Vec3::Y) > 0.9, "stale normal after a miss: {}", back.normal);
+    }
+
+    #[test]
+    fn cursor_normal_eases_instead_of_snapping_to_noise() {
+        let still = ease_cursor_normal(Vec3::Y, Vec3::ZERO, Vec3::X, Vec3::X * 0.001, 1.0);
+        assert!(still.dot(Vec3::Y) > 0.99, "a tiny step kept a wild normal: {still}");
+        let turned = ease_cursor_normal(Vec3::Y, Vec3::ZERO, Vec3::X, Vec3::X * 0.5, 1.0);
+        assert!(turned.dot(Vec3::X) > 0.9, "a real move should follow: {turned}");
+        let flipped = ease_cursor_normal(Vec3::Y, Vec3::ZERO, -Vec3::Y, Vec3::ZERO, 1.0);
+        assert!(flipped.dot(-Vec3::Y) > 0.99, "the other side of a thin part snaps: {flipped}");
+    }
+
+    #[test]
     fn settings_round_trip_through_the_editor() {
         use crate::settings::{Settings, UiLayout};
         let s = Settings {
@@ -2484,6 +2621,7 @@ mod tests {
             update_skip: "1.2.3".into(),
             flat_shading: true,
             stroke_from_empty: true,
+            surface_cursor: true,
             custom_matcap: String::new(),
             background_style: BackgroundStyle::Flat,
             background: [0.15, 0.16, 0.18],

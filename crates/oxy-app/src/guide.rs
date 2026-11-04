@@ -38,6 +38,13 @@ Prefer starting strokes beside the model? Turn on Settings > Strokes can start o
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it.",
     },
     Topic {
+        title: "Brush cursor",
+        keywords: "ring circle orientation surface normal tangent align screen",
+        body: "The ring under the pointer is the brush cursor. It shows the brush size, and the inner ring is where the falloff is about halfway.\n\n\
+By default the ring lies flat on the screen, so it stays a circle at any viewing angle. View > Align cursor to surface (the same checkbox is in Settings, and the command palette finds it too) lays the ring on the clay instead: a circle the size of the brush, flat against the surface, with a short line showing which way the surface faces.\n\n\
+That direction is an average of the surface around the pointer, eased as you move, so on a dense mesh it stays steady instead of twitching from one triangle to the next. Move the pointer off the model and the ring goes back to lying flat on the screen. The choice is remembered.",
+    },
+    Topic {
         title: "Choosing brushes",
         keywords: "brush picker shelf number keys space find",
         body: "Click a brush in the shelf, press its number key (1–9 and 0 select the first ten), or press Space and type part of its name: \"cs\" finds Clay Strips, Enter picks it.\n\n\
@@ -272,6 +279,7 @@ mod tests {
         let lasso = search("lasso");
         assert_eq!(lasso.iter().map(|&i| TOPICS[i].title).collect::<Vec<_>>(), ["Masking"]);
         assert!(search("stl export").iter().any(|&i| TOPICS[i].title == "Importing and exporting"));
+        assert!(search("cursor").iter().any(|&i| TOPICS[i].title == "Brush cursor"));
         assert!(search("zzzz nothing").is_empty());
     }
 
