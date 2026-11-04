@@ -2619,6 +2619,7 @@ name = "oxy-sculpt"
 version = "0.3.0-alpha"
 dependencies = [
  "glam",
+ "miniz_oxide 0.9.1",
  "oxy-mesh",
  "rayon",
 ]

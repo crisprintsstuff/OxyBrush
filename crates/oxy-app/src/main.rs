@@ -5,6 +5,7 @@
 
 mod app;
 mod editor;
+mod presets;
 mod settings;
 mod snapshot;
 mod support;
