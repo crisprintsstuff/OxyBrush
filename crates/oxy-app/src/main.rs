@@ -5,6 +5,8 @@
 
 mod app;
 mod editor;
+mod guide;
+mod palette;
 mod pose;
 mod presets;
 mod settings;

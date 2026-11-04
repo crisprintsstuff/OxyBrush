@@ -240,7 +240,12 @@ pub struct Settings {
     pub update_last_check: u64,
     /// A version the user chose to skip ("" for none).
     pub update_skip: String,
+    /// Recently used files, most recent first (one `recent = ` line each).
+    pub recent_files: Vec<PathBuf>,
 }
+
+/// How many recent files are remembered.
+pub const MAX_RECENT: usize = 10;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -260,6 +265,7 @@ impl Default for Settings {
             updates: UpdateMode::Off,
             update_last_check: 0,
             update_skip: String::new(),
+            recent_files: Vec::new(),
         }
     }
 }
@@ -302,7 +308,13 @@ impl Settings {
             self.updates.key(),
             self.update_last_check,
             self.update_skip,
-        )
+        ) + &self
+            .recent_files
+            .iter()
+            .filter_map(|p| p.to_str())
+            .filter(|p| !p.contains(['\n', '\r']))
+            .map(|p| format!("recent = {p}\n"))
+            .collect::<String>()
     }
 
     /// Parse; anything missing, unknown or invalid keeps its default.
@@ -361,6 +373,12 @@ impl Settings {
                     }
                 }
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
+                "recent" if !v.is_empty() && s.recent_files.len() < MAX_RECENT => {
+                    let p = PathBuf::from(v);
+                    if !s.recent_files.contains(&p) {
+                        s.recent_files.push(p);
+                    }
+                }
                 "update_last_check" => s.update_last_check = v.parse().unwrap_or(0),
                 "update_skip" if v.is_empty() || oxy_update::Version::parse(v).is_some() => {
                     s.update_skip = v.to_owned();
@@ -432,8 +450,12 @@ mod tests {
             updates: UpdateMode::Notify,
             update_last_check: 1_800_000_000,
             update_skip: "0.4.0-alpha".into(),
+            recent_files: vec![PathBuf::from("/work/head = v2.oxb"), PathBuf::from("C:\\Sculpts\\Dragon.obj")],
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
+        // Duplicate recent entries are dropped and the list is capped.
+        let many: String = (0..20).map(|i| format!("recent = /f{}.oxb\n", i % 15)).collect();
+        assert_eq!(Settings::from_text(&many).recent_files.len(), MAX_RECENT);
         // Unknown keys, junk lines and out-of-range values fall back to defaults.
         let t = "layout = sideways\nui_scale = 99\nfuture_option = 3\nnot a setting\nhigh_contrast=true\n";
         let p = Settings::from_text(t);
