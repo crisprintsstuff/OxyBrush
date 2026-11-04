@@ -4,7 +4,7 @@
 use glam::{Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
-use oxy_mesh::{Mesh, MeshData, primitives, topo};
+use oxy_mesh::{Mesh, primitives, topo};
 use oxy_render::{Camera, MatcapPreset, ViewSettings};
 use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
 use oxy_topo::RemeshOptions;
@@ -116,6 +116,8 @@ pub struct Job {
 pub enum JobResult {
     /// A new mesh (remesh, merge, decimate); subdivision levels are dropped.
     Mesh(Mesh),
+    /// New pieces to add after the target (e.g. a LOD chain), as (name, mesh).
+    NewPieces(Vec<(String, Mesh)>),
     /// A subdivision level change: the new active-level mesh, the stack,
     /// and the stack as it was before (for undo; None if there were no levels).
     Levels {
@@ -958,18 +960,18 @@ impl Editor {
     }
 
     /// Export visible pieces combined into one mesh file.
+    /// Export the visible pieces (hidden faces left out). glTF/GLB and OBJ
+    /// keep pieces as separate objects; STL and PLY merge them.
     pub fn export(&mut self, path: &Path) {
-        let mut data = MeshData::default();
-        for p in self.scene.pieces.iter().filter(|p| p.visible) {
-            let base = data.positions.len() as u32;
-            data.positions.extend_from_slice(&p.mesh.positions);
-            data.triangles.extend(
-                p.mesh.triangles.iter().zip(p.mesh.hidden()).filter(|(_, h)| !**h).map(|(t, _)| t.map(|i| i + base)),
-            );
-        }
-        let mesh = Mesh::from_data(data);
-        self.status = match oxy_io::export(&mesh, path) {
-            Ok(()) => format!("Exported {} ({} triangles)", path.display(), mesh.triangle_count()),
+        let pieces: Vec<oxy_io::ExportPiece> = self
+            .scene
+            .pieces
+            .iter()
+            .filter(|p| p.visible)
+            .map(|p| oxy_io::ExportPiece { name: &p.name, mesh: &p.mesh })
+            .collect();
+        self.status = match oxy_io::export_pieces(&pieces, path) {
+            Ok(s) => format!("Exported {} ({} pieces, {} triangles)", path.display(), s.pieces, s.triangles),
             Err(e) => format!("Export failed: {e}"),
         };
     }
@@ -1299,6 +1301,68 @@ impl Editor {
         });
     }
 
+    /// Add decimated copies of the active piece (LOD1, LOD2, …), each with
+    /// half the triangles of the one before. Runs in the background.
+    pub fn make_lod_chain(&mut self, levels: usize) {
+        let piece = self.scene.active();
+        let (name, mesh) = (piece.name.clone(), piece.mesh.clone());
+        let base = mesh.triangle_count();
+        if base < 64 {
+            self.status = "This piece is too small for a LOD chain".into();
+            return;
+        }
+        self.start_job(format!("LOD chain ({levels} levels)"), Vec::new(), move || {
+            let mut out = Vec::new();
+            let mut source = mesh;
+            for level in 1..=levels {
+                let target = (base >> level).max(32);
+                // Each level is built from the previous one: faster, and the
+                // levels nest (useful for engines that blend between them).
+                let lod = oxy_topo::decimate(&source, target);
+                out.push((format!("{name} LOD{level}"), lod.clone()));
+                source = lod;
+            }
+            Ok(JobResult::NewPieces(out))
+        });
+    }
+
+    /// Split the active piece into one piece per face group, or per loose
+    /// part (connected surface). Undoable as one step.
+    pub fn split_active(&mut self, by_parts: bool) {
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        self.pointer_up();
+        let index = self.scene.active_index();
+        let piece = &self.scene.pieces[index];
+        let keys = if by_parts { piece.mesh.island_ids() } else { piece.mesh.groups().to_vec() };
+        let parts = piece.mesh.split_by(&keys);
+        let what = if by_parts { "loose parts" } else { "face groups" };
+        if parts.len() < 2 {
+            self.status = format!("Nothing to split: this piece has only one of its {what}");
+            return;
+        }
+        let base_name = piece.name.clone();
+        let count = parts.len();
+        // Insert the parts after the original, then remove it. (In this order,
+        // undo puts the original back before taking the parts out, so the
+        // scene never runs out of pieces part-way.)
+        let mut steps = Vec::new();
+        for (k, (key, data)) in parts.into_iter().enumerate() {
+            let label =
+                if by_parts { format!("{base_name} part {}", k + 1) } else { format!("{base_name} group {key}") };
+            let name = self.scene.unique_name(&label);
+            self.scene.pieces.insert(index + 1 + k, Piece::new(name, Mesh::from_data(data)));
+            steps.push(Step::Inserted { index: index + 1 + k });
+        }
+        let removed = self.scene.pieces.remove(index);
+        steps.push(Step::Removed { index, piece: removed });
+        self.scene.set_active(index);
+        self.history.record_compound(format!("Split by {what}"), steps);
+        self.status = format!("Split into {count} pieces by {what}");
+    }
+
     /// Apply a finished background job. Call once per frame.
     pub fn poll_job(&mut self) -> bool {
         let Some(job) = &self.job else { return false };
@@ -1325,6 +1389,23 @@ impl Editor {
                     Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
                     None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
                 };
+            }
+            Ok(JobResult::NewPieces(new)) => {
+                let Some(index) = self.scene.index_of(job.target) else {
+                    self.status = format!("{}: the piece was deleted meanwhile", job.label);
+                    return true;
+                };
+                let mut steps = Vec::new();
+                let count = new.len();
+                for (k, (name, mesh)) in new.into_iter().enumerate() {
+                    let at = index + 1 + k;
+                    let name = self.scene.unique_name(&name);
+                    self.scene.pieces.insert(at, Piece::new(name, mesh));
+                    steps.push(Step::Inserted { index: at });
+                }
+                self.scene.set_active(index);
+                self.history.record_compound(job.label.clone(), steps);
+                self.status = format!("{}: {count} pieces added in {secs:.1} s", job.label);
             }
             Ok(JobResult::Mesh(mesh)) => {
                 let Some(target_index) = self.scene.index_of(job.target) else {
@@ -1954,5 +2035,64 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         assert!(matches!(e.drag, Drag::Stroke { .. }));
         e.pointer_up();
+    }
+
+    #[test]
+    fn split_by_groups_and_parts_then_undo() {
+        // Two loose spheres in one piece, one group each by islands.
+        let a = primitives::icosphere(2, 1.0).to_data();
+        let mut data = a.clone();
+        let n = a.positions.len() as u32;
+        data.positions.extend(a.positions.iter().map(|p| *p + Vec3::X * 4.0));
+        data.triangles.extend(a.triangles.iter().map(|t| t.map(|v| v + n)));
+        let mut e = Editor { scene: Scene::new(Piece::new("Pair", Mesh::from_data(data))), ..Default::default() };
+        let total = e.scene.triangle_count();
+        e.split_active(false);
+        assert_eq!(e.scene.pieces.len(), 1, "one face group: nothing to split");
+        e.split_active(true);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.triangle_count(), total);
+        assert_eq!(e.scene.pieces[1].name, "Pair part 2");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.pieces[0].name, "Pair");
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        // By face groups.
+        e.undo();
+        e.edit_faces("Group by islands", Mesh::groups_from_islands);
+        e.split_active(false);
+        assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn lod_chain_adds_halving_pieces_in_the_background() {
+        let mut e = editor();
+        let base = e.scene.active().mesh.triangle_count();
+        e.make_lod_chain(3);
+        wait_job(&mut e);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Sphere LOD1", "Sphere LOD2", "Sphere LOD3"]);
+        for (level, p) in e.scene.pieces.iter().enumerate().skip(1) {
+            let target = base >> level;
+            let got = p.mesh.triangle_count();
+            assert!(got <= target + target / 10 + 8, "LOD{level}: {got} for target {target}");
+        }
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "one undo removes the whole chain");
+    }
+
+    #[test]
+    fn export_keeps_pieces_and_leaves_out_hidden_ones() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = editor();
+        e.add_primitive("cube");
+        e.scene.pieces[0].visible = false;
+        let path = dir.join("out.glb");
+        e.export(&path);
+        assert!(e.status.contains("1 pieces"), "{}", e.status);
+        assert!(path.exists());
+        std::fs::remove_dir_all(dir).ok();
     }
 }

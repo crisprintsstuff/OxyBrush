@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-02 (opt-in update checks, RFC 0002)
+> **Last updated:** 2026-11-04 (glTF/GLB and PLY export, LOD chain, split pieces, command-line tool)
 
 ## Status at a glance
 
@@ -108,7 +108,7 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - Armature spheres for base meshes; curve/tube and insert-mesh brushes
 - Polygon modeling (extrude, bevel, inset, edge loops) and creased subdivision preview
 - UV unwrap; normal/displacement map baking
-- FBX/USD/glTF export; send-to-Blender bridge
+- ~~glTF export~~ ✅ (glTF/GLB and PLY export, LOD chain, split pieces, `oxybrush-cli`); FBX/USD export; send-to-Blender bridge
 - WASM plugin API and scripting
 - Hair/fiber and mesh instancing
 - Exploratory: GPU compute sculpting, OpenXR, opt-in AI plugins

@@ -2564,6 +2564,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxy-cli"
+version = "0.3.0-alpha"
+dependencies = [
+ "oxy-doc",
+ "oxy-io",
+ "oxy-mesh",
+ "oxy-topo",
+]
+
+[[package]]
 name = "oxy-doc"
 version = "0.3.0-alpha"
 dependencies = [
@@ -2590,6 +2600,7 @@ version = "0.3.0-alpha"
 dependencies = [
  "glam",
  "oxy-mesh",
+ "serde_json",
  "tobj",
 ]
 

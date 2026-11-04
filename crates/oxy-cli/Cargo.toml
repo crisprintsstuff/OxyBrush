@@ -1,0 +1,21 @@
+[package]
+name = "oxy-cli"
+description = "Headless OxyBrush tools: convert, remesh, decimate, LOD chains, split"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "oxybrush-cli"
+path = "src/main.rs"
+
+[dependencies]
+oxy-mesh.workspace = true
+oxy-io.workspace = true
+oxy-topo.workspace = true
+oxy-doc.workspace = true
+
+[lints]
+workspace = true
