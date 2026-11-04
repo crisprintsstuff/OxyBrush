@@ -1,6 +1,7 @@
 //! Editor state and pointer/keyboard interaction, independent of the GPU and
 //! window so it can be unit-tested.
 
+use crate::keymap::{self, CommandEffect, CommandId, NavAction, NavButton};
 use crate::pose::{self, GizmoMode, Handle};
 use glam::{Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
@@ -106,6 +107,13 @@ pub enum Drag {
         points: Vec<Vec2>,
         lasso: bool,
         click_group: Option<u32>,
+    },
+    /// Drag up or down to zoom (a mouse-navigation binding).
+    Zoom,
+    /// Mask-key press on empty space when that gesture clears or inverts the mask.
+    /// A click inverts it; a drag clears it.
+    MaskGesture {
+        start: Vec2,
     },
 }
 
@@ -246,7 +254,7 @@ pub struct Editor {
     pub show_background: bool,
     /// Welcome window with starter shapes and the basics (shown at startup).
     pub show_welcome: bool,
-    /// Carve instead of raise by default (Alt still flips it while held).
+    /// Carve instead of raise by default (the invert key still flips it while held).
     pub carve: bool,
     /// Interface layout (Standard / Compact / Touch).
     pub layout: crate::settings::UiLayout,
@@ -282,6 +290,14 @@ pub struct Editor {
     /// Pointer position in physical pixels.
     pub pointer: Option<Vec2>,
     pub modifiers: Modifiers,
+    /// Keyboard and mouse bindings. Defaults to the original OxyBrush layout.
+    pub keymap: keymap::Keymap,
+    /// Waiting for a key: the command, and which of its chords to replace (`None` adds one).
+    pub keymap_capture: Option<(CommandId, Option<usize>)>,
+    pub show_keymap: bool,
+    /// Set by the keymap window; the platform layer opens the file dialog.
+    pub request_import_keymap: bool,
+    pub request_export_keymap: bool,
     pub pressure: f32,
     pub drag: Drag,
     pub status: String,
@@ -301,6 +317,8 @@ pub struct Editor {
     pub grab_through: bool,
     /// Size/strength menu at the cursor (right click, or hold Q).
     pub quick_menu: Option<QuickMenu>,
+    /// Key that opened a held quick menu. Releasing that key closes it.
+    pub quick_menu_key: Option<keymap::KeyId>,
     /// Where the right button went down, to tell a click from a pan.
     rmb_press: Option<Vec2>,
     /// Let a drag on empty space start a stroke when it reaches the model
@@ -406,6 +424,11 @@ impl Default for Editor {
             canvas: [0.0, 0.0, 1.0, 1.0],
             pointer: None,
             modifiers: Modifiers::default(),
+            keymap: keymap::Keymap::default(),
+            keymap_capture: None,
+            show_keymap: false,
+            request_import_keymap: false,
+            request_export_keymap: false,
             pressure: 1.0,
             drag: Drag::None,
             status: "Welcome to OxyBrush. Drag on the model to sculpt, drag on empty space to orbit. Press F1 for shortcuts.".into(),
@@ -419,6 +442,7 @@ impl Default for Editor {
             frame_ms: 0.0,
             grab_through: false,
             quick_menu: None,
+            quick_menu_key: None,
             rmb_press: None,
             stroke_from_empty: false,
             surface_cursor: false,
@@ -543,11 +567,30 @@ impl Editor {
         matches!(self.drag, Drag::Stroke { .. })
     }
 
-    /// The brush that a primary-button press would use right now.
-    /// Keyboard modifiers combined with the on-screen touch toggles.
+    /// Keyboard modifiers combined with the on-screen touch toggles, as raw keys.
+    /// Mouse navigation matches these. Brush behavior uses [`brush_roles`](Self::brush_roles).
     pub fn active_modifiers(&self) -> Modifiers {
         let (k, t) = (self.modifiers, self.touch_modifiers);
         Modifiers { shift: k.shift || t.shift, ctrl: k.ctrl || t.ctrl, alt: k.alt || t.alt }
+    }
+
+    /// What the held keys mean for sculpting. `shift` is smooth, `ctrl` is mask
+    /// and `alt` is invert, after the keymap's role assignment. The touch
+    /// layout's Smooth / Mask / Invert buttons always mean those roles, even
+    /// when the keyboard keys have been moved.
+    pub fn brush_roles(&self) -> Modifiers {
+        let keys = self.modifiers;
+        let touch = self.touch_modifiers;
+        Modifiers {
+            shift: touch.shift || self.keymap.smooth.held(keys),
+            ctrl: touch.ctrl || self.keymap.mask.held(keys),
+            alt: touch.alt || self.keymap.invert.held(keys),
+        }
+    }
+
+    /// The 45° snap key is down. Touch toggles do not snap the view; they sculpt.
+    pub fn snap_modifier_held(&self) -> bool {
+        self.keymap.snap.is_some_and(|k| k.held(self.modifiers))
     }
 
     /// Current preferences, for saving.
@@ -658,10 +701,12 @@ impl Editor {
         self.brush_order.get(i).copied()
     }
 
-    /// Number key shown next to a brush in the shelf, if it has one.
-    pub fn number_key(&self, k: BrushKind) -> Option<&'static str> {
-        const KEYS: [&str; 10] = ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"];
-        self.brush_order.iter().position(|b| *b == k).and_then(|i| KEYS.get(i).copied())
+    /// Key shown next to a brush in the shelf: the binding for its slot, if it has one.
+    pub fn number_key(&self, k: BrushKind) -> Option<String> {
+        let slot = self.brush_order.iter().position(|b| *b == k)?;
+        let id = CommandId::from_brush_slot(slot)?;
+        let label = self.keymap.primary(id);
+        if label.is_empty() { None } else { Some(label) }
     }
 
     /// Apply saved preferences.
@@ -695,7 +740,7 @@ impl Editor {
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
-        let m = self.active_modifiers();
+        let m = self.brush_roles();
         if m.ctrl {
             (BrushKind::Mask, m.alt)
         } else if m.shift {
@@ -733,27 +778,38 @@ impl Editor {
             .min_by(|a, b| a.1.t.total_cmp(&b.1.t))
     }
 
+    fn drag_for_nav(&self, action: Option<NavAction>, button: PointerButton) -> Drag {
+        match action {
+            Some(NavAction::Orbit) => Drag::Orbit,
+            Some(NavAction::Zoom) => Drag::Zoom,
+            Some(NavAction::Pan) => Drag::Pan,
+            // An unmatched middle button orbits and an unmatched right button pans,
+            // so a half-edited keymap never leaves a button doing nothing.
+            None if button == PointerButton::Middle => Drag::Orbit,
+            None => Drag::Pan,
+        }
+    }
+
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
         if button != PointerButton::Primary {
             // A right click (without dragging) opens the quick menu.
             self.rmb_press = (button == PointerButton::Secondary).then_some(p);
-            self.drag = match button {
-                PointerButton::Middle if !self.active_modifiers().shift => Drag::Orbit,
-                _ => Drag::Pan,
-            };
+            let nav_button = if button == PointerButton::Middle { NavButton::Middle } else { NavButton::Right };
+            self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
             return;
         }
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
-        let m = self.active_modifiers();
+        // Roles, not raw keys: Ctrl masks only while that key is still the mask key.
+        let m = self.brush_roles();
 
         let active = self.scene.active_index();
         let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
 
-        // Ctrl+Shift+drag: box/lasso visibility (Alt hides the selection).
+        // Mask+Smooth drag: box/lasso visibility (Invert hides the selection).
         // A click without dragging isolates the group under the cursor, or
         // shows everything on empty space.
         if m.ctrl && m.shift {
@@ -765,14 +821,19 @@ impl Editor {
             self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
             return;
         }
-        // Ctrl+drag on empty space: box/lasso mask (Alt unmasks); a click blurs the mask.
+        // Mask key on empty space. The box gesture blurs on a click; the clear
+        // gesture inverts on a click and clears on a drag.
         if m.ctrl && active_hit.is_none() {
-            let action = if m.alt { SelectAction::Unmask } else { SelectAction::Mask };
-            self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group: None };
+            if self.keymap.mask_empty == keymap::MaskEmpty::Clear {
+                self.drag = Drag::MaskGesture { start: p };
+            } else {
+                let action = if m.alt { SelectAction::Unmask } else { SelectAction::Mask };
+                self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group: None };
+            }
             return;
         }
 
-        // Alt+click on another piece makes it active.
+        // Invert-key click on another piece makes it active.
         if m.alt
             && let Some((i, _)) = self.pick_piece(o, d)
             && i != active
@@ -791,7 +852,9 @@ impl Editor {
         }
         if let Some(hit) = active_hit {
             self.start_stroke_at(p, hit, d);
-        } else if m.alt {
+        } else if let Some(action) = self.keymap.nav_action(NavButton::Left, self.active_modifiers()) {
+            self.drag = self.drag_for_nav(Some(action), PointerButton::Primary);
+        } else if self.keymap.mask_empty == keymap::MaskEmpty::Box && m.alt {
             self.drag = Drag::Pan;
         } else if self.stroke_from_empty && self.scene.active().visible && !self.job_blocks_active() {
             // The stroke starts once the pointer reaches the model.
@@ -808,7 +871,7 @@ impl Editor {
         let mode = if kind.is_grab_like()
             || kind == BrushKind::SnakeHook
             || kind == BrushKind::Smooth
-            || self.active_modifiers().ctrl
+            || self.brush_roles().ctrl
         {
             // Moving brushes, and the Shift/Ctrl stand-ins, always work freehand.
             StrokeMode::Freehand
@@ -1047,8 +1110,8 @@ impl Editor {
         match &mut self.drag {
             Drag::None => false,
             Drag::Orbit => {
-                // Holding Shift snaps the view to 45° steps.
-                if self.modifiers.shift {
+                // The snap key (Shift, unless the keymap says otherwise) steps the view by 45°.
+                if self.snap_modifier_held() {
                     let free = self.snap_orbit.get_or_insert((self.camera.yaw, self.camera.pitch));
                     self.camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
                 } else {
@@ -1057,6 +1120,12 @@ impl Editor {
                 }
                 true
             }
+            Drag::Zoom => {
+                // Drag up zooms in, the same direction as the view strip.
+                self.camera.zoom(-delta.y / self.pixels_per_point.max(0.1) * 0.05);
+                true
+            }
+            Drag::MaskGesture { .. } => true,
             Drag::PendingStroke => {
                 let (o, d) = self.camera.ray(self.canvas_local(pos), size);
                 if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
@@ -1159,6 +1228,14 @@ impl Editor {
             }
             Drag::Select { action, points, lasso, click_group } => {
                 self.finish_select(action, points, lasso, click_group)
+            }
+            Drag::MaskGesture { start } => {
+                let moved = self.pointer.is_some_and(|p| p.distance(start) >= 4.0 * self.pixels_per_point.max(0.1));
+                if moved {
+                    self.clear_mask();
+                } else {
+                    self.invert_mask();
+                }
             }
             _ => {}
         }
@@ -1298,7 +1375,9 @@ impl Editor {
     }
 
     pub fn scroll(&mut self, steps: f32) {
-        self.camera.zoom(steps);
+        if self.keymap.wheel_zoom {
+            self.camera.zoom(steps);
+        }
     }
 
     pub fn undo(&mut self) {
@@ -2110,6 +2189,201 @@ impl Editor {
         let s = self.strength_mut(k);
         *s = (*s + delta).clamp(0.01, 1.0);
     }
+
+    /// Run a keymap command. File commands are returned for the platform layer
+    /// to show a dialog; everything else happens here.
+    pub fn perform_command(&mut self, id: CommandId) -> CommandEffect {
+        use CommandEffect as E;
+        use CommandId as C;
+        match id {
+            C::Open => E::Open,
+            C::Import => E::Import,
+            C::Save => E::Save,
+            C::SaveAs => E::SaveAs,
+            C::Export => E::Export,
+            C::Undo => {
+                self.undo();
+                E::None
+            }
+            C::Redo => {
+                self.redo();
+                E::None
+            }
+            C::CommandPalette => {
+                self.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
+                E::None
+            }
+            C::BrushFinder => {
+                self.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
+                E::None
+            }
+            C::QuickMenu => {
+                if let Some(pos) = self.pointer {
+                    self.quick_menu = Some(QuickMenu { pos, held: false });
+                }
+                E::None
+            }
+            C::Cancel => {
+                self.cancel_drag();
+                E::None
+            }
+            C::Brush1
+            | C::Brush2
+            | C::Brush3
+            | C::Brush4
+            | C::Brush5
+            | C::Brush6
+            | C::Brush7
+            | C::Brush8
+            | C::Brush9
+            | C::Brush0 => {
+                // Shelf slots are 1–9 then 0, the same order as the number keys.
+                let n = match id.brush_slot() {
+                    Some(9) => 0,
+                    Some(slot) => slot as u32 + 1,
+                    None => 0,
+                };
+                if let Some(k) = self.brush_for_number_key(n) {
+                    self.brush_kind = k;
+                    self.status = format!("{} brush", k.label());
+                }
+                E::None
+            }
+            C::RadiusDown => {
+                self.adjust_radius(1.0 / 1.15);
+                E::None
+            }
+            C::RadiusUp => {
+                self.adjust_radius(1.15);
+                E::None
+            }
+            C::StrengthDown => {
+                self.adjust_strength(-0.05);
+                E::None
+            }
+            C::StrengthUp => {
+                self.adjust_strength(0.05);
+                E::None
+            }
+            C::SymmetryX => {
+                self.symmetry.x = !self.symmetry.x;
+                self.status = format!("X symmetry {}", if self.symmetry.x { "on" } else { "off" });
+                E::None
+            }
+            C::SelectionLasso => {
+                self.selection_lasso = !self.selection_lasso;
+                self.status = format!("Selection: {}", if self.selection_lasso { "lasso" } else { "rectangle" });
+                E::None
+            }
+            C::GizmoCycle => {
+                self.gizmo = match self.gizmo {
+                    None => Some(GizmoMode::Move),
+                    Some(GizmoMode::Move) => Some(GizmoMode::Rotate),
+                    Some(GizmoMode::Rotate) => Some(GizmoMode::Scale),
+                    Some(GizmoMode::Scale) => None,
+                };
+                self.status = match self.gizmo {
+                    Some(m) => format!("{} gizmo (same key for the next mode)", m.label()),
+                    None => "Gizmo off".into(),
+                };
+                E::None
+            }
+            C::Frame => {
+                self.frame();
+                E::None
+            }
+            C::ViewFront => {
+                self.camera.snap(0.0, 0.0);
+                self.status = "Front view".into();
+                E::None
+            }
+            C::ViewBack => {
+                self.camera.snap(std::f32::consts::PI, 0.0);
+                self.status = "Back view".into();
+                E::None
+            }
+            C::ViewLeft => {
+                self.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
+                self.status = "Left view".into();
+                E::None
+            }
+            C::ViewRight => {
+                self.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
+                self.status = "Right view".into();
+                E::None
+            }
+            C::ViewTop => {
+                self.camera.snap(0.0, 1.55);
+                self.status = "Top view".into();
+                E::None
+            }
+            C::ViewBottom => {
+                self.camera.snap(0.0, -1.55);
+                self.status = "Bottom view".into();
+                E::None
+            }
+            C::Orthographic => {
+                self.camera.orthographic = !self.camera.orthographic;
+                E::None
+            }
+            C::ShowGroups => {
+                self.view.show_groups = !self.view.show_groups;
+                E::None
+            }
+            C::TogglePanels => {
+                self.show_panels = !self.show_panels;
+                E::None
+            }
+            C::Shortcuts => {
+                self.show_shortcuts = !self.show_shortcuts;
+                E::None
+            }
+            C::ShowMask => {
+                self.view.show_mask = !self.view.show_mask;
+                E::None
+            }
+            C::ClearMask => {
+                self.clear_mask();
+                E::None
+            }
+            C::InvertMask => {
+                self.invert_mask();
+                E::None
+            }
+            C::MaskGroup => {
+                self.mask_group_under_pointer();
+                E::None
+            }
+            C::Solo => {
+                self.solo_active();
+                E::None
+            }
+            C::AddLevel => {
+                self.add_level();
+                E::None
+            }
+            C::LevelUp => {
+                self.step_level(1);
+                E::None
+            }
+            C::LevelDown => {
+                self.step_level(-1);
+                E::None
+            }
+            C::Remesh => {
+                self.remesh_active();
+                E::None
+            }
+            C::GroupVisible => {
+                self.edit_faces("Group visible", oxy_mesh::Mesh::group_visible);
+                E::None
+            }
+            C::Guide => {
+                self.guide.open = !self.guide.open;
+                E::None
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2653,7 +2927,7 @@ mod tests {
         assert_eq!(e.brush_order[0], BrushKind::Mask);
         assert_eq!(e.brush_order[1], BrushKind::Draw);
         assert_eq!(e.brush_for_number_key(1), Some(BrushKind::Mask));
-        assert_eq!(e.number_key(BrushKind::Mask), Some("1"));
+        assert_eq!(e.number_key(BrushKind::Mask).as_deref(), Some("1"));
         assert_eq!(e.brush_for_number_key(0), Some(e.brush_order[9]));
         // Out-of-range moves are ignored; nothing is lost.
         e.move_brush(99, 0);
@@ -3104,5 +3378,93 @@ mod tests {
         assert!((e.focal_mm - 200.0).abs() < 1e-3);
         e.set_focal_mm(f32::NAN);
         assert!((e.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mmb_preset_orbits_pans_and_zooms_with_the_middle_button() {
+        let mut e = editor();
+        e.keymap.apply_navigation_preset(crate::keymap::Preset::MmbOrbit);
+        // Sculpting is unchanged: Alt still inverts.
+        e.modifiers.alt = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, true));
+        e.modifiers = Modifiers::default();
+
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Middle);
+        assert!(matches!(e.drag, Drag::Orbit));
+        e.pointer_up();
+
+        e.modifiers.shift = true;
+        e.pointer_down(PointerButton::Middle);
+        assert!(matches!(e.drag, Drag::Pan), "shift+middle pans");
+        e.pointer_up();
+
+        e.modifiers = Modifiers { ctrl: true, ..Default::default() };
+        let distance = e.camera.distance;
+        e.pointer_down(PointerButton::Middle);
+        assert!(matches!(e.drag, Drag::Zoom));
+        e.pointer_moved(Vec2::new(400.0, 200.0));
+        assert!(e.camera.distance < distance, "dragging up zooms in");
+        e.pointer_up();
+
+        // Left-drag on empty space still orbits, so the old gesture keeps working.
+        e.modifiers = Modifiers::default();
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Orbit));
+    }
+
+    #[test]
+    fn ctrl_carve_masks_with_alt_and_uses_empty_space_for_the_mask() {
+        let mut e = editor();
+        e.keymap.use_ctrl_carve();
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, false));
+        e.modifiers.ctrl = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, true), "Ctrl carves");
+        e.modifiers = Modifiers { alt: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, false), "Alt masks");
+        e.modifiers.ctrl = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, true), "Ctrl+Alt erases the mask");
+
+        e.modifiers = Modifiers { alt: true, ..Default::default() };
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0), "Alt+drag on the mesh masks");
+
+        let before = e.scene.active().mesh.mask.clone();
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert_ne!(before, e.scene.active().mesh.mask, "Alt+click on empty space inverts the mask");
+
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(80.0, 80.0));
+        e.pointer_up();
+        assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 0.0), "Alt+drag on empty space clears the mask");
+    }
+
+    #[test]
+    fn rebound_view_command_snaps_without_a_numpad() {
+        let mut e = editor();
+        e.camera.yaw = 1.0;
+        e.keymap.set_chord(CommandId::ViewFront, Some(0), crate::keymap::Chord::parse("h").unwrap());
+        assert_eq!(e.keymap.command_for(crate::keymap::Chord::parse("h").unwrap()), Some(CommandId::ViewFront));
+        assert!(e.keymap.command_for(crate::keymap::Chord::parse("numpad1").unwrap()).is_none());
+        e.perform_command(CommandId::ViewFront);
+        assert_eq!(e.camera.yaw, 0.0);
+        e.perform_command(CommandId::ViewBack);
+        assert!((e.camera.yaw - std::f32::consts::PI).abs() < 1e-5);
+    }
+
+    #[test]
+    fn touch_buttons_keep_their_jobs_when_the_keys_move() {
+        let mut e = Editor::default();
+        e.keymap.use_ctrl_carve();
+        e.touch_modifiers.ctrl = true;
+        assert_eq!(e.effective_brush(), (BrushKind::Mask, false), "the on-screen Mask button still masks");
+        e.touch_modifiers = Modifiers { alt: true, ..Default::default() };
+        assert_eq!(e.effective_brush(), (BrushKind::Draw, true), "the on-screen Invert button still inverts");
     }
 }

@@ -74,7 +74,7 @@ Your layout, arrangement, brush order, interface scale, theme, material, autosav
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf (each brush has an icon showing what it does to the surface); hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
 3. Need more detail? **Ctrl+D** adds a subdivision level; **D** / **Shift+D** step up and down between levels, keeping your detail. **Remesh** (right panel) rebuilds even topology.
 4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY (for game engines, other 3D tools or 3D printing).
-5. **Ctrl+K** finds any command by typing part of its name, and **Space** finds a brush the same way. **F1** shows every shortcut, and **F2** opens the built-in guide (searchable, works offline).
+5. **Ctrl+K** finds any command by typing part of its name, and **Space** finds a brush the same way. **F1** shows every shortcut, and **F2** opens the built-in guide (searchable, works offline). **Settings > Keymap** changes any shortcut or the mouse buttons.
 
 ## Help test OxyBrush
 
@@ -109,6 +109,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4, 1/8 of the triangles), split a piece by face groups or into loose parts, and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting (`cargo run -p oxy-cli -- --help`).
 - **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, focal length, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
 - **Fast workflow:** a command palette (Ctrl+K) that finds any command, brush, recent file or guide topic as you type; a type-to-pick brush finder (Space); recent files in File > Open recent and on the welcome window; and a built-in, searchable guide (F2) that works offline.
+- **Keymap:** Settings > Keymap rebinds every command, brush and view key (conflict warnings, reset one or all) and the mouse. Presets: **OxyBrush** (the controls in the table below) and **MMB orbit** (middle-drag orbits, Ctrl+middle zooms, Shift+middle pans, 45° snap on Alt until you change it). An optional sculpt setup makes Ctrl carve and Alt mask. Keys are remembered and can be exported. The touch layout's on-screen Smooth, Mask and Invert buttons keep those jobs.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Optional updates:** off by default. Settings > Updates can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Help > Check for updates checks once on demand. Only GitHub is contacted and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
 - **Rust:** a standard Rust toolchain is all you need on Windows, Linux or macOS (the optional updater's TLS library compiles a little C with the compiler Rust already uses).
@@ -147,7 +148,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Space | Find a brush by name |
 | `F1` / `F2` | Full shortcut list / built-in guide |
 
-On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
+These are the OxyBrush preset. **Settings > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
 
 ## Roadmap
 
@@ -160,7 +161,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
 | — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v0.4.0-alpha |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 v0.3.0-alpha |
-| 4 | Workflow: dynamic topology, vertex color, layers, symmetrize/projection, deformers & posing, viewport, quick palette, keymap editor | ⏳ |
+| 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport, quick palette ✅, keymap editor ✅ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
 | Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
 | After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |

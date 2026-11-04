@@ -26,7 +26,8 @@ pub const TOPICS: &[Topic] = &[
 - O switches between perspective and orthographic.\n\
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
 - Tab hides the panels to give the model the whole window.\n\n\
-Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.",
+Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.\n\n\
+Every shortcut and the mouse buttons can be changed in Settings > Keymap, including the numpad view keys. The MMB orbit preset uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan.",
     },
     Topic {
         title: "Sculpting basics",
@@ -165,6 +166,15 @@ Interface scale and a high-contrast theme are in Settings too. All of these are 
 - Drag the slider or type a value from 15 to 200 mm, in hundredths. The vertical field of view in degrees is shown next to the number; hover it for the horizontal angle at this window's shape.\n\
 - The five presets jump to those lenses. Reset puts back the original view (35° vertical, about 38 mm).\n\n\
 The model stays about the same size when the lens changes. The mouse wheel is still zoom, and it is separate from the lens. Orthographic view (O) ignores the lens entirely; the choice applies again when you switch back to perspective, and it is remembered next time you open OxyBrush.",
+    },
+    Topic {
+        title: "Keymap",
+        keywords: "hotkey shortcut rebind mouse navigation preset snap",
+        body: "Settings > Keymap lists every command, brush and view key. Click a key and press a new one, add a second key with +, or reset one command. Conflicts are marked; the first command in the list wins until you change one of them.\n\n\
+- OxyBrush is the original layout: drag empty space to orbit, right-drag to pan, the wheel to zoom, Shift to snap the orbit to 45°.\n\
+- MMB orbit uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan. The 45° snap key starts as Alt and can be changed.\n\
+- Ctrl carves, Alt masks: Ctrl inverts the brush, Alt+drag on the mesh masks, Ctrl+Alt erases, Alt+click on empty space inverts the mask and Alt+drag on empty space clears it.\n\n\
+Keys are remembered next to your other settings. Export writes a keymap file you can share; Import reads one back. The touch layout's Smooth, Mask and Invert buttons keep those jobs even when the keyboard keys move. View keys start on the numpad (front, right, top) and can be moved to any key, so a keyboard without a numpad can still snap the view. Back, left and bottom start unbound.",
     },
     Topic {
         title: "Reporting problems",

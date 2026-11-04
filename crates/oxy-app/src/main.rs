@@ -6,6 +6,7 @@
 mod app;
 mod editor;
 mod guide;
+mod keymap;
 mod matcaps;
 mod palette;
 mod pose;
@@ -22,7 +23,7 @@ use std::path::PathBuf;
 fn main() {
     let mut file = None;
     let mut auto = app::AutoRun::default();
-    let mut args = std::env::args().skip(1);
+    let mut args = std::env::args().skip(1).peekable();
     while let Some(a) = args.next() {
         match a.as_str() {
             "--version" | "-V" => {
@@ -31,13 +32,26 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: oxybrush [MESH.obj|MESH.stl] [--layout standard|compact|touch] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo]\n\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)"
+                    "Usage: oxybrush [MESH.obj|MESH.stl] [--layout standard|compact|touch] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo] [--open-keymap [mmb]]\n\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)\n--open-keymap opens Settings > Keymap (add mmb for the middle-mouse preset)"
                 );
                 return;
             }
             "--screenshot" => auto.screenshot = args.next().map(PathBuf::from),
             "--demo" => auto.demo = true,
             "--set" => auto.overrides.extend(args.next()),
+            "--open-keymap" => {
+                auto.open_keymap = Some(match args.peek().map(String::as_str) {
+                    Some("mmb") => {
+                        args.next();
+                        keymap::Preset::MmbOrbit
+                    }
+                    Some("oxybrush") => {
+                        args.next();
+                        keymap::Preset::OxyBrush
+                    }
+                    _ => keymap::Preset::OxyBrush,
+                });
+            }
             "--layout" => {
                 let v = args.next().unwrap_or_default();
                 match settings::UiLayout::ALL.into_iter().find(|l| format!("{l:?}").eq_ignore_ascii_case(&v)) {
