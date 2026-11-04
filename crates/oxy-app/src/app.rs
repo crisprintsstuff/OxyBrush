@@ -439,11 +439,14 @@ impl App {
                     .path
                     .as_ref()
                     .and_then(|p| p.file_stem())
-                    .map(|s| format!("{}.obj", s.to_string_lossy()))
-                    .unwrap_or_else(|| "sculpt.obj".into());
+                    .map(|s| format!("{}.glb", s.to_string_lossy()))
+                    .unwrap_or_else(|| "sculpt.glb".into());
                 if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("glTF binary (games, engines, Blender)", &["glb"])
+                    .add_filter("glTF (single text file)", &["gltf"])
                     .add_filter("Wavefront OBJ", &["obj"])
                     .add_filter("STL (3D printing)", &["stl"])
+                    .add_filter("PLY", &["ply"])
                     .set_file_name(name)
                     .save_file()
                 {

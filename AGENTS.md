@@ -22,7 +22,8 @@ crates/
   oxy-topo     voxel remesh, quadric decimation                                     (no GPU)
   oxy-doc      scenes of pieces, .oxb format, autosave/recovery                     (no GPU)
   oxy-history  scene-wide undo/redo                                                 (no GPU)
-  oxy-io       OBJ/STL import/export                                                (no GPU)
+  oxy-io       OBJ/STL import; glTF/GLB, OBJ, STL, PLY export                       (no GPU)
+  oxy-cli      headless command-line tool, binary `oxybrush-cli`                    (no GPU)
   oxy-ztl      ZBrush format research tools (see "ZBrush rules" below)              (no GPU)
   oxy-update   opt-in update checks: release choice, verification, HTTPS, signing (no GPU)
   oxy-render   wgpu matcap renderer, camera
