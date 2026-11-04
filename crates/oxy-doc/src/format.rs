@@ -16,6 +16,10 @@
 //!   is derived by subdividing the base. When present, the preceding
 //!   `PIEC` stores the active level in level order. Older readers skip it
 //!   and simply load the active level as a plain mesh.
+//! - `VCOL` (optional, since 0.4): vertex color of the **preceding** `PIEC`:
+//!   `vcount:u32 rgb:f32*3v` (sRGB, 0..=1), indexed like its positions.
+//!   Only written for painted pieces; older readers skip it and show the
+//!   piece unpainted.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -75,6 +79,16 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         sections.push((*b"PIEC", encode_piece(p)));
         if let Some(mr) = &p.multires {
             sections.push((*b"MRES", encode_multires(mr)));
+        }
+        if !p.mesh.color.is_empty() {
+            let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
+            b.extend_from_slice(&(p.mesh.color.len() as u32).to_le_bytes());
+            for c in &p.mesh.color {
+                for x in c.to_array() {
+                    b.extend_from_slice(&x.to_le_bytes());
+                }
+            }
+            sections.push((*b"VCOL", b));
         }
     }
 
@@ -216,6 +230,17 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring subdivision levels that don't match piece {:?}", piece.name);
                 }
             }
+            b"VCOL" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("VCOL before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let n = r.u32()? as usize;
+                if n == piece.mesh.positions.len() {
+                    piece.mesh.color =
+                        (0..n).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect::<Result<_>>()?;
+                } else {
+                    log::warn!("ignoring vertex color that doesn't match piece {:?}", piece.name);
+                }
+            }
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
@@ -326,6 +351,7 @@ mod tests {
         a.mask = (0..a.positions.len()).map(|i| (i % 7) as f32 / 7.0).collect();
         a.groups = (0..a.triangles.len() as u32).map(|i| i % 3).collect();
         a.hidden = (0..a.triangles.len()).map(|i| i % 5 == 0).collect();
+        a.color = (0..a.positions.len()).map(|i| Vec3::new((i % 3) as f32 / 2.0, 0.25, 1.0)).collect();
         let b = primitives::cube(4, 1.0).to_data();
         SceneData {
             pieces: vec![
@@ -334,6 +360,20 @@ mod tests {
             ],
             active: 1,
         }
+    }
+
+    #[test]
+    fn color_is_optional_and_checked() {
+        // Unpainted pieces write no VCOL section.
+        let s = sample();
+        let bytes = encode(&s);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"VCOL").count(), 1);
+        // A color section that doesn't match its piece is ignored, not fatal.
+        let mut bad = s.clone();
+        bad.pieces[0].mesh.color.pop();
+        let back = decode(&encode(&bad)).unwrap();
+        assert!(back.pieces[0].mesh.color.is_empty());
+        assert_eq!(back.pieces[0].mesh.positions, s.pieces[0].mesh.positions);
     }
 
     #[test]

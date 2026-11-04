@@ -36,9 +36,10 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 3. **Sculpt.** Drag on the sphere. Try brushes **1–9** and **0** (see the left shelf). Hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert (or switch **Raise / Carve** in the size/strength bar). Resize the brush with **[** and **]**. Click the brush, alpha or material preview at the top left to pick from thumbnails, and try the axis gizmo (top right of the viewport) and the drag buttons in the strip beside it. The ball-shaped button in that strip switches **shading** (ambient occlusion and cavity) on and off; tell us if it looks wrong or slows your computer down.
 4. **Undo** with **Ctrl+Z**, redo with **Ctrl+Shift+Z**.
 5. **More resolution:** press **Ctrl+D** to add a subdivision level (a few times), sculpt some fine detail, then press **Shift+D** to go down a level and make a broad change; press **D** to go back up and check that the fine detail followed. **Remesh** in the right panel rebuilds even topology (it removes the levels).
-6. **Pieces:** in the right panel, **+ Add > Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.
-7. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (OBJ or STL, e.g. for 3D printing).
-8. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+6. **Color and posing:** pick the **Paint** brush (last in the shelf), choose a color and paint; try **Fill cavities** with a dark color. Switch the material to **Pearl** to see true colors. Then mask the lower half (Ctrl+drag on empty space), press **T** and drag the handles: only the unmasked half moves. Press **T** again for rotate and scale; **Esc** during a drag cancels it.
+7. **Pieces:** in the right panel, **+ Add > Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.
+8. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (OBJ or STL, e.g. for 3D printing).
+9. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
 
 ## 3. What we most want to know
 

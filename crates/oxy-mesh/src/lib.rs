@@ -47,6 +47,9 @@ pub struct RayHit {
     pub normal: Vec3,
 }
 
+/// Color of unpainted vertices.
+pub const WHITE: Vec3 = Vec3::ONE;
+
 /// Plain mesh data, e.g. for file I/O or topology operations. Optional
 /// attribute vectors may be empty (meaning default values).
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -59,6 +62,8 @@ pub struct MeshData {
     pub groups: Vec<u32>,
     /// Per triangle visibility.
     pub hidden: Vec<bool>,
+    /// Per vertex color (sRGB, 0..=1); empty means unpainted (white).
+    pub color: Vec<Vec3>,
 }
 
 #[derive(Debug, Clone)]
@@ -67,6 +72,9 @@ pub struct Mesh {
     pub normals: Vec<Vec3>,
     /// Per-vertex mask in `0..=1`; 1 means fully protected from brushes.
     pub mask: Vec<f32>,
+    /// Per-vertex color (sRGB, 0..=1). Unpainted vertices are
+    /// [`WHITE`], which leaves the viewport material unchanged.
+    pub color: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
     pub chunks: Vec<Chunk>,
     /// Per-triangle face group id.
@@ -104,7 +112,7 @@ impl Mesh {
     /// Build from [`MeshData`]. Triangles and vertices are reordered for
     /// locality; per-triangle and per-vertex attributes follow them.
     pub fn from_data(data: MeshData) -> Self {
-        let MeshData { positions, triangles, mask, groups, hidden } = data;
+        let MeshData { positions, triangles, mask, groups, hidden, color } = data;
         let mask = (mask.len() == positions.len()).then_some(mask);
         // Valid triangles (no repeated or out-of-range corners), keyed by the
         // Morton code of their centroid for a spatial sort. Sorting packed
@@ -139,6 +147,7 @@ impl Mesh {
         let mut remap = vec![u32::MAX; positions.len()];
         let mut new_positions = Vec::with_capacity(positions.len());
         let mut new_mask = Vec::with_capacity(positions.len());
+        let mut new_color = Vec::with_capacity(positions.len());
         let mut source_vertex = Vec::with_capacity(positions.len());
         let mut chunks = Vec::with_capacity(chunk_count);
         for c in 0..chunk_count {
@@ -152,6 +161,7 @@ impl Mesh {
                         remap[old] = new_positions.len() as u32;
                         new_positions.push(positions[old]);
                         new_mask.push(mask.as_ref().map_or(0.0, |m| m[old]));
+                        new_color.push(color.get(old).copied().unwrap_or(WHITE));
                         source_vertex.push(old as u32);
                     }
                     *i = remap[old];
@@ -186,6 +196,7 @@ impl Mesh {
             normals: vec![Vec3::Z; vcount],
             positions: new_positions,
             mask: new_mask,
+            color: new_color,
             groups,
             hidden,
             vertex_hidden: Vec::new(),
@@ -228,7 +239,49 @@ impl Mesh {
             mask: self.mask.clone(),
             groups: self.groups.clone(),
             hidden: self.hidden.clone(),
+            color: if self.is_painted() { self.color.clone() } else { Vec::new() },
         }
+    }
+
+    // ---- vertex color ----
+
+    /// Whether any vertex has a color other than white.
+    pub fn is_painted(&self) -> bool {
+        self.color.iter().any(|&c| c != WHITE)
+    }
+
+    /// Blend `color` into every visible vertex, weighted by `strength` and
+    /// held back by the mask (a fully masked vertex keeps its color).
+    pub fn fill_color(&mut self, color: Vec3, strength: f32) {
+        let s = strength.clamp(0.0, 1.0);
+        for v in 0..self.color.len() {
+            if !self.vertex_hidden[v] {
+                let w = s * (1.0 - self.mask[v]);
+                self.color[v] = self.color[v].lerp(color, w);
+            }
+        }
+        self.mark_all_dirty();
+    }
+
+    /// Like [`fill_color`](Self::fill_color), but only into cavities
+    /// (creases, pores, folds) in proportion to how deep they are, or into
+    /// peaks (ridges, edges) when `cavities` is false. Good for dirt in the
+    /// folds or worn, lighter edges.
+    pub fn fill_color_by_curvature(&mut self, color: Vec3, strength: f32, cavities: bool) {
+        let s = strength.clamp(0.0, 1.0);
+        let curv = self.curvature(cavities);
+        for (v, c) in curv.into_iter().enumerate() {
+            if !self.vertex_hidden[v] {
+                let w = s * c * (1.0 - self.mask[v]);
+                self.color[v] = self.color[v].lerp(color, w);
+            }
+        }
+        self.mark_all_dirty();
+    }
+
+    /// Reset every visible, unmasked vertex to white.
+    pub fn clear_color(&mut self) {
+        self.fill_color(WHITE, 1.0);
     }
 
     // ---- mask operations (all respect hidden vertices: they are left alone) ----
@@ -275,6 +328,16 @@ impl Mesh {
     /// (creases, pores), otherwise convex peaks. Strength is normalised so
     /// the strongest 5% of the mesh reaches a full mask.
     pub fn mask_by_curvature(&mut self, cavities: bool) {
+        for (v, c) in self.curvature(cavities).into_iter().enumerate() {
+            if !self.vertex_hidden[v] {
+                self.mask[v] = c;
+            }
+        }
+    }
+
+    /// Per-vertex concavity (or convexity when `cavities` is false) in
+    /// `0..=1`, normalised so the strongest 5% of the mesh reaches 1.
+    pub fn curvature(&self, cavities: bool) -> Vec<f32> {
         // Signed mean-curvature proxy: how far the neighbor average lies
         // above (concave) or below (convex) the vertex along its normal,
         // relative to the local edge length.
@@ -294,11 +357,7 @@ impl Mesh {
         let mut sorted: Vec<f32> = curv.iter().copied().filter(|&c| c > 0.0).collect();
         sorted.sort_unstable_by(f32::total_cmp);
         let scale = sorted.get(sorted.len().saturating_sub(1) * 95 / 100).copied().unwrap_or(1.0).max(1e-6);
-        for (v, c) in curv.into_iter().enumerate() {
-            if !self.vertex_hidden[v] {
-                self.mask[v] = (c / scale).clamp(0.0, 1.0);
-            }
-        }
+        curv.into_iter().map(|c| (c / scale).clamp(0.0, 1.0)).collect()
     }
 
     /// Fully mask every vertex of face group `group`; unmask the rest.
@@ -745,6 +804,54 @@ fn morton3(n: Vec3) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vertex_color_survives_reorder_subdivision_and_levels() {
+        let mut m = primitives::icosphere(2, 1.0);
+        assert!(!m.is_painted() && m.to_data().color.is_empty(), "unpainted meshes carry no color data");
+        for v in 0..m.vertex_count() {
+            m.color[v] = if m.positions[v].x > 0.0 { Vec3::new(1.0, 0.0, 0.0) } else { WHITE };
+        }
+        // Rebuilding from data keeps each vertex's color with its position.
+        let r = Mesh::from_data(m.to_data());
+        for v in 0..r.vertex_count() {
+            assert_eq!(r.color[v].y == 0.0, r.positions[v].x > 0.0);
+        }
+        // Subdivision: midpoints average their edge.
+        let s = topo::subdivide(&m, 0);
+        assert_eq!(s.color.len(), s.vertex_count());
+        assert!(s.color.iter().any(|c| (c.y - 0.5).abs() < 1e-6), "edge midpoints across the boundary blend");
+        // Subdivision levels carry color up and back down.
+        let mut mr = multires::Multires::new(&m);
+        let up = Mesh::from_data(mr.add_level(&m));
+        assert!(up.is_painted() && up.color.len() == up.vertex_count());
+        mr.bind(&up);
+        let down = Mesh::from_data(mr.set_level(&up, 0));
+        assert_eq!(down.color.len(), m.vertex_count());
+        assert_eq!(down.color.iter().filter(|c| c.y == 0.0).count(), m.color.iter().filter(|c| c.y == 0.0).count());
+    }
+
+    #[test]
+    fn color_fills_follow_curvature_and_mask() {
+        let mut m = primitives::icosphere(4, 1.0);
+        // A dent: push one vertex in.
+        let dent = 0usize;
+        m.positions[dent] *= 0.8;
+        m.recompute_all_normals();
+        let black = Vec3::ZERO;
+        m.fill_color_by_curvature(black, 1.0, true);
+        assert!(m.color[dent].x < 0.2, "the dent gets dirt: {}", m.color[dent]);
+        let far = (0..m.vertex_count()).max_by(|&a, &b| {
+            m.positions[a].distance(m.positions[dent]).total_cmp(&m.positions[b].distance(m.positions[dent]))
+        });
+        assert!(m.color[far.unwrap()].x > 0.8, "smooth areas stay clean");
+        m.mask.iter_mut().for_each(|x| *x = 1.0);
+        m.clear_color();
+        assert!(m.color[dent].x < 0.2, "masked vertices keep their color");
+        m.mask.iter_mut().for_each(|x| *x = 0.0);
+        m.clear_color();
+        assert!(!m.is_painted());
+    }
 
     #[test]
     fn chunks_own_contiguous_vertices() {

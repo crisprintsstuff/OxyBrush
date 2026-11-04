@@ -30,6 +30,8 @@ struct GpuVertex {
     normal: [f32; 3],
     mask: f32,
     group_color: u32,
+    /// Vertex color, RGBA8 (alpha unused); white leaves the material as is.
+    paint: u32,
 }
 
 #[repr(C)]
@@ -312,7 +314,8 @@ impl ViewportRenderer {
             multiview_mask: None,
             cache: None,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Uint32];
+        let attributes =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Uint32, 4 => Uint32];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("oxy viewport pipeline"),
             layout: Some(&pipeline_layout),
@@ -768,7 +771,13 @@ fn vertex(mesh: &Mesh, i: usize) -> GpuVertex {
         normal: mesh.normals[i].to_array(),
         mask: mesh.mask[i],
         group_color,
+        paint: pack_color(mesh.color[i]),
     }
+}
+
+fn pack_color(c: glam::Vec3) -> u32 {
+    let b = |x: f32| (x.clamp(0.0, 1.0) * 255.0).round() as u32;
+    b(c.x) | (b(c.y) << 8) | (b(c.z) << 16) | (255 << 24)
 }
 
 #[cfg(test)]

@@ -463,6 +463,20 @@ impl App {
                     ("m", false, _, true) => ed.clear_mask(),
                     ("m", false, _, false) => ed.view.show_mask = !ed.view.show_mask,
                     ("f", false, ..) => ed.frame(),
+                    ("t", false, false, false) => {
+                        // T cycles Move → Rotate → Scale → off.
+                        use crate::pose::GizmoMode;
+                        ed.gizmo = match ed.gizmo {
+                            None => Some(GizmoMode::Move),
+                            Some(GizmoMode::Move) => Some(GizmoMode::Rotate),
+                            Some(GizmoMode::Rotate) => Some(GizmoMode::Scale),
+                            Some(GizmoMode::Scale) => None,
+                        };
+                        ed.status = match ed.gizmo {
+                            Some(m) => format!("{} gizmo (T for the next mode)", m.label()),
+                            None => "Gizmo off".into(),
+                        };
+                    }
                     ("o", false, ..) => ed.camera.orthographic = !ed.camera.orthographic,
                     ("x", false, ..) => {
                         ed.symmetry.x = !ed.symmetry.x;

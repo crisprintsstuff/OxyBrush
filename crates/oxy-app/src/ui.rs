@@ -1,10 +1,11 @@
 //! egui panels, dialogs, theme and brush cursor.
 
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
+use crate::pose::{GizmoMode, Handle};
 use crate::settings::{Choice, PanelSide, QuickBar, ShelfPosition, UiLayout};
 use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
 use oxy_render::MatcapPreset;
 use oxy_sculpt::{Axis, BrushKind, Falloff};
@@ -318,6 +319,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         if ed.quick_bar != QuickBar::Toolbar {
             floating_quick_bar(ui.ctx(), ed, canvas);
         }
+    }
+    if !ed.show_welcome {
+        transform_gizmo(ui.ctx(), ed, canvas);
     }
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
@@ -767,6 +771,22 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             {
                 ed.toggle_shading();
             }
+            let on = ed.gizmo.is_some();
+            if widgets::icon_button(
+                ui,
+                Icon::Transform,
+                on,
+                true,
+                "Transform gizmo (T): move, rotate or scale the piece. Masked parts stay put.",
+            )
+            .clicked()
+            {
+                if on {
+                    ed.gizmo = None;
+                } else {
+                    ed.toggle_gizmo(GizmoMode::Move);
+                }
+            }
             let solo = ed.scene.pieces.iter().filter(|p| p.visible).count() == 1 && ed.scene.pieces.len() > 1;
             if widgets::icon_button(
                 ui,
@@ -781,6 +801,80 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             }
         });
     });
+}
+
+const AXIS_COLORS: [Color32; 3] =
+    [Color32::from_rgb(230, 80, 80), Color32::from_rgb(110, 200, 90), Color32::from_rgb(80, 140, 240)];
+
+/// Transform gizmo over the model, plus its mode bar at the bottom of the viewport.
+fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    let Some(mode) = ed.gizmo else { return };
+    egui::Area::new(egui::Id::unique("gizmo_bar"))
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .fixed_pos(
+            canvas.center_bottom()
+                - egui::vec2(0.0, if ed.quick_bar == QuickBar::ViewportBottom { 64.0 } else { 12.0 }),
+        )
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 6)).show(
+                ui,
+                |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new("Transform").strong());
+                        for m in GizmoMode::ALL {
+                            if ui.selectable_label(mode == m, m.label()).clicked() {
+                                ed.gizmo = Some(m);
+                            }
+                        }
+                        ui.separator();
+                        ui.label(RichText::new("Masked parts stay put").weak().small());
+                        if ui.button("Done").clicked() {
+                            ed.gizmo = None;
+                        }
+                    });
+                },
+            );
+        });
+    let Some(layout) = ed.gizmo_layout() else { return };
+    let ppp = ed.pixels_per_point;
+    let origin = Vec2::new(ed.canvas[0], ed.canvas[1]);
+    let to_pt = |v: Vec2| egui::pos2((v.x + origin.x) / ppp, (v.y + origin.y) / ppp);
+    let hover = ed
+        .pointer
+        .and_then(|p| layout.pick(p - origin, crate::pose::PICK_PT * ppp))
+        .filter(|_| matches!(ed.drag, Drag::None));
+    let painter = ctx
+        .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("transform_gizmo")))
+        .with_clip_rect(canvas);
+    let c = to_pt(layout.center);
+    for (i, end) in layout.axes.iter().enumerate() {
+        let Some(end) = end else { continue };
+        let e = to_pt(*end);
+        let hot = hover == Some(Handle::Axis(i));
+        let col = if hot { Color32::WHITE } else { AXIS_COLORS[i] };
+        let w = if hot { 3.5 } else { 2.5 };
+        painter.line_segment([c, e], EStroke::new(w, col));
+        match mode {
+            GizmoMode::Move => {
+                let d = (e - c).normalized();
+                let n = egui::vec2(-d.y, d.x);
+                painter.add(egui::Shape::convex_polygon(
+                    vec![e + d * 10.0, e + n * 6.0, e - n * 6.0],
+                    col,
+                    EStroke::NONE,
+                ));
+            }
+            GizmoMode::Rotate => {
+                painter.circle_stroke(e, 8.0, EStroke::new(w, col));
+            }
+            GizmoMode::Scale => {
+                painter.rect_filled(egui::Rect::from_center_size(e, egui::vec2(11.0, 11.0)), 1.0, col);
+            }
+        }
+    }
+    let hot = hover == Some(Handle::Center);
+    painter.circle_filled(c, if hot { 8.0 } else { 6.5 }, if hot { Color32::WHITE } else { Color32::from_gray(225) });
+    painter.circle_stroke(c, 9.0, EStroke::new(1.5, Color32::from_black_alpha(140)));
 }
 
 /// Axis gizmo in the viewport corner: shows the orientation; click an axis
@@ -1007,6 +1101,21 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if ui.button("Delete hidden").clicked() {
         ed.delete_hidden();
     }
+    ui.separator();
+    ui.menu_button("Vertex color", |ui| {
+        if ui.button("Paint brush").clicked() {
+            ed.brush_kind = BrushKind::Paint;
+        }
+        color_actions(ui, ed);
+    });
+    ui.menu_button("Transform", |ui| {
+        for m in GizmoMode::ALL {
+            let label = if m == GizmoMode::Move { format!("{}  (T)", m.label()) } else { m.label().to_owned() };
+            if ui.selectable_label(ed.gizmo == Some(m), label).clicked() {
+                ed.toggle_gizmo(m);
+            }
+        }
+    });
 }
 
 fn group_actions(ui: &mut Ui, ed: &mut Editor) {
@@ -1213,6 +1322,70 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     ui.checkbox(&mut ed.pressure_radius, "Pen pressure sets radius");
     ui.checkbox(&mut ed.front_faces_only, "Front faces only")
         .on_hover_text("Don't affect surfaces facing away from you (e.g. the back of a thin part)");
+    if ed.brush_kind == BrushKind::Paint {
+        ui.separator();
+        paint_controls(ui, ed);
+    }
+}
+
+/// Original swatches (not taken from any other product): skin, clay, bone,
+/// moss, sea, plum, soot, white.
+const SWATCHES: [[f32; 3]; 8] = [
+    [0.86, 0.60, 0.48],
+    [0.75, 0.22, 0.18],
+    [0.90, 0.85, 0.70],
+    [0.35, 0.55, 0.25],
+    [0.20, 0.45, 0.65],
+    [0.45, 0.25, 0.50],
+    [0.12, 0.11, 0.10],
+    [1.0, 1.0, 1.0],
+];
+
+fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.horizontal(|ui| {
+        ui.label("Color");
+        let p = ed.paint_color;
+        let mut c = [p.x, p.y, p.z].map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
+        if ui.color_edit_button_srgb(&mut c).changed() {
+            ed.paint_color = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
+        }
+        for s in SWATCHES {
+            let col = Color32::from_rgb((s[0] * 255.0) as u8, (s[1] * 255.0) as u8, (s[2] * 255.0) as u8);
+            let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+            ui.painter().rect_filled(rect, 3.0, col);
+            if ed.paint_color.to_array() == s {
+                ui.painter().rect_stroke(rect.expand(1.5), 3.0, EStroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+            }
+            if r.clicked() {
+                ed.paint_color = s.into();
+            }
+        }
+    });
+    ui.label(RichText::new("Alt erases paint. Use the Pearl or Grey Clay material to see true colors.").weak().small());
+    color_actions(ui, ed);
+}
+
+/// Fill operations; all respect the mask (masked areas keep their color).
+fn color_actions(ui: &mut Ui, ed: &mut Editor) {
+    let c = ed.paint_color;
+    ui.horizontal_wrapped(|ui| {
+        if ui.button("Fill").on_hover_text("Paint everything that isn't masked").clicked() {
+            ed.edit_color("Fill color", |m| m.fill_color(c, 1.0));
+        }
+        if ui
+            .button("Fill cavities")
+            .on_hover_text("Paint creases, pores and folds, more where they are deeper")
+            .clicked()
+        {
+            ed.edit_color("Fill cavities", |m| m.fill_color_by_curvature(c, 1.0, true));
+        }
+        if ui.button("Fill peaks").on_hover_text("Paint ridges and edges, e.g. for worn highlights").clicked() {
+            ed.edit_color("Fill peaks", |m| m.fill_color_by_curvature(c, 1.0, false));
+        }
+        if ui.button("Clear color").on_hover_text("Back to unpainted (masked areas are kept)").clicked() {
+            ed.edit_color("Clear color", Mesh::clear_color);
+        }
+    });
 }
 
 fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
@@ -1853,6 +2026,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+O / Ctrl+I", "Open / import mesh"),
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
     ("Ctrl+E", "Export visible pieces"),
+    ("T", "Transform gizmo: move / rotate / scale (Esc cancels a drag)"),
     ("Tab", "Show/hide panels"),
     ("F1", "This window"),
 ];
