@@ -4,20 +4,13 @@ use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
 use crate::pose::{GizmoMode, Handle};
 use crate::settings::{Choice, PanelSide, QuickBar, ShelfPosition, UiLayout};
+use crate::tips::{self, Cmd, plain};
 use crate::widgets::{self, ACCENT, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
 use oxy_render::{BackgroundStyle, FOCAL_MM_MAX, FOCAL_MM_MIN, FOCAL_PRESETS_MM, MatcapPreset};
 use oxy_sculpt::{Axis, BrushKind, Falloff};
-
-fn ml(ed: &Editor, label: &str, id: CommandId) -> String {
-    keymap::menu_label(label, &ed.keymap.primary(id))
-}
-
-fn tp(ed: &Editor, text: &str, id: CommandId) -> String {
-    keymap::tip(text, &ed.keymap.primary(id))
-}
 
 /// Actions that need the platform layer (file dialogs).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -191,205 +184,177 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
-                ui.menu_button("New", |ui| {
-                    for (label, which) in [("Sphere", "sphere"), ("Cube", "cube"), ("Plane", "plane")] {
-                        if ui.button(label).clicked() {
+            tips::menu(ui, "File", plain::FILE, |ui| {
+                tips::menu(ui, "New", plain::NEW, |ui| {
+                    for (label, which, cmd) in [
+                        ("Sphere", "sphere", Cmd::NewSphere),
+                        ("Cube", "cube", Cmd::NewCube),
+                        ("Plane", "plane", Cmd::NewPlane),
+                    ] {
+                        if tips::button(ui, label, cmd).clicked() {
                             ed.request(Pending::New(which));
                         }
                     }
                 });
-                if ui.button(crate::keymap::menu_label("Open…", &ed.keymap.primary(crate::keymap::CommandId::Open))).clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Open…", Cmd::Open).clicked() {
                     action = Some(UiAction::Open);
                 }
                 ui.add_enabled_ui(!ed.recent_files.is_empty(), |ui| {
-                    ui.menu_button("Open recent", |ui| recent_menu(ui, ed));
+                    tips::menu(ui, "Open recent", plain::OPEN_RECENT, |ui| recent_menu(ui, ed));
                 });
-                if ui
-                    .button(crate::keymap::menu_label("Import mesh as piece…", &ed.keymap.primary(crate::keymap::CommandId::Import)))
-                    .clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Import mesh as piece…", Cmd::Import).clicked() {
                     action = Some(UiAction::Import);
                 }
                 ui.separator();
-                if ui.button(crate::keymap::menu_label("Save", &ed.keymap.primary(crate::keymap::CommandId::Save))).clicked() {
+                if tips::button_km(ui, &ed.keymap, "Save", Cmd::Save).clicked() {
                     action = Some(UiAction::Save);
                 }
-                if ui.button(crate::keymap::menu_label("Save as…", &ed.keymap.primary(crate::keymap::CommandId::SaveAs))).clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
                     action = Some(UiAction::SaveAs);
                 }
-                if ui
-                    .button(crate::keymap::menu_label("Export visible…", &ed.keymap.primary(crate::keymap::CommandId::Export)))
-                    .clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if tips::button(ui, "Quit", Cmd::Quit).clicked() {
                     ed.request(Pending::Quit);
                 }
             });
-            ui.menu_button("Edit", |ui| {
-                if ui
-                    .button(crate::keymap::menu_label(
-                        "Command palette…",
-                        &ed.keymap.primary(crate::keymap::CommandId::CommandPalette),
-                    ))
-                    .clicked()
-                {
+            tips::menu(ui, "Edit", plain::EDIT, |ui| {
+                if tips::button_km(ui, &ed.keymap, "Command palette…", Cmd::Palette).clicked() {
                     ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
                 }
-                if ui
-                    .button(crate::keymap::menu_label("Find brush…", &ed.keymap.primary(crate::keymap::CommandId::BrushFinder)))
-                    .clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Find brush…", Cmd::FindBrush).clicked() {
                     ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
                 }
                 ui.separator();
-                if ui
-                    .add_enabled(
-                        ed.history.can_undo(),
-                        egui::Button::new(crate::keymap::menu_label("Undo", &ed.keymap.primary(crate::keymap::CommandId::Undo))),
-                    )
-                    .clicked()
-                {
+                if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo", Cmd::Undo).clicked() {
                     ed.undo();
                 }
-                if ui
-                    .add_enabled(
-                        ed.history.can_redo(),
-                        egui::Button::new(crate::keymap::menu_label("Redo", &ed.keymap.primary(crate::keymap::CommandId::Redo))),
-                    )
-                    .clicked()
-                {
+                if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
                     ed.redo();
                 }
             });
-            ui.menu_button("Pieces", |ui| piece_actions(ui, ed, busy));
-            ui.menu_button("Mesh", |ui| mesh_actions(ui, ed, busy));
-            ui.menu_button("Groups", |ui| group_actions(ui, ed));
-            ui.menu_button("Mask", |ui| mask_actions(ui, ed));
-            ui.menu_button("View", |ui| {
-                if ui.button(crate::keymap::menu_label("Frame scene", &ed.keymap.primary(crate::keymap::CommandId::Frame))).clicked()
-                {
+            tips::menu(ui, "Pieces", plain::PIECES, |ui| piece_actions(ui, ed, busy));
+            tips::menu(ui, "Mesh", plain::MESH, |ui| mesh_actions(ui, ed, busy));
+            tips::menu(ui, "Groups", plain::GROUPS, |ui| group_actions(ui, ed));
+            tips::menu(ui, "Mask", plain::MASK, |ui| mask_actions(ui, ed));
+            tips::menu(ui, "View", plain::VIEW, |ui| {
+                if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
                     ed.frame();
                 }
-                if ui.button(crate::keymap::menu_label("Front", &ed.keymap.primary(crate::keymap::CommandId::ViewFront))).clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
                     ed.camera.snap(0.0, 0.0);
                 }
-                if ui.button(crate::keymap::menu_label("Back", &ed.keymap.primary(crate::keymap::CommandId::ViewBack))).clicked() {
+                if tips::button_km(ui, &ed.keymap, "Back", Cmd::Back).clicked() {
                     ed.camera.snap(std::f32::consts::PI, 0.0);
                 }
-                if ui.button(crate::keymap::menu_label("Left", &ed.keymap.primary(crate::keymap::CommandId::ViewLeft))).clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Left", Cmd::Left).clicked() {
                     ed.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
                 }
-                if ui.button(crate::keymap::menu_label("Right", &ed.keymap.primary(crate::keymap::CommandId::ViewRight))).clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Right", Cmd::Right).clicked() {
                     ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
                 }
-                if ui.button(crate::keymap::menu_label("Top", &ed.keymap.primary(crate::keymap::CommandId::ViewTop))).clicked() {
+                if tips::button_km(ui, &ed.keymap, "Top", Cmd::Top).clicked() {
                     ed.camera.snap(0.0, 1.55);
                 }
-                if ui
-                    .button(crate::keymap::menu_label("Bottom", &ed.keymap.primary(crate::keymap::CommandId::ViewBottom)))
-                    .clicked()
-                {
+                if tips::button_km(ui, &ed.keymap, "Bottom", Cmd::Bottom).clicked() {
                     ed.camera.snap(0.0, -1.55);
                 }
-                let ortho = ml(ed, "Orthographic", CommandId::Orthographic);
-                let groups = ml(ed, "Face group colors", CommandId::ShowGroups);
-                ui.checkbox(&mut ed.camera.orthographic, ortho);
-                ui.menu_button("Focal length", |ui| {
+                tips::check_km(ui, &ed.keymap, &mut ed.camera.orthographic, "Orthographic", Cmd::Ortho);
+                tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
                     ui.set_min_width(280.0);
                     focal_length_controls(ui, ed);
                 });
-                ui.checkbox(&mut ed.view.show_groups, groups);
+                tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
                 ui.separator();
                 ui.label("Shading");
-                ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))
-                    .on_hover_text(
-                        "Darkens places other parts of the surface shade, such as folds and the inside of ears",
-                    );
-                ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))
-                    .on_hover_text("Darkens creases and pores and brightens edges, so fine detail reads clearly");
-                ui.checkbox(&mut ed.view.flat_shading, "Flat shading")
-                    .on_hover_text("Show each polygon as a flat facet instead of a smooth surface");
+                tips::hover(
+                    ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
+                    plain::AO,
+                );
+                tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
+                tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
                 surface_cursor_checkbox(ui, ed);
                 ui.separator();
-                ui.label("Background");
-                background_menu(ui, ed);
+                tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
                 ui.separator();
                 ui.label("Material");
                 for m in MatcapPreset::ALL {
-                    if ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()).clicked() {
+                    if tips::hover(
+                        ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()),
+                        tips::matcap_tip(m),
+                    )
+                    .clicked()
+                    {
                         ed.matcap = m;
                         ed.custom_matcap = None;
                     }
                 }
                 for i in 0..ed.custom_matcaps.len() {
-                    if ui.radio(ed.custom_matcap == Some(i), ed.custom_matcaps[i].name.as_str()).clicked() {
+                    let name = ed.custom_matcaps[i].name.clone();
+                    let tip = format!("{name}. A material you loaded.");
+                    if tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip).clicked() {
                         ed.custom_matcap = Some(i);
                     }
                 }
-                if ui.button("Load matcap…").on_hover_text("A PNG or JPEG image of a lit sphere").clicked() {
+                if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
                     ed.request_load_matcap = true;
                 }
                 ui.separator();
-                let panels = ml(ed, "Show panels", CommandId::TogglePanels);
-                ui.checkbox(&mut ed.show_panels, panels);
+                tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
             });
-            ui.menu_button("Settings", |ui| {
+            tips::menu(ui, "Settings", plain::SETTINGS, |ui| {
                 ui.label("Layout");
                 for l in UiLayout::ALL {
-                    ui.radio_value(&mut ed.layout, l, l.label()).on_hover_text(l.description());
+                    tips::hover(ui.radio_value(&mut ed.layout, l, l.label()), l.description());
                 }
-                ui.menu_button("Arrange panels", |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
-                ui.checkbox(&mut ed.welcome_at_startup, "Show welcome window at startup");
-                ui.checkbox(&mut ed.stroke_from_empty, "Strokes can start on empty space").on_hover_text(
-                    "Drag from beside the model onto it to sculpt. Orbit with the middle mouse button or the view strip.",
+                tips::menu(ui, "Arrange panels", plain::ARRANGE, |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
+                tips::check_plain(
+                    ui,
+                    &mut ed.welcome_at_startup,
+                    "Show welcome window at startup",
+                    plain::WELCOME_STARTUP,
                 );
+                tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
                 surface_cursor_checkbox(ui, ed);
-                if ui.button("Keymap…").on_hover_text("Change keyboard shortcuts, mouse navigation and sculpt modifiers").clicked()
-                {
+                if tips::hover(ui.button("Keymap…"), plain::KEYMAP_SETTINGS).clicked() {
                     ed.show_keymap = true;
                 }
-                ui.menu_button("Updates", |ui| update_menu(ui, ed));
+                tips::menu(ui, "Updates", plain::UPDATES, |ui| update_menu(ui, ed));
                 ui.separator();
-                ui.checkbox(&mut ed.agent_enabled, "Local AI agent")
-                    .on_hover_text("Let a program on this computer sculpt with you. Off by default. Nothing is sent off this machine.");
+                tips::check_plain(ui, &mut ed.agent_enabled, "Local AI agent", plain::AGENT_ENABLED);
                 if ed.agent_enabled {
                     if ed.agent_endpoint.is_empty() {
                         ui.label("Starting the local listener…");
                     } else {
                         ui.label(RichText::new(&ed.agent_endpoint).small());
-                        if ui.button("Copy connection").on_hover_text("Address and token, for your MCP client").clicked() {
+                        if tips::hover(ui.button("Copy connection"), plain::AGENT_COPY).clicked() {
                             ui.ctx().copy_text(crate::agent::connection_text(&ed.agent_endpoint, &ed.agent_token));
                             ed.status = "Copied the agent address and token".into();
                         }
-                        if ui.button("New token").on_hover_text("Disconnects the current agent").clicked() {
+                        if tips::hover(ui.button("New token"), plain::AGENT_DISCONNECT).clicked() {
                             ed.agent_disconnect = true;
                         }
                     }
                 }
                 ui.separator();
                 ui.label("Interface scale");
-                ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05));
-                ui.checkbox(&mut ed.high_contrast, "High-contrast theme");
+                tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
+                tips::check_plain(ui, &mut ed.high_contrast, "High-contrast theme", plain::HIGH_CONTRAST);
                 ui.separator();
                 ui.label("Viewport background");
                 background_menu(ui, ed);
                 ui.separator();
                 ui.label("Autosave every");
                 let mut mins = ed.autosaver.interval.as_secs_f32() / 60.0;
-                if ui.add(egui::Slider::new(&mut mins, 1.0..=30.0).suffix(" min")).changed() {
+                if tips::hover(ui.add(egui::Slider::new(&mut mins, 1.0..=30.0).suffix(" min")), plain::AUTOSAVE)
+                    .changed()
+                {
                     ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
                 }
             });
-            ui.menu_button("Help", |ui| help_menu(ui, ed));
+            tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
         });
     });
 
@@ -491,6 +456,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         transform_gizmo(ui.ctx(), ed, canvas);
     }
     draw_brush_cursor(ui, ed, canvas);
+    tips::show_pinned(ui.ctx());
     (action, canvas)
 }
 
@@ -510,10 +476,10 @@ fn background_menu(ui: &mut Ui, ed: &mut Editor) {
     if ed.view.background_style != before {
         ed.status = format!("Viewport background: {}", ed.view.background_style.label().to_lowercase());
     }
-    if ui.button("Colors…").on_hover_text("Center and edge for a gradient, or one color when flat").clicked() {
+    if ui.button("Colors…").on_hover_text(plain::BACKGROUND_COLORS).clicked() {
         ed.show_background = true;
     }
-    if ui.button("Reset to default").on_hover_text("Restore the built-in gradient and its colors").clicked() {
+    if ui.button("Reset to default").on_hover_text(plain::BACKGROUND_RESET).clicked() {
         ed.reset_background();
     }
 }
@@ -569,7 +535,7 @@ fn background_controls(ui: &mut Ui, ed: &mut Editor) {
             });
         }
     }
-    if ui.button("Reset to default").on_hover_text("Restore the built-in gradient and its colors").clicked() {
+    if ui.button("Reset to default").on_hover_text(plain::BACKGROUND_RESET).clicked() {
         ed.reset_background();
     }
 }
@@ -603,12 +569,14 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
     egui::Panel::top("toolbar").show(ui, |ui| {
         ui.add_space(3.0);
         ui.horizontal(|ui| {
-            let undo_tip = tp(ed, "Undo", CommandId::Undo);
-            let redo_tip = tp(ed, "Redo", CommandId::Redo);
-            if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &undo_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &Cmd::Undo.tip_in(&ed.keymap))
+                .clicked()
+            {
                 ed.undo();
             }
-            if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), &redo_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), &Cmd::Redo.tip_in(&ed.keymap))
+                .clicked()
+            {
                 ed.redo();
             }
             ui.separator();
@@ -620,10 +588,9 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
 
             ui.label(RichText::new("Mirror").weak());
-            let sym = tp(ed, "Mirror strokes across X (left/right)", CommandId::SymmetryX);
-            widgets::chip(ui, &mut ed.symmetry.x, "X", &sym);
-            widgets::chip(ui, &mut ed.symmetry.y, "Y", "Mirror strokes across Y (top/bottom)");
-            widgets::chip(ui, &mut ed.symmetry.z, "Z", "Mirror strokes across Z (front/back)");
+            widgets::chip(ui, &mut ed.symmetry.x, "X", &Cmd::SymX.tip_in(&ed.keymap));
+            widgets::chip(ui, &mut ed.symmetry.y, "Y", &Cmd::SymY.tip_in(&ed.keymap));
+            widgets::chip(ui, &mut ed.symmetry.z, "Z", &Cmd::SymZ.tip_in(&ed.keymap));
             ui.separator();
 
             let levels = ed.multires_level();
@@ -631,33 +598,50 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
                 Some((a, c)) => format!("Level {} / {c}", a + 1),
                 None => "No levels".into(),
             };
-            ui.label(RichText::new(text).weak())
-                .on_hover_text("Subdivision levels: sculpt big shapes on low levels and fine detail on high ones");
-            let down_tip = tp(ed, "Level down", CommandId::LevelDown);
-            let up_tip = tp(ed, "Level up", CommandId::LevelUp);
-            let add_tip = tp(ed, "Add a subdivision level", CommandId::AddLevel);
-            if widgets::icon_button(ui, Icon::Down, false, levels.is_some_and(|(a, _)| a > 0), &down_tip).clicked() {
+            tips::hover(ui.label(RichText::new(text).weak()), plain::LEVELS);
+            if widgets::icon_button(
+                ui,
+                Icon::Down,
+                false,
+                levels.is_some_and(|(a, _)| a > 0),
+                &Cmd::LevelDown.tip_in(&ed.keymap),
+            )
+            .clicked()
+            {
                 ed.step_level(-1);
             }
-            if widgets::icon_button(ui, Icon::Up, false, levels.is_some_and(|(a, c)| a + 1 < c), &up_tip).clicked() {
+            if widgets::icon_button(
+                ui,
+                Icon::Up,
+                false,
+                levels.is_some_and(|(a, c)| a + 1 < c),
+                &Cmd::LevelUp.tip_in(&ed.keymap),
+            )
+            .clicked()
+            {
                 ed.step_level(1);
             }
-            if widgets::icon_button(ui, Icon::Plus, false, ed.job.is_none(), &add_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Plus, false, ed.job.is_none(), &Cmd::AddLevel.tip_in(&ed.keymap))
+                .clicked()
+            {
                 ed.add_level();
             }
 
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let help_tip = tp(ed, "Keyboard shortcuts", CommandId::Shortcuts);
-                if widgets::icon_button(ui, Icon::Help, ed.show_shortcuts, true, &help_tip).clicked() {
+                if widgets::icon_button(ui, Icon::Help, ed.show_shortcuts, true, &Cmd::Shortcuts.tip_in(&ed.keymap))
+                    .clicked()
+                {
                     ed.show_shortcuts = !ed.show_shortcuts;
                 }
                 ui.separator();
                 let active = ed.scene.active().mesh.triangle_count();
                 let total = ed.scene.triangle_count();
-                ui.label(
-                    RichText::new(format!("{} / {} tris", fmt_count(active), fmt_count(total))).monospace().small(),
-                )
-                .on_hover_text("Triangles in the active piece / in the whole scene");
+                tips::hover(
+                    ui.label(
+                        RichText::new(format!("{} / {} tris", fmt_count(active), fmt_count(total))).monospace().small(),
+                    ),
+                    plain::TRIANGLES,
+                );
             });
         });
         ui.add_space(1.0);
@@ -680,11 +664,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             (layout, _) => {
                 let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
                 let t = widgets::brush_texture(&ctx, k);
-                let tip = match key {
-                    Some(n) => format!("{}\nShortcut: {n}", widgets::brush_description(k)),
-                    None => widgets::brush_description(k).to_string(),
-                };
-                widgets::thumb_sized(ui, Some(&t), k.label(), selected, size).on_hover_text(tip)
+                let tip = tips::brush_tip(k, key);
+                widgets::thumb_sized(ui, Some(&t), k.label(), selected, size, &tip)
             }
         };
         if r.clicked() {
@@ -807,17 +788,17 @@ fn arrange_menu(ui: &mut Ui, current: Arrangement) {
     let mut a = current;
     ui.label(RichText::new("Brush shelf").strong());
     for c in ShelfPosition::ALL {
-        ui.radio_value(&mut a.shelf, *c, c.label());
+        tips::hover(ui.radio_value(&mut a.shelf, *c, c.label()), tips::shelf_tip(*c));
     }
     ui.label(RichText::new("Settings panel").strong());
     for c in PanelSide::ALL {
-        ui.radio_value(&mut a.panels, *c, c.label());
+        tips::hover(ui.radio_value(&mut a.panels, *c, c.label()), tips::panel_tip(*c));
     }
     ui.label(RichText::new("Size & strength").strong());
     for c in QuickBar::ALL {
-        ui.radio_value(&mut a.quick_bar, *c, c.label());
+        tips::hover(ui.radio_value(&mut a.quick_bar, *c, c.label()), tips::quick_bar_tip(*c));
     }
-    let reset = ui.button("Reset brush order").clicked();
+    let reset = tips::hover(ui.button("Reset brush order"), plain::RESET_ORDER).clicked();
     if a.shelf != current.shelf || a.panels != current.panels || a.quick_bar != current.quick_bar || reset {
         ui.ctx().data_mut(|d| d.insert_temp(arrange_id(), (a.shelf, a.panels, a.quick_bar, reset)));
     }
@@ -844,23 +825,30 @@ fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
 /// Raise / Carve, size and strength: the controls used most while sculpting.
 fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     let raise = egui::Button::selectable(!ed.carve, RichText::new("Raise").strong()).min_size(egui::vec2(58.0, 26.0));
-    if ui.add(raise).on_hover_text("Brushes add clay (Alt carves while held)").clicked() {
+    if tips::hover(ui.add(raise), Cmd::Raise.tip()).clicked() {
         ed.carve = false;
     }
     let carve = egui::Button::selectable(ed.carve, RichText::new("Carve").strong()).min_size(egui::vec2(58.0, 26.0));
-    if ui.add(carve).on_hover_text("Brushes remove clay (Alt raises while held)").clicked() {
+    if tips::hover(ui.add(carve), Cmd::Carve.tip()).clicked() {
         ed.carve = true;
     }
     ui.separator();
     ui.label(RichText::new("Size").weak());
-    ui.add(
-        egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0).trailing_fill(true),
-    )
-    .on_hover_text("Brush radius in points  ([ and ])");
+    tips::hover(
+        ui.add(
+            egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
+                .logarithmic(true)
+                .max_decimals(0)
+                .trailing_fill(true),
+        ),
+        Cmd::Radius.tip(),
+    );
     ui.label(RichText::new("Strength").weak());
     let k = ed.brush_kind;
-    ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true))
-        .on_hover_text("Brush strength  (- and =)");
+    tips::hover(
+        ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true)),
+        Cmd::Strength.tip(),
+    );
 }
 
 /// Size/strength menu at the cursor (right click on the viewport, or hold Q).
@@ -881,7 +869,11 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         ui.spacing_mut().slider_width = 150.0;
                         quick_controls(ui, ed);
                     });
-                    let hint = if q.held { "Release Q to close" } else { "Esc or click outside to close" };
+                    let hint = if q.held {
+                        format!("Release {} to close", Cmd::QuickMenu.shortcut())
+                    } else {
+                        "Esc or click outside to close".into()
+                    };
                     ui.label(RichText::new(hint).weak().small());
                 },
             );
@@ -939,7 +931,7 @@ fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
             (&mut t.alt, "Invert", invert.as_str()),
         ] {
             let b = egui::Button::selectable(*on, RichText::new(label).strong()).min_size(egui::vec2(w, 44.0));
-            if ui.add(b).on_hover_text(tip).clicked() {
+            if tips::hover(ui.add(b), tip).clicked() {
                 *on = !*on;
             }
         }
@@ -954,16 +946,14 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         ui.spacing_mut().item_spacing.x = 6.0;
         let size = 58.0;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
-        let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), "Brush: click to pick", size);
+        let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Brushes").strong());
             egui::Grid::new("brush_picker").spacing([6.0, 6.0]).show(ui, |ui| {
                 for (i, k) in BrushKind::ALL.into_iter().enumerate() {
                     let t = widgets::brush_texture(&ctx, k);
-                    if widgets::thumb(ui, Some(&t), k.label(), ed.brush_kind == k)
-                        .on_hover_text(widgets::brush_description(k))
-                        .clicked()
-                    {
+                    let tip = tips::brush_tip(k, ed.number_key(k).as_deref());
+                    if widgets::thumb(ui, Some(&t), k.label(), ed.brush_kind == k, &tip).clicked() {
                         ed.brush_kind = k;
                     }
                     if i % 4 == 3 {
@@ -976,23 +966,19 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         let alpha = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned();
         let alpha_tex = alpha.as_ref().map(|a| alpha_texture(&ctx, a));
         let caption = alpha.as_ref().map_or("No alpha".to_string(), |a| a.name.clone());
-        let r = widgets::tile(
-            ui,
-            alpha_tex.as_ref(),
-            &caption,
-            "Alpha: an image that shapes each dab. Click to pick.",
-            size,
-        );
+        let r = widgets::tile(ui, alpha_tex.as_ref(), &caption, plain::ALPHA_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Alphas").strong());
             egui::Grid::new("alpha_picker").spacing([6.0, 6.0]).show(ui, |ui| {
-                if widgets::thumb(ui, None, "None", ed.alpha.is_none()).clicked() {
+                let none = tips::alpha_tip("None");
+                if widgets::thumb(ui, None, "None", ed.alpha.is_none(), &none).clicked() {
                     ed.alpha = None;
                 }
                 let alphas = ed.alphas.clone();
                 for (i, a) in alphas.iter().enumerate() {
                     let t = alpha_texture(&ctx, a);
-                    if widgets::thumb(ui, Some(&t), &a.name, ed.alpha == Some(i)).clicked() {
+                    let tip = tips::alpha_tip(&a.name);
+                    if widgets::thumb(ui, Some(&t), &a.name, ed.alpha == Some(i), &tip).clicked() {
                         ed.alpha = Some(i);
                     }
                     if i % 4 == 2 {
@@ -1000,7 +986,7 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
                     }
                 }
             });
-            if ui.button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
+            if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
                 ed.request_load_alpha = true;
             }
         });
@@ -1010,13 +996,21 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             None => widgets::material_texture(&ctx, ed.matcap),
         };
         let label = ed.material_label();
-        let r = widgets::tile(ui, Some(&mat_tex), &label, "Viewport material: click to pick", size);
+        let r = widgets::tile(ui, Some(&mat_tex), &label, plain::MATERIAL_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Materials").strong());
             ui.horizontal(|ui| {
                 for m in MatcapPreset::ALL {
                     let t = widgets::material_texture(&ctx, m);
-                    if widgets::thumb(ui, Some(&t), m.label(), ed.custom_matcap.is_none() && ed.matcap == m).clicked() {
+                    if widgets::thumb(
+                        ui,
+                        Some(&t),
+                        m.label(),
+                        ed.custom_matcap.is_none() && ed.matcap == m,
+                        tips::matcap_tip(m),
+                    )
+                    .clicked()
+                    {
                         ed.matcap = m;
                         ed.custom_matcap = None;
                     }
@@ -1029,12 +1023,13 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
                     for i in 0..ed.custom_matcaps.len() {
                         let m = &ed.custom_matcaps[i];
                         let t = custom_matcap_texture(&ctx, m);
-                        let r = widgets::thumb(ui, Some(&t), &m.name, ed.custom_matcap == Some(i));
+                        let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
+                        let r = widgets::thumb(ui, Some(&t), &m.name, ed.custom_matcap == Some(i), &tip);
                         if r.clicked() {
                             ed.custom_matcap = Some(i);
                         }
                         r.context_menu(|ui| {
-                            if ui.button("Remove").clicked() {
+                            if tips::hover(ui.button("Remove"), plain::REMOVE_MATCAP).clicked() {
                                 remove = Some(i);
                             }
                         });
@@ -1044,7 +1039,7 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
                     ed.remove_custom_matcap(i);
                 }
             }
-            if ui.button("Load matcap…").on_hover_text("A PNG or JPEG image of a lit sphere").clicked() {
+            if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
                 ed.request_load_matcap = true;
             }
         });
@@ -1104,9 +1099,7 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
                 .max_decimals(2)
                 .min_decimals(2),
         )
-        .on_hover_text(
-            "Shorter is wider, with more perspective. Longer flattens depth. The model stays the same size.",
-        );
+        .on_hover_text(plain::FOCAL_SLIDER);
     let typed = ui
         .horizontal(|ui| {
             let r = ui
@@ -1144,11 +1137,7 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
             }
         }
         let at_default = (ed.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-3;
-        if ui
-            .add_enabled(!at_default, egui::Button::new("Reset"))
-            .on_hover_text("Back to the default lens: 35° vertical, about 38.06 mm")
-            .clicked()
-        {
+        if ui.add_enabled(!at_default, egui::Button::new("Reset")).on_hover_text(plain::FOCAL_RESET).clicked() {
             ed.reset_focal_length();
         }
     });
@@ -1191,86 +1180,54 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             ui.spacing_mut().item_spacing.y = 6.0;
             if ed.layout == UiLayout::Touch {
                 // Undo/redo within thumb reach (no keyboard on a tablet).
-                if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), "Undo").clicked() {
+                if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &Cmd::Undo.tip()).clicked() {
                     ed.undo();
                 }
-                if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), "Redo").clicked() {
+                if widgets::icon_button(ui, Icon::Redo, false, ed.history.can_redo(), &Cmd::Redo.tip()).clicked() {
                     ed.redo();
                 }
                 ui.separator();
             }
-            let frame_tip = tp(ed, "Frame the scene", CommandId::Frame);
-            if widgets::icon_button(ui, Icon::Frame, false, true, &frame_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Frame, false, true, &Cmd::Frame.tip_in(&ed.keymap)).clicked() {
                 ed.frame();
             }
             let ppp = ed.pixels_per_point;
-            let r = widgets::drag_button(ui, Icon::Orbit, "Drag to orbit (or drag empty space in the viewport)");
+            let r = widgets::drag_button(ui, Icon::Orbit, plain::ORBIT);
             if r.dragged() {
                 let d = r.drag_delta() * ppp;
                 ed.camera.orbit(Vec2::new(d.x, d.y));
             }
-            let r = widgets::drag_button(ui, Icon::Pan, "Drag to pan (or right-drag in the viewport)");
+            let r = widgets::drag_button(ui, Icon::Pan, plain::PAN);
             if r.dragged() {
                 let d = r.drag_delta() * ppp;
                 ed.camera.pan(Vec2::new(d.x, d.y), ed.canvas[3]);
             }
-            let r = widgets::drag_button(ui, Icon::Zoom, "Drag up/down to zoom (or use the mouse wheel)");
+            let r = widgets::drag_button(ui, Icon::Zoom, plain::ZOOM);
             if r.dragged() {
                 ed.camera.zoom(-r.drag_delta().y * 0.05);
             }
             ui.separator();
             let ortho = ed.camera.orthographic;
-            let ortho_tip = tp(ed, "Orthographic view", CommandId::Orthographic);
-            if widgets::icon_button(ui, Icon::Ortho, ortho, true, &ortho_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Ortho, ortho, true, &Cmd::Ortho.tip_in(&ed.keymap)).clicked() {
                 ed.camera.orthographic = !ortho;
             }
-            if widgets::icon_button(
-                ui,
-                Icon::Lens,
-                ed.show_focal_length,
-                true,
-                "Focal length: perspective lens in millimeters. Orthographic view is unchanged.",
-            )
-            .clicked()
-            {
+            if widgets::icon_button(ui, Icon::Lens, ed.show_focal_length, true, plain::LENS_STRIP).clicked() {
                 ed.show_focal_length = !ed.show_focal_length;
             }
             let mask = ed.view.show_mask;
-            let mask_tip = tp(ed, "Show mask", CommandId::ShowMask);
-            if widgets::icon_button(ui, Icon::Mask, mask, true, &mask_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Mask, mask, true, &Cmd::ShowMask.tip_in(&ed.keymap)).clicked() {
                 ed.view.show_mask = !mask;
             }
             let groups = ed.view.show_groups;
-            let groups_tip = tp(ed, "Face group colors", CommandId::ShowGroups);
-            if widgets::icon_button(ui, Icon::Groups, groups, true, &groups_tip).clicked() {
+            if widgets::icon_button(ui, Icon::Groups, groups, true, &Cmd::GroupColors.tip_in(&ed.keymap)).clicked() {
                 ed.view.show_groups = !groups;
             }
             let shading = ed.shading_on();
-            if widgets::icon_button(
-                ui,
-                Icon::Shading,
-                shading,
-                true,
-                "Shading: ambient occlusion and cavity (strengths in View > Shading)",
-            )
-            .clicked()
-            {
+            if widgets::icon_button(ui, Icon::Shading, shading, true, &Cmd::Shading.tip()).clicked() {
                 ed.toggle_shading();
             }
             let on = ed.gizmo.is_some();
-            if widgets::icon_button(
-                ui,
-                Icon::Transform,
-                on,
-                true,
-                &tp(
-                    ed,
-                    "Transform gizmo: move, rotate or scale the piece. Masked parts stay put.",
-                    CommandId::GizmoCycle,
-                ),
-            )
-            .clicked()
-            {
+            if widgets::icon_button(ui, Icon::Transform, on, true, &Cmd::GizmoMove.tip_in(&ed.keymap)).clicked() {
                 if on {
                     ed.gizmo = None;
                 } else {
@@ -1278,14 +1235,8 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
                 }
             }
             let solo = ed.scene.pieces.iter().filter(|p| p.visible).count() == 1 && ed.scene.pieces.len() > 1;
-            if widgets::icon_button(
-                ui,
-                Icon::Solo,
-                solo,
-                ed.scene.pieces.len() > 1,
-                &tp(ed, "Solo the active piece / show all", CommandId::Solo),
-            )
-            .clicked()
+            if widgets::icon_button(ui, Icon::Solo, solo, ed.scene.pieces.len() > 1, &Cmd::Solo.tip_in(&ed.keymap))
+                .clicked()
             {
                 ed.solo_active();
             }
@@ -1312,13 +1263,21 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Transform").strong());
                         for m in GizmoMode::ALL {
-                            if ui.selectable_label(mode == m, m.label()).clicked() {
+                            let label = if m == GizmoMode::Move {
+                                tips::menu_text(m.label(), Cmd::GizmoMove)
+                            } else {
+                                m.label().to_owned()
+                            };
+                            if tips::hover(ui.selectable_label(mode == m, label), tips::gizmo_mode_tip(m)).clicked() {
                                 ed.gizmo = Some(m);
                             }
                         }
                         ui.separator();
-                        ui.label(RichText::new("Masked parts stay put").weak().small());
-                        if ui.button("Done").clicked() {
+                        tips::hover(
+                            ui.label(RichText::new("Masked parts stay put").weak().small()),
+                            plain::GIZMO_MASKED,
+                        );
+                        if tips::hover(ui.button("Done"), plain::GIZMO_DONE).clicked() {
                             ed.gizmo = None;
                         }
                     });
@@ -1365,6 +1324,15 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
     let hot = hover == Some(Handle::Center);
     painter.circle_filled(c, if hot { 8.0 } else { 6.5 }, if hot { Color32::WHITE } else { Color32::from_gray(225) });
     painter.circle_stroke(c, 9.0, EStroke::new(1.5, Color32::from_black_alpha(140)));
+    // Handles are drawn, not widgets. The same sentence shows while the pointer
+    // rests on one (a finger held still on a touch screen, or a mouse hover).
+    if let Some(handle) = hover {
+        let at = match handle {
+            Handle::Center => c,
+            Handle::Axis(i) => layout.axes[i].map(to_pt).unwrap_or(c),
+        };
+        tips::show_at(ctx, at, tips::gizmo_handle_tip(mode, handle));
+    }
 }
 
 /// Axis gizmo in the viewport corner: shows the orientation; click an axis
@@ -1415,7 +1383,8 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         {
             ed.view_from_axis(dir);
         }
-        response.on_hover_text("Click an axis to view from that side");
+        let tip = nearest.map(tips::axis_view_tip).unwrap_or(plain::AXIS_GIZMO);
+        tips::hover(response, tip);
     });
 }
 
@@ -1473,13 +1442,16 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
         ui.horizontal(|ui| {
             let m = &ed.scene.active().mesh;
             ui.label(RichText::new(&ed.scene.active().name).strong());
-            ui.label(format!("{} triangles", fmt_count(m.triangle_count()))).on_hover_text(format!(
-                "{} vertices\n{} triangles in the scene\nUndo memory {:.1} MB\nFrame time {:.1} ms",
-                fmt_count(m.vertex_count()),
-                fmt_count(ed.scene.triangle_count()),
-                ed.history.used_bytes() as f64 / 1e6,
-                ed.frame_ms
-            ));
+            tips::hover(
+                ui.label(format!("{} triangles", fmt_count(m.triangle_count()))),
+                format!(
+                    "{} vertices\n{} triangles in the scene\nUndo memory {:.1} MB\nFrame time {:.1} ms",
+                    fmt_count(m.vertex_count()),
+                    fmt_count(ed.scene.triangle_count()),
+                    ed.history.used_bytes() as f64 / 1e6,
+                    ed.frame_ms
+                ),
+            );
             ui.separator();
             if let Some(job) = &ed.job {
                 ui.spinner();
@@ -1491,11 +1463,7 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
             if ed.agent_connected {
                 let label = RichText::new("Agent connected — Disconnect").color(Color32::WHITE);
                 let button = egui::Button::new(label).fill(ACCENT);
-                if ui
-                    .add(button)
-                    .on_hover_text("An AI agent on this computer is editing the scene. Click to disconnect it. Your work stays; the token changes.")
-                    .clicked()
-                {
+                if tips::hover(ui.add(button), plain::AGENT_CONNECTED_DISCONNECT).clicked() {
                     ed.agent_disconnect = true;
                 }
             }
@@ -1506,7 +1474,7 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                     _ => format!("Update {} available", u.release.version),
                 };
                 let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.linear_multiply(0.8));
-                if ui.add(b).on_hover_text("Open the update details").clicked() {
+                if tips::hover(ui.add(b), plain::UPDATE_BUTTON).clicked() {
                     ed.updater.show_window = true;
                 }
             }
@@ -1516,7 +1484,7 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                 ui.label(RichText::new(context_hint(ed)).weak());
                 if ed.job.is_none() {
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                        ui.add(egui::Label::new(&ed.status).truncate()).on_hover_text(&ed.status);
+                        tips::hover(ui.add(egui::Label::new(&ed.status).truncate()), ed.status.clone());
                     });
                 }
             });
@@ -1528,12 +1496,12 @@ fn recent_menu(ui: &mut Ui, ed: &mut Editor) {
     let mut chosen = None;
     for p in &ed.recent_files {
         let name = p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
-        if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+        if tips::hover(ui.button(name), tips::recent_tip(p)).clicked() {
             chosen = Some(p.clone());
         }
     }
     ui.separator();
-    if ui.button("Clear list").clicked() {
+    if tips::hover(ui.button("Clear list"), plain::CLEAR_RECENT).clicked() {
         ed.recent_files.clear();
     }
     if let Some(p) = chosen {
@@ -1544,152 +1512,145 @@ fn recent_menu(ui: &mut Ui, ed: &mut Editor) {
 fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     use crate::support::{REPO_URL, folder_url};
     let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-    if ui.button(ml(ed, "Guide", CommandId::Guide)).on_hover_text("Built in and searchable; works offline").clicked() {
+    if tips::button_km(ui, &ed.keymap, "Guide", Cmd::Guide).clicked() {
         ed.guide.open = true;
     }
-    if ui.button(ml(ed, "Command palette", CommandId::CommandPalette)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Command palette", Cmd::Palette).clicked() {
         ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
     }
-    if ui.button("Welcome screen").clicked() {
+    if tips::button(ui, "Welcome screen", Cmd::Welcome).clicked() {
         ed.show_welcome = true;
     }
-    if ui.button(ml(ed, "Shortcuts", CommandId::Shortcuts)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Shortcuts", Cmd::Shortcuts).clicked() {
         ed.show_shortcuts = true;
     }
     ui.separator();
-    if ui.button("Report a bug…").on_hover_text("Opens a pre-filled GitHub issue form in your browser").clicked() {
+    if tips::hover(ui.button("Report a bug…"), plain::REPORT_BUG).clicked() {
         open(ui, ed.system_info.bug_report_url());
     }
-    if ui.button("Send feedback…").clicked() {
+    if tips::hover(ui.button("Send feedback…"), plain::FEEDBACK).clicked() {
         open(ui, ed.system_info.feedback_url());
     }
-    if ui.button("Copy system info").on_hover_text("Version, OS and GPU, for bug reports").clicked() {
+    if tips::hover(ui.button("Copy system info"), plain::COPY_INFO).clicked() {
         ui.ctx().copy_text(ed.system_info.text());
         ed.status = "System info copied to the clipboard".into();
     }
     let log_dir = ed.system_info.log_path.as_ref().and_then(|p| p.parent()).map(|p| p.to_path_buf());
-    if ui.add_enabled(log_dir.is_some(), egui::Button::new("Open log folder")).clicked()
+    if tips::hover(ui.add_enabled(log_dir.is_some(), egui::Button::new("Open log folder")), plain::OPEN_LOG).clicked()
         && let Some(dir) = log_dir
     {
         open(ui, folder_url(&dir));
     }
     ui.separator();
-    if ui.button("Check for updates…").clicked() {
+    if tips::button(ui, "Check for updates…", Cmd::CheckUpdates).clicked() {
         ed.updater.show_window = true;
         if !ed.updater.managed_by_flatpak() {
             ed.updater.check(crate::updates::now_secs());
         }
     }
-    if ui.button("Testing guide (online)").clicked() {
+    if tips::hover(ui.button("Testing guide (online)"), plain::TESTING_GUIDE).clicked() {
         open(ui, format!("{REPO_URL}/blob/main/docs/TESTING_GUIDE.md"));
     }
-    if ui.button("Changelog").clicked() {
+    if tips::hover(ui.button("Changelog"), plain::CHANGELOG).clicked() {
         open(ui, format!("{REPO_URL}/blob/main/CHANGELOG.md"));
     }
-    if ui.button("About OxyBrush").clicked() {
+    if tips::hover(ui.button("About OxyBrush"), plain::ABOUT).clicked() {
         ed.show_about = true;
     }
 }
 
 fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    ui.menu_button("Add", |ui| {
-        for (label, which) in [("Sphere", "sphere"), ("Cube", "cube"), ("Plane", "plane")] {
-            if ui.button(label).clicked() {
+    tips::menu(ui, "Add", plain::ADD, |ui| {
+        for (label, which, cmd) in
+            [("Sphere", "sphere", Cmd::AddSphere), ("Cube", "cube", Cmd::AddCube), ("Plane", "plane", Cmd::AddPlane)]
+        {
+            if tips::button(ui, label, cmd).clicked() {
                 ed.add_primitive(which);
             }
         }
     });
-    if ui.button("Duplicate").clicked() {
+    if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
         ed.duplicate_active(false);
     }
-    if ui.button("Mirror duplicate (X)").clicked() {
+    if tips::button(ui, "Mirror duplicate (X)", Cmd::MirrorDuplicate).clicked() {
         ed.duplicate_active(true);
     }
-    if ui.add_enabled(ed.scene.pieces.len() > 1, egui::Button::new("Delete")).clicked() {
+    if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
         ed.delete_active();
     }
-    if ui.button(ml(ed, "Solo / show all", CommandId::Solo)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Solo / show all", Cmd::Solo).clicked() {
         ed.solo_active();
     }
     ui.separator();
-    if ui.button("Split by face groups").on_hover_text("One piece per face group (undoable)").clicked() {
+    if tips::button(ui, "Split by face groups", Cmd::SplitGroups).clicked() {
         ed.split_active(false);
     }
-    if ui.button("Split into loose parts").on_hover_text("One piece per separate surface (undoable)").clicked() {
+    if tips::button(ui, "Split into loose parts", Cmd::SplitLoose).clicked() {
         ed.split_active(true);
     }
-    if ui
-        .add_enabled(!busy, egui::Button::new("Make LOD chain"))
-        .on_hover_text("Add 3 lighter copies (1/2, 1/4 and 1/8 of the triangles) for games and engines")
-        .clicked()
-    {
+    if tips::button_on(ui, !busy, "Make LOD chain", Cmd::Lod).clicked() {
         ed.make_lod_chain(3);
     }
     ui.separator();
-    if ui
-        .add_enabled(!busy, egui::Button::new("Merge visible (remesh)"))
-        .on_hover_text("Voxel-remesh all visible pieces into the active one")
-        .clicked()
-    {
+    if tips::button_on(ui, !busy, "Merge visible (remesh)", Cmd::Merge).clicked() {
         ed.merge_visible();
     }
 }
 
 fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.label(RichText::new("Subdivision levels").weak());
-    if ui.button(ml(ed, "Add level", CommandId::AddLevel)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Add level", Cmd::AddLevel).clicked() {
         ed.add_level();
     }
     let levels = ed.multires_level();
-    if ui
-        .add_enabled(levels.is_some_and(|(a, c)| a + 1 < c), egui::Button::new(ml(ed, "Level up", CommandId::LevelUp)))
-        .clicked()
-    {
+    if tips::button_on_km(ui, &ed.keymap, levels.is_some_and(|(a, c)| a + 1 < c), "Level up", Cmd::LevelUp).clicked() {
         ed.step_level(1);
     }
-    if ui
-        .add_enabled(levels.is_some_and(|(a, _)| a > 0), egui::Button::new(ml(ed, "Level down", CommandId::LevelDown)))
-        .clicked()
-    {
+    if tips::button_on_km(ui, &ed.keymap, levels.is_some_and(|(a, _)| a > 0), "Level down", Cmd::LevelDown).clicked() {
         ed.step_level(-1);
     }
-    if ui.add_enabled(levels.is_some_and(|(a, c)| a + 1 < c), egui::Button::new("Delete higher levels")).clicked() {
+    if tips::button_on(ui, levels.is_some_and(|(a, c)| a + 1 < c), "Delete higher levels", Cmd::DeleteHigher).clicked()
+    {
         ed.delete_higher_levels();
     }
-    if ui.add_enabled(levels.is_some_and(|(a, _)| a > 0), egui::Button::new("Delete lower levels")).clicked() {
+    if tips::button_on(ui, levels.is_some_and(|(a, _)| a > 0), "Delete lower levels", Cmd::DeleteLower).clicked() {
         ed.delete_lower_levels();
     }
     ui.separator();
-    if ui
-        .button("Subdivide (single mesh)")
-        .on_hover_text("Smooth subdivision without levels; removes existing levels")
-        .clicked()
-    {
+    if tips::button(ui, "Subdivide (single mesh)", Cmd::SubdivideOnce).clicked() {
         ed.subdivide(true);
     }
     ui.separator();
-    if ui.add_enabled(!busy, egui::Button::new(ml(ed, "Voxel remesh", CommandId::Remesh))).clicked() {
+    if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
     }
-    if ui.add_enabled(!busy, egui::Button::new("Decimate")).clicked() {
+    if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
     ui.separator();
-    if ui.button("Delete hidden").clicked() {
+    if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
     }
     ui.separator();
-    ui.menu_button("Vertex color", |ui| {
-        if ui.button("Paint brush").clicked() {
+    tips::menu(ui, "Vertex color", plain::VERTEX_COLOR, |ui| {
+        if tips::button(ui, "Paint brush", Cmd::PaintBrush).clicked() {
             ed.brush_kind = BrushKind::Paint;
         }
         color_actions(ui, ed);
     });
-    ui.menu_button("Transform", |ui| {
+    tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
         for m in GizmoMode::ALL {
-            let label =
-                if m == GizmoMode::Move { ml(ed, m.label(), CommandId::GizmoCycle) } else { m.label().to_owned() };
-            if ui.selectable_label(ed.gizmo == Some(m), label).clicked() {
+            let cmd = match m {
+                GizmoMode::Move => Cmd::GizmoMove,
+                GizmoMode::Rotate => Cmd::GizmoRotate,
+                GizmoMode::Scale => Cmd::GizmoScale,
+            };
+            if tips::hover(
+                ui.selectable_label(ed.gizmo == Some(m), tips::menu_text_km(&ed.keymap, m.label(), cmd)),
+                cmd.tip_in(&ed.keymap),
+            )
+            .clicked()
+            {
                 ed.toggle_gizmo(m);
             }
         }
@@ -1697,29 +1658,30 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 }
 
 fn group_actions(ui: &mut Ui, ed: &mut Editor) {
-    if ui.button(ml(ed, "Group visible", CommandId::GroupVisible)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Group visible", Cmd::GroupVisible).clicked() {
         ed.edit_faces("Group visible", Mesh::group_visible);
     }
-    if ui.button("Group from mask").clicked() {
+    if tips::button(ui, "Group from mask", Cmd::GroupFromMask).clicked() {
         ed.edit_faces("Group from mask", Mesh::group_from_mask);
     }
-    if ui.button("Group by islands").clicked() {
+    if tips::button(ui, "Group by islands", Cmd::GroupIslands).clicked() {
         ed.edit_faces("Group by islands", Mesh::groups_from_islands);
     }
-    if ui.button("Clear groups").clicked() {
+    if tips::button(ui, "Clear groups", Cmd::ClearGroups).clicked() {
         ed.edit_faces("Clear groups", |m| m.set_groups(vec![0; m.triangle_count()]));
     }
     ui.separator();
-    if ui.button(format!("Show all  ({}+{}+click empty)", ed.keymap.mask.label(), ed.keymap.smooth.label())).clicked() {
+    let show_all_label = format!("Show all  ({}+{}+click empty)", ed.keymap.mask.label(), ed.keymap.smooth.label());
+    if tips::hover(ui.button(show_all_label), Cmd::ShowAll.tip_in(&ed.keymap)).clicked() {
         ed.edit_faces("Show all", Mesh::show_all);
     }
-    if ui.button("Invert visibility").clicked() {
+    if tips::button(ui, "Invert visibility", Cmd::InvertVisibility).clicked() {
         ed.edit_faces("Invert visibility", Mesh::invert_visibility);
     }
-    if ui.button("Grow visible").clicked() {
+    if tips::button(ui, "Grow visible", Cmd::GrowVisible).clicked() {
         ed.edit_faces("Grow visible", |m| m.grow_visible(true));
     }
-    if ui.button("Shrink visible").clicked() {
+    if tips::button(ui, "Shrink visible", Cmd::ShrinkVisible).clicked() {
         ed.edit_faces("Shrink visible", |m| m.grow_visible(false));
     }
     ui.separator();
@@ -1731,8 +1693,8 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// Small plot of the pressure response curve.
-fn pressure_curve_plot(ui: &mut Ui, gamma: f32) {
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(36.0, 24.0), egui::Sense::hover());
+fn pressure_curve_plot(ui: &mut Ui, gamma: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(36.0, 24.0), egui::Sense::hover());
     let p = ui.painter();
     p.rect_stroke(rect, 2.0, EStroke::new(1.0, Color32::from_gray(80)), egui::StrokeKind::Inside);
     let pts: Vec<egui::Pos2> = (0..=16)
@@ -1742,6 +1704,7 @@ fn pressure_curve_plot(ui: &mut Ui, gamma: f32) {
         })
         .collect();
     p.add(egui::Shape::line(pts, EStroke::new(1.5, ACCENT)));
+    response
 }
 
 /// Preview of an alpha (texture cached per alpha name).
@@ -1753,44 +1716,53 @@ fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha) {
         ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
         t
     });
-    ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0))));
+    tips::hover(ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0)))), tips::alpha_tip(&alpha.name));
 }
 
 fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
-    if ui.button(ml(ed, "Invert", CommandId::InvertMask)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Invert", Cmd::InvertMask).clicked() {
         ed.invert_mask();
     }
-    if ui.button(ml(ed, "Clear", CommandId::ClearMask)).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Clear", Cmd::ClearMask).clicked() {
         ed.clear_mask();
     }
     ui.separator();
-    if ui.button(format!("Blur  ({}+click empty space)", ed.keymap.mask.label())).clicked() {
+    let blur_label = format!("Blur  ({}+click empty space)", ed.keymap.mask.label());
+    if tips::hover(ui.button(blur_label), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
         ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
     }
-    if ui.button("Sharpen").clicked() {
+    if tips::button(ui, "Sharpen", Cmd::SharpenMask).clicked() {
         ed.edit_mesh_mask("Sharpen mask", Mesh::sharpen_mask);
     }
-    if ui.button("Grow").clicked() {
+    if tips::button(ui, "Grow", Cmd::GrowMask).clicked() {
         ed.edit_mesh_mask("Grow mask", |m| m.grow_mask(true));
     }
-    if ui.button("Shrink").clicked() {
+    if tips::button(ui, "Shrink", Cmd::ShrinkMask).clicked() {
         ed.edit_mesh_mask("Shrink mask", |m| m.grow_mask(false));
     }
     ui.separator();
-    if ui.button("Mask cavities").on_hover_text("Mask concave areas: creases, pores, crevices").clicked() {
+    if tips::button(ui, "Mask cavities", Cmd::MaskCavities).clicked() {
         ed.edit_mesh_mask("Mask cavities", |m| m.mask_by_curvature(true));
     }
-    if ui.button("Mask peaks").on_hover_text("Mask convex areas: ridges and edges").clicked() {
+    if tips::button(ui, "Mask peaks", Cmd::MaskPeaks).clicked() {
         ed.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false));
     }
-    ui.label(
-        RichText::new(format!("Mask a face group: point at it and press {}", ed.keymap.primary(CommandId::MaskGroup)))
-            .weak()
-            .small(),
+    tips::hover(
+        ui.add(
+            egui::Label::new(
+                RichText::new(format!(
+                    "Mask a face group: point at it and press {}",
+                    ed.keymap.primary(CommandId::MaskGroup)
+                ))
+                .weak()
+                .small(),
+            )
+            .sense(egui::Sense::click()),
+        ),
+        Cmd::MaskGroup.tip_in(&ed.keymap),
     );
     ui.separator();
-    let show_mask = ml(ed, "Show mask", CommandId::ShowMask);
-    ui.checkbox(&mut ed.view.show_mask, show_mask);
+    tips::check_km(ui, &ed.keymap, &mut ed.view.show_mask, "Show mask", Cmd::ShowMask);
     let empty = if ed.keymap.mask_empty == keymap::MaskEmpty::Clear {
         format!(
             "{}+click on empty space: invert the mask\n{}+drag on empty space: clear the mask",
@@ -1810,19 +1782,19 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
 
 fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.add_space(4.0);
-    widgets::section(ui, "Pieces", true, |ui| pieces_section(ui, ed, busy));
+    widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
     let brush_title = format!("{} brush", ed.brush_kind.label());
-    widgets::section(ui, &brush_title, true, |ui| brush_section(ui, ed));
-    widgets::section(ui, "Stroke", false, |ui| stroke_section(ui, ed));
+    widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
+    widgets::section(ui, "Stroke", plain::SECTION_STROKE, false, |ui| stroke_section(ui, ed));
     let alpha_title = match ed.alpha.and_then(|i| ed.alphas.get(i)) {
         Some(a) => format!("Alpha: {}", a.name),
         None => "Alpha".into(),
     };
-    widgets::section(ui, &alpha_title, false, |ui| alpha_section(ui, ed));
-    widgets::section(ui, "Symmetry", false, |ui| symmetry_section(ui, ed));
-    widgets::section(ui, "Topology", true, |ui| topology_section(ui, ed, busy));
-    widgets::section(ui, "Groups & mask", false, |ui| groups_section(ui, ed));
-    widgets::section(ui, "History", false, |ui| history_section(ui, ed));
+    widgets::section(ui, &alpha_title, plain::SECTION_ALPHA, false, |ui| alpha_section(ui, ed));
+    widgets::section(ui, "Symmetry", plain::SECTION_SYMMETRY, false, |ui| symmetry_section(ui, ed));
+    widgets::section(ui, "Topology", plain::SECTION_TOPOLOGY, true, |ui| topology_section(ui, ed, busy));
+    widgets::section(ui, "Groups & mask", plain::SECTION_GROUPS, false, |ui| groups_section(ui, ed));
+    widgets::section(ui, "History", plain::SECTION_HISTORY, false, |ui| history_section(ui, ed));
 }
 
 fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
@@ -1832,17 +1804,17 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         let fill = if i == active { ACCENT.linear_multiply(0.18) } else { Color32::TRANSPARENT };
         egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                let (icon, tip) = if p.visible { (Icon::Eye, "Hide piece") } else { (Icon::EyeOff, "Show piece") };
+                let (icon, tip) =
+                    if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
                 if widgets::icon_button(ui, icon, false, true, tip).clicked() {
                     p.visible = !p.visible;
                 }
                 if i == active {
-                    ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0))
-                        .on_hover_text("Active piece: click to rename");
-                } else if ui
-                    .add(egui::Button::selectable(false, &p.name))
-                    .on_hover_text("Make active (or Alt+click it in the viewport)")
-                    .clicked()
+                    tips::hover(
+                        ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
+                        plain::PIECE_RENAME,
+                    );
+                } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE).clicked()
                 {
                     select = Some(i);
                 }
@@ -1854,26 +1826,24 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.scene.set_active(i);
     }
     ui.horizontal_wrapped(|ui| {
-        ui.menu_button("+ Add", |ui| {
-            for (label, which) in [("Sphere", "sphere"), ("Cube", "cube"), ("Plane", "plane")] {
-                if ui.button(label).clicked() {
+        tips::menu(ui, "+ Add", plain::ADD, |ui| {
+            for (label, which, cmd) in [
+                ("Sphere", "sphere", Cmd::AddSphere),
+                ("Cube", "cube", Cmd::AddCube),
+                ("Plane", "plane", Cmd::AddPlane),
+            ] {
+                if tips::button(ui, label, cmd).clicked() {
                     ed.add_primitive(which);
                 }
             }
-        })
-        .response
-        .on_hover_text("Add a new piece");
-        if ui.button("Duplicate").clicked() {
+        });
+        if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
             ed.duplicate_active(false);
         }
-        if ui.add_enabled(ed.scene.pieces.len() > 1, egui::Button::new("Delete")).clicked() {
+        if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
             ed.delete_active();
         }
-        if ui
-            .add_enabled(!busy && ed.scene.pieces.len() > 1, egui::Button::new("Merge"))
-            .on_hover_text("Voxel-remesh all visible pieces into the active one")
-            .clicked()
-        {
+        if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Merge", Cmd::Merge).clicked() {
             ed.merge_visible();
         }
     });
@@ -1896,25 +1866,19 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
         ui.horizontal(|ui| {
             let t = widgets::brush_texture(&ctx, p.kind);
             ui.add(egui::Image::new((t.id(), egui::vec2(24.0, 24.0))));
-            let tip = format!(
-                "{} brush, radius {:.0} pt, strength {:.2}{}",
-                p.kind.label(),
-                p.radius_pt,
-                p.strength,
-                p.alpha.as_ref().map_or(String::new(), |a| format!(", alpha {a}"))
-            );
-            let r = ui.add(egui::Button::selectable(false, &p.name)).on_hover_text(tip);
+            let tip = tips::preset_tip(p.kind.label(), p.radius_pt, p.strength, p.alpha.as_deref());
+            let r = tips::hover(ui.add(egui::Button::selectable(false, &p.name)), tip);
             if r.clicked() {
                 *apply = Some(p.clone());
             }
             r.context_menu(|ui| {
-                if ui.button("Copy brush code").clicked() {
+                if tips::hover(ui.button("Copy brush code"), plain::PRESET_COPY).clicked() {
                     *copy = Some(p.to_code());
                 }
-                if ui.button("Export to a file…").clicked() {
+                if tips::hover(ui.button("Export to a file…"), plain::PRESET_EXPORT).clicked() {
                     ed.request_export_preset = Some(p.clone());
                 }
-                if user && ui.button("Delete").clicked() {
+                if user && tips::hover(ui.button("Delete"), plain::PRESET_DELETE).clicked() {
                     *delete = Some(p.name.clone());
                 }
             });
@@ -1942,23 +1906,38 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
     let mut name: String = ui.data_mut(|d| d.get_temp(name_id)).unwrap_or_default();
     let mut code: String = ui.data_mut(|d| d.get_temp(code_id)).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0));
-        if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save current brush")).clicked() {
+        tips::hover(
+            ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0)),
+            plain::PRESET_NAME,
+        );
+        if tips::hover(
+            ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save current brush")),
+            plain::PRESET_SAVE,
+        )
+        .clicked()
+        {
             ed.save_preset(&name);
             name.clear();
         }
     });
     ui.horizontal(|ui| {
-        ui.add(egui::TextEdit::singleline(&mut code).hint_text("Paste a brush code (oxyb1:…)").desired_width(150.0));
-        if ui.add_enabled(!code.trim().is_empty(), egui::Button::new("Add")).clicked() && ed.paste_preset_code(&code) {
+        tips::hover(
+            ui.add(
+                egui::TextEdit::singleline(&mut code).hint_text("Paste a brush code (oxyb1:…)").desired_width(150.0),
+            ),
+            plain::PRESET_CODE,
+        );
+        if tips::hover(ui.add_enabled(!code.trim().is_empty(), egui::Button::new("Add")), plain::PRESET_ADD).clicked()
+            && ed.paste_preset_code(&code)
+        {
             code.clear();
         }
     });
     ui.horizontal(|ui| {
-        if ui.button("Import file…").clicked() {
+        if tips::hover(ui.button("Import file…"), plain::PRESET_IMPORT).clicked() {
             ed.request_import_preset = true;
         }
-        if ui.button("Copy current as code").on_hover_text("Share this brush as one line of text").clicked() {
+        if tips::hover(ui.button("Copy current as code"), plain::PRESET_COPY).clicked() {
             copy = Some(ed.capture_preset(ed.brush_kind.label()).to_code());
         }
     });
@@ -1979,7 +1958,7 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn brush_section(ui: &mut Ui, ed: &mut Editor) {
-    let r = ui.button("Presets…").on_hover_text("Saved brushes: use, save, share as a code or file");
+    let r = tips::hover(ui.button("Presets…"), plain::PRESETS);
     egui::Popup::from_toggle_button_response(&r)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| presets_popup(ui, ed));
@@ -1987,47 +1966,48 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     ui.add_space(2.0);
     egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Radius");
-        ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt"))
-            .on_hover_text("Brush size on screen  ([ and ])");
+        tips::hover(
+            ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt")),
+            Cmd::Radius.tip(),
+        );
         ui.end_row();
         ui.label("Strength");
         let k = ed.brush_kind;
-        ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)).on_hover_text("How strong each dab is  (- and =)");
+        tips::hover(ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)), Cmd::Strength.tip());
         ui.end_row();
         ui.label("Falloff");
-        egui::ComboBox::from_id_salt("falloff")
-            .selected_text(ed.falloff.label())
-            .show_ui(ui, |ui| {
-                for f in Falloff::ALL {
-                    ui.selectable_value(&mut ed.falloff, f, f.label());
-                }
-            })
-            .response
-            .on_hover_text("How the effect fades from the center of the brush to its edge");
+        tips::hover(
+            egui::ComboBox::from_id_salt("falloff")
+                .selected_text(ed.falloff.label())
+                .show_ui(ui, |ui| {
+                    for f in Falloff::ALL {
+                        tips::hover(ui.selectable_value(&mut ed.falloff, f, f.label()), tips::falloff_tip(f));
+                    }
+                })
+                .response,
+            plain::FALLOFF,
+        );
         ui.end_row();
         ui.label("Spacing");
-        ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0))
-            .on_hover_text("Distance between dabs, as a fraction of the radius. Lower is smoother.");
+        tips::hover(ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0)), plain::SPACING);
         ui.end_row();
         ui.label("Auto smooth");
-        ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0)).on_hover_text("Smooth a little after every dab");
+        tips::hover(ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0)), plain::AUTO_SMOOTH);
         ui.end_row();
         if ed.brush_kind == BrushKind::Grab {
             ui.label("Grab through");
-            ui.checkbox(&mut ed.grab_through, "Whole depth")
-                .on_hover_text("Move everything under the brush circle, front to back, not just the surface you click");
+            tips::check_plain(ui, &mut ed.grab_through, "Whole depth", plain::GRAB_THROUGH);
             ui.end_row();
         }
         if ed.brush_kind == BrushKind::Noise {
             ui.label("Noise scale");
-            ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)).on_hover_text("Size of the noise pattern");
+            tips::hover(ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)), plain::NOISE);
             ui.end_row();
         }
     });
-    ui.checkbox(&mut ed.pressure_strength, "Pen pressure sets strength");
-    ui.checkbox(&mut ed.pressure_radius, "Pen pressure sets radius");
-    ui.checkbox(&mut ed.front_faces_only, "Front faces only")
-        .on_hover_text("Don't affect surfaces facing away from you (e.g. the back of a thin part)");
+    tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
+    tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
+    tips::check_plain(ui, &mut ed.front_faces_only, "Front faces only", plain::FRONT_FACES);
     if ed.brush_kind == BrushKind::Paint {
         ui.separator();
         paint_controls(ui, ed);
@@ -2052,18 +2032,18 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Color");
         let p = ed.paint_color;
         let mut c = [p.x, p.y, p.z].map(|x| (x.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if ui.color_edit_button_srgb(&mut c).changed() {
+        if tips::hover(ui.color_edit_button_srgb(&mut c), plain::PAINT_COLOR).changed() {
             ed.paint_color = Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32) / 255.0;
         }
-        for s in SWATCHES {
+        for (i, s) in SWATCHES.iter().enumerate() {
             let col = Color32::from_rgb((s[0] * 255.0) as u8, (s[1] * 255.0) as u8, (s[2] * 255.0) as u8);
             let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
             ui.painter().rect_filled(rect, 3.0, col);
-            if ed.paint_color.to_array() == s {
+            if ed.paint_color.to_array() == *s {
                 ui.painter().rect_stroke(rect.expand(1.5), 3.0, EStroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
             }
-            if r.clicked() {
-                ed.paint_color = s.into();
+            if tips::hover(r, tips::swatch_tip(tips::SWATCH_NAMES[i])).clicked() {
+                ed.paint_color = (*s).into();
             }
         }
     });
@@ -2075,20 +2055,16 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
 fn color_actions(ui: &mut Ui, ed: &mut Editor) {
     let c = ed.paint_color;
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Fill").on_hover_text("Paint everything that isn't masked").clicked() {
+        if tips::button(ui, "Fill", Cmd::FillColor).clicked() {
             ed.edit_color("Fill color", |m| m.fill_color(c, 1.0));
         }
-        if ui
-            .button("Fill cavities")
-            .on_hover_text("Paint creases, pores and folds, more where they are deeper")
-            .clicked()
-        {
+        if tips::button(ui, "Fill cavities", Cmd::FillCavities).clicked() {
             ed.edit_color("Fill cavities", |m| m.fill_color_by_curvature(c, 1.0, true));
         }
-        if ui.button("Fill peaks").on_hover_text("Paint ridges and edges, e.g. for worn highlights").clicked() {
+        if tips::button(ui, "Fill peaks", Cmd::FillPeaks).clicked() {
             ed.edit_color("Fill peaks", |m| m.fill_color_by_curvature(c, 1.0, false));
         }
-        if ui.button("Clear color").on_hover_text("Back to unpainted (masked areas are kept)").clicked() {
+        if tips::button(ui, "Clear color", Cmd::ClearColor).clicked() {
             ed.edit_color("Clear color", Mesh::clear_color);
         }
     });
@@ -2097,29 +2073,31 @@ fn color_actions(ui: &mut Ui, ed: &mut Editor) {
 fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
     egui::Grid::new("stroke").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Mode");
-        egui::ComboBox::from_id_salt("stroke_mode")
-            .selected_text(ed.stroke_mode.label())
-            .show_ui(ui, |ui| {
-                for m in StrokeMode::ALL {
-                    ui.selectable_value(&mut ed.stroke_mode, m, m.label());
-                }
-            })
-            .response
-            .on_hover_text("Freehand: paint. Line: drag a straight line. Stamp: drag out a single dab.");
+        tips::hover(
+            egui::ComboBox::from_id_salt("stroke_mode")
+                .selected_text(ed.stroke_mode.label())
+                .show_ui(ui, |ui| {
+                    for m in StrokeMode::ALL {
+                        tips::hover(ui.selectable_value(&mut ed.stroke_mode, m, m.label()), tips::stroke_tip(m));
+                    }
+                })
+                .response,
+            plain::STROKE_MODE,
+        );
         ui.end_row();
         ui.label("Stabilizer");
-        ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt"))
-            .on_hover_text("Lazy mouse: the brush trails the cursor on a string for smooth lines (0 = off)");
+        tips::hover(ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt")), plain::STABILIZER);
         ui.end_row();
         ui.label("Spray");
-        ui.add(egui::Slider::new(&mut ed.spray, 0.0..=1.0))
-            .on_hover_text("Scatter dab position, rotation and strength");
+        tips::hover(ui.add(egui::Slider::new(&mut ed.spray, 0.0..=1.0)), plain::SPRAY);
         ui.end_row();
         ui.label("Pressure curve");
         ui.horizontal(|ui| {
-            ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))
-                .on_hover_text("Below 1: soft (light touch goes further). Above 1: firm.");
-            pressure_curve_plot(ui, ed.pressure_gamma);
+            tips::hover(
+                ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true)),
+                plain::PRESSURE_CURVE,
+            );
+            tips::hover(pressure_curve_plot(ui, ed.pressure_gamma), plain::PRESSURE_CURVE);
         });
         ui.end_row();
     });
@@ -2128,13 +2106,20 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
 fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
     let current = ed.alpha.and_then(|i| ed.alphas.get(i)).map_or("None".to_string(), |a| a.name.clone());
     ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("alpha").selected_text(current).show_ui(ui, |ui| {
-            ui.selectable_value(&mut ed.alpha, None, "None");
-            for (i, a) in ed.alphas.iter().enumerate() {
-                ui.selectable_value(&mut ed.alpha, Some(i), a.name.as_str());
-            }
-        });
-        if ui.button("Load image…").on_hover_text("Grayscale PNG: white = full strength").clicked() {
+        tips::hover(
+            egui::ComboBox::from_id_salt("alpha")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    tips::hover(ui.selectable_value(&mut ed.alpha, None, "None"), tips::alpha_tip("None"));
+                    for (i, a) in ed.alphas.iter().enumerate() {
+                        let tip = tips::alpha_tip(&a.name);
+                        tips::hover(ui.selectable_value(&mut ed.alpha, Some(i), a.name.as_str()), tip);
+                    }
+                })
+                .response,
+            plain::ALPHA_MENU,
+        );
+        if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
             ed.request_load_alpha = true;
         }
     });
@@ -2143,8 +2128,13 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
             ui.horizontal(|ui| {
                 alpha_thumbnail(ui, &a);
                 ui.vertical(|ui| {
-                    ui.add(egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"));
-                    ui.checkbox(&mut ed.alpha_follow_stroke, "Follow stroke direction");
+                    tips::hover(
+                        ui.add(
+                            egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"),
+                        ),
+                        plain::ALPHA_ROTATION,
+                    );
+                    tips::check_plain(ui, &mut ed.alpha_follow_stroke, "Follow stroke direction", plain::ALPHA_FOLLOW);
                     ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
                 });
             });
@@ -2162,22 +2152,27 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
 fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
     ui.horizontal(|ui| {
         ui.label("Mirror");
-        let sym = tp(ed, "Mirror strokes across X (left/right)", CommandId::SymmetryX);
-        widgets::chip(ui, &mut ed.symmetry.x, "X", &sym);
-        widgets::chip(ui, &mut ed.symmetry.y, "Y", "Mirror strokes across Y (top/bottom)");
-        widgets::chip(ui, &mut ed.symmetry.z, "Z", "Mirror strokes across Z (front/back)");
+        widgets::chip(ui, &mut ed.symmetry.x, "X", &Cmd::SymX.tip_in(&ed.keymap));
+        widgets::chip(ui, &mut ed.symmetry.y, "Y", &Cmd::SymY.tip_in(&ed.keymap));
+        widgets::chip(ui, &mut ed.symmetry.z, "Z", &Cmd::SymZ.tip_in(&ed.keymap));
     });
     ui.horizontal(|ui| {
         ui.label("Radial");
-        ui.add(egui::DragValue::new(&mut ed.symmetry.radial).range(0..=64).speed(0.1))
-            .on_hover_text("Number of copies around the axis (0 = off). Great for flowers, wheels, crowns.");
-        egui::ComboBox::from_id_salt("radial_axis")
-            .selected_text(format!("{:?} axis", ed.symmetry.radial_axis))
-            .show_ui(ui, |ui| {
-                for a in [Axis::X, Axis::Y, Axis::Z] {
-                    ui.selectable_value(&mut ed.symmetry.radial_axis, a, format!("{a:?} axis"));
-                }
-            });
+        tips::hover(ui.add(egui::DragValue::new(&mut ed.symmetry.radial).range(0..=64).speed(0.1)), plain::RADIAL);
+        tips::hover(
+            egui::ComboBox::from_id_salt("radial_axis")
+                .selected_text(format!("{:?} axis", ed.symmetry.radial_axis))
+                .show_ui(ui, |ui| {
+                    for a in [Axis::X, Axis::Y, Axis::Z] {
+                        tips::hover(
+                            ui.selectable_value(&mut ed.symmetry.radial_axis, a, format!("{a:?} axis")),
+                            plain::RADIAL_AXIS,
+                        );
+                    }
+                })
+                .response,
+            plain::RADIAL_AXIS,
+        );
     });
 }
 
@@ -2186,13 +2181,11 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.horizontal(|ui| {
         match ed.multires_level() {
             Some((a, c)) => {
-                ui.label(format!("Level {} of {c}", a + 1));
-                let down_tip = tp(ed, "Level down", CommandId::LevelDown);
-                if widgets::icon_button(ui, Icon::Down, false, a > 0, &down_tip).clicked() {
+                tips::hover(ui.label(format!("Level {} of {c}", a + 1)), plain::LEVELS);
+                if widgets::icon_button(ui, Icon::Down, false, a > 0, &Cmd::LevelDown.tip_in(&ed.keymap)).clicked() {
                     ed.step_level(-1);
                 }
-                let up_tip = tp(ed, "Level up", CommandId::LevelUp);
-                if widgets::icon_button(ui, Icon::Up, false, a + 1 < c, &up_tip).clicked() {
+                if widgets::icon_button(ui, Icon::Up, false, a + 1 < c, &Cmd::LevelUp.tip_in(&ed.keymap)).clicked() {
                     ed.step_level(1);
                 }
             }
@@ -2200,11 +2193,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ui.label(RichText::new("None yet").weak());
             }
         }
-        if ui
-            .button("+ Level")
-            .on_hover_text(tp(ed, "Add a subdivision level for finer detail", CommandId::AddLevel))
-            .clicked()
-        {
+        if tips::button_km(ui, &ed.keymap, "+ Level", Cmd::AddLevel).clicked() {
             ed.add_level();
         }
     });
@@ -2212,61 +2201,48 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.label(RichText::new("Rebuild").small().weak());
     ui.horizontal(|ui| {
         ui.label("Resolution");
-        ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION))
-            .on_hover_text("Voxel grid size for remeshing: higher keeps more detail");
+        tips::hover(
+            ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION)),
+            plain::REMESH_RES,
+        );
     });
     ui.horizontal_wrapped(|ui| {
-        if ui
-            .add_enabled(!busy, egui::Button::new("Remesh"))
-            .on_hover_text(tp(ed, "Rebuild clean, even triangles. Removes subdivision levels.", CommandId::Remesh))
-            .clicked()
-        {
+        if tips::button_on_km(ui, &ed.keymap, !busy, "Remesh", Cmd::Remesh).clicked() {
             ed.remesh_active();
         }
-        if ui
-            .button("Subdivide once")
-            .on_hover_text("Smooth subdivision without levels (removes existing levels). For levels use + Level.")
-            .clicked()
-        {
+        if tips::button(ui, "Subdivide once", Cmd::SubdivideOnce).clicked() {
             ed.subdivide(true);
         }
     });
     ui.horizontal(|ui| {
         ui.label("Keep");
-        ui.add(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))
-            .on_hover_text("Share of triangles to keep when decimating");
-        if ui
-            .add_enabled(!busy, egui::Button::new("Decimate"))
-            .on_hover_text("Reduce the triangle count while keeping the shape (e.g. before export)")
-            .clicked()
-        {
+        tips::hover(ui.add(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %")), plain::KEEP);
+        if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
             ed.decimate_active();
         }
     });
 }
 
 fn groups_section(ui: &mut Ui, ed: &mut Editor) {
-    let show_groups = ml(ed, "Show face group colors", CommandId::ShowGroups);
-    let show_mask = ml(ed, "Show mask", CommandId::ShowMask);
-    ui.checkbox(&mut ed.view.show_groups, show_groups);
-    ui.checkbox(&mut ed.view.show_mask, show_mask);
+    tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Show face group colors", Cmd::GroupColors);
+    tips::check_km(ui, &ed.keymap, &mut ed.view.show_mask, "Show mask", Cmd::ShowMask);
     ui.horizontal(|ui| {
         ui.label("Selection");
-        ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle");
-        ui.selectable_value(&mut ed.selection_lasso, true, "Lasso");
-        widgets::keycap(ui, "L");
+        tips::hover(ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle"), plain::SELECTION_RECT);
+        tips::hover(ui.selectable_value(&mut ed.selection_lasso, true, "Lasso"), Cmd::Lasso.tip());
+        widgets::keycap(ui, Cmd::Lasso.shortcut());
     });
     ui.horizontal_wrapped(|ui| {
-        if ui.button("Group visible").clicked() {
+        if tips::button(ui, "Group visible", Cmd::GroupVisible).clicked() {
             ed.edit_faces("Group visible", Mesh::group_visible);
         }
-        if ui.button("Show all").clicked() {
+        if tips::button(ui, "Show all", Cmd::ShowAll).clicked() {
             ed.edit_faces("Show all", Mesh::show_all);
         }
-        if ui.button("Invert mask").clicked() {
+        if tips::button(ui, "Invert mask", Cmd::InvertMask).clicked() {
             ed.invert_mask();
         }
-        if ui.button("Clear mask").clicked() {
+        if tips::button(ui, "Clear mask", Cmd::ClearMask).clicked() {
             ed.clear_mask();
         }
     });
@@ -2311,7 +2287,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         ui.heading(format!("OxyBrush {}", env!("CARGO_PKG_VERSION")));
         ui.label("An open-source digital sculpting application written in Rust.");
         ui.label("Licensed under MIT OR Apache-2.0.");
-        ui.hyperlink(crate::support::REPO_URL);
+        tips::hover(ui.hyperlink(crate::support::REPO_URL), plain::REPO);
         ui.add_space(6.0);
         ui.label(
             RichText::new(
@@ -2333,7 +2309,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 ui.end_row();
             }
         });
-        if ui.button("Copy system info").clicked() {
+        if tips::hover(ui.button("Copy system info"), plain::COPY_INFO).clicked() {
             ui.ctx().copy_text(info.text());
             copied = true;
         }
@@ -2368,13 +2344,13 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             ui.label(format!("Save your changes before {what}?"));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Save").clicked() {
+                if tips::hover(ui.button("Save"), plain::UNSAVED_SAVE).clicked() {
                     *action = Some(UiAction::SaveThenContinue);
                 }
-                if ui.button("Don't save").clicked() {
+                if tips::hover(ui.button("Don't save"), plain::UNSAVED_DISCARD).clicked() {
                     ed.perform(pending.clone());
                 }
-                if ui.button("Cancel").clicked() {
+                if tips::hover(ui.button("Cancel"), plain::CANCEL).clicked() {
                     ed.pending = None;
                 }
             });
@@ -2386,13 +2362,13 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             ui.label(format!("OxyBrush found work that wasn't saved when it last closed ({ago} min ago)."));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Recover").clicked() {
+                if tips::hover(ui.button("Recover"), plain::RECOVER).clicked() {
                     ed.recover(&r);
                 }
-                if ui.button("Discard").clicked() {
+                if tips::hover(ui.button("Discard"), plain::DISCARD_RECOVERY).clicked() {
                     ed.discard_recoverable();
                 }
-                if ui.button("Later").on_hover_text("Keep the file and ask again next time").clicked() {
+                if tips::hover(ui.button("Later"), plain::LATER).clicked() {
                     ed.recoverable.clear();
                 }
             });
@@ -2413,13 +2389,13 @@ fn update_menu(ui: &mut Ui, ed: &mut Editor) {
         return;
     }
     for m in UpdateMode::ALL {
-        ui.radio_value(&mut ed.updater.mode, *m, m.label());
+        tips::hover(ui.radio_value(&mut ed.updater.mode, *m, m.label()), tips::update_tip(*m));
     }
     ui.label(
         RichText::new("Checks ask GitHub about once a day; nothing about you or your work is sent.").weak().small(),
     );
     ui.separator();
-    if ui.button("Check now").clicked() {
+    if tips::hover(ui.button("Check now"), plain::CHECK_NOW).clicked() {
         ed.updater.show_window = true;
         ed.updater.check(crate::updates::now_secs());
     }
@@ -2451,33 +2427,35 @@ fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
         ui.horizontal_wrapped(|ui| {
             match &phase {
                 Phase::Available(u) => {
-                    ui.hyperlink_to("Release notes", &u.release.page_url);
+                    tips::hover(ui.hyperlink_to("Release notes", &u.release.page_url), plain::RELEASE_NOTES);
                     if u.downloadable() {
-                        if ui.button("Download").on_hover_text(format!("Save it to {}", crate::updates::download_dir().display())).clicked() {
+                        if tips::hover(ui.button("Download"), tips::download_tip(&crate::updates::download_dir())).clicked() {
                             action = Some("download");
                         }
                     } else {
-                        ui.hyperlink_to("Download page", &u.release.page_url);
+                        tips::hover(ui.hyperlink_to("Download page", &u.release.page_url), plain::RELEASE_NOTES);
                     }
-                    if ui.button("Skip this version").clicked() {
+                    if tips::hover(ui.button("Skip this version"), plain::SKIP_VERSION).clicked() {
                         action = Some("skip");
                     }
                 }
                 Phase::Ready { update, path } => {
-                    ui.hyperlink_to("Release notes", &update.release.page_url);
-                    let label = match install_step(ed.updater.kind, path.clone()) {
-                        InstallStep::RunInstaller(_) => "Install and restart",
-                        InstallStep::ShowFile { .. } => "Show the file",
+                    tips::hover(ui.hyperlink_to("Release notes", &update.release.page_url), plain::RELEASE_NOTES);
+                    let (label, tip) = match install_step(ed.updater.kind, path.clone()) {
+                        InstallStep::RunInstaller(_) => ("Install and restart", plain::INSTALL),
+                        InstallStep::ShowFile { .. } => ("Show the file", plain::SHOW_FILE),
                     };
-                    if ui.button(RichText::new(label).strong()).clicked() {
+                    if tips::hover(ui.button(RichText::new(label).strong()), tip).clicked() {
                         action = Some("install");
                     }
-                    if ui.button("Skip this version").clicked() {
+                    if tips::hover(ui.button("Skip this version"), plain::SKIP_VERSION).clicked() {
                         action = Some("skip");
                     }
                 }
                 _ => {
-                    if ui.add_enabled(!ed.updater.busy(), egui::Button::new("Check now")).clicked() {
+                    if tips::hover(ui.add_enabled(!ed.updater.busy(), egui::Button::new("Check now")), plain::CHECK_NOW)
+                        .clicked()
+                    {
                         action = Some("check");
                     }
                 }
@@ -2487,7 +2465,7 @@ fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
         ui.separator();
         ui.label("Automatic checks");
         for m in crate::settings::UpdateMode::ALL {
-            ui.radio_value(&mut ed.updater.mode, *m, m.label());
+            tips::hover(ui.radio_value(&mut ed.updater.mode, *m, m.label()), tips::update_tip(*m));
         }
         ui.label(
             RichText::new(
@@ -2541,21 +2519,21 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
             ui.label(RichText::new("Sculpt digital clay. Pick a starting shape, or open your work.").size(15.0));
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                for (icon, title, sub, which) in [
-                    (Icon::Sphere, "Sphere", "Heads, creatures", "sphere"),
-                    (Icon::Cube, "Cube", "Hard surfaces", "cube"),
-                    (Icon::Plane, "Plane", "Reliefs, tiles", "plane"),
+                for (icon, title, sub, which, cmd) in [
+                    (Icon::Sphere, "Sphere", "Heads, creatures", "sphere", Cmd::NewSphere),
+                    (Icon::Cube, "Cube", "Hard surfaces", "cube", Cmd::NewCube),
+                    (Icon::Plane, "Plane", "Reliefs, tiles", "plane", Cmd::NewPlane),
                 ] {
-                    if widgets::card(ui, icon, title, sub).clicked() {
+                    if widgets::card(ui, icon, title, sub, &cmd.tip()).clicked() {
                         ed.request(Pending::New(which));
                         close = true;
                     }
                 }
-                if widgets::card(ui, Icon::Open, "Open…", "A .oxb project").clicked() {
+                if widgets::card(ui, Icon::Open, "Open…", "A .oxb project", &Cmd::Open.tip()).clicked() {
                     *action = Some(UiAction::Open);
                     close = true;
                 }
-                if widgets::card(ui, Icon::Import, "Import…", "OBJ or STL mesh").clicked() {
+                if widgets::card(ui, Icon::Import, "Import…", "OBJ or STL mesh", &Cmd::Import.tip()).clicked() {
                     *action = Some(UiAction::Import);
                     close = true;
                 }
@@ -2568,7 +2546,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     for p in ed.recent_files.iter().take(5) {
                         let name =
                             p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
-                        if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+                        if tips::hover(ui.button(name), tips::recent_tip(p)).clicked() {
                             chosen = Some(p.clone());
                         }
                     }
@@ -2591,6 +2569,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     (&["1", "…", "0"][..], "Pick a brush"),
                     (&["Ctrl+D"][..], "Add a subdivision level for more detail"),
                     (&["Ctrl+K"][..], "Find any command"),
+                    (&["Hover or hold"][..], "Read what a control does"),
                     (&["F1", "F2"][..], "All shortcuts, the guide"),
                 ] {
                     ui.horizontal(|ui| {
@@ -2606,7 +2585,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
             ui.label(RichText::new("Layout").strong().size(14.0));
             ui.horizontal(|ui| {
                 for l in UiLayout::ALL {
-                    ui.selectable_value(&mut ed.layout, l, l.label()).on_hover_text(l.description());
+                    tips::hover(ui.selectable_value(&mut ed.layout, l, l.label()), l.description());
                 }
             });
             ui.label(RichText::new(ed.layout.description()).weak().small());
@@ -2615,10 +2594,10 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                 let start = egui::Button::new(RichText::new("Start sculpting").strong().color(Color32::WHITE))
                     .fill(ACCENT)
                     .min_size(egui::vec2(140.0, 30.0));
-                if ui.add(start).on_hover_text("Keep the sphere and start").clicked() {
+                if tips::hover(ui.add(start), plain::START).clicked() {
                     close = true;
                 }
-                ui.checkbox(&mut ed.welcome_at_startup, "Show at startup");
+                tips::check_plain(ui, &mut ed.welcome_at_startup, "Show at startup", plain::SHOW_AT_STARTUP);
                 ui.label(
                     RichText::new("Reopen from Help > Welcome screen; change the layout in Settings.").weak().small(),
                 );
@@ -2631,9 +2610,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
 
 fn surface_cursor_checkbox(ui: &mut Ui, ed: &mut Editor) {
     let before = ed.surface_cursor;
-    ui.checkbox(&mut ed.surface_cursor, "Align cursor to surface").on_hover_text(
-        "Draw the brush ring flat on the surface under the pointer, at the brush size. Off the model it stays flat to the screen.",
-    );
+    ui.checkbox(&mut ed.surface_cursor, "Align cursor to surface").on_hover_text(plain::SURFACE_CURSOR);
     if before && !ed.surface_cursor {
         ed.forget_cursor_plane();
     }

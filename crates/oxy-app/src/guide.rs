@@ -49,7 +49,7 @@ That direction is an average of the surface around the pointer, eased as you mov
         title: "Choosing brushes",
         keywords: "brush picker shelf number keys space find",
         body: "Click a brush in the shelf, press its number key (1–9 and 0 select the first ten), or press Space and type part of its name: \"cs\" finds Clay Strips, Enter picks it.\n\n\
-Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover a brush for a one-line description.\n\n\
+Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover any control for a short explanation and its shortcut. On a touch screen, press and hold the control: the same text stays up after you lift your finger, and the control does not activate.\n\n\
 - Grab, Topological Move and Snake Hook: hold Alt to move the surface along its normal.\n\
 - Grab through (Grab settings) moves everything under the brush circle, front to back.\n\
 - Middle-drag over a panel scrolls it, handy with a pen side button.",
@@ -143,7 +143,8 @@ OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it eve
         title: "Layouts and panels",
         keywords: "interface layout touch compact tablet arrange panels scale theme",
         body: "Settings > Layout switches between Standard, Compact (small screens) and Touch friendly (bigger controls and on-screen Smooth/Mask/Invert buttons for tablets). Settings > Arrange panels moves the brush shelf, the settings panel and the size/strength bar.\n\n\
-Interface scale and a high-contrast theme are in Settings too. All of these are remembered.",
+Interface scale and a high-contrast theme are in Settings too. All of these are remembered.\n\n\
+The Touch layout has no mouse hover. Press and hold a control to read what it does.",
     },
     Topic {
         title: "Shading and materials",
@@ -233,8 +234,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         ctx,
         |ui| {
             let g = &mut ed.guide;
-            ui.add(
-                egui::TextEdit::singleline(&mut g.query).hint_text("Search the guide…").desired_width(f32::INFINITY),
+            crate::tips::hover(
+                ui.add(
+                    egui::TextEdit::singleline(&mut g.query)
+                        .hint_text("Search the guide…")
+                        .desired_width(f32::INFINITY),
+                ),
+                crate::tips::plain::GUIDE_SEARCH,
             );
             let hits = search(&g.query);
             if !hits.is_empty() && !hits.contains(&g.topic) {
@@ -249,7 +255,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                             ui.label(RichText::new("No topic matches").weak());
                         }
                         for &i in &hits {
-                            ui.selectable_value(&mut g.topic, i, TOPICS[i].title);
+                            crate::tips::hover(
+                                ui.selectable_value(&mut g.topic, i, TOPICS[i].title),
+                                crate::tips::plain::GUIDE_TOPIC,
+                            );
                         }
                     });
                 });

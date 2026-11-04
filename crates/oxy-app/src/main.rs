@@ -15,6 +15,7 @@ mod presets;
 mod settings;
 mod snapshot;
 mod support;
+mod tips;
 mod ui;
 mod updates;
 mod widgets;

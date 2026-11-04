@@ -1,10 +1,12 @@
 # Changelog
 
-All notable changes to OxyBrush. The format follows
-[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow
-[Semantic Versioning](https://semver.org/) (pre-1.0: anything may change).
+All notable changes to OxyBrush. The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
+
+### Changed
+
+- **Every control explains itself.** Hover a button, slider, menu item, brush or dialog control for one short sentence about what it does, plus its shortcut when it has one. Shortcut words come from one list, shared with the menus and the command palette. On a touch screen, where there is no hover, press and hold a control: the same text stays up briefly after you lift your finger, and the control does not activate.
 
 ### Added
 
