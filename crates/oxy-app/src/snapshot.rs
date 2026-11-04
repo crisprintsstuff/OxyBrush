@@ -46,6 +46,13 @@ pub fn copy_to_buffer(
 }
 
 pub fn save_png(device: &wgpu::Device, p: Pending, path: &Path) -> Result<(), String> {
+    let png = png_bytes(device, p, None)?;
+    std::fs::File::create(path).and_then(|mut f| f.write_all(&png)).map_err(|e| e.to_string())
+}
+
+/// Encode `p` as a PNG. `crop` is `(x, y, width, height)` in pixels, top-left
+/// origin, clamped to the image. `None` keeps the whole image.
+pub fn png_bytes(device: &wgpu::Device, p: Pending, crop: Option<(u32, u32, u32, u32)>) -> Result<Vec<u8>, String> {
     let slice = p.buffer.slice(..);
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
@@ -54,9 +61,24 @@ pub fn save_png(device: &wgpu::Device, p: Pending, path: &Path) -> Result<(), St
     device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| e.to_string())?;
     rx.recv().map_err(|e| e.to_string())?.map_err(|e| e.to_string())?;
     let data = slice.get_mapped_range().map_err(|e| e.to_string())?;
-    let mut rgb = Vec::with_capacity((p.width * p.height * 3) as usize);
-    for row in data.chunks(p.padded_row as usize).take(p.height as usize) {
-        for px in row[..(p.width * 4) as usize].as_chunks::<4>().0 {
+    let (x, y, w, h) = match crop {
+        Some((x, y, w, h)) => {
+            let x = x.min(p.width.saturating_sub(1));
+            let y = y.min(p.height.saturating_sub(1));
+            (x, y, w.min(p.width - x).max(1), h.min(p.height - y).max(1))
+        }
+        None => (0, 0, p.width.max(1), p.height.max(1)),
+    };
+    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+    for (row_i, row) in data.chunks(p.padded_row as usize).take(p.height as usize).enumerate() {
+        let row_i = row_i as u32;
+        if row_i < y || row_i >= y + h {
+            continue;
+        }
+        let start = (x as usize) * 4;
+        let end = start + (w as usize) * 4;
+        let pixels = row.get(start..end).unwrap_or(&[]);
+        for px in pixels.as_chunks::<4>().0 {
             if p.bgra {
                 rgb.extend_from_slice(&[px[2], px[1], px[0]]);
             } else {
@@ -65,8 +87,7 @@ pub fn save_png(device: &wgpu::Device, p: Pending, path: &Path) -> Result<(), St
         }
     }
     drop(data);
-    let png = encode_png(p.width, p.height, &rgb);
-    std::fs::File::create(path).and_then(|mut f| f.write_all(&png)).map_err(|e| e.to_string())
+    Ok(encode_png(w, h, &rgb))
 }
 
 /// Minimal PNG encoder using stored (uncompressed) deflate blocks.

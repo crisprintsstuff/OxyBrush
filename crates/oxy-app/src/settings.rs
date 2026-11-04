@@ -247,6 +247,8 @@ pub struct Settings {
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
+    /// Local MCP agent listener (off unless the user turns it on). The token is not stored.
+    pub agent_mcp: bool,
     /// Name of the custom matcap in use ("" for a built-in material).
     pub custom_matcap: String,
     /// Viewport backdrop: gradient (center and edge) or one flat color.
@@ -287,6 +289,7 @@ impl Default for Settings {
             flat_shading: false,
             stroke_from_empty: false,
             surface_cursor: false,
+            agent_mcp: false,
             custom_matcap: String::new(),
             background_style: view.background_style,
             background: view.background,
@@ -344,7 +347,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\nsurface_cursor = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -363,6 +366,7 @@ impl Settings {
             self.flat_shading,
             self.stroke_from_empty,
             self.surface_cursor,
+            self.agent_mcp,
             self.custom_matcap,
             self.background_style.key(),
             background,
@@ -436,6 +440,7 @@ impl Settings {
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
+                "agent_mcp" => s.agent_mcp = v.parse().unwrap_or(s.agent_mcp),
                 "custom_matcap" => s.custom_matcap = v.to_owned(),
                 "background_style" => s.background_style = BackgroundStyle::from_key(v).unwrap_or(s.background_style),
                 "background" => s.background = parse_rgb(v).unwrap_or(s.background),
@@ -527,6 +532,7 @@ mod tests {
             flat_shading: true,
             stroke_from_empty: true,
             surface_cursor: true,
+            agent_mcp: false,
             custom_matcap: "Red Wax".into(),
             background_style: BackgroundStyle::Flat,
             background: [0.2, 0.25, 0.3],

@@ -2550,6 +2550,7 @@ dependencies = [
  "oxy-doc",
  "oxy-history",
  "oxy-io",
+ "oxy-mcp",
  "oxy-mesh",
  "oxy-render",
  "oxy-sculpt",
@@ -2558,6 +2559,7 @@ dependencies = [
  "png",
  "pollster 1.0.1",
  "rfd",
+ "serde_json",
  "wgpu",
  "winit",
  "winresource",
@@ -2570,6 +2572,7 @@ version = "0.4.0-alpha"
 dependencies = [
  "oxy-doc",
  "oxy-io",
+ "oxy-mcp",
  "oxy-mesh",
  "oxy-topo",
 ]
@@ -2603,6 +2606,21 @@ dependencies = [
  "oxy-mesh",
  "serde_json",
  "tobj",
+]
+
+[[package]]
+name = "oxy-mcp"
+version = "0.4.0-alpha"
+dependencies = [
+ "getrandom 0.3.4",
+ "glam",
+ "oxy-doc",
+ "oxy-history",
+ "oxy-io",
+ "oxy-mesh",
+ "oxy-sculpt",
+ "oxy-topo",
+ "serde_json",
 ]
 
 [[package]]

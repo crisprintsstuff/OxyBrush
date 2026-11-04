@@ -25,7 +25,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all
 ```
 
-- Keep algorithm crates (`oxy-mesh`, `oxy-sculpt`, `oxy-history`, `oxy-io`) **free of GPU and windowing dependencies**.
+- Keep algorithm crates (`oxy-mesh`, `oxy-sculpt`, `oxy-history`, `oxy-io`, `oxy-doc`, `oxy-topo`, `oxy-mcp`) **free of GPU and windowing dependencies**.
+- **Network:** no telemetry. The only network code is the opt-in updater ([RFC 0002](docs/rfcs/0002-updates.md)) and, when the user turns it on, a loopback-only MCP server for a local AI agent ([RFC 0003](docs/rfcs/0003-mcp.md)). The agent server never contacts another machine.
 - Any change that adds stroke latency or frame time is a regression. Include numbers when you touch hot paths.
 - `unsafe` is forbidden workspace-wide. Proposals to relax that need an RFC.
 - Headless screenshot (used in CI and docs):

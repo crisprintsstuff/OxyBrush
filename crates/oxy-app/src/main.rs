@@ -3,6 +3,7 @@
 // Release builds on Windows are GUI apps: no console window.
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod agent;
 mod app;
 mod editor;
 mod guide;
@@ -76,6 +77,7 @@ fn main() {
         }
     };
     let mut app = app::App::new(file, auto, log_path);
+    app.set_event_proxy(event_loop.create_proxy());
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("event loop failed: {e}");
         std::process::exit(1);

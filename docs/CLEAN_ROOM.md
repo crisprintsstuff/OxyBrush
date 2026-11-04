@@ -24,5 +24,7 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-04 | SculptForge (GPL-3.0-or-later) README feature list only; its source was never opened, and the local clone used to read the README was deleted | The idea of each feature (one sentence each) | Brush presets with shareable one-line codes and preset files; command palette and type-to-pick brush picker; recent files and an offline guide; posing gizmo; vertex color painting; glTF/PLY export, LOD chains, splitting pieces, a headless CLI |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
-cloud AI services and network bridges (OxyBrush makes no network calls apart
-from the opt-in updater, RFC 0002).
+and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can
+let a program on this machine drive OxyBrush; it does not call out to a
+model or any other host. The only other network code is the opt-in updater
+([RFC 0002](rfcs/0002-updates.md)).

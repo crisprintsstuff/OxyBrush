@@ -359,6 +359,23 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
                 ui.menu_button("Updates", |ui| update_menu(ui, ed));
                 ui.separator();
+                ui.checkbox(&mut ed.agent_enabled, "Local AI agent")
+                    .on_hover_text("Let a program on this computer sculpt with you. Off by default. Nothing is sent off this machine.");
+                if ed.agent_enabled {
+                    if ed.agent_endpoint.is_empty() {
+                        ui.label("Starting the local listener…");
+                    } else {
+                        ui.label(RichText::new(&ed.agent_endpoint).small());
+                        if ui.button("Copy connection").on_hover_text("Address and token, for your MCP client").clicked() {
+                            ui.ctx().copy_text(crate::agent::connection_text(&ed.agent_endpoint, &ed.agent_token));
+                            ed.status = "Copied the agent address and token".into();
+                        }
+                        if ui.button("New token").on_hover_text("Disconnects the current agent").clicked() {
+                            ed.agent_disconnect = true;
+                        }
+                    }
+                }
+                ui.separator();
                 ui.label("Interface scale");
                 ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05));
                 ui.checkbox(&mut ed.high_contrast, "High-contrast theme");
@@ -1470,6 +1487,17 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
             }
             if let Some(e) = &ed.autosaver.last_error {
                 ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
+            }
+            if ed.agent_connected {
+                let label = RichText::new("Agent connected — Disconnect").color(Color32::WHITE);
+                let button = egui::Button::new(label).fill(ACCENT);
+                if ui
+                    .add(button)
+                    .on_hover_text("An AI agent on this computer is editing the scene. Click to disconnect it. Your work stays; the token changes.")
+                    .clicked()
+                {
+                    ed.agent_disconnect = true;
+                }
             }
             if let Some(u) = ed.updater.offered() {
                 let text = match &ed.updater.phase {
@@ -3027,6 +3055,18 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn agent_indicator_draws() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.agent_enabled = true;
+        ed.agent_endpoint = "http://127.0.0.1:9/mcp".into();
+        ed.agent_token = "abc".into();
+        ed.agent_connected = true;
+        run_frames(&mut ed, 1);
+        assert!(!ed.agent_disconnect, "drawing alone does not disconnect");
     }
 
     #[test]
