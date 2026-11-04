@@ -240,6 +240,12 @@ pub struct Settings {
     pub update_last_check: u64,
     /// A version the user chose to skip ("" for none).
     pub update_skip: String,
+    /// Faceted instead of smooth shading in the viewport.
+    pub flat_shading: bool,
+    /// Strokes may start on empty space (orbit with the middle mouse button).
+    pub stroke_from_empty: bool,
+    /// Name of the custom matcap in use ("" for a built-in material).
+    pub custom_matcap: String,
     /// Recently used files, most recent first (one `recent = ` line each).
     pub recent_files: Vec<PathBuf>,
 }
@@ -265,6 +271,9 @@ impl Default for Settings {
             updates: UpdateMode::Off,
             update_last_check: 0,
             update_skip: String::new(),
+            flat_shading: false,
+            stroke_from_empty: false,
+            custom_matcap: String::new(),
             recent_files: Vec::new(),
         }
     }
@@ -292,7 +301,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\ncustom_matcap = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -308,6 +317,9 @@ impl Settings {
             self.updates.key(),
             self.update_last_check,
             self.update_skip,
+            self.flat_shading,
+            self.stroke_from_empty,
+            self.custom_matcap,
         ) + &self
             .recent_files
             .iter()
@@ -373,6 +385,9 @@ impl Settings {
                     }
                 }
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
+                "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
+                "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
+                "custom_matcap" => s.custom_matcap = v.to_owned(),
                 "recent" if !v.is_empty() && s.recent_files.len() < MAX_RECENT => {
                     let p = PathBuf::from(v);
                     if !s.recent_files.contains(&p) {
@@ -450,6 +465,9 @@ mod tests {
             updates: UpdateMode::Notify,
             update_last_check: 1_800_000_000,
             update_skip: "0.4.0-alpha".into(),
+            flat_shading: true,
+            stroke_from_empty: true,
+            custom_matcap: "Red Wax".into(),
             recent_files: vec![PathBuf::from("/work/head = v2.oxb"), PathBuf::from("C:\\Sculpts\\Dragon.obj")],
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);

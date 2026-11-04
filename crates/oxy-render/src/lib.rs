@@ -21,7 +21,8 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// View normal (xyz) and linear depth (w) for the screen-space shading passes.
 const NORMAL_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
-const MATCAP_SIZE: u32 = 256;
+/// Matcap texture size; custom matcaps are resampled to this.
+pub const MATCAP_SIZE: u32 = 256;
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
@@ -39,7 +40,7 @@ struct GpuVertex {
 struct Uniforms {
     view_proj: [[f32; 4]; 4],
     view: [[f32; 4]; 4],
-    /// x: unused, y: mask overlay strength, z: viewport aspect (w / h)
+    /// x: flat shading (1) or smooth (0), y: mask overlay strength, z: viewport aspect (w / h)
     params: [f32; 4],
     mask_color: [f32; 4],
     /// Background gradient: color at the center and at the edges (linear).
@@ -80,6 +81,9 @@ pub struct ViewSettings {
     /// Cavity strength, 0 (off) to 1: darkens creases and pores and
     /// brightens edges, so fine detail reads clearly.
     pub cavity: f32,
+    /// Shade each triangle flat (faceted) instead of smoothing normals
+    /// across the surface.
+    pub flat_shading: bool,
 }
 
 impl Default for ViewSettings {
@@ -91,6 +95,7 @@ impl Default for ViewSettings {
             background_center: [0.062, 0.064, 0.070],
             ambient_occlusion: 0.7,
             cavity: 0.6,
+            flat_shading: false,
         }
     }
 }
@@ -468,10 +473,15 @@ impl ViewportRenderer {
     }
 
     pub fn set_matcap(&mut self, queue: &wgpu::Queue, preset: MatcapPreset) {
-        let pixels = matcap::generate(preset, MATCAP_SIZE);
+        self.set_matcap_pixels(queue, &matcap::generate(preset, MATCAP_SIZE));
+    }
+
+    /// Use an image as the matcap: `MATCAP_SIZE`² RGBA8 sRGB pixels.
+    pub fn set_matcap_pixels(&mut self, queue: &wgpu::Queue, pixels: &[u8]) {
+        assert_eq!(pixels.len(), (MATCAP_SIZE * MATCAP_SIZE * 4) as usize, "matcap must be MATCAP_SIZE² RGBA");
         queue.write_texture(
             self.matcap.as_image_copy(),
-            &pixels,
+            pixels,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(MATCAP_SIZE * 4), rows_per_image: None },
             wgpu::Extent3d { width: MATCAP_SIZE, height: MATCAP_SIZE, depth_or_array_layers: 1 },
         );
@@ -639,7 +649,12 @@ impl ViewportRenderer {
         let u = Uniforms {
             view_proj: camera.view_projection(aspect).to_cols_array_2d(),
             view: camera.view().to_cols_array_2d(),
-            params: [0.0, if settings.show_mask { 1.0 } else { 0.0 }, aspect, 0.0],
+            params: [
+                if settings.flat_shading { 1.0 } else { 0.0 },
+                if settings.show_mask { 1.0 } else { 0.0 },
+                aspect,
+                0.0,
+            ],
             mask_color: [0.25, 0.3, 0.45, 1.0],
             bg_center: rgba(settings.background_center),
             bg_edge: rgba(settings.background),
