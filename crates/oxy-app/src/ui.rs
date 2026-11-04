@@ -89,20 +89,36 @@ pub fn metrics(layout: UiLayout) -> Metrics {
 pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layout: UiLayout) {
     let m = metrics(layout);
     let mut v = egui::Visuals::dark();
-    let (bg, panel, text) = if high_contrast {
-        (Color32::BLACK, Color32::from_gray(10), Color32::WHITE)
+    // Neutral graphite: every chrome gray is R = G = B. An earlier palette
+    // raised the blue channel on each of these (the comment called it warm,
+    // but the bytes were cool), and that cast showed up across the panels.
+    // Brightness matches the old colors' average so contrast stays put.
+    // The clay accent is only for selection, the pressed control, hover
+    // outlines and links — not for panel fills.
+    let (bg, panel, window, faint, text) = if high_contrast {
+        (Color32::BLACK, Color32::from_gray(10), Color32::from_gray(10), Color32::from_gray(16), Color32::WHITE)
     } else {
-        // Warm graphite: slightly brown-tinted grays that suit the clay material.
-        (Color32::from_rgb(0x16, 0x17, 0x1A), Color32::from_rgb(0x1F, 0x21, 0x25), Color32::from_gray(228))
+        (
+            Color32::from_gray(24),
+            Color32::from_gray(34),
+            Color32::from_gray(39),
+            Color32::from_gray(40),
+            Color32::from_gray(228),
+        )
     };
     v.panel_fill = panel;
-    v.window_fill = Color32::from_rgb(0x24, 0x26, 0x2B);
+    v.window_fill = window;
     v.extreme_bg_color = bg;
-    v.faint_bg_color = Color32::from_rgb(0x25, 0x27, 0x2C);
+    v.faint_bg_color = faint;
     v.override_text_color = Some(text);
     v.selection.bg_fill = ACCENT.linear_multiply(0.55);
     v.selection.stroke = EStroke::new(1.0, ACCENT);
     v.hyperlink_color = ACCENT;
+    // egui's default caret and IME underline are light blue. Use the text
+    // color so a focused field does not reintroduce that cast.
+    v.text_cursor.stroke.color = text;
+    v.ime_composition.active_underline_stroke.color = text;
+    v.ime_composition.inactive_underline_stroke.color = text.linear_multiply(0.5);
     v.window_corner_radius = 10.into();
     v.menu_corner_radius = 8.into();
     v.window_stroke = EStroke::new(1.0, Color32::from_gray(60));
@@ -121,10 +137,11 @@ pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layo
         v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_gray(200));
     } else {
         v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, Color32::from_gray(48));
-        v.widgets.inactive.weak_bg_fill = Color32::from_rgb(0x2C, 0x2E, 0x34);
-        v.widgets.inactive.bg_fill = Color32::from_rgb(0x34, 0x37, 0x3D);
-        v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x37, 0x3A, 0x41);
-        v.widgets.hovered.bg_fill = Color32::from_rgb(0x40, 0x43, 0x4A);
+        v.widgets.inactive.weak_bg_fill = Color32::from_gray(47);
+        v.widgets.inactive.bg_fill = Color32::from_gray(56);
+        v.widgets.hovered.weak_bg_fill = Color32::from_gray(59);
+        v.widgets.hovered.bg_fill = Color32::from_gray(68);
+        // Hover outline and the pressed control keep the clay accent.
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, ACCENT.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = ACCENT.linear_multiply(0.6);
         v.widgets.active.bg_fill = ACCENT;
@@ -2974,5 +2991,49 @@ mod tests {
             max = max.max(*p);
         }
         (min, max)
+    }
+
+    fn assert_neutral(name: &str, c: Color32) {
+        assert_eq!(c.r(), c.g(), "{name} should be neutral gray, got {c:?}");
+        assert_eq!(c.g(), c.b(), "{name} should be neutral gray, got {c:?}");
+    }
+
+    /// Panels and controls are gray. The clay accent stays on selection,
+    /// the pressed control and links.
+    #[test]
+    fn theme_chrome_is_neutral_gray() {
+        let ctx = egui::Context::default();
+        apply_theme(&ctx, false, 1.0, UiLayout::Standard);
+        let v = ctx.global_style().visuals.clone();
+        for (name, c) in [
+            ("panel", v.panel_fill),
+            ("window", v.window_fill),
+            ("extreme background", v.extreme_bg_color),
+            ("faint background", v.faint_bg_color),
+            ("inactive button", v.widgets.inactive.weak_bg_fill),
+            ("inactive fill", v.widgets.inactive.bg_fill),
+            ("hovered button", v.widgets.hovered.weak_bg_fill),
+            ("hovered fill", v.widgets.hovered.bg_fill),
+            ("separator", v.widgets.noninteractive.bg_stroke.color),
+            ("text cursor", v.text_cursor.stroke.color),
+            ("ime underline", v.ime_composition.active_underline_stroke.color),
+        ] {
+            assert_neutral(name, c);
+        }
+        assert_eq!(v.selection.stroke.color, ACCENT);
+        assert_eq!(v.hyperlink_color, ACCENT);
+        assert_eq!(v.widgets.active.bg_fill, ACCENT);
+        assert_eq!(v.widgets.hovered.bg_stroke.color, ACCENT.linear_multiply(0.7));
+
+        apply_theme(&ctx, true, 1.0, UiLayout::Standard);
+        let v = ctx.global_style().visuals.clone();
+        for (name, c) in [
+            ("high-contrast panel", v.panel_fill),
+            ("high-contrast window", v.window_fill),
+            ("high-contrast faint", v.faint_bg_color),
+            ("high-contrast cursor", v.text_cursor.stroke.color),
+        ] {
+            assert_neutral(name, c);
+        }
     }
 }

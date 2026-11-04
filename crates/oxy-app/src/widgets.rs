@@ -110,7 +110,8 @@ fn arrow(p: &Painter, from: Pos2, to: Pos2, stroke: Stroke) {
 
 /// Paint a brush icon (surface cross-section) into `rect`.
 pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
-    p.rect_filled(rect, 5.0, Color32::from_rgb(0x26, 0x28, 0x2D));
+    // Neutral gray behind the clay profile. The old 0x26, 0x28, 0x2D well was blue.
+    p.rect_filled(rect, 5.0, Color32::from_gray(41));
     let r = rect.shrink(3.0);
     let base = r.top() + r.height() * 0.68;
     let amp = r.height() * 0.55;
@@ -695,7 +696,7 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
         let img = Rect::from_min_size(rect.min, Vec2::splat(size));
         let stroke =
             if response.hovered() { Stroke::new(1.0, ACCENT) } else { Stroke::new(1.0, Color32::from_gray(52)) };
-        ui.painter().rect(img, 6.0, Color32::from_rgb(0x2A, 0x2C, 0x31), stroke, egui::StrokeKind::Inside);
+        ui.painter().rect(img, 6.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
         match tex {
             Some(t) => {
                 ui.painter().image(
@@ -753,7 +754,7 @@ pub fn thumb_sized(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, 
         } else {
             Stroke::NONE
         };
-        ui.painter().rect(img, 5.0, Color32::from_rgb(0x2A, 0x2C, 0x31), stroke, egui::StrokeKind::Inside);
+        ui.painter().rect(img, 5.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
         if let Some(t) = tex {
             ui.painter().image(
                 t.id(),
