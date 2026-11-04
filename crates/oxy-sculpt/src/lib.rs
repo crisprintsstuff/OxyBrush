@@ -34,6 +34,8 @@ pub enum BrushKind {
     Grab,
     SnakeHook,
     Mask,
+    /// Paints vertex color instead of moving the surface.
+    Paint,
     Polish,
     PlanarTrim,
     TopoMove,
@@ -42,7 +44,7 @@ pub enum BrushKind {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 16] = [
+    pub const ALL: [BrushKind; 17] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -59,6 +61,7 @@ impl BrushKind {
         BrushKind::PlanarTrim,
         BrushKind::Noise,
         BrushKind::Mask,
+        BrushKind::Paint,
     ];
 
     /// Brushes that move a captured region with the pointer instead of dabbing.
@@ -80,6 +83,7 @@ impl BrushKind {
             BrushKind::Flatten => "Flatten",
             BrushKind::Grab => "Grab",
             BrushKind::Mask => "Mask",
+            BrushKind::Paint => "Paint",
             BrushKind::Polish => "Polish",
             BrushKind::PlanarTrim => "Planar Trim",
             BrushKind::TopoMove => "Topological Move",
@@ -95,6 +99,7 @@ impl BrushKind {
             BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
+            BrushKind::Paint => 0.6,
             _ => 0.4,
         }
     }
@@ -318,6 +323,8 @@ pub struct Stroke {
     /// Grab: capture everything under the brush circle on screen, through
     /// the whole depth of the model, instead of a sphere on the surface.
     grab_through: bool,
+    /// Paint brush color (sRGB).
+    paint: Vec3,
     rng: u64,
 }
 
@@ -336,6 +343,7 @@ impl Stroke {
             alpha: None,
             view: Vec3::ZERO,
             grab_through: false,
+            paint: Vec3::ONE,
             rng: 0x9e37_79b9_7f4a_7c15,
         }
     }
@@ -353,6 +361,12 @@ impl Stroke {
     /// [`with_view`](Self::with_view).
     pub fn with_grab_through(mut self, on: bool) -> Self {
         self.grab_through = on;
+        self
+    }
+
+    /// Color the Paint brush applies (sRGB, 0..=1).
+    pub fn with_paint_color(mut self, color: Vec3) -> Self {
+        self.paint = color;
         self
     }
 
@@ -464,11 +478,13 @@ impl Stroke {
         let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
         for &m in &self.transforms.clone() {
             let dab = base.transformed(m);
-            apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_deref(), &mut self.layer, touch);
-            if self.settings.auto_smooth > 0.0 && !matches!(kind, BrushKind::Smooth | BrushKind::Mask) {
+            apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_deref(), self.paint, &mut self.layer, touch);
+            if self.settings.auto_smooth > 0.0
+                && !matches!(kind, BrushKind::Smooth | BrushKind::Mask | BrushKind::Paint)
+            {
                 let smooth = Dab { strength: self.settings.auto_smooth, ..dab };
                 let smooth_settings = BrushSettings { kind: BrushKind::Smooth, ..self.settings };
-                apply_kernel(mesh, &smooth_settings, false, &smooth, None, &mut self.layer, touch);
+                apply_kernel(mesh, &smooth_settings, false, &smooth, None, self.paint, &mut self.layer, touch);
             }
         }
     }
@@ -630,12 +646,14 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
 
 /// Apply one dab. `settings.kind` selects the kernel (callers override it
 /// for auto-smooth).
+#[allow(clippy::too_many_arguments)] // per-stroke context, all needed by the kernels
 fn apply_kernel(
     mesh: &mut Mesh,
     settings: &BrushSettings,
     invert: bool,
     dab: &Dab,
     alpha: Option<&Alpha>,
+    paint: Vec3,
     layer: &mut LayerState,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
@@ -667,6 +685,19 @@ fn apply_kernel(
     }
     for &c in &chunks {
         touch(mesh, c);
+    }
+
+    if kind == BrushKind::Paint {
+        // Alt (invert) erases paint back to white.
+        let target = if invert { Vec3::ONE } else { paint };
+        for &(v, w) in &affected {
+            let c = &mut mesh.color[v as usize];
+            *c = c.lerp(target, (w * dab.strength).clamp(0.0, 1.0));
+        }
+        for c in chunks {
+            mesh.mark_dirty(c);
+        }
+        return;
     }
 
     if kind == BrushKind::Mask {
@@ -776,7 +807,7 @@ fn apply_kernel(
                         let n = alpha::noise3(p * (settings.noise_scale / dab.radius));
                         p + m.normals[v as usize] * (sign * n * amount * 1.5 * w)
                     }
-                    BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Layer => p,
+                    BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Paint | BrushKind::Layer => p,
                 };
                 (v, np)
             })

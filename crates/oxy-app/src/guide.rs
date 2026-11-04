@@ -89,6 +89,20 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Merge fuses the visible pieces into one with a voxel remesh.",
     },
     Topic {
+        title: "Painting color",
+        keywords: "vertex color paint fill cavity dirt",
+        body: "The Paint brush (last in the shelf) colors the surface without changing its shape; Alt erases back to white. Pick a color or swatch in its settings. Alphas, spray and symmetry work as with other brushes.\n\n\
+- Fill paints everything that isn't masked; Fill cavities and Fill peaks paint creases or edges, more where they are deeper or sharper.\n\
+- Clear color returns to unpainted. Use the Pearl or Grey clay material to see true colors.\n\
+- Color is saved in projects and follows subdivision levels; remesh and decimate remove it.",
+    },
+    Topic {
+        title: "Posing and the transform gizmo",
+        keywords: "gizmo move rotate scale pose transform mask",
+        body: "Press T to show the gizmo (T again cycles move, rotate, scale, off). Drag an axis handle, or the centre handle to move in the screen plane, spin around the view or scale evenly. Esc during a drag cancels it.\n\n\
+Masked parts stay put and partly masked parts move partly, so a soft mask edge bends smoothly: mask the body, leave an arm unmasked, and rotate it at the shoulder. The pivot sits on the edge of the mask.",
+    },
+    Topic {
         title: "Subdivision levels",
         keywords: "multires multiresolution detail divide levels",
         body: "Ctrl+D adds a subdivision level: four times the triangles, for finer detail. D and Shift+D move up and down between levels. Make broad changes on a low level and fine detail on a high one; the detail follows when you go back up.\n\n\

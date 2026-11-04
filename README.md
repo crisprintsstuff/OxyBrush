@@ -91,6 +91,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Brush presets:** save any brush (kind, size, strength, falloff, stroke, alpha) as a preset; five starter presets included. Share a brush as a one-line code (`oxyb1:…`) you can paste into a chat, or as an `.oxbrush` file. Everything stays on your computer.
 - **Alphas:** grayscale images shape each dab; seven built-in procedural alphas plus your own grayscale PNGs, with rotation and follow-stroke.
 - **Masking and selection:** box or lasso mask/unmask and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
+- **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks that respect the mask. Saved in projects and carried through subdivision levels.
+- **Transform gizmo (T):** move, rotate or scale a piece in the viewport. With a mask, only the unmasked part moves, and a soft mask edge bends smoothly, which makes it a quick posing tool (mask the body, rotate an arm at the shoulder).
 - **Symmetry:** X/Y/Z mirroring plus radial symmetry (up to 64 copies around any axis).
 - **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active.
 - **Subdivision levels (multiresolution):** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo.
@@ -133,6 +135,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |
 | `G` | Face group colors |
+| `T` | Transform gizmo: move → rotate → scale → off |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Right click / hold `Q` | Quick menu at the cursor (size, strength, Raise/Carve) |

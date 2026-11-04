@@ -13,6 +13,7 @@ use oxy_sculpt::BrushKind;
 
 pub const ACCENT: Color32 = Color32::from_rgb(0xE0, 0x7A, 0x4F);
 pub const MASK_BLUE: Color32 = Color32::from_rgb(110, 150, 255);
+const PAINT_TEAL: Color32 = Color32::from_rgb(70, 180, 160);
 const CLAY_TOP: Color32 = Color32::from_rgb(0xD9, 0x9A, 0x78);
 const CLAY_BOTTOM: Color32 = Color32::from_rgb(0x7A, 0x45, 0x30);
 const CLAY_EDGE: Color32 = Color32::from_rgb(0xF2, 0xC2, 0xA4);
@@ -39,6 +40,7 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::PlanarTrim => "Cuts the surface down to a plane. Alt fills up to it.",
         BrushKind::Noise => "Adds procedural surface noise. Adjust the noise scale below.",
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
+        BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
     }
 }
 
@@ -75,6 +77,8 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
                 * bump(x, 0.6)
         }
         BrushKind::Mask => 0.18 * bump(x, 0.8),
+        // Paint leaves the shape alone: the same gentle surface, wider.
+        BrushKind::Paint => 0.14 * bump(x, 1.1),
     }
 }
 
@@ -118,9 +122,15 @@ pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
     let mut mesh = egui::Mesh::default();
     for &x in &xs {
         let y = base - brush_profile(k, x) * amp;
-        let masked = k == BrushKind::Mask && x.abs() < 0.45;
-        let (top, bottom) =
-            if masked { (MASK_BLUE, lerp_color(MASK_BLUE, CLAY_BOTTOM, 0.6)) } else { (CLAY_TOP, CLAY_BOTTOM) };
+        let tint = match k {
+            BrushKind::Mask => Some(MASK_BLUE),
+            BrushKind::Paint => Some(PAINT_TEAL),
+            _ => None,
+        };
+        let (top, bottom) = match tint.filter(|_| x.abs() < 0.45) {
+            Some(t) => (t, lerp_color(t, CLAY_BOTTOM, 0.6)),
+            None => (CLAY_TOP, CLAY_BOTTOM),
+        };
         mesh.colored_vertex(pos2(to_x(x), y), top);
         mesh.colored_vertex(pos2(to_x(x), r.bottom()), bottom);
     }
@@ -187,6 +197,7 @@ pub enum Icon {
     Zoom,
     Solo,
     Shading,
+    Transform,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -354,6 +365,14 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             for d in [vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0)] {
                 arrow(p, ctr + d * r * 0.15, ctr + d * l, s);
             }
+        }
+        Icon::Transform => {
+            // Three axis arrows from a corner, like the gizmo itself.
+            let o = ctr + vec2(-r * 0.5, r * 0.5);
+            arrow(p, o, o + vec2(r * 1.25, 0.0), s);
+            arrow(p, o, o + vec2(0.0, -r * 1.25), s);
+            arrow(p, o, o + vec2(r * 0.8, -r * 0.8), s);
+            p.circle_filled(o, s.width * 1.2, c);
         }
         Icon::Zoom => {
             let lens = ctr + vec2(-r * 0.18, -r * 0.18);
