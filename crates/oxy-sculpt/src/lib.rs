@@ -287,16 +287,42 @@ impl Dab {
     }
 }
 
-/// (vertex, weight, original position)
-type GrabVertex = (u32, f32, Vec3);
+/// (vertex, weight, original position) inside one symmetry copy.
+type GrabHit = (u32, f32, Vec3);
+
+/// One vertex after every symmetry copy that captured it has been merged.
+struct BlendedGrab {
+    index: u32,
+    orig: Vec3,
+    /// `blend * delta` is the move for a drag `delta` in the primary sample's
+    /// space. The weight is already baked in, so a vertex seen by one copy
+    /// moves by `weight * delta`.
+    blend: Mat3,
+    /// Alt (move along the normal): the move is `along * t`.
+    along: Vec3,
+}
 
 struct GrabState {
     origin: Vec3,
-    /// Captured vertices per symmetry transform.
-    captured: Vec<(Mat3, Vec<GrabVertex>)>,
-    /// Weighted average normal of each captured region (for Alt: move
-    /// along the surface normal).
-    normals: Vec<Vec3>,
+    verts: Vec<BlendedGrab>,
+    /// Average normal of the primary (unmirrored) capture. Alt uses it to
+    /// turn the screen drag into a signed distance.
+    primary_normal: Vec3,
+}
+
+/// Combine symmetry copies that want to displace the same vertex.
+///
+/// `weighted` is Σ delta_i · weight_i. One copy reproduces `delta * weight`.
+/// Several copies take the weighted average of their full deltas and scale
+/// it by the strongest weight, so the vertex follows the drag once: a weak
+/// mirror copy cannot replace a strong one, and the move never exceeds the
+/// strongest influence. Opposing components (the two sides of a mirror
+/// plane) cancel where the weights match, which is exactly on the plane.
+fn blend_weighted_deltas(weighted: Vec3, sum_w: f32, max_w: f32) -> Vec3 {
+    if sum_w <= f32::EPSILON {
+        return Vec3::ZERO;
+    }
+    weighted * (max_w / sum_w)
 }
 
 /// Per-vertex state for the Layer brush: original position, original
@@ -476,16 +502,42 @@ impl Stroke {
             base = base.rotated((self.random() - 0.5) * std::f32::consts::TAU * spray);
         }
         let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
-        for &m in &self.transforms.clone() {
-            let dab = base.transformed(m);
-            apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_deref(), self.paint, &mut self.layer, touch);
-            if self.settings.auto_smooth > 0.0
-                && !matches!(kind, BrushKind::Smooth | BrushKind::Mask | BrushKind::Paint)
-            {
-                let smooth = Dab { strength: self.settings.auto_smooth, ..dab };
-                let smooth_settings = BrushSettings { kind: BrushKind::Smooth, ..self.settings };
-                apply_kernel(mesh, &smooth_settings, false, &smooth, None, self.paint, &mut self.layer, touch);
+        let copies = self.transforms.clone();
+        // Where two symmetry copies cover the same vertex, blend their
+        // displacements. Writing one after the other lets the second copy
+        // chase vertices the first copy already moved, and the overlap tears.
+        if copies.len() > 1 && kind == BrushKind::SnakeHook {
+            blend_snake_hook(mesh, &self.settings, self.invert, &base, &copies, alpha.as_deref(), touch);
+        } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease) {
+            blend_symmetry_copies(mesh, &self.settings, self.invert, &base, &copies, alpha.as_deref(), touch);
+        } else {
+            for &m in &copies {
+                let dab = base.transformed(m);
+                apply_kernel(
+                    mesh,
+                    &self.settings,
+                    self.invert,
+                    &dab,
+                    alpha.as_deref(),
+                    self.paint,
+                    &mut self.layer,
+                    touch,
+                );
+                self.auto_smooth_dab(mesh, &dab, touch);
             }
+            return;
+        }
+        for &m in &copies {
+            self.auto_smooth_dab(mesh, &base.transformed(m), touch);
+        }
+    }
+
+    fn auto_smooth_dab(&mut self, mesh: &mut Mesh, dab: &Dab, touch: &mut dyn FnMut(&Mesh, u32)) {
+        let kind = self.settings.kind;
+        if self.settings.auto_smooth > 0.0 && !matches!(kind, BrushKind::Smooth | BrushKind::Mask | BrushKind::Paint) {
+            let smooth = Dab { strength: self.settings.auto_smooth, ..*dab };
+            let smooth_settings = BrushSettings { kind: BrushKind::Smooth, ..self.settings };
+            apply_kernel(mesh, &smooth_settings, false, &smooth, None, self.paint, &mut self.layer, touch);
         }
     }
 
@@ -496,7 +548,7 @@ impl Stroke {
             let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
             let topological = self.settings.kind == BrushKind::TopoMove;
             let through = self.grab_through && self.view != Vec3::ZERO && !topological;
-            let captured: Vec<(Mat3, Vec<GrabVertex>)> = self
+            let captured: Vec<(Mat3, Vec<GrabHit>)> = self
                 .transforms
                 .iter()
                 .map(|&m| {
@@ -519,7 +571,7 @@ impl Stroke {
                     (m, verts)
                 })
                 .collect();
-            let normals = captured
+            let normals: Vec<Vec3> = captured
                 .iter()
                 .zip(&self.transforms)
                 .map(|((_, verts), &m)| {
@@ -527,31 +579,64 @@ impl Stroke {
                     n.try_normalize().unwrap_or(m * dab.normal)
                 })
                 .collect();
-            self.grab = Some(GrabState { origin: s.position, captured, normals });
+            // A vertex under two copies used to be written twice, and the
+            // second write replaced the first. Where the brush only just
+            // crosses the mirror, that boundary is a hard sphere cut: one
+            // vertex keeps the full drag and its neighbour snaps back to the
+            // other copy's (often tiny, often opposite) move. The surface
+            // opens along that cut. Bake one displacement per vertex instead.
+            struct Acc {
+                orig: Vec3,
+                sum_m: Mat3,
+                sum_n: Vec3,
+                sum_w: f32,
+                max_w: f32,
+            }
+            let mut acc: HashMap<u32, Acc> = HashMap::new();
+            for ((m, hits), n) in captured.iter().zip(&normals) {
+                for &(index, w, orig) in hits {
+                    let e = acc.entry(index).or_insert(Acc {
+                        orig,
+                        sum_m: Mat3::ZERO,
+                        sum_n: Vec3::ZERO,
+                        sum_w: 0.0,
+                        max_w: 0.0,
+                    });
+                    e.sum_m += *m * w;
+                    e.sum_n += *n * w;
+                    e.sum_w += w;
+                    e.max_w = e.max_w.max(w);
+                }
+            }
+            let verts = acc
+                .into_iter()
+                .map(|(index, e)| {
+                    let scale = e.max_w / e.sum_w;
+                    BlendedGrab { index, orig: e.orig, blend: e.sum_m * scale, along: e.sum_n * scale }
+                })
+                .collect();
+            let primary_normal = normals.first().copied().unwrap_or(dab.normal);
+            self.grab = Some(GrabState { origin: s.position, verts, primary_normal });
             self.last = Some(s);
             return;
         };
         let delta = s.position - grab.origin;
-        let mut moved = Vec::new();
-        let mut chunks: Vec<u32> =
-            grab.captured.iter().flat_map(|(_, vs)| vs.iter().map(|&(v, _, _)| mesh.vertex_chunk(v))).collect();
+        // Alt (invert): move along the surface normal instead, by the drag's length.
+        let along = self.invert.then(|| along_normal(delta, grab.primary_normal, self.view).dot(grab.primary_normal));
+        let mut chunks: Vec<u32> = grab.verts.iter().map(|v| mesh.vertex_chunk(v.index)).collect();
         chunks.sort_unstable();
         chunks.dedup();
         for c in chunks {
             touch(mesh, c);
         }
-        // Alt (invert): move along the surface normal instead, by the drag's length.
-        let primary = grab.normals.first().copied().unwrap_or(Vec3::ZERO);
-        let along = self.invert.then(|| along_normal(delta, primary, self.view).dot(primary));
-        for ((m, verts), n) in grab.captured.iter().zip(&grab.normals) {
+        let mut moved = Vec::with_capacity(grab.verts.len());
+        for v in &grab.verts {
             let d = match along {
-                Some(t) => *n * t,
-                None => *m * delta,
+                Some(t) => v.along * t,
+                None => v.blend * delta,
             };
-            for &(v, w, orig) in verts {
-                mesh.positions[v as usize] = orig + d * w;
-                moved.push(v);
-            }
+            mesh.positions[v.index as usize] = v.orig + d;
+            moved.push(v.index);
         }
         mesh.update_after_move(&moved);
         self.dab_count += 1;
@@ -562,7 +647,7 @@ impl Stroke {
 /// Grab-through capture: every visible vertex whose distance from the
 /// line through the dab centre along the view direction is within the
 /// radius, front to back, with the brush falloff and the mask applied.
-fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<GrabVertex> {
+fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<GrabHit> {
     let r = dab.radius;
     let axis = dab.view;
     (0..mesh.vertex_count() as u32)
@@ -583,7 +668,7 @@ fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<Gra
 /// Keep only captured vertices connected (through captured vertices) to
 /// the one nearest `center`: Topological Move moves an arm without
 /// dragging along the nearby torso.
-fn connected_to_nearest(mesh: &Mesh, center: Vec3, verts: Vec<GrabVertex>) -> Vec<GrabVertex> {
+fn connected_to_nearest(mesh: &Mesh, center: Vec3, verts: Vec<GrabHit>) -> Vec<GrabHit> {
     let Some(seed) =
         verts.iter().min_by(|a, b| a.2.distance_squared(center).total_cmp(&b.2.distance_squared(center))).map(|v| v.0)
     else {
@@ -644,6 +729,222 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
     (w > 0.0).then_some(w)
 }
 
+/// Chunks in range of a dab, and the weighted vertices inside them.
+/// Snake Hook queries where the brush was before this dab's drag.
+fn gather_affected(
+    mesh: &Mesh,
+    settings: &BrushSettings,
+    dab: &Dab,
+    alpha: Option<&Alpha>,
+) -> (Vec<u32>, Vec<(u32, f32)>) {
+    let settings = *settings;
+    let query =
+        if settings.kind == BrushKind::SnakeHook { Dab { center: dab.center - dab.drag, ..*dab } } else { *dab };
+    let chunks = mesh.chunks_in_sphere(query.center, reach(settings.kind, &query, alpha.is_some()));
+    if chunks.is_empty() {
+        return (chunks, Vec::new());
+    }
+    let affected = {
+        let m: &Mesh = mesh;
+        chunks
+            .par_iter()
+            .flat_map_iter(|&c| {
+                m.chunks[c as usize]
+                    .vertices
+                    .clone()
+                    .filter_map(move |v| vertex_weight(m, &settings, &query, alpha, v).map(|w| (v, w)))
+            })
+            .collect()
+    };
+    (chunks, affected)
+}
+
+fn area_normal_of(mesh: &Mesh, affected: &[(u32, f32)], fallback: Vec3) -> Vec3 {
+    let n = affected.iter().fold(Vec3::ZERO, |n, &(v, w)| n + mesh.normals[v as usize] * w);
+    n.try_normalize().unwrap_or(fallback)
+}
+
+/// Where this dab would put each affected vertex, read from the mesh as it
+/// is now (nothing is written).
+fn target_positions(
+    mesh: &Mesh,
+    settings: &BrushSettings,
+    invert: bool,
+    dab: &Dab,
+    affected: &[(u32, f32)],
+) -> Vec<(u32, Vec3)> {
+    let kind = settings.kind;
+    let sign = if invert { -1.0 } else { 1.0 };
+    let (wsum, area_normal, area_center) =
+        affected.iter().fold((0.0, Vec3::ZERO, Vec3::ZERO), |(ws, n, c), &(v, w)| {
+            (ws + w, n + mesh.normals[v as usize] * w, c + mesh.positions[v as usize] * w)
+        });
+    let area_normal = area_normal.try_normalize().unwrap_or(dab.normal);
+    let area_center = area_center / wsum.max(1e-12);
+    // Displacement scale: a full-strength dab moves the surface ~10% of the radius.
+    let amount = dab.radius * 0.1 * dab.strength;
+    affected
+        .par_iter()
+        .map(|&(v, w)| {
+            let p = mesh.positions[v as usize];
+            let pinch = |p: Vec3| {
+                let to_center = dab.center - p;
+                (to_center - area_normal * to_center.dot(area_normal)) * (0.3 * w * dab.strength)
+            };
+            let np = match kind {
+                BrushKind::Draw => p + area_normal * (sign * amount * w),
+                BrushKind::Inflate => p + mesh.normals[v as usize] * (sign * amount * w),
+                BrushKind::Smooth => {
+                    let n = mesh.neighbors(v);
+                    if n.is_empty() {
+                        p
+                    } else {
+                        let avg = n.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
+                        p.lerp(avg, (w * dab.strength).min(1.0))
+                    }
+                }
+                BrushKind::Flatten | BrushKind::Clay | BrushKind::ClayStrips => {
+                    // Clay builds toward a plane slightly above the surface;
+                    // Flatten pulls everything onto the mean plane.
+                    let (plane, one_sided) = if kind == BrushKind::Flatten {
+                        (area_center, false)
+                    } else {
+                        (area_center + area_normal * (sign * dab.radius * 0.15 * dab.strength), true)
+                    };
+                    let d = (plane - p).dot(area_normal);
+                    if one_sided && d * sign < 0.0 { p } else { p + area_normal * (d * (w * dab.strength).min(1.0)) }
+                }
+                BrushKind::Pinch => p + pinch(p) * sign,
+                // Crease carves a groove and pulls its walls together;
+                // inverted it raises a sharp ridge.
+                BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
+                BrushKind::SnakeHook => {
+                    // Alt (invert): pull straight out along the surface normal.
+                    let drag = if invert { along_normal(dab.drag, area_normal, dab.view) } else { dab.drag };
+                    p + drag * (w * dab.strength.min(1.0))
+                }
+                // Polish: smooth only along the normal, so bumps flatten
+                // without the surface shrinking or sliding sideways.
+                BrushKind::Polish => {
+                    let n = mesh.neighbors(v);
+                    if n.is_empty() {
+                        p
+                    } else {
+                        let avg = n.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
+                        let nv = mesh.normals[v as usize];
+                        p + nv * ((avg - p).dot(nv) * (w * dab.strength).min(1.0))
+                    }
+                }
+                // Planar Trim: cut everything above the mean plane down to
+                // it (inverted: fill everything below up to it).
+                BrushKind::PlanarTrim => {
+                    let d = (area_center - p).dot(area_normal);
+                    if d * sign < 0.0 { p + area_normal * (d * (w * dab.strength * 1.5).min(1.0)) } else { p }
+                }
+                BrushKind::Noise => {
+                    let n = alpha::noise3(p * (settings.noise_scale / dab.radius));
+                    p + mesh.normals[v as usize] * (sign * n * amount * 1.5 * w)
+                }
+                BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Paint | BrushKind::Layer => p,
+            };
+            (v, np)
+        })
+        .collect()
+}
+
+/// Snake Hook with more than one symmetry copy. Each copy's drag is read
+/// from the pre-dab surface and blended like Grab, so the overlap follows
+/// the stroke once instead of adding every copy's drag.
+#[allow(clippy::too_many_arguments)]
+fn blend_snake_hook(
+    mesh: &mut Mesh,
+    settings: &BrushSettings,
+    invert: bool,
+    base: &Dab,
+    copies: &[Mat3],
+    alpha: Option<&Alpha>,
+    touch: &mut dyn FnMut(&Mesh, u32),
+) {
+    let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
+    let mut chunks = Vec::new();
+    for &m in copies {
+        let dab = base.transformed(m);
+        let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
+        if affected.is_empty() {
+            continue;
+        }
+        chunks.extend(ch);
+        let area_normal = area_normal_of(mesh, &affected, dab.normal);
+        let drag = if invert { along_normal(dab.drag, area_normal, dab.view) } else { dab.drag };
+        let scale = dab.strength.min(1.0);
+        for &(v, w) in &affected {
+            let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0));
+            e.0 += drag * (scale * w);
+            e.1 += w;
+            e.2 = e.2.max(w);
+        }
+    }
+    if acc.is_empty() {
+        return;
+    }
+    chunks.sort_unstable();
+    chunks.dedup();
+    for &c in &chunks {
+        touch(mesh, c);
+    }
+    let moved: Vec<u32> = acc.keys().copied().collect();
+    for (v, (weighted, sum_w, max_w)) in &acc {
+        mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w);
+    }
+    mesh.update_after_move(&moved);
+}
+
+/// Pinch and Crease slide vertices toward each copy. Copies are read from
+/// the pre-dab surface and blended like a drag, so the overlap follows the
+/// stronger copy instead of being pulled both ways at once.
+#[allow(clippy::too_many_arguments)]
+fn blend_symmetry_copies(
+    mesh: &mut Mesh,
+    settings: &BrushSettings,
+    invert: bool,
+    base: &Dab,
+    copies: &[Mat3],
+    alpha: Option<&Alpha>,
+    touch: &mut dyn FnMut(&Mesh, u32),
+) {
+    let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
+    let mut chunks = Vec::new();
+    for &m in copies {
+        let dab = base.transformed(m);
+        let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
+        if affected.is_empty() {
+            continue;
+        }
+        chunks.extend(ch);
+        let weight_of: HashMap<u32, f32> = affected.iter().copied().collect();
+        for (v, p) in target_positions(mesh, settings, invert, &dab, &affected) {
+            let w = weight_of[&v];
+            let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0));
+            e.0 += p - mesh.positions[v as usize];
+            e.1 += w;
+            e.2 = e.2.max(w);
+        }
+    }
+    if acc.is_empty() {
+        return;
+    }
+    chunks.sort_unstable();
+    chunks.dedup();
+    for &c in &chunks {
+        touch(mesh, c);
+    }
+    let moved: Vec<u32> = acc.keys().copied().collect();
+    for (v, (weighted, sum_w, max_w)) in &acc {
+        mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w);
+    }
+    mesh.update_after_move(&moved);
+}
+
 /// Apply one dab. `settings.kind` selects the kernel (callers override it
 /// for auto-smooth).
 #[allow(clippy::too_many_arguments)] // per-stroke context, all needed by the kernels
@@ -657,32 +958,13 @@ fn apply_kernel(
     layer: &mut LayerState,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
-    // Snake Hook pulls the region it was over at the previous dab.
-    let kind = settings.kind;
-    let query = if kind == BrushKind::SnakeHook { Dab { center: dab.center - dab.drag, ..*dab } } else { *dab };
-    let chunks = mesh.chunks_in_sphere(query.center, reach(kind, &query, alpha.is_some()));
-    if chunks.is_empty() {
-        return;
-    }
-    let settings = *settings;
-    let sign = if invert { -1.0 } else { 1.0 };
-
-    // Gather affected vertices and weights in parallel per chunk.
-    let affected: Vec<(u32, f32)> = {
-        let m: &Mesh = mesh;
-        chunks
-            .par_iter()
-            .flat_map_iter(|&c| {
-                m.chunks[c as usize]
-                    .vertices
-                    .clone()
-                    .filter_map(move |v| vertex_weight(m, &settings, &query, alpha, v).map(|w| (v, w)))
-            })
-            .collect()
-    };
+    let (chunks, affected) = gather_affected(mesh, settings, dab, alpha);
     if affected.is_empty() {
         return;
     }
+    let kind = settings.kind;
+    let settings = *settings;
+    let sign = if invert { -1.0 } else { 1.0 };
     for &c in &chunks {
         touch(mesh, c);
     }
@@ -711,16 +993,6 @@ fn apply_kernel(
         return;
     }
 
-    // Region statistics used by plane-based brushes.
-    let (wsum, area_normal, area_center) =
-        affected.iter().fold((0.0, Vec3::ZERO, Vec3::ZERO), |(ws, n, c), &(v, w)| {
-            (ws + w, n + mesh.normals[v as usize] * w, c + mesh.positions[v as usize] * w)
-        });
-    let area_normal = area_normal.try_normalize().unwrap_or(dab.normal);
-    let area_center = area_center / wsum.max(1e-12);
-    // Displacement scale: a full-strength dab moves the surface ~10% of the radius.
-    let amount = dab.radius * 0.1 * dab.strength;
-
     if kind == BrushKind::Layer {
         // Raise to a fixed height above the stroke-start surface; overlapping
         // dabs within one stroke don't stack.
@@ -739,80 +1011,7 @@ fn apply_kernel(
         return;
     }
 
-    let new_positions: Vec<(u32, Vec3)> = {
-        let m: &Mesh = mesh;
-        affected
-            .par_iter()
-            .map(|&(v, w)| {
-                let p = m.positions[v as usize];
-                let pinch = |p: Vec3| {
-                    let to_center = dab.center - p;
-                    (to_center - area_normal * to_center.dot(area_normal)) * (0.3 * w * dab.strength)
-                };
-                let np = match kind {
-                    BrushKind::Draw => p + area_normal * (sign * amount * w),
-                    BrushKind::Inflate => p + m.normals[v as usize] * (sign * amount * w),
-                    BrushKind::Smooth => {
-                        let n = m.neighbors(v);
-                        if n.is_empty() {
-                            p
-                        } else {
-                            let avg = n.iter().map(|&i| m.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
-                            p.lerp(avg, (w * dab.strength).min(1.0))
-                        }
-                    }
-                    BrushKind::Flatten | BrushKind::Clay | BrushKind::ClayStrips => {
-                        // Clay builds toward a plane slightly above the surface;
-                        // Flatten pulls everything onto the mean plane.
-                        let (plane, one_sided) = if kind == BrushKind::Flatten {
-                            (area_center, false)
-                        } else {
-                            (area_center + area_normal * (sign * dab.radius * 0.15 * dab.strength), true)
-                        };
-                        let d = (plane - p).dot(area_normal);
-                        if one_sided && d * sign < 0.0 {
-                            p
-                        } else {
-                            p + area_normal * (d * (w * dab.strength).min(1.0))
-                        }
-                    }
-                    BrushKind::Pinch => p + pinch(p) * sign,
-                    // Crease carves a groove and pulls its walls together;
-                    // inverted it raises a sharp ridge.
-                    BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
-                    BrushKind::SnakeHook => {
-                        // Alt (invert): pull straight out along the surface normal.
-                        let drag = if invert { along_normal(dab.drag, area_normal, dab.view) } else { dab.drag };
-                        p + drag * (w * dab.strength.min(1.0))
-                    }
-                    // Polish: smooth only along the normal, so bumps flatten
-                    // without the surface shrinking or sliding sideways.
-                    BrushKind::Polish => {
-                        let n = m.neighbors(v);
-                        if n.is_empty() {
-                            p
-                        } else {
-                            let avg = n.iter().map(|&i| m.positions[i as usize]).sum::<Vec3>() / n.len() as f32;
-                            let nv = m.normals[v as usize];
-                            p + nv * ((avg - p).dot(nv) * (w * dab.strength).min(1.0))
-                        }
-                    }
-                    // Planar Trim: cut everything above the mean plane down to
-                    // it (inverted: fill everything below up to it).
-                    BrushKind::PlanarTrim => {
-                        let d = (area_center - p).dot(area_normal);
-                        if d * sign < 0.0 { p + area_normal * (d * (w * dab.strength * 1.5).min(1.0)) } else { p }
-                    }
-                    BrushKind::Noise => {
-                        let n = alpha::noise3(p * (settings.noise_scale / dab.radius));
-                        p + m.normals[v as usize] * (sign * n * amount * 1.5 * w)
-                    }
-                    BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Paint | BrushKind::Layer => p,
-                };
-                (v, np)
-            })
-            .collect()
-    };
+    let new_positions = target_positions(mesh, &settings, invert, dab, &affected);
 
     let mut moved = Vec::with_capacity(new_positions.len());
     for (v, p) in new_positions {
@@ -826,6 +1025,7 @@ fn apply_kernel(
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+    use std::collections::HashMap;
 
     fn top_sample() -> StrokeSample {
         StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 }
@@ -1199,5 +1399,406 @@ mod tests {
         );
         // 1.0 / (0.2 * 0.25) = 20 dabs + the first (the last may round away).
         assert!((20..=21).contains(&s.dab_count()), "{}", s.dab_count());
+    }
+
+    /// Longest edge after the stroke, as a multiple of its original length.
+    /// A seam crack stretches a few edges by many times; a smooth grab does not.
+    fn max_edge_stretch(before: &Mesh, after: &Mesh) -> f32 {
+        let mut worst = 1.0_f32;
+        for t in &before.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                let l0 = before.positions[a as usize].distance(before.positions[b as usize]);
+                let l1 = after.positions[a as usize].distance(after.positions[b as usize]);
+                if l0 > 1e-8 {
+                    worst = worst.max(l1 / l0);
+                }
+            }
+        }
+        worst
+    }
+
+    /// Greatest distance from a vertex to the nearest vertex at `map(p)`.
+    fn max_image_gap(mesh: &Mesh, map: impl Fn(Vec3) -> Vec3) -> f32 {
+        let q = 400.0_f32;
+        let key = |p: Vec3| ((p.x * q).round() as i32, (p.y * q).round() as i32, (p.z * q).round() as i32);
+        let mut bins: HashMap<(i32, i32, i32), Vec<Vec3>> = HashMap::new();
+        for p in &mesh.positions {
+            bins.entry(key(*p)).or_default().push(*p);
+        }
+        let mut worst = 0.0_f32;
+        for p in &mesh.positions {
+            let image = map(*p);
+            let (x, y, z) = key(image);
+            let mut best = f32::MAX;
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(vs) = bins.get(&(x + dx, y + dy, z + dz)) {
+                            for qv in vs {
+                                best = best.min(qv.distance(image));
+                            }
+                        }
+                    }
+                }
+            }
+            worst = worst.max(if best == f32::MAX { 1.0 } else { best });
+        }
+        worst
+    }
+
+    /// Brush on the front of a sphere, just off the X=0 plane, radius crossing
+    /// it. This is the overlap that used to tear Grab open along the seam.
+    fn front_overlap(kind: BrushKind, sym: Symmetry, invert: bool, through: bool, delta: Vec3) -> (Mesh, Mesh) {
+        let mut mesh = primitives::icosphere(5, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings {
+            kind,
+            radius: 0.45,
+            strength: 1.0,
+            spacing: 0.1,
+            front_faces_only: true,
+            ..Default::default()
+        };
+        let mut s = Stroke::new(settings, sym, invert).with_view(-Vec3::Z).with_grab_through(through);
+        let start = Vec3::new(0.28, 0.05, 0.96).normalize();
+        for step in 0..=8 {
+            let p = start + delta * (step as f32 / 8.0);
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    fn edges_longer_than(before: &Mesh, after: &Mesh, factor: f32) -> usize {
+        let mut n = 0;
+        for t in &before.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i] as usize, t[(i + 1) % 3] as usize);
+                let l0 = before.positions[a].distance(before.positions[b]);
+                let l1 = after.positions[a].distance(after.positions[b]);
+                if l0 > 1e-8 && l1 > l0 * factor {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// The seam stays on the mirror plane, the mesh stays symmetric, and no
+    /// edge opens into the crack this bug used to cut (those ran about 7–11×).
+    fn assert_closed_seam(before: &Mesh, after: &Mesh) {
+        let stretch = max_edge_stretch(before, after);
+        let cracks = edges_longer_than(before, after, 6.0);
+        assert!(stretch < 4.5 && cracks == 0, "seam tore: stretch {stretch:.2}, edges over 6×: {cracks}");
+        let gap = max_image_gap(after, |p| Vec3::new(-p.x, p.y, p.z));
+        assert!(gap < 1e-3, "result left the X mirror, gap {gap}");
+        let drift = before
+            .positions
+            .iter()
+            .zip(&after.positions)
+            .filter(|(p, _)| p.x.abs() < 1e-3)
+            .map(|(_, q)| q.x.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(drift < 1e-3, "seam vertices left the mirror plane by {drift}");
+    }
+
+    #[test]
+    fn blend_keeps_one_copy_and_cancels_opposites() {
+        let d = Vec3::new(0.4, -0.2, 0.1);
+        assert_eq!(blend_weighted_deltas(d * 0.3, 0.3, 0.3), d * 0.3);
+        // Two equal copies of the same drag: still one drag, not two.
+        assert_eq!(blend_weighted_deltas(d + d, 2.0, 1.0), d);
+        // Mirror copies of a purely perpendicular drag cancel on the plane.
+        assert_eq!(blend_weighted_deltas(d + Vec3::new(-d.x, d.y, d.z), 2.0, 1.0), Vec3::new(0.0, d.y, d.z));
+        assert_eq!(blend_weighted_deltas(Vec3::ZERO, 0.0, 0.0), Vec3::ZERO);
+    }
+
+    /// Flat grid, X symmetry, brush centred at x=0.2 so the mirror sphere
+    /// cuts through the primary one. The centre vertex is in both copies.
+    fn plane_stroke(kind: BrushKind, sym: Symmetry, invert: bool, delta: Vec3) -> (Mesh, Mesh) {
+        let mut mesh = primitives::plane(40, 2.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind, radius: 0.5, strength: 1.0, spacing: 0.2, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, invert).with_view(-Vec3::Y);
+        let start = Vec3::new(0.2, 0.0, 0.0);
+        let n = Vec3::Y;
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: n, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(&mut mesh, StrokeSample { position: start + delta, normal: n, pressure: 1.0 }, &mut |_, _| {});
+        (before, mesh)
+    }
+
+    fn vertex_at(mesh: &Mesh, at: Vec3) -> usize {
+        mesh.positions.iter().position(|p| p.distance(at) < 1e-5).unwrap_or_else(|| panic!("no vertex at {at}"))
+    }
+
+    #[test]
+    fn grab_across_the_mirror_plane_does_not_tear() {
+        // The reported stroke: brush just off the centre line, dragged toward
+        // it, away from it, and along it. Each one used to open a stair-step
+        // crack where the mirror sphere cut the mesh.
+        let xsym = Symmetry { x: true, ..Default::default() };
+        let drags = [
+            Vec3::new(-0.45, 0.0, 0.0),
+            Vec3::new(0.4, 0.0, 0.0),
+            Vec3::new(0.0, 0.4, 0.0),
+            Vec3::new(-0.25, 0.15, 0.0),
+        ];
+        for delta in drags {
+            for kind in [BrushKind::Grab, BrushKind::TopoMove] {
+                let (before, sym) = front_overlap(kind, xsym, false, false, delta);
+                assert_closed_seam(&before, &sym);
+                let moved = before.positions.iter().zip(&sym.positions).any(|(a, b)| a.distance(*b) > 0.05);
+                assert!(moved, "{kind:?} drag {delta} did nothing");
+            }
+        }
+    }
+
+    #[test]
+    fn grab_on_the_centre_line_still_pulls_out() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.45, strength: 1.0, ..Default::default() };
+        let sym = Symmetry { x: true, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, false);
+        let start = Vec3::Z;
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        // Along the plane: one smooth bump, shared by both copies.
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::Y * 0.35, normal: start, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        let front = before.positions.iter().enumerate().max_by(|(_, a), (_, b)| a.z.total_cmp(&b.z)).unwrap().0;
+        let d = mesh.positions[front] - before.positions[front];
+        assert!(d.y > 0.2 && d.x.abs() < 0.02, "centred pull should rise in one piece, moved {d}");
+        assert!(max_edge_stretch(&before, &mesh) < 3.0);
+        assert!(max_image_gap(&mesh, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3);
+        // Straight across the plane the two copies want opposite moves, so
+        // the centred grab stays put instead of sliding off to one side.
+        let mut mesh = before.clone();
+        let mut s = Stroke::new(settings, sym, false);
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::X * 0.35, normal: start, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        let moved = before.positions.iter().zip(&mesh.positions).map(|(a, b)| a.distance(*b)).fold(0.0_f32, f32::max);
+        assert!(moved < 1e-4, "centred perpendicular grab slid by {moved}");
+    }
+
+    #[test]
+    fn grab_blend_matches_the_weights_on_a_plane() {
+        let sym = Symmetry { x: true, ..Default::default() };
+        let (before, after) = plane_stroke(BrushKind::Grab, sym, false, Vec3::new(0.0, 0.0, 0.3));
+        let origin = vertex_at(&before, Vec3::ZERO);
+        let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
+        let w_seam = Falloff::Smooth.eval(0.2 / 0.5);
+        let seam_move = after.positions[origin] - before.positions[origin];
+        // On the plane both copies agree, and the move is one drag times the
+        // falloff — not twice that, which is what adding the copies would do.
+        assert!(seam_move.distance(Vec3::new(0.0, 0.0, 0.3 * w_seam)) < 1e-4, "{seam_move}");
+        // The brush centre is inside the mirror sphere too. Parallel to the
+        // plane, the stronger copy wins, so it matches a brush with no mirror.
+        let (_, solo) = plane_stroke(BrushKind::Grab, Symmetry::default(), false, Vec3::new(0.0, 0.0, 0.3));
+        assert!(after.positions[centre].distance(solo.positions[centre]) < 1e-4);
+        for (i, p0) in before.positions.iter().enumerate() {
+            if p0.x > 1e-4 {
+                assert!(after.positions[i].distance(solo.positions[i]) < 1e-3, "positive side diverged at {p0}");
+            }
+        }
+
+        // Toward the plane. The centre must follow the cursor, not snap to
+        // the mirror copy's opposite drag (that snap was the crack).
+        let delta = Vec3::new(-0.4, 0.0, 0.0);
+        let (before, after) = plane_stroke(BrushKind::Grab, sym, false, delta);
+        let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
+        let moved = after.positions[centre] - before.positions[centre];
+        assert!(moved.x < -0.2, "brush centre should slide toward the plane, moved {moved}");
+        let origin = vertex_at(&before, Vec3::ZERO);
+        assert!(after.positions[origin].x.abs() < 1e-4, "seam drifted to {}", after.positions[origin]);
+        assert!(max_edge_stretch(&before, &after) < 3.0, "{}", max_edge_stretch(&before, &after));
+        assert!(max_image_gap(&after, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3);
+    }
+
+    #[test]
+    fn grab_through_and_alt_keep_the_seam() {
+        let sym = Symmetry { x: true, ..Default::default() };
+        let delta = Vec3::new(-0.35, 0.12, 0.0);
+        let (before, through) = front_overlap(BrushKind::Grab, sym, false, true, delta);
+        assert_closed_seam(&before, &through);
+        let back = before
+            .positions
+            .iter()
+            .zip(&through.positions)
+            .filter(|(p, q)| p.z < -0.5 && p.distance(**q) > 0.05)
+            .count();
+        assert!(back > 10, "grab through should move the far side, moved {back}");
+
+        let (before, alt) = front_overlap(BrushKind::Grab, sym, true, false, delta);
+        assert_closed_seam(&before, &alt);
+        let along = before
+            .positions
+            .iter()
+            .zip(&alt.positions)
+            .zip(&before.normals)
+            .map(|((a, b), n)| (*b - *a).dot(*n).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(along > 0.08, "Alt should move along the normal, got {along}");
+
+        // Alt on the plane: the brush centre is in both copies and must rise
+        // by about the full drag, not by the mirror copy's weak weight.
+        let (before, after) = plane_stroke(BrushKind::Grab, sym, true, Vec3::X * 0.3);
+        let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
+        assert!(after.positions[centre].y > 0.2, "centre rose {}", after.positions[centre]);
+        let origin = vertex_at(&before, Vec3::ZERO);
+        assert!(after.positions[origin].x.abs() < 1e-4);
+        assert!(after.positions[origin].y > 0.1);
+    }
+
+    #[test]
+    fn grab_far_from_the_plane_still_mirrors() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.positions.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.25, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry { x: true, ..Default::default() }, false);
+        let start = Vec3::X;
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::new(0.2, 0.1, 0.0), normal: start, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        let moved_left = before.iter().zip(&mesh.positions).any(|(a, b)| a.x < -0.8 && a.distance(*b) > 0.05);
+        assert!(moved_left, "the mirror side should follow");
+        for (a, b) in before.iter().zip(&mesh.positions) {
+            if a.x.abs() < 0.7 {
+                assert_eq!(a, b, "vertices between the two brushes must stay put");
+            }
+        }
+        assert!(max_image_gap(&mesh, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3);
+    }
+
+    #[test]
+    fn grab_radial_overlap_stays_on_the_axis() {
+        let (before, after) = {
+            let mut mesh = primitives::plane(40, 2.0);
+            let before = mesh.clone();
+            let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+            let sym = Symmetry { radial: 4, radial_axis: Axis::Y, ..Default::default() };
+            let mut s = Stroke::new(settings, sym, false);
+            let start = Vec3::new(0.3, 0.0, 0.0);
+            s.add_sample(&mut mesh, StrokeSample { position: start, normal: Vec3::Y, pressure: 1.0 }, &mut |_, _| {});
+            s.add_sample(
+                &mut mesh,
+                StrokeSample { position: start + Vec3::new(0.25, 0.0, 0.0), normal: Vec3::Y, pressure: 1.0 },
+                &mut |_, _| {},
+            );
+            (before, mesh)
+        };
+        let origin = vertex_at(&before, Vec3::ZERO);
+        assert!(
+            after.positions[origin].distance(Vec3::ZERO) < 1e-4,
+            "axis vertex thrown to {}",
+            after.positions[origin]
+        );
+        assert!(max_edge_stretch(&before, &after) < 3.0, "{}", max_edge_stretch(&before, &after));
+        let turn = Mat3::from_axis_angle(Vec3::Y, std::f32::consts::TAU / 4.0);
+        assert!(max_image_gap(&after, |p| turn * p) < 1e-3);
+
+        // Same thing on a sphere, up near the pole where every copy overlaps.
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.45, strength: 1.0, ..Default::default() };
+        let sym = Symmetry { radial: 6, radial_axis: Axis::Y, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, false);
+        let start = Vec3::new(0.16, 0.92, 0.08).normalize();
+        assert!(start.x.hypot(start.z) < 0.45, "the brush must reach the axis");
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::new(0.3, 0.05, 0.0), normal: start, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        for (a, b) in before.positions.iter().zip(&mesh.positions) {
+            if a.x.hypot(a.z) < 0.05 {
+                assert!(b.x.hypot(b.z) < 0.1, "pole vertex left the axis: {a} -> {b}");
+            }
+        }
+        assert!(max_edge_stretch(&before, &mesh) < 3.5, "{}", max_edge_stretch(&before, &mesh));
+    }
+
+    #[test]
+    fn y_mirror_grab_keeps_its_seam() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.45, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry { y: true, ..Default::default() }, false);
+        let start = Vec3::new(0.05, 0.28, 0.96).normalize();
+        let delta = Vec3::new(0.1, -0.4, 0.0);
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(&mut mesh, StrokeSample { position: start + delta, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        assert!(max_edge_stretch(&before, &mesh) < 3.0, "{}", max_edge_stretch(&before, &mesh));
+        assert!(max_image_gap(&mesh, |p| Vec3::new(p.x, -p.y, p.z)) < 1e-3);
+        let drift = before
+            .positions
+            .iter()
+            .zip(&mesh.positions)
+            .filter(|(p, _)| p.y.abs() < 1e-3)
+            .map(|(_, q)| q.y.abs())
+            .fold(0.0_f32, f32::max);
+        assert!(drift < 1e-3, "Y seam drifted by {drift}");
+    }
+
+    #[test]
+    fn snake_hook_pinch_and_crease_keep_the_seam() {
+        let sym = Symmetry { x: true, ..Default::default() };
+        let delta = Vec3::new(-0.35, 0.1, 0.0);
+        for kind in [BrushKind::SnakeHook, BrushKind::Pinch, BrushKind::Crease] {
+            let (before, after) = front_overlap(kind, sym, false, false, delta);
+            let stretch = max_edge_stretch(&before, &after);
+            // Pinch and Crease gather the surface, so edges do stretch; they
+            // must not open the multi-times crack Grab used to (stretch ~7–11).
+            assert!(stretch < 5.5, "{kind:?} stretch {stretch}");
+            assert!(max_image_gap(&after, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3, "{kind:?} broke symmetry");
+        }
+        let (before, alt) = front_overlap(BrushKind::SnakeHook, sym, true, false, delta);
+        assert!(max_edge_stretch(&before, &alt) < 3.0);
+        assert!(max_image_gap(&alt, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3);
+        // Parallel to the plane, the seam follows the stroke once. Adding both
+        // copies would carry it about twice as far as the brush centre.
+        let (before, after) = plane_stroke(BrushKind::SnakeHook, sym, false, Vec3::new(0.0, 0.0, 0.2));
+        let origin = vertex_at(&before, Vec3::ZERO);
+        let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
+        let seam = (after.positions[origin] - before.positions[origin]).length();
+        let at_centre = (after.positions[centre] - before.positions[centre]).length();
+        assert!(seam < at_centre + 1e-3, "seam ran ahead of the brush ({seam} > {at_centre})");
+        assert!(after.positions[origin].x.abs() < 1e-3);
+    }
+
+    #[test]
+    fn grab_touches_chunks_before_moving_them() {
+        let mut mesh = primitives::icosphere(3, 1.0);
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.4, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry { x: true, ..Default::default() }, false);
+        let start = Vec3::new(0.3, 0.0, 0.95).normalize();
+        let mut touched = false;
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {
+            touched = true;
+        });
+        assert!(!touched, "capturing the grab must not modify the mesh");
+        let before = mesh.positions.clone();
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::X * 0.2, normal: start, pressure: 1.0 },
+            &mut |m, c| {
+                touched = true;
+                let r = m.chunks[c as usize].vertices.clone();
+                for i in r {
+                    assert_eq!(m.positions[i as usize], before[i as usize], "touch ran after the move");
+                }
+            },
+        );
+        assert!(touched);
     }
 }
