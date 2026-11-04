@@ -241,6 +241,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     .on_hover_text("Darkens creases and pores and brightens edges, so fine detail reads clearly");
                 ui.checkbox(&mut ed.view.flat_shading, "Flat shading")
                     .on_hover_text("Show each polygon as a flat facet instead of a smooth surface");
+                surface_cursor_checkbox(ui, ed);
                 ui.separator();
                 ui.label("Background");
                 background_menu(ui, ed);
@@ -273,6 +274,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.checkbox(&mut ed.stroke_from_empty, "Strokes can start on empty space").on_hover_text(
                     "Drag from beside the model onto it to sculpt. Orbit with the middle mouse button or the view strip.",
                 );
+                surface_cursor_checkbox(ui, ed);
                 ui.menu_button("Updates", |ui| update_menu(ui, ed));
                 ui.separator();
                 ui.label("Interface scale");
@@ -2417,7 +2419,134 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
     }
 }
 
-fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+fn surface_cursor_checkbox(ui: &mut Ui, ed: &mut Editor) {
+    let before = ed.surface_cursor;
+    ui.checkbox(&mut ed.surface_cursor, "Align cursor to surface").on_hover_text(
+        "Draw the brush ring flat on the surface under the pointer, at the brush size. Off the model it stays flat to the screen.",
+    );
+    if before && !ed.surface_cursor {
+        ed.forget_cursor_plane();
+    }
+}
+
+/// Orthonormal axes in the plane perpendicular to `normal`. `up_hint` keeps
+/// the square cursor from spinning as the normal changes a little; a circle
+/// does not show the basis at all.
+fn tangent_basis(normal: Vec3, up_hint: Vec3) -> (Vec3, Vec3) {
+    let n = normal.normalize_or(Vec3::Z);
+    let mut tangent = up_hint.cross(n);
+    if tangent.length_squared() < 1e-8 {
+        tangent = n.any_orthonormal_vector();
+    }
+    let tangent = tangent.normalize_or(Vec3::X);
+    let bitangent = n.cross(tangent).normalize_or(Vec3::Y);
+    (tangent, bitangent)
+}
+
+/// `segments` points of a circle of `radius` around `center`, in the plane
+/// perpendicular to `normal`.
+fn surface_circle(center: Vec3, normal: Vec3, radius: f32, up_hint: Vec3, segments: usize) -> Vec<Vec3> {
+    let (t, b) = tangent_basis(normal, up_hint);
+    let nseg = segments.max(3);
+    (0..nseg)
+        .map(|i| {
+            let a = i as f32 / nseg as f32 * std::f32::consts::TAU;
+            center + (t * a.cos() + b * a.sin()) * radius
+        })
+        .collect()
+}
+
+/// Square centered on `center` with side length `2 * half`, in the tangent plane.
+fn surface_square(center: Vec3, normal: Vec3, half: f32, up_hint: Vec3) -> Vec<Vec3> {
+    let (t, b) = tangent_basis(normal, up_hint);
+    vec![center + (-t - b) * half, center + (t - b) * half, center + (t + b) * half, center + (-t + b) * half]
+}
+
+fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
+    let vp = Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
+    let s = ed.camera.project(p, vp)?;
+    let w = s + Vec2::new(ed.canvas[0], ed.canvas[1]);
+    let ppp = ed.pixels_per_point.max(0.1);
+    let pos = egui::pos2(w.x / ppp, w.y / ppp);
+    (pos.x.is_finite() && pos.y.is_finite()).then_some(pos)
+}
+
+fn project_points(ed: &Editor, world: &[Vec3]) -> Option<Vec<egui::Pos2>> {
+    let mut out = Vec::with_capacity(world.len());
+    for &p in world {
+        out.push(project_point(ed, p)?);
+    }
+    // A ring that crosses the near plane projects to a streak across the view.
+    if let Some(origin) = out.first()
+        && out.iter().any(|p| p.distance(*origin) > 10_000.0)
+    {
+        return None;
+    }
+    Some(out)
+}
+
+/// Draw the brush mark in the surface tangent plane. False means the caller
+/// should draw the ordinary screen-aligned mark: the option is off, the ray
+/// misses the model, or the ring cannot be projected.
+fn try_draw_surface_cursor(
+    painter: &egui::Painter,
+    ed: &mut Editor,
+    center_px: Vec2,
+    radius_pt: f32,
+    color: Color32,
+    square: bool,
+    inner: bool,
+) -> bool {
+    if !ed.surface_cursor {
+        ed.forget_cursor_plane();
+        return false;
+    }
+    let Some(plane) = ed.cursor_plane(center_px, radius_pt) else { return false };
+    let up = ed.camera.up();
+    let outer_world = if square {
+        surface_square(plane.point, plane.normal, plane.radius, up)
+    } else {
+        surface_circle(plane.point, plane.normal, plane.radius, up, 48)
+    };
+    let Some(outer) = project_points(ed, &outer_world) else { return false };
+    painter.add(egui::Shape::closed_line(outer, EStroke::new(1.5, color)));
+    if inner && !square {
+        let inner_world = surface_circle(plane.point, plane.normal, plane.radius * 0.5, up, 48);
+        if let Some(inner_pts) = project_points(ed, &inner_world) {
+            painter.add(egui::Shape::closed_line(inner_pts, EStroke::new(1.0, color.linear_multiply(0.45))));
+        }
+    }
+    if let Some(center) = project_point(ed, plane.point) {
+        // A short tick along the normal. Skip it when the surface faces the
+        // camera and the tick would be a dot on top of the centre.
+        let tip = plane.point + plane.normal.normalize_or(Vec3::Z) * (plane.radius * 0.55);
+        if let Some(end) = project_point(ed, tip)
+            && center.distance(end) >= 6.0
+        {
+            painter.line_segment([center, end], EStroke::new(1.25, color.linear_multiply(0.85)));
+        }
+        painter.circle_filled(center, 1.5, color);
+    }
+    true
+}
+
+fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32, kind: BrushKind, color: Color32) {
+    if kind == BrushKind::ClayStrips {
+        painter.rect_stroke(
+            egui::Rect::from_center_size(pos, egui::vec2(2.0 * radius_pt, 2.0 * radius_pt)),
+            0.0,
+            EStroke::new(1.5, color),
+            egui::StrokeKind::Middle,
+        );
+    } else {
+        painter.circle_stroke(pos, radius_pt, EStroke::new(1.5, color));
+        // Inner ring marks where the falloff reaches ~50%.
+        painter.circle_stroke(pos, radius_pt * 0.5, EStroke::new(1.0, color.linear_multiply(0.45)));
+    }
+    painter.circle_filled(pos, 1.5, color);
+}
+
+fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     if !ed.pointer_in_canvas() || matches!(ed.drag, Drag::Orbit | Drag::Pan) {
         return;
     }
@@ -2428,8 +2557,26 @@ fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
     }
     let painter = ui.painter().with_clip_rect(canvas);
     let to_pt = |v: glam::Vec2| egui::pos2(v.x, v.y) / ed.pixels_per_point;
-    match &ed.drag {
+    // Copy what the drag needs before any `&mut ed` call. Matching on
+    // `ed.drag` holds a borrow that the surface cursor cannot share.
+    enum Mark {
+        Select { points: Vec<Vec2>, lasso: bool, action: crate::editor::SelectAction },
+        Deferred { mode: StrokeMode, start: Vec2 },
+        Lazy(Vec2),
+        Brush { kind: BrushKind, invert: bool },
+    }
+    let (fallback_kind, fallback_invert) = ed.effective_brush();
+    let mark = match &ed.drag {
         Drag::Select { points, lasso, action, .. } => {
+            Mark::Select { points: points.clone(), lasso: *lasso, action: *action }
+        }
+        Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
+        Drag::Stroke { lazy: Some(b), .. } => Mark::Lazy(*b),
+        Drag::Stroke { stroke, .. } => Mark::Brush { kind: stroke.settings().kind, invert: false },
+        _ => Mark::Brush { kind: fallback_kind, invert: fallback_invert },
+    };
+    match mark {
+        Mark::Select { points, lasso, action } => {
             let c = match action {
                 crate::editor::SelectAction::Mask => Color32::from_rgb(110, 150, 255),
                 crate::editor::SelectAction::Unmask => Color32::from_rgb(200, 200, 255),
@@ -2437,7 +2584,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
                 crate::editor::SelectAction::Hide => Color32::from_rgb(240, 120, 100),
             };
             let stroke = EStroke::new(1.5, c);
-            if *lasso {
+            if lasso {
                 let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
                 pts.push(pos);
                 painter.add(egui::Shape::closed_line(pts, stroke));
@@ -2445,62 +2592,54 @@ fn draw_brush_cursor(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
                 let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
                 painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
             }
-            return;
         }
-        Drag::Deferred { mode, start, .. } => {
-            let s = to_pt(*start);
+        Mark::Deferred { mode, start } => {
+            let s = to_pt(start);
             let c = ACCENT;
-            if *mode == StrokeMode::Stamp {
+            if mode == StrokeMode::Stamp {
                 let r = s.distance(pos).max(4.0);
-                painter.circle_stroke(s, r, EStroke::new(1.5, c));
+                if !try_draw_surface_cursor(&painter, ed, start, r, c, false, false) {
+                    painter.circle_stroke(s, r, EStroke::new(1.5, c));
+                }
                 painter.line_segment([s, pos], EStroke::new(1.0, c.linear_multiply(0.6)));
             } else {
                 painter.line_segment([s, pos], EStroke::new(2.0, c));
-                painter.circle_stroke(pos, ed.brush_radius_pt, EStroke::new(1.0, c.linear_multiply(0.5)));
+                let ghost = c.linear_multiply(0.5);
+                if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, ghost, false, false) {
+                    painter.circle_stroke(pos, ed.brush_radius_pt, EStroke::new(1.0, ghost));
+                }
             }
-            return;
         }
-        Drag::Stroke { lazy: Some(b), .. } => {
-            // Stabilizer: show the brush position and the string to the cursor.
-            let bp = to_pt(*b);
+        Mark::Lazy(b) => {
+            // Stabilizer: the brush position and the string back to the pointer.
+            let bp = to_pt(b);
             painter.line_segment([bp, pos], EStroke::new(1.0, Color32::from_gray(160)));
-            painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, ACCENT));
-            painter.circle_filled(bp, 2.0, ACCENT);
-            return;
+            if !try_draw_surface_cursor(&painter, ed, b, ed.brush_radius_pt, ACCENT, false, false) {
+                painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, ACCENT));
+                painter.circle_filled(bp, 2.0, ACCENT);
+            }
         }
-        _ => {}
+        Mark::Brush { kind, invert } => {
+            let mods = ed.active_modifiers();
+            if mods.ctrl && mods.shift {
+                // Group pick mode: crosshair instead of a brush ring.
+                let c = Color32::from_rgb(230, 230, 120);
+                painter.line_segment([pos - egui::vec2(8.0, 0.0), pos + egui::vec2(8.0, 0.0)], EStroke::new(1.5, c));
+                painter.line_segment([pos - egui::vec2(0.0, 8.0), pos + egui::vec2(0.0, 8.0)], EStroke::new(1.5, c));
+                return;
+            }
+            let color = match (kind, invert) {
+                (BrushKind::Mask, _) => Color32::from_rgb(110, 150, 255),
+                (BrushKind::Smooth, _) => Color32::from_rgb(160, 220, 160),
+                (_, true) => Color32::from_rgb(120, 200, 255),
+                _ => ACCENT,
+            };
+            let square = kind == BrushKind::ClayStrips;
+            if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, color, square, !square) {
+                paint_screen_cursor(&painter, pos, ed.brush_radius_pt, kind, color);
+            }
+        }
     }
-    if ed.active_modifiers().ctrl && ed.active_modifiers().shift {
-        // Group pick mode: crosshair instead of a brush ring.
-        let c = Color32::from_rgb(230, 230, 120);
-        painter.line_segment([pos - egui::vec2(8.0, 0.0), pos + egui::vec2(8.0, 0.0)], EStroke::new(1.5, c));
-        painter.line_segment([pos - egui::vec2(0.0, 8.0), pos + egui::vec2(0.0, 8.0)], EStroke::new(1.5, c));
-        return;
-    }
-    let (kind, invert) = match &ed.drag {
-        Drag::Stroke { stroke, .. } => (stroke.settings().kind, false),
-        _ => ed.effective_brush(),
-    };
-    let color = match (kind, invert) {
-        (BrushKind::Mask, _) => Color32::from_rgb(110, 150, 255),
-        (BrushKind::Smooth, _) => Color32::from_rgb(160, 220, 160),
-        (_, true) => Color32::from_rgb(120, 200, 255),
-        _ => ACCENT,
-    };
-    let r = ed.brush_radius_pt;
-    if kind == BrushKind::ClayStrips {
-        painter.rect_stroke(
-            egui::Rect::from_center_size(pos, egui::vec2(2.0 * r, 2.0 * r)),
-            0.0,
-            EStroke::new(1.5, color),
-            egui::StrokeKind::Middle,
-        );
-    } else {
-        painter.circle_stroke(pos, r, EStroke::new(1.5, color));
-        // Inner ring marks where the falloff reaches ~50%.
-        painter.circle_stroke(pos, r * 0.5, EStroke::new(1.0, color.linear_multiply(0.45)));
-    }
-    painter.circle_filled(pos, 1.5, color);
 }
 
 fn fmt_count(n: usize) -> String {
@@ -2800,5 +2939,40 @@ mod tests {
         assert!(context_hint(&ed).contains("unmask"));
         ed.modifiers = crate::editor::Modifiers { alt: true, ..Default::default() };
         assert!(context_hint(&ed).contains("inverted"));
+    }
+
+    #[test]
+    fn surface_circle_lies_in_its_plane_and_foreshortens() {
+        let pts = super::surface_circle(glam::Vec3::ZERO, glam::Vec3::Y, 1.0, glam::Vec3::Z, 32);
+        assert_eq!(pts.len(), 32);
+        for p in &pts {
+            assert!(p.dot(glam::Vec3::Y).abs() < 1e-4, "{p}");
+            assert!((p.length() - 1.0).abs() < 1e-4, "{p}");
+        }
+        // Looking along -Z, a circle in the XZ plane (normal +Y) is edge-on.
+        let cam = oxy_render::Camera::default();
+        let vp = glam::Vec2::new(800.0, 600.0);
+        let proj: Vec<_> = pts.iter().map(|p| cam.project(*p, vp).unwrap()).collect::<Vec<_>>();
+        let (min, max) = proj_extent(&proj);
+        let extent = max - min;
+        assert!(extent.x > 50.0, "the circle still has width: {extent}");
+        assert!(extent.y < extent.x * 0.05, "an edge-on circle collapses to a line: {extent}");
+
+        let facing = super::surface_circle(glam::Vec3::ZERO, -cam.forward(), 1.0, cam.up(), 32);
+        let proj = facing.iter().map(|p| cam.project(*p, vp).unwrap()).collect::<Vec<_>>();
+        let (min, max) = proj_extent(&proj);
+        let extent = max - min;
+        let ratio = extent.x / extent.y.max(1e-3);
+        assert!((0.85..=1.15).contains(&ratio), "a circle facing the camera stays round: {extent}");
+    }
+
+    fn proj_extent(pts: &[glam::Vec2]) -> (glam::Vec2, glam::Vec2) {
+        let mut min = pts[0];
+        let mut max = pts[0];
+        for p in pts {
+            min = min.min(*p);
+            max = max.max(*p);
+        }
+        (min, max)
     }
 }

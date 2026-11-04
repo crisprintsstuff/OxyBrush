@@ -162,6 +162,9 @@ fn commands() -> Vec<Entry> {
             e.set_background_style(BackgroundStyle::Flat)
         }),
         cmd("Reset viewport background", "", "view color default backdrop", Editor::reset_background),
+        cmd("Align cursor to surface on / off", "", "view brush cursor ring normal tangent", |e| {
+            e.toggle_surface_cursor()
+        }),
         cmd("Load matcap…", "", "material image custom", |e| e.request_load_matcap = true),
         cmd("Strokes from empty space on / off", "", "navigation orbit middle mouse", |e| {
             e.stroke_from_empty = !e.stroke_from_empty
@@ -453,6 +456,15 @@ mod tests {
         run(&mut ed, toggle);
         assert_eq!(ed.symmetry.x, !x);
         assert_eq!(run(&mut ed, Act::Ui(UiAction::Save)), Some(UiAction::Save));
+        assert!(!ed.surface_cursor);
+        let align = ranked(entries(&ed, PaletteMode::Everything), "align cursor")[0].act.clone();
+        assert_eq!(
+            ranked(entries(&ed, PaletteMode::Everything), "align cursor")[0].label,
+            "Align cursor to surface on / off"
+        );
+        run(&mut ed, align);
+        assert!(ed.surface_cursor);
+        assert!(ed.status.contains("surface"));
         run(&mut ed, Act::Guide(2));
         assert!(ed.guide.open);
         assert_eq!(ed.guide.topic, 2);
