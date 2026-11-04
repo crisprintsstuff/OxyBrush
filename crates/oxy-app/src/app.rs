@@ -73,6 +73,13 @@ impl App {
                     e.enable_autosave();
                 }
                 e.system_info.log_path = log_path;
+                // Brush presets: read the user's library (automated runs use none).
+                if auto.screenshot.is_none() {
+                    e.preset_dir = crate::presets::library_dir();
+                    if let Some(dir) = &e.preset_dir {
+                        e.presets = crate::presets::load_all(dir);
+                    }
+                }
                 e.apply_settings(&settings);
                 if !auto.overrides.is_empty() {
                     let text = format!("{}\n{}", e.settings().to_text(), auto.overrides.join("\n"));
@@ -391,6 +398,34 @@ impl App {
                     match crate::support::load_alpha_png(&p) {
                         Ok(alpha) => ed.add_alpha(alpha),
                         Err(e) => ed.status = format!("Could not load {}: {e}", p.display()),
+                    }
+                }
+            }
+            UiAction::ImportBrush => {
+                let ext = oxy_sculpt::preset::EXTENSION;
+                if let Some(p) = rfd::FileDialog::new().add_filter("OxyBrush brush preset", &[ext]).pick_file() {
+                    match crate::presets::read_file(&p) {
+                        Ok(preset) => {
+                            ed.apply_preset(&preset);
+                            ed.add_preset(preset);
+                        }
+                        Err(e) => ed.status = format!("Could not import {}: {e}", p.display()),
+                    }
+                }
+            }
+            UiAction::ExportBrush => {
+                if let Some(preset) = ed.request_export_preset.take() {
+                    let ext = oxy_sculpt::preset::EXTENSION;
+                    if let Some(p) = rfd::FileDialog::new()
+                        .add_filter("OxyBrush brush preset", &[ext])
+                        .set_file_name(crate::presets::file_name(&preset.name))
+                        .save_file()
+                    {
+                        let p = if p.extension().is_none() { p.with_extension(ext) } else { p };
+                        ed.status = match crate::presets::write_file(&preset, &p) {
+                            Ok(()) => format!("Exported brush preset to {}", p.display()),
+                            Err(e) => format!("Could not export: {e}"),
+                        };
                     }
                 }
             }
