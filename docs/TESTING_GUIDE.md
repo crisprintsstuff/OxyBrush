@@ -39,7 +39,8 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 6. **Color and posing:** pick the **Paint** brush (last in the shelf), choose a color and paint; try **Fill cavities** with a dark color. Switch the material to **Pearl** to see true colors. Then mask the lower half (Ctrl+drag on empty space), press **T** and drag the handles: only the unmasked half moves. Press **T** again for rotate and scale; **Esc** during a drag cancels it.
 7. **Pieces:** in the right panel, **+ Add > Sphere** adds a piece. Sculpt one, Alt+click the other to switch, then **Merge** to fuse them.
 8. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (OBJ or STL, e.g. for 3D printing).
-9. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
+10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
 
 ## 3. What we most want to know
 

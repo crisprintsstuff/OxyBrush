@@ -22,6 +22,10 @@ pub enum UiAction {
     SaveThenContinue,
     /// Load a grayscale image as a brush alpha.
     LoadAlpha,
+    /// Import a brush preset file.
+    ImportBrush,
+    /// Export `Editor::request_export_preset` to a file.
+    ExportBrush,
 }
 
 /// Sizes that differ between the interface layouts.
@@ -307,6 +311,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 
     if std::mem::take(&mut ed.request_load_alpha) {
         action = Some(UiAction::LoadAlpha);
+    }
+    if std::mem::take(&mut ed.request_import_preset) {
+        action = Some(UiAction::ImportBrush);
+    }
+    if ed.request_export_preset.is_some() {
+        action = Some(UiAction::ExportBrush);
     }
     dialogs(ui, ed, &mut action);
 
@@ -1282,7 +1292,110 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     });
 }
 
+/// Brush presets: starter presets and the user's library; save, share, import.
+fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
+    let ctx = ui.ctx().clone();
+    let starters = oxy_sculpt::preset::starter_presets();
+    let mut apply = None;
+    let mut delete = None;
+    let mut copy = None;
+    let row = |ui: &mut Ui,
+               p: &oxy_sculpt::BrushPreset,
+               user: bool,
+               apply: &mut Option<oxy_sculpt::BrushPreset>,
+               delete: &mut Option<String>,
+               copy: &mut Option<String>,
+               ed: &mut Editor| {
+        ui.horizontal(|ui| {
+            let t = widgets::brush_texture(&ctx, p.kind);
+            ui.add(egui::Image::new((t.id(), egui::vec2(24.0, 24.0))));
+            let tip = format!(
+                "{} brush, radius {:.0} pt, strength {:.2}{}",
+                p.kind.label(),
+                p.radius_pt,
+                p.strength,
+                p.alpha.as_ref().map_or(String::new(), |a| format!(", alpha {a}"))
+            );
+            let r = ui.add(egui::Button::selectable(false, &p.name)).on_hover_text(tip);
+            if r.clicked() {
+                *apply = Some(p.clone());
+            }
+            r.context_menu(|ui| {
+                if ui.button("Copy brush code").clicked() {
+                    *copy = Some(p.to_code());
+                }
+                if ui.button("Export to a file…").clicked() {
+                    ed.request_export_preset = Some(p.clone());
+                }
+                if user && ui.button("Delete").clicked() {
+                    *delete = Some(p.name.clone());
+                }
+            });
+        });
+    };
+    ui.label(RichText::new("Starter presets").strong());
+    for p in &starters {
+        row(ui, p, false, &mut apply, &mut delete, &mut copy, ed);
+    }
+    ui.separator();
+    ui.label(RichText::new("My presets").strong());
+    if ed.presets.is_empty() {
+        ui.label(RichText::new("None yet: save the current brush below.").weak().small());
+    }
+    let mine = ed.presets.clone();
+    egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+        for p in &mine {
+            row(ui, p, true, &mut apply, &mut delete, &mut copy, ed);
+        }
+    });
+    ui.label(RichText::new("Click to use. Right-click to copy its code, export or delete.").weak().small());
+    ui.separator();
+    let name_id = egui::Id::unique("preset_name_field");
+    let code_id = egui::Id::unique("preset_code_field");
+    let mut name: String = ui.data_mut(|d| d.get_temp(name_id)).unwrap_or_default();
+    let mut code: String = ui.data_mut(|d| d.get_temp(code_id)).unwrap_or_default();
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut name).hint_text("Preset name").desired_width(150.0));
+        if ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Save current brush")).clicked() {
+            ed.save_preset(&name);
+            name.clear();
+        }
+    });
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(&mut code).hint_text("Paste a brush code (oxyb1:…)").desired_width(150.0));
+        if ui.add_enabled(!code.trim().is_empty(), egui::Button::new("Add")).clicked() && ed.paste_preset_code(&code) {
+            code.clear();
+        }
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Import file…").clicked() {
+            ed.request_import_preset = true;
+        }
+        if ui.button("Copy current as code").on_hover_text("Share this brush as one line of text").clicked() {
+            copy = Some(ed.capture_preset(ed.brush_kind.label()).to_code());
+        }
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(name_id, name);
+        d.insert_temp(code_id, code);
+    });
+    if let Some(p) = apply {
+        ed.apply_preset(&p);
+    }
+    if let Some(n) = delete {
+        ed.delete_preset(&n);
+    }
+    if let Some(c) = copy {
+        ctx.copy_text(c);
+        ed.status = "Brush code copied: paste it anywhere to share this brush".into();
+    }
+}
+
 fn brush_section(ui: &mut Ui, ed: &mut Editor) {
+    let r = ui.button("Presets…").on_hover_text("Saved brushes: use, save, share as a code or file");
+    egui::Popup::from_toggle_button_response(&r)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+        .show(|ui| presets_popup(ui, ed));
     ui.label(RichText::new(widgets::brush_description(ed.brush_kind)).weak().small());
     ui.add_space(2.0);
     egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {

@@ -6,6 +6,7 @@
 mod app;
 mod editor;
 mod pose;
+mod presets;
 mod settings;
 mod snapshot;
 mod support;
