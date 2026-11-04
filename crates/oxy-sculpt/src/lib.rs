@@ -8,9 +8,11 @@
 
 pub mod alpha;
 mod falloff;
+pub mod preset;
 
 pub use alpha::{Alpha, BuiltinAlpha};
 pub use falloff::Falloff;
+pub use preset::BrushPreset;
 
 use glam::{Mat3, Vec2, Vec3};
 use oxy_mesh::Mesh;

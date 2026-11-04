@@ -94,7 +94,9 @@ alone don't show visual regressions.
   zlib-compatible. **Never copy GPL code**, including Blender's; studying
   behavior and published papers is fine (cite the paper in a comment).
 - **Clean-room behavior.** Never consult leaked or decompiled proprietary
-  code. Don't copy other products' UI layouts, icons, materials, brushes or
+  code, and never read the source of copyleft (e.g. GPL) projects whose
+  features we reimplement; use their public docs only and log it in
+  [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md). Don't copy other products' UI layouts, icons, materials, brushes or
   other assets; everything shipped is original or CC0/CC-BY.
 - **Trademarks.** Don't use ZBrush/Maxon proprietary feature names (DynaMesh,
   ZRemesher, ZSpheres, SubTool, Polypaint, …) for OxyBrush features, in code,

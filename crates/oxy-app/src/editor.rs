@@ -44,6 +44,19 @@ pub enum StrokeMode {
 impl StrokeMode {
     pub const ALL: [StrokeMode; 3] = [StrokeMode::Freehand, StrokeMode::Line, StrokeMode::Stamp];
 
+    /// Key used in brush presets.
+    pub fn key(self) -> &'static str {
+        match self {
+            StrokeMode::Freehand => "freehand",
+            StrokeMode::Line => "line",
+            StrokeMode::Stamp => "stamp",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<StrokeMode> {
+        Self::ALL.into_iter().find(|m| m.key() == key)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             StrokeMode::Freehand => "Freehand",
@@ -197,6 +210,14 @@ pub struct Editor {
     pub(crate) level_job_triangles: usize,
     /// Opt-in update checks (off unless the user turns them on).
     pub updater: crate::updates::Updater,
+    /// The user's saved brush presets (loaded from the library folder).
+    pub presets: Vec<oxy_sculpt::BrushPreset>,
+    /// Where presets are saved; None in automated runs and tests (nothing is written).
+    pub preset_dir: Option<std::path::PathBuf>,
+    /// Set by the UI: export this preset to a file (platform layer opens a dialog).
+    pub request_export_preset: Option<oxy_sculpt::BrushPreset>,
+    /// Set by the UI: import a preset file.
+    pub request_import_preset: bool,
     /// Where the brush shelf, the settings panel and the size/strength bar go.
     pub shelf: crate::settings::ShelfPosition,
     pub panels: crate::settings::PanelSide,
@@ -279,6 +300,10 @@ impl Default for Editor {
             touch_modifiers: Modifiers::default(),
             level_job_triangles: LEVEL_JOB_TRIANGLES,
             updater: Default::default(),
+            presets: Vec::new(),
+            preset_dir: None,
+            request_export_preset: None,
+            request_import_preset: false,
             shelf: Default::default(),
             panels: Default::default(),
             quick_bar: Default::default(),
@@ -617,6 +642,117 @@ impl Editor {
                 up: self.camera.up(),
             });
         Stroke::new(settings, self.symmetry, invert).with_alpha(stamp)
+    }
+
+    /// The current brush as a preset named `name`.
+    pub fn capture_preset(&self, name: &str) -> oxy_sculpt::BrushPreset {
+        let k = self.brush_kind;
+        oxy_sculpt::BrushPreset {
+            name: name.trim().to_owned(),
+            kind: k,
+            radius_pt: self.brush_radius_pt,
+            strength: self.strength(k),
+            falloff: self.falloff,
+            spacing: self.spacing,
+            pressure_strength: self.pressure_strength,
+            pressure_radius: self.pressure_radius,
+            front_faces_only: self.front_faces_only,
+            auto_smooth: self.auto_smooth,
+            spray: self.spray,
+            noise_scale: self.noise_scale,
+            stroke_mode: self.stroke_mode.key().into(),
+            stabilizer_pt: self.stabilizer_pt,
+            pressure_gamma: self.pressure_gamma,
+            alpha: self.alpha.and_then(|i| self.alphas.get(i)).map(|a| a.name.clone()),
+            alpha_rotation_deg: self.alpha_rotation_deg,
+            alpha_follow_stroke: self.alpha_follow_stroke,
+        }
+    }
+
+    /// Switch to a preset's brush and settings.
+    pub fn apply_preset(&mut self, p: &oxy_sculpt::BrushPreset) {
+        self.brush_kind = p.kind;
+        self.brush_radius_pt = p.radius_pt;
+        *self.strength_mut(p.kind) = p.strength;
+        self.falloff = p.falloff;
+        self.spacing = p.spacing;
+        self.pressure_strength = p.pressure_strength;
+        self.pressure_radius = p.pressure_radius;
+        self.front_faces_only = p.front_faces_only;
+        self.auto_smooth = p.auto_smooth;
+        self.spray = p.spray;
+        self.noise_scale = p.noise_scale;
+        self.stroke_mode = StrokeMode::from_key(&p.stroke_mode).unwrap_or_default();
+        self.stabilizer_pt = p.stabilizer_pt;
+        self.pressure_gamma = p.pressure_gamma;
+        self.alpha_rotation_deg = p.alpha_rotation_deg;
+        self.alpha_follow_stroke = p.alpha_follow_stroke;
+        self.status = format!("Brush preset: {}", p.name);
+        self.alpha = match &p.alpha {
+            None => None,
+            Some(name) => {
+                let found = self.alphas.iter().position(|a| a.name.eq_ignore_ascii_case(name));
+                if found.is_none() {
+                    self.status = format!(
+                        "Brush preset: {} (its alpha \"{name}\" isn't loaded; load that image to use it)",
+                        p.name
+                    );
+                }
+                found
+            }
+        };
+    }
+
+    /// Save the current brush as a user preset (replacing one of the same name).
+    pub fn save_preset(&mut self, name: &str) {
+        let name = name.trim();
+        if name.is_empty() {
+            self.status = "Give the preset a name first".into();
+            return;
+        }
+        let preset = self.capture_preset(name);
+        self.add_preset(preset);
+    }
+
+    /// Add a preset (from a code or file) to the library.
+    pub fn add_preset(&mut self, preset: oxy_sculpt::BrushPreset) {
+        if let Some(dir) = &self.preset_dir
+            && let Err(e) = crate::presets::save(dir, &preset)
+        {
+            self.status = format!("Could not save the preset: {e}");
+            return;
+        }
+        self.status = format!("Saved brush preset \"{}\"", preset.name);
+        self.presets.retain(|p| p.name != preset.name);
+        self.presets.push(preset);
+        self.presets.sort_by_key(|p| p.name.to_lowercase());
+    }
+
+    pub fn delete_preset(&mut self, name: &str) {
+        if let Some(dir) = &self.preset_dir
+            && let Err(e) = crate::presets::delete(dir, name)
+            && e.kind() != std::io::ErrorKind::NotFound
+        {
+            self.status = format!("Could not delete the preset: {e}");
+            return;
+        }
+        self.presets.retain(|p| p.name != name);
+        self.status = format!("Deleted brush preset \"{name}\"");
+    }
+
+    /// Add a preset from a pasted brush code.
+    pub fn paste_preset_code(&mut self, code: &str) -> bool {
+        match oxy_sculpt::BrushPreset::from_code(code) {
+            Ok(p) => {
+                self.apply_preset(&p);
+                self.add_preset(p);
+                true
+            }
+            Err(e) => {
+                self.status = e;
+                false
+            }
+        }
     }
 
     /// Add a user alpha and select it.
@@ -2035,6 +2171,42 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         assert!(matches!(e.drag, Drag::Stroke { .. }));
         e.pointer_up();
+    }
+
+    #[test]
+    fn presets_capture_apply_and_survive_codes() {
+        let mut e = Editor { brush_kind: BrushKind::Crease, brush_radius_pt: 21.0, ..Default::default() };
+        *e.strength_mut(BrushKind::Crease) = 0.66;
+        e.falloff = oxy_sculpt::Falloff::Sharp;
+        e.stroke_mode = StrokeMode::Line;
+        e.stabilizer_pt = 40.0;
+        e.alpha = e.alphas.iter().position(|a| a.name == "Cracks");
+        let p = e.capture_preset("  Deep cracks ");
+        assert_eq!(p.name, "Deep cracks");
+        let code = p.to_code();
+
+        let mut f = Editor::default();
+        assert!(f.paste_preset_code(&code));
+        assert_eq!(f.brush_kind, BrushKind::Crease);
+        assert_eq!(f.brush_radius_pt, 21.0);
+        assert_eq!(f.strength(BrushKind::Crease), 0.66);
+        assert_eq!(f.stroke_mode, StrokeMode::Line);
+        assert_eq!(f.stabilizer_pt, 40.0);
+        assert_eq!(f.alpha.map(|i| f.alphas[i].name.clone()).as_deref(), Some("Cracks"));
+        assert_eq!(f.presets.len(), 1, "a pasted code is kept in the library");
+        // Same name replaces; delete removes.
+        f.save_preset("Deep cracks");
+        assert_eq!(f.presets.len(), 1);
+        f.delete_preset("Deep cracks");
+        assert!(f.presets.is_empty());
+        // An alpha that isn't loaded is reported, not guessed.
+        let mut missing = p.clone();
+        missing.alpha = Some("My scan".into());
+        f.apply_preset(&missing);
+        assert!(f.alpha.is_none() && f.status.contains("isn't loaded"), "{}", f.status);
+        assert!(!f.paste_preset_code("garbage"));
+        f.save_preset("   ");
+        assert!(f.status.contains("name"), "{}", f.status);
     }
 
     #[test]
