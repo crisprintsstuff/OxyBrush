@@ -18,12 +18,13 @@ pub struct Topic {
 pub const TOPICS: &[Topic] = &[
     Topic {
         title: "Getting around",
-        keywords: "camera navigate orbit rotate pan zoom view",
+        keywords: "camera navigate orbit rotate pan zoom view focal length fov lens",
         body: "Drag on empty space to orbit around the model. Right-drag (or Alt+drag on empty space) pans, and the mouse wheel zooms. With a pen, use the drag buttons in the strip beside the viewport.\n\n\
 - F frames the whole scene.\n\
 - Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others.\n\
 - Hold Shift while orbiting to snap the view to 45° steps.\n\
 - O switches between perspective and orthographic.\n\
+- The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
 - Tab hides the panels to give the model the whole window.\n\n\
 Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.",
     },
@@ -148,6 +149,15 @@ Interface scale and a high-contrast theme are in Settings too. All of these are 
         title: "Updates and privacy",
         keywords: "update version network privacy telemetry",
         body: "OxyBrush never contacts the internet unless you turn on update checks in Settings > Updates (or use Help > Check for updates). Then it asks GitHub for the latest release and sends nothing about you or your work. This guide is built in and works offline.",
+    },
+    Topic {
+        title: "Focal length",
+        keywords: "fov field of view lens camera mm perspective zoom millimeters",
+        body: "View > Focal length, the lens button beside the viewport, or the command palette (Ctrl+K, then type \"focal\") sets the perspective lens. The number is a 35mm-equivalent focal length, the same kind of millimeter number a camera lens uses.\n\n\
+- 18 mm is wide and stretches depth. 50 mm looks natural. 135 mm flattens it, so a nose and an ear look closer in size.\n\
+- Drag the slider or type a value from 15 to 200 mm, in hundredths. The vertical field of view in degrees is shown next to the number; hover it for the horizontal angle at this window's shape.\n\
+- The five presets jump to those lenses. Reset puts back the original view (35° vertical, about 38 mm).\n\n\
+The model stays about the same size when the lens changes. The mouse wheel is still zoom, and it is separate from the lens. Orthographic view (O) ignores the lens entirely; the choice applies again when you switch back to perspective, and it is remembered next time you open OxyBrush.",
     },
     Topic {
         title: "Reporting problems",

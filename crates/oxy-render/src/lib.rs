@@ -9,7 +9,10 @@
 mod camera;
 pub mod matcap;
 
-pub use camera::Camera;
+pub use camera::{
+    Camera, DEFAULT_FOV_Y, FOCAL_MM_MAX, FOCAL_MM_MIN, FOCAL_PRESETS_MM, clamp_focal_mm, default_focal_mm,
+    fov_y_from_focal_mm, quantize_focal_mm,
+};
 pub use matcap::MatcapPreset;
 
 use bytemuck::{Pod, Zeroable};

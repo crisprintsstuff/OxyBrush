@@ -142,6 +142,13 @@ fn commands() -> Vec<Entry> {
         cmd("Right view", "Numpad 3", "view camera side", |e| e.camera.snap(std::f32::consts::FRAC_PI_2, 0.0)),
         cmd("Top view", "Numpad 7", "view camera", |e| e.camera.snap(0.0, 1.55)),
         cmd("Toggle orthographic", "O", "view camera perspective", |e| e.camera.orthographic = !e.camera.orthographic),
+        cmd("Focal length…", "", "view camera lens fov field of view mm", |e| e.show_focal_length = true),
+        cmd("Focal length 18 mm", "wide", "view camera lens fov", |e| e.set_focal_mm(18.0)),
+        cmd("Focal length 35 mm", "", "view camera lens fov", |e| e.set_focal_mm(35.0)),
+        cmd("Focal length 50 mm", "natural", "view camera lens fov", |e| e.set_focal_mm(50.0)),
+        cmd("Focal length 85 mm", "", "view camera lens fov", |e| e.set_focal_mm(85.0)),
+        cmd("Focal length 135 mm", "telephoto", "view camera lens fov", |e| e.set_focal_mm(135.0)),
+        cmd("Reset focal length", "", "view camera lens fov default", Editor::reset_focal_length),
         cmd("Face group colors", "G", "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd("Shading on / off", "", "view ambient occlusion cavity", Editor::toggle_shading),
         cmd("Flat shading on / off", "", "view faceted polygons smooth", |e| {
@@ -425,7 +432,9 @@ mod tests {
         assert_eq!(ranked(all.clone(), "brush clay")[0].label, "Brush: Clay");
         // Hidden keywords match too: "polygons" finds Decimate.
         assert!(labels(&ranked(all.clone(), "polygons")).contains(&"Decimate"));
-        assert!(labels(&ranked(all, "guide mask")).iter().any(|l| l.starts_with("Guide: Mask")));
+        assert!(labels(&ranked(all.clone(), "guide mask")).iter().any(|l| l.starts_with("Guide: Mask")));
+        assert_eq!(ranked(all.clone(), "focal length 85")[0].label, "Focal length 85 mm");
+        assert!(labels(&ranked(all, "guide focal")).iter().any(|l| l.contains("Focal length")));
 
         let brushes = entries(&ed, PaletteMode::Brushes);
         assert_eq!(brushes.len(), BrushKind::ALL.len());
@@ -453,9 +462,19 @@ mod tests {
         assert_eq!(ed.view.background_style, BackgroundStyle::Flat);
         // The flat color is kept; only the style changes.
         assert_eq!(ed.view.background, [0.2, 0.3, 0.4]);
-        let reset = ranked(entries(&ed, PaletteMode::Everything), "reset viewport background")[0].act.clone();
-        run(&mut ed, reset);
+        let reset_bg = ranked(entries(&ed, PaletteMode::Everything), "reset viewport background")[0].act.clone();
+        run(&mut ed, reset_bg);
         assert_eq!(ed.view.background_style, BackgroundStyle::Gradient);
         assert_eq!(ed.view.background, oxy_render::ViewSettings::default().background);
+        let lens = ranked(entries(&ed, PaletteMode::Everything), "focal length 50 mm")[0].act.clone();
+        run(&mut ed, lens);
+        assert!((ed.focal_mm - 50.0).abs() < 1e-4);
+        let reset_lens = ranked(entries(&ed, PaletteMode::Everything), "reset focal")[0].act.clone();
+        run(&mut ed, reset_lens);
+        assert!((ed.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-4);
+        assert!((ed.camera.fov_y - oxy_render::DEFAULT_FOV_Y).abs() < 1e-5);
+        let open = ranked(entries(&ed, PaletteMode::Everything), "focal length")[0].act.clone();
+        run(&mut ed, open);
+        assert!(ed.show_focal_length);
     }
 }
