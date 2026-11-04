@@ -134,6 +134,9 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `G` | Face group colors |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
+| Right click / hold `Q` | Quick menu at the cursor (size, strength, Raise/Carve) |
+| Alt with Grab / Snake Hook | Move along the surface normal |
+| Middle-drag on a panel | Scroll the panel |
 | `F1` | Full shortcut list |
 
 On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.

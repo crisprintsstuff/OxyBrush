@@ -30,8 +30,10 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Pinch => "Pulls the surface together to sharpen edges and ridges.",
         BrushKind::Crease => "Cuts a sharp groove, for wrinkles and folds. Alt raises a ridge.",
         BrushKind::Layer => "Raises an even plateau of fixed height, however often you go over it.",
-        BrushKind::Grab => "Drag to move a whole region of the surface.",
-        BrushKind::SnakeHook => "Pulls out long shapes like horns and tentacles.",
+        BrushKind::Grab => "Drag to move a whole region of the surface. Alt moves it along the surface normal.",
+        BrushKind::SnakeHook => {
+            "Pulls out long shapes like horns and tentacles. Alt pulls straight out along the normal."
+        }
         BrushKind::TopoMove => "Moves only the connected surface under the brush; nearby separate parts stay put.",
         BrushKind::Polish => "Flattens small bumps without shrinking the form.",
         BrushKind::PlanarTrim => "Cuts the surface down to a plane. Alt fills up to it.",

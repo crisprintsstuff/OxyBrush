@@ -233,6 +233,29 @@ struct Dab {
     /// Alpha axes in the tangent plane (x right, y up).
     tangent: Vec3,
     bitangent: Vec3,
+    /// Camera forward direction (zero when unknown), for brushes that
+    /// interpret screen drags.
+    view: Vec3,
+}
+
+/// Pull `drag` (a movement in the view plane) onto `normal`: its length
+/// becomes the distance along the normal, positive when the drag points
+/// the way the normal does on screen (or always, when the normal faces the
+/// viewer, or the view is unknown), negative when it points back.
+fn along_normal(drag: Vec3, normal: Vec3, view: Vec3) -> Vec3 {
+    let len = drag.length();
+    if len < 1e-12 {
+        return Vec3::ZERO;
+    }
+    // The normal's direction on screen; when it points at the viewer (or
+    // the view is unknown), any drag pulls outward.
+    let on_screen = (normal - view * normal.dot(view)).normalize_or_zero();
+    let sign = if view == Vec3::ZERO || (normal - view * normal.dot(view)).length() < 0.2 {
+        1.0
+    } else {
+        drag.dot(on_screen).signum()
+    };
+    normal * (len * sign)
 }
 
 impl Dab {
@@ -244,6 +267,7 @@ impl Dab {
             drag: m * self.drag,
             tangent: m * self.tangent,
             bitangent: m * self.bitangent,
+            view: m * self.view,
             ..*self
         }
     }
@@ -265,6 +289,9 @@ struct GrabState {
     origin: Vec3,
     /// Captured vertices per symmetry transform.
     captured: Vec<(Mat3, Vec<GrabVertex>)>,
+    /// Weighted average normal of each captured region (for Alt: move
+    /// along the surface normal).
+    normals: Vec<Vec3>,
 }
 
 /// Per-vertex state for the Layer brush: original position, original
@@ -286,6 +313,11 @@ pub struct Stroke {
     layer: LayerState,
     dab_count: u32,
     alpha: Option<AlphaStamp>,
+    /// Camera forward direction, when the caller provides it.
+    view: Vec3,
+    /// Grab: capture everything under the brush circle on screen, through
+    /// the whole depth of the model, instead of a sphere on the surface.
+    grab_through: bool,
     rng: u64,
 }
 
@@ -302,8 +334,26 @@ impl Stroke {
             layer: LayerState::default(),
             dab_count: 0,
             alpha: None,
+            view: Vec3::ZERO,
+            grab_through: false,
             rng: 0x9e37_79b9_7f4a_7c15,
         }
+    }
+
+    /// The camera's forward direction. Inverted Grab, Topological Move and
+    /// Snake Hook use it to turn screen drags into movement along the
+    /// surface normal.
+    pub fn with_view(mut self, forward: Vec3) -> Self {
+        self.view = forward.normalize_or_zero();
+        self
+    }
+
+    /// Grab captures a cylinder along the view direction (everything under
+    /// the brush circle, front to back) instead of a sphere. Needs
+    /// [`with_view`](Self::with_view).
+    pub fn with_grab_through(mut self, on: bool) -> Self {
+        self.grab_through = on;
+        self
     }
 
     /// Shape every dab with an alpha.
@@ -381,7 +431,17 @@ impl Stroke {
                 (b.cross(n), b)
             }
         };
-        let dab = Dab { center: s.position, normal: n, radius, strength, direction, drag, tangent, bitangent };
+        let dab = Dab {
+            center: s.position,
+            normal: n,
+            radius,
+            strength,
+            direction,
+            drag,
+            tangent,
+            bitangent,
+            view: self.view,
+        };
         dab.rotated(self.alpha.as_ref().map_or(0.0, |a| a.rotation))
     }
 
@@ -419,16 +479,21 @@ impl Stroke {
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
             let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
             let topological = self.settings.kind == BrushKind::TopoMove;
-            let captured = self
+            let through = self.grab_through && self.view != Vec3::ZERO && !topological;
+            let captured: Vec<(Mat3, Vec<GrabVertex>)> = self
                 .transforms
                 .iter()
                 .map(|&m| {
                     let d = dab.transformed(m);
                     let mut verts = Vec::new();
-                    for c in mesh.chunks_in_sphere(d.center, reach(self.settings.kind, &d, alpha.is_some())) {
-                        for v in mesh.chunks[c as usize].vertices.clone() {
-                            if let Some(w) = vertex_weight(mesh, &self.settings, &d, alpha.as_deref(), v) {
-                                verts.push((v, w, mesh.positions[v as usize]));
+                    if through {
+                        verts = capture_cylinder(mesh, &self.settings, &d);
+                    } else {
+                        for c in mesh.chunks_in_sphere(d.center, reach(self.settings.kind, &d, alpha.is_some())) {
+                            for v in mesh.chunks[c as usize].vertices.clone() {
+                                if let Some(w) = vertex_weight(mesh, &self.settings, &d, alpha.as_deref(), v) {
+                                    verts.push((v, w, mesh.positions[v as usize]));
+                                }
                             }
                         }
                     }
@@ -438,7 +503,15 @@ impl Stroke {
                     (m, verts)
                 })
                 .collect();
-            self.grab = Some(GrabState { origin: s.position, captured });
+            let normals = captured
+                .iter()
+                .zip(&self.transforms)
+                .map(|((_, verts), &m)| {
+                    let n: Vec3 = verts.iter().map(|&(v, w, _)| mesh.normals[v as usize] * w).sum();
+                    n.try_normalize().unwrap_or(m * dab.normal)
+                })
+                .collect();
+            self.grab = Some(GrabState { origin: s.position, captured, normals });
             self.last = Some(s);
             return;
         };
@@ -451,8 +524,14 @@ impl Stroke {
         for c in chunks {
             touch(mesh, c);
         }
-        for (m, verts) in &grab.captured {
-            let d = *m * delta;
+        // Alt (invert): move along the surface normal instead, by the drag's length.
+        let primary = grab.normals.first().copied().unwrap_or(Vec3::ZERO);
+        let along = self.invert.then(|| along_normal(delta, primary, self.view).dot(primary));
+        for ((m, verts), n) in grab.captured.iter().zip(&grab.normals) {
+            let d = match along {
+                Some(t) => *n * t,
+                None => *m * delta,
+            };
             for &(v, w, orig) in verts {
                 mesh.positions[v as usize] = orig + d * w;
                 moved.push(v);
@@ -462,6 +541,27 @@ impl Stroke {
         self.dab_count += 1;
         self.last = Some(s);
     }
+}
+
+/// Grab-through capture: every visible vertex whose distance from the
+/// line through the dab centre along the view direction is within the
+/// radius, front to back, with the brush falloff and the mask applied.
+fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<GrabVertex> {
+    let r = dab.radius;
+    let axis = dab.view;
+    (0..mesh.vertex_count() as u32)
+        .filter(|&v| !mesh.is_vertex_hidden(v))
+        .filter_map(|v| {
+            let p = mesh.positions[v as usize];
+            let off = p - dab.center;
+            let radial = (off - axis * off.dot(axis)).length();
+            if radial > r {
+                return None;
+            }
+            let w = settings.falloff.eval(radial / r) * (1.0 - mesh.mask[v as usize]);
+            (w > 0.0).then_some((v, w, p))
+        })
+        .collect()
 }
 
 /// Keep only captured vertices connected (through captured vertices) to
@@ -649,7 +749,11 @@ fn apply_kernel(
                     // Crease carves a groove and pulls its walls together;
                     // inverted it raises a sharp ridge.
                     BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
-                    BrushKind::SnakeHook => p + dab.drag * (w * dab.strength.min(1.0)),
+                    BrushKind::SnakeHook => {
+                        // Alt (invert): pull straight out along the surface normal.
+                        let drag = if invert { along_normal(dab.drag, area_normal, dab.view) } else { dab.drag };
+                        p + drag * (w * dab.strength.min(1.0))
+                    }
                     // Polish: smooth only along the normal, so bumps flatten
                     // without the surface shrinking or sliding sideways.
                     BrushKind::Polish => {
@@ -818,6 +922,65 @@ mod tests {
             s.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 1.0 }, &mut |_, _| {});
         }
         (before, mesh)
+    }
+
+    /// Grab from the front of a unit sphere (camera looking down -Z),
+    /// dragging by `delta` in the view plane.
+    fn grab(kind: BrushKind, invert: bool, through: bool, delta: Vec3) -> (Mesh, Mesh) {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind, radius: 0.4, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry::default(), invert).with_view(-Vec3::Z).with_grab_through(through);
+        let start = Vec3::Z;
+        for t in [0.0, 0.5, 1.0] {
+            let p = start + delta * t;
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: Vec3::Z, pressure: 1.0 }, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    #[test]
+    fn grab_through_moves_the_back_too() {
+        let d = Vec3::new(0.3, 0.0, 0.0);
+        let moved_back = |m: &Mesh, b: &Mesh| {
+            m.positions.iter().zip(&b.positions).filter(|(p, q)| q.z < -0.5 && (**p - **q).length() > 1e-4).count()
+        };
+        let (b, m) = grab(BrushKind::Grab, false, false, d);
+        assert_eq!(moved_back(&m, &b), 0, "a normal grab only takes the front");
+        let (b, m) = grab(BrushKind::Grab, false, true, d);
+        assert!(moved_back(&m, &b) > 10, "grab-through takes everything under the circle");
+        // Outside the circle on screen nothing moves, at any depth.
+        for (p, q) in m.positions.iter().zip(&b.positions) {
+            if q.truncate().length() > 0.41 {
+                assert_eq!(p, q);
+            }
+        }
+    }
+
+    #[test]
+    fn inverted_grab_and_snake_hook_move_along_the_normal() {
+        // Facing the viewer, a sideways drag pulls the surface straight out.
+        let (b, m) = grab(BrushKind::Grab, true, false, Vec3::new(0.3, 0.0, 0.0));
+        let tip = (0..b.vertex_count()).max_by(|&i, &j| b.positions[i].z.total_cmp(&b.positions[j].z)).unwrap();
+        let d = m.positions[tip] - b.positions[tip];
+        assert!(d.z > 0.25 && d.x.abs() < 0.02, "pulled out along +Z: {d}");
+        let (b, m) = grab(BrushKind::Grab, false, false, Vec3::new(0.3, 0.0, 0.0));
+        let d = m.positions[tip] - b.positions[tip];
+        assert!(d.x > 0.25 && d.z.abs() < 0.02, "without Alt it follows the drag: {d}");
+        // Snake Hook pulls outward too.
+        let (b, m) = drag_stroke(BrushKind::SnakeHook, true);
+        assert!(max_radius(&m) > max_radius(&b) + 0.01);
+    }
+
+    #[test]
+    fn along_normal_signs() {
+        let v = -Vec3::Z;
+        // Normal facing the viewer: always outward.
+        assert_eq!(along_normal(Vec3::X, Vec3::Z, v), Vec3::Z);
+        assert_eq!(along_normal(-Vec3::X, Vec3::Z, v), Vec3::Z);
+        // Normal pointing right on screen: dragging left pushes in.
+        assert_eq!(along_normal(-Vec3::X * 2.0, Vec3::X, v), -Vec3::X * 2.0);
+        assert_eq!(along_normal(Vec3::ZERO, Vec3::X, v), Vec3::ZERO);
     }
 
     fn max_radius(m: &Mesh) -> f32 {

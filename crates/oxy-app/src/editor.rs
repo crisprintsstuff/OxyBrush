@@ -103,6 +103,14 @@ pub enum Drag {
     },
 }
 
+/// The quick menu: shown at `pos` (window physical px). `held`: it closes
+/// when its key is released; otherwise on Esc or a click outside it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuickMenu {
+    pub pos: Vec2,
+    pub held: bool,
+}
+
 /// Something that needs a "discard unsaved changes?" confirmation first.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Pending {
@@ -247,6 +255,13 @@ pub struct Editor {
     pub job: Option<Job>,
     pub frame_ms: f32,
     pub quit_now: bool,
+    /// Grab captures everything under the brush circle, through the whole
+    /// depth of the model.
+    pub grab_through: bool,
+    /// Size/strength menu at the cursor (right click, or hold Q).
+    pub quick_menu: Option<QuickMenu>,
+    /// Where the right button went down, to tell a click from a pan.
+    rmb_press: Option<Vec2>,
     /// Machine details for bug reports (filled in by the app layer).
     pub system_info: crate::support::SystemInfo,
 }
@@ -325,6 +340,9 @@ impl Default for Editor {
             pending: None,
             job: None,
             frame_ms: 0.0,
+            grab_through: false,
+            quick_menu: None,
+            rmb_press: None,
             quit_now: false,
             system_info: Default::default(),
         }
@@ -533,6 +551,8 @@ impl Editor {
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
         if button != PointerButton::Primary {
+            // A right click (without dragging) opens the quick menu.
+            self.rmb_press = (button == PointerButton::Secondary).then_some(p);
             self.drag = match button {
                 PointerButton::Middle if !self.active_modifiers().shift => Drag::Orbit,
                 _ => Drag::Pan,
@@ -641,7 +661,10 @@ impl Editor {
                 follow_stroke: self.alpha_follow_stroke,
                 up: self.camera.up(),
             });
-        Stroke::new(settings, self.symmetry, invert).with_alpha(stamp)
+        Stroke::new(settings, self.symmetry, invert)
+            .with_alpha(stamp)
+            .with_view(self.camera.forward())
+            .with_grab_through(self.grab_through && kind == BrushKind::Grab)
     }
 
     /// The current brush as a preset named `name`.
@@ -835,6 +858,11 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self) {
+        if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
+            && p0.distance(p) < 5.0 * self.pixels_per_point
+        {
+            self.quick_menu = Some(QuickMenu { pos: p0, held: false });
+        }
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } => self.history.commit(),
             Drag::Deferred { mode, kind, invert, start } => {
@@ -2266,5 +2294,40 @@ mod tests {
         assert!(e.status.contains("1 pieces"), "{}", e.status);
         assert!(path.exists());
         std::fs::remove_dir_all(dir).ok();
+    }
+    #[test]
+    fn right_click_opens_the_quick_menu_and_right_drag_pans() {
+        let mut e = editor();
+        let p = Vec2::new(400.0, 300.0);
+        e.pointer = Some(p);
+        e.pointer_down(PointerButton::Secondary);
+        e.pointer_up();
+        assert_eq!(e.quick_menu, Some(QuickMenu { pos: p, held: false }));
+        e.quick_menu = None;
+        let target = e.camera.target;
+        e.pointer_down(PointerButton::Secondary);
+        for i in 1..=10 {
+            e.pointer_moved(p + Vec2::new(i as f32 * 6.0, 0.0));
+        }
+        e.pointer_up();
+        assert!(e.quick_menu.is_none(), "a drag pans instead");
+        assert_ne!(e.camera.target, target);
+    }
+
+    #[test]
+    fn grab_through_reaches_the_back_of_the_model() {
+        let back_moved = |through: bool| {
+            let mut e = editor();
+            e.brush_kind = BrushKind::Grab;
+            e.grab_through = through;
+            e.symmetry.x = false;
+            let before = e.scene.active().mesh.positions.clone();
+            drag(&mut e, Vec2::new(400.0, 300.0), Vec2::new(440.0, 300.0));
+            let fwd = e.camera.forward();
+            let mesh = &e.scene.active().mesh;
+            mesh.positions.iter().zip(&before).filter(|(p, q)| q.dot(fwd) > 0.5 && (**p - **q).length() > 1e-4).count()
+        };
+        assert_eq!(back_moved(false), 0);
+        assert!(back_moved(true) > 10);
     }
 }

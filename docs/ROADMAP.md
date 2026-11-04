@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (brush presets; glTF/GLB and PLY export, LOD chain, split pieces, command-line tool)
+> **Last updated:** 2026-11-04 (quick menu at the cursor, grab through, move along the normal, middle-drag panel scrolling)
 
 ## Status at a glance
 
@@ -86,7 +86,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
 | **Viewport** | Screen-space ambient occlusion and cavity shading ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, user-imported matcaps, material per piece | 3–5 wk |
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
-| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. ⏳ Quick palette at the cursor, keymap editor, custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
+| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. ⏳ Keymap editor and navigation presets, custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 

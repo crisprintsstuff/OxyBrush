@@ -329,6 +329,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             floating_quick_bar(ui.ctx(), ed, canvas);
         }
     }
+    quick_menu(ui.ctx(), ed);
     draw_brush_cursor(ui, ed, canvas);
     (action, canvas)
 }
@@ -585,6 +586,41 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     let k = ed.brush_kind;
     ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true))
         .on_hover_text("Brush strength  (- and =)");
+}
+
+/// Size/strength menu at the cursor (right click on the viewport, or hold Q).
+fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
+    let Some(q) = ed.quick_menu else { return };
+    let pos = egui::pos2(q.pos.x, q.pos.y) / ed.pixels_per_point;
+    let r = egui::Area::new(egui::Id::unique("cursor_quick_menu"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .fixed_pos(pos)
+        .constrain(true)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 8)).show(
+                ui,
+                |ui| {
+                    ui.label(RichText::new(format!("{} brush", ed.brush_kind.label())).strong());
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().slider_width = 150.0;
+                        quick_controls(ui, ed);
+                    });
+                    let hint = if q.held { "Release Q to close" } else { "Esc or click outside to close" };
+                    ui.label(RichText::new(hint).weak().small());
+                },
+            );
+        })
+        .response;
+    if !q.held {
+        let (esc, clicked_outside) = ctx.input(|i| {
+            let outside = i.pointer.interact_pos().is_some_and(|p| !r.rect.contains(p));
+            (i.key_pressed(egui::Key::Escape), i.pointer.any_pressed() && outside)
+        });
+        if esc || clicked_outside {
+            ed.quick_menu = None;
+        }
+    }
 }
 
 /// The quick controls floating over the center of the viewport, close to
@@ -1331,6 +1367,12 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Auto smooth");
         ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0)).on_hover_text("Smooth a little after every dab");
         ui.end_row();
+        if ed.brush_kind == BrushKind::Grab {
+            ui.label("Grab through");
+            ui.checkbox(&mut ed.grab_through, "Whole depth")
+                .on_hover_text("Move everything under the brush circle, front to back, not just the surface you click");
+            ui.end_row();
+        }
         if ed.brush_kind == BrushKind::Noise {
             ui.label("Noise scale");
             ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)).on_hover_text("Size of the noise pattern");
@@ -1949,6 +1991,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Alt+LMB on piece", "Make that piece active"),
     ("MMB", "Orbit (Shift: pan)"),
     ("Wheel", "Zoom"),
+    ("Right click / hold Q", "Quick menu at the cursor: size and strength"),
+    ("Middle-drag on a panel", "Scroll the panel"),
     ("Shift (hold)", "Smooth brush"),
     ("Ctrl (hold)", "Mask brush (Alt: unmask)"),
     ("Alt (hold)", "Invert brush"),
@@ -2020,6 +2064,9 @@ mod tests {
         ed.show_panels = false;
         ed.high_contrast = true;
         run_frames(&mut ed, 2);
+        ed.quick_menu = Some(crate::editor::QuickMenu { pos: Vec2::new(500.0, 400.0), held: true });
+        run_frames(&mut ed, 2);
+        assert!(ed.quick_menu.is_some(), "a held menu stays until its key is released");
     }
 
     #[test]
