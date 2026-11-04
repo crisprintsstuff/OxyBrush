@@ -74,7 +74,7 @@ Your layout, arrangement, brush order, interface scale, theme, material, autosav
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf (each brush has an icon showing what it does to the surface); hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
 3. Need more detail? **Ctrl+D** adds a subdivision level; **D** / **Shift+D** step up and down between levels, keeping your detail. **Remesh** (right panel) rebuilds even topology.
 4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY (for game engines, other 3D tools or 3D printing).
-5. **F1** shows every shortcut; **Help > Getting started guide** opens the full walkthrough.
+5. **Ctrl+K** finds any command by typing part of its name, and **Space** finds a brush the same way. **F1** shows every shortcut, and **F2** opens the built-in guide (searchable, works offline).
 
 ## Help test OxyBrush
 
@@ -105,6 +105,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Import/export:** OBJ and STL import (each object in an OBJ file becomes its own piece). Export of all visible pieces to glTF 2.0 (`.glb`/`.gltf`, one object per piece), OBJ (one object per piece), binary STL and binary PLY.
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4, 1/8 of the triangles), split a piece by face groups or into loose parts, and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting (`cargo run -p oxy-cli -- --help`).
 - **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and tooltips; a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do.
+- **Fast workflow:** a command palette (Ctrl+K) that finds any command, brush, recent file or guide topic as you type; a type-to-pick brush finder (Space); recent files in File > Open recent and on the welcome window; and a built-in, searchable guide (F2) that works offline.
 - **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
 - **Optional updates:** off by default. Settings > Updates can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Help > Check for updates checks once on demand. Only GitHub is contacted and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
 - **Rust:** a standard Rust toolchain is all you need on Windows, Linux or macOS (the optional updater's TLS library compiles a little C with the compiler Rust already uses).
@@ -135,7 +136,9 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Shift+drag on empty space | Orbit in 45° steps |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
-| `F1` | Full shortcut list |
+| Ctrl+K | Command palette |
+| Space | Find a brush by name |
+| `F1` / `F2` | Full shortcut list / built-in guide |
 
 On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
 

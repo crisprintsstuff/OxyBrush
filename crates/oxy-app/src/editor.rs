@@ -263,6 +263,12 @@ pub struct Editor {
     pub matcap_dir: Option<PathBuf>,
     /// Set by the UI to ask the platform layer for a matcap file dialog.
     pub request_load_matcap: bool,
+    /// Command palette / brush picker, while open.
+    pub palette: Option<crate::palette::Palette>,
+    /// Built-in guide window.
+    pub guide: crate::guide::GuideState,
+    /// Recently opened or saved files, most recent first (remembered).
+    pub recent_files: Vec<PathBuf>,
     /// Machine details for bug reports (filled in by the app layer).
     pub system_info: crate::support::SystemInfo,
 }
@@ -347,6 +353,9 @@ impl Default for Editor {
             custom_matcap: None,
             matcap_dir: None,
             request_load_matcap: false,
+            palette: None,
+            guide: Default::default(),
+            recent_files: Vec::new(),
             quit_now: false,
             system_info: Default::default(),
         }
@@ -458,6 +467,7 @@ impl Editor {
                 .custom_matcap
                 .and_then(|i| self.custom_matcaps.get(i))
                 .map_or(String::new(), |m| m.name.clone()),
+            recent_files: self.recent_files.clone(),
         }
     }
 
@@ -522,6 +532,7 @@ impl Editor {
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
+        self.recent_files = s.recent_files.clone();
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
@@ -1106,6 +1117,7 @@ impl Editor {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
                 self.replace_document(scene, Some(path.to_path_buf()));
+                self.remember_recent(path);
                 self.status = format!("Opened {} ({n} piece{})", path.display(), if n == 1 { "" } else { "s" });
             }
             Ok(None) => self.status = format!("{} contains no pieces", path.display()),
@@ -1120,6 +1132,24 @@ impl Editor {
             self.request(Pending::OpenProject(path.to_path_buf()));
         } else {
             self.import(path);
+        }
+    }
+
+    /// Put `path` at the top of the recent-files list.
+    pub fn remember_recent(&mut self, path: &Path) {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        self.recent_files.retain(|p| *p != path);
+        self.recent_files.insert(0, path);
+        self.recent_files.truncate(crate::settings::MAX_RECENT);
+    }
+
+    /// Open a file from the recent list; forget it if it no longer exists.
+    pub fn open_recent(&mut self, path: &Path) {
+        if path.is_file() {
+            self.open(path);
+        } else {
+            self.recent_files.retain(|p| p != path);
+            self.status = format!("{} no longer exists; removed it from the recent files", path.display());
         }
     }
 
@@ -1144,6 +1174,7 @@ impl Editor {
                 self.camera.frame(self.scene.bounds());
                 let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
                 self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
+                self.remember_recent(path);
             }
             Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
         }
@@ -1194,6 +1225,7 @@ impl Editor {
             Ok(()) => {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
+                self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
                 true
             }
@@ -2208,6 +2240,7 @@ mod tests {
             flat_shading: true,
             stroke_from_empty: true,
             custom_matcap: String::new(),
+            recent_files: vec![std::path::PathBuf::from("/tmp/a.oxb")],
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
@@ -2283,6 +2316,33 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         assert!(matches!(e.drag, Drag::Stroke { .. }));
         e.pointer_up();
+    }
+    #[test]
+    fn recent_files_follow_saves_and_forget_missing_files() {
+        let dir = std::env::temp_dir().join(format!("oxy-recent-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut e = Editor::default();
+        let a = dir.join("a.oxb");
+        let b = dir.join("b.oxb");
+        assert!(e.save(&a));
+        assert!(e.save(&b));
+        assert!(e.save(&a));
+        assert_eq!(e.recent_files, vec![a.clone(), b.clone()], "most recent first, no duplicates");
+        for i in 0..20 {
+            e.remember_recent(&dir.join(format!("f{i}.oxb")));
+        }
+        assert_eq!(e.recent_files.len(), crate::settings::MAX_RECENT);
+        // Opening a recent file that has gone away drops it from the list.
+        let gone = dir.join("f19.oxb");
+        e.open_recent(&gone);
+        assert!(!e.recent_files.contains(&gone));
+        assert!(e.status.contains("no longer exists"));
+        // A recent project opens.
+        e.remember_recent(&b);
+        e.open_recent(&b);
+        assert_eq!(e.path.as_deref(), Some(b.as_path()));
+        assert_eq!(e.recent_files[0], b);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

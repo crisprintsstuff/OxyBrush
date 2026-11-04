@@ -171,6 +171,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if ui.button("Open…  (Ctrl+O)").clicked() {
                     action = Some(UiAction::Open);
                 }
+                ui.add_enabled_ui(!ed.recent_files.is_empty(), |ui| {
+                    ui.menu_button("Open recent", |ui| recent_menu(ui, ed));
+                });
                 if ui.button("Import mesh as piece…  (Ctrl+I)").clicked() {
                     action = Some(UiAction::Import);
                 }
@@ -190,6 +193,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
             });
             ui.menu_button("Edit", |ui| {
+                if ui.button("Command palette…  (Ctrl+K)").clicked() {
+                    ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
+                }
+                if ui.button("Find brush…  (Space)").clicked() {
+                    ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
+                }
+                ui.separator();
                 if ui.add_enabled(ed.history.can_undo(), egui::Button::new("Undo  (Ctrl+Z)")).clicked() {
                     ed.undo();
                 }
@@ -339,6 +349,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         action = Some(UiAction::ExportBrush);
     }
     dialogs(ui, ed, &mut action);
+    crate::guide::window(ui.ctx(), ed);
+    if let Some(a) = crate::palette::window(ui.ctx(), ed) {
+        action = Some(a);
+    }
 
     let canvas = ui.available_rect_before_wrap();
     // Overlays: keep them out of the way of the welcome window.
@@ -983,11 +997,31 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
+fn recent_menu(ui: &mut Ui, ed: &mut Editor) {
+    let mut chosen = None;
+    for p in &ed.recent_files {
+        let name = p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
+        if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+            chosen = Some(p.clone());
+        }
+    }
+    ui.separator();
+    if ui.button("Clear list").clicked() {
+        ed.recent_files.clear();
+    }
+    if let Some(p) = chosen {
+        ed.open_recent(&p);
+    }
+}
+
 fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     use crate::support::{REPO_URL, folder_url};
     let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
-    if ui.button("Getting started guide").clicked() {
-        open(ui, format!("{REPO_URL}/blob/main/docs/TESTING_GUIDE.md"));
+    if ui.button("Guide  (F2)").on_hover_text("Built in and searchable; works offline").clicked() {
+        ed.guide.open = true;
+    }
+    if ui.button("Command palette  (Ctrl+K)").clicked() {
+        ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
     }
     if ui.button("Welcome screen").clicked() {
         ed.show_welcome = true;
@@ -1018,6 +1052,9 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
         if !ed.updater.managed_by_flatpak() {
             ed.updater.check(crate::updates::now_secs());
         }
+    }
+    if ui.button("Testing guide (online)").clicked() {
+        open(ui, format!("{REPO_URL}/blob/main/docs/TESTING_GUIDE.md"));
     }
     if ui.button("Changelog").clicked() {
         open(ui, format!("{REPO_URL}/blob/main/CHANGELOG.md"));
@@ -1872,6 +1909,24 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     close = true;
                 }
             });
+            if !ed.recent_files.is_empty() {
+                ui.add_space(10.0);
+                ui.label(RichText::new("Recent").strong().size(14.0));
+                let mut chosen = None;
+                ui.horizontal_wrapped(|ui| {
+                    for p in ed.recent_files.iter().take(5) {
+                        let name =
+                            p.file_name().map_or_else(|| p.display().to_string(), |n| n.to_string_lossy().into_owned());
+                        if ui.button(name).on_hover_text(p.display().to_string()).clicked() {
+                            chosen = Some(p.clone());
+                        }
+                    }
+                });
+                if let Some(p) = chosen {
+                    ed.open_recent(&p);
+                    close = true;
+                }
+            }
             ui.add_space(12.0);
             ui.label(RichText::new("The basics").strong().size(14.0));
             ui.add_space(2.0);
@@ -1884,7 +1939,8 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     (&["[", "]"][..], "Brush smaller / larger"),
                     (&["1", "…", "0"][..], "Pick a brush"),
                     (&["Ctrl+D"][..], "Add a subdivision level for more detail"),
-                    (&["F1"][..], "All shortcuts"),
+                    (&["Ctrl+K"][..], "Find any command"),
+                    (&["F1", "F2"][..], "All shortcuts, the guide"),
                 ] {
                     ui.horizontal(|ui| {
                         for k in keys {
@@ -2059,7 +2115,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("Ctrl+S / Ctrl+Shift+S", "Save / save as"),
     ("Ctrl+E", "Export visible pieces"),
     ("Tab", "Show/hide panels"),
+    ("Space", "Find a brush by name"),
+    ("Ctrl+K", "Command palette: find any command"),
     ("F1", "This window"),
+    ("F2", "Guide (built in, searchable)"),
 ];
 
 #[cfg(test)]
@@ -2097,6 +2156,16 @@ mod tests {
         ed.show_panels = false;
         ed.high_contrast = true;
         run_frames(&mut ed, 2);
+        ed.show_panels = true;
+        ed.guide.open = true;
+        ed.guide.query = "mask".into();
+        ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
+        run_frames(&mut ed, 2);
+        assert!(ed.palette.is_some(), "the palette stays open until something is chosen");
+        ed.palette.as_mut().unwrap().query = "zzzz".into();
+        run_frames(&mut ed, 1);
+        ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
+        run_frames(&mut ed, 1);
     }
 
     #[test]

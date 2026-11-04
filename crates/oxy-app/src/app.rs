@@ -507,6 +507,10 @@ impl App {
         match &event.logical_key {
             Key::Named(NamedKey::Tab) => ed.show_panels = !ed.show_panels,
             Key::Named(NamedKey::F1) => ed.show_shortcuts = !ed.show_shortcuts,
+            Key::Named(NamedKey::F2) => ed.guide.open = !ed.guide.open,
+            Key::Named(NamedKey::Space) if !ctrl && !m.alt && ed.palette.is_none() => {
+                ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
+            }
             Key::Named(NamedKey::Escape) => ed.cancel_drag(),
             Key::Character(c) => {
                 let c = c.to_lowercase();
@@ -514,6 +518,9 @@ impl App {
                     ("z", true, false, _) => ed.undo(),
                     ("z", true, true, _) | ("y", true, _, _) => ed.redo(),
                     ("o", true, _, _) => return Some(UiAction::Open),
+                    ("k", true, _, _) => {
+                        ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
+                    }
                     ("s", true, true, _) => return Some(UiAction::SaveAs),
                     ("s", true, false, _) => return Some(UiAction::Save),
                     ("e", true, _, _) => return Some(UiAction::Export),

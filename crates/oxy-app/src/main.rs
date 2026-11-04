@@ -5,7 +5,9 @@
 
 mod app;
 mod editor;
+mod guide;
 mod matcaps;
+mod palette;
 mod presets;
 mod settings;
 mod snapshot;
