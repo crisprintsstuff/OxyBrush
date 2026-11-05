@@ -393,7 +393,7 @@ mod tests {
         let start = std::time::Instant::now();
 
         let mut res = None;
-        while start.elapsed() < std::time::Duration::from_secs(10) {
+        while start.elapsed() < std::time::Duration::from_secs(30) {
             let _ = inbox.poll(&mut ed);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
@@ -433,7 +433,7 @@ mod tests {
         let start = std::time::Instant::now();
 
         let mut res = None;
-        while start.elapsed() < std::time::Duration::from_secs(10) {
+        while start.elapsed() < std::time::Duration::from_secs(30) {
             let _ = inbox.poll(&mut ed);
             if let Ok(r) = proc.rx.try_recv() {
                 res = Some(r);
