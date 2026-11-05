@@ -115,6 +115,9 @@ fn commands(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::InvertMask, "masking", Editor::invert_mask),
         cmd(ed, Cmd::ClearMask, "masking", Editor::clear_mask),
+        cmd(ed, Cmd::ExtractMask, "masking extract solidify piece new", |e| {
+            e.extract_mask(e.extract_thickness, e.extract_smooth)
+        }),
         cmd(ed, Cmd::BlurMask, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
         cmd(ed, Cmd::SharpenMask, "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
         cmd(ed, Cmd::MaskCavities, "masking concave creases", |e| {

@@ -42,6 +42,16 @@ pub struct AutoRun {
     pub open_keymap: Option<crate::keymap::Preset>,
 }
 
+type AppliedThemeKey = (
+    crate::settings::ThemePreset,
+    crate::settings::AccentPreset,
+    [u8; 3],
+    crate::settings::CornerStyle,
+    bool,
+    f32,
+    crate::settings::UiLayout,
+);
+
 pub struct App {
     gfx: Option<Gfx>,
     egui_ctx: egui::Context,
@@ -50,15 +60,7 @@ pub struct App {
     applied_matcap: Option<(MatcapPreset, Option<String>)>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
-    applied_theme: Option<(
-        crate::settings::ThemePreset,
-        crate::settings::AccentPreset,
-        [u8; 3],
-        crate::settings::CornerStyle,
-        bool,
-        f32,
-        crate::settings::UiLayout,
-    )>,
+    applied_theme: Option<AppliedThemeKey>,
     applied_title: String,
     last_frame: Instant,
     initial_file: Option<PathBuf>,

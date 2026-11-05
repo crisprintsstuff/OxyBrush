@@ -702,18 +702,16 @@ impl Stroke {
                     n.try_normalize().unwrap_or(m * dab.normal)
                 })
                 .collect();
-            // A vertex under two copies used to be written twice, and the
-            // second write replaced the first. Where the brush only just
-            // crosses the mirror, that boundary is a hard sphere cut: one
-            // vertex keeps the full drag and its neighbour snaps back to the
-            // other copy's (often tiny, often opposite) move. The surface
-            // opens along that cut. Bake one displacement per vertex instead.
+            // Combine symmetry copies smoothly. A hard max cutoff creates a harsh
+            // crease/ridge line along the mirror plane; instead, blend using a
+            // smooth maximum over the overlapping copies so they transition
+            // seamlessly across the symmetry seam with C1 continuity.
             struct Acc {
                 orig: Vec3,
                 sum_m: Mat3,
                 sum_n: Vec3,
                 sum_w: f32,
-                max_w: f32,
+                top_w: [f32; 2],
             }
             let mut acc: HashMap<u32, Acc> = HashMap::new();
             for ((m, center, hits), n) in captured.iter().zip(&normals) {
@@ -723,7 +721,7 @@ impl Stroke {
                         sum_m: Mat3::ZERO,
                         sum_n: Vec3::ZERO,
                         sum_w: 0.0,
-                        max_w: 0.0,
+                        top_w: [0.0, 0.0],
                     });
                     let local_m = if self.settings.kind.is_kelvin() {
                         let k =
@@ -735,13 +733,33 @@ impl Stroke {
                     e.sum_m += local_m;
                     e.sum_n += *n * w;
                     e.sum_w += w;
-                    e.max_w = e.max_w.max(w);
+                    if w > e.top_w[0] {
+                        e.top_w[1] = e.top_w[0];
+                        e.top_w[0] = w;
+                    } else if w > e.top_w[1] {
+                        e.top_w[1] = w;
+                    }
                 }
             }
             let verts = acc
                 .into_iter()
                 .map(|(index, e)| {
-                    let scale = e.max_w / e.sum_w;
+                    // C1 smooth maximum between the top two overlapping symmetry influences:
+                    // eliminates the sharp V-crease / cutoff line along the mirror plane.
+                    let w_eff = if e.top_w[1] > f32::EPSILON {
+                        let eps = 0.2_f32;
+                        let m = 0.5 * (e.top_w[0] + e.top_w[1]);
+                        let d = 0.5 * (e.top_w[0] - e.top_w[1]);
+                        if d < eps {
+                            let ratio = d / eps;
+                            m + (d * d / (2.0 * eps)) * (3.0 - ratio * ratio)
+                        } else {
+                            e.top_w[0]
+                        }
+                    } else {
+                        e.top_w[0]
+                    };
+                    let scale = if e.sum_w > f32::EPSILON { w_eff / e.sum_w } else { 0.0 };
                     BlendedGrab { index, orig: e.orig, blend: e.sum_m * scale, along: e.sum_n * scale }
                 })
                 .collect();
@@ -1790,8 +1808,10 @@ mod tests {
         // plane, the stronger copy wins, so it matches a brush with no mirror.
         let (_, solo) = plane_stroke(BrushKind::Grab, Symmetry::default(), false, Vec3::new(0.0, 0.0, 0.3));
         assert!(after.positions[centre].distance(solo.positions[centre]) < 1e-4);
+        // Outside the overlap region (where the mirror brush does not reach),
+        // the positive side matches a solo brush with no symmetry.
         for (i, p0) in before.positions.iter().enumerate() {
-            if p0.x > 1e-4 {
+            if p0.x >= 0.3 {
                 assert!(after.positions[i].distance(solo.positions[i]) < 1e-3, "positive side diverged at {p0}");
             }
         }

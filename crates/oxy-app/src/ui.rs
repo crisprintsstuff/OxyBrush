@@ -3,9 +3,7 @@
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
 use crate::pose::{GizmoMode, Handle};
-use crate::settings::{
-    AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, ThemePreset, UiLayout,
-};
+use crate::settings::{AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, ThemePreset, UiLayout};
 use crate::tips::{self, Cmd, plain};
 use crate::widgets::{self, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
@@ -96,6 +94,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn apply_theme(
     ctx: &egui::Context,
     theme: ThemePreset,
@@ -1974,6 +1973,9 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button_km(ui, &ed.keymap, "Clear", Cmd::ClearMask).clicked() {
         ed.clear_mask();
     }
+    if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
+        ed.extract_mask(ed.extract_thickness, ed.extract_smooth);
+    }
     ui.separator();
     let blur_label = format!("Blur  ({}+click empty space)", ed.keymap.mask.label());
     if tips::hover(ui.button(blur_label), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
@@ -2049,7 +2051,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
-        let fill = if i == active { ui.visuals().selection.stroke.color.linear_multiply(0.18) } else { Color32::TRANSPARENT };
+        let fill =
+            if i == active { ui.visuals().selection.stroke.color.linear_multiply(0.18) } else { Color32::TRANSPARENT };
         egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (icon, tip) =
@@ -2288,7 +2291,12 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
             let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
             ui.painter().rect_filled(rect, 3.0, col);
             if ed.paint_color.to_array() == *s {
-                ui.painter().rect_stroke(rect.expand(1.5), 3.0, EStroke::new(1.5, ui.visuals().selection.stroke.color), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(
+                    rect.expand(1.5),
+                    3.0,
+                    EStroke::new(1.5, ui.visuals().selection.stroke.color),
+                    egui::StrokeKind::Outside,
+                );
             }
             if tips::hover(r, tips::swatch_tip(tips::SWATCH_NAMES[i])).clicked() {
                 ed.paint_color = (*s).into();
@@ -2493,6 +2501,16 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
         if tips::button(ui, "Clear mask", Cmd::ClearMask).clicked() {
             ed.clear_mask();
         }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        if tips::button(ui, "Extract mask", Cmd::ExtractMask).clicked() {
+            ed.extract_mask(ed.extract_thickness, ed.extract_smooth);
+        }
+        ui.label("Thickness");
+        ui.add(egui::DragValue::new(&mut ed.extract_thickness).speed(0.002).range(0.0..=0.5));
+        ui.label("Smooth");
+        ui.add(egui::DragValue::new(&mut ed.extract_smooth).range(0..=10));
     });
     ui.label(RichText::new("More in the Groups and Mask menus.").weak().small());
 }

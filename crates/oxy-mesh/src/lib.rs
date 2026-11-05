@@ -18,7 +18,7 @@ pub use glam::Vec3;
 
 use adjacency::Csr;
 use rayon::prelude::*;
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
@@ -534,6 +534,161 @@ impl Mesh {
             }
         }
         self.set_groups(groups);
+    }
+
+    /// Extract the masked region into a new piece mesh.
+    ///
+    /// Triangles with average mask >= 0.5 (or >= half of max mask if softly masked) are extracted.
+    /// If `thickness > 0.0`, the surface is extruded outward along its normals by `thickness`
+    /// and stitched along the boundary with closed side walls to create a watertight solid.
+    /// If `thickness <= 0.0`, an open single-sided surface is returned.
+    /// `smooth_border` applies Laplacian smoothing iterations to boundary vertices
+    /// to eliminate jagged stepping along the rim.
+    pub fn extract_mask(&self, thickness: f32, smooth_border: usize) -> Option<MeshData> {
+        let max_mask = self.mask.iter().copied().fold(0.0_f32, f32::max);
+        if max_mask < 0.05 {
+            return None;
+        }
+        let threshold = 0.5_f32.min(max_mask * 0.7);
+
+        let mut remap = vec![u32::MAX; self.positions.len()];
+        let mut front_pos = Vec::new();
+        let mut front_normals = Vec::new();
+        let mut front_colors = Vec::new();
+        let mut front_tris = Vec::new();
+        let painted = self.is_painted();
+
+        for (t, &tri) in self.triangles.iter().enumerate() {
+            if self.hidden[t] {
+                continue;
+            }
+            let avg_mask = (self.mask[tri[0] as usize] + self.mask[tri[1] as usize] + self.mask[tri[2] as usize]) / 3.0;
+            if avg_mask < threshold {
+                continue;
+            }
+            let mapped = tri.map(|v| {
+                let r = &mut remap[v as usize];
+                if *r == u32::MAX {
+                    *r = front_pos.len() as u32;
+                    front_pos.push(self.positions[v as usize]);
+                    front_normals.push(self.normals[v as usize]);
+                    if painted {
+                        front_colors.push(self.color[v as usize]);
+                    }
+                }
+                *r
+            });
+            front_tris.push(mapped);
+        }
+
+        if front_tris.is_empty() {
+            return None;
+        }
+
+        // Identify boundary edges (edges incident to only one triangle in front_tris).
+        let mut edge_counts: HashMap<[u32; 2], u32> = HashMap::new();
+        for &[a, b, c] in &front_tris {
+            for &[u, v] in &[[a, b], [b, c], [c, a]] {
+                let key = if u < v { [u, v] } else { [v, u] };
+                *edge_counts.entry(key).or_insert(0) += 1;
+            }
+        }
+
+        let mut boundary_edges = Vec::new();
+        for &[a, b, c] in &front_tris {
+            for &[u, v] in &[[a, b], [b, c], [c, a]] {
+                let key = if u < v { [u, v] } else { [v, u] };
+                if edge_counts.get(&key).copied().unwrap_or(0) == 1 {
+                    boundary_edges.push([u, v]);
+                }
+            }
+        }
+
+        // Smooth boundary vertices if requested.
+        if smooth_border > 0 && !boundary_edges.is_empty() {
+            let mut b_adj: HashMap<u32, Vec<u32>> = HashMap::new();
+            for &[u, v] in &boundary_edges {
+                b_adj.entry(u).or_default().push(v);
+                b_adj.entry(v).or_default().push(u);
+            }
+            for _ in 0..smooth_border {
+                let mut smoothed = front_pos.clone();
+                for (&v, nbrs) in &b_adj {
+                    if !nbrs.is_empty() {
+                        let avg: Vec3 =
+                            nbrs.iter().map(|&nb| front_pos[nb as usize]).sum::<Vec3>() / (nbrs.len() as f32);
+                        smoothed[v as usize] = front_pos[v as usize].lerp(avg, 0.5);
+                    }
+                }
+                front_pos = smoothed;
+            }
+        }
+
+        if thickness <= 0.0 {
+            let n_verts = front_pos.len();
+            let n_tris = front_tris.len();
+            return Some(MeshData {
+                positions: front_pos,
+                triangles: front_tris,
+                mask: vec![0.0; n_verts],
+                color: front_colors,
+                groups: vec![0; n_tris],
+                hidden: vec![false; n_tris],
+            });
+        }
+
+        let n = front_pos.len() as u32;
+        let mut positions = Vec::with_capacity((n * 2) as usize);
+        // Outer / front surface: offset along vertex normals by thickness.
+        for (&p, &norm) in front_pos.iter().zip(&front_normals) {
+            positions.push(p + norm * thickness);
+        }
+        // Inner / back surface: original surface positions.
+        positions.extend_from_slice(&front_pos);
+
+        let mut triangles = Vec::with_capacity(front_tris.len() * 2 + boundary_edges.len() * 2);
+        let mut groups = Vec::with_capacity(triangles.capacity());
+
+        // Front faces (group 0)
+        for tri in &front_tris {
+            triangles.push(*tri);
+            groups.push(0);
+        }
+
+        // Back faces with reversed winding (group 1)
+        for &[a, b, c] in &front_tris {
+            triangles.push([c + n, b + n, a + n]);
+            groups.push(1);
+        }
+
+        // Side / rim wall faces (group 2)
+        for &[u, v] in &boundary_edges {
+            // Quad connecting front edge (u -> v) to back edge (v+n -> u+n)
+            triangles.push([v, u, u + n]);
+            triangles.push([v, u + n, v + n]);
+            groups.push(2);
+            groups.push(2);
+        }
+
+        let color = if painted {
+            let mut c = front_colors.clone();
+            c.extend_from_slice(&front_colors);
+            c
+        } else {
+            Vec::new()
+        };
+
+        let total_verts = positions.len();
+        let total_tris = triangles.len();
+
+        Some(MeshData {
+            positions,
+            triangles,
+            mask: vec![0.0; total_verts],
+            color,
+            groups,
+            hidden: vec![false; total_tris],
+        })
     }
 
     /// One group per visible triangle set; hidden triangles keep their group.
@@ -1150,6 +1305,38 @@ mod tests {
         assert!(a1.dot(a2) > 0.999, "averaged normals twitched: {}", a1.dot(a2));
         assert!(a1.dot(Vec3::Y) > 0.95, "bumps leaked into the average: {a1}");
         assert!(a2.dot(Vec3::Y) > 0.95, "{a2}");
+    }
+
+    #[test]
+    fn extract_mask_solid_and_flat() {
+        let mut m = primitives::icosphere(3, 1.0);
+        assert!(m.extract_mask(0.02, 1).is_none(), "no mask: returns None");
+
+        // Mask the top hemisphere
+        for (i, p) in m.positions.iter().enumerate() {
+            if p.y > 0.3 {
+                m.mask[i] = 1.0;
+            }
+        }
+
+        // 1. Flat extraction (thickness = 0)
+        let flat = m.extract_mask(0.0, 0).expect("should extract flat patch");
+        assert!(!flat.positions.is_empty());
+        assert!(!flat.triangles.is_empty());
+        assert!(flat.positions.iter().all(|p| p.y > 0.2));
+        assert!(flat.mask.iter().all(|&k| k == 0.0), "extracted mask is cleared for sculpting");
+
+        // 2. Solid extraction with thickness
+        let solid_data = m.extract_mask(0.05, 2).expect("should extract solid shell");
+        let solid = Mesh::from_data(solid_data);
+        assert!(solid.positions.len() > flat.positions.len());
+        // Verify groups: 0 for front, 1 for back, 2 for rim
+        assert!(solid.groups.contains(&0));
+        assert!(solid.groups.contains(&1));
+        assert!(solid.groups.contains(&2));
+        // Verify the front vertices were extruded outward along normals
+        let max_y = solid.positions.iter().map(|p| p.y).fold(0.0_f32, f32::max);
+        assert!(max_y > 1.04, "top vertex should be extruded outward: {max_y}");
     }
 
     #[test]

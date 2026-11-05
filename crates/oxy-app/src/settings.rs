@@ -279,6 +279,10 @@ pub struct Settings {
     pub corner_style: CornerStyle,
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
+    /// Default extrusion thickness for Mask Extract (in scene units).
+    pub extract_thickness: f32,
+    /// Number of Laplacian boundary smoothing iterations for Mask Extract.
+    pub extract_smooth: usize,
 }
 
 /// Overall visual theme preset.
@@ -458,10 +462,10 @@ impl CornerStyle {
 }
 
 pub fn default_max_triangles() -> usize {
-    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES") {
-        if let Ok(n) = v.parse::<usize>() {
-            return n;
-        }
+    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES")
+        && let Ok(n) = v.parse::<usize>()
+    {
+        return n;
     }
     24_000_000
 }
@@ -505,6 +509,8 @@ impl Default for Settings {
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: CornerStyle::Rounded,
             max_triangles: default_max_triangles(),
+            extract_thickness: 0.02,
+            extract_smooth: 2,
         }
     }
 }
@@ -567,7 +573,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -601,6 +607,8 @@ impl Settings {
             self.custom_accent[2],
             self.corner_style.key(),
             self.max_triangles,
+            self.extract_thickness,
+            self.extract_smooth,
         ) + &self
             .recent_files
             .iter()
@@ -727,6 +735,20 @@ impl Settings {
                         s.max_triangles = n;
                     }
                 }
+                "extract_thickness" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=1.0).contains(&x)
+                    {
+                        s.extract_thickness = x;
+                    }
+                }
+                "extract_smooth" => {
+                    if let Ok(n) = v.parse::<usize>()
+                        && n <= 10
+                    {
+                        s.extract_smooth = n;
+                    }
+                }
                 _ => {}
             }
         }
@@ -811,6 +833,8 @@ mod tests {
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: CornerStyle::Soft,
             max_triangles: 48_000_000,
+            extract_thickness: 0.035,
+            extract_smooth: 3,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

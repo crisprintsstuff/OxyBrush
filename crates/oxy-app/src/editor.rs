@@ -404,6 +404,10 @@ pub struct Editor {
     pub corner_style: crate::settings::CornerStyle,
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
+    /// Default extrusion thickness for Mask Extract (in scene units).
+    pub extract_thickness: f32,
+    /// Number of Laplacian boundary smoothing iterations for Mask Extract.
+    pub extract_smooth: usize,
 }
 
 impl Default for Editor {
@@ -526,6 +530,8 @@ impl Default for Editor {
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: crate::settings::CornerStyle::Rounded,
             max_triangles: crate::settings::default_max_triangles(),
+            extract_thickness: 0.02,
+            extract_smooth: 2,
         }
     }
 }
@@ -737,6 +743,8 @@ impl Editor {
             custom_accent: self.custom_accent,
             corner_style: self.corner_style,
             max_triangles: self.max_triangles,
+            extract_thickness: self.extract_thickness,
+            extract_smooth: self.extract_smooth,
         }
     }
 
@@ -862,6 +870,8 @@ impl Editor {
         self.custom_accent = s.custom_accent;
         self.corner_style = s.corner_style;
         self.max_triangles = s.max_triangles;
+        self.extract_thickness = s.extract_thickness;
+        self.extract_smooth = s.extract_smooth;
     }
 
     /// Rescan user and workspace plugin directories for Python plugins.
@@ -1417,12 +1427,8 @@ impl Editor {
             Drag::Gizmo(g) => {
                 if g.has_soft_weights {
                     let mesh = &mut self.scene.active_mut().mesh;
-                    let moved: Vec<u32> = g
-                        .weights
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(v, &w)| (w > 0.0).then_some(v as u32))
-                        .collect();
+                    let moved: Vec<u32> =
+                        g.weights.iter().enumerate().filter_map(|(v, &w)| (w > 0.0).then_some(v as u32)).collect();
                     mesh.update_after_move(&moved);
                 }
                 self.history.commit();
@@ -1862,6 +1868,30 @@ impl Editor {
             if mirror_x { "Mirror duplicate" } else { "Duplicate" },
         );
         self.status = format!("Created {name}");
+    }
+
+    /// Extract the active piece's masked area into a new piece.
+    ///
+    /// If `thickness > 0.0`, extrudes into a solid shell; otherwise extracts an open surface.
+    /// `smooth_border` smooths jagged boundary edges.
+    pub fn extract_mask(&mut self, thickness: f32, smooth_border: usize) {
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let src = self.scene.active();
+        if !src.mesh.mask.iter().any(|&m| m > 0.05) {
+            self.status = "Nothing to extract: paint a mask on the mesh first".into();
+            return;
+        }
+        let Some(data) = src.mesh.extract_mask(thickness, smooth_border) else {
+            self.status = "Masked area is too small or faint to extract".into();
+            return;
+        };
+        let base = format!("{} extract", src.name);
+        let name = self.scene.unique_name(&base);
+        self.add_piece(Piece::new(name.clone(), Mesh::from_data(data)), "Extract mask");
+        self.status = format!("Extracted mask as {name}");
     }
 
     pub fn delete_active(&mut self) {
@@ -2367,11 +2397,8 @@ impl Editor {
                 }
             }
         }
-        let affected_chunks: Vec<u32> = affected_chunk_flags
-            .iter()
-            .enumerate()
-            .filter_map(|(c, &aff)| aff.then_some(c as u32))
-            .collect();
+        let affected_chunks: Vec<u32> =
+            affected_chunk_flags.iter().enumerate().filter_map(|(c, &aff)| aff.then_some(c as u32)).collect();
         let original_chunk_aabbs: Vec<oxy_mesh::Aabb> = piece.mesh.chunks.iter().map(|c| c.aabb).collect();
         self.drag = Drag::Gizmo(Box::new(GizmoDrag {
             handle,
@@ -3257,6 +3284,8 @@ mod tests {
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: crate::settings::CornerStyle::Soft,
             max_triangles: 48_000_000,
+            extract_thickness: 0.035,
+            extract_smooth: 3,
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
@@ -3827,5 +3856,43 @@ mod tests {
         assert_eq!(e.effective_brush(), (BrushKind::Mask, false), "the on-screen Mask button still masks");
         e.touch_modifiers = Modifiers { alt: true, ..Default::default() };
         assert_eq!(e.effective_brush(), (BrushKind::Draw, true), "the on-screen Invert button still inverts");
+    }
+
+    #[test]
+    fn mask_extract_creates_piece_and_undoes() {
+        let mut e = Editor::default();
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // Without a mask, extraction is a no-op with helpful status
+        e.extract_mask(0.02, 1);
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert!(e.status.contains("Nothing to extract"));
+
+        // Mask upper hemisphere
+        let active = e.scene.active_mut();
+        for (i, p) in active.mesh.positions.iter().enumerate() {
+            if p.y > 0.2 {
+                active.mesh.mask[i] = 1.0;
+            }
+        }
+
+        // Extract with thickness
+        e.extract_mask(0.04, 2);
+        assert_eq!(e.scene.pieces.len(), 2, "extracted piece added to scene");
+        assert_eq!(e.scene.active_index(), 1, "extracted piece is now active");
+        let extracted = e.scene.active();
+        assert!(extracted.name.contains("extract"));
+        assert!(extracted.mesh.vertex_count() > 0);
+        assert!(extracted.mesh.mask.iter().all(|&m| m == 0.0), "extracted piece mask is clear");
+
+        // Undo removes extracted piece
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.active_index(), 0);
+
+        // Redo puts extracted piece back
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.active_index(), 1);
     }
 }

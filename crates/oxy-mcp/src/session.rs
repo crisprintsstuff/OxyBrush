@@ -18,10 +18,10 @@ use std::path::{Path, PathBuf};
 
 /// Maximum triangles allowed during subdivision (default 24M, overridable via OXYBRUSH_MAX_TRIANGLES, 0 = unlimited).
 fn max_triangles() -> usize {
-    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES") {
-        if let Ok(n) = v.parse::<usize>() {
-            return n;
-        }
+    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES")
+        && let Ok(n) = v.parse::<usize>()
+    {
+        return n;
     }
     24_000_000
 }

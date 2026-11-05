@@ -255,13 +255,8 @@ pub fn apply_interactive(
                 }
             });
     } else {
-        for ((((p, n), &orig_p), &orig_n), &w) in mesh
-            .positions
-            .iter_mut()
-            .zip(&mut mesh.normals)
-            .zip(original_pos)
-            .zip(original_norm)
-            .zip(weights)
+        for ((((p, n), &orig_p), &orig_n), &w) in
+            mesh.positions.iter_mut().zip(&mut mesh.normals).zip(original_pos).zip(original_norm).zip(weights)
         {
             if w <= 0.0 {
                 *p = orig_p;
