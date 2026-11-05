@@ -246,8 +246,10 @@ impl App {
             Ok(Err(stderr)) => {
                 let name = proc.name.clone();
                 self.plugin_process = None;
-                let first_line = stderr.lines().next().unwrap_or("failed");
-                self.editor.status = format!("Plugin '{name}' failed: {first_line}");
+                // For Python exceptions and tracebacks, the meaningful diagnostic
+                // (e.g. `AttributeError: ...`) is on the last non-empty line of stderr.
+                let err_msg = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim();
+                self.editor.status = format!("Plugin '{name}' failed: {err_msg}");
                 log::warn!("Plugin '{name}' failed:\n{stderr}");
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
