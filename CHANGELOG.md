@@ -4,6 +4,22 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.6.0-alpha] - 2026-11-05
+
+### Added
+
+- **Pixar Regularized Kelvinlet Sculpting Brushes:** Integrated three elastodynamic brushes based on *de Goes & James (SIGGRAPH 2017)*:
+  - `Kelvin Grab`: Fundamental translational regularized Kelvin state with Poisson's ratio $\nu = 0.45$. Unlike standard geometric translation, it preserves cross-sectional volume: as the surface is pulled forward, lateral regions pinch inward naturally like physical clay or rubber.
+  - `Kelvin Twist`: Torsional regularized Kelvin state induced by an infinitesimal moment around the surface contact normal. Strictly divergence-free ($\nabla \cdot \mathbf{u} = 0$) and incompressible, rotating the surface smoothly without bunching or tearing. Alt inverts rotation direction.
+  - `Kelvin Scale`: Dilatational/compressive elastodynamic dipole expanding or pinching volume radially with elastodynamic decay.
+  - Precomputes the $3 \times 3$ elasticity tensor $\mathbf{K}(\mathbf{r})$ into the symmetry-blended grab matrix at stroke start for 60+ FPS real-time interactive deformation.
+  - Full shelf integration with distinct profile icons, preview spheres, tooltips, presets, and guide topics.
+- **Real-Time Wireframe Overlay:**
+  - Hardware-accelerated wireframe rendering (`wireframe.wgsl`) over the shaded matcap mesh with depth testing and depth bias to eliminate Z-fighting.
+  - Bound to `Shift+W` default shortcut with command palette integration.
+  - Viewport view strip quick toggle button and View menu controls with adjustable line opacity slider (0.0 to 1.0).
+  - Settings persistence in `settings.txt` across sessions.
+
 ## [0.5.2-alpha] - 2026-11-04
 
 ### Fixed
@@ -191,7 +207,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.6.0-alpha...HEAD
+[0.6.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...v0.6.0-alpha
 [0.5.2-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...v0.5.2-alpha
 [0.5.1-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.0-alpha...v0.5.1-alpha
 [0.5.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.4.0-alpha...v0.5.0-alpha
