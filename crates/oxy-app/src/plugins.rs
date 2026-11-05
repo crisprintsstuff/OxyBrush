@@ -382,6 +382,9 @@ mod tests {
              app = oxybrush.attach()\n\
              pieces = app.list_pieces()\n\
              assert len(pieces) >= 1\n\
+             stats = app.get_mesh_stats()\n\
+             assert stats.piece_count >= 1\n\
+             assert stats.vertex_count > 0\n\
              brush_msg = app.select_brush('Clay')\n\
              assert 'Clay' in brush_msg\n\
              print('E2E SUCCESS')\n",
@@ -445,5 +448,45 @@ mod tests {
         let output = res.expect("process should complete").expect("mesh_stats should succeed");
         assert!(output.contains("OxyBrush Scene Inspector"), "{output}");
         assert!(output.contains("Total pieces: 1"), "{output}");
+    }
+
+    #[test]
+    fn test_example_plugin_mesh_stats_reporter() {
+        if find_python().is_none() {
+            return;
+        }
+        let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+        let wake = Arc::new(move || {
+            let _ = wake_tx.send(());
+        });
+        let mut inbox = match crate::agent::Inbox::listen(wake.clone()) {
+            Ok(ib) => ib,
+            Err(_) => return,
+        };
+        let endpoint = inbox.endpoint.clone();
+        let token = inbox.token();
+
+        let plugin_path = PathBuf::from("examples/plugins/mesh_stats_reporter.py");
+        if !plugin_path.is_file() {
+            return;
+        }
+
+        let proc = run_plugin(&plugin_path, &endpoint, &token, wake).expect("spawn mesh_stats_reporter");
+        let mut ed = crate::editor::Editor::default();
+        let start = std::time::Instant::now();
+
+        let mut res = None;
+        while start.elapsed() < std::time::Duration::from_secs(30) {
+            let _ = inbox.poll(&mut ed);
+            if let Ok(r) = proc.rx.try_recv() {
+                res = Some(r);
+                break;
+            }
+            let _ = wake_rx.recv_timeout(std::time::Duration::from_millis(50));
+        }
+
+        let output = res.expect("process should complete").expect("mesh_stats_reporter should succeed");
+        assert!(output.contains("piece(s)"), "{output}");
+        assert!(output.contains("tris"), "{output}");
     }
 }

@@ -7,7 +7,19 @@ import os
 import re
 import urllib.request
 import urllib.error
-from typing import Optional, List, Dict, Any, Union
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Union, Tuple
+
+
+@dataclass
+class MeshStats:
+    """Aggregated mesh metrics for the active piece or scene."""
+    vertex_count: int
+    triangle_count: int
+    piece_count: int
+    subdivision_level: int = 0
+    bounding_box_min: Tuple[float, float, float] = (-1.0, -1.0, -1.0)
+    bounding_box_max: Tuple[float, float, float] = (1.0, 1.0, 1.0)
 
 
 class OxyBrushError(Exception):
@@ -105,11 +117,19 @@ class Session:
             if not line:
                 continue
             m = re.match(
-                r"^(\d+):\s+(.+?)\s+id\s+(\d+)\s+(active|idle)(\s+hidden)?\s+(\d+)\s+triangles,\s+(\d+)\s+vertices",
+                r"^(\d+):\s+(.+?)\s+id\s+(\d+)\s+(active|idle)(\s+hidden)?\s+(\d+)\s+triangles,\s+(\d+)\s+vertices(?:,\s+mask\s+\d+)?(?:,\s+bounds\s+\[([^\]]+)\]\s+\.\.\s+\[([^\]]+)\])?",
                 line,
             )
             if m:
-                idx, name, piece_id, status, hidden, tris, verts = m.groups()
+                idx, name, piece_id, status, hidden, tris, verts, b_min_str, b_max_str = m.groups()
+                b_min = (-1.0, -1.0, -1.0)
+                b_max = (1.0, 1.0, 1.0)
+                if b_min_str and b_max_str:
+                    try:
+                        b_min = tuple(float(x.strip()) for x in b_min_str.split(","))
+                        b_max = tuple(float(x.strip()) for x in b_max_str.split(","))
+                    except ValueError:
+                        pass
                 pieces.append({
                     "index": int(idx),
                     "name": name,
@@ -118,11 +138,30 @@ class Session:
                     "visible": not bool(hidden),
                     "triangles": int(tris),
                     "vertices": int(verts),
+                    "bounds_min": b_min,
+                    "bounds_max": b_max,
                     "raw": line,
                 })
             else:
                 pieces.append({"raw": line})
         return pieces
+
+    def get_mesh_stats(self) -> MeshStats:
+        """Return aggregated mesh statistics for the active piece or scene."""
+        pieces = self.list_pieces()
+        active = next((p for p in pieces if p.get("is_active")), pieces[0] if pieces else {})
+        v_total = sum(p.get("vertices", 0) for p in pieces)
+        t_total = sum(p.get("triangles", 0) for p in pieces)
+        b_min = active.get("bounds_min", (-1.0, -1.0, -1.0))
+        b_max = active.get("bounds_max", (1.0, 1.0, 1.0))
+        return MeshStats(
+            vertex_count=active.get("vertices", v_total),
+            triangle_count=active.get("triangles", t_total),
+            piece_count=len(pieces),
+            subdivision_level=0,
+            bounding_box_min=b_min,
+            bounding_box_max=b_max,
+        )
 
     def piece_info(
         self, id: Optional[int] = None, index: Optional[int] = None, name: Optional[str] = None
@@ -152,9 +191,16 @@ class Session:
         res = self.call_tool("select_piece", **args)
         return res["content"][0]["text"]
 
-    def add_primitive(self, kind: str = "cube") -> str:
+    def add_primitive(
+        self,
+        kind: Optional[str] = None,
+        primitive_type: Optional[str] = None,
+        position: Optional[Any] = None,
+        radius: Optional[float] = None,
+    ) -> str:
         """Add a primitive piece to the scene ('cube', 'sphere', 'plane')."""
-        res = self.call_tool("add_primitive", kind=kind)
+        chosen = kind or primitive_type or "sphere"
+        res = self.call_tool("add_primitive", kind=chosen)
         return res["content"][0]["text"]
 
     def select_brush(self, name: str) -> str:
@@ -214,6 +260,23 @@ class Session:
         res = self.call_tool("stroke", points=clean_points, space=space, invert=invert, pressure=pressure)
         return res["content"][0]["text"]
 
+    def apply_stroke(
+        self,
+        points: List[Union[List[float], Dict[str, float]]],
+        brush: Optional[str] = None,
+        radius: Optional[float] = None,
+        strength: Optional[float] = None,
+        space: str = "world",
+        invert: bool = False,
+        pressure: float = 1.0,
+    ) -> str:
+        """Configure brush and apply stroke."""
+        if brush:
+            self.select_brush(brush)
+        if radius is not None or strength is not None:
+            self.set_brush(size=radius, strength=strength)
+        return self.stroke(points=points, space=space, invert=invert, pressure=pressure)
+
     def mask(self, op: str) -> str:
         """Mask operation: 'clear', 'invert', 'blur', 'sharpen', 'grow', 'shrink'."""
         res = self.call_tool("mask", op=op)
@@ -224,6 +287,13 @@ class Session:
         args = {"resolution": resolution} if resolution is not None else {}
         res = self.call_tool("remesh", **args)
         return res["content"][0]["text"]
+
+    def voxel_remesh(self, resolution: Optional[int] = None, voxel_size: Optional[float] = None) -> str:
+        """Voxel remesh the active piece."""
+        res_val = resolution
+        if res_val is None and voxel_size is not None and voxel_size > 0:
+            res_val = max(16, min(320, int(2.0 / voxel_size)))
+        return self.remesh(resolution=res_val)
 
     def decimate(
         self, keep_percent: Optional[float] = None, triangles: Optional[int] = None
@@ -272,6 +342,12 @@ class Session:
         """Export visible pieces to glTF (.glb), OBJ, STL or PLY."""
         res = self.call_tool("export", path=path)
         return res["content"][0]["text"]
+
+    def export_mesh(self, path: str, format: Optional[str] = None) -> str:
+        """Export visible pieces to glTF (.glb), OBJ, STL or PLY."""
+        if format and not os.path.splitext(path)[1]:
+            path = f"{path}.{format.lstrip('.')}"
+        return self.export_file(path=path)
 
     def screenshot(self) -> bytes:
         """Capture the current viewport as PNG bytes."""
