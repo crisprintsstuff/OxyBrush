@@ -1,5 +1,7 @@
 //! `oxybrush-cli`: headless OxyBrush operations for scripts, build farms and
-//! pipelines. No window, no GPU, no network.
+//! pipelines. No window, no GPU. The `mcp` command speaks to a local agent
+//! over stdio, or attaches to the desktop app on 127.0.0.1; it never dials
+//! any other address.
 //!
 //! Inputs: `.oxb` projects (visible pieces), OBJ, STL. Outputs: `.oxb`,
 //! glTF (`.glb`/`.gltf`), OBJ, STL, PLY. Output files are written
@@ -21,9 +23,14 @@ USAGE:
   oxybrush-cli decimate <input> <output> (--keep PERCENT | --triangles N)
   oxybrush-cli lod      <input> <output-prefix> [--levels N] [--format EXT]
   oxybrush-cli split    <input> <output-folder> [--by groups|parts] [--format EXT]
+  oxybrush-cli mcp      [file]            stdio MCP server for a local agent (no socket)
+  oxybrush-cli mcp      --attach 127.0.0.1:PORT --token TOKEN
 
 Inputs:  .oxb project (visible pieces), .obj, .stl
 Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
+
+`mcp` writes the protocol to stdout. Do not mix it with other commands.
+It refuses to attach to anything but 127.0.0.1 or localhost. See docs/mcp.md.
 
 Examples:
   oxybrush-cli convert head.oxb head.glb
@@ -35,7 +42,10 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match run(&args) {
         Ok(msg) => {
-            println!("{msg}");
+            // `mcp` speaks the protocol on stdout itself and returns nothing to print.
+            if !msg.is_empty() {
+                println!("{msg}");
+            }
             ExitCode::SUCCESS
         }
         Err(e) => {
@@ -126,6 +136,7 @@ fn run(args: &[String]) -> Result<String, String> {
             }
             Ok(format!("wrote {} LOD files:\n{}", levels + 1, written.join("\n")))
         }
+        "mcp" => mcp(&args[1..]),
         "split" => {
             need(2)?;
             let by_parts = match flag_str(args, "--by").unwrap_or("parts") {
@@ -179,6 +190,33 @@ fn flag_num(args: &[String], name: &str) -> Result<Option<f64>, String> {
     match flag_str(args, name) {
         None => Ok(None),
         Some(v) => v.trim_end_matches('%').parse().map(Some).map_err(|_| format!("{name} needs a number, not `{v}`")),
+    }
+}
+
+/// `mcp` is the local agent protocol. It does not print a summary: stdout is the protocol.
+fn mcp(args: &[String]) -> Result<String, String> {
+    let attach = flag_str(args, "--attach");
+    let token = flag_str(args, "--token");
+    let files = positional(args);
+    match (attach, token, files.as_slice()) {
+        (Some(addr), Some(token), []) => {
+            oxy_mcp::serve_stdio_attach(addr, token)?;
+            Ok(String::new())
+        }
+        (Some(_), None, _) => Err("--attach needs --token (see usage)".into()),
+        (None, Some(_), _) => Err("--token is only used with --attach (see usage)".into()),
+        (Some(_), Some(_), _) => Err("mcp --attach does not take a file (see usage)".into()),
+        (None, None, []) => {
+            let mut session = oxy_mcp::HeadlessSession::new();
+            oxy_mcp::serve_stdio(oxy_mcp::Identity::cli(), &mut session).map_err(|e| e.to_string())?;
+            Ok(String::new())
+        }
+        (None, None, [path]) => {
+            let mut session = oxy_mcp::HeadlessSession::from_file(Path::new(path))?;
+            oxy_mcp::serve_stdio(oxy_mcp::Identity::cli(), &mut session).map_err(|e| e.to_string())?;
+            Ok(String::new())
+        }
+        (None, None, _) => Err("mcp takes one file (see usage)".into()),
     }
 }
 
@@ -277,6 +315,8 @@ mod tests {
         assert!(run(&args(&["convert", &d("in.oxb"), &d("in.oxb")])).unwrap_err().contains("refusing"));
         assert!(run(&args(&["convert", &d("missing.obj"), &d("x.glb")])).is_err());
         assert!(run(&args(&["decimate", &d("in.oxb"), &d("x.glb"), "--keep", "lots"])).unwrap_err().contains("number"));
+        assert!(run(&args(&["mcp", "--attach", "10.0.0.1:9", "--token", "abc"])).unwrap_err().contains("refusing"));
+        assert!(run(&args(&["mcp", "--token", "abc"])).unwrap_err().contains("--attach"));
         assert!(run(&args(&["frobnicate"])).unwrap_err().contains("unknown command"));
         assert!(run(&args(&["info"])).unwrap_err().contains("takes 1"));
         assert!(run(&[]).unwrap().contains("USAGE"));

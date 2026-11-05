@@ -312,6 +312,16 @@ impl History {
         self.undo.iter().map(|e| e.label.as_str())
     }
 
+    /// Prefix the newest undo entry. Agent edits use this so the history
+    /// panel shows who made the change, without a second undo stack.
+    pub fn prefix_latest_undo(&mut self, prefix: &str) {
+        if let Some(entry) = self.undo.back_mut()
+            && !entry.label.starts_with(prefix)
+        {
+            entry.label.insert_str(0, prefix);
+        }
+    }
+
     pub fn redo_labels(&self) -> impl Iterator<Item = &str> {
         self.redo.iter().rev().map(|e| e.label.as_str())
     }

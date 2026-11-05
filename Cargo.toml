@@ -19,6 +19,7 @@ oxy-topo = { path = "crates/oxy-topo" }
 oxy-doc = { path = "crates/oxy-doc" }
 oxy-ztl = { path = "crates/oxy-ztl" }
 oxy-update = { path = "crates/oxy-update", default-features = false }
+oxy-mcp = { path = "crates/oxy-mcp" }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"

@@ -15,6 +15,7 @@ All notable changes to OxyBrush. The format follows
 - **Mouse navigation** is part of the keymap. The **OxyBrush** preset keeps the current controls. **MMB orbit** uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan, and the 45° snap key starts as Alt (it can be any modifier, or off).
 - **Sculpt modifiers** can be reassigned. **Ctrl carves, Alt masks** uses Ctrl to invert the brush, Alt+drag on the mesh to mask, Ctrl+Alt to erase, Alt+click on empty space to invert the mask and Alt+drag on empty space to clear it. The touch layout's Smooth, Mask and Invert buttons keep those jobs.
 - Keymaps are saved beside the other settings (`keymap.txt`, versioned; unknown lines are kept) and can be exported or imported as an `.oxkeys` file.
+- **Local AI agent** (off by default): Settings > Local AI agent lets a program on this computer sculpt in the same scene as you, over the Model Context Protocol. It listens only on `127.0.0.1`, with a new token every launch. While an agent is connected the status bar says so, and Disconnect changes the token. Agent edits are normal undo steps labeled `Agent:`. Nothing is sent off the machine. `oxybrush-cli mcp` speaks the same tools over stdio for a file, and `oxybrush-cli mcp --attach` connects a stdio client to the running app. See [RFC 0003](docs/rfcs/0003-mcp.md) and [docs/mcp.md](docs/mcp.md).
 
 ### Fixed
 

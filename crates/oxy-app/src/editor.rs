@@ -356,6 +356,18 @@ pub struct Editor {
     pub focal_mm: f32,
     /// Focal-length window, opened from the view strip, View menu or palette.
     pub show_focal_length: bool,
+    /// Opt-in local agent (MCP). Off unless the user turns it on.
+    pub agent_enabled: bool,
+    /// `http://127.0.0.1:<port>/mcp` while the listener is up.
+    pub agent_endpoint: String,
+    /// Per-launch token. Not written to settings.
+    pub agent_token: String,
+    /// An authenticated agent has spoken in the last few seconds.
+    pub agent_connected: bool,
+    /// Set by the Disconnect button; the app rotates the token and clears it.
+    pub agent_disconnect: bool,
+    /// Files opened, imported or saved this session. Export will not overwrite them.
+    pub(crate) agent_sources: Vec<PathBuf>,
     /// Machine details for bug reports (filled in by the app layer).
     pub system_info: crate::support::SystemInfo,
 }
@@ -460,6 +472,12 @@ impl Default for Editor {
             recent_files: Vec::new(),
             focal_mm: default_focal_mm(),
             show_focal_length: false,
+            agent_enabled: false,
+            agent_endpoint: String::new(),
+            agent_token: String::new(),
+            agent_connected: false,
+            agent_disconnect: false,
+            agent_sources: Vec::new(),
             quit_now: false,
             system_info: Default::default(),
         }
@@ -516,6 +534,20 @@ fn ease_cursor_normal(prev: Vec3, prev_point: Vec3, raw: Vec3, point: Vec3, radi
     prev.lerp(raw, alpha).normalize_or(raw)
 }
 
+fn same_path(a: &Path, b: &Path) -> bool {
+    let (a, b) = (
+        std::path::absolute(a).unwrap_or_else(|_| a.to_path_buf()),
+        std::path::absolute(b).unwrap_or_else(|_| b.to_path_buf()),
+    );
+    if a == b {
+        return true;
+    }
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(x), Ok(y)) => x == y,
+        _ => false,
+    }
+}
+
 impl Editor {
     /// Enable autosave into the platform data directory and look for
     /// work left behind by crashed sessions.
@@ -567,6 +599,28 @@ impl Editor {
         matches!(self.drag, Drag::Stroke { .. })
     }
 
+    /// The user is mid-edit. An agent waits rather than applying a change
+    /// under a stroke, gizmo drag or selection.
+    pub fn agent_input_busy(&self) -> bool {
+        matches!(
+            self.drag,
+            Drag::Stroke { .. } | Drag::Gizmo(_) | Drag::Deferred { .. } | Drag::Select { .. } | Drag::PendingStroke
+        )
+    }
+
+    /// Remember a file this session read or wrote, so an agent export cannot replace it.
+    pub(crate) fn protect_path(&mut self, path: &Path) {
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        if !self.agent_sources.iter().any(|p| same_path(p, &path)) {
+            self.agent_sources.push(path);
+        }
+    }
+
+    /// True when `path` is the open project or a file this session already touched.
+    pub(crate) fn protected_path(&self, path: &Path) -> bool {
+        self.path.as_ref().is_some_and(|p| same_path(p, path)) || self.agent_sources.iter().any(|p| same_path(p, path))
+    }
+
     /// Keyboard modifiers combined with the on-screen touch toggles, as raw keys.
     /// Mouse navigation matches these. Brush behavior uses [`brush_roles`](Self::brush_roles).
     pub fn active_modifiers(&self) -> Modifiers {
@@ -614,6 +668,7 @@ impl Editor {
             flat_shading: self.view.flat_shading,
             stroke_from_empty: self.stroke_from_empty,
             surface_cursor: self.surface_cursor,
+            agent_mcp: self.agent_enabled,
             custom_matcap: self
                 .custom_matcap
                 .and_then(|i| self.custom_matcaps.get(i))
@@ -733,6 +788,7 @@ impl Editor {
         self.stroke_from_empty = s.stroke_from_empty;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
+        self.agent_enabled = s.agent_mcp;
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
@@ -1453,6 +1509,7 @@ impl Editor {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
                 self.replace_document(scene, Some(path.to_path_buf()));
+                self.protect_path(path);
                 self.remember_recent(path);
                 self.status = format!("Opened {} ({n} piece{})", path.display(), if n == 1 { "" } else { "s" });
             }
@@ -1510,6 +1567,7 @@ impl Editor {
                 self.camera.frame(self.scene.bounds());
                 let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
                 self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
+                self.protect_path(path);
                 self.remember_recent(path);
             }
             Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
@@ -1561,6 +1619,7 @@ impl Editor {
             Ok(()) => {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
+                self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
                 true
@@ -1907,10 +1966,33 @@ impl Editor {
     }
 
     pub fn decimate_active(&mut self) {
+        let count = self.scene.active().mesh.triangle_count();
+        let target = ((count as f32 * self.decimate_percent / 100.0) as usize).max(4);
+        self.decimate_to(target);
+    }
+
+    /// Decimate the active piece to about `target` triangles, off the UI thread.
+    pub fn decimate_to(&mut self, target: usize) {
         let mesh = self.scene.active().mesh.clone();
-        let target = ((mesh.triangle_count() as f32 * self.decimate_percent / 100.0) as usize).max(4);
+        let count = mesh.triangle_count().max(1);
+        let target = target.clamp(4, count);
+        self.decimate_percent = (target as f32 / count as f32 * 100.0).clamp(1.0, 90.0);
         self.start_job(format!("Decimate to {target} triangles"), Vec::new(), move || {
             Ok(JobResult::Mesh(oxy_topo::decimate(&mesh, target)))
+        });
+    }
+
+    /// Subdivide off the UI thread. The menu's [`subdivide`](Self::subdivide) stays instant for small meshes.
+    pub fn subdivide_background(&mut self, smooth: bool) {
+        let n = self.scene.active().mesh.triangle_count().saturating_mul(4);
+        if n > MAX_TRIANGLES {
+            self.status = format!("Subdivision would create {n} triangles (limit {MAX_TRIANGLES})");
+            return;
+        }
+        let mesh = self.scene.active().mesh.clone();
+        let label = if smooth { "Smooth subdivide" } else { "Subdivide" };
+        self.start_job(label.to_string(), Vec::new(), move || {
+            Ok(JobResult::Mesh(oxy_mesh::topo::subdivide(&mesh, if smooth { 1 } else { 0 })))
         });
     }
 
@@ -2896,6 +2978,7 @@ mod tests {
             flat_shading: true,
             stroke_from_empty: true,
             surface_cursor: true,
+            agent_mcp: false,
             custom_matcap: String::new(),
             background_style: BackgroundStyle::Flat,
             background: [0.15, 0.16, 0.18],

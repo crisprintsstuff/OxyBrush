@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use winit::application::ApplicationHandler;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta, StartCause, TouchPhase, WindowEvent};
+use winit::event_loop::EventLoopProxy;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -63,6 +64,11 @@ pub struct App {
     saved_keymap: String,
     /// When the preferences last changed without being saved yet.
     settings_changed_at: Option<Instant>,
+    proxy: Option<EventLoopProxy<()>>,
+    /// Local MCP listener. None unless the user opted in.
+    agent: Option<crate::agent::Inbox>,
+    /// Screenshot tool waiting for this frame's viewport.
+    shot_reply: Option<std::sync::mpsc::Sender<oxy_mcp::ToolResult>>,
 }
 
 impl App {
@@ -114,6 +120,7 @@ impl App {
                 // Automated runs (CI screenshots) never connect anywhere.
                 if auto.screenshot.is_some() {
                     e.updater.mode = crate::settings::UpdateMode::Off;
+                    e.agent_enabled = false;
                 }
                 e.keymap = keymap;
                 e.show_welcome = crate::settings::show_welcome(
@@ -147,6 +154,72 @@ impl App {
             saved_keymap,
             // Write the file on the first start so the welcome window isn't shown again.
             settings_changed_at: first_start.then(Instant::now),
+            proxy: None,
+            agent: None,
+            shot_reply: None,
+        }
+    }
+
+    /// The event-loop proxy is created in `main`, before the loop starts
+    /// (`ActiveEventLoop` cannot build one). The agent thread uses it to wake the UI.
+    pub(crate) fn set_event_proxy(&mut self, proxy: EventLoopProxy<()>) {
+        self.proxy = Some(proxy);
+    }
+
+    /// Start or stop the loopback agent server to match the setting, and
+    /// refresh the token and the "connected" indicator.
+    fn sync_agent(&mut self) {
+        if self.auto.screenshot.is_some() {
+            self.editor.agent_enabled = false;
+        }
+        if self.editor.agent_disconnect {
+            self.editor.agent_disconnect = false;
+            if let Some(agent) = &self.agent {
+                agent.disconnect();
+                self.editor.agent_token = agent.token();
+                self.editor.agent_connected = false;
+                self.editor.status = "Agent disconnected. The new token is in Settings.".into();
+            }
+        }
+        let want = self.editor.agent_enabled && self.auto.screenshot.is_none();
+        if want && self.agent.is_none() {
+            let Some(proxy) = self.proxy.clone() else { return };
+            let wake = Arc::new(move || {
+                let _ = proxy.send_event(());
+            });
+            match crate::agent::Inbox::listen(wake) {
+                Ok(inbox) => {
+                    log::info!("local agent listening on {} (127.0.0.1 only)", inbox.endpoint);
+                    self.editor.agent_endpoint = inbox.endpoint.clone();
+                    self.editor.agent_token = inbox.token();
+                    self.agent = Some(inbox);
+                }
+                Err(e) => {
+                    log::warn!("could not start the local agent server: {e}");
+                    self.editor.agent_enabled = false;
+                    self.editor.status = format!("Could not start the local agent server: {e}");
+                }
+            }
+        } else if !want && self.agent.is_some() {
+            self.agent = None;
+            self.editor.agent_endpoint.clear();
+            self.editor.agent_token.clear();
+            self.editor.agent_connected = false;
+        }
+        if let Some(agent) = &self.agent {
+            self.editor.agent_connected = agent.connected();
+            self.editor.agent_token = agent.token();
+        }
+    }
+
+    /// Apply one queued agent call. A screenshot is answered after the viewport is drawn.
+    fn poll_agent(&mut self) {
+        if self.shot_reply.is_some() {
+            return;
+        }
+        let Some(agent) = &mut self.agent else { return };
+        if let Some(reply) = agent.poll(&mut self.editor) {
+            self.shot_reply = Some(reply);
         }
     }
 
@@ -260,6 +333,8 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // Before borrowing the GPU state, so a listener started last frame shows its address.
+        self.sync_agent();
         let Some(g) = &mut self.gfx else { return };
         let now = Instant::now();
         let dt = now.duration_since(self.last_frame).as_secs_f32() * 1000.0;
@@ -304,6 +379,12 @@ impl App {
         ed.poll_job();
         ed.tick_autosave();
         ed.updater.tick(crate::updates::now_secs());
+        // Agent calls run after the user's finished job and before the mesh is uploaded.
+        if self.shot_reply.is_none()
+            && let Some(reply) = self.agent.as_mut().and_then(|agent| agent.poll(ed))
+        {
+            self.shot_reply = Some(reply);
+        }
         let title = ed.title();
         if self.applied_title != title {
             g.window.set_title(&title);
@@ -356,6 +437,45 @@ impl App {
             &ed.view,
             &items,
         );
+        // The agent's screenshot is the viewport without the panels, so copy
+        // before egui draws. Reading the pixels back submits this encoder;
+        // the UI is recorded into a fresh one afterwards.
+        if self.shot_reply.is_some() {
+            let copied = crate::snapshot::copy_to_buffer(&g.device, &mut encoder, &frame.texture);
+            match copied {
+                Some(pending) => {
+                    g.queue.submit([encoder.finish()]);
+                    let canvas = ed.canvas;
+                    let crop = (
+                        canvas[0].round().max(0.0) as u32,
+                        canvas[1].round().max(0.0) as u32,
+                        canvas[2].round().max(1.0) as u32,
+                        canvas[3].round().max(1.0) as u32,
+                    );
+                    let png = crate::snapshot::png_bytes(&g.device, pending, Some(crop));
+                    if let Some(reply) = self.shot_reply.take() {
+                        let result = match png {
+                            Ok(bytes) => oxy_mcp::ToolResult::with_image(
+                                format!(
+                                    "viewport {}x{} pixels. Screen-space stroke points use these pixels, origin at the top-left of the viewport.",
+                                    crop.2, crop.3
+                                ),
+                                bytes,
+                            ),
+                            Err(e) => oxy_mcp::ToolResult::error(format!("screenshot failed: {e}")),
+                        };
+                        let _ = reply.send(result);
+                    }
+                    encoder =
+                        g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame-ui") });
+                }
+                None => {
+                    if let Some(reply) = self.shot_reply.take() {
+                        let _ = reply.send(oxy_mcp::ToolResult::error("this GPU surface can't be read back"));
+                    }
+                }
+            }
+        }
         let extra = g.egui_renderer.update_buffers(&g.device, &g.queue, &mut encoder, &tris, &screen);
         {
             let mut pass = encoder
@@ -690,12 +810,29 @@ impl ApplicationHandler for App {
         }
     }
 
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
+        // The agent thread woke us. Apply the call and draw it.
+        self.poll_agent();
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        self.sync_agent();
+        self.poll_agent();
+        if self.shot_reply.is_some()
+            && let Some(g) = &self.gfx
+        {
+            g.window.request_redraw();
+        }
         // Save preferences once they settle, even if nothing redraws.
         self.persist_settings(false);
-        // Wake up regularly to finish background jobs, pending settings and
-        // autosave even when idle.
-        let wait = if self.editor.job.is_some() || self.editor.updater.busy() {
+        // Wake up regularly to finish background jobs, pending settings,
+        // autosave and a waiting agent even when the window is idle.
+        let wait = if self.editor.job.is_some() || self.shot_reply.is_some() || self.editor.updater.busy() {
+            Duration::from_millis(50)
+        } else if self.agent.is_some() {
             Duration::from_millis(200)
         } else if self.settings_changed_at.is_some() {
             Duration::from_millis(500)
@@ -707,6 +844,7 @@ impl ApplicationHandler for App {
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.gfx.is_some() {
+            self.sync_agent();
             return;
         }
         if let Err(e) = self.init_gfx(event_loop) {
@@ -721,6 +859,7 @@ impl ApplicationHandler for App {
         if let Some(p) = self.initial_file.take() {
             self.editor.open(&p);
         }
+        self.sync_agent();
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }

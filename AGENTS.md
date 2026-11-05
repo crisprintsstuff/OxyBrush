@@ -26,6 +26,7 @@ crates/
   oxy-cli      headless command-line tool, binary `oxybrush-cli`                    (no GPU)
   oxy-ztl      ZBrush format research tools (see "ZBrush rules" below)              (no GPU)
   oxy-update   opt-in update checks: release choice, verification, HTTPS, signing (no GPU)
+  oxy-mcp      local MCP server for an on-machine AI agent (stdio and 127.0.0.1 only, no GPU)
   oxy-render   wgpu matcap renderer, camera
   oxy-app      winit + egui desktop app, binary `oxybrush`
 docs/          ROADMAP.md, rfcs/, formats/zbrush/, releases/<tag>.md, images/
@@ -103,11 +104,16 @@ alone don't show visual regressions.
   UI or docs. Use generic names: voxel remesh, auto-retopology, armature
   spheres, pieces, vertex color. Naming ZBrush only to identify its file
   format or to compare features is fine.
-- **No telemetry. No network calls**, except the opt-in updater in
-  `oxy-update` ([RFC 0002](docs/rfcs/0002-updates.md)): it is off by
-  default, contacts only GitHub releases, sends nothing but a version
-  User-Agent, and automated runs (`--screenshot`) never enable it. Don't add
-  other network access.
+- **No telemetry. No network calls**, except two opt-in features, both off
+  by default, and both disabled in automated runs (`--screenshot`):
+  - the updater in `oxy-update` ([RFC 0002](docs/rfcs/0002-updates.md)):
+    contacts only GitHub releases, sends nothing but a version User-Agent;
+  - the local MCP server in `oxy-mcp` ([RFC 0003](docs/rfcs/0003-mcp.md)):
+    loopback `127.0.0.1` with a per-session token in the app, stdio in
+    `oxybrush-cli mcp`. It never dials out, never listens on another
+    interface, and every edit goes through the normal undo history labeled
+    `Agent:`.
+  Don't add any other network access.
 - **Performance is a feature.** Don't add work to the per-dab or per-frame
   path without measuring (`dab_timing`). Report numbers when you touch hot
   paths.

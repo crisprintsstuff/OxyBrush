@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (unreleased: keymap editor and navigation presets, perspective focal length, viewport background, surface-aligned brush cursor)
+> **Last updated:** 2026-11-04 (unreleased: keymap editor and navigation presets, perspective focal length, viewport background, surface-aligned brush cursor, local MCP server so an on-machine agent can sculpt alongside you, RFC 0003; v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide)
 
 ## Status at a glance
 
@@ -88,6 +88,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. Keymap editor, mouse-navigation presets (OxyBrush and MMB orbit) and optional Ctrl-carve / Alt-mask gestures ✅. ⏳ Custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |
+| **Local AI agents** | ✅ Opt-in MCP server on `127.0.0.1` (and `oxybrush-cli mcp` over stdio) so an agent on this machine can sculpt alongside you ([RFC 0003](rfcs/0003-mcp.md)). Off by default; edits are ordinary undo steps labeled `Agent:`. ⏳ More tools (gizmo, alphas as brushes, subdivision levels) as those settle | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
 ## Phase 5 — Hardening → 1.0 ⏳

@@ -76,6 +76,8 @@ Your layout, arrangement, brush order, interface scale, theme, material, autosav
 4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY (for game engines, other 3D tools or 3D printing).
 5. **Ctrl+K** finds any command by typing part of its name, and **Space** finds a brush the same way. **F1** shows every shortcut, and **F2** opens the built-in guide (searchable, works offline). **Settings > Keymap** changes any shortcut or the mouse buttons.
 
+**Working with an AI agent** (off unless you turn it on): Settings > Local AI agent lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
+
 ## Help test OxyBrush
 
 Testers are the most useful contribution right now — especially with **pen tablets**, **varied GPUs** and **3D printing workflows**.
@@ -211,6 +213,7 @@ crates/
   oxy-history  scene-wide undo/redo (chunk snapshots, topology, pieces)           (no GPU)
   oxy-io       OBJ/STL import; glTF/GLB, OBJ, STL, PLY export                      (no GPU)
   oxy-cli      headless command-line tool (binary: `oxybrush-cli`)                (no GPU)
+  oxy-mcp      local MCP server for an on-machine AI agent                      (no GPU)
   oxy-render   wgpu matcap renderer and orbit camera
   oxy-app      winit + egui desktop app (binary: `oxybrush`)
 ```
