@@ -53,6 +53,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.1-alpha" date="2026-11-04" type="development">
+      <description>
+        <p>Python plugin error diagnostic improvements, expanded oxybrush SDK with MeshStats dataclass, bundled mesh stats reporter plugin, and comprehensive GitHub Wiki documentation.</p>
+      </description>
+    </release>
     <release version="0.5.0-alpha" date="2026-11-04" type="development">
       <description>
         <p>Python plugin and scripting system with pure Python SDK, local AI agent (MCP) integration, keymap editor and navigation presets (MMB orbit), high-res mesh performance optimizations, autosave control, focal length, surface-aligned cursor and custom viewport backgrounds.</p>
