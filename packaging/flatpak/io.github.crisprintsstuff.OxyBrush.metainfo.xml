@@ -53,6 +53,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="1.0.0-beta" date="2026-11-05" type="development">
+      <description>
+        <p>Mask extract sculpting feature with thickness extrusion and boundary smoothing, C1 smooth symmetry blending for Grab brush, customizable theme presets and accent colors, and high-poly gizmo performance fixes.</p>
+      </description>
+    </release>
     <release version="0.6.0-alpha" date="2026-11-05" type="development">
       <description>
         <p>Pixar Regularized Kelvinlet sculpting brushes (Kelvin Grab, Kelvin Twist, Kelvin Scale) with elastodynamic volume preservation, and hardware-accelerated real-time wireframe overlay with Shift+W shortcut and opacity controls.</p>

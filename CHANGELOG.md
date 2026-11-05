@@ -4,19 +4,30 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-### Fixed
-
-- **Transform Gizmo High-Poly Mesh Freeze:** Fixed severe UI lockup when dragging the transform gizmo on dense meshes (millions of triangles). OS pointer moves are now coalesced at frame rate and processed via direct, parallel normal rotation matrices ($\mathbf{n}' = \mathbf{R} \mathbf{n}$) and chunk bounds transformations without running heavy triangle cross-product or CSR topology deduplication during the drag. Soft-mask exact normal recomputation settles once upon mouse release.
-- **Configurable Subdivision Triangle Cap:** Replaced hardcoded 24M triangle ceiling with configurable `max_triangles` setting in Preferences and `settings.txt` (presets for 24M, 48M, 96M, or Unlimited). Added `OXYBRUSH_MAX_TRIANGLES` environment variable override for high-memory workstations and informative limit status feedback.
+## [1.0.0-beta] - 2026-11-05
 
 ### Added
 
+- **Mask Extract for Sculpting:**
+  - Extract masked regions as a new piece with customizable extrusion thickness and boundary smoothing.
+  - Generates watertight 2-manifold solid shells with side rim walls and distinct face groups (front: 0, back: 1, rim: 2) or flat single-sided surface patches (`thickness = 0`).
+  - Laplacian boundary smoothing iterations to eliminate jagged stair-step edges along the mask rim.
+  - Accessible via `Mask > Extract mask…`, the sidebar **Groups & mask** inspector panel with interactive controls, and Command Palette (`Mask: Extract`).
+  - Preferences persist across sessions in `settings.txt`.
 - **Customizable Theme System:**
   - Added 6 base theme presets: `Graphite` (default dark neutral), `Charcoal` (deep OLED dark), `Slate` (cool studio blue-gray), `Warm Umber` (sculpting clay tone), `Studio Light` (clean bright neutral), and `High Contrast`.
   - Added 7 accent color presets: `Terracotta` (signature OxyBrush clay), `Cyan` (electric blue), `Emerald` (calming mint), `Amber` (golden warm), `Crimson` (vivid ruby), `Violet` (studio purple), and `Custom` (full RGB color picker).
   - Added adjustable interface corner rounding styles: `Sharp` (0 px), `Rounded` (6 px default), and `Soft` (10 px).
   - All theme presets, accent colors, custom RGB values, and corner styles persist across sessions in `settings.txt`.
   - Dedicated "Theme & Appearance" submenu in Settings with live preview swatches, and quick switcher shortcuts in the Command Palette (`Ctrl+P`).
+
+### Fixed
+
+- **Grab Brush Symmetry Blending (Issue #53):**
+  - Replaced the hard maximum cutoff with a $C^1$ smooth maximum partition-of-unity blend across the symmetry overlap window.
+  - Eliminates the harsh midline crease or ridge line when pulling surfaces near or across the reflection plane, guaranteeing smooth continuous transitions without seam tearing or drift.
+- **Transform Gizmo High-Poly Mesh Freeze:** Fixed severe UI lockup when dragging the transform gizmo on dense meshes (millions of triangles). OS pointer moves are now coalesced at frame rate and processed via direct, parallel normal rotation matrices ($\mathbf{n}' = \mathbf{R} \mathbf{n}$) and chunk bounds transformations without running heavy triangle cross-product or CSR topology deduplication during the drag. Soft-mask exact normal recomputation settles once upon mouse release.
+- **Configurable Subdivision Triangle Cap:** Replaced hardcoded 24M triangle ceiling with configurable `max_triangles` setting in Preferences and `settings.txt` (presets for 24M, 48M, 96M, or Unlimited). Added `OXYBRUSH_MAX_TRIANGLES` environment variable override for high-memory workstations and informative limit status feedback.
 
 ## [0.6.0-alpha] - 2026-11-05
 
@@ -221,7 +232,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.6.0-alpha...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.0.0-beta...HEAD
+[1.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.6.0-alpha...v1.0.0-beta
 [0.6.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...v0.6.0-alpha
 [0.5.2-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...v0.5.2-alpha
 [0.5.1-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.0-alpha...v0.5.1-alpha
