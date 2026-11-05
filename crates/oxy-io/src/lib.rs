@@ -53,19 +53,20 @@ pub fn import(path: &Path) -> Result<Mesh> {
     match extension(path).as_str() {
         "obj" => import_obj(path),
         "stl" => import_stl(&std::fs::read(path)?),
+        "ztl" | "zpr" => oxy_ztl::import(&std::fs::read(path)?).map_err(Error::Format),
         other => Err(Error::Unsupported(other.to_string())),
     }
 }
 
 /// Import by file extension, keeping separate objects apart: each named
 /// OBJ object (`o`) or group (`g`) becomes its own `(name, mesh)`; STL files
-/// give one. Objects with the same name are combined, and objects without
-/// triangles are skipped.
+/// give one. ZBrush (`.ztl`, `.zpr`) files give one piece per SubTool.
 pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
     let stem = path.file_stem().map_or("Imported".into(), |s| s.to_string_lossy().into_owned());
     match extension(path).as_str() {
         "obj" => import_obj_pieces(path, &stem),
         "stl" => Ok(vec![(stem, import_stl(&std::fs::read(path)?)?)]),
+        "ztl" | "zpr" => oxy_ztl::import_pieces(&std::fs::read(path)?).map_err(Error::Format),
         other => Err(Error::Unsupported(other.to_string())),
     }
 }
@@ -292,5 +293,30 @@ mod tests {
         let mut bytes = vec![0u8; 84];
         bytes[80] = 10;
         assert!(import_stl(&bytes).is_err());
+    }
+
+    #[test]
+    fn ztl_and_zpr_import_if_present() {
+        let dir = Path::new("/home/cris/ztl files");
+        if !dir.exists() {
+            return;
+        }
+
+        let ztl_path = dir.join("T-shirt.ztl");
+        if ztl_path.exists() {
+            let mesh = import(&ztl_path).expect("failed to import T-shirt.ztl mesh");
+            assert!(mesh.vertex_count() > 0);
+            assert!(mesh.triangle_count() > 0);
+
+            let pieces = import_pieces(&ztl_path).expect("failed to import T-shirt.ztl pieces");
+            assert!(!pieces.is_empty());
+            assert_eq!(pieces[0].0, "Low_T_shirt");
+        }
+
+        let zpr_path = dir.join("DefaultProject.ZPR");
+        if zpr_path.exists() {
+            let pieces = import_pieces(&zpr_path).expect("failed to import DefaultProject.ZPR pieces");
+            assert!(!pieces.is_empty());
+        }
     }
 }

@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 oxy-mesh.workspace = true
+oxy-ztl.workspace = true
 glam.workspace = true
 tobj.workspace = true
 serde_json.workspace = true

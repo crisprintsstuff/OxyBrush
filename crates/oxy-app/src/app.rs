@@ -645,14 +645,23 @@ impl App {
         match action {
             UiAction::Open => {
                 if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("OxyBrush project or mesh", &["oxb", "obj", "stl", "OXB", "OBJ", "STL"])
+                    .add_filter("OxyBrush project or mesh", &["oxb", "obj", "stl", "ztl", "zpr", "OXB", "OBJ", "STL", "ZTL", "ZPR"])
+                    .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
+                    .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
+                    .add_filter("STL mesh (*.stl)", &["stl", "STL"])
+                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"])
                     .pick_file()
                 {
                     ed.open(&p);
                 }
             }
             UiAction::Import => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("Meshes", &["obj", "stl", "OBJ", "STL"]).pick_file()
+                if let Some(p) = rfd::FileDialog::new()
+                    .add_filter("Meshes", &["obj", "stl", "ztl", "zpr", "OBJ", "STL", "ZTL", "ZPR"])
+                    .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
+                    .add_filter("STL mesh (*.stl)", &["stl", "STL"])
+                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"])
+                    .pick_file()
                 {
                     ed.import(&p);
                 }

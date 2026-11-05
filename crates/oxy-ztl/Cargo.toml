@@ -9,6 +9,9 @@ rust-version.workspace = true
 
 [dependencies]
 miniz_oxide.workspace = true
+glam.workspace = true
+oxy-mesh.workspace = true
+log.workspace = true
 
 [lints]
 workspace = true

@@ -42,9 +42,14 @@
 //!   [`Record::Gap`]s) and the content of every stream.
 
 pub mod diff;
+pub mod parser;
 pub mod probe;
+pub mod rle;
 mod zlib;
 
+pub use parser::{parse_pieces, parse_single_mesh, read_file};
+pub use parser::parse_pieces as import_pieces;
+pub use parser::parse_single_mesh as import;
 pub use zlib::MAX_STREAM_OUTPUT;
 
 /// One Layer-1 record. Records are contiguous and non-overlapping.

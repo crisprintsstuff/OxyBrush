@@ -2605,6 +2605,7 @@ version = "1.0.0-beta"
 dependencies = [
  "glam",
  "oxy-mesh",
+ "oxy-ztl",
  "serde_json",
  "tobj",
 ]
@@ -2680,7 +2681,10 @@ dependencies = [
 name = "oxy-ztl"
 version = "1.0.0-beta"
 dependencies = [
+ "glam",
+ "log",
  "miniz_oxide 0.9.1",
+ "oxy-mesh",
  "serde_json",
 ]
 
