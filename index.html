@@ -104,7 +104,7 @@
         </div>
         <div class="flex items-center gap-2">
           <span class="font-bold text-lg tracking-tight text-white font-mono">OxyBrush</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan font-medium" data-latest-version>v0.4.0-alpha</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan font-medium" data-latest-version>v0.5.0-alpha</span>
         </div>
       </a>
 
@@ -125,7 +125,7 @@
       <div class="flex items-center gap-3">
         <a href="#downloads" class="px-4 py-2 rounded-lg bg-accent-cyan hover:bg-sky-400 text-dark-950 font-semibold text-xs font-mono transition-all flex items-center gap-1.5 shadow-md shadow-accent-cyan/20">
           <i data-lucide="download" class="w-3.5 h-3.5"></i>
-          <span data-latest-version data-short>Get v0.4.0</span>
+          <span data-latest-version data-short>Get v0.5.0</span>
         </a>
         <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white transition-all" title="GitHub Repository">
           <!-- GitHub mark from Primer Octicons (MIT); Lucide no longer ships brand icons -->
@@ -170,7 +170,7 @@
         <div class="flex flex-wrap items-center justify-center gap-4 mb-12">
           <a href="#downloads" class="px-6 py-3.5 rounded-xl bg-white hover:bg-slate-100 text-dark-950 font-bold text-sm font-mono transition-all flex items-center gap-2 shadow-xl hover:shadow-2xl hover:scale-[1.02]">
             <i data-lucide="download-cloud" class="w-4 h-4 text-accent-cyan"></i>
-            <span>Download <span data-latest-version>v0.4.0-alpha</span></span>
+            <span>Download <span data-latest-version>v0.5.0-alpha</span></span>
           </a>
           <button onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" class="px-6 py-3.5 rounded-xl bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white font-mono text-xs font-medium transition-all flex items-center gap-2.5">
             <i data-lucide="terminal" class="w-4 h-4 text-accent-cyan"></i>
@@ -210,11 +210,11 @@
           <div>
             <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-accent-emerald/10 border border-accent-emerald/30 text-accent-emerald font-mono text-xs font-semibold uppercase tracking-wider mb-3">
               <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
-              What's New in v0.4.0-alpha
+              What's New in v0.5.0-alpha
             </div>
-            <h2 class="text-3xl font-extrabold text-white tracking-tight">Paint, Pose &amp; Export to Game Engines</h2>
+            <h2 class="text-3xl font-extrabold text-white tracking-tight">Python Plugins, Local AI Agent &amp; Dense Mesh Speed</h2>
           </div>
-          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.4.0-alpha" target="_blank" class="text-xs font-mono text-accent-cyan hover:underline flex items-center gap-1.5 self-start md:self-end">
+          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v0.5.0-alpha" target="_blank" class="text-xs font-mono text-accent-cyan hover:underline flex items-center gap-1.5 self-start md:self-end">
             <span>View GitHub Release</span>
             <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i>
           </a>
@@ -226,16 +226,16 @@
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-cyan/10 rounded-full blur-2xl group-hover:bg-accent-cyan/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-cyan mb-4">
-                <i data-lucide="palette" class="w-5 h-5"></i>
+                <i data-lucide="terminal" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Vertex Color &amp; Posing</h3>
+              <h3 class="text-lg font-bold text-white mb-2">Python Plugin System</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                A new <strong class="text-slate-300">Paint</strong> brush with mask-aware fills for the whole piece, its cavities or its peaks. Press <code class="font-mono text-slate-300">T</code> for a transform gizmo: masked parts stay put and a soft mask edge bends smoothly, so you can pose an arm at the shoulder.
+                A pure-Python client SDK (<code class="font-mono text-slate-300">python/oxybrush</code>) with zero third-party dependencies. Script strokes, topology, and pieces directly in Python. Use the in-app <strong class="text-slate-300">Plugins</strong> menu to launch scripts and installed plugins on the fly.
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-cyan">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Saved in projects &amp; subdivision levels</span>
+              <span>Zero dependencies &amp; in-app UI integration</span>
             </div>
           </div>
 
@@ -243,16 +243,16 @@
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-violet/10 rounded-full blur-2xl group-hover:bg-accent-violet/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-violet mb-4">
-                <i data-lucide="command" class="w-5 h-5"></i>
+                <i data-lucide="zap" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Faster Workflow</h3>
+              <h3 class="text-lg font-bold text-white mb-2">High-Res Mesh Performance</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                A command palette (<code class="font-mono text-slate-300">Ctrl+K</code>) finds any command, brush or file as you type; <code class="font-mono text-slate-300">Space</code> finds a brush. Brush presets you can share as one-line codes, a quick menu at the cursor, recent files and a built-in offline guide (<code class="font-mono text-slate-300">F2</code>).
+                Stroke coalescing and adaptive dab budgeting (<code class="font-mono text-slate-300">OXYBRUSH_DAB_BUDGET_MS</code>) eliminate stroke lag during fast brush sweeps. Parallel Rayon updates, atomic stamps, and zero-copy GPU buffers keep dense sculpts buttery smooth.
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-violet">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Flat shading &amp; custom matcaps too</span>
+              <span>Adaptive dab budget &amp; parallel Rayon passes</span>
             </div>
           </div>
 
@@ -260,16 +260,16 @@
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-emerald/10 rounded-full blur-2xl group-hover:bg-accent-emerald/20 transition-all"></div>
             <div>
               <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-emerald mb-4">
-                <i data-lucide="package" class="w-5 h-5"></i>
+                <i data-lucide="keyboard" class="w-5 h-5"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">glTF, LODs &amp; CLI</h3>
+              <h3 class="text-lg font-bold text-white mb-2">Keymap &amp; Navigation</h3>
               <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Export to <strong class="text-slate-300">glTF/GLB</strong> with every piece as its own object, plus OBJ, STL and PLY. Make LOD chains, split pieces by face group or loose parts, and batch-process files with the new <code class="font-mono text-slate-300">oxybrush-cli</code>.
+                Full keymap editor with conflict warnings. Switch to Blender/Maya <strong class="text-slate-300">MMB Orbit</strong> navigation, toggle autosave off, configure 35mm-equivalent perspective focal lengths, and align the brush cursor to surface normals.
               </p>
             </div>
             <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-emerald">
               <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Validated with the Khronos glTF validator</span>
+              <span>MMB navigation &amp; local AI agent (MCP)</span>
             </div>
           </div>
 
@@ -563,7 +563,7 @@
         
         <div class="text-center mb-12">
           <div class="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-2 font-semibold">Get Started</div>
-          <h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">Download OxyBrush <span data-latest-version>v0.4.0-alpha</span></h2>
+          <h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">Download OxyBrush <span data-latest-version>v0.5.0-alpha</span></h2>
           <p class="text-slate-400 text-sm max-w-xl mx-auto">
             Binary releases are pre-compiled and published on GitHub Releases with SHA-256 checksums for integrity verification.
           </p>
@@ -690,13 +690,37 @@
 
         <div class="space-y-4">
           
+          <!-- v0.5.0-alpha -->
+          <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
+            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
+              <div class="flex items-center gap-3">
+                <span class="font-mono font-bold text-white text-sm">0.5.0-alpha</span>
+                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
+                <span class="px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono font-semibold">LATEST</span>
+              </div>
+            </div>
+            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Python Plugin &amp; Scripting System</span>
+                <p class="text-slate-400">Pure-Python SDK (<code class="font-mono text-slate-300">python/oxybrush</code>) with zero third-party dependencies. Top-level in-app Plugins menu, dynamic plugin auto-discovery and reload, procedural sculpting examples, and background execution.</p>
+              </div>
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Performance Overhaul</span>
+                <p class="text-slate-400">Stroke coalescing and adaptive dab budget (<code class="font-mono text-slate-300">OXYBRUSH_DAB_BUDGET_MS</code>), Rayon parallel update_after_move passes, atomic generation stamps, parallel GPU vertex packing, and zero-copy index buffers.</p>
+              </div>
+              <div>
+                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Customization &amp; Agent</span>
+                <p class="text-slate-400">Keymap editor with conflict resolution, Blender/Maya MMB orbit navigation presets, local AI agent (MCP) integration, autosave off toggle, 35mm-equivalent perspective focal length, and surface-aligned brush cursor.</p>
+              </div>
+            </div>
+          </div>
+
           <!-- v0.4.0-alpha -->
           <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
             <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
               <div class="flex items-center gap-3">
                 <span class="font-mono font-bold text-white text-sm">0.4.0-alpha</span>
                 <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
-                <span class="px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono font-semibold">LATEST</span>
               </div>
             </div>
             <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
