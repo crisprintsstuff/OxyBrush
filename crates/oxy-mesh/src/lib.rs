@@ -206,15 +206,11 @@ impl Mesh {
         let vcount = new_positions.len();
         let mut vertex_chunk = vec![0u32; vcount];
         for (ci, c) in chunks.iter().enumerate() {
-            for v in c.vertices.clone() {
-                vertex_chunk[v as usize] = ci as u32;
-            }
+            vertex_chunk[c.vertices.start as usize..c.vertices.end as usize].fill(ci as u32);
         }
         let mut triangle_chunk = vec![0u32; triangles.len()];
         for (ci, c) in chunks.iter().enumerate() {
-            for t in c.triangles.clone() {
-                triangle_chunk[t as usize] = ci as u32;
-            }
+            triangle_chunk[c.triangles.start as usize..c.triangles.end as usize].fill(ci as u32);
         }
 
         let vertex_triangles = Csr::vertex_triangles(vcount, &triangles);

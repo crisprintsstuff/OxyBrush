@@ -2641,6 +2641,7 @@ dependencies = [
  "naga",
  "oxy-mesh",
  "pollster 1.0.1",
+ "rayon",
  "wgpu",
 ]
 

@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (unreleased: keymap editor and navigation presets, perspective focal length, viewport background, surface-aligned brush cursor, tooltips on every control and touch long-press, local MCP server so an on-machine agent can sculpt alongside you, RFC 0003; v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide)
+> **Last updated:** 2026-11-04 (unreleased: keymap editor and navigation presets, perspective focal length, viewport background, surface-aligned brush cursor, tooltips on every control and touch long-press, local MCP server so an on-machine agent can sculpt alongside you, RFC 0003, disable autosave, stroke coalescing & dab budgeting, parallel update_after_move, zero-copy GPU packing; v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide)
 
 ## Status at a glance
 
@@ -81,10 +81,12 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ⏳ Bend, twist, taper, inflate; topological masking from a click | 4–6 wk |
 | **Transform gizmo** | ✅ Move, rotate and scale pieces and masked regions in the viewport. ⏳ Numeric input, snapping, local axes | 1–2 wk |
 | **Brush presets and editor** | Save brushes (kernel, alpha, falloff, settings) as presets; custom shelves of favorites | 2–3 wk |
-| **Insert-mesh and curve brushes** | Stamp small meshes (eyes, bolts, teeth) onto the surface; draw tubes and straps along a curve | 3–5 wk |
-| **Hard-surface tools** | Clip, slice and trim brushes; edge-preserving polish | 2–4 wk |
+| **Insert-mesh and primitive brushes** | Stamp small meshes (eyes, bolts, teeth) or geometric primitives (spheres, cubes, cylinders) onto the surface with auto-orientation and automatic masking of base geometry (Discussion #21) | 3–5 wk |
+| **Hard-surface tools** | Clip brushes (push geometry to plane), slice brushes (insert edge loops and face groups), trim brushes (cut and hole-cap) (Discussion #21); edge-preserving polish | 2–4 wk |
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
-| **Viewport** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅, gradient or flat background with colors ✅, focal length (15–200 mm, remembered) ✅, surface-aligned brush cursor (optional, off by default) ✅. ⏳ Shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
+| **Viewport & lighting** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅, gradient or flat background with colors ✅, focal length (15–200 mm, remembered) ✅, surface-aligned brush cursor (optional, off by default) ✅. ⏳ Dynamic studio lights (directional, point, spot), atmospheric distance/depth fog, shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
+| **Path tracer renderer** | Progressive hardware-accelerated / compute path tracer for photorealistic render previews, realistic contact shadows and ambient lighting | 4–6 wk |
+| **Python plugin system** | Embedded Python runtime and scripting API (extending the MCP server architecture) for custom procedural brushes, generators, import/export filters and automation scripts | 3–5 wk |
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. Keymap editor, mouse-navigation presets (OxyBrush and MMB orbit) and optional Ctrl-carve / Alt-mask gestures ✅. A tooltip on every control (what it does, plus the shortcut from one shared list), and the same text on a long-press in the Touch layout ✅. ⏳ Custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |
@@ -111,7 +113,9 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 - Polygon modeling (extrude, bevel, inset, edge loops) and creased subdivision preview
 - UV unwrap; normal/displacement map baking
 - ~~glTF export~~ ✅ (glTF/GLB and PLY export, LOD chain, split pieces, `oxybrush-cli`); FBX/USD export; send-to-Blender bridge
-- WASM plugin API and scripting
+- WASM & Python plugin APIs and automation scripting
+- Interactive path tracer viewport renderer & turntable rendering
+- Multi-light studio setups, environment lighting & atmospheric depth fog
 - Hair/fiber and mesh instancing
 - Exploratory: GPU compute sculpting, OpenXR, opt-in AI plugins
 

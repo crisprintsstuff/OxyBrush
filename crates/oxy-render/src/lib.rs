@@ -17,6 +17,7 @@ pub use matcap::MatcapPreset;
 
 use bytemuck::{Pod, Zeroable};
 use oxy_mesh::Mesh;
+use rayon::prelude::*;
 use std::collections::HashMap;
 use wgpu::util::DeviceExt;
 
@@ -562,33 +563,63 @@ impl ViewportRenderer {
             let max_group = mesh.groups().iter().copied().max().unwrap_or(0) as usize;
             let lut: Vec<u32> = (0..=max_group).map(|g| group_color(g as u32)).collect();
             let vertex_lut: &[u32] = if self.exact_face_colors { &[] } else { &lut };
-            let verts: Vec<GpuVertex> = (0..mesh.vertex_count()).map(|i| vertex(mesh, i, vertex_lut)).collect();
+            let m: &Mesh = mesh;
+            let verts: Vec<GpuVertex> =
+                (0..mesh.vertex_count()).into_par_iter().map(|i| vertex(m, i, vertex_lut)).collect();
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy vertices"),
                 contents: bytemuck::cast_slice(&verts),
                 usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             });
             // Visible triangles only; face colors in the same order.
-            let mut indices: Vec<[u32; 3]> = Vec::with_capacity(mesh.triangle_count());
-            let mut face_colors: Vec<u32> = Vec::with_capacity(mesh.triangle_count());
-            for (t, tri) in mesh.triangles.iter().enumerate() {
-                if !mesh.hidden()[t] {
-                    indices.push(*tri);
-                    let g = mesh.groups()[t] as usize;
-                    face_colors.push(if g < lut.len() { lut[g] } else { group_color(mesh.groups()[t]) });
+            let any_hidden = mesh.any_hidden();
+            let (indices, index_count): (Option<Vec<[u32; 3]>>, u32) = if !any_hidden {
+                (None, mesh.triangles.len() as u32 * 3)
+            } else {
+                let mut vis = Vec::with_capacity(mesh.triangle_count());
+                for (t, tri) in mesh.triangles.iter().enumerate() {
+                    if !mesh.hidden()[t] {
+                        vis.push(*tri);
+                    }
                 }
-            }
-            if face_colors.is_empty() {
-                face_colors.push(0);
-            }
+                let count = vis.len() as u32 * 3;
+                (Some(vis), count)
+            };
+
+            let face_colors: Vec<u32> = if !any_hidden {
+                mesh.groups()
+                    .par_iter()
+                    .map(|&g| {
+                        let g = g as usize;
+                        if g < lut.len() { lut[g] } else { group_color(g as u32) }
+                    })
+                    .collect()
+            } else {
+                let mut fc = Vec::with_capacity(mesh.triangle_count());
+                for (t, &h) in mesh.hidden().iter().enumerate() {
+                    if !h {
+                        let g = mesh.groups()[t] as usize;
+                        fc.push(if g < lut.len() { lut[g] } else { group_color(mesh.groups()[t]) });
+                    }
+                }
+                fc
+            };
+            let face_colors_slice = if face_colors.is_empty() { &[0u32] } else { face_colors.as_slice() };
+
+            let index_contents: &[u8] = match &indices {
+                Some(vis) if vis.is_empty() => &[0u8; 12],
+                Some(vis) => bytemuck::cast_slice(vis),
+                None if mesh.triangles.is_empty() => &[0u8; 12],
+                None => bytemuck::cast_slice(&mesh.triangles),
+            };
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy indices"),
-                contents: if indices.is_empty() { &[0u8; 12] } else { bytemuck::cast_slice(&indices) },
+                contents: index_contents,
                 usage: wgpu::BufferUsages::INDEX,
             });
             let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy face colors"),
-                contents: bytemuck::cast_slice(&face_colors),
+                contents: bytemuck::cast_slice(face_colors_slice),
                 usage: wgpu::BufferUsages::STORAGE,
             });
             let piece_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
@@ -610,7 +641,7 @@ impl ViewportRenderer {
                 GpuMesh {
                     vertices,
                     indices: index_buffer,
-                    index_count: indices.len() as u32 * 3,
+                    index_count,
                     piece_uniforms,
                     bind_group,
                     topology_version: mesh.topology_version(),
@@ -634,10 +665,13 @@ impl ViewportRenderer {
                 _ => runs.push(start..end),
             }
         }
-        let mut staging = Vec::new();
+        let m = mesh;
         for run in runs {
-            staging.clear();
-            staging.extend(run.clone().map(|i| vertex(mesh, i, &gpu.group_lut)));
+            let staging: Vec<GpuVertex> = if run.len() > 4096 {
+                run.clone().into_par_iter().map(|i| vertex(m, i, &gpu.group_lut)).collect()
+            } else {
+                run.clone().map(|i| vertex(m, i, &gpu.group_lut)).collect()
+            };
             queue.write_buffer(
                 &gpu.vertices,
                 run.start as u64 * std::mem::size_of::<GpuVertex>() as u64,
