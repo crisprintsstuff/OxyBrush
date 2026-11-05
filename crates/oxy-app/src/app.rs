@@ -69,6 +69,8 @@ pub struct App {
     agent: Option<crate::agent::Inbox>,
     /// Screenshot tool waiting for this frame's viewport.
     shot_reply: Option<std::sync::mpsc::Sender<oxy_mcp::ToolResult>>,
+    /// Running Python plugin process.
+    plugin_process: Option<crate::plugins::PluginProcess>,
 }
 
 impl App {
@@ -160,6 +162,7 @@ impl App {
             proxy: None,
             agent: None,
             shot_reply: None,
+            plugin_process: None,
         }
     }
 
@@ -223,6 +226,66 @@ impl App {
         let Some(agent) = &mut self.agent else { return };
         if let Some(reply) = agent.poll(&mut self.editor) {
             self.shot_reply = Some(reply);
+        }
+    }
+
+    /// Check if a background Python plugin process has completed.
+    fn poll_plugin(&mut self) {
+        let Some(proc) = &mut self.plugin_process else { return };
+        match proc.rx.try_recv() {
+            Ok(Ok(stdout)) => {
+                let name = proc.name.clone();
+                self.plugin_process = None;
+                if stdout.is_empty() {
+                    self.editor.status = format!("Plugin '{name}' finished");
+                } else {
+                    let first_line = stdout.lines().next().unwrap_or("finished");
+                    self.editor.status = format!("Plugin '{name}': {first_line}");
+                }
+            }
+            Ok(Err(stderr)) => {
+                let name = proc.name.clone();
+                self.plugin_process = None;
+                let first_line = stderr.lines().next().unwrap_or("failed");
+                self.editor.status = format!("Plugin '{name}' failed: {first_line}");
+                log::warn!("Plugin '{name}' failed:\n{stderr}");
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                self.plugin_process = None;
+            }
+        }
+    }
+
+    /// Execute a Python plugin script against the local agent server.
+    fn run_python_script(&mut self, path: &std::path::Path) {
+        if self.plugin_process.is_some() {
+            self.editor.status = "Another plugin is already running".into();
+            return;
+        }
+        if self.agent.is_none() {
+            self.editor.agent_enabled = true;
+            self.sync_agent();
+        }
+        let (endpoint, token) = if let Some(agent) = &self.agent {
+            (agent.endpoint.clone(), agent.token())
+        } else {
+            self.editor.status = "Could not start local agent server for Python script".into();
+            return;
+        };
+        let Some(proxy) = self.proxy.clone() else { return };
+        let wake = Arc::new(move || {
+            let _ = proxy.send_event(());
+        });
+        match crate::plugins::run_plugin(path, &endpoint, &token, wake) {
+            Ok(proc) => {
+                let name = proc.name.clone();
+                self.plugin_process = Some(proc);
+                self.editor.status = format!("Running plugin '{name}'…");
+            }
+            Err(e) => {
+                self.editor.status = format!("Failed to run plugin: {e}");
+            }
         }
     }
 
@@ -528,6 +591,18 @@ impl App {
         if let Some(a) = action {
             self.run_action(a);
         }
+        if let Some(p) = self.editor.request_run_plugin.take() {
+            self.run_python_script(&p);
+        }
+        if std::mem::take(&mut self.editor.request_open_plugins_dir)
+            && let Some(dir) = crate::plugins::plugins_dir()
+        {
+            crate::plugins::open_folder(&dir);
+        }
+        if std::mem::take(&mut self.editor.request_reload_plugins) {
+            self.editor.reload_plugins();
+            self.editor.status = format!("Loaded {} plugins", self.editor.plugins.len());
+        }
         self.persist_settings(self.editor.quit_now);
         if self.editor.quit_now {
             self.editor.autosaver.finish();
@@ -682,6 +757,11 @@ impl App {
                     ed.export(&p);
                 }
             }
+            UiAction::RunScript => {
+                if let Some(p) = rfd::FileDialog::new().add_filter("Python script", &["py", "PY"]).pick_file() {
+                    self.run_python_script(&p);
+                }
+            }
         }
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
@@ -817,6 +897,7 @@ impl ApplicationHandler for App {
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, _event: ()) {
         // The agent thread woke us. Apply the call and draw it.
         self.poll_agent();
+        self.poll_plugin();
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
@@ -825,6 +906,7 @@ impl ApplicationHandler for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         self.sync_agent();
         self.poll_agent();
+        self.poll_plugin();
         if self.shot_reply.is_some()
             && let Some(g) = &self.gfx
         {
@@ -834,7 +916,11 @@ impl ApplicationHandler for App {
         self.persist_settings(false);
         // Wake up regularly to finish background jobs, pending settings,
         // autosave and a waiting agent even when the window is idle.
-        let wait = if self.editor.job.is_some() || self.shot_reply.is_some() || self.editor.updater.busy() {
+        let wait = if self.editor.job.is_some()
+            || self.shot_reply.is_some()
+            || self.editor.updater.busy()
+            || self.plugin_process.is_some()
+        {
             Duration::from_millis(50)
         } else if self.agent.is_some() {
             Duration::from_millis(200)

@@ -517,6 +517,10 @@ pub mod plain {
     pub const GROUPS: &str = "Face groups, and which faces are hidden.";
     pub const MASK: &str = "Protect parts of the surface from brushes.";
     pub const VIEW: &str = "Camera, shading and materials.";
+    pub const PLUGINS: &str = "Run Python scripts and custom plugins against the active document.";
+    pub const RUN_SCRIPT: &str = "Pick and run a Python (.py) script using the OxyBrush API.";
+    pub const OPEN_PLUGINS_DIR: &str = "Open the folder where OxyBrush looks for Python plugins.";
+    pub const RELOAD_PLUGINS: &str = "Scan the plugins folder again for new or changed scripts.";
     pub const SETTINGS: &str = "Layout, where panels sit, scale, and update checks.";
     pub const HELP: &str = "The guide, shortcuts, and reporting a problem.";
     pub const NEW: &str = "Start a new scene from a sphere, cube or plane.";
