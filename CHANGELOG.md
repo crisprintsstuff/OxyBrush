@@ -24,6 +24,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **GPU vertex packing:** Group colors use a precomputed lookup table, bypassing per-vertex HSV calculations, and dirty chunk uploads are coalesced into contiguous ranges.
   - **Tuned chunk granularity:** Lowered `CHUNK_TRIANGLES` from 4096 to 1024, cutting raycast cost and reducing dirty upload / undo snapshot chunk size by 4×.
   - **Parallel `update_after_move` passes:** Replaced serial dedup loops with atomic generation stamps (`Stamps`) across Rayon chunks, derived affected vertex sets directly via adjacency tables, and accumulated per-thread chunk bounding box growths.
+  - **Parallel GPU rebuild & zero-copy index buffer:** Packed rebuild vertices and large dirty staging runs in parallel with Rayon, and bound mesh triangles directly when no faces are hidden, eliminating redundant index allocations.
 
 ### Fixed
 

@@ -13,6 +13,7 @@ glam.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true
+rayon.workspace = true
 
 [dev-dependencies]
 # Validates the WGSL shaders in tests without a GPU (pure Rust, part of wgpu).
