@@ -368,6 +368,16 @@ pub struct Editor {
     pub agent_connected: bool,
     /// Set by the Disconnect button; the app rotates the token and clears it.
     pub agent_disconnect: bool,
+    /// Discovered Python plugins.
+    pub plugins: Vec<crate::plugins::PluginInfo>,
+    /// Set by the UI to ask the platform layer for a Python script file dialog.
+    pub request_run_script: bool,
+    /// Set by the UI to run a specific discovered plugin script.
+    pub request_run_plugin: Option<PathBuf>,
+    /// Set by the UI to open the user's plugins folder.
+    pub request_open_plugins_dir: bool,
+    /// Set by the UI to reload discovered plugins.
+    pub request_reload_plugins: bool,
     /// Files opened, imported or saved this session. Export will not overwrite them.
     pub(crate) agent_sources: Vec<PathBuf>,
     /// Machine details for bug reports (filled in by the app layer).
@@ -484,6 +494,11 @@ impl Default for Editor {
             agent_token: String::new(),
             agent_connected: false,
             agent_disconnect: false,
+            plugins: crate::plugins::discover_plugins(),
+            request_run_script: false,
+            request_run_plugin: None,
+            request_open_plugins_dir: false,
+            request_reload_plugins: false,
             agent_sources: Vec::new(),
             quit_now: false,
             system_info: Default::default(),
@@ -805,6 +820,11 @@ impl Editor {
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
         self.recent_files = s.recent_files.clone();
+    }
+
+    /// Rescan user and workspace plugin directories for Python plugins.
+    pub fn reload_plugins(&mut self) {
+        self.plugins = crate::plugins::discover_plugins();
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {

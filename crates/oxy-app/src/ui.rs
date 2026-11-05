@@ -34,6 +34,8 @@ pub enum UiAction {
     ImportKeymap,
     /// Export the current keymap.
     ExportKeymap,
+    /// Pick and run a Python script file.
+    RunScript,
 }
 
 /// Sizes that differ between the interface layouts.
@@ -304,6 +306,34 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.separator();
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
             });
+            tips::menu(ui, "Plugins", plain::PLUGINS, |ui| {
+                if tips::hover(ui.button("Run Python script…"), plain::RUN_SCRIPT).clicked() {
+                    ed.request_run_script = true;
+                }
+                ui.separator();
+                if ed.plugins.is_empty() {
+                    ui.add_enabled(false, egui::Label::new("No plugins found"));
+                } else {
+                    ui.label(RichText::new("Installed plugins").weak().small());
+                    for plugin in &ed.plugins {
+                        let tip = if plugin.description.is_empty() {
+                            format!("Run {}", plugin.path.display())
+                        } else {
+                            format!("{}\n{}", plugin.description, plugin.path.display())
+                        };
+                        if tips::hover(ui.button(&plugin.name), tip).clicked() {
+                            ed.request_run_plugin = Some(plugin.path.clone());
+                        }
+                    }
+                }
+                ui.separator();
+                if tips::hover(ui.button("Open plugins folder…"), plain::OPEN_PLUGINS_DIR).clicked() {
+                    ed.request_open_plugins_dir = true;
+                }
+                if tips::hover(ui.button("Reload plugins"), plain::RELOAD_PLUGINS).clicked() {
+                    ed.request_reload_plugins = true;
+                }
+            });
             tips::menu(ui, "Settings", plain::SETTINGS, |ui| {
                 ui.label("Layout");
                 for l in UiLayout::ALL {
@@ -438,6 +468,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     if std::mem::take(&mut ed.request_export_keymap) {
         action = Some(UiAction::ExportKeymap);
+    }
+    if std::mem::take(&mut ed.request_run_script) {
+        action = Some(UiAction::RunScript);
     }
     dialogs(ui, ed, &mut action);
     background_window(ui.ctx(), ed);

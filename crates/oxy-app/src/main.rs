@@ -10,6 +10,7 @@ mod guide;
 mod keymap;
 mod matcaps;
 mod palette;
+mod plugins;
 mod pose;
 mod presets;
 mod settings;

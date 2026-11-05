@@ -20,3 +20,11 @@ docs/formats/zbrush/research/**/samples/
 /packaging/flatpak/build-dir/
 /packaging/flatpak/.flatpak-builder/
 /packaging/flatpak/repo/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
