@@ -78,6 +78,8 @@ Your layout, arrangement, brush order, interface scale, theme, material, autosav
 
 **Working with an AI agent** (off unless you turn it on): Settings > Local AI agent lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
 
+**Python plugins & scripting:** Write Python scripts or install custom plugins in your local plugins folder using the zero-dependency pure-Python SDK (`python/oxybrush`). The top-level **Plugins** menu lets you run any `.py` script via file dialog, launch installed plugins with one click, open your plugins directory, and reload plugins on the fly. Example plugins are in `examples/plugins/`.
+
 ## Help test OxyBrush
 
 Testers are the most useful contribution right now — especially with **pen tablets**, **varied GPUs** and **3D printing workflows**.
@@ -101,7 +103,9 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Voxel remesh:** rebuilds clean, even topology. "Merge visible" remeshes several pieces into one (a union).
 - **Decimation:** quadric edge collapse that keeps open borders and face-group borders.
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, delete hidden, and a group color overlay.
-- **Projects:** `.oxb` project files (versioned, checksummed, compressed, saved atomically), a prompt before discarding unsaved changes, **autosave every 2 minutes**, and **crash recovery** on the next launch.
+- **Projects:** `.oxb` project files (versioned, checksummed, compressed, saved atomically), a prompt before discarding unsaved changes, **autosave every 2 minutes** (or set to 0/"Off" in Settings), and **crash recovery** on the next launch.
+- **Python plugins & scripting:** a pure-Python client SDK (`python/oxybrush`) with zero external dependencies. Connects over loopback Model Context Protocol (MCP JSON-RPC 2.0) to inspect scenes, configure brushes, execute 3D strokes, manage topology (remesh, decimate, subdivide), and import/export assets. In-app **Plugins** menu with dynamic discovery, reload, and non-blocking background execution. Includes procedural sample plugins (`examples/plugins/`).
+- **Dense mesh performance optimizations:** stroke coalescing and adaptive dab budgeting (`OXYBRUSH_DAB_BUDGET_MS`, default 10 ms) eliminate stroke queuing during rapid gestures; parallel Rayon geometry passes, atomic stamps, 1024-triangle chunk granularity, parallel GPU vertex packing, and zero-copy GPU index buffer binding.
 - **Background jobs:** remesh, merge and decimate run on a worker thread, so the UI stays responsive.
 - **Chunked mesh engine:** a stroke only re-computes, re-uploads and snapshots the regions it touches.
 - **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
@@ -163,7 +167,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
 | — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v0.5.0-alpha |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 v0.3.0-alpha |
-| 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport, quick palette ✅, keymap editor ✅ | 🚧 |
+| 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport, quick palette ✅, keymap editor ✅, Python plugins ✅, local AI agent (MCP) ✅ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
 | Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
 | After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
@@ -219,6 +223,21 @@ crates/
 ```
 
 Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. The full design is in [RFC-0001](docs/rfcs/0001-oxybrush.md).
+
+### Python SDK & Plugins
+
+The `python/` directory contains the zero-dependency pure-Python `oxybrush` client library:
+
+```bash
+cd python
+pip install -e .
+```
+
+Or run scripts directly against OxyBrush without installing:
+
+```bash
+PYTHONPATH=python python3 examples/plugins/mesh_stats.py
+```
 
 ### Performance status
 
