@@ -18,6 +18,7 @@
 
 <p align="center">
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases/latest"><b>Download</b></a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
