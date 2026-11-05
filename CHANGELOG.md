@@ -18,6 +18,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Sculpt modifiers** can be reassigned. **Ctrl carves, Alt masks** uses Ctrl to invert the brush, Alt+drag on the mesh to mask, Ctrl+Alt to erase, Alt+click on empty space to invert the mask and Alt+drag on empty space to clear it. The touch layout's Smooth, Mask and Invert buttons keep those jobs.
 - Keymaps are saved beside the other settings (`keymap.txt`, versioned; unknown lines are kept) and can be exported or imported as an `.oxkeys` file.
 - **Local AI agent** (off by default): Settings > Local AI agent lets a program on this computer sculpt in the same scene as you, over the Model Context Protocol. It listens only on `127.0.0.1`, with a new token every launch. While an agent is connected the status bar says so, and Disconnect changes the token. Agent edits are normal undo steps labeled `Agent:`. Nothing is sent off the machine. `oxybrush-cli mcp` speaks the same tools over stdio for a file, and `oxybrush-cli mcp --attach` connects a stdio client to the running app. See [RFC 0003](docs/rfcs/0003-mcp.md) and [docs/mcp.md](docs/mcp.md).
+- **Disable autosave:** The Settings > *Autosave every* slider can be set to 0 (displays as "Off") to turn off periodic background saves and crash-recovery file writes.
+- **Performance optimizations for dense meshes:**
+  - **Stroke coalescing & adaptive dab budget:** Coalesce mouse moves per frame during interactive sculpting and adapt dab spacing and strength when strokes exceed a time budget (`OXYBRUSH_DAB_BUDGET_MS`, default 10 ms), preventing input lag on high-resolution meshes.
+  - **GPU vertex packing:** Group colors use a precomputed lookup table, bypassing per-vertex HSV calculations, and dirty chunk uploads are coalesced into contiguous ranges.
+  - **Tuned chunk granularity:** Lowered `CHUNK_TRIANGLES` from 4096 to 1024, cutting raycast cost and reducing dirty upload / undo snapshot chunk size by 4×.
 
 ### Fixed
 

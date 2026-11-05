@@ -96,6 +96,9 @@ impl App {
                 // Automated runs (CI screenshots) don't touch the user's autosave folder.
                 if auto.screenshot.is_none() {
                     e.enable_autosave();
+                    e.coalesce_strokes = true;
+                    e.dab_budget_ms =
+                        std::env::var("OXYBRUSH_DAB_BUDGET_MS").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
                 }
                 e.system_info.log_path = log_path;
                 // Brush presets: read the user's library (automated runs use none).
@@ -333,6 +336,7 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
+        self.editor.flush_stroke();
         // Before borrowing the GPU state, so a listener started last frame shows its address.
         self.sync_agent();
         let Some(g) = &mut self.gfx else { return };

@@ -332,6 +332,57 @@ struct LayerState {
     vertices: HashMap<u32, (Vec3, Vec3, f32)>,
 }
 
+/// Adaptive time budget for dabs along a stroke.
+#[derive(Debug, Clone)]
+pub struct DabBudget {
+    /// Time allowed per [`Stroke::add_sample`] call, in milliseconds.
+    pub ms: f32,
+    /// Hard cap on dabs per [`Stroke::add_sample`] call.
+    pub max_dabs: u32,
+    /// Maximum strength multiplier used to compensate for wider spacing.
+    pub max_strength_scale: f32,
+    recent: [f32; 8],
+    count: usize,
+    spacing_scale: f32,
+}
+
+impl DabBudget {
+    pub fn new(ms: f32) -> Self {
+        Self { ms, max_dabs: 8, max_strength_scale: 4.0, recent: [0.0; 8], count: 0, spacing_scale: 1.0 }
+    }
+
+    /// Median duration of recent dabs in milliseconds, if any have run.
+    pub fn dab_ms(&self) -> Option<f32> {
+        let n = self.count.min(self.recent.len());
+        if n == 0 {
+            return None;
+        }
+        let mut v = self.recent;
+        v[..n].sort_unstable_by(f32::total_cmp);
+        Some(v[n / 2])
+    }
+
+    fn record(&mut self, ms: f32) {
+        self.recent[self.count % self.recent.len()] = ms;
+        self.count += 1;
+    }
+
+    pub fn spacing_scale(&self) -> f32 {
+        self.spacing_scale
+    }
+}
+
+/// How many dabs fit the budget, and how much to widen spacing so the dabs
+/// the stroke wanted still cover the segment. Returns `(max_dabs, spacing_factor >= 1.0)`.
+pub fn plan_dabs(wanted: f32, dab_ms: Option<f32>, budget_ms: f32, hard_cap: u32) -> (u32, f32) {
+    let cap = hard_cap.max(1);
+    let n_max = match dab_ms {
+        Some(c) if c > 0.0 => ((budget_ms / c) as u32).clamp(1, cap),
+        _ => cap,
+    };
+    (n_max, (wanted / n_max as f32).max(1.0))
+}
+
 /// An in-progress stroke.
 pub struct Stroke {
     settings: BrushSettings,
@@ -352,6 +403,8 @@ pub struct Stroke {
     /// Paint brush color (sRGB).
     paint: Vec3,
     rng: u64,
+    budget: Option<DabBudget>,
+    strength_scale: f32,
 }
 
 impl Stroke {
@@ -371,7 +424,26 @@ impl Stroke {
             grab_through: false,
             paint: Vec3::ONE,
             rng: 0x9e37_79b9_7f4a_7c15,
+            budget: None,
+            strength_scale: 1.0,
         }
+    }
+
+    /// Bound each `add_sample` call to approximately `ms` milliseconds by
+    /// widening spacing and scaling strength when dabs take longer.
+    pub fn with_budget(mut self, ms: f32) -> Self {
+        if ms > 0.0 {
+            self.budget = Some(DabBudget::new(ms));
+        }
+        self
+    }
+
+    pub fn dab_ms(&self) -> Option<f32> {
+        self.budget.as_ref().and_then(|b| b.dab_ms())
+    }
+
+    pub fn spacing_scale(&self) -> f32 {
+        self.budget.as_ref().map_or(1.0, |b| b.spacing_scale)
     }
 
     /// The camera's forward direction. Inverted Grab, Topological Move and
@@ -431,18 +503,30 @@ impl Stroke {
             self.apply_dab(mesh, sample, touch);
             return;
         };
-        let step = (self.settings.radius * self.settings.spacing).max(1e-6);
+        let nominal = (self.settings.radius * self.settings.spacing).max(1e-6);
         let seg = sample.position - last.position;
         let len = seg.length();
-        let mut d = step - self.carry;
-        while d <= len {
-            let t = d / len;
+        let (step, max_dabs) = match &mut self.budget {
+            Some(b) => {
+                let wanted = (len + self.carry) / nominal;
+                let (n_max, k) = plan_dabs(wanted, b.dab_ms(), b.ms, b.max_dabs);
+                b.spacing_scale = k;
+                self.strength_scale = k.min(b.max_strength_scale);
+                (nominal * k, n_max)
+            }
+            None => (nominal, u32::MAX),
+        };
+        let mut d = (step - self.carry).max(0.0);
+        let mut placed = 0;
+        while d <= len && placed < max_dabs {
+            let t = if len > 0.0 { d / len } else { 0.0 };
             let s = StrokeSample {
                 position: last.position + seg * t,
                 normal: last.normal.lerp(sample.normal, t).normalize_or(sample.normal),
                 pressure: last.pressure + (sample.pressure - last.pressure) * t,
             };
             self.apply_dab(mesh, s, touch);
+            placed += 1;
             d += step;
         }
         self.carry = len - (d - step);
@@ -486,7 +570,20 @@ impl Stroke {
     }
 
     fn apply_dab(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
+        if self.budget.is_none() {
+            return self.apply_dab_inner(mesh, s, touch);
+        }
+        let start = std::time::Instant::now();
+        self.apply_dab_inner(mesh, s, touch);
+        let ms = start.elapsed().as_secs_f32() * 1e3;
+        if let Some(b) = &mut self.budget {
+            b.record(ms);
+        }
+    }
+
+    fn apply_dab_inner(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
         let mut base = self.make_dab(s);
+        base.strength *= self.strength_scale;
         self.last_dab = Some(s.position);
         self.dab_count += 1;
         let kind = self.settings.kind;
@@ -1800,5 +1897,75 @@ mod tests {
             },
         );
         assert!(touched);
+    }
+
+    #[test]
+    fn plan_dabs_budgeting() {
+        // Fits within budget: normal 1.0 spacing.
+        let (n, k) = plan_dabs(3.0, Some(2.0), 10.0, 8);
+        assert_eq!(n, 5);
+        assert!((k - 1.0).abs() < 1e-6);
+
+        // Wanted exceeds budget: spacing is widened proportionally.
+        let (n, k) = plan_dabs(10.0, Some(5.0), 10.0, 8);
+        assert_eq!(n, 2);
+        assert!((k - 5.0).abs() < 1e-6);
+
+        // Dab is slower than whole budget: clamp to minimum 1 dab.
+        let (n, k) = plan_dabs(4.0, Some(50.0), 10.0, 8);
+        assert_eq!(n, 1);
+        assert!((k - 4.0).abs() < 1e-6);
+
+        // Hard cap limits max dabs.
+        let (n, _) = plan_dabs(20.0, Some(0.1), 100.0, 8);
+        assert_eq!(n, 8);
+
+        // None/zero dab_ms uses cap.
+        let (n, k) = plan_dabs(4.0, None, 10.0, 8);
+        assert_eq!(n, 8);
+        assert_eq!(k, 1.0);
+    }
+
+    #[test]
+    fn stroke_budget_limits_dabs_and_preserves_determinism() {
+        let run_stroke = |budget: Option<f32>| -> (Mesh, u32) {
+            let mut mesh = primitives::icosphere(4, 1.0);
+            let settings = BrushSettings { kind: BrushKind::Draw, radius: 0.3, strength: 1.0, ..Default::default() };
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false);
+            if let Some(ms) = budget {
+                stroke = stroke.with_budget(ms);
+            }
+            let start = Vec3::Y;
+            let end = (Vec3::Y + Vec3::X * 0.5).normalize();
+            for i in 0..=10 {
+                let t = i as f32 / 10.0;
+                let pos = start.lerp(end, t).normalize();
+                stroke.add_sample(
+                    &mut mesh,
+                    StrokeSample { position: pos, normal: pos, pressure: 1.0 },
+                    &mut |_, _| {},
+                );
+            }
+            let count = stroke.dab_count();
+            (mesh, count)
+        };
+
+        // Determinism guard: two unbudgeted runs produce identical results.
+        let (mesh1, count1) = run_stroke(None);
+        let (mesh2, count2) = run_stroke(None);
+        assert_eq!(count1, count2);
+        assert_eq!(mesh1.positions, mesh2.positions);
+
+        // Budgeted run: dabs are completed and total displacement remains reasonable.
+        let (mesh_b, count_b) = run_stroke(Some(10.0));
+        assert!(count_b > 0);
+        let disp_unbudgeted: f32 =
+            mesh1.positions.iter().zip(&primitives::icosphere(4, 1.0).positions).map(|(a, b)| a.distance(*b)).sum();
+        let disp_budgeted: f32 =
+            mesh_b.positions.iter().zip(&primitives::icosphere(4, 1.0).positions).map(|(a, b)| a.distance(*b)).sum();
+        assert!(
+            disp_budgeted >= disp_unbudgeted * 0.3 && disp_budgeted <= disp_unbudgeted * 1.5,
+            "budgeted disp {disp_budgeted} vs unbudgeted {disp_unbudgeted}"
+        );
     }
 }

@@ -25,7 +25,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 static NEXT_TOPOLOGY_VERSION: AtomicU64 = AtomicU64::new(1);
 
 /// Target number of triangles per chunk.
-pub const CHUNK_TRIANGLES: usize = 4096;
+pub const CHUNK_TRIANGLES: usize = 1024;
 
 /// A spatially coherent group of triangles plus the vertices it owns.
 #[derive(Debug, Clone)]

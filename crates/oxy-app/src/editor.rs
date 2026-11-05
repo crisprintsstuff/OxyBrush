@@ -91,6 +91,8 @@ pub enum Drag {
         grab_plane: (Vec3, Vec3),
         /// Stabilizer: where the brush actually is (physical px), trailing the pointer.
         lazy: Option<Vec2>,
+        /// Last pointer position queued for the next frame redraw if coalescing is on.
+        queued: Option<Vec2>,
     },
     /// Line / Stamp strokes: nothing changes until release.
     Deferred {
@@ -370,6 +372,11 @@ pub struct Editor {
     pub(crate) agent_sources: Vec<PathBuf>,
     /// Machine details for bug reports (filled in by the app layer).
     pub system_info: crate::support::SystemInfo,
+    /// When true, mouse moves while stroking only queue the latest position;
+    /// [`flush_stroke`](Self::flush_stroke) applies it once per frame before drawing.
+    pub coalesce_strokes: bool,
+    /// Dab time budget in milliseconds (0.0 = unlimited).
+    pub dab_budget_ms: f32,
 }
 
 impl Default for Editor {
@@ -480,6 +487,8 @@ impl Default for Editor {
             agent_sources: Vec::new(),
             quit_now: false,
             system_info: Default::default(),
+            coalesce_strokes: false,
+            dab_budget_ms: 0.0,
         }
     }
 }
@@ -654,7 +663,7 @@ impl Editor {
             ui_scale: self.ui_scale,
             high_contrast: self.high_contrast,
             welcome_at_startup: self.welcome_at_startup,
-            autosave_minutes: self.autosaver.interval.as_secs_f32() / 60.0,
+            autosave_minutes: if self.autosaver.enabled { self.autosaver.interval.as_secs_f32() / 60.0 } else { 0.0 },
             matcap: self.matcap,
             shelf: self.shelf,
             panels: self.panels,
@@ -770,7 +779,10 @@ impl Editor {
         self.ui_scale = s.ui_scale;
         self.high_contrast = s.high_contrast;
         self.welcome_at_startup = s.welcome_at_startup;
-        self.autosaver.interval = Duration::from_secs_f32(s.autosave_minutes * 60.0);
+        self.autosaver.enabled = s.autosave_minutes > 0.0;
+        if s.autosave_minutes > 0.0 {
+            self.autosaver.interval = Duration::from_secs_f32(s.autosave_minutes * 60.0);
+        }
         self.matcap = s.matcap;
         self.shelf = s.shelf;
         self.panels = s.panels;
@@ -951,7 +963,7 @@ impl Editor {
         let history = &mut self.history;
         stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
         let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
-        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy };
+        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None };
     }
 
     /// Pen pressure after the pressure curve.
@@ -1037,6 +1049,7 @@ impl Editor {
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && kind == BrushKind::Grab)
             .with_paint_color(self.paint_color)
+            .with_budget(self.dab_budget_ms)
     }
 
     /// The current brush as a preset named `name`.
@@ -1162,7 +1175,6 @@ impl Editor {
         let prev = self.pointer.replace(pos);
         let delta = prev.map_or(Vec2::ZERO, |p| pos - p);
         let size = self.canvas_size();
-        let pressure_now = self.pressure();
         match &mut self.drag {
             Drag::None => false,
             Drag::Orbit => {
@@ -1225,50 +1237,72 @@ impl Editor {
                 }
                 true
             }
-            Drag::Stroke { stroke, grab_plane, lazy } => {
-                // Stabilizer: the brush trails the pointer on a string of fixed length.
-                let pos = match lazy {
-                    Some(b) => {
-                        let r = self.stabilizer_pt * self.pixels_per_point;
-                        let dist = b.distance(pos);
-                        if dist <= r {
-                            return true;
-                        }
-                        *b = pos - (pos - *b) / dist * r;
-                        *b
-                    }
-                    None => pos,
-                };
-                let local = pos - Vec2::new(self.canvas[0], self.canvas[1]);
-                let (o, d) = self.camera.ray(local, size);
-                let piece = self.scene.active_mut();
-                // Grab and Snake Hook follow the cursor off the surface, on a
-                // view-facing plane at the stroke's starting depth.
-                let sample = if stroke.settings().kind.is_grab_like() || stroke.settings().kind == BrushKind::SnakeHook
-                {
-                    let (pp, pn) = *grab_plane;
-                    let denom = d.dot(pn);
-                    if denom.abs() < 1e-6 {
-                        return false;
-                    }
-                    let t = (pp - o).dot(pn) / denom;
-                    StrokeSample { position: o + d * t, normal: -pn, pressure: pressure_now }
-                } else {
-                    match piece.mesh.raycast(o, d) {
-                        Some(hit) => {
-                            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: pressure_now }
-                        }
-                        None => return false,
-                    }
-                };
-                let history = &mut self.history;
-                stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+            Drag::Stroke { queued, .. } if self.coalesce_strokes => {
+                *queued = Some(pos);
                 true
             }
+            Drag::Stroke { .. } => self.stroke_to(pos),
         }
     }
 
+    /// Feed a pointer position into the active stroke.
+    pub fn stroke_to(&mut self, pos: Vec2) -> bool {
+        let size = self.canvas_size();
+        let pressure_now = self.pressure();
+        let (stroke, grab_plane, lazy) = match &mut self.drag {
+            Drag::Stroke { stroke, grab_plane, lazy, .. } => (stroke, grab_plane, lazy),
+            _ => return false,
+        };
+        // Stabilizer: the brush trails the pointer on a string of fixed length.
+        let pos = match lazy {
+            Some(b) => {
+                let r = self.stabilizer_pt * self.pixels_per_point;
+                let dist = b.distance(pos);
+                if dist <= r {
+                    return true;
+                }
+                *b = pos - (pos - *b) / dist * r;
+                *b
+            }
+            None => pos,
+        };
+        let local = pos - Vec2::new(self.canvas[0], self.canvas[1]);
+        let (o, d) = self.camera.ray(local, size);
+        let piece = self.scene.active_mut();
+        // Grab and Snake Hook follow the cursor off the surface, on a
+        // view-facing plane at the stroke's starting depth.
+        let sample = if stroke.settings().kind.is_grab_like() || stroke.settings().kind == BrushKind::SnakeHook {
+            let (pp, pn) = *grab_plane;
+            let denom = d.dot(pn);
+            if denom.abs() < 1e-6 {
+                return false;
+            }
+            let t = (pp - o).dot(pn) / denom;
+            StrokeSample { position: o + d * t, normal: -pn, pressure: pressure_now }
+        } else {
+            match piece.mesh.raycast(o, d) {
+                Some(hit) => {
+                    StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: pressure_now }
+                }
+                None => return false,
+            }
+        };
+        let history = &mut self.history;
+        stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        true
+    }
+
+    /// Call once per frame, before drawing.
+    pub fn flush_stroke(&mut self) -> bool {
+        let queued = match &mut self.drag {
+            Drag::Stroke { queued, .. } => queued.take(),
+            _ => None,
+        };
+        queued.is_some_and(|pos| self.stroke_to(pos))
+    }
+
     pub fn pointer_up(&mut self) {
+        self.flush_stroke();
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
             && p0.distance(p) < 5.0 * self.pixels_per_point
         {
@@ -2510,6 +2544,36 @@ mod tests {
     }
 
     #[test]
+    fn stroke_coalescing_and_flushing() {
+        let mut e = editor();
+        e.coalesce_strokes = true;
+        center(&mut e);
+        let from = e.pointer.unwrap();
+        let to = from + Vec2::new(50.0, 0.0);
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=5 {
+            e.pointer_moved(from.lerp(to, i as f32 / 10.0));
+        }
+        match &e.drag {
+            Drag::Stroke { queued, stroke, .. } => {
+                assert!(queued.is_some());
+                assert_eq!(stroke.dab_count(), 1);
+            }
+            _ => panic!("expected Drag::Stroke"),
+        }
+        assert!(e.flush_stroke());
+        match &e.drag {
+            Drag::Stroke { queued, stroke, .. } => {
+                assert!(queued.is_none());
+                assert!(stroke.dab_count() > 1);
+            }
+            _ => panic!("expected Drag::Stroke"),
+        }
+        e.pointer_up();
+        assert!(e.history.can_undo());
+    }
+
+    #[test]
     fn click_on_empty_space_orbits() {
         let mut e = editor();
         e.pointer = Some(Vec2::new(5.0, 5.0));
@@ -2990,6 +3054,12 @@ mod tests {
         assert_ne!(e.settings(), s);
         e.apply_settings(&s);
         assert_eq!(e.settings(), s);
+        let mut disabled = s.clone();
+        disabled.autosave_minutes = 0.0;
+        e.apply_settings(&disabled);
+        assert_eq!(e.settings().autosave_minutes, 0.0);
+        assert!(!e.autosaver.enabled);
+        e.apply_settings(&s);
         e.reset_background();
         assert_eq!(e.view.background_style, BackgroundStyle::Gradient);
         assert_eq!(e.view.background, ViewSettings::default().background);

@@ -531,7 +531,7 @@ pub mod plain {
     pub const WELCOME_STARTUP: &str = "Show the welcome window the next time OxyBrush starts.";
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";
     pub const UI_SCALE: &str = "Make the whole interface larger or smaller.";
-    pub const AUTOSAVE: &str = "How often a recovery copy is written.";
+    pub const AUTOSAVE: &str = "How often a recovery copy is written, or Off to disable it.";
     pub const AO: &str = "Darkens places other parts of the surface shade, such as folds and the inside of ears.";
     pub const CAVITY: &str = "Darkens creases and pores and brightens edges, so fine detail reads clearly.";
     pub const LEVELS: &str = "Subdivision levels: sculpt big shapes on low levels and fine detail on high ones.";

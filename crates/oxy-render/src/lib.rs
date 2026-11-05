@@ -182,6 +182,7 @@ struct GpuMesh {
     bind_group: wgpu::BindGroup,
     topology_version: u64,
     face_version: u64,
+    group_lut: Vec<u32>,
 }
 
 pub struct ViewportRenderer {
@@ -558,7 +559,10 @@ impl ViewportRenderer {
             .get(&id)
             .is_none_or(|g| g.topology_version != mesh.topology_version() || g.face_version != mesh.face_version());
         if rebuild {
-            let verts: Vec<GpuVertex> = (0..mesh.vertex_count()).map(|i| vertex(mesh, i)).collect();
+            let max_group = mesh.groups().iter().copied().max().unwrap_or(0) as usize;
+            let lut: Vec<u32> = (0..=max_group).map(|g| group_color(g as u32)).collect();
+            let vertex_lut: &[u32] = if self.exact_face_colors { &[] } else { &lut };
+            let verts: Vec<GpuVertex> = (0..mesh.vertex_count()).map(|i| vertex(mesh, i, vertex_lut)).collect();
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy vertices"),
                 contents: bytemuck::cast_slice(&verts),
@@ -570,7 +574,8 @@ impl ViewportRenderer {
             for (t, tri) in mesh.triangles.iter().enumerate() {
                 if !mesh.hidden()[t] {
                     indices.push(*tri);
-                    face_colors.push(group_color(mesh.groups()[t]));
+                    let g = mesh.groups()[t] as usize;
+                    face_colors.push(if g < lut.len() { lut[g] } else { group_color(mesh.groups()[t]) });
                 }
             }
             if face_colors.is_empty() {
@@ -610,23 +615,32 @@ impl ViewportRenderer {
                     bind_group,
                     topology_version: mesh.topology_version(),
                     face_version: mesh.face_version(),
+                    group_lut: if self.exact_face_colors { Vec::new() } else { lut },
                 },
             );
             return mesh.take_dirty().len();
         }
         let gpu = &self.meshes[&id];
         let dirty = mesh.take_dirty();
-        let mut staging = Vec::new();
+        let mut runs: Vec<std::ops::Range<usize>> = Vec::new();
         for &c in &dirty {
             let r = mesh.chunks[c as usize].vertices.clone();
             if r.is_empty() {
                 continue;
             }
+            let (start, end) = (r.start as usize, r.end as usize);
+            match runs.last_mut() {
+                Some(last) if last.end == start => last.end = end,
+                _ => runs.push(start..end),
+            }
+        }
+        let mut staging = Vec::new();
+        for run in runs {
             staging.clear();
-            staging.extend((r.start as usize..r.end as usize).map(|i| vertex(mesh, i)));
+            staging.extend(run.clone().map(|i| vertex(mesh, i, &gpu.group_lut)));
             queue.write_buffer(
                 &gpu.vertices,
-                r.start as u64 * std::mem::size_of::<GpuVertex>() as u64,
+                run.start as u64 * std::mem::size_of::<GpuVertex>() as u64,
                 bytemuck::cast_slice(&staging),
             );
         }
@@ -836,9 +850,17 @@ fn rgba(c: [f64; 3]) -> [f32; 4] {
     [c[0] as f32, c[1] as f32, c[2] as f32, 1.0]
 }
 
-fn vertex(mesh: &Mesh, i: usize) -> GpuVertex {
-    // Fallback per-vertex group color: the vertex's first triangle's group.
-    let group_color = mesh.vertex_triangles(i as u32).first().map_or(0, |&t| group_color(mesh.groups()[t as usize]));
+fn vertex(mesh: &Mesh, i: usize, lut: &[u32]) -> GpuVertex {
+    // When the shader uses primitive_index (exact_face_colors), per-vertex group color
+    // is unused, so passing an empty lut completely skips face color calculations.
+    let group_color = if lut.is_empty() {
+        0
+    } else {
+        mesh.vertex_triangles(i as u32).first().map_or(0, |&t| {
+            let g = mesh.groups()[t as usize] as usize;
+            if g < lut.len() { lut[g] } else { group_color(mesh.groups()[t as usize]) }
+        })
+    };
     GpuVertex {
         position: mesh.positions[i].to_array(),
         normal: mesh.normals[i].to_array(),
