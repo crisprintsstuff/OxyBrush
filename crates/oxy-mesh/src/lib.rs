@@ -20,9 +20,38 @@ use adjacency::Csr;
 use rayon::prelude::*;
 use std::collections::{HashSet, VecDeque};
 use std::ops::Range;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 
 static NEXT_TOPOLOGY_VERSION: AtomicU64 = AtomicU64::new(1);
+
+/// Generation stamps for parallel dedup. Cloning gives a fresh zeroed set:
+/// stamps are scratch, not state. (Needed because AtomicU32 isn't Clone and
+/// Mesh derives Clone.)
+#[derive(Debug, Default)]
+struct Stamps(Vec<AtomicU32>);
+
+impl Stamps {
+    fn new(n: usize) -> Self {
+        Stamps((0..n).map(|_| AtomicU32::new(0)).collect())
+    }
+
+    fn reset(&mut self) {
+        self.0.iter_mut().for_each(|a| *a.get_mut() = 0);
+    }
+
+    /// True for exactly one caller per (id, stamp), even across threads.
+    #[inline]
+    fn claim(&self, id: u32, stamp: u32) -> bool {
+        let a = &self.0[id as usize];
+        a.load(Ordering::Relaxed) != stamp && a.swap(stamp, Ordering::Relaxed) != stamp
+    }
+}
+
+impl Clone for Stamps {
+    fn clone(&self) -> Self {
+        Stamps::new(self.0.len())
+    }
+}
 
 /// Target number of triangles per chunk.
 pub const CHUNK_TRIANGLES: usize = 1024;
@@ -98,8 +127,7 @@ pub struct Mesh {
     /// possibly loose); `tighten_bounds` recomputes them exactly.
     loose_bounds: Vec<bool>,
     topology_version: u64,
-    tri_stamp: Vec<u32>,
-    vert_stamp: Vec<u32>,
+    vert_stamp: Stamps,
     stamp: u32,
 }
 
@@ -192,7 +220,6 @@ impl Mesh {
         let vertex_triangles = Csr::vertex_triangles(vcount, &triangles);
         let vertex_neighbors = Csr::vertex_neighbors(vcount, &triangles, &vertex_triangles);
 
-        let tri_count = triangles.len();
         let mut mesh = Mesh {
             normals: vec![Vec3::Z; vcount],
             positions: new_positions,
@@ -213,8 +240,7 @@ impl Mesh {
             vertex_chunk,
             triangle_chunk,
             topology_version: NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed),
-            tri_stamp: vec![0; tri_count],
-            vert_stamp: vec![0; vcount],
+            vert_stamp: Stamps::new(vcount),
             stamp: 0,
         };
         mesh.recompute_all_normals();
@@ -660,49 +686,57 @@ impl Mesh {
         if moved.is_empty() {
             return;
         }
-        // Generation stamps dedup triangles/vertices in O(n) without sorting.
         self.stamp = self.stamp.wrapping_add(1);
         if self.stamp == 0 {
-            self.tri_stamp.iter_mut().for_each(|x| *x = 0);
-            self.vert_stamp.iter_mut().for_each(|x| *x = 0);
+            self.vert_stamp.reset();
             self.stamp = 1;
         }
         let stamp = self.stamp;
-        let mut tris = Vec::with_capacity(moved.len() * 6);
-        for &v in moved {
-            for &t in self.vertex_triangles.get(v as usize) {
-                if self.tri_stamp[t as usize] != stamp {
-                    self.tri_stamp[t as usize] = stamp;
-                    tris.push(t);
-                }
-            }
-        }
-        let mut verts = Vec::with_capacity(tris.len() / 2);
-        for &t in &tris {
-            for v in self.triangles[t as usize] {
-                if self.vert_stamp[v as usize] != stamp {
-                    self.vert_stamp[v as usize] = stamp;
-                    verts.push(v);
-                }
-            }
-        }
-        let normals: Vec<Vec3> = verts.par_iter().map(|&v| self.compute_vertex_normal(v)).collect();
+        const PAR_ABOVE: usize = 2048;
+
+        // 1. moved vertices + their neighbours, de-duplicated (parallel when large).
+        let verts = collect_unique(moved, |&v| self.vertex_neighbors.get(v as usize), |&v| v, &self.vert_stamp, stamp);
+
+        // 2. normals: unchanged maths, parallel above a threshold so tiny dabs avoid fork/join cost.
+        let normals: Vec<Vec3> = if verts.len() > PAR_ABOVE {
+            verts.par_iter().map(|&v| self.compute_vertex_normal(v)).collect()
+        } else {
+            verts.iter().map(|&v| self.compute_vertex_normal(v)).collect()
+        };
         for (&v, n) in verts.iter().zip(normals) {
             self.normals[v as usize] = n;
             self.dirty[self.vertex_chunk[v as usize] as usize] = true;
         }
 
-        // Bounds only need to contain every corner of the chunk's triangles,
-        // so growing them by the affected triangles keeps them correct; a
-        // full refit of each 4096-triangle chunk per dab is not needed.
-        // INVARIANT: chunk bounds contain all corners of the chunk's triangles.
-        for &t in &tris {
-            let c = self.triangle_chunk[t as usize] as usize;
-            let chunk = &mut self.chunks[c];
-            for v in self.triangles[t as usize] {
-                chunk.aabb.grow(self.positions[v as usize]);
+        // 3. bounds: grow each triangle's chunk by the moved corner only, sparse per thread.
+        let grow = |part: &[u32]| -> Vec<(u32, Aabb)> {
+            let mut acc: Vec<(u32, Aabb)> = Vec::new();
+            let mut last = (u32::MAX, 0usize); // cache: neighbours are usually in one chunk
+            for &v in part {
+                let p = self.positions[v as usize];
+                for &t in self.vertex_triangles.get(v as usize) {
+                    let c = self.triangle_chunk[t as usize];
+                    if last.0 != c {
+                        let i = acc.iter().position(|e| e.0 == c).unwrap_or_else(|| {
+                            acc.push((c, Aabb::EMPTY));
+                            acc.len() - 1
+                        });
+                        last = (c, i);
+                    }
+                    acc[last.1].1.grow(p);
+                }
             }
-            self.loose_bounds[c] = true;
+            acc
+        };
+        let boxes: Vec<(u32, Aabb)> = if moved.len() > PAR_ABOVE {
+            moved.par_chunks(1024).map(grow).flatten_iter().collect()
+        } else {
+            grow(moved)
+        };
+        for (c, b) in boxes {
+            let chunk = &mut self.chunks[c as usize];
+            chunk.aabb = chunk.aabb.union(&b);
+            self.loose_bounds[c as usize] = true;
         }
     }
 
@@ -716,7 +750,42 @@ impl Mesh {
             self.loose_bounds[c] = false;
         }
     }
+}
 
+/// Distinct ids among `items` (via `seed`) and what `expand` yields for them.
+fn collect_unique<'a>(
+    items: &[u32],
+    expand: impl Fn(&u32) -> &'a [u32] + Sync,
+    seed: impl Fn(&u32) -> u32 + Sync,
+    stamps: &Stamps,
+    stamp: u32,
+) -> Vec<u32> {
+    const SERIAL_BELOW: usize = 4096;
+    let run = |part: &[u32]| -> Vec<u32> {
+        let mut out = Vec::with_capacity(part.len() * 2);
+        for item in part {
+            let s = seed(item);
+            if stamps.claim(s, stamp) {
+                out.push(s);
+            }
+            for &id in expand(item) {
+                if stamps.claim(id, stamp) {
+                    out.push(id);
+                }
+            }
+        }
+        out
+    };
+    if items.len() <= SERIAL_BELOW {
+        return run(items);
+    }
+    let parts: Vec<Vec<u32>> = items.par_chunks(1024).map(run).collect();
+    let mut out = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+    parts.into_iter().for_each(|mut p| out.append(&mut p));
+    out
+}
+
+impl Mesh {
     /// Recompute normals and bounds for whole chunks (e.g. after undo).
     pub fn update_chunks(&mut self, chunks: &[u32]) {
         let moved: Vec<u32> = chunks.iter().flat_map(|&c| self.chunks[c as usize].vertices.clone()).collect();
@@ -1248,5 +1317,57 @@ mod tests {
         let dirty = m.take_dirty();
         assert!(dirty.contains(&m.vertex_chunk(v)));
         assert!(m.bounds().max.length() > 2.0 || m.bounds().min.length() > 2.0);
+    }
+
+    #[test]
+    fn update_after_move_parallel_and_serial_equivalence() {
+        let mut m = primitives::icosphere(6, 1.0);
+        let vcount = m.vertex_count() as u32;
+
+        for round in 0..6 {
+            let count = match round % 3 {
+                0 => 300,
+                1 => 3_000,
+                _ => 20_000,
+            };
+            let step = (vcount / count).max(1);
+            let moved: Vec<u32> = (0..vcount).step_by(step as usize).take(count as usize).collect();
+
+            for &v in &moved {
+                m.positions[v as usize] += Vec3::new(0.01, 0.02, -0.01) * ((round + 1) as f32);
+            }
+            m.update_after_move(&moved);
+
+            let mut ref_mesh = m.clone();
+            ref_mesh.recompute_all_normals();
+            for v in 0..vcount {
+                let diff = (m.normals[v as usize] - ref_mesh.normals[v as usize]).length();
+                assert!(diff < 1e-4, "normal mismatch at vertex {v} in round {round}: diff {diff}");
+            }
+
+            for (ci, c) in m.chunks.iter().enumerate() {
+                for t in c.triangles.clone() {
+                    for v in m.triangles[t as usize] {
+                        assert!(c.aabb.contains(m.positions[v as usize]), "chunk {ci} must contain vertex {v}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cloned_mesh_updates_independently() {
+        let mut m1 = primitives::icosphere(4, 1.0);
+        let mut m2 = m1.clone();
+
+        m1.positions[0] *= 2.0;
+        m1.update_after_move(&[0]);
+
+        assert_ne!(m1.normals[0], m2.normals[0]);
+        m2.positions[0] *= 3.0;
+        m2.update_after_move(&[0]);
+
+        assert_ne!(m1.positions[0], m2.positions[0]);
+        assert_ne!(m1.normals[0], m2.normals[0]);
     }
 }
