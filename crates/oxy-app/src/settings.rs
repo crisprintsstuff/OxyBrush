@@ -408,7 +408,7 @@ impl Settings {
                 "welcome_at_startup" => s.welcome_at_startup = v.parse().unwrap_or(s.welcome_at_startup),
                 "autosave_minutes" => {
                     if let Ok(x) = v.parse::<f32>()
-                        && (1.0..=30.0).contains(&x)
+                        && (0.0..=30.0).contains(&x)
                     {
                         s.autosave_minutes = x;
                     }
@@ -569,6 +569,9 @@ mod tests {
         assert_eq!(ignored.focal_mm, defaults.focal_mm);
         assert!((Settings::from_text("focal_mm = 18\n").focal_mm - 18.0).abs() < 1e-6);
         assert!((Settings::from_text("focal_mm = 200\n").focal_mm - 200.0).abs() < 1e-4);
+        assert_eq!(Settings::from_text("autosave_minutes = 0\n").autosave_minutes, 0.0);
+        assert_eq!(Settings::from_text("autosave_minutes = -1\n").autosave_minutes, defaults.autosave_minutes);
+        assert_eq!(Settings::from_text("autosave_minutes = 31\n").autosave_minutes, defaults.autosave_minutes);
     }
 
     #[test]

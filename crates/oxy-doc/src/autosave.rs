@@ -48,6 +48,7 @@ fn own_file_name() -> String {
 pub struct Autosaver {
     dir: Option<PathBuf>,
     pub interval: Duration,
+    pub enabled: bool,
     last: Instant,
     in_flight: Option<mpsc::Receiver<Result<(), String>>>,
     pub last_error: Option<String>,
@@ -56,7 +57,15 @@ pub struct Autosaver {
 
 impl Autosaver {
     pub fn new(dir: Option<PathBuf>, interval: Duration) -> Self {
-        Self { dir, interval, last: Instant::now(), in_flight: None, last_error: None, last_success: None }
+        Self {
+            dir,
+            interval,
+            enabled: true,
+            last: Instant::now(),
+            in_flight: None,
+            last_error: None,
+            last_success: None,
+        }
     }
 
     pub fn path(&self) -> Option<PathBuf> {
@@ -66,11 +75,14 @@ impl Autosaver {
     /// Whether a save is due now (the caller then provides a snapshot).
     pub fn due(&mut self, dirty: bool) -> bool {
         self.poll();
-        dirty && self.in_flight.is_none() && self.dir.is_some() && self.last.elapsed() >= self.interval
+        self.enabled && dirty && self.in_flight.is_none() && self.dir.is_some() && self.last.elapsed() >= self.interval
     }
 
     /// Start writing `snapshot` in the background.
     pub fn start(&mut self, snapshot: SceneData) {
+        if !self.enabled {
+            return;
+        }
         let Some(path) = self.path() else { return };
         self.last = Instant::now();
         let (tx, rx) = mpsc::channel();
@@ -154,6 +166,9 @@ mod tests {
         assert_eq!(find_recoverable(&dir).len(), 1);
         a.finish();
         assert!(!path.exists());
+        // Disabled autosave is never due even if dirty.
+        a.enabled = false;
+        assert!(!a.due(true));
         std::fs::remove_dir_all(dir).ok();
     }
 }

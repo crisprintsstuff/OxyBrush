@@ -347,11 +347,18 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 background_menu(ui, ed);
                 ui.separator();
                 ui.label("Autosave every");
-                let mut mins = ed.autosaver.interval.as_secs_f32() / 60.0;
-                if tips::hover(ui.add(egui::Slider::new(&mut mins, 1.0..=30.0).suffix(" min")), plain::AUTOSAVE)
-                    .changed()
-                {
-                    ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
+                let mut mins =
+                    if ed.autosaver.enabled { (ed.autosaver.interval.as_secs_f32() / 60.0).round() } else { 0.0 };
+                let slider = egui::Slider::new(&mut mins, 0.0..=30.0)
+                    .step_by(1.0)
+                    .custom_formatter(|v, _| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} min") });
+                if tips::hover(ui.add(slider), plain::AUTOSAVE).changed() {
+                    if mins <= 0.0 {
+                        ed.autosaver.enabled = false;
+                    } else {
+                        ed.autosaver.enabled = true;
+                        ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
+                    }
                 }
             });
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
