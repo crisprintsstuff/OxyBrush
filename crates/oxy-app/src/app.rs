@@ -1024,6 +1024,25 @@ impl ApplicationHandler for App {
                     Modifiers { shift: s.shift_key(), ctrl: s.control_key() || s.super_key(), alt: s.alt_key() };
                 redraw = true;
             }
+            WindowEvent::Focused(focused) => {
+                if !*focused {
+                    self.editor.modifiers = Modifiers::default();
+                    if self.editor.is_stroking() {
+                        self.editor.pointer_up();
+                    }
+                    self.editor.pointer = None;
+                    self.editor.quick_menu = None;
+                    self.editor.quick_menu_key = None;
+                    self.mmb_scroll = None;
+                    self.egui_ctx.memory_mut(|m| {
+                        if let Some(id) = m.focused() {
+                            m.surrender_focus(id);
+                        }
+                        m.stop_text_input();
+                    });
+                }
+                redraw = true;
+            }
             WindowEvent::CursorMoved { position, .. } if self.mmb_scroll.is_some() => {
                 // Middle-drag over a panel scrolls it, like grabbing the page.
                 let pos = Vec2::new(position.x as f32, position.y as f32);
@@ -1102,7 +1121,7 @@ impl ApplicationHandler for App {
             }
             // A keymap capture, or releasing the quick-menu key, wins over a focused
             // slider so the key the user pressed is the one that gets bound.
-            WindowEvent::KeyboardInput { event, .. }
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. }
                 if self.editor.keymap_capture.is_some()
                     || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held)) =>
             {
@@ -1111,7 +1130,9 @@ impl ApplicationHandler for App {
                 }
                 redraw = true;
             }
-            WindowEvent::KeyboardInput { event, .. } if !self.egui_ctx.egui_wants_keyboard_input() => {
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. }
+                if !self.egui_ctx.egui_wants_keyboard_input() =>
+            {
                 if let Some(a) = self.handle_key(event) {
                     self.run_action(a);
                 }

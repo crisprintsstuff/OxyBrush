@@ -5,6 +5,7 @@ struct Uniforms {
     mask_color: vec4<f32>,
     bg_center: vec4<f32>,
     bg_edge: vec4<f32>,
+    wireframe_color: vec4<f32>,
 };
 
 struct Piece {
@@ -43,9 +44,8 @@ struct FsOut {
 @fragment
 fn fs_wireframe() -> FsOut {
     let opacity = clamp(piece.flags.w, 0.0, 1.0);
-    // Dark neutral wireframe with subtle slate tint
     return FsOut(
-        vec4<f32>(0.10, 0.12, 0.16, opacity),
+        vec4<f32>(u.wireframe_color.rgb, opacity),
         vec4<f32>(0.0, 0.0, 0.0, 0.0),
     );
 }

@@ -726,6 +726,7 @@ impl Editor {
             flat_shading: self.view.flat_shading,
             wireframe: self.view.wireframe,
             wireframe_opacity: self.view.wireframe_opacity,
+            wireframe_color: self.view.wireframe_color,
             stroke_from_empty: self.stroke_from_empty,
             surface_cursor: self.surface_cursor,
             agent_mcp: self.agent_enabled,
@@ -854,6 +855,7 @@ impl Editor {
         self.view.flat_shading = s.flat_shading;
         self.view.wireframe = s.wireframe;
         self.view.wireframe_opacity = s.wireframe_opacity;
+        self.view.wireframe_color = s.wireframe_color;
         self.view.background_style = s.background_style;
         self.view.background = s.background;
         self.view.background_center = s.background_center;
@@ -3270,6 +3272,7 @@ mod tests {
             flat_shading: true,
             wireframe: true,
             wireframe_opacity: 0.8,
+            wireframe_color: [0.2, 0.22, 0.25],
             stroke_from_empty: true,
             surface_cursor: true,
             agent_mcp: false,

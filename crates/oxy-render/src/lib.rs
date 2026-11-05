@@ -51,6 +51,7 @@ struct Uniforms {
     /// Background gradient: color at the center and at the edges (linear).
     bg_center: [f32; 4],
     bg_edge: [f32; 4],
+    wireframe_color: [f32; 4],
 }
 
 #[repr(C)]
@@ -131,6 +132,8 @@ pub struct ViewSettings {
     pub wireframe: bool,
     /// Opacity of the wireframe lines (0.0 to 1.0).
     pub wireframe_opacity: f32,
+    /// Wireframe line color (linear RGB). Defaults to neutral dark slate.
+    pub wireframe_color: [f64; 3],
 }
 
 impl ViewSettings {
@@ -161,6 +164,7 @@ impl Default for ViewSettings {
             flat_shading: false,
             wireframe: false,
             wireframe_opacity: 0.7,
+            wireframe_color: [0.10, 0.12, 0.16],
         }
     }
 }
@@ -854,6 +858,7 @@ impl ViewportRenderer {
             mask_color: [0.25, 0.3, 0.45, 1.0],
             bg_center: rgba(settings.background_center),
             bg_edge: rgba(settings.background),
+            wireframe_color: rgba(settings.wireframe_color),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         let multiple = items.len() > 1;
@@ -1036,7 +1041,7 @@ mod tests {
     #[test]
     fn uniform_layouts_match_wgsl() {
         // std140-style sizes the shaders expect (vec4/mat4 aligned).
-        assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 4 * 16);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 5 * 16);
         assert_eq!(std::mem::size_of::<PostUniforms>(), 3 * 16);
     }
 
@@ -1064,6 +1069,7 @@ mod tests {
     #[test]
     fn default_viewport_background_is_neutral() {
         let v = ViewSettings::default();
+        assert_eq!(v.wireframe_color, [0.10, 0.12, 0.16]);
         for (name, c) in [("edge", v.background), ("center", v.background_center)] {
             assert!((c[0] - c[1]).abs() < 1e-9 && (c[1] - c[2]).abs() < 1e-9, "{name} background is tinted: {c:?}");
         }

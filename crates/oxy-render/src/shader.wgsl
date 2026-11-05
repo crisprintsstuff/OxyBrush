@@ -12,6 +12,7 @@ struct Uniforms {
     mask_color: vec4<f32>,
     bg_center: vec4<f32>,
     bg_edge: vec4<f32>,
+    wireframe_color: vec4<f32>,
 };
 
 struct Piece {

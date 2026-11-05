@@ -261,6 +261,9 @@ pub fn apply_theme(
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
+        s.interaction.show_tooltips_only_when_still = false;
+        s.interaction.tooltip_delay = 0.2;
+        s.interaction.tooltip_grace_time = 0.2;
         s.spacing.item_spacing = m.item_spacing;
         s.spacing.button_padding = m.button_padding;
         s.spacing.interact_size.y = m.interact_height;
@@ -388,6 +391,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity")),
                         "Wireframe line opacity",
                     );
+                    ui.horizontal(|ui| {
+                        ui.label("Wireframe color");
+                        edit_linear_color(ui, &mut ed.view.wireframe_color)
+                            .on_hover_text("Color of the wireframe lines");
+                        if ui.button("Reset").on_hover_text("Reset wireframe color to default").clicked() {
+                            ed.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
+                        }
+                    });
                 }
                 surface_cursor_checkbox(ui, ed);
                 ui.separator();

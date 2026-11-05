@@ -249,6 +249,8 @@ pub struct Settings {
     pub wireframe: bool,
     /// Wireframe line opacity (0.0 to 1.0).
     pub wireframe_opacity: f32,
+    /// Wireframe line color (linear RGB).
+    pub wireframe_color: [f64; 3],
     /// Strokes may start on empty space (orbit with the middle mouse button).
     pub stroke_from_empty: bool,
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
@@ -495,6 +497,7 @@ impl Default for Settings {
             flat_shading: false,
             wireframe: false,
             wireframe_opacity: 0.7,
+            wireframe_color: view.wireframe_color,
             stroke_from_empty: false,
             surface_cursor: false,
             agent_mcp: false,
@@ -570,10 +573,11 @@ impl Settings {
         let focal_mm = format!("{:.4}", oxy_render::quantize_focal_mm(self.focal_mm));
         let background = format_rgb(self.background);
         let background_center = format_rgb(self.background_center);
+        let wireframe_color = format_rgb(self.wireframe_color);
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -592,6 +596,7 @@ impl Settings {
             self.flat_shading,
             self.wireframe,
             self.wireframe_opacity,
+            wireframe_color,
             self.stroke_from_empty,
             self.surface_cursor,
             self.agent_mcp,
@@ -683,6 +688,7 @@ impl Settings {
                         s.wireframe_opacity = x;
                     }
                 }
+                "wireframe_color" => s.wireframe_color = parse_rgb(v).unwrap_or(s.wireframe_color),
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
                 "agent_mcp" => s.agent_mcp = v.parse().unwrap_or(s.agent_mcp),
@@ -819,6 +825,7 @@ mod tests {
             flat_shading: true,
             wireframe: true,
             wireframe_opacity: 0.85,
+            wireframe_color: [0.15, 0.2, 0.25],
             stroke_from_empty: true,
             surface_cursor: true,
             agent_mcp: false,
