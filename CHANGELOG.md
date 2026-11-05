@@ -4,6 +4,22 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.5.1-alpha] - 2026-11-04
+
+### Fixed
+
+- **Status bar error diagnostics for plugins:** When an unhandled exception occurs in a Python plugin, the status bar now extracts the exact exception diagnostic (e.g. `AttributeError: ...`, `SyntaxError: ...`) from the last line of `stderr` instead of truncating at the generic first line `Traceback (most recent call last):`. The full traceback continues to be recorded in the application log.
+
+### Added
+
+- **Python SDK convenience methods and dataclasses:**
+  - Added `MeshStats` dataclass and `session.get_mesh_stats()` returning active vertex count, triangle count, piece count, bounding box extents, and subdivision level.
+  - Added high-level helper methods on `Session`: `session.voxel_remesh()`, `session.apply_stroke()`, and `session.export_mesh()`.
+  - Added multi-parameter support to `session.add_primitive()` allowing `kind` or `primitive_type`.
+  - Added bundled `mesh_stats_reporter.py` example plugin demonstrating `get_mesh_stats()` reporting directly to the status bar.
+- **Documentation:**
+  - Published comprehensive 15-page GitHub Wiki covering sculpting brushes, multiresolution subdivision, voxel remeshing, masking & face groups, posing & transform gizmo, vertex coloring, Python plugin development, MCP agent tandem workflows, and 3D printing pipelines.
+
 ## [0.5.0-alpha] - 2026-11-04
 
 ### Changed
@@ -167,7 +183,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.0-alpha...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...HEAD
+[0.5.1-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.0-alpha...v0.5.1-alpha
 [0.5.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.4.0-alpha...v0.5.0-alpha
 [0.4.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.3.0-alpha...v0.4.0-alpha
 [0.3.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.2.0-alpha...v0.3.0-alpha
