@@ -30,6 +30,8 @@ struct VsOut {
 fn vs_wireframe(v: VsIn) -> VsOut {
     var o: VsOut;
     o.clip = u.view_proj * vec4<f32>(v.position, 1.0);
+    // Nudge depth slightly towards near plane to eliminate Z-fighting on lines
+    o.clip.z = o.clip.z - 0.00015 * o.clip.w;
     return o;
 }
 

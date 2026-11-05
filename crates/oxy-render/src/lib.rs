@@ -464,7 +464,7 @@ impl ViewportRenderer {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: Some(false),
                 depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                bias: wgpu::DepthBiasState { constant: -2, slope_scale: -2.0, clamp: 0.0 },
+                bias: Default::default(),
                 stencil: Default::default(),
             }),
             multisample: Default::default(),
