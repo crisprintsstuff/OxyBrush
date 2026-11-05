@@ -4,6 +4,30 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.5.0-beta] - 2026-11-05
+
+### Added
+
+- **Native ZBrush `.ztl` and `.zpr` File Import:**
+  - Implemented full native decoder and parser in `oxy-ztl` supporting both ZBrush Tool (`.ztl`) and Project (`.zpr`) files without external dependencies.
+  - Decompresses RLE-encoded subtool geometry streams and extracts vertex positions (both modern IEEE 754 floats and primitive $2^{20}$ fixed-point integer coordinates).
+  - Extracts quad and triangle polygons, polygroups / face groups, and subtool names.
+  - Automatically transforms SubTool local coordinates into world space using embedded inverse scale and translation matrices (`inv_scale`, `tx`, `ty`, `tz`), preserving outward normal orientation.
+  - Fully integrated into `Editor::open`, `Editor::import`, `oxy_io::import`, and `oxy_io::import_pieces`, mapping each subtool to an independent piece in the scene hierarchy.
+  - Updated file dialog filters in `oxy-app` with explicit "ZBrush tool or project (*.ztl, *.zpr)" options for Open and Import workflows.
+- **Customizable Wireframe Color:**
+  - Added user-configurable wireframe color support (`wireframe_color: [f64; 3]`) across rendering shaders (`wireframe.wgsl`, `shader.wgsl`), render pipeline uniform buffers, and application state.
+  - Added interactive RGB/HSV color picker under `View > Wireframe` and in the Command Palette (`Ctrl+P`).
+  - Wireframe color selection persists across sessions in `settings.txt`.
+
+### Fixed
+
+- **Window Focus Loss & Synthetic Input Handling (Issue #54):**
+  - Handled `WindowEvent::Focused(focused)` to cleanly surrender keyboard focus, reset modifier keys, call `pointer_up()`, and clear transient pointer / quick-menu states when the application loses focus.
+  - Filtered synthetic keyboard events (`is_synthetic: false`) in `WindowEvent::KeyboardInput` to prevent OS window-switching shortcut combinations (e.g., Alt+Tab, Super+Tab) from inadvertently triggering camera or projection hotkeys (such as perspective/orthographic toggle).
+- **Hover Tooltip Responsiveness:**
+  - Improved tooltip trigger reliability across the UI by disabling `show_tooltips_only_when_still` in `egui::Style` and adjusting delay to 0.2s with a 0.2s grace time, ensuring fast and consistent tooltip display across tools and buttons.
+
 ## [1.0.0-beta] - 2026-11-05
 
 ### Added
