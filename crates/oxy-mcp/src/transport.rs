@@ -122,6 +122,7 @@ fn accept_loop(listener: TcpListener, identity: Identity, host: &mut dyn Host, c
                 if peer.ip() != IpAddr::V4(Ipv4Addr::LOCALHOST) {
                     continue;
                 }
+                let _ = stream.set_nonblocking(false);
                 let _ = handle_connection(stream, identity, host, control, &mut state);
             }
             Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(20)),
@@ -137,6 +138,7 @@ fn handle_connection(
     control: &Control,
     state: &mut ServerState,
 ) -> std::io::Result<()> {
+    let _ = stream.set_nonblocking(false);
     let port = stream.local_addr().map(|a| a.port()).unwrap_or(0);
     let mut reader = BufReader::new(stream);
     let request = match read_http(&mut reader) {
@@ -145,7 +147,11 @@ fn handle_connection(
     };
     let origin = header(&request.headers, "origin").map(str::to_owned);
     let response = respond(&request, port, origin.as_deref(), identity, host, control, state);
-    reader.get_mut().write_all(&response)
+    let stream = reader.get_mut();
+    stream.write_all(&response)?;
+    stream.flush()?;
+    let _ = stream.shutdown(std::net::Shutdown::Both);
+    Ok(())
 }
 
 struct HttpRequest {
@@ -518,8 +524,12 @@ mod tests {
             body.len()
         );
         stream.write_all(req.as_bytes()).unwrap();
+        stream.flush().unwrap();
         let mut buf = String::new();
-        stream.read_to_string(&mut buf).unwrap();
-        buf
+        match stream.read_to_string(&mut buf) {
+            Ok(_) => buf,
+            Err(e) if e.kind() == std::io::ErrorKind::ConnectionReset && !buf.is_empty() => buf,
+            Err(e) => panic!("read failed: {e}"),
+        }
     }
 }

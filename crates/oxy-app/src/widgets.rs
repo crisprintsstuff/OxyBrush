@@ -441,7 +441,7 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, enabled: bool, toolt
         };
         paint_icon(ui.painter(), rect.shrink(5.0), icon, fg);
     }
-    response.on_hover_text(tooltip)
+    crate::tips::hover(response, tooltip)
 }
 
 /// A text toggle chip (e.g. the X/Y/Z symmetry axes).
@@ -451,7 +451,7 @@ pub fn chip(ui: &mut Ui, on: &mut bool, text: &str, tooltip: &str) -> Response {
         *on = !*on;
         r.mark_changed();
     }
-    r.on_hover_text(tooltip)
+    crate::tips::hover(r, tooltip)
 }
 
 /// A key name drawn like a keyboard key.
@@ -501,8 +501,7 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -
             );
         }
     }
-    let key = key.map_or(String::new(), |k| format!("\nShortcut: {k}"));
-    response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
+    crate::tips::hover(response, crate::tips::brush_tip(k, key))
 }
 
 /// Square brush icon button (compact layout's icon grid).
@@ -520,12 +519,11 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, k
         };
         ui.painter().rect_stroke(rect.shrink(1.0), 6.0, stroke, egui::StrokeKind::Inside);
     }
-    let key = key.map_or(String::new(), |k| format!("\nShortcut: {k}"));
-    response.on_hover_text(format!("{}\n{}{key}", k.label(), brush_description(k)))
+    crate::tips::hover(response, crate::tips::brush_tip(k, key))
 }
 
 /// Large clickable card with an icon, a title and a one-line subtitle.
-pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> Response {
+pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str, tooltip: &str) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(124.0, 112.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, title));
     if ui.is_rect_visible(rect) {
@@ -553,7 +551,7 @@ pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str) -> Response {
             v.weak_text_color(),
         );
     }
-    response
+    crate::tips::hover(response, tooltip)
 }
 
 /// Button you drag on to navigate (orbit, pan, zoom), like dragging in the
@@ -577,7 +575,7 @@ pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
     if response.hovered() || response.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
-    response.on_hover_text(tooltip)
+    crate::tips::hover(response, tooltip)
 }
 
 /// A brush preview: a clay ball with the brush's effect pressed into it,
@@ -732,16 +730,23 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
         );
         ui.painter().galley(pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 2.0), galley, v.text_color());
     }
-    response.on_hover_text(tooltip)
+    crate::tips::hover(response, tooltip)
 }
 
 /// Clickable thumbnail used inside the picker grids.
-pub fn thumb(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool) -> Response {
-    thumb_sized(ui, tex, label, selected, 56.0)
+pub fn thumb(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool, tooltip: &str) -> Response {
+    thumb_sized(ui, tex, label, selected, 56.0, tooltip)
 }
 
 /// Like [`thumb`] with a chosen image size.
-pub fn thumb_sized(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, selected: bool, size: f32) -> Response {
+pub fn thumb_sized(
+    ui: &mut Ui,
+    tex: Option<&egui::TextureHandle>,
+    label: &str,
+    selected: bool,
+    size: f32,
+    tooltip: &str,
+) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size + 14.0), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, label));
     if ui.is_rect_visible(rect) {
@@ -779,17 +784,24 @@ pub fn thumb_sized(ui: &mut Ui, tex: Option<&egui::TextureHandle>, label: &str, 
         );
         ui.painter().galley(pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 1.0), galley, v.text_color());
     }
-    response.on_hover_text(label)
+    crate::tips::hover(response, tooltip)
 }
 
 /// Collapsible inspector section with a consistent header style.
-pub fn section<R>(ui: &mut Ui, title: &str, default_open: bool, add: impl FnOnce(&mut Ui) -> R) -> Option<R> {
-    let r = egui::CollapsingHeader::new(egui::RichText::new(title).strong().size(14.0))
+/// `tip` is the hover (and long-press) explanation of the section.
+pub fn section<R>(
+    ui: &mut Ui,
+    title: &str,
+    tip: &str,
+    default_open: bool,
+    add: impl FnOnce(&mut Ui) -> R,
+) -> Option<R> {
+    let opened = egui::CollapsingHeader::new(egui::RichText::new(title).strong().size(14.0))
         .default_open(default_open)
-        .show(ui, add)
-        .body_returned;
+        .show(ui, add);
+    crate::tips::hover(opened.header_response.clone(), tip);
     ui.add_space(2.0);
-    r
+    opened.body_returned
 }
 
 #[cfg(test)]

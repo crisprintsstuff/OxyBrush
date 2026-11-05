@@ -994,6 +994,8 @@ impl Keymap {
             rows.push((format!("{k} while orbiting", k = k.label()), "Snap the view to 45° steps".into()));
         }
         rows.push(("Right click".into(), "Quick menu at the cursor".into()));
+        rows.push(("Hover a control".into(), "Read what it does, and its shortcut".into()));
+        rows.push(("Press and hold (touch)".into(), "The same explanation; the control does not activate".into()));
         rows.push(("Middle-drag on a panel".into(), "Scroll the panel".into()));
         for meta in COMMANDS {
             let keys = self.list(meta.id);
@@ -1521,11 +1523,13 @@ fn command_section(ui: &mut egui::Ui, ed: &mut Editor) {
 }
 
 /// Append `shortcut` to a menu label when the command has a key.
+#[allow(dead_code)]
 pub fn menu_label(label: &str, shortcut: &str) -> String {
     if shortcut.is_empty() { label.to_string() } else { format!("{label}  ({shortcut})") }
 }
 
 /// Append a binding to a tooltip.
+#[allow(dead_code)]
 pub fn tip(text: &str, shortcut: &str) -> String {
     if shortcut.is_empty() { text.to_string() } else { format!("{text} ({shortcut})") }
 }

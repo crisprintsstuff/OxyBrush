@@ -6,7 +6,7 @@
 //! is just the fast path for people who know what they want.
 
 use crate::editor::{Editor, Pending};
-use crate::keymap::CommandId;
+use crate::tips::Cmd;
 use crate::ui::UiAction;
 use crate::widgets;
 use egui::{RichText, Ui};
@@ -53,159 +53,136 @@ pub struct Entry {
     pub detail: String,
     /// Extra words that should match but aren't shown.
     pub keywords: &'static str,
+    /// Hover text: what it does, and the shortcut when it has one.
+    pub tooltip: String,
     pub act: Act,
 }
 
-fn cmd(ed: &Editor, label: &str, id: Option<CommandId>, keywords: &'static str, f: fn(&mut Editor)) -> Entry {
-    Entry {
-        label: label.into(),
-        detail: id.map(|id| ed.keymap.primary(id)).unwrap_or_default(),
-        keywords,
-        act: Act::Run(f),
-    }
+fn cmd(ed: &Editor, id: Cmd, keywords: &'static str, f: fn(&mut Editor)) -> Entry {
+    let detail = id.shortcut_in(&ed.keymap);
+    let tooltip = id.tip_in(&ed.keymap);
+    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Run(f) }
 }
 
-fn ui_cmd(ed: &Editor, label: &str, id: CommandId, keywords: &'static str, a: UiAction) -> Entry {
-    Entry { label: label.into(), detail: ed.keymap.primary(id), keywords, act: Act::Ui(a) }
+fn ui_cmd(ed: &Editor, id: Cmd, keywords: &'static str, a: UiAction) -> Entry {
+    let detail = id.shortcut_in(&ed.keymap);
+    let tooltip = id.tip_in(&ed.keymap);
+    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Ui(a) }
 }
 
 /// Every command the palette offers (menus have the same actions).
 fn commands(ed: &Editor) -> Vec<Entry> {
     vec![
-        ui_cmd(ed, "Open…", CommandId::Open, "file project load", UiAction::Open),
-        ui_cmd(ed, "Import mesh as piece…", CommandId::Import, "obj stl file", UiAction::Import),
-        ui_cmd(ed, "Save", CommandId::Save, "file project", UiAction::Save),
-        ui_cmd(ed, "Save as…", CommandId::SaveAs, "file project", UiAction::SaveAs),
-        ui_cmd(ed, "Export visible pieces…", CommandId::Export, "obj stl gltf glb ply print file", UiAction::Export),
-        cmd(ed, "New sphere", None, "file document start", |e| e.request(Pending::New("sphere"))),
-        cmd(ed, "New cube", None, "file document start", |e| e.request(Pending::New("cube"))),
-        cmd(ed, "New plane", None, "file document start", |e| e.request(Pending::New("plane"))),
-        cmd(ed, "Undo", Some(CommandId::Undo), "edit", Editor::undo),
-        cmd(ed, "Redo", Some(CommandId::Redo), "edit", Editor::redo),
-        cmd(ed, "Add sphere piece", None, "pieces primitive", |e| e.add_primitive("sphere")),
-        cmd(ed, "Add cube piece", None, "pieces primitive", |e| e.add_primitive("cube")),
-        cmd(ed, "Add plane piece", None, "pieces primitive", |e| e.add_primitive("plane")),
-        cmd(ed, "Duplicate piece", None, "pieces copy", |e| e.duplicate_active(false)),
-        cmd(ed, "Mirror duplicate piece", None, "pieces copy symmetry x", |e| e.duplicate_active(true)),
-        cmd(ed, "Delete piece", None, "pieces remove", Editor::delete_active),
-        cmd(ed, "Solo piece / show all", Some(CommandId::Solo), "pieces isolate", Editor::solo_active),
-        cmd(ed, "Merge visible pieces", None, "pieces union combine", Editor::merge_visible),
-        cmd(ed, "Split by face groups", None, "pieces separate", |e| e.split_active(false)),
-        cmd(ed, "Split into loose parts", None, "pieces separate islands", |e| e.split_active(true)),
-        cmd(ed, "Make LOD chain", None, "pieces level of detail decimate game", |e| e.make_lod_chain(3)),
-        cmd(ed, "Add subdivision level", Some(CommandId::AddLevel), "multires divide detail", Editor::add_level),
-        cmd(ed, "Subdivision level up", Some(CommandId::LevelUp), "multires", |e| e.step_level(1)),
-        cmd(ed, "Subdivision level down", Some(CommandId::LevelDown), "multires", |e| e.step_level(-1)),
-        cmd(ed, "Delete higher levels", None, "multires", Editor::delete_higher_levels),
-        cmd(ed, "Delete lower levels", None, "multires", Editor::delete_lower_levels),
-        cmd(ed, "Voxel remesh", Some(CommandId::Remesh), "topology rebuild even", Editor::remesh_active),
-        cmd(ed, "Decimate", None, "topology reduce polygons triangles", Editor::decimate_active),
-        cmd(ed, "Delete hidden faces", None, "topology visibility", Editor::delete_hidden),
-        cmd(ed, "Group visible", Some(CommandId::GroupVisible), "face groups", |e| {
-            e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)
-        }),
-        cmd(ed, "Group from mask", None, "face groups", |e| {
+        ui_cmd(ed, Cmd::Open, "file project load", UiAction::Open),
+        ui_cmd(ed, Cmd::Import, "obj stl file", UiAction::Import),
+        ui_cmd(ed, Cmd::Save, "file project", UiAction::Save),
+        ui_cmd(ed, Cmd::SaveAs, "file project", UiAction::SaveAs),
+        ui_cmd(ed, Cmd::Export, "obj stl gltf glb ply print file", UiAction::Export),
+        cmd(ed, Cmd::NewSphere, "file document start", |e| e.request(Pending::New("sphere"))),
+        cmd(ed, Cmd::NewCube, "file document start", |e| e.request(Pending::New("cube"))),
+        cmd(ed, Cmd::NewPlane, "file document start", |e| e.request(Pending::New("plane"))),
+        cmd(ed, Cmd::Undo, "edit", Editor::undo),
+        cmd(ed, Cmd::Redo, "edit", Editor::redo),
+        cmd(ed, Cmd::AddSphere, "pieces primitive", |e| e.add_primitive("sphere")),
+        cmd(ed, Cmd::AddCube, "pieces primitive", |e| e.add_primitive("cube")),
+        cmd(ed, Cmd::AddPlane, "pieces primitive", |e| e.add_primitive("plane")),
+        cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
+        cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
+        cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
+        cmd(ed, Cmd::Solo, "pieces isolate", Editor::solo_active),
+        cmd(ed, Cmd::Merge, "pieces union combine", Editor::merge_visible),
+        cmd(ed, Cmd::SplitGroups, "pieces separate", |e| e.split_active(false)),
+        cmd(ed, Cmd::SplitLoose, "pieces separate islands", |e| e.split_active(true)),
+        cmd(ed, Cmd::Lod, "pieces level of detail decimate game", |e| e.make_lod_chain(3)),
+        cmd(ed, Cmd::AddLevel, "multires divide detail", Editor::add_level),
+        cmd(ed, Cmd::LevelUp, "multires", |e| e.step_level(1)),
+        cmd(ed, Cmd::LevelDown, "multires", |e| e.step_level(-1)),
+        cmd(ed, Cmd::DeleteHigher, "multires", Editor::delete_higher_levels),
+        cmd(ed, Cmd::DeleteLower, "multires", Editor::delete_lower_levels),
+        cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
+        cmd(ed, Cmd::Decimate, "topology reduce polygons triangles", Editor::decimate_active),
+        cmd(ed, Cmd::DeleteHidden, "topology visibility", Editor::delete_hidden),
+        cmd(ed, Cmd::GroupVisible, "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
+        cmd(ed, Cmd::GroupFromMask, "face groups", |e| {
             e.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask)
         }),
-        cmd(ed, "Group by islands", None, "face groups loose parts", |e| {
+        cmd(ed, Cmd::GroupIslands, "face groups loose parts", |e| {
             e.edit_faces("Group by islands", oxy_mesh::Mesh::groups_from_islands)
         }),
-        cmd(ed, "Show all faces", None, "visibility unhide", |e| e.edit_faces("Show all", oxy_mesh::Mesh::show_all)),
-        cmd(ed, "Invert visibility", None, "hide show", |e| {
+        cmd(ed, Cmd::ShowAll, "visibility unhide", |e| e.edit_faces("Show all", oxy_mesh::Mesh::show_all)),
+        cmd(ed, Cmd::InvertVisibility, "hide show", |e| {
             e.edit_faces("Invert visibility", oxy_mesh::Mesh::invert_visibility)
         }),
-        cmd(ed, "Invert mask", Some(CommandId::InvertMask), "masking", Editor::invert_mask),
-        cmd(ed, "Clear mask", Some(CommandId::ClearMask), "masking", Editor::clear_mask),
-        cmd(ed, "Blur mask", None, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
-        cmd(ed, "Sharpen mask", None, "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
-        cmd(ed, "Mask cavities", None, "masking concave creases", |e| {
+        cmd(ed, Cmd::InvertMask, "masking", Editor::invert_mask),
+        cmd(ed, Cmd::ClearMask, "masking", Editor::clear_mask),
+        cmd(ed, Cmd::BlurMask, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
+        cmd(ed, Cmd::SharpenMask, "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
+        cmd(ed, Cmd::MaskCavities, "masking concave creases", |e| {
             e.edit_mesh_mask("Mask cavities", |m| m.mask_by_curvature(true))
         }),
-        cmd(ed, "Mask peaks", None, "masking convex ridges", |e| {
+        cmd(ed, Cmd::MaskPeaks, "masking convex ridges", |e| {
             e.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false))
         }),
-        cmd(ed, "Show / hide mask", Some(CommandId::ShowMask), "masking view", |e| {
-            e.view.show_mask = !e.view.show_mask
-        }),
-        cmd(ed, "Transform: move", Some(CommandId::GizmoCycle), "gizmo pose translate", |e| {
-            e.toggle_gizmo(crate::pose::GizmoMode::Move)
-        }),
-        cmd(ed, "Transform: rotate", None, "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
-        cmd(ed, "Transform: scale", None, "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
-        cmd(ed, "Fill color", None, "paint vertex color", |e| {
+        cmd(ed, Cmd::ShowMask, "masking view", |e| e.view.show_mask = !e.view.show_mask),
+        cmd(ed, Cmd::GizmoMove, "gizmo pose translate", |e| e.toggle_gizmo(crate::pose::GizmoMode::Move)),
+        cmd(ed, Cmd::GizmoRotate, "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
+        cmd(ed, Cmd::GizmoScale, "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
+        cmd(ed, Cmd::FillColor, "paint vertex color", |e| {
             let c = e.paint_color;
             e.edit_color("Fill color", |m| m.fill_color(c, 1.0))
         }),
-        cmd(ed, "Fill cavities with color", None, "paint vertex color dirt", |e| {
+        cmd(ed, Cmd::FillCavities, "paint vertex color dirt", |e| {
             let c = e.paint_color;
             e.edit_color("Fill cavities", |m| m.fill_color_by_curvature(c, 1.0, true))
         }),
-        cmd(ed, "Fill peaks with color", None, "paint vertex color edges", |e| {
+        cmd(ed, Cmd::FillPeaks, "paint vertex color edges", |e| {
             let c = e.paint_color;
             e.edit_color("Fill peaks", |m| m.fill_color_by_curvature(c, 1.0, false))
         }),
-        cmd(ed, "Clear color", None, "paint vertex color remove", |e| {
+        cmd(ed, Cmd::ClearColor, "paint vertex color remove", |e| {
             e.edit_color("Clear color", oxy_mesh::Mesh::clear_color)
         }),
-        cmd(ed, "Toggle X symmetry", Some(CommandId::SymmetryX), "mirror", |e| e.symmetry.x = !e.symmetry.x),
-        cmd(ed, "Toggle Y symmetry", None, "mirror", |e| e.symmetry.y = !e.symmetry.y),
-        cmd(ed, "Toggle Z symmetry", None, "mirror", |e| e.symmetry.z = !e.symmetry.z),
-        cmd(ed, "Raise / carve", None, "invert direction", |e| e.carve = !e.carve),
-        cmd(ed, "Frame scene", Some(CommandId::Frame), "view camera zoom fit", Editor::frame),
-        cmd(ed, "Front view", Some(CommandId::ViewFront), "view camera", |e| e.camera.snap(0.0, 0.0)),
-        cmd(ed, "Back view", Some(CommandId::ViewBack), "view camera", |e| e.camera.snap(std::f32::consts::PI, 0.0)),
-        cmd(ed, "Left view", Some(CommandId::ViewLeft), "view camera side", |e| {
-            e.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0)
-        }),
-        cmd(ed, "Right view", Some(CommandId::ViewRight), "view camera side", |e| {
-            e.camera.snap(std::f32::consts::FRAC_PI_2, 0.0)
-        }),
-        cmd(ed, "Top view", Some(CommandId::ViewTop), "view camera", |e| e.camera.snap(0.0, 1.55)),
-        cmd(ed, "Bottom view", Some(CommandId::ViewBottom), "view camera", |e| e.camera.snap(0.0, -1.55)),
-        cmd(ed, "Toggle orthographic", Some(CommandId::Orthographic), "view camera perspective", |e| {
-            e.camera.orthographic = !e.camera.orthographic
-        }),
-        cmd(ed, "Focal length…", None, "view camera lens fov field of view mm", |e| e.show_focal_length = true),
-        cmd(ed, "Focal length 18 mm", None, "wide view camera lens fov", |e| e.set_focal_mm(18.0)),
-        cmd(ed, "Focal length 35 mm", None, "view camera lens fov", |e| e.set_focal_mm(35.0)),
-        cmd(ed, "Focal length 50 mm", None, "natural view camera lens fov", |e| e.set_focal_mm(50.0)),
-        cmd(ed, "Focal length 85 mm", None, "view camera lens fov", |e| e.set_focal_mm(85.0)),
-        cmd(ed, "Focal length 135 mm", None, "telephoto view camera lens fov", |e| e.set_focal_mm(135.0)),
-        cmd(ed, "Reset focal length", None, "view camera lens fov default", Editor::reset_focal_length),
-        cmd(ed, "Face group colors", Some(CommandId::ShowGroups), "view", |e| e.view.show_groups = !e.view.show_groups),
-        cmd(ed, "Shading on / off", None, "view ambient occlusion cavity", Editor::toggle_shading),
-        cmd(ed, "Flat shading on / off", None, "view faceted polygons smooth", |e| {
-            e.view.flat_shading = !e.view.flat_shading
-        }),
-        cmd(ed, "Viewport background…", None, "view color picker backdrop", |e| e.show_background = true),
-        cmd(ed, "Viewport background: gradient", None, "view color backdrop", |e| {
-            e.set_background_style(BackgroundStyle::Gradient)
-        }),
-        cmd(ed, "Viewport background: flat", None, "view color backdrop solid", |e| {
-            e.set_background_style(BackgroundStyle::Flat)
-        }),
-        cmd(ed, "Reset viewport background", None, "view color default backdrop", Editor::reset_background),
-        cmd(ed, "Align cursor to surface on / off", None, "view brush cursor ring normal tangent", |e| {
-            e.toggle_surface_cursor()
-        }),
-        cmd(ed, "Load matcap…", None, "material image custom", |e| e.request_load_matcap = true),
-        cmd(ed, "Strokes from empty space on / off", None, "navigation orbit middle mouse", |e| {
-            e.stroke_from_empty = !e.stroke_from_empty
-        }),
-        cmd(ed, "Show / hide panels", Some(CommandId::TogglePanels), "view interface", |e| {
-            e.show_panels = !e.show_panels
-        }),
-        cmd(ed, "Shortcuts", Some(CommandId::Shortcuts), "help keys keyboard", |e| e.show_shortcuts = true),
-        cmd(ed, "Keymap", None, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
-        cmd(ed, "Guide", Some(CommandId::Guide), "help manual documentation", |e| e.guide.open = true),
-        cmd(ed, "Welcome screen", None, "help start", |e| e.show_welcome = true),
-        cmd(ed, "Check for updates…", None, "help version", |e| {
+        cmd(ed, Cmd::SymX, "mirror", |e| e.symmetry.x = !e.symmetry.x),
+        cmd(ed, Cmd::SymY, "mirror", |e| e.symmetry.y = !e.symmetry.y),
+        cmd(ed, Cmd::SymZ, "mirror", |e| e.symmetry.z = !e.symmetry.z),
+        cmd(ed, Cmd::RaiseCarve, "invert direction", |e| e.carve = !e.carve),
+        cmd(ed, Cmd::Frame, "view camera zoom fit", Editor::frame),
+        cmd(ed, Cmd::Front, "view camera", |e| e.camera.snap(0.0, 0.0)),
+        cmd(ed, Cmd::Back, "view camera", |e| e.camera.snap(std::f32::consts::PI, 0.0)),
+        cmd(ed, Cmd::Left, "view camera side", |e| e.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0)),
+        cmd(ed, Cmd::Right, "view camera side", |e| e.camera.snap(std::f32::consts::FRAC_PI_2, 0.0)),
+        cmd(ed, Cmd::Top, "view camera", |e| e.camera.snap(0.0, 1.55)),
+        cmd(ed, Cmd::Bottom, "view camera", |e| e.camera.snap(0.0, -1.55)),
+        cmd(ed, Cmd::Ortho, "view camera perspective", |e| e.camera.orthographic = !e.camera.orthographic),
+        cmd(ed, Cmd::FocalLengthWindow, "view camera lens fov field of view mm", |e| e.show_focal_length = true),
+        cmd(ed, Cmd::Focal18, "wide view camera lens fov", |e| e.set_focal_mm(18.0)),
+        cmd(ed, Cmd::Focal35, "view camera lens fov", |e| e.set_focal_mm(35.0)),
+        cmd(ed, Cmd::Focal50, "natural view camera lens fov", |e| e.set_focal_mm(50.0)),
+        cmd(ed, Cmd::Focal85, "view camera lens fov", |e| e.set_focal_mm(85.0)),
+        cmd(ed, Cmd::Focal135, "telephoto view camera lens fov", |e| e.set_focal_mm(135.0)),
+        cmd(ed, Cmd::ResetFocal, "view camera lens fov default", Editor::reset_focal_length),
+        cmd(ed, Cmd::GroupColors, "view", |e| e.view.show_groups = !e.view.show_groups),
+        cmd(ed, Cmd::Shading, "view ambient occlusion cavity", Editor::toggle_shading),
+        cmd(ed, Cmd::FlatShading, "view faceted polygons smooth", |e| e.view.flat_shading = !e.view.flat_shading),
+        cmd(ed, Cmd::BackgroundWindow, "view color picker backdrop", |e| e.show_background = true),
+        cmd(ed, Cmd::BackgroundGradient, "view color backdrop", |e| e.set_background_style(BackgroundStyle::Gradient)),
+        cmd(ed, Cmd::BackgroundFlat, "view color backdrop solid", |e| e.set_background_style(BackgroundStyle::Flat)),
+        cmd(ed, Cmd::ResetBackground, "view color default backdrop", Editor::reset_background),
+        cmd(ed, Cmd::AlignCursor, "view brush cursor ring normal tangent", |e| e.toggle_surface_cursor()),
+        cmd(ed, Cmd::LoadMatcap, "material image custom", |e| e.request_load_matcap = true),
+        cmd(ed, Cmd::StrokeFromEmpty, "navigation orbit middle mouse", |e| e.stroke_from_empty = !e.stroke_from_empty),
+        cmd(ed, Cmd::Panels, "view interface", |e| e.show_panels = !e.show_panels),
+        cmd(ed, Cmd::Shortcuts, "help keys keyboard", |e| e.show_shortcuts = true),
+        cmd(ed, Cmd::Keymap, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
+        cmd(ed, Cmd::Guide, "help manual documentation", |e| e.guide.open = true),
+        cmd(ed, Cmd::Welcome, "help start", |e| e.show_welcome = true),
+        cmd(ed, Cmd::CheckUpdates, "help version", |e| {
             e.updater.show_window = true;
             if !e.updater.managed_by_flatpak() {
                 e.updater.check(crate::updates::now_secs());
             }
         }),
-        cmd(ed, "Quit", None, "exit close", |e| e.request(Pending::Quit)),
+        cmd(ed, Cmd::Quit, "exit close", |e| e.request(Pending::Quit)),
     ]
 }
 
@@ -216,6 +193,7 @@ fn brush_entries(ed: &Editor, prefix: &str) -> Vec<Entry> {
             label: format!("{prefix}{}", k.label()),
             detail: ed.number_key(k).unwrap_or_default(),
             keywords: widgets::brush_description(k),
+            tooltip: crate::tips::brush_tip(k, ed.number_key(k).as_deref()),
             act: Act::Brush(k),
         })
         .collect()
@@ -235,12 +213,14 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
                 ),
                 detail: String::new(),
                 keywords: "file",
+                tooltip: crate::tips::recent_tip(p),
                 act: Act::Recent(p.clone()),
             }));
             v.extend(crate::guide::TOPICS.iter().enumerate().map(|(i, t)| Entry {
                 label: format!("Guide: {}", t.title),
                 detail: String::new(),
                 keywords: t.keywords,
+                tooltip: format!("Open the guide topic “{}”.", t.title),
                 act: Act::Guide(i),
             }));
             v
@@ -374,7 +354,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> Option<UiAction> {
                 ui.label(RichText::new("Up/Down move · Enter choose · Esc close").weak().small());
             });
             let before = p.query.clone();
-            let r = ui.add(egui::TextEdit::singleline(&mut p.query).hint_text(hint).desired_width(f32::INFINITY));
+            let r = crate::tips::hover(
+                ui.add(egui::TextEdit::singleline(&mut p.query).hint_text(hint).desired_width(f32::INFINITY)),
+                crate::tips::plain::PALETTE_SEARCH,
+            );
             r.request_focus();
             // The Space that opened the brush picker must not land in the field.
             if p.query.starts_with(' ') {
@@ -423,6 +406,7 @@ fn entry_row(ui: &mut Ui, e: &Entry, selected: bool) -> egui::Response {
         font.clone(),
         text_color,
     );
+    let r = crate::tips::hover(r, e.tooltip.clone());
     if !e.detail.is_empty() {
         ui.painter().text(
             rect.right_center() - egui::vec2(8.0, 0.0),
@@ -514,5 +498,44 @@ mod tests {
         let open = ranked(entries(&ed, PaletteMode::Everything), "focal length")[0].act.clone();
         run(&mut ed, open);
         assert!(ed.show_focal_length);
+    }
+
+    /// A new command or brush in the palette with an empty explanation fails here.
+    #[test]
+    fn every_registered_command_and_brush_has_a_tooltip() {
+        let ed = Editor::default();
+        let all = entries(&ed, PaletteMode::Everything);
+        assert!(all.len() > BrushKind::ALL.len());
+        for e in &all {
+            assert!(e.tooltip.trim().len() > 8, "missing tooltip for {}", e.label);
+            match &e.act {
+                Act::Brush(k) => {
+                    assert!(e.tooltip.contains(k.label()), "{}", e.label);
+                    assert!(e.tooltip.contains(widgets::brush_description(*k)), "{}", e.label);
+                    if e.detail.is_empty() {
+                        assert!(!e.tooltip.contains("Shortcut:"), "{}", e.label);
+                    } else {
+                        assert!(e.tooltip.contains(&format!("Shortcut: {}", e.detail)), "{}", e.label);
+                    }
+                }
+                Act::Run(_) | Act::Ui(_) => {
+                    if e.detail.is_empty() {
+                        assert!(!e.tooltip.contains("Shortcut:"), "{}", e.label);
+                    } else {
+                        assert!(
+                            e.tooltip.contains(&format!("Shortcut: {}", e.detail)),
+                            "{} tooltip {:?} does not use binding {}",
+                            e.label,
+                            e.tooltip,
+                            e.detail
+                        );
+                    }
+                }
+                Act::Recent(_) | Act::Guide(_) => {}
+            }
+        }
+        let brushes = entries(&ed, PaletteMode::Brushes);
+        assert_eq!(brushes.len(), BrushKind::ALL.len());
+        assert!(brushes.iter().all(|e| !e.tooltip.is_empty()));
     }
 }
