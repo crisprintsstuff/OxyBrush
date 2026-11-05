@@ -9,10 +9,10 @@
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   
-  <!-- Google Fonts: Inter & JetBrains Mono -->
+  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
   
   <!-- Lucide Icons -->
   <script src="https://unpkg.com/lucide@1.59.0/dist/umd/lucide.min.js"></script>
@@ -23,18 +23,18 @@
       theme: {
         extend: {
           fontFamily: {
-            sans: ['"Inter"', 'sans-serif'],
-            mono: ['"JetBrains Mono"', 'monospace'],
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            display: ['Outfit', 'sans-serif'],
           },
           colors: {
-            dark: {
-              950: '#07090e',
-              900: '#0b0f19',
-              850: '#111726',
-              800: '#172033',
-              700: '#222f49',
-              600: '#334155'
+            oxy: {
+                pink: '#ec4899',
+                purple: '#a855f7',
+                blue: '#3b82f6',
+                dark: '#050505'
             },
+            // Kept for semantic text highlights in changelogs
             accent: {
               cyan: '#38bdf8',
               emerald: '#34d399',
@@ -48,896 +48,738 @@
   </script>
 
   <style>
-    .grid-dots {
-      background-size: 32px 32px;
-      background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+    body {
+        background-color: #050505;
+        color: #f8fafc;
+        overflow-x: hidden;
     }
-    .clay-gradient {
-      background: radial-gradient(circle at 35% 35%, #e09f80 0%, #b86b4b 55%, #632d18 100%);
+
+    /* Fluid Gradient Blobs */
+    @keyframes blob {
+        0% { transform: translate(0px, 0px) scale(1); }
+        33% { transform: translate(50px, -50px) scale(1.1); }
+        66% { transform: translate(-20px, 40px) scale(0.9); }
+        100% { transform: translate(0px, 0px) scale(1); }
     }
-    .matcap-pearl {
-      background: radial-gradient(circle at 30% 30%, #ffffff 0%, #cbd5e1 45%, #475569 85%, #1e293b 100%);
+    
+    .animate-blob { animation: blob 10s infinite; }
+    .animation-delay-2000 { animation-delay: 2s; }
+    .animation-delay-4000 { animation-delay: 4s; }
+    .animation-delay-6000 { animation-delay: 6s; }
+
+    /* Glassmorphism Utilities */
+    .glass {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
     }
-    .matcap-obsidian {
-      background: radial-gradient(circle at 35% 30%, #64748b 0%, #1e293b 50%, #020617 100%);
+    
+    .glass-card:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(236, 72, 153, 0.3);
+        box-shadow: 0 0 40px rgba(168, 85, 247, 0.15);
+        transform: translateY(-5px);
     }
-    .matcap-bronze {
-      background: radial-gradient(circle at 30% 30%, #fde047 0%, #b45309 60%, #451a03 100%);
+    
+    .glass-card {
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
     }
-    ::-webkit-scrollbar {
-      width: 7px;
-      height: 7px;
+
+    /* Text Gradients */
+    .text-gradient {
+        background: linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
     }
-    ::-webkit-scrollbar-track {
-      background: #07090e;
-    }
-    ::-webkit-scrollbar-thumb {
-      background: #222f49;
-      border-radius: 9999px;
-    }
-    ::-webkit-scrollbar-thumb:hover {
-      background: #38bdf8;
-    }
+
+    /* Brush Specific Styles */
+    .clay-gradient { background: radial-gradient(circle at 35% 35%, #e09f80 0%, #b86b4b 55%, #632d18 100%); }
+    .matcap-pearl { background: radial-gradient(circle at 30% 30%, #ffffff 0%, #cbd5e1 45%, #475569 85%, #1e293b 100%); }
+    .matcap-obsidian { background: radial-gradient(circle at 35% 30%, #64748b 0%, #1e293b 50%, #020617 100%); }
+    .matcap-bronze { background: radial-gradient(circle at 30% 30%, #fde047 0%, #b45309 60%, #451a03 100%); }
+    
+    /* Scrollbars */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #050505; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(236, 72, 153, 0.5); }
   </style>
 </head>
-<body class="bg-dark-950 text-slate-200 font-sans antialiased selection:bg-accent-cyan selection:text-dark-950 flex flex-col min-h-screen">
+<body class="antialiased selection:bg-oxy-pink selection:text-white flex flex-col min-h-screen">
 
-  <!-- Ambient Light Effects -->
-  <div class="fixed top-0 left-1/2 -translate-x-1/2 -z-10 w-full max-w-7xl h-[550px] bg-gradient-to-b from-accent-cyan/10 via-accent-violet/5 to-transparent blur-3xl pointer-events-none"></div>
+  <!-- Ambient Background Elements -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+      <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-oxy-pink/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob"></div>
+      <div class="absolute top-[20%] right-[-10%] w-[600px] h-[600px] bg-oxy-purple/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob animation-delay-2000"></div>
+      <div class="absolute bottom-[-20%] left-[20%] w-[700px] h-[700px] bg-oxy-blue/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob animation-delay-4000"></div>
+  </div>
 
   <!-- Notification Toast -->
-  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-3 px-4 py-3 rounded-xl bg-dark-900 border border-dark-700 text-xs font-mono text-slate-200 shadow-2xl">
-    <div class="w-2 h-2 rounded-full bg-accent-emerald animate-ping"></div>
+  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-3 px-4 py-3 rounded-2xl glass text-xs font-mono text-slate-200 shadow-2xl">
+    <div class="w-2 h-2 rounded-full bg-oxy-pink animate-ping"></div>
     <span id="toastMsg">Copied to clipboard</span>
   </div>
 
   <!-- Navigation -->
-  <header class="sticky top-0 z-40 backdrop-blur-xl bg-dark-950/85 border-b border-dark-800">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
+  <header class="fixed w-full z-40 top-0 transition-all duration-300 glass border-x-0 border-t-0 border-b border-white/5">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between">
       
       <!-- Brand -->
       <a href="#" class="flex items-center gap-3 group">
-        <div class="w-9 h-9 rounded-xl bg-gradient-to-br from-accent-cyan to-accent-violet p-0.5 shadow-lg shadow-accent-cyan/10">
-          <div class="w-full h-full bg-dark-950 rounded-[10px] flex items-center justify-center text-accent-cyan group-hover:text-white transition-colors">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-oxy-pink to-oxy-blue p-[2px] shadow-lg">
+          <div class="w-full h-full bg-[#050505] rounded-full flex items-center justify-center text-white group-hover:text-oxy-pink transition-colors">
             <i data-lucide="box" class="w-5 h-5"></i>
           </div>
         </div>
         <div class="flex items-center gap-2">
-          <span class="font-bold text-lg tracking-tight text-white font-mono">OxyBrush</span>
-          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-accent-cyan/10 border border-accent-cyan/30 text-accent-cyan font-medium" data-latest-version>v1.0.0-beta</span>
+          <span class="font-display font-bold text-xl tracking-wide text-white">OxyBrush</span>
+          <span class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-white/10 border border-white/20 text-slate-300 font-medium" data-latest-version>v1.0.0-beta</span>
         </div>
       </a>
 
       <!-- Desktop Nav -->
-      <nav class="hidden lg:flex items-center gap-8 text-xs font-mono text-slate-400">
-        <a href="#latest-highlights" class="hover:text-slate-200 transition-colors flex items-center gap-1.5">
-          <span class="w-1.5 h-1.5 rounded-full bg-accent-emerald"></span>
+      <nav class="hidden lg:flex items-center gap-8 text-xs font-medium font-sans text-slate-300">
+        <a href="#latest-highlights" class="hover:text-oxy-pink transition-colors flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-oxy-pink"></span>
           <span>What's new</span>
         </a>
-        <a href="#features" class="hover:text-slate-200 transition-colors">Sculpting System</a>
-        <a href="#brushes" class="hover:text-slate-200 transition-colors">20 Brushes</a>
-        <a href="#performance" class="hover:text-slate-200 transition-colors">Performance</a>
-        <a href="#architecture" class="hover:text-slate-200 transition-colors">Architecture</a>
-        <a href="#changelog" class="hover:text-slate-200 transition-colors">Changelog</a>
+        <a href="#features" class="hover:text-oxy-purple transition-colors">Sculpting System</a>
+        <a href="#brushes" class="hover:text-oxy-blue transition-colors">17 Brushes</a>
+        <a href="#performance" class="hover:text-white transition-colors">Performance</a>
+        <a href="#architecture" class="hover:text-oxy-pink transition-colors">Architecture</a>
+        <a href="#changelog" class="hover:text-oxy-purple transition-colors">Changelog</a>
       </nav>
 
       <!-- Action Buttons -->
       <div class="flex items-center gap-3">
-        <a href="#downloads" class="px-4 py-2 rounded-lg bg-accent-cyan hover:bg-sky-400 text-dark-950 font-semibold text-xs font-mono transition-all flex items-center gap-1.5 shadow-md shadow-accent-cyan/20">
-          <i data-lucide="download" class="w-3.5 h-3.5"></i>
-          <span data-latest-version data-short>Get v0.6.0</span>
+        <a href="#downloads" class="px-5 py-2.5 rounded-full bg-gradient-to-r from-oxy-pink to-oxy-purple hover:opacity-90 text-white font-semibold text-xs transition-all flex items-center gap-1.5 shadow-lg">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span data-latest-version data-short>Get v1.0.0</span>
         </a>
-        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2 rounded-lg bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white transition-all" title="GitHub Repository">
-          <!-- GitHub mark from Primer Octicons (MIT); Lucide no longer ships brand icons -->
-          <svg class="w-4 h-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"></path></svg>
+        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2.5 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white transition-all group" title="GitHub Repository">
+          <svg class="w-4 h-4 group-hover:scale-110 transition-transform" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"></path></svg>
         </a>
       </div>
 
     </div>
   </header>
 
-  <main class="flex-grow">
+  <main class="flex-grow relative z-10 pt-20">
     
     <!-- Hero Section -->
-    <section class="relative pt-20 pb-20 border-b border-dark-800 grid-dots overflow-hidden">
-      <div class="max-w-5xl mx-auto px-4 sm:px-6 text-center">
+    <section class="relative pt-24 pb-20 border-b border-white/5">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6 text-center relative z-10">
         
         <!-- Badge row -->
-        <div class="inline-flex flex-wrap items-center justify-center gap-2 mb-6">
-          <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-dark-900 border border-dark-700 text-xs font-mono text-slate-300">
-            <span class="w-2 h-2 rounded-full bg-accent-emerald animate-pulse"></span>
+        <div class="inline-flex flex-wrap items-center justify-center gap-3 mb-8">
+          <span class="glass px-4 py-1.5 rounded-full text-xs font-medium text-slate-300 flex items-center gap-2">
+            <span class="w-2 h-2 rounded-full bg-oxy-pink animate-pulse"></span>
             Rust + wgpu + Naga
           </span>
-          <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-dark-900 border border-dark-700 text-xs font-mono text-slate-300">
-            <i data-lucide="monitor" class="w-3.5 h-3.5 text-accent-cyan"></i>
-            Windows &bull; macOS (Universal) &bull; Linux (Flatpak)
+          <span class="glass px-4 py-1.5 rounded-full text-xs font-medium text-slate-300 flex items-center gap-2">
+            <i data-lucide="monitor" class="w-3.5 h-3.5 text-oxy-purple"></i>
+            Windows &bull; macOS &bull; Linux
           </span>
-          <span class="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-dark-900 border border-dark-700 text-xs font-mono text-slate-300">
-            <i data-lucide="shield-check" class="w-3.5 h-3.5 text-accent-violet"></i>
+          <span class="glass px-4 py-1.5 rounded-full text-xs font-medium text-slate-300 flex items-center gap-2">
+            <i data-lucide="shield-check" class="w-3.5 h-3.5 text-oxy-blue"></i>
             Atomic .oxb Format
           </span>
         </div>
 
-        <h1 class="text-4xl sm:text-6xl lg:text-7xl font-extrabold text-white tracking-tight mb-6 leading-tight">
-          High-performance <span class="text-transparent bg-clip-text bg-gradient-to-r from-accent-cyan via-sky-300 to-accent-violet">3D digital sculpting</span> in pure Rust
+        <h1 class="text-5xl sm:text-6xl lg:text-7xl font-display font-extrabold tracking-tight mb-6 leading-tight">
+          High-performance <br class="hidden sm:block"/> <span class="text-gradient">3D digital sculpting</span> in pure Rust
         </h1>
 
-        <p class="text-slate-400 text-base sm:text-lg max-w-3xl mx-auto mb-10 font-normal leading-relaxed">
-          OxyBrush is a lightweight, responsive desktop 3D sculpting studio built for speed and stability. Sculpt at dense multiresolution levels without UI lockup, render instant viewport ambient occlusion and cavity details, and paint organic forms with 20 dedicated tools, including vertex color and Pixar Kelvinlet elastodynamics.
+        <p class="text-slate-400 text-lg max-w-3xl mx-auto mb-10 font-light leading-relaxed">
+          OxyBrush is a lightweight, responsive desktop 3D sculpting studio built for speed and stability. Sculpt at dense multiresolution levels without UI lockup, render instant viewport ambient occlusion and cavity details, and paint organic forms with 17 dedicated tools.
         </p>
 
         <!-- CTA Downloads / Commands -->
-        <div class="flex flex-wrap items-center justify-center gap-4 mb-12">
-          <a href="#downloads" class="px-6 py-3.5 rounded-xl bg-white hover:bg-slate-100 text-dark-950 font-bold text-sm font-mono transition-all flex items-center gap-2 shadow-xl hover:shadow-2xl hover:scale-[1.02]">
-            <i data-lucide="download-cloud" class="w-4 h-4 text-accent-cyan"></i>
+        <div class="flex flex-wrap items-center justify-center gap-4 mb-16">
+          <a href="#downloads" class="px-8 py-4 rounded-full bg-white hover:bg-slate-200 text-black font-semibold transition-all flex items-center gap-2 shadow-xl hover:shadow-2xl hover:-translate-y-1">
+            <i data-lucide="download-cloud" class="w-5 h-5 text-oxy-pink"></i>
             <span>Download <span data-latest-version>v1.0.0-beta</span></span>
           </a>
-          <button onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" class="px-6 py-3.5 rounded-xl bg-dark-900 hover:bg-dark-850 border border-dark-700 text-slate-300 hover:text-white font-mono text-xs font-medium transition-all flex items-center gap-2.5">
-            <i data-lucide="terminal" class="w-4 h-4 text-accent-cyan"></i>
+          <button onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" class="px-6 py-4 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white font-mono text-xs transition-all flex items-center gap-3">
+            <i data-lucide="terminal" class="w-4 h-4 text-oxy-blue"></i>
             <span>git clone https://github.com/crisprintsstuff/OxyBrush.git</span>
-            <i data-lucide="copy" class="w-3.5 h-3.5 text-slate-500"></i>
+            <i data-lucide="copy" class="w-4 h-4 opacity-50"></i>
           </button>
         </div>
 
         <!-- Metric highlights -->
-        <div class="grid grid-cols-2 md:grid-cols-4 gap-4 max-w-4xl mx-auto pt-6 border-t border-dark-800/80">
-          <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
-            <div class="text-2xl font-bold font-mono text-white mb-1">5.2M+</div>
-            <div class="text-xs text-slate-400">Dense Subdivision Triangles</div>
+        <div class="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto pt-8 border-t border-white/5">
+          <div class="glass glass-card p-6 rounded-3xl">
+            <div class="text-3xl font-display font-bold text-white mb-1">5.2M+</div>
+            <div class="text-xs text-slate-400 uppercase tracking-wide">Dense Triangles</div>
           </div>
-          <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
-            <div class="text-2xl font-bold font-mono text-accent-cyan mb-1">~0.7s</div>
-            <div class="text-xs text-slate-400">Level Switch Speedup</div>
+          <div class="glass glass-card p-6 rounded-3xl">
+            <div class="text-3xl font-display font-bold text-oxy-pink mb-1">~0.7s</div>
+            <div class="text-xs text-slate-400 uppercase tracking-wide">Level Switch Speed</div>
           </div>
-          <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
-            <div class="text-2xl font-bold font-mono text-accent-emerald mb-1">20 Tools</div>
-            <div class="text-xs text-slate-400">Dedicated Sculpting Brushes</div>
+          <div class="glass glass-card p-6 rounded-3xl">
+            <div class="text-3xl font-display font-bold text-oxy-purple mb-1">17 Tools</div>
+            <div class="text-xs text-slate-400 uppercase tracking-wide">Dedicated Brushes</div>
           </div>
-          <div class="p-4 rounded-xl bg-dark-900/60 border border-dark-800">
-            <div class="text-2xl font-bold font-mono text-accent-violet mb-1">Zero Lag</div>
-            <div class="text-xs text-slate-400">Background Worker Decimation</div>
+          <div class="glass glass-card p-6 rounded-3xl">
+            <div class="text-3xl font-display font-bold text-oxy-blue mb-1">Zero Lag</div>
+            <div class="text-xs text-slate-400 uppercase tracking-wide">Worker Decimation</div>
           </div>
         </div>
 
       </div>
     </section>
 
-    <!-- Latest release highlights (update with each release; the version badge and links update themselves) -->
-    <section id="latest-highlights" class="py-16 border-b border-dark-800 bg-gradient-to-b from-dark-900/80 to-dark-950">
-      <div class="max-w-6xl mx-auto px-4 sm:px-6">
+    <!-- Latest release highlights -->
+    <section id="latest-highlights" class="py-24 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6">
         
-        <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
+        <div class="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-4">
           <div>
-            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-md bg-accent-emerald/10 border border-accent-emerald/30 text-accent-emerald font-mono text-xs font-semibold uppercase tracking-wider mb-3">
+            <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-oxy-pink/10 border border-oxy-pink/20 text-oxy-pink text-xs font-bold uppercase tracking-wider mb-4">
               <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
               What's New in v1.0.0-beta
             </div>
-            <h2 class="text-3xl font-extrabold text-white tracking-tight">Mask Extract, Smooth Symmetry &amp; Theme Studio</h2>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Mask Extract &amp; Smooth Symmetry</h2>
           </div>
-          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v1.0.0-beta" target="_blank" class="text-xs font-mono text-accent-cyan hover:underline flex items-center gap-1.5 self-start md:self-end">
+          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v1.0.0-beta" target="_blank" class="text-sm font-medium text-oxy-blue hover:text-oxy-pink transition-colors flex items-center gap-1.5 self-start md:self-end">
             <span>View GitHub Release</span>
-            <i data-lucide="arrow-up-right" class="w-3.5 h-3.5"></i>
+            <i data-lucide="arrow-up-right" class="w-4 h-4"></i>
           </a>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8">
           
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
-            <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-cyan/10 rounded-full blur-2xl group-hover:bg-accent-cyan/20 transition-all"></div>
-            <div>
-              <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-cyan mb-4">
-                <i data-lucide="hand" class="w-5 h-5"></i>
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute -right-12 -top-12 w-32 h-32 bg-oxy-pink/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
+            <div class="relative z-10">
+              <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-pink mb-6">
+                <i data-lucide="hand" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Pixar Kelvinlet Brushes</h3>
-              <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Physically-based regularized elastodynamics (de Goes &amp; James 2017). <strong class="text-slate-300">Kelvin Grab</strong> preserves volume with Poisson ratio &nu; = 0.45. <strong class="text-slate-300">Kelvin Twist</strong> spins geometry around the contact normal without tearing. <strong class="text-slate-300">Kelvin Scale</strong> pinches or dilates volume radially.
+              <h3 class="text-xl font-display font-bold text-white mb-3">Pixar Kelvinlet Brushes</h3>
+              <p class="text-slate-400 text-sm leading-relaxed mb-6">
+                Physically-based regularized elastodynamics (de Goes &amp; James 2017). Kelvin Grab preserves volume with Poisson ratio &nu; = 0.45. Kelvin Twist spins geometry without tearing.
               </p>
             </div>
-            <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-cyan">
-              <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Volume-preserving elastic sculpting</span>
+            <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-pink font-medium relative z-10">
+              <i data-lucide="check" class="w-4 h-4"></i>
+              <span>Volume-preserving elasticity</span>
             </div>
           </div>
 
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
-            <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-violet/10 rounded-full blur-2xl group-hover:bg-accent-violet/20 transition-all"></div>
-            <div>
-              <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-violet mb-4">
-                <i data-lucide="grid" class="w-5 h-5"></i>
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute -right-12 -top-12 w-32 h-32 bg-oxy-purple/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
+            <div class="relative z-10">
+              <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-purple mb-6">
+                <i data-lucide="grid" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Real-Time Wireframe Overlay</h3>
-              <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                GPU-accelerated line rendering overlaid atop the shaded matcap mesh. Features hardware depth testing with slope-scaled bias to eliminate Z-fighting, <strong class="text-slate-300">Shift+W</strong> shortcut, view strip button, and adjustable opacity slider.
+              <h3 class="text-xl font-display font-bold text-white mb-3">Real-Time Wireframe</h3>
+              <p class="text-slate-400 text-sm leading-relaxed mb-6">
+                GPU-accelerated line rendering overlaid atop the shaded matcap mesh. Features hardware depth testing with slope-scaled bias to eliminate Z-fighting, accessible via Shift+W.
               </p>
             </div>
-            <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-violet">
-              <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Depth-biased GPU lines &amp; Shift+W hotkey</span>
+            <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-purple font-medium relative z-10">
+              <i data-lucide="check" class="w-4 h-4"></i>
+              <span>Depth-biased GPU lines</span>
             </div>
           </div>
 
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between relative overflow-hidden group hover:border-dark-700 transition-colors">
-            <div class="absolute -right-12 -top-12 w-32 h-32 bg-accent-emerald/10 rounded-full blur-2xl group-hover:bg-accent-emerald/20 transition-all"></div>
-            <div>
-              <div class="w-10 h-10 rounded-xl bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-emerald mb-4">
-                <i data-lucide="terminal" class="w-5 h-5"></i>
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between relative overflow-hidden group">
+            <div class="absolute -right-12 -top-12 w-32 h-32 bg-oxy-blue/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
+            <div class="relative z-10">
+              <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-blue mb-6">
+                <i data-lucide="terminal" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-lg font-bold text-white mb-2">Python Plugins &amp; Local AI Agent</h3>
-              <p class="text-slate-400 text-xs leading-relaxed font-sans">
-                Embedded pure-Python SDK with auto-provisioning into local storage. Bundled metrics and procedural generator plugins, status-bar diagnostics, and local MCP agent tandem editing.
+              <h3 class="text-xl font-display font-bold text-white mb-3">Python Plugins &amp; SDK</h3>
+              <p class="text-slate-400 text-sm leading-relaxed mb-6">
+                Embedded pure-Python SDK with auto-provisioning into local storage. Bundled metrics and procedural generator plugins, status-bar diagnostics, and local MCP agent editing.
               </p>
             </div>
-            <div class="mt-6 pt-4 border-t border-dark-800/80 flex items-center gap-2 text-[11px] font-mono text-accent-emerald">
-              <i data-lucide="check" class="w-3.5 h-3.5"></i>
-              <span>Embedded SDK &amp; zero-config plugins</span>
+            <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-blue font-medium relative z-10">
+              <i data-lucide="check" class="w-4 h-4"></i>
+              <span>Embedded zero-config SDK</span>
             </div>
           </div>
 
         </div>
-
       </div>
     </section>
 
     <!-- Core Sculpting Capabilities -->
-    <section id="features" class="py-20 border-b border-dark-800">
-      <div class="max-w-6xl mx-auto px-4 sm:px-6">
+    <section id="features" class="py-24 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6">
         
-        <div class="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-2 font-semibold">Sculpting Architecture</div>
-        <h2 class="text-3xl font-extrabold text-white tracking-tight mb-4">Designed for Sculptors &amp; Technical Artists</h2>
-        <p class="text-slate-400 text-sm max-w-2xl mb-12">
-          From non-destructive multiresolution subdivision to stroke stabilization, OxyBrush gives you the precision of industry-standard sculpting suites in a native, responsive footprint.
-        </p>
+        <div class="text-center mb-16">
+            <div class="text-sm font-bold text-oxy-purple uppercase tracking-widest mb-3">Sculpting Architecture</div>
+            <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-6">Designed for Technical Artists</h2>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">
+              From non-destructive multiresolution subdivision to stroke stabilization, OxyBrush gives you the precision of industry-standard tools in a native footprint.
+            </p>
+        </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
           
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-cyan mb-3">
-              <i data-lucide="layers-3" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="layers-3" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Multiresolution Subdivision</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
-              Press <code class="text-slate-300 font-mono">Ctrl+D</code> to add subdivision levels; navigate up and down with <code class="text-slate-300 font-mono">D</code> / <code class="text-slate-300 font-mono">Shift+D</code>. Modifications made on lower levels automatically carry higher-frequency detail along.
+            <h4 class="font-display font-bold text-lg text-white mb-2">Multiresolution Sub-D</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
+              Press <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">Ctrl+D</code> to add subdivision levels; navigate up and down with <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">D</code> / <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">Shift+D</code>. Modifications made on lower levels automatically carry higher-frequency detail along.
             </p>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-emerald mb-3">
-              <i data-lucide="compass" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="compass" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Lazy Mouse &amp; Stroke Modes</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <h4 class="font-display font-bold text-lg text-white mb-2">Lazy Mouse &amp; Stroke Modes</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
               Stabilize strokes with an elastic drag rope, draw straight lines with Line Mode, drag out single dabs with Stamp Mode, or scatter dabs with procedural Spray dynamics.
             </p>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-violet mb-3">
-              <i data-lucide="image" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="image" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Procedural &amp; Custom Alphas</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <h4 class="font-display font-bold text-lg text-white mb-2">Procedural Alphas</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
               Seven built-in procedural alphas (Noise, Bumps, Scales, Cracks, Stripes, Rings, Square) plus import for custom 8-bit or 16-bit grayscale PNG stamp textures with follow-stroke rotation.
             </p>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-cyan mb-3">
-              <i data-lucide="shield" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="shield" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Masking &amp; Face Groups</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
-              Box marquee or lasso mask selection, unmask, cavity masking, peak masking, mask blur/sharpen, and island/group isolation with <code class="text-slate-300 font-mono">Ctrl+Shift+Click</code>.
+            <h4 class="font-display font-bold text-lg text-white mb-2">Masking &amp; Face Groups</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
+              Box marquee or lasso mask selection, unmask, cavity masking, peak masking, mask blur/sharpen, and island/group isolation with <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">Ctrl+Shift+Click</code>.
             </p>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-emerald mb-3">
-              <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="refresh-cw" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Voxel Remesh &amp; Decimation</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <h4 class="font-display font-bold text-lg text-white mb-2">Voxel Remesh &amp; Decimation</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
               Seamlessly rebuild geometry topology using background voxel remeshing or quadric decimation (e.g. 1.3M triangles down to 131k in ~6 seconds).
             </p>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="w-8 h-8 rounded-lg bg-dark-850 border border-dark-700 flex items-center justify-center text-accent-amber mb-3">
-              <i data-lucide="hard-drive" class="w-4 h-4"></i>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-white mb-4">
+              <i data-lucide="hard-drive" class="w-5 h-5"></i>
             </div>
-            <h4 class="font-bold text-white text-sm mb-1.5">Atomic .oxb Project Files</h4>
-            <p class="text-xs text-slate-400 leading-relaxed">
+            <h4 class="font-display font-bold text-lg text-white mb-2">Atomic .oxb Project Files</h4>
+            <p class="text-sm text-slate-400 leading-relaxed">
               Native compressed format with CRC32 checksums on every section, background autosave every 2 minutes, crash recovery, and export/import for OBJ and binary STL formats.
             </p>
           </div>
 
         </div>
-
       </div>
     </section>
 
-    <!-- The 16 Brushes Showcase -->
-    <section id="brushes" class="py-20 border-b border-dark-800 bg-dark-900/40">
-      <div class="max-w-6xl mx-auto px-4 sm:px-6">
+    <!-- The 17 Brushes Showcase -->
+    <section id="brushes" class="py-24 border-b border-white/5 relative">
+        <div class="absolute inset-0 bg-gradient-to-b from-oxy-blue/5 to-transparent pointer-events-none"></div>
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 relative z-10">
         
-        <div class="flex flex-col md:flex-row md:items-end justify-between mb-10 gap-4">
+        <div class="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
           <div>
-            <div class="text-xs font-mono text-accent-violet uppercase tracking-wider mb-2 font-semibold">Brush Palette</div>
-            <h2 class="text-3xl font-extrabold text-white tracking-tight">17 Purpose-Built Sculpting Tools</h2>
-            <p class="text-slate-400 text-sm mt-1">Rendered clay ball previews, number-key shortcuts (1–9, 0) that follow your shelf order, and draggable shelf ordering.</p>
+            <div class="text-sm font-bold text-oxy-blue uppercase tracking-widest mb-3">Brush Palette</div>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">17 Purpose-Built Tools</h2>
+            <p class="text-slate-400 mt-3 max-w-xl">Rendered clay ball previews, number-key shortcuts that follow your shelf order, and draggable customization.</p>
           </div>
-          <div class="text-xs font-mono text-slate-400 bg-dark-850 px-3 py-1.5 rounded-lg border border-dark-700">
-            <span class="text-slate-300">Alt</span> flips Raise &harr; Carve
+          <div class="text-sm font-medium text-slate-300 glass px-5 py-2.5 rounded-full">
+            Hold <span class="text-white font-bold bg-white/10 px-2 py-0.5 rounded">Alt</span> to flip Raise &harr; Carve
           </div>
         </div>
 
-        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-4">
           
-          <!-- Brush 1 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Draw</span>
-            <span class="text-[10px] text-slate-500 font-mono">General build</span>
+          <!-- Brushes (Generated identical structural content, updated styling) -->
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Draw</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">General</span>
           </div>
-
-          <!-- Brush 2 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Clay</span>
-            <span class="text-[10px] text-slate-500 font-mono">Organic mass</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Clay</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Organic</span>
           </div>
-
-          <!-- Brush 3 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Clay Strips</span>
-            <span class="text-[10px] text-slate-500 font-mono">Structured planes</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Clay Strips</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Planes</span>
           </div>
-
-          <!-- Brush 4 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full matcap-pearl mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Smooth</span>
-            <span class="text-[10px] text-slate-500 font-mono">Laplacian relax</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full matcap-pearl mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Smooth</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Relax</span>
           </div>
-
-          <!-- Brush 5 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Inflate</span>
-            <span class="text-[10px] text-slate-500 font-mono">Normal push</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Inflate</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Push</span>
           </div>
-
-          <!-- Brush 6 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full matcap-obsidian mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Flatten</span>
-            <span class="text-[10px] text-slate-500 font-mono">Area plane</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full matcap-obsidian mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Flatten</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Area</span>
           </div>
-
-          <!-- Brush 7 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Pinch</span>
-            <span class="text-[10px] text-slate-500 font-mono">Sharp creases</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Pinch</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Crease</span>
           </div>
-
-          <!-- Brush 8 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Crease</span>
-            <span class="text-[10px] text-slate-500 font-mono">Deep folds</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Crease</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Folds</span>
           </div>
-
-          <!-- Brush 9 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Layer</span>
-            <span class="text-[10px] text-slate-500 font-mono">Constant offset</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Layer</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Offset</span>
           </div>
-
-          <!-- Brush 10 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Grab</span>
-            <span class="text-[10px] text-slate-500 font-mono">Volume move</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Grab</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Move</span>
           </div>
-
-          <!-- Brush 11 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Snake Hook</span>
-            <span class="text-[10px] text-slate-500 font-mono">Horns &amp; tentacles</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Snake</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Horns</span>
           </div>
-
-          <!-- Brush 12 -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-dark-800 flex flex-col items-center text-center group hover:border-accent-cyan/50 transition-all">
-            <div class="w-12 h-12 rounded-full matcap-obsidian mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Mask</span>
-            <span class="text-[10px] text-slate-500 font-mono">Paint isolation</span>
+          <div class="glass glass-card p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full matcap-obsidian mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Mask</span>
+            <span class="text-[10px] text-slate-400 uppercase tracking-wide mt-1">Isolate</span>
           </div>
-
-          <!-- Brush 13 (v0.1.0) -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-accent-cyan/40 flex flex-col items-center text-center group hover:border-accent-cyan transition-all">
-            <div class="w-12 h-12 rounded-full matcap-pearl mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Polish</span>
-            <span class="text-[10px] text-accent-cyan font-mono">No shrink plane</span>
+          <div class="glass glass-card border-oxy-pink/40 p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full matcap-pearl mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Polish</span>
+            <span class="text-[10px] text-oxy-pink uppercase tracking-wide mt-1">Plane</span>
           </div>
-
-          <!-- Brush 14 (v0.1.0) -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-accent-cyan/40 flex flex-col items-center text-center group hover:border-accent-cyan transition-all">
-            <div class="w-12 h-12 rounded-full matcap-bronze mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Planar Trim</span>
-            <span class="text-[10px] text-accent-cyan font-mono">Hardsurface cut</span>
+          <div class="glass glass-card border-oxy-purple/40 p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full matcap-bronze mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Trim</span>
+            <span class="text-[10px] text-oxy-purple uppercase tracking-wide mt-1">Hard Cut</span>
           </div>
-
-          <!-- Brush 15 (v0.1.0) -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-accent-cyan/40 flex flex-col items-center text-center group hover:border-accent-cyan transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Topo Move</span>
-            <span class="text-[10px] text-accent-cyan font-mono">Connected only</span>
+          <div class="glass glass-card border-oxy-blue/40 p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Topo Move</span>
+            <span class="text-[10px] text-oxy-blue uppercase tracking-wide mt-1">Connected</span>
           </div>
-
-          <!-- Brush 16 (v0.1.0) -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-accent-cyan/40 flex flex-col items-center text-center group hover:border-accent-cyan transition-all">
-            <div class="w-12 h-12 rounded-full clay-gradient mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Noise</span>
-            <span class="text-[10px] text-accent-cyan font-mono">Procedural grain</span>
+          <div class="glass glass-card border-white/30 p-4 rounded-3xl flex flex-col items-center text-center">
+            <div class="w-14 h-14 rounded-full clay-gradient mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Noise</span>
+            <span class="text-[10px] text-white uppercase tracking-wide mt-1">Grain</span>
           </div>
-
-          <!-- Brush 17 (v0.4.0) -->
-          <div class="p-3 rounded-xl bg-dark-900 border border-accent-emerald/40 flex flex-col items-center text-center group hover:border-accent-emerald transition-all">
-            <div class="w-12 h-12 rounded-full matcap-pearl mb-2 shadow-inner group-hover:scale-105 transition-transform"></div>
-            <span class="text-xs font-bold text-white">Paint</span>
-            <span class="text-[10px] text-accent-emerald font-mono">Vertex color</span>
+          <div class="glass glass-card border-oxy-pink/40 p-4 rounded-3xl flex flex-col items-center text-center lg:col-start-4">
+            <div class="w-14 h-14 rounded-full matcap-pearl mb-3 shadow-inner"></div>
+            <span class="text-sm font-bold text-white">Paint</span>
+            <span class="text-[10px] text-oxy-pink uppercase tracking-wide mt-1">Color</span>
           </div>
 
         </div>
-
       </div>
     </section>
 
-    <!-- Architecture & Crate Ecosystem -->
-    <section id="architecture" class="py-20 border-b border-dark-800">
-      <div class="max-w-6xl mx-auto px-4 sm:px-6">
+    <!-- Architecture Ecosystem -->
+    <section id="architecture" class="py-24 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6">
         
-        <div class="text-xs font-mono text-accent-emerald uppercase tracking-wider mb-2 font-semibold">Engine Internals</div>
-        <h2 class="text-3xl font-extrabold text-white tracking-tight mb-4">Engineered for Modularity &amp; Memory Safety</h2>
-        <p class="text-slate-400 text-sm max-w-2xl mb-12">
-          OxyBrush is partitioned into distinct crates designed to be lean, verifiable with headless test benches, and free of unnecessary dependencies.
-        </p>
+        <div class="text-center mb-16">
+            <div class="text-sm font-bold text-oxy-pink uppercase tracking-widest mb-3">Engine Internals</div>
+            <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-6">Modularity &amp; Memory Safety</h2>
+            <p class="text-slate-400 text-lg max-w-2xl mx-auto">
+              OxyBrush is partitioned into distinct crates designed to be lean, verifiable with headless test benches, and free of unnecessary dependencies.
+            </p>
+        </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-8">
           
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="text-xs font-mono text-accent-cyan font-semibold mb-2">crate oxy-render</div>
-            <h4 class="text-base font-bold text-white mb-2">wgpu &amp; Matcap Pipeline</h4>
-            <p class="text-xs text-slate-400 leading-relaxed font-sans mb-4">
-              Modern WebGPU-native backend handling MatCaps, SSAO, cavity shading, and axis gizmos. Shaders are pre-validated via Naga with zero GPU required for CI unit tests.
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="text-xs font-mono text-oxy-pink bg-oxy-pink/10 px-2 py-1 rounded inline-block mb-4">crate oxy-render</div>
+            <h4 class="text-xl font-display font-bold text-white mb-3">wgpu Pipeline</h4>
+            <p class="text-sm text-slate-400 leading-relaxed mb-6">
+              Modern WebGPU-native backend handling MatCaps, SSAO, cavity shading, and axis gizmos. Shaders are pre-validated via Naga.
             </p>
-            <div class="p-2.5 rounded bg-dark-950 font-mono text-[11px] text-slate-400">
-              cargo run -p oxy-render --example shading_timing
+            <div class="p-3 rounded-xl bg-black/40 font-mono text-xs text-slate-400 border border-white/5 overflow-x-auto">
+              cargo run -p oxy-render
             </div>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="text-xs font-mono text-accent-emerald font-semibold mb-2">crate oxy-update</div>
-            <h4 class="text-base font-bold text-white mb-2">Verified Updates (RFC 0002)</h4>
-            <p class="text-xs text-slate-400 leading-relaxed font-sans mb-4">
-              Decoupled network updater checking GitHub releases. Verifies SHA-256 checksums, and ed25519 signatures once release signing is set up. Can be completely omitted with <code class="font-mono text-slate-300">--no-default-features</code>.
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="text-xs font-mono text-oxy-purple bg-oxy-purple/10 px-2 py-1 rounded inline-block mb-4">crate oxy-update</div>
+            <h4 class="text-xl font-display font-bold text-white mb-3">Verified Updates</h4>
+            <p class="text-sm text-slate-400 leading-relaxed mb-6">
+              Decoupled network updater checking GitHub releases. Verifies SHA-256 checksums, easily omitted with feature flags.
             </p>
-            <div class="p-2.5 rounded bg-dark-950 font-mono text-[11px] text-slate-400">
-              cargo build -p oxy-app --no-default-features
+            <div class="p-3 rounded-xl bg-black/40 font-mono text-xs text-slate-400 border border-white/5 overflow-x-auto">
+              cargo build --no-default
             </div>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="text-xs font-mono text-accent-violet font-semibold mb-2">crate oxy-app</div>
-            <h4 class="text-base font-bold text-white mb-2">UI &amp; Layout Engine</h4>
-            <p class="text-xs text-slate-400 leading-relaxed font-sans mb-4">
-              AccessKit screen-reader accessible interface with Standard, Compact, and Touch-friendly layouts, customizable panel shelves, and persistent settings.
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="text-xs font-mono text-oxy-blue bg-oxy-blue/10 px-2 py-1 rounded inline-block mb-4">crate oxy-app</div>
+            <h4 class="text-xl font-display font-bold text-white mb-3">UI Engine</h4>
+            <p class="text-sm text-slate-400 leading-relaxed mb-6">
+              AccessKit screen-reader accessible interface with Standard, Compact, and Touch-friendly layouts, and persistent settings.
             </p>
-            <div class="p-2.5 rounded bg-dark-950 font-mono text-[11px] text-slate-400">
-              oxybrush --layout standard|touch
+            <div class="p-3 rounded-xl bg-black/40 font-mono text-xs text-slate-400 border border-white/5 overflow-x-auto">
+              oxybrush --layout touch
             </div>
           </div>
 
-          <div class="p-6 rounded-xl bg-dark-900 border border-dark-800">
-            <div class="text-xs font-mono text-accent-amber font-semibold mb-2">crate oxy-ztl</div>
-            <h4 class="text-base font-bold text-white mb-2">Format Research</h4>
-            <p class="text-xs text-slate-400 leading-relaxed font-sans mb-4">
-              Dedicated binary format tooling and reverse-engineering research layer targeting digital clay file interoperability across sculpting ecosystems.
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="text-xs font-mono text-white bg-white/10 px-2 py-1 rounded inline-block mb-4">crate oxy-ztl</div>
+            <h4 class="text-xl font-display font-bold text-white mb-3">Format Research</h4>
+            <p class="text-sm text-slate-400 leading-relaxed mb-6">
+              Dedicated binary format tooling and reverse-engineering research layer targeting digital clay file interoperability.
             </p>
-            <div class="p-2.5 rounded bg-dark-950 font-mono text-[11px] text-slate-400">
-              docs/ROADMAP.md (Phase 3)
+            <div class="p-3 rounded-xl bg-black/40 font-mono text-xs text-slate-400 border border-white/5 overflow-x-auto">
+              docs/ROADMAP.md
             </div>
           </div>
 
         </div>
-
       </div>
     </section>
 
-    <!-- Downloads & Platform Support -->
-    <section id="downloads" class="py-20 border-b border-dark-800 bg-dark-900/40">
-      <div class="max-w-5xl mx-auto px-4 sm:px-6">
+    <!-- Downloads Section -->
+    <section id="downloads" class="py-24 border-b border-white/5 relative">
+        <div class="absolute inset-0 bg-gradient-to-t from-oxy-pink/5 to-transparent pointer-events-none"></div>
+      <div class="max-w-6xl mx-auto px-4 sm:px-6 relative z-10">
         
-        <div class="text-center mb-12">
-          <div class="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-2 font-semibold">Get Started</div>
-          <h2 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight mb-3">Download OxyBrush <span data-latest-version>v1.0.0-beta</span></h2>
-          <p class="text-slate-400 text-sm max-w-xl mx-auto">
-            Binary releases are pre-compiled and published on GitHub Releases with SHA-256 checksums for integrity verification.
+        <div class="text-center mb-16">
+          <div class="text-sm font-bold text-white uppercase tracking-widest mb-3">Get Started</div>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-4">Download OxyBrush <span data-latest-version>v1.0.0</span></h2>
+          <p class="text-slate-400 text-lg max-w-xl mx-auto">
+            Binary releases are pre-compiled and published on GitHub Releases with SHA-256 checksums.
           </p>
         </div>
 
-        <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-12">
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-16">
           
           <!-- Windows -->
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between">
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between group">
             <div>
-              <div class="flex items-center justify-between mb-4">
-                <i data-lucide="monitor" class="w-8 h-8 text-accent-cyan"></i>
-                <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-dark-850 text-slate-400 border border-dark-700">x86_64</span>
+              <div class="flex items-center justify-between mb-6">
+                <div class="w-12 h-12 rounded-full bg-oxy-blue/10 flex items-center justify-center text-oxy-blue">
+                    <i data-lucide="monitor" class="w-6 h-6"></i>
+                </div>
+                <span class="text-xs font-mono px-3 py-1 rounded-full bg-white/10 text-white">x86_64</span>
               </div>
-              <h3 class="text-lg font-bold text-white mb-1">Windows</h3>
-              <p class="text-xs text-slate-400 mb-6">Windows 10 / 11 with DirectX 12 or Vulkan support.</p>
+              <h3 class="text-2xl font-display font-bold text-white mb-2">Windows</h3>
+              <p class="text-sm text-slate-400 mb-8">Windows 10 / 11 with DirectX 12 or Vulkan support.</p>
               
-              <div class="space-y-2">
-                <a data-asset="windows-setup" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
-                  <span class="flex items-center gap-2">
-                    <i data-lucide="package" class="w-3.5 h-3.5 text-accent-cyan"></i>
+              <div class="space-y-3">
+                <a data-asset="windows-setup" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-blue hover:text-white hover:border-oxy-blue text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                  <span class="flex items-center gap-3">
+                    <i data-lucide="package" class="w-4 h-4 opacity-70"></i>
                     <span>Installer (.exe)</span>
                   </span>
-                  <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
+                  <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="windows-portable" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-cyan/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
-                  <span class="flex items-center gap-2">
-                    <i data-lucide="file-archive" class="w-3.5 h-3.5 text-slate-400"></i>
+                <a data-asset="windows-portable" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                  <span class="flex items-center gap-3">
+                    <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.zip)</span>
                   </span>
-                  <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
+                  <i data-lucide="download" class="w-4 h-4 opacity-50"></i>
                 </a>
               </div>
-            </div>
-
-            <div class="mt-6 pt-4 border-t border-dark-800 text-[11px] text-slate-500">
-              *Early alpha builds may show a Microsoft SmartScreen prompt.
             </div>
           </div>
 
           <!-- macOS -->
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between">
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between group">
             <div>
-              <div class="flex items-center justify-between mb-4">
-                <i data-lucide="laptop" class="w-8 h-8 text-accent-violet"></i>
-                <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-dark-850 text-slate-400 border border-dark-700">Universal Binary</span>
+              <div class="flex items-center justify-between mb-6">
+                <div class="w-12 h-12 rounded-full bg-oxy-purple/10 flex items-center justify-center text-oxy-purple">
+                    <i data-lucide="laptop" class="w-6 h-6"></i>
+                </div>
+                <span class="text-xs font-mono px-3 py-1 rounded-full bg-white/10 text-white">Universal</span>
               </div>
-              <h3 class="text-lg font-bold text-white mb-1">macOS</h3>
-              <p class="text-xs text-slate-400 mb-6">macOS 11+ running Apple Silicon (M1/M2/M3/M4) &amp; Intel.</p>
+              <h3 class="text-2xl font-display font-bold text-white mb-2">macOS</h3>
+              <p class="text-sm text-slate-400 mb-8">macOS 11+ running Apple Silicon (M-series) &amp; Intel.</p>
               
-              <div class="space-y-2">
-                <a data-asset="macos-dmg" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-violet/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
-                  <span class="flex items-center gap-2">
-                    <i data-lucide="disc" class="w-3.5 h-3.5 text-accent-violet"></i>
-                    <span>Universal DMG (.dmg)</span>
+              <div class="space-y-3">
+                <a data-asset="macos-dmg" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-purple hover:text-white hover:border-oxy-purple text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                  <span class="flex items-center gap-3">
+                    <i data-lucide="disc" class="w-4 h-4 opacity-70"></i>
+                    <span>App Image (.dmg)</span>
                   </span>
-                  <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
+                  <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
               </div>
-            </div>
-
-            <div class="mt-6 pt-4 border-t border-dark-800 text-[11px] text-slate-500">
-              *Unnotarized alpha: on first launch, select "Open Anyway" in System Settings.
             </div>
           </div>
 
           <!-- Linux -->
-          <div class="p-6 rounded-2xl bg-dark-900 border border-dark-800 flex flex-col justify-between">
+          <div class="glass glass-card p-8 rounded-3xl flex flex-col justify-between group">
             <div>
-              <div class="flex items-center justify-between mb-4">
-                <i data-lucide="terminal" class="w-8 h-8 text-accent-emerald"></i>
-                <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-dark-850 text-slate-400 border border-dark-700">Flatpak / Tarball</span>
+              <div class="flex items-center justify-between mb-6">
+                <div class="w-12 h-12 rounded-full bg-oxy-pink/10 flex items-center justify-center text-oxy-pink">
+                    <i data-lucide="terminal" class="w-6 h-6"></i>
+                </div>
+                <span class="text-xs font-mono px-3 py-1 rounded-full bg-white/10 text-white">Flatpak</span>
               </div>
-              <h3 class="text-lg font-bold text-white mb-1">Linux</h3>
-              <p class="text-xs text-slate-400 mb-6">Modern desktop distributions via Flatpak or standalone tarball.</p>
+              <h3 class="text-2xl font-display font-bold text-white mb-2">Linux</h3>
+              <p class="text-sm text-slate-400 mb-8">Modern desktop distributions via Flatpak or standalone.</p>
               
-              <div class="space-y-2">
-                <a data-asset="linux-flatpak" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
-                  <span class="flex items-center gap-2">
-                    <i data-lucide="box" class="w-3.5 h-3.5 text-accent-emerald"></i>
+              <div class="space-y-3">
+                <a data-asset="linux-flatpak" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-pink hover:text-white hover:border-oxy-pink text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                  <span class="flex items-center gap-3">
+                    <i data-lucide="box" class="w-4 h-4 opacity-70"></i>
                     <span>Flatpak Bundle</span>
                   </span>
-                  <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
+                  <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="linux-tarball" href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="w-full py-2.5 px-4 rounded-xl bg-dark-850 hover:bg-dark-800 border border-dark-700 hover:border-accent-emerald/60 text-xs font-mono text-white flex items-center justify-between transition-colors">
-                  <span class="flex items-center gap-2">
-                    <i data-lucide="file-archive" class="w-3.5 h-3.5 text-slate-400"></i>
+                <a data-asset="linux-tarball" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                  <span class="flex items-center gap-3">
+                    <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.tar.gz)</span>
                   </span>
-                  <i data-lucide="download" class="w-3.5 h-3.5 text-slate-500"></i>
+                  <i data-lucide="download" class="w-4 h-4 opacity-50"></i>
                 </a>
               </div>
-            </div>
-
-            <div class="mt-6 pt-4 border-t border-dark-800 text-[11px] text-slate-500">
-              *A .flatpak bundle doesn't update itself: install the newer bundle from Releases to update.
             </div>
           </div>
 
         </div>
 
         <!-- Build from Source Banner -->
-        <div class="rounded-xl border border-dark-700 bg-dark-900 p-6 flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div class="rounded-3xl glass p-8 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
           <div>
-            <div class="text-sm font-bold text-white mb-1">Prefer building from source?</div>
-            <div class="text-xs text-slate-400">Requires a standard stable Rust toolchain (<code class="font-mono text-slate-300">cargo</code> &amp; <code class="font-mono text-slate-300">rustc</code>).</div>
+            <div class="text-lg font-display font-bold text-white mb-2">Prefer building from source?</div>
+            <div class="text-sm text-slate-400">Requires a standard stable Rust toolchain (<code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">cargo</code>).</div>
           </div>
-          <button onclick="copyCommand('cargo run --release -p oxy-app')" class="px-4 py-2 rounded-lg bg-dark-850 hover:bg-dark-800 border border-dark-700 text-xs font-mono text-slate-300 hover:text-white flex items-center gap-2 transition-colors">
-            <i data-lucide="terminal" class="w-3.5 h-3.5 text-accent-cyan"></i>
+          <button onclick="copyCommand('cargo run --release -p oxy-app')" class="px-6 py-4 rounded-2xl glass hover:bg-white/10 text-sm font-mono text-white flex items-center gap-3 transition-all">
+            <i data-lucide="terminal" class="w-4 h-4 text-oxy-pink"></i>
             <span>cargo run --release -p oxy-app</span>
-            <i data-lucide="copy" class="w-3 h-3 text-slate-500"></i>
+            <i data-lucide="copy" class="w-4 h-4 opacity-50"></i>
           </button>
         </div>
 
       </div>
     </section>
 
-    <!-- Changelog Accordion -->
-    <section id="changelog" class="py-20 border-b border-dark-800">
+    <!-- Changelog -->
+    <section id="changelog" class="py-24 border-b border-white/5">
       <div class="max-w-4xl mx-auto px-4 sm:px-6">
         
-        <div class="text-xs font-mono text-accent-cyan uppercase tracking-wider mb-2 font-semibold">History</div>
-        <h2 class="text-3xl font-extrabold text-white tracking-tight mb-8">Release Changelog</h2>
+        <div class="text-center mb-16">
+            <div class="text-sm font-bold text-oxy-purple uppercase tracking-widest mb-3">History</div>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Release Changelog</h2>
+        </div>
 
-        <div class="space-y-4">
+        <div class="space-y-6">
           
           <!-- v1.0.0-beta -->
-          <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">1.0.0-beta</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-05</span>
-                <span class="px-2 py-0.5 rounded bg-accent-cyan/10 text-accent-cyan text-[10px] font-mono font-semibold">LATEST</span>
+          <div class="rounded-3xl glass overflow-hidden border-oxy-pink/30">
+            <div class="px-8 py-5 border-b border-white/5 bg-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <span class="font-display font-bold text-white text-lg">1.0.0-beta</span>
+                <span class="text-sm text-slate-400">2026-11-05</span>
+                <span class="px-3 py-1 rounded-full bg-oxy-pink text-white text-xs font-bold uppercase tracking-wide shadow-[0_0_10px_rgba(236,72,153,0.5)]">Latest</span>
               </div>
             </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
+            <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
               <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Mask Extract for Sculpting</span>
+                <span class="font-bold text-oxy-pink block mb-2 uppercase tracking-wider font-mono text-[11px]">Mask Extract</span>
                 <p class="text-slate-400">Extract masked regions as an independent piece with customizable solid extrusion thickness, side rim walls, distinct front/back/rim face groups, and Laplacian border smoothing.</p>
               </div>
               <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Smooth Symmetry Blending &amp; Performance</span>
-                <p class="text-slate-400">C1 smooth maximum partition-of-unity blending eliminates midline seams/cutoffs on symmetry strokes (Issue #53). Coalesced gizmo dragging on multi-million poly meshes and configurable subdivision triangle caps.</p>
+                <span class="font-bold text-oxy-purple block mb-2 uppercase tracking-wider font-mono text-[11px]">Smooth Symmetry Blending</span>
+                <p class="text-slate-400">C1 smooth maximum partition-of-unity blending eliminates midline seams on symmetry strokes. Coalesced gizmo dragging on multi-million poly meshes.</p>
               </div>
               <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Customizable Theme System</span>
-                <p class="text-slate-400">6 base theme presets (Graphite, Charcoal, Slate, Warm Umber, Studio Light, High Contrast), 7 accent colors with custom RGB picker, and adjustable corner rounding styles.</p>
+                <span class="font-bold text-oxy-blue block mb-2 uppercase tracking-wider font-mono text-[11px]">Theme Studio</span>
+                <p class="text-slate-400">6 base theme presets, 7 accent colors with custom RGB picker, and adjustable corner rounding styles.</p>
               </div>
             </div>
           </div>
 
           <!-- v0.6.0-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden opacity-90 hover:opacity-100 transition-opacity">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.6.0-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-05</span>
+          <div class="rounded-3xl glass overflow-hidden opacity-80 hover:opacity-100 transition-opacity">
+            <div class="px-8 py-5 border-b border-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <span class="font-display font-bold text-white text-lg">0.6.0-alpha</span>
+                <span class="text-sm text-slate-400">2026-11-05</span>
               </div>
             </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
+            <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
               <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Pixar Regularized Kelvinlet Brushes</span>
-                <p class="text-slate-400">Integrated three physically-based elastodynamic brushes (Kelvin Grab with &nu; = 0.45 volume preservation, Kelvin Twist, Kelvin Scale) with 60+ FPS real-time precomputed tensor deformation.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Real-Time Wireframe Overlay</span>
-                <p class="text-slate-400">GPU depth-biased line overlay (<code class="font-mono text-slate-300">Shift+W</code>) with zero Z-fighting, viewport view strip button, View menu controls, and adjustable opacity slider.</p>
+                <span class="font-bold text-white block mb-2 uppercase tracking-wider font-mono text-[11px]">Kelvinlet Brushes</span>
+                <p class="text-slate-400">Integrated three physically-based elastodynamic brushes with 60+ FPS real-time precomputed tensor deformation.</p>
               </div>
             </div>
           </div>
-
+          
           <!-- v0.5.2-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden opacity-90 hover:opacity-100 transition-opacity">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.5.2-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
+          <div class="rounded-3xl glass overflow-hidden opacity-70 hover:opacity-100 transition-opacity">
+            <div class="px-8 py-5 border-b border-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <span class="font-display font-bold text-white text-lg">0.5.2-alpha</span>
+                <span class="text-sm text-slate-400">2026-11-04</span>
               </div>
             </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
+            <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
               <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Embedded Python SDK Auto-Provisioning</span>
-                <p class="text-slate-400">Fixed <code class="font-mono text-slate-300">ModuleNotFoundError</code> on release binaries. OxyBrush embeds the pure-Python SDK and provisions it to user data storage alongside bundled plugin examples.</p>
+                <span class="font-bold text-white block mb-2 uppercase tracking-wider font-mono text-[11px]">Python SDK</span>
+                <p class="text-slate-400">OxyBrush embeds the pure-Python SDK and provisions it to user data storage alongside bundled plugin examples.</p>
               </div>
-            </div>
-          </div>
-
-          <!-- v0.5.1-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden opacity-90 hover:opacity-100 transition-opacity">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.5.1-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Plugin Error Diagnostics &amp; SDK Expansion</span>
-                <p class="text-slate-400">Refined status-bar exception reporting for Python plugins, expanded <code class="font-mono text-slate-300">oxybrush</code> SDK with <code class="font-mono text-slate-300">MeshStats</code> metrics and topology helpers, bundled <code class="font-mono text-slate-300">mesh_stats_reporter.py</code>, and launched the 15-page GitHub Wiki.</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- v0.5.0-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden opacity-90 hover:opacity-100 transition-opacity">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.5.0-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Python Plugin &amp; Scripting System</span>
-                <p class="text-slate-400">Pure-Python SDK (<code class="font-mono text-slate-300">python/oxybrush</code>) with zero third-party dependencies. Top-level in-app Plugins menu, dynamic plugin auto-discovery and reload, procedural sculpting examples, and background execution.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Performance Overhaul</span>
-                <p class="text-slate-400">Stroke coalescing and adaptive dab budget (<code class="font-mono text-slate-300">OXYBRUSH_DAB_BUDGET_MS</code>), Rayon parallel update_after_move passes, atomic generation stamps, parallel GPU vertex packing, and zero-copy index buffers.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Customization &amp; Agent</span>
-                <p class="text-slate-400">Keymap editor with conflict resolution, Blender/Maya MMB orbit navigation presets, local AI agent (MCP) integration, autosave off toggle, 35mm-equivalent perspective focal length, and surface-aligned brush cursor.</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- v0.4.0-alpha -->
-          <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.4.0-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-04</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Sculpting &amp; Painting</span>
-                <p class="text-slate-400">Paint brush and mask-aware color fills, a transform gizmo for posing, quick menu at the cursor, grab through the model, Alt to move along the normal, and brush presets with shareable codes.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Viewing &amp; Workflow</span>
-                <p class="text-slate-400">Flat shading, custom matcaps, 45° view steps, command palette, brush finder, recent files, built-in guide, strokes from empty space and opt-in update checks.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Pipeline</span>
-                <p class="text-slate-400">glTF/GLB and PLY export, OBJ objects imported as separate pieces, LOD chains, splitting pieces, and the oxybrush-cli command-line tool.</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- v0.3.0-alpha -->
-          <div class="rounded-xl border border-dark-700 bg-dark-900 overflow-hidden">
-            <div class="px-6 py-4 bg-dark-850 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-bold text-white text-sm">0.3.0-alpha</span>
-                <span class="text-xs text-slate-400 font-mono">2026-11-02</span>
-                              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-300 space-y-4 leading-relaxed">
-              <div>
-                <span class="font-bold text-accent-cyan block mb-1 uppercase tracking-wider font-mono text-[11px]">Viewport Shading</span>
-                <p class="text-slate-400">Screen-space ambient occlusion (folds and inside shapes darken) and cavity shading (creases and pores darken, edges catch light). On by default in the view strip and remembered between sessions.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-emerald block mb-1 uppercase tracking-wider font-mono text-[11px]">Dense Mesh Acceleration</span>
-                <p class="text-slate-400">Switching to 5.2M-triangle subdivision level accelerated from ~2.3s to ~0.7s. Adding it dropped from ~8s to ~2–4s. Level changes &gt;1M triangles run in background threads, keeping camera orbit fluid.</p>
-              </div>
-              <div>
-                <span class="font-bold text-accent-violet block mb-1 uppercase tracking-wider font-mono text-[11px]">Decimation &amp; Dabs</span>
-                <p class="text-slate-400">Quadric decimation (1.3M &rarr; 131k triangles) runs in ~6s (down from 12s). Small brush dabs ~40% faster through per-dab chunk bounding box calculations.</p>
-              </div>
-            </div>
-          </div>
-
-          <!-- v0.2.0-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden">
-            <div class="px-6 py-3.5 bg-dark-850/60 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-semibold text-white text-xs">0.2.0-alpha</span>
-                <span class="text-[11px] text-slate-500 font-mono">2026-11-01</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-400 space-y-2 leading-relaxed">
-              <p><strong class="text-slate-300 font-mono">Subdivision Multiresolution:</strong> Added Ctrl+D to subdivide, D / Shift+D to step up and down without losing high-frequency details. Saved into .oxb project files.</p>
-              <p><strong class="text-slate-300 font-mono">UI Upgrades:</strong> Welcome starter screen (sphere, cube, plane), clay ball rendered brush previews, customizable layouts (Standard, Compact, Touch), axis view gizmo, and Raise/Carve toggles.</p>
-            </div>
-          </div>
-
-          <!-- v0.1.0-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden">
-            <div class="px-6 py-3.5 bg-dark-850/60 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-semibold text-white text-xs">0.1.0-alpha</span>
-                <span class="text-[11px] text-slate-500 font-mono">2026-11-01</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-400 space-y-2 leading-relaxed">
-              <p><strong class="text-slate-300 font-mono">New Brushes:</strong> Added Polish, Planar Trim, Topological Move, and Noise (bringing the total to 16 brushes).</p>
-              <p><strong class="text-slate-300 font-mono">Stroke Control:</strong> Introduced lazy mouse stabilization, line &amp; stamp modes, spray dynamics, and 7 built-in procedural alphas.</p>
-              <p><strong class="text-slate-300 font-mono">macOS Universal:</strong> Released first universal .dmg supporting both Apple Silicon and Intel Macs.</p>
-            </div>
-          </div>
-
-          <!-- v0.0.1-alpha -->
-          <div class="rounded-xl border border-dark-800 bg-dark-900/60 overflow-hidden">
-            <div class="px-6 py-3.5 bg-dark-850/60 flex items-center justify-between">
-              <div class="flex items-center gap-3">
-                <span class="font-mono font-semibold text-white text-xs">0.0.1-alpha</span>
-                <span class="text-[11px] text-slate-500 font-mono">2026-11-01</span>
-              </div>
-            </div>
-            <div class="p-6 text-xs text-slate-400 space-y-2 leading-relaxed">
-              <p><strong class="text-slate-300 font-mono">Public Launch:</strong> Initial release featuring core sculpting engine (12 brushes), XYZ/radial symmetry, multi-piece scene hierarchy, voxel remeshing, atomic .oxb storage, and wgpu matcap renderer.</p>
             </div>
           </div>
 
         </div>
-
-      </div>
-    </section>
-
-    <!-- Alpha Testing Guide & Bug Reporting -->
-    <section class="py-20">
-      <div class="max-w-4xl mx-auto px-4 sm:px-6 text-center">
-        
-        <div class="w-12 h-12 rounded-2xl bg-dark-900 border border-dark-700 flex items-center justify-center text-accent-cyan mx-auto mb-4">
-          <i data-lucide="help-circle" class="w-6 h-6"></i>
-        </div>
-
-        <h2 class="text-2xl font-bold text-white mb-2">Alpha Testing &amp; Feedback</h2>
-        <p class="text-slate-400 text-xs sm:text-sm max-w-xl mx-auto mb-8 leading-relaxed">
-          OxyBrush is actively evolving in public. Every run writes diagnostic traces to <code class="font-mono text-slate-300">oxybrush.log</code>. Help shape development by submitting bug reports or hardware feedback.
-        </p>
-
-        <div class="flex flex-wrap items-center justify-center gap-4">
-          <a href="https://github.com/crisprintsstuff/OxyBrush/issues" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 rounded-xl bg-dark-900 hover:bg-dark-850 border border-dark-700 text-xs font-mono text-white flex items-center gap-2 transition-all">
-            <i data-lucide="bug" class="w-4 h-4 text-accent-emerald"></i>
-            <span>Report an Issue</span>
-          </a>
-          <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="px-5 py-2.5 rounded-xl bg-dark-900 hover:bg-dark-850 border border-dark-700 text-xs font-mono text-white flex items-center gap-2 transition-all">
-            <i data-lucide="star" class="w-4 h-4 text-accent-amber"></i>
-            <span>Star on GitHub</span>
-          </a>
-        </div>
-
       </div>
     </section>
 
   </main>
 
   <!-- Footer -->
-  <footer class="py-10 border-t border-dark-800 bg-dark-950 text-slate-500 text-xs font-mono">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-4">
-      <div class="flex items-center gap-3">
-        <span class="text-slate-300 font-bold">OxyBrush</span>
-        <span>&bull;</span>
-        <span>Created by <a href="https://github.com/crisprintsstuff" target="_blank" class="text-slate-400 hover:text-white underline">crisprintsstuff</a></span>
+  <footer class="relative z-10 border-t border-white/10 bg-[#050505]/80 backdrop-blur-lg pt-12 pb-12">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center">
+          <div class="w-12 h-12 rounded-full bg-gradient-to-br from-oxy-pink to-oxy-blue p-[1px] mb-6">
+              <div class="w-full h-full bg-[#050505] rounded-full flex items-center justify-center">
+                  <svg class="w-6 h-6 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="18" cy="6" r="3"></circle>
+                      <circle cx="6" cy="18" r="3"></circle>
+                      <circle cx="12" cy="12" r="2"></circle>
+                      <path d="M16.5 7.5l-3 3"></path>
+                      <path d="M10.5 13.5l-3 3"></path>
+                  </svg>
+              </div>
+          </div>
+          <div class="flex gap-6 mb-8">
+              <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" class="text-slate-400 hover:text-oxy-pink transition-colors text-sm font-medium">Changelog</a>
+              <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="text-slate-400 hover:text-oxy-purple transition-colors text-sm font-medium">Releases</a>
+              <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" class="text-slate-400 hover:text-oxy-blue transition-colors text-sm font-medium">GitHub</a>
+          </div>
+          <p class="text-slate-600 text-xs font-mono">
+              &copy; <script>document.write(new Date().getFullYear())</script> Oxytocin Labs. OxyBrush created by crisprintsstuff.
+          </p>
       </div>
-      <div class="flex items-center gap-6">
-        <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" class="hover:text-slate-300 transition-colors">Changelog</a>
-        <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="hover:text-slate-300 transition-colors">Release Notes</a>
-        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" class="hover:text-slate-300 transition-colors">GitHub</a>
-      </div>
-    </div>
   </footer>
 
   <!-- Script Logic -->
   <script>
     lucide.createIcons();
 
-    // Keep the version and download links pointing at the newest release.
-    // The page works without this (static fallback text and a link to the
-    // releases list); with it, each button downloads the right file directly.
+    // Release Fetching
     (async function latestRelease() {
       const patterns = {
         'windows-setup': /-windows-x86_64-setup\.exe$/,
@@ -947,7 +789,6 @@
         'linux-tarball': /-linux-x86_64\.tar\.gz$/,
       };
       try {
-        // All releases so far are pre-releases, which /releases/latest skips.
         const r = await fetch('https://api.github.com/repos/crisprintsstuff/OxyBrush/releases?per_page=10', {
           headers: { Accept: 'application/vnd.github+json' },
         });
@@ -963,11 +804,10 @@
           const asset = release.assets.find((a) => patterns[el.dataset.asset]?.test(a.name));
           el.href = asset ? asset.browser_download_url : release.html_url;
         });
-      } catch (e) {
-        // Offline or rate-limited: keep the static links.
-      }
+      } catch (e) { }
     })();
 
+    // Copy to clipboard
     function copyCommand(text) {
       const textarea = document.createElement('textarea');
       textarea.value = text;
@@ -984,6 +824,7 @@
       document.body.removeChild(textarea);
     }
 
+    // Toast notifications
     function showToast(message) {
       const toast = document.getElementById('toast');
       const msg = document.getElementById('toastMsg');
