@@ -164,6 +164,7 @@ fn commands(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::GroupColors, "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd(ed, Cmd::Shading, "view ambient occlusion cavity", Editor::toggle_shading),
         cmd(ed, Cmd::FlatShading, "view faceted polygons smooth", |e| e.view.flat_shading = !e.view.flat_shading),
+        cmd(ed, Cmd::Wireframe, "view polygon edges lines mesh overlay", |e| e.view.wireframe = !e.view.wireframe),
         cmd(ed, Cmd::BackgroundWindow, "view color picker backdrop", |e| e.show_background = true),
         cmd(ed, Cmd::BackgroundGradient, "view color backdrop", |e| e.set_background_style(BackgroundStyle::Gradient)),
         cmd(ed, Cmd::BackgroundFlat, "view color backdrop solid", |e| e.set_background_style(BackgroundStyle::Flat)),

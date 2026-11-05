@@ -51,6 +51,7 @@ That direction is an average of the surface around the pointer, eased as you mov
         body: "Click a brush in the shelf, press its number key (1–9 and 0 select the first ten), or press Space and type part of its name: \"cs\" finds Clay Strips, Enter picks it.\n\n\
 Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover any control for a short explanation and its shortcut. On a touch screen, press and hold the control: the same text stays up after you lift your finger, and the control does not activate.\n\n\
 - Grab, Topological Move and Snake Hook: hold Alt to move the surface along its normal.\n\
+- Kelvin Grab, Kelvin Twist and Kelvin Scale: elastodynamic Pixar Kelvinlet brushes for volume-preserving elastic deformation, twisting, and radial expansion/pinch.\n\
 - Grab through (Grab settings) moves everything under the brush circle, front to back.\n\
 - Middle-drag over a panel scrolls it, handy with a pen side button.",
     },
@@ -152,6 +153,7 @@ The Touch layout has no mouse hover. Press and hold a control to read what it do
         body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.\n\n\
 - Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
 - View > Flat shading shows every polygon as a flat facet.\n\
+- View > Wireframe (Shift+W or the wireframe icon in the view strip) overlays polygon edges atop the shaded surface, with adjustable line opacity.\n\
 - View > Background (also under Settings) switches between a soft gradient and one flat color. Colors… sets the center and the edge, or the single flat color. Reset to default puts the original gradient back. The command palette can open the colors, switch the style or reset it. The choice is remembered.",
     },
     Topic {

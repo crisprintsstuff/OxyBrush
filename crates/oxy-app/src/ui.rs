@@ -277,6 +277,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 );
                 tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
                 tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
+                if ed.view.wireframe {
+                    tips::hover(
+                        ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity")),
+                        "Wireframe line opacity",
+                    );
+                }
                 surface_cursor_checkbox(ui, ed);
                 ui.separator();
                 tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
@@ -1265,6 +1272,11 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             let shading = ed.shading_on();
             if widgets::icon_button(ui, Icon::Shading, shading, true, &Cmd::Shading.tip()).clicked() {
                 ed.toggle_shading();
+            }
+            let wireframe = ed.view.wireframe;
+            if widgets::icon_button(ui, Icon::Wireframe, wireframe, true, &Cmd::Wireframe.tip_in(&ed.keymap)).clicked()
+            {
+                ed.view.wireframe = !wireframe;
             }
             let on = ed.gizmo.is_some();
             if widgets::icon_button(ui, Icon::Transform, on, true, &Cmd::GizmoMove.tip_in(&ed.keymap)).clicked() {

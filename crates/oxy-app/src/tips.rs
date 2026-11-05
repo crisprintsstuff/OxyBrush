@@ -119,6 +119,7 @@ commands! {
     GroupColors => "Face group colors", "G", "Show face groups as colors, or the normal material.";
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
+    Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";
     LoadMatcap => "Load matcap…", "", "Use a PNG or JPEG of a lit sphere as the material.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
     Panels => "Show / hide panels", "Tab", "Show or hide the side panels.";
@@ -191,6 +192,7 @@ impl Cmd {
             Cmd::Bottom => CommandId::ViewBottom,
             Cmd::Ortho => CommandId::Orthographic,
             Cmd::GroupColors => CommandId::ShowGroups,
+            Cmd::Wireframe => CommandId::Wireframe,
             Cmd::Panels => CommandId::TogglePanels,
             Cmd::Shortcuts => CommandId::Shortcuts,
             Cmd::ShowMask => CommandId::ShowMask,

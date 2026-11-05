@@ -690,6 +690,8 @@ impl Editor {
             update_last_check: self.updater.last_check,
             update_skip: self.updater.skip.clone(),
             flat_shading: self.view.flat_shading,
+            wireframe: self.view.wireframe,
+            wireframe_opacity: self.view.wireframe_opacity,
             stroke_from_empty: self.stroke_from_empty,
             surface_cursor: self.surface_cursor,
             agent_mcp: self.agent_enabled,
@@ -809,6 +811,8 @@ impl Editor {
         self.updater.last_check = s.update_last_check;
         self.updater.skip = s.update_skip.clone();
         self.view.flat_shading = s.flat_shading;
+        self.view.wireframe = s.wireframe;
+        self.view.wireframe_opacity = s.wireframe_opacity;
         self.view.background_style = s.background_style;
         self.view.background = s.background;
         self.view.background_center = s.background_center;
@@ -1067,7 +1071,7 @@ impl Editor {
         Stroke::new(settings, self.symmetry, invert)
             .with_alpha(stamp)
             .with_view(self.camera.forward())
-            .with_grab_through(self.grab_through && kind == BrushKind::Grab)
+            .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
             .with_budget(self.dab_budget_ms)
     }
@@ -2466,6 +2470,10 @@ impl Editor {
                 self.view.show_groups = !self.view.show_groups;
                 E::None
             }
+            C::Wireframe => {
+                self.view.wireframe = !self.view.wireframe;
+                E::None
+            }
             C::TogglePanels => {
                 self.show_panels = !self.show_panels;
                 E::None
@@ -3060,6 +3068,8 @@ mod tests {
             update_last_check: 42,
             update_skip: "1.2.3".into(),
             flat_shading: true,
+            wireframe: true,
+            wireframe_opacity: 0.8,
             stroke_from_empty: true,
             surface_cursor: true,
             agent_mcp: false,

@@ -39,6 +39,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Polish => "Flattens small bumps without shrinking the form.",
         BrushKind::PlanarTrim => "Cuts the surface down to a plane. Alt fills up to it.",
         BrushKind::Noise => "Adds procedural surface noise. Adjust the noise scale below.",
+        BrushKind::KelvinGrab => "Deforms like real elastic rubber with volume preservation. Alt moves along normal.",
+        BrushKind::KelvinTwist => "Twists the surface elastically around the contact normal. Alt reverses spin.",
+        BrushKind::KelvinScale => "Scales or pinches the volume radially with elastodynamic decay. Alt inverts.",
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
     }
@@ -71,6 +74,9 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::TopoMove => {
             0.28 * smoothstep(0.3, 0.2, (x + 0.5).abs()) + 0.5 * smoothstep(0.3, 0.2, (x - 0.45).abs())
         }
+        BrushKind::KelvinGrab => 0.52 * bump(x - 0.25, 0.35) - 0.14 * bump(x + 0.42, 0.25),
+        BrushKind::KelvinTwist => 0.38 * (x * 3.8).sin() * bump(x, 0.62),
+        BrushKind::KelvinScale => 0.46 * bump(x, 0.28) - 0.18 * bump(a - 0.55, 0.22),
         BrushKind::Polish => 0.32 * bump(x, 0.6),
         BrushKind::Noise => {
             (0.1 * ((x * 13.0).sin() + 0.6 * (x * 29.0 + 1.0).sin() + 0.4 * (x * 47.0 + 2.0).sin()) + 0.08)
@@ -89,6 +95,9 @@ fn brush_ghost(k: BrushKind, x: f32) -> Option<f32> {
         BrushKind::Flatten | BrushKind::PlanarTrim => Some(0.6 * bump(x, 0.5)),
         BrushKind::Pinch => Some(0.38 * bump(x, 0.42)),
         BrushKind::Grab => Some(0.55 * bump(x + 0.3, 0.38)),
+        BrushKind::KelvinGrab => Some(0.48 * bump(x + 0.25, 0.35)),
+        BrushKind::KelvinTwist => Some(0.0),
+        BrushKind::KelvinScale => Some(0.25 * bump(x, 0.5)),
         BrushKind::TopoMove => Some(0.28 * smoothstep(0.3, 0.2, (x - 0.45).abs())),
         BrushKind::Polish => Some(0.32 * bump(x, 0.6) + 0.07 * (x * 15.0).sin() * bump(x, 0.6)),
         _ => None,
@@ -154,6 +163,21 @@ pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
     let at = |x: f32, h: f32| pos2(to_x(x), base - h * amp);
     match k {
         BrushKind::Grab => arrow(p, at(-0.55, 0.75), at(0.05, 0.75), s),
+        BrushKind::KelvinGrab => arrow(p, at(-0.45, 0.72), at(0.15, 0.72), s),
+        BrushKind::KelvinTwist => {
+            let pts: Vec<Pos2> = (0..=8)
+                .map(|i| {
+                    let a = 0.2 + 0.6 * (i as f32 / 8.0);
+                    pos2(to_x(0.35 * a.cos()), base - (0.55 + 0.25 * a.sin()) * amp)
+                })
+                .collect();
+            p.add(Shape::line(pts, s));
+            arrow(p, at(0.2, 0.72), at(0.3, 0.82), s);
+        }
+        BrushKind::KelvinScale => {
+            arrow(p, at(0.0, 0.55), at(0.0, 0.85), s);
+            arrow(p, at(0.0, 0.25), at(0.0, -0.05), s);
+        }
         BrushKind::TopoMove => arrow(p, at(0.45, 0.62), at(0.45, 0.9), s),
         BrushKind::SnakeHook => {
             let pts: Vec<Pos2> =
@@ -198,6 +222,7 @@ pub enum Icon {
     Zoom,
     Solo,
     Shading,
+    Wireframe,
     Transform,
     /// Perspective lens (focal length).
     Lens,
@@ -391,6 +416,21 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             p.circle_filled(ctr + vec2(r * 0.18, r * 0.2), r * 0.36, c.gamma_multiply(0.55));
             p.circle_filled(ctr + vec2(-r * 0.3, -r * 0.32), r * 0.12, c);
         }
+        Icon::Wireframe => {
+            // Isometric cube with visible wireframe edges.
+            let h = r * 0.75;
+            let w = h * 0.866;
+            let top = ctr + vec2(0.0, -h);
+            let bot = ctr + vec2(0.0, h);
+            let top_l = ctr + vec2(-w, -h * 0.5);
+            let top_r = ctr + vec2(w, -h * 0.5);
+            let bot_l = ctr + vec2(-w, h * 0.5);
+            let bot_r = ctr + vec2(w, h * 0.5);
+            p.add(Shape::closed_line(vec![top, top_r, bot_r, bot, bot_l, top_l], s));
+            p.line_segment([ctr, top], s);
+            p.line_segment([ctr, bot_l], s);
+            p.line_segment([ctr, bot_r], s);
+        }
         Icon::Solo => {
             p.circle_filled(ctr, r * 0.38, c);
             for i in 0..3 {
@@ -581,7 +621,10 @@ pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
 /// A brush preview: a clay ball with the brush's effect pressed into it,
 /// shaded with a fixed key light. Computed on the CPU (64 px, cached).
 pub fn brush_preview_image(k: BrushKind, size: usize) -> egui::ColorImage {
-    let asymmetric = matches!(k, BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove);
+    let asymmetric = matches!(
+        k,
+        BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove | BrushKind::KelvinGrab | BrushKind::KelvinTwist
+    );
     let height = |x: f32, y: f32| -> f32 {
         let (u, v) = ((x + 0.05) / 1.05, (y - 0.08) / 1.05);
         if asymmetric { brush_profile(k, u) * bump(v, 0.45) } else { brush_profile(k, (u * u + v * v).sqrt()) }

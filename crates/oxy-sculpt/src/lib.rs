@@ -40,11 +40,14 @@ pub enum BrushKind {
     PlanarTrim,
     TopoMove,
     Noise,
+    KelvinGrab,
+    KelvinTwist,
+    KelvinScale,
 }
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 17] = [
+    pub const ALL: [BrushKind; 20] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -57,6 +60,9 @@ impl BrushKind {
         BrushKind::Grab,
         BrushKind::SnakeHook,
         BrushKind::TopoMove,
+        BrushKind::KelvinGrab,
+        BrushKind::KelvinTwist,
+        BrushKind::KelvinScale,
         BrushKind::Polish,
         BrushKind::PlanarTrim,
         BrushKind::Noise,
@@ -66,7 +72,19 @@ impl BrushKind {
 
     /// Brushes that move a captured region with the pointer instead of dabbing.
     pub fn is_grab_like(self) -> bool {
-        matches!(self, BrushKind::Grab | BrushKind::TopoMove)
+        matches!(
+            self,
+            BrushKind::Grab
+                | BrushKind::TopoMove
+                | BrushKind::KelvinGrab
+                | BrushKind::KelvinTwist
+                | BrushKind::KelvinScale
+        )
+    }
+
+    /// Brushes based on regularized Kelvinlet elasticity solutions.
+    pub fn is_kelvin(self) -> bool {
+        matches!(self, BrushKind::KelvinGrab | BrushKind::KelvinTwist | BrushKind::KelvinScale)
     }
 
     pub fn label(self) -> &'static str {
@@ -82,6 +100,9 @@ impl BrushKind {
             BrushKind::Inflate => "Inflate",
             BrushKind::Flatten => "Flatten",
             BrushKind::Grab => "Grab",
+            BrushKind::KelvinGrab => "Kelvin Grab",
+            BrushKind::KelvinTwist => "Kelvin Twist",
+            BrushKind::KelvinScale => "Kelvin Scale",
             BrushKind::Mask => "Mask",
             BrushKind::Paint => "Paint",
             BrushKind::Polish => "Polish",
@@ -95,7 +116,12 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
-            BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove => 1.0,
+            BrushKind::Grab
+            | BrushKind::SnakeHook
+            | BrushKind::TopoMove
+            | BrushKind::KelvinGrab
+            | BrushKind::KelvinTwist
+            | BrushKind::KelvinScale => 1.0,
             BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
@@ -645,7 +671,7 @@ impl Stroke {
             let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
             let topological = self.settings.kind == BrushKind::TopoMove;
             let through = self.grab_through && self.view != Vec3::ZERO && !topological;
-            let captured: Vec<(Mat3, Vec<GrabHit>)> = self
+            let captured: Vec<(Mat3, Vec3, Vec<GrabHit>)> = self
                 .transforms
                 .iter()
                 .map(|&m| {
@@ -665,13 +691,13 @@ impl Stroke {
                     if topological {
                         verts = connected_to_nearest(mesh, d.center, verts);
                     }
-                    (m, verts)
+                    (m, d.center, verts)
                 })
                 .collect();
             let normals: Vec<Vec3> = captured
                 .iter()
                 .zip(&self.transforms)
-                .map(|((_, verts), &m)| {
+                .map(|((_, _, verts), &m)| {
                     let n: Vec3 = verts.iter().map(|&(v, w, _)| mesh.normals[v as usize] * w).sum();
                     n.try_normalize().unwrap_or(m * dab.normal)
                 })
@@ -690,7 +716,7 @@ impl Stroke {
                 max_w: f32,
             }
             let mut acc: HashMap<u32, Acc> = HashMap::new();
-            for ((m, hits), n) in captured.iter().zip(&normals) {
+            for ((m, center, hits), n) in captured.iter().zip(&normals) {
                 for &(index, w, orig) in hits {
                     let e = acc.entry(index).or_insert(Acc {
                         orig,
@@ -699,7 +725,14 @@ impl Stroke {
                         sum_w: 0.0,
                         max_w: 0.0,
                     });
-                    e.sum_m += *m * w;
+                    let local_m = if self.settings.kind.is_kelvin() {
+                        let k =
+                            kelvin_tensor(self.settings.kind, orig - *center, *n, dab.radius, self.view, self.invert);
+                        k * (*m) * (w * self.settings.strength)
+                    } else {
+                        *m * w
+                    };
+                    e.sum_m += local_m;
                     e.sum_n += *n * w;
                     e.sum_w += w;
                     e.max_w = e.max_w.max(w);
@@ -738,6 +771,55 @@ impl Stroke {
         mesh.update_after_move(&moved);
         self.dab_count += 1;
         self.last = Some(s);
+    }
+}
+
+/// Evaluates the regularized Kelvinlet deformation tensor (Pixar / de Goes & James 2017).
+fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: Vec3, invert: bool) -> Mat3 {
+    let r = r_vec.length();
+    if radius <= 1e-6 {
+        return Mat3::ZERO;
+    }
+    let epsilon = 0.35 * radius;
+    let eps2 = epsilon * epsilon;
+    let r_eps = (r * r + eps2).sqrt();
+    let r_eps3 = r_eps * r_eps * r_eps;
+
+    match kind {
+        BrushKind::KelvinGrab => {
+            // Translational Kelvin state with Poisson's ratio nu = 0.45.
+            // As nu -> 0.5, deformation is strictly volume-preserving (incompressible).
+            let nu = 0.45f32;
+            let b_factor = 1.0 / (2.0 * (1.0 - nu));
+            let c_diag = epsilon / r_eps;
+            let c_outer = b_factor * epsilon / r_eps3;
+            let outer = Mat3::from_cols(r_vec * r_vec.x, r_vec * r_vec.y, r_vec * r_vec.z);
+            Mat3::IDENTITY * c_diag + outer * c_outer
+        }
+        BrushKind::KelvinTwist => {
+            // Torsional Kelvin state (infinitesimal moment around surface normal).
+            // Pure divergence-free (strictly incompressible) rotational deformation.
+            let c = (3.0 * 3.0f32.sqrt() * 0.5) * (eps2 / r_eps3) * (1.0 / radius);
+            let sign = if invert { -1.0 } else { 1.0 };
+            let spin = normal.cross(r_vec) * (c * sign);
+            let mut tangent = if view != Vec3::ZERO { view.cross(normal) } else { normal.any_orthonormal_vector() };
+            if tangent.length_squared() < 1e-6 {
+                tangent = normal.any_orthonormal_vector();
+            }
+            let tangent = tangent.normalize();
+            Mat3::from_cols(spin * tangent.x, spin * tangent.y, spin * tangent.z)
+        }
+        BrushKind::KelvinScale => {
+            // Dilatational / compressive elastodynamic dipole.
+            let c = (2.0 / radius) * (eps2 / r_eps3);
+            let sign = if invert { -1.0 } else { 1.0 };
+            let radial = r_vec * (c * sign);
+            let side = view.cross(normal);
+            let up = normal.cross(side).normalize_or(normal);
+            let driver = (up + normal).normalize();
+            Mat3::from_cols(radial * driver.x, radial * driver.y, radial * driver.z)
+        }
+        _ => Mat3::IDENTITY,
     }
 }
 
@@ -805,7 +887,9 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
     if settings.front_faces_only && mesh.normals[v as usize].dot(dab.normal) < 0.0 {
         return None;
     }
-    let f = if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
+    let f = if settings.kind.is_kelvin() {
+        (1.0 - (d2 / (dab.radius * dab.radius)).min(1.0)).powi(3)
+    } else if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
         // Square footprint aligned with the stroke: soft only across it.
         let side = dab.normal.cross(dab.direction);
         let along = offset.dot(dab.direction).abs() / dab.radius;
@@ -942,7 +1026,14 @@ fn target_positions(
                     let n = alpha::noise3(p * (settings.noise_scale / dab.radius));
                     p + mesh.normals[v as usize] * (sign * n * amount * 1.5 * w)
                 }
-                BrushKind::Grab | BrushKind::TopoMove | BrushKind::Mask | BrushKind::Paint | BrushKind::Layer => p,
+                BrushKind::Grab
+                | BrushKind::TopoMove
+                | BrushKind::KelvinGrab
+                | BrushKind::KelvinTwist
+                | BrushKind::KelvinScale
+                | BrushKind::Mask
+                | BrushKind::Paint
+                | BrushKind::Layer => p,
             };
             (v, np)
         })
@@ -1967,5 +2058,78 @@ mod tests {
             disp_budgeted >= disp_unbudgeted * 0.3 && disp_budgeted <= disp_unbudgeted * 1.5,
             "budgeted disp {disp_budgeted} vs unbudgeted {disp_unbudgeted}"
         );
+    }
+
+    #[test]
+    fn kelvin_brushes_deform_with_elastodynamics() {
+        let mut mesh = primitives::icosphere(3, 1.0);
+        let contact = mesh.positions[0];
+        let normal = mesh.normals[0];
+        let delta = Vec3::new(0.2, 0.0, 0.0);
+
+        // 1. KelvinGrab: moves center along delta and preserves volume through Poisson lateral response
+        let settings = BrushSettings { kind: BrushKind::KelvinGrab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false);
+        stroke.add_sample(&mut mesh, StrokeSample { position: contact, normal, pressure: 1.0 }, &mut |_, _| {});
+        stroke.add_sample(&mut mesh, StrokeSample { position: contact + delta, normal, pressure: 1.0 }, &mut |_, _| {});
+
+        let center_disp = mesh.positions[0] - contact;
+        assert!(center_disp.x > 0.15, "center moved: {center_disp:?}");
+
+        // Far vertices must be untouched
+        let bottom = mesh.positions.iter().find(|p| p.distance(contact) > 1.2).unwrap();
+        let orig_bottom =
+            primitives::icosphere(3, 1.0).positions.into_iter().find(|p| p.distance(contact) > 1.2).unwrap();
+        assert!((bottom.distance(orig_bottom)).abs() < 1e-4);
+
+        // 2. KelvinTwist: twists around normal
+        let mut twist_mesh = primitives::icosphere(3, 1.0);
+        let settings_twist =
+            BrushSettings { kind: BrushKind::KelvinTwist, radius: 0.5, strength: 1.0, ..Default::default() };
+        let mut stroke_twist = Stroke::new(settings_twist, Symmetry::default(), false).with_view(Vec3::Z);
+        stroke_twist.add_sample(
+            &mut twist_mesh,
+            StrokeSample { position: contact, normal, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        stroke_twist.add_sample(
+            &mut twist_mesh,
+            StrokeSample { position: contact + Vec3::X * 0.2, normal, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        // Center vertex should remain very close to contact (axis of twist)
+        let center_disp_twist = twist_mesh.positions[0] - contact;
+        assert!(center_disp_twist.length() < 0.01, "twist center stayed on axis: {center_disp_twist:?}");
+        // Surrounding vertices should have rotated
+        let rotated_count = twist_mesh
+            .positions
+            .iter()
+            .zip(&primitives::icosphere(3, 1.0).positions)
+            .filter(|(a, b)| a.distance(**b) > 0.005)
+            .count();
+        assert!(rotated_count > 5, "surrounding vertices twisted: {rotated_count}");
+
+        // 3. KelvinScale: radial displacement
+        let mut scale_mesh = primitives::icosphere(3, 1.0);
+        let settings_scale =
+            BrushSettings { kind: BrushKind::KelvinScale, radius: 0.5, strength: 1.0, ..Default::default() };
+        let mut stroke_scale = Stroke::new(settings_scale, Symmetry::default(), false).with_view(Vec3::Z);
+        stroke_scale.add_sample(
+            &mut scale_mesh,
+            StrokeSample { position: contact, normal, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        stroke_scale.add_sample(
+            &mut scale_mesh,
+            StrokeSample { position: contact + normal * 0.2, normal, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        let scaled_count = scale_mesh
+            .positions
+            .iter()
+            .zip(&primitives::icosphere(3, 1.0).positions)
+            .filter(|(a, b)| a.distance(**b) > 0.005)
+            .count();
+        assert!(scaled_count > 5, "surrounding vertices scaled: {scaled_count}");
     }
 }

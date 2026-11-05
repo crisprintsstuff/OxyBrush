@@ -191,6 +191,9 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::Polish => "polish",
         BrushKind::PlanarTrim => "planar_trim",
         BrushKind::Noise => "noise",
+        BrushKind::KelvinGrab => "kelvin_grab",
+        BrushKind::KelvinTwist => "kelvin_twist",
+        BrushKind::KelvinScale => "kelvin_scale",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
     }
@@ -242,6 +245,10 @@ pub struct Settings {
     pub update_skip: String,
     /// Faceted instead of smooth shading in the viewport.
     pub flat_shading: bool,
+    /// Overlay polygon edges atop shaded surfaces.
+    pub wireframe: bool,
+    /// Wireframe line opacity (0.0 to 1.0).
+    pub wireframe_opacity: f32,
     /// Strokes may start on empty space (orbit with the middle mouse button).
     pub stroke_from_empty: bool,
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
@@ -287,6 +294,8 @@ impl Default for Settings {
             update_last_check: 0,
             update_skip: String::new(),
             flat_shading: false,
+            wireframe: false,
+            wireframe_opacity: 0.7,
             stroke_from_empty: false,
             surface_cursor: false,
             agent_mcp: false,
@@ -347,7 +356,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -364,6 +373,8 @@ impl Settings {
             self.update_last_check,
             self.update_skip,
             self.flat_shading,
+            self.wireframe,
+            self.wireframe_opacity,
             self.stroke_from_empty,
             self.surface_cursor,
             self.agent_mcp,
@@ -438,6 +449,14 @@ impl Settings {
                 }
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
+                "wireframe" => s.wireframe = v.parse().unwrap_or(s.wireframe),
+                "wireframe_opacity" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=1.0).contains(&x)
+                    {
+                        s.wireframe_opacity = x;
+                    }
+                }
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
                 "agent_mcp" => s.agent_mcp = v.parse().unwrap_or(s.agent_mcp),
@@ -530,6 +549,8 @@ mod tests {
             update_last_check: 1_800_000_000,
             update_skip: "0.4.0-alpha".into(),
             flat_shading: true,
+            wireframe: true,
+            wireframe_opacity: 0.85,
             stroke_from_empty: true,
             surface_cursor: true,
             agent_mcp: false,

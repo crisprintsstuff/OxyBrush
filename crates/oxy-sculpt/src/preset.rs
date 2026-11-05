@@ -207,6 +207,9 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::Polish => "polish",
         BrushKind::PlanarTrim => "planar_trim",
         BrushKind::Noise => "noise",
+        BrushKind::KelvinGrab => "kelvin_grab",
+        BrushKind::KelvinTwist => "kelvin_twist",
+        BrushKind::KelvinScale => "kelvin_scale",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
     }

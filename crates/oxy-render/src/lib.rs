@@ -127,6 +127,10 @@ pub struct ViewSettings {
     /// Shade each triangle flat (faceted) instead of smoothing normals
     /// across the surface.
     pub flat_shading: bool,
+    /// Overlay polygon edges atop the shaded surface.
+    pub wireframe: bool,
+    /// Opacity of the wireframe lines (0.0 to 1.0).
+    pub wireframe_opacity: f32,
 }
 
 impl ViewSettings {
@@ -155,6 +159,8 @@ impl Default for ViewSettings {
             ambient_occlusion: 0.7,
             cavity: 0.6,
             flat_shading: false,
+            wireframe: false,
+            wireframe_opacity: 0.7,
         }
     }
 }
@@ -179,6 +185,8 @@ struct GpuMesh {
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
     index_count: u32,
+    line_indices: wgpu::Buffer,
+    line_index_count: u32,
     piece_uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     topology_version: u64,
@@ -188,6 +196,7 @@ struct GpuMesh {
 
 pub struct ViewportRenderer {
     pipeline: wgpu::RenderPipeline,
+    wireframe_pipeline: wgpu::RenderPipeline,
     background_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
@@ -429,6 +438,57 @@ impl ViewportRenderer {
         });
 
         // Screen-space shading passes (obscurance, then blur + cavity + composite).
+        let wireframe_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("oxy wireframe shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("wireframe.wgsl").into()),
+        });
+        let wireframe_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("oxy wireframe pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &wireframe_shader,
+                entry_point: Some("vs_wireframe"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::LineList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                bias: wgpu::DepthBiasState { constant: -2, slope_scale: -2.0, clamp: 0.0 },
+                stencil: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &wireframe_shader,
+                entry_point: Some("fs_wireframe"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: NORMAL_DEPTH_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::empty(),
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("oxy shading"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shading.wgsl").into()),
@@ -507,6 +567,7 @@ impl ViewportRenderer {
 
         let mut r = Self {
             pipeline,
+            wireframe_pipeline,
             background_pipeline,
             color_format,
             post_uniforms,
@@ -617,6 +678,33 @@ impl ViewportRenderer {
                 contents: index_contents,
                 usage: wgpu::BufferUsages::INDEX,
             });
+            let (line_indices, line_index_count): (Vec<[u32; 2]>, u32) = match &indices {
+                Some(vis) => {
+                    let mut lines = Vec::with_capacity(vis.len() * 3);
+                    for tri in vis {
+                        lines.push([tri[0], tri[1]]);
+                        lines.push([tri[1], tri[2]]);
+                        lines.push([tri[2], tri[0]]);
+                    }
+                    let count = lines.len() as u32 * 2;
+                    (lines, count)
+                }
+                None => {
+                    let mut lines = Vec::with_capacity(mesh.triangles.len() * 3);
+                    for tri in &mesh.triangles {
+                        lines.push([tri[0], tri[1]]);
+                        lines.push([tri[1], tri[2]]);
+                        lines.push([tri[2], tri[0]]);
+                    }
+                    let count = lines.len() as u32 * 2;
+                    (lines, count)
+                }
+            };
+            let line_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("oxy line indices"),
+                contents: if line_indices.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&line_indices) },
+                usage: wgpu::BufferUsages::INDEX,
+            });
             let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy face colors"),
                 contents: bytemuck::cast_slice(face_colors_slice),
@@ -642,6 +730,8 @@ impl ViewportRenderer {
                     vertices,
                     indices: index_buffer,
                     index_count,
+                    line_indices: line_index_buffer,
+                    line_index_count,
                     piece_uniforms,
                     bind_group,
                     topology_version: mesh.topology_version(),
@@ -772,8 +862,8 @@ impl ViewportRenderer {
                 let flags = [
                     if settings.show_groups { 1.0 } else { 0.0 },
                     if item.active || !multiple { 1.0 } else { 0.0 },
-                    0.0,
-                    0.0,
+                    if settings.wireframe { 1.0 } else { 0.0 },
+                    settings.wireframe_opacity,
                 ];
                 queue.write_buffer(&gpu.piece_uniforms, 0, bytemuck::bytes_of(&PieceUniforms { flags }));
             }
@@ -844,6 +934,19 @@ impl ViewportRenderer {
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                 pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+            }
+            if settings.wireframe && settings.wireframe_opacity > 0.001 {
+                pass.set_pipeline(&self.wireframe_pipeline);
+                for item in items {
+                    let Some(gpu) = self.meshes.get(&item.id) else { continue };
+                    if gpu.line_index_count == 0 {
+                        continue;
+                    }
+                    pass.set_bind_group(1, &gpu.bind_group, &[]);
+                    pass.set_vertex_buffer(0, gpu.vertices.slice(..));
+                    pass.set_index_buffer(gpu.line_indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..gpu.line_index_count, 0, 0..1);
+                }
             }
         }
         if shading[0] > 0.0 {
@@ -927,6 +1030,7 @@ mod tests {
         validate("shader.wgsl", src);
         validate("shader.wgsl (primitive_index)", &src.replace("//PRIM ", ""));
         validate("shading.wgsl", include_str!("shading.wgsl"));
+        validate("wireframe.wgsl", include_str!("wireframe.wgsl"));
     }
 
     #[test]
