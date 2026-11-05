@@ -50,7 +50,15 @@ pub struct App {
     applied_matcap: Option<(MatcapPreset, Option<String>)>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
-    applied_theme: Option<(bool, f32, crate::settings::UiLayout)>,
+    applied_theme: Option<(
+        crate::settings::ThemePreset,
+        crate::settings::AccentPreset,
+        [u8; 3],
+        crate::settings::CornerStyle,
+        bool,
+        f32,
+        crate::settings::UiLayout,
+    )>,
     applied_title: String,
     last_frame: Instant,
     initial_file: Option<PathBuf>,
@@ -401,7 +409,7 @@ impl App {
     }
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
-        self.editor.flush_stroke();
+        self.editor.flush_drag();
         // Before borrowing the GPU state, so a listener started last frame shows its address.
         self.sync_agent();
         let Some(g) = &mut self.gfx else { return };
@@ -410,10 +418,27 @@ impl App {
         self.last_frame = now;
         self.editor.frame_ms = self.editor.frame_ms * 0.9 + dt * 0.1;
 
-        let theme = (self.editor.high_contrast, self.editor.ui_scale, self.editor.layout);
-        if self.applied_theme != Some(theme) {
-            ui::apply_theme(&self.egui_ctx, theme.0, theme.1, theme.2);
-            self.applied_theme = Some(theme);
+        let theme_key = (
+            self.editor.theme,
+            self.editor.accent,
+            self.editor.custom_accent,
+            self.editor.corner_style,
+            self.editor.high_contrast,
+            self.editor.ui_scale,
+            self.editor.layout,
+        );
+        if self.applied_theme != Some(theme_key) {
+            ui::apply_theme(
+                &self.egui_ctx,
+                theme_key.0,
+                theme_key.1,
+                theme_key.2,
+                theme_key.3,
+                theme_key.4,
+                theme_key.5,
+                theme_key.6,
+            );
+            self.applied_theme = Some(theme_key);
         }
 
         let raw = g.egui_state.take_egui_input(&g.window);

@@ -2558,6 +2558,7 @@ dependencies = [
  "oxy-update",
  "png",
  "pollster 1.0.1",
+ "rayon",
  "rfd",
  "serde_json",
  "wgpu",

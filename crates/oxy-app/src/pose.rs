@@ -8,7 +8,8 @@
 //! centre of what moves.
 
 use glam::{Mat3, Quat, Vec2, Vec3};
-use oxy_mesh::Mesh;
+use oxy_mesh::{Aabb, Mesh};
+use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
@@ -189,6 +190,7 @@ pub fn drag_transform(i: &DragInput) -> Transform {
 
 /// Move `mesh` from `original` by `t`, weighted per vertex. Returns the
 /// vertices that moved (for `Mesh::update_after_move`).
+#[allow(dead_code)]
 pub fn apply(mesh: &mut Mesh, original: &[Vec3], weights: &[f32], pivot: Vec3, t: &Transform) -> Vec<u32> {
     let mut moved = Vec::new();
     for (v, &w) in weights.iter().enumerate() {
@@ -199,6 +201,82 @@ pub fn apply(mesh: &mut Mesh, original: &[Vec3], weights: &[f32], pivot: Vec3, t
         }
     }
     moved
+}
+
+/// Transform an AABB under `t` around `pivot`.
+pub fn transform_aabb(aabb: &Aabb, pivot: Vec3, t: &Transform) -> Aabb {
+    if aabb.is_empty() {
+        return *aabb;
+    }
+    let mut out = Aabb::EMPTY;
+    for x in [aabb.min.x, aabb.max.x] {
+        for y in [aabb.min.y, aabb.max.y] {
+            for z in [aabb.min.z, aabb.max.z] {
+                out.grow(t.apply(pivot, Vec3::new(x, y, z)));
+            }
+        }
+    }
+    out
+}
+
+/// Transform positions and normals directly in parallel during interactive gizmo drag.
+/// Does not rebuild CSR adjacency or recompute triangle cross products, maintaining
+/// full frame rate even on 10M+ triangle meshes.
+pub fn apply_interactive(
+    mesh: &mut Mesh,
+    original_pos: &[Vec3],
+    original_norm: &[Vec3],
+    weights: &[f32],
+    pivot: Vec3,
+    t: &Transform,
+) {
+    let inv_trans = t.linear.inverse().transpose();
+    const PAR_ABOVE: usize = 2048;
+
+    if mesh.positions.len() > PAR_ABOVE {
+        mesh.positions
+            .par_iter_mut()
+            .zip(&mut mesh.normals)
+            .zip(original_pos)
+            .zip(original_norm)
+            .zip(weights)
+            .for_each(|((((p, n), &orig_p), &orig_n), &w)| {
+                if w <= 0.0 {
+                    *p = orig_p;
+                    *n = orig_n;
+                } else if (w - 1.0).abs() < 1e-5 {
+                    *p = t.apply(pivot, orig_p);
+                    *n = (inv_trans * orig_n).normalize_or(orig_n);
+                } else {
+                    let target_p = t.apply(pivot, orig_p);
+                    *p = orig_p + (target_p - orig_p) * w;
+                    let target_n = (inv_trans * orig_n).normalize_or(orig_n);
+                    *n = (orig_n + (target_n - orig_n) * w).normalize_or(orig_n);
+                }
+            });
+    } else {
+        for ((((p, n), &orig_p), &orig_n), &w) in mesh
+            .positions
+            .iter_mut()
+            .zip(&mut mesh.normals)
+            .zip(original_pos)
+            .zip(original_norm)
+            .zip(weights)
+        {
+            if w <= 0.0 {
+                *p = orig_p;
+                *n = orig_n;
+            } else if (w - 1.0).abs() < 1e-5 {
+                *p = t.apply(pivot, orig_p);
+                *n = (inv_trans * orig_n).normalize_or(orig_n);
+            } else {
+                let target_p = t.apply(pivot, orig_p);
+                *p = orig_p + (target_p - orig_p) * w;
+                let target_n = (inv_trans * orig_n).normalize_or(orig_n);
+                *n = (orig_n + (target_n - orig_n) * w).normalize_or(orig_n);
+            }
+        }
+    }
 }
 
 #[cfg(test)]

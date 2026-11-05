@@ -16,8 +16,15 @@ use oxy_mesh::Mesh;
 use oxy_sculpt::{Axis, BrushKind, Symmetry};
 use std::path::{Path, PathBuf};
 
-/// Hard limit, same as the app, so one call can't exhaust memory.
-const MAX_TRIANGLES: usize = 24_000_000;
+/// Maximum triangles allowed during subdivision (default 24M, overridable via OXYBRUSH_MAX_TRIANGLES, 0 = unlimited).
+fn max_triangles() -> usize {
+    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n;
+        }
+    }
+    24_000_000
+}
 
 pub struct HeadlessSession {
     scene: Scene,
@@ -475,8 +482,9 @@ impl HeadlessSession {
 
     fn subdivide(&mut self, smooth: bool) -> ToolResult {
         let next = self.scene.active().mesh.triangle_count().saturating_mul(4);
-        if next > MAX_TRIANGLES {
-            return ToolResult::error(format!("subdivision would create {next} triangles (limit {MAX_TRIANGLES})"));
+        let limit = max_triangles();
+        if limit > 0 && next > limit {
+            return ToolResult::error(format!("subdivision would create {next} triangles (limit {limit})"));
         }
         let mesh = oxy_mesh::topo::subdivide(&self.scene.active().mesh, if smooth { 1 } else { 0 });
         let tris = mesh.triangle_count();

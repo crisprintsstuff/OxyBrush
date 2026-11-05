@@ -535,6 +535,7 @@ pub mod plain {
     pub const UPDATES: &str = "Whether OxyBrush looks for new versions. Off unless you turn it on.";
     pub const RESET_ORDER: &str = "Put the brushes back in the default order. Number keys follow that order.";
     pub const WELCOME_STARTUP: &str = "Show the welcome window the next time OxyBrush starts.";
+    #[allow(dead_code)]
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";
     pub const UI_SCALE: &str = "Make the whole interface larger or smaller.";
     pub const AUTOSAVE: &str = "How often a recovery copy is written, or Off to disable it.";

@@ -3,9 +3,11 @@
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
 use crate::pose::{GizmoMode, Handle};
-use crate::settings::{Choice, PanelSide, QuickBar, ShelfPosition, UiLayout};
+use crate::settings::{
+    AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, ThemePreset, UiLayout,
+};
 use crate::tips::{self, Cmd, plain};
-use crate::widgets::{self, ACCENT, Icon};
+use crate::widgets::{self, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
 use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
@@ -94,43 +96,144 @@ pub fn metrics(layout: UiLayout) -> Metrics {
     }
 }
 
-pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layout: UiLayout) {
+pub fn apply_theme(
+    ctx: &egui::Context,
+    theme: ThemePreset,
+    accent: AccentPreset,
+    custom_accent: [u8; 3],
+    corner_style: CornerStyle,
+    high_contrast: bool,
+    ui_scale: f32,
+    layout: UiLayout,
+) {
     let m = metrics(layout);
-    let mut v = egui::Visuals::dark();
-    // Neutral graphite: every chrome gray is R = G = B. An earlier palette
-    // raised the blue channel on each of these (the comment called it warm,
-    // but the bytes were cool), and that cast showed up across the panels.
-    // Brightness matches the old colors' average so contrast stays put.
-    // The clay accent is only for selection, the pressed control, hover
-    // outlines and links — not for panel fills.
-    let (bg, panel, window, faint, text) = if high_contrast {
-        (Color32::BLACK, Color32::from_gray(10), Color32::from_gray(10), Color32::from_gray(16), Color32::WHITE)
+    let is_high_contrast = high_contrast || theme == ThemePreset::HighContrast;
+    let accent_rgb = accent.rgb(custom_accent);
+    let accent_color = Color32::from_rgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
+
+    let mut v = if theme == ThemePreset::StudioLight && !is_high_contrast {
+        egui::Visuals::light()
     } else {
-        (
-            Color32::from_gray(24),
-            Color32::from_gray(34),
-            Color32::from_gray(39),
-            Color32::from_gray(40),
-            Color32::from_gray(228),
-        )
+        egui::Visuals::dark()
     };
-    v.panel_fill = panel;
-    v.window_fill = window;
-    v.extreme_bg_color = bg;
-    v.faint_bg_color = faint;
-    v.override_text_color = Some(text);
-    v.selection.bg_fill = ACCENT.linear_multiply(0.55);
-    v.selection.stroke = EStroke::new(1.0, ACCENT);
-    v.hyperlink_color = ACCENT;
-    // egui's default caret and IME underline are light blue. Use the text
-    // color so a focused field does not reintroduce that cast.
-    v.text_cursor.stroke.color = text;
-    v.ime_composition.active_underline_stroke.color = text;
-    v.ime_composition.inactive_underline_stroke.color = text.linear_multiply(0.5);
-    v.window_corner_radius = 10.into();
-    v.menu_corner_radius = 8.into();
-    v.window_stroke = EStroke::new(1.0, Color32::from_gray(60));
-    let radius = egui::CornerRadius::same(6);
+
+    struct Palette {
+        bg: Color32,
+        panel: Color32,
+        window: Color32,
+        faint: Color32,
+        text: Color32,
+        inactive_weak: Color32,
+        inactive_fill: Color32,
+        hovered_weak: Color32,
+        hovered_fill: Color32,
+        stroke: Color32,
+        window_stroke: Color32,
+    }
+
+    let p = if is_high_contrast {
+        Palette {
+            bg: Color32::BLACK,
+            panel: Color32::from_gray(10),
+            window: Color32::from_gray(10),
+            faint: Color32::from_gray(16),
+            text: Color32::WHITE,
+            inactive_weak: Color32::from_gray(20),
+            inactive_fill: Color32::from_gray(30),
+            hovered_weak: Color32::from_gray(40),
+            hovered_fill: Color32::from_gray(50),
+            stroke: Color32::WHITE,
+            window_stroke: Color32::WHITE,
+        }
+    } else {
+        match theme {
+            ThemePreset::Graphite | ThemePreset::HighContrast => Palette {
+                bg: Color32::from_gray(24),
+                panel: Color32::from_gray(34),
+                window: Color32::from_gray(39),
+                faint: Color32::from_gray(40),
+                text: Color32::from_gray(228),
+                inactive_weak: Color32::from_gray(47),
+                inactive_fill: Color32::from_gray(56),
+                hovered_weak: Color32::from_gray(59),
+                hovered_fill: Color32::from_gray(68),
+                stroke: Color32::from_gray(48),
+                window_stroke: Color32::from_gray(60),
+            },
+            ThemePreset::Charcoal => Palette {
+                bg: Color32::from_gray(12),
+                panel: Color32::from_gray(18),
+                window: Color32::from_gray(24),
+                faint: Color32::from_gray(26),
+                text: Color32::from_gray(236),
+                inactive_weak: Color32::from_gray(30),
+                inactive_fill: Color32::from_gray(38),
+                hovered_weak: Color32::from_gray(44),
+                hovered_fill: Color32::from_gray(54),
+                stroke: Color32::from_gray(36),
+                window_stroke: Color32::from_gray(48),
+            },
+            ThemePreset::Slate => Palette {
+                bg: Color32::from_rgb(22, 26, 32),
+                panel: Color32::from_rgb(30, 35, 44),
+                window: Color32::from_rgb(36, 42, 53),
+                faint: Color32::from_rgb(42, 49, 61),
+                text: Color32::from_rgb(226, 232, 240),
+                inactive_weak: Color32::from_rgb(45, 52, 64),
+                inactive_fill: Color32::from_rgb(51, 60, 75),
+                hovered_weak: Color32::from_rgb(60, 71, 88),
+                hovered_fill: Color32::from_rgb(71, 84, 103),
+                stroke: Color32::from_rgb(52, 62, 77),
+                window_stroke: Color32::from_rgb(64, 76, 95),
+            },
+            ThemePreset::WarmUmber => Palette {
+                bg: Color32::from_rgb(28, 24, 22),
+                panel: Color32::from_rgb(38, 33, 30),
+                window: Color32::from_rgb(46, 40, 36),
+                faint: Color32::from_rgb(52, 45, 41),
+                text: Color32::from_rgb(240, 232, 226),
+                inactive_weak: Color32::from_rgb(54, 47, 43),
+                inactive_fill: Color32::from_rgb(64, 56, 51),
+                hovered_weak: Color32::from_rgb(76, 67, 61),
+                hovered_fill: Color32::from_rgb(88, 77, 70),
+                stroke: Color32::from_rgb(62, 54, 49),
+                window_stroke: Color32::from_rgb(78, 68, 62),
+            },
+            ThemePreset::StudioLight => Palette {
+                bg: Color32::from_gray(245),
+                panel: Color32::from_gray(236),
+                window: Color32::from_gray(228),
+                faint: Color32::from_gray(220),
+                text: Color32::from_gray(25),
+                inactive_weak: Color32::from_gray(216),
+                inactive_fill: Color32::from_gray(205),
+                hovered_weak: Color32::from_gray(195),
+                hovered_fill: Color32::from_gray(185),
+                stroke: Color32::from_gray(190),
+                window_stroke: Color32::from_gray(175),
+            },
+        }
+    };
+
+    v.panel_fill = p.panel;
+    v.window_fill = p.window;
+    v.extreme_bg_color = p.bg;
+    v.faint_bg_color = p.faint;
+    v.override_text_color = Some(p.text);
+    v.selection.bg_fill = accent_color.linear_multiply(0.55);
+    v.selection.stroke = EStroke::new(1.0, accent_color);
+    v.hyperlink_color = accent_color;
+    v.text_cursor.stroke.color = p.text;
+    v.ime_composition.active_underline_stroke.color = p.text;
+    v.ime_composition.inactive_underline_stroke.color = p.text.linear_multiply(0.5);
+
+    let radius_pt = corner_style.radius_pt();
+    let radius = egui::CornerRadius::same(radius_pt as u8);
+    let win_rad = egui::CornerRadius::same((radius_pt * 1.5).round() as u8);
+    v.window_corner_radius = win_rad;
+    v.menu_corner_radius = radius;
+    v.window_stroke = EStroke::new(1.0, p.window_stroke);
+
     for w in [
         &mut v.widgets.noninteractive,
         &mut v.widgets.inactive,
@@ -140,19 +243,22 @@ pub fn apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layo
     ] {
         w.corner_radius = radius;
     }
-    if high_contrast {
+
+    if is_high_contrast {
         v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, Color32::WHITE);
         v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_gray(200));
+        v.widgets.hovered.bg_stroke = EStroke::new(1.0, Color32::WHITE);
+        v.widgets.active.bg_fill = Color32::WHITE;
+        v.widgets.active.weak_bg_fill = Color32::from_gray(200);
     } else {
-        v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, Color32::from_gray(48));
-        v.widgets.inactive.weak_bg_fill = Color32::from_gray(47);
-        v.widgets.inactive.bg_fill = Color32::from_gray(56);
-        v.widgets.hovered.weak_bg_fill = Color32::from_gray(59);
-        v.widgets.hovered.bg_fill = Color32::from_gray(68);
-        // Hover outline and the pressed control keep the clay accent.
-        v.widgets.hovered.bg_stroke = EStroke::new(1.0, ACCENT.linear_multiply(0.7));
-        v.widgets.active.weak_bg_fill = ACCENT.linear_multiply(0.6);
-        v.widgets.active.bg_fill = ACCENT;
+        v.widgets.noninteractive.bg_stroke = EStroke::new(1.0, p.stroke);
+        v.widgets.inactive.weak_bg_fill = p.inactive_weak;
+        v.widgets.inactive.bg_fill = p.inactive_fill;
+        v.widgets.hovered.weak_bg_fill = p.hovered_weak;
+        v.widgets.hovered.bg_fill = p.hovered_fill;
+        v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
+        v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
+        v.widgets.active.bg_fill = accent_color;
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
@@ -378,7 +484,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.separator();
                 ui.label("Interface scale");
                 tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
-                tips::check_plain(ui, &mut ed.high_contrast, "High-contrast theme", plain::HIGH_CONTRAST);
+                tips::menu(ui, "Theme & Appearance", "Visual themes, accent colors and corner rounding", |ui| {
+                    theme_appearance_menu(ui, ed);
+                });
+                tips::menu(ui, "Subdivision limit", "Maximum triangles allowed for subdivision", |ui| {
+                    subdivision_limit_menu(ui, ed);
+                });
                 ui.separator();
                 ui.label("Viewport background");
                 background_menu(ui, ed);
@@ -505,6 +616,81 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_brush_cursor(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
+}
+
+fn theme_appearance_menu(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Base theme").strong());
+    for t in ThemePreset::ALL {
+        let is_selected = ed.theme == t && (!ed.high_contrast || t == ThemePreset::HighContrast);
+        if ui.selectable_label(is_selected, t.label()).clicked() {
+            ed.theme = t;
+            ed.high_contrast = t == ThemePreset::HighContrast;
+        }
+    }
+    ui.separator();
+    ui.label(RichText::new("Accent color").strong());
+    for a in AccentPreset::ALL {
+        let rgb = a.rgb(ed.custom_accent);
+        let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+        ui.horizontal(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 3.0, color);
+            if ui.selectable_label(ed.accent == a, a.label()).clicked() {
+                ed.accent = a;
+            }
+        });
+    }
+    if ed.accent == AccentPreset::Custom {
+        ui.horizontal(|ui| {
+            ui.label("Custom RGB:");
+            let mut rgb_f32 = [
+                ed.custom_accent[0] as f32 / 255.0,
+                ed.custom_accent[1] as f32 / 255.0,
+                ed.custom_accent[2] as f32 / 255.0,
+            ];
+            if ui.color_edit_button_rgb(&mut rgb_f32).changed() {
+                ed.custom_accent = [
+                    (rgb_f32[0] * 255.0).round() as u8,
+                    (rgb_f32[1] * 255.0).round() as u8,
+                    (rgb_f32[2] * 255.0).round() as u8,
+                ];
+            }
+        });
+    }
+    ui.separator();
+    ui.label(RichText::new("Corner rounding").strong());
+    for c in CornerStyle::ALL {
+        if ui.selectable_label(ed.corner_style == c, c.label()).clicked() {
+            ed.corner_style = c;
+        }
+    }
+}
+
+fn subdivision_limit_menu(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Subdivision triangle safety ceiling").strong());
+    for (label, limit) in [
+        ("24M (Default - balanced)", 24_000_000),
+        ("48M (High RAM)", 48_000_000),
+        ("96M (Extreme)", 96_000_000),
+        ("Unlimited (No safety cap)", 0),
+    ] {
+        if ui.selectable_label(ed.max_triangles == limit, label).clicked() {
+            ed.max_triangles = limit;
+        }
+    }
+    ui.separator();
+    if ed.max_triangles > 0 {
+        ui.label(
+            RichText::new(format!(
+                "Current limit: {:.1}M triangles\n(Override with OXYBRUSH_MAX_TRIANGLES)",
+                ed.max_triangles as f64 / 1e6
+            ))
+            .weak()
+            .small(),
+        );
+    } else {
+        ui.label(RichText::new("Limit disabled: Mesh can subdivide until system memory is exhausted.").weak().small());
+    }
 }
 
 /// Style and reset in the View menu and in Settings. Color pickers open in
@@ -683,11 +869,20 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
                 ui.separator();
                 let active = ed.scene.active().mesh.triangle_count();
                 let total = ed.scene.triangle_count();
+                let limit_tip = if ed.max_triangles > 0 {
+                    format!(
+                        "{}\nSubdivision limit: {:.1}M (Settings > Subdivision limit)",
+                        plain::TRIANGLES,
+                        ed.max_triangles as f64 / 1e6
+                    )
+                } else {
+                    format!("{}\nSubdivision limit: Unlimited (Settings > Subdivision limit)", plain::TRIANGLES)
+                };
                 tips::hover(
                     ui.label(
                         RichText::new(format!("{} / {} tris", fmt_count(active), fmt_count(total))).monospace().small(),
                     ),
-                    plain::TRIANGLES,
+                    &limit_tip,
                 );
             });
         });
@@ -798,7 +993,7 @@ fn reorder(ui: &Ui, r: &egui::Response, i: usize, horizontal: bool) -> Option<(u
     // Drop before this item in its first half, after it in the second.
     let after = if horizontal { pointer.x > r.rect.center().x } else { pointer.y > r.rect.center().y };
     if r.dnd_hover_payload::<usize>().is_some_and(|from| *from != i) {
-        let stroke = EStroke::new(2.5, ACCENT);
+        let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
         let p = ui.painter();
         if horizontal {
             let x = if after { r.rect.right() + 2.0 } else { r.rect.left() - 2.0 };
@@ -1512,9 +1707,10 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
             if let Some(e) = &ed.autosaver.last_error {
                 ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
             }
+            let accent = ed.accent_color();
             if ed.agent_connected {
                 let label = RichText::new("Agent connected — Disconnect").color(Color32::WHITE);
-                let button = egui::Button::new(label).fill(ACCENT);
+                let button = egui::Button::new(label).fill(accent);
                 if tips::hover(ui.add(button), plain::AGENT_CONNECTED_DISCONNECT).clicked() {
                     ed.agent_disconnect = true;
                 }
@@ -1525,7 +1721,7 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                     crate::updates::Phase::Downloading { .. } => ed.updater.summary(),
                     _ => format!("Update {} available", u.release.version),
                 };
-                let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(ACCENT.linear_multiply(0.8));
+                let b = egui::Button::new(RichText::new(text).color(Color32::WHITE)).fill(accent.linear_multiply(0.8));
                 if tips::hover(ui.add(b), plain::UPDATE_BUTTON).clicked() {
                     ed.updater.show_window = true;
                 }
@@ -1755,7 +1951,7 @@ fn pressure_curve_plot(ui: &mut Ui, gamma: f32) -> egui::Response {
             egui::pos2(rect.left() + x * rect.width(), rect.bottom() - x.powf(gamma) * rect.height())
         })
         .collect();
-    p.add(egui::Shape::line(pts, EStroke::new(1.5, ACCENT)));
+    p.add(egui::Shape::line(pts, EStroke::new(1.5, ui.visuals().selection.stroke.color)));
     response
 }
 
@@ -1853,7 +2049,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
-        let fill = if i == active { ACCENT.linear_multiply(0.18) } else { Color32::TRANSPARENT };
+        let fill = if i == active { ui.visuals().selection.stroke.color.linear_multiply(0.18) } else { Color32::TRANSPARENT };
         egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
             ui.horizontal(|ui| {
                 let (icon, tip) =
@@ -2092,7 +2288,7 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
             let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
             ui.painter().rect_filled(rect, 3.0, col);
             if ed.paint_color.to_array() == *s {
-                ui.painter().rect_stroke(rect.expand(1.5), 3.0, EStroke::new(1.5, ACCENT), egui::StrokeKind::Outside);
+                ui.painter().rect_stroke(rect.expand(1.5), 3.0, EStroke::new(1.5, ui.visuals().selection.stroke.color), egui::StrokeKind::Outside);
             }
             if tips::hover(r, tips::swatch_tip(tips::SWATCH_NAMES[i])).clicked() {
                 ed.paint_color = (*s).into();
@@ -2644,7 +2840,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
             ui.add_space(10.0);
             ui.horizontal(|ui| {
                 let start = egui::Button::new(RichText::new("Start sculpting").strong().color(Color32::WHITE))
-                    .fill(ACCENT)
+                    .fill(ed.accent_color())
                     .min_size(egui::vec2(140.0, 30.0));
                 if tips::hover(ui.add(start), plain::START).clicked() {
                     close = true;
@@ -2839,7 +3035,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
         Mark::Deferred { mode, start } => {
             let s = to_pt(start);
-            let c = ACCENT;
+            let c = ed.accent_color();
             if mode == StrokeMode::Stamp {
                 let r = s.distance(pos).max(4.0);
                 if !try_draw_surface_cursor(&painter, ed, start, r, c, false, false) {
@@ -2857,10 +3053,11 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Mark::Lazy(b) => {
             // Stabilizer: the brush position and the string back to the pointer.
             let bp = to_pt(b);
+            let accent = ed.accent_color();
             painter.line_segment([bp, pos], EStroke::new(1.0, Color32::from_gray(160)));
-            if !try_draw_surface_cursor(&painter, ed, b, ed.brush_radius_pt, ACCENT, false, false) {
-                painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, ACCENT));
-                painter.circle_filled(bp, 2.0, ACCENT);
+            if !try_draw_surface_cursor(&painter, ed, b, ed.brush_radius_pt, accent, false, false) {
+                painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, accent));
+                painter.circle_filled(bp, 2.0, accent);
             }
         }
         Mark::Brush { kind, invert } => {
@@ -2876,7 +3073,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                 (BrushKind::Mask, _) => Color32::from_rgb(110, 150, 255),
                 (BrushKind::Smooth, _) => Color32::from_rgb(160, 220, 160),
                 (_, true) => Color32::from_rgb(120, 200, 255),
-                _ => ACCENT,
+                _ => ed.accent_color(),
             };
             let square = kind == BrushKind::ClayStrips;
             if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, color, square, !square) {
@@ -2899,11 +3096,25 @@ fn fmt_count(n: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::widgets::ACCENT;
+
+    fn test_apply_theme(ctx: &egui::Context, high_contrast: bool, ui_scale: f32, layout: UiLayout) {
+        apply_theme(
+            ctx,
+            if high_contrast { ThemePreset::HighContrast } else { ThemePreset::Graphite },
+            AccentPreset::Terracotta,
+            [0xE0, 0x7A, 0x4F],
+            CornerStyle::Rounded,
+            high_contrast,
+            ui_scale,
+            layout,
+        );
+    }
 
     /// Run a few headless frames of the whole interface.
     fn run_frames(ed: &mut Editor, frames: usize) {
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0, ed.layout);
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
         for _ in 0..frames {
             let raw = egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
@@ -3000,7 +3211,7 @@ mod tests {
         let mut ed = Editor::default();
         ed.show_welcome = false;
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0, ed.layout);
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
         // Lay out once with the pointer away from everything.
         click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
         assert!(!egui::Popup::is_any_open(&ctx));
@@ -3038,7 +3249,7 @@ mod tests {
         let mut ed = Editor::default();
         ed.show_welcome = false;
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0, ed.layout);
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
         click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
         // Find the rows from the layout: Draw is the first row, Pinch the seventh.
         let row = |ed: &Editor, k: BrushKind| ed.brush_order.iter().position(|b| *b == k).unwrap();
@@ -3192,7 +3403,7 @@ mod tests {
     #[test]
     fn theme_chrome_is_neutral_gray() {
         let ctx = egui::Context::default();
-        apply_theme(&ctx, false, 1.0, UiLayout::Standard);
+        test_apply_theme(&ctx, false, 1.0, UiLayout::Standard);
         let v = ctx.global_style().visuals.clone();
         for (name, c) in [
             ("panel", v.panel_fill),
@@ -3214,7 +3425,7 @@ mod tests {
         assert_eq!(v.widgets.active.bg_fill, ACCENT);
         assert_eq!(v.widgets.hovered.bg_stroke.color, ACCENT.linear_multiply(0.7));
 
-        apply_theme(&ctx, true, 1.0, UiLayout::Standard);
+        test_apply_theme(&ctx, true, 1.0, UiLayout::Standard);
         let v = ctx.global_style().visuals.clone();
         for (name, c) in [
             ("high-contrast panel", v.panel_fill),
@@ -3223,6 +3434,29 @@ mod tests {
             ("high-contrast cursor", v.text_cursor.stroke.color),
         ] {
             assert_neutral(name, c);
+        }
+    }
+
+    #[test]
+    fn all_theme_presets_and_accents_apply_cleanly() {
+        let ctx = egui::Context::default();
+        for theme in ThemePreset::ALL {
+            for accent in AccentPreset::ALL {
+                for corner in CornerStyle::ALL {
+                    apply_theme(&ctx, theme, accent, [100, 150, 200], corner, false, 1.0, UiLayout::Standard);
+                    let v = ctx.global_style().visuals.clone();
+                    let expected_accent = Color32::from_rgb(
+                        accent.rgb([100, 150, 200])[0],
+                        accent.rgb([100, 150, 200])[1],
+                        accent.rgb([100, 150, 200])[2],
+                    );
+                    if theme != ThemePreset::HighContrast {
+                        assert_eq!(v.selection.stroke.color, expected_accent);
+                    }
+                    assert!(v.panel_fill.a() > 0);
+                    assert!(v.window_fill.a() > 0);
+                }
+            }
         }
     }
 }

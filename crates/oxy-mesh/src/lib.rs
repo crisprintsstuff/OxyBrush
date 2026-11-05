@@ -660,6 +660,22 @@ impl Mesh {
         self.dirty[chunk as usize] = true;
     }
 
+    /// Update chunk bounds and mark dirty after an interactive transform.
+    pub fn update_chunk_bounds(&mut self, chunk: u32, aabb: Aabb) {
+        let c = chunk as usize;
+        self.chunks[c].aabb = aabb;
+        self.dirty[c] = true;
+        self.loose_bounds[c] = true;
+    }
+
+    /// Restore exact chunk bounds and mark dirty (e.g. after cancelling a transform).
+    pub fn restore_chunk_bounds(&mut self, chunk: u32, aabb: Aabb) {
+        let c = chunk as usize;
+        self.chunks[c].aabb = aabb;
+        self.dirty[c] = true;
+        self.loose_bounds[c] = false;
+    }
+
     pub fn mark_all_dirty(&mut self) {
         self.dirty.iter_mut().for_each(|d| *d = true);
     }

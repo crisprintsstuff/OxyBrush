@@ -15,6 +15,7 @@ use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 /// Hard limit for subdivision so a click can't exhaust memory.
+#[allow(dead_code)]
 pub const MAX_TRIANGLES: usize = 24_000_000;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -133,12 +134,18 @@ pub struct GizmoDrag {
     start: Vec2,
     pivot: Vec3,
     original: Vec<Vec3>,
+    original_normals: Vec<Vec3>,
+    original_chunk_aabbs: Vec<oxy_mesh::Aabb>,
+    affected_chunks: Vec<u32>,
+    has_soft_weights: bool,
     weights: Vec<f32>,
     screen_axis: Option<Vec2>,
     length: f32,
     world_per_px: f32,
     /// Transform applied so far.
     current: pose::Transform,
+    /// Last pointer position queued for frame redraw.
+    queued_pos: Option<Vec2>,
 }
 
 /// Something that needs a "discard unsaved changes?" confirmation first.
@@ -387,6 +394,16 @@ pub struct Editor {
     pub coalesce_strokes: bool,
     /// Dab time budget in milliseconds (0.0 = unlimited).
     pub dab_budget_ms: f32,
+    /// Visual theme preset.
+    pub theme: crate::settings::ThemePreset,
+    /// Accent color preset.
+    pub accent: crate::settings::AccentPreset,
+    /// Custom accent RGB when `accent == AccentPreset::Custom`.
+    pub custom_accent: [u8; 3],
+    /// Window and button corner rounding style.
+    pub corner_style: crate::settings::CornerStyle,
+    /// Maximum triangles allowed during subdivision (0 = unlimited).
+    pub max_triangles: usize,
 }
 
 impl Default for Editor {
@@ -504,6 +521,11 @@ impl Default for Editor {
             system_info: Default::default(),
             coalesce_strokes: false,
             dab_budget_ms: 0.0,
+            theme: crate::settings::ThemePreset::Graphite,
+            accent: crate::settings::AccentPreset::Terracotta,
+            custom_accent: [0xE0, 0x7A, 0x4F],
+            corner_style: crate::settings::CornerStyle::Rounded,
+            max_triangles: crate::settings::default_max_triangles(),
         }
     }
 }
@@ -671,6 +693,12 @@ impl Editor {
         self.keymap.snap.is_some_and(|k| k.held(self.modifiers))
     }
 
+    /// Return the active theme accent color.
+    pub fn accent_color(&self) -> egui::Color32 {
+        let rgb = self.accent.rgb(self.custom_accent);
+        egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2])
+    }
+
     /// Current preferences, for saving.
     pub fn settings(&self) -> crate::settings::Settings {
         crate::settings::Settings {
@@ -704,6 +732,11 @@ impl Editor {
             background_center: self.view.background_center,
             focal_mm: self.focal_mm,
             recent_files: self.recent_files.clone(),
+            theme: self.theme,
+            accent: self.accent,
+            custom_accent: self.custom_accent,
+            corner_style: self.corner_style,
+            max_triangles: self.max_triangles,
         }
     }
 
@@ -824,6 +857,11 @@ impl Editor {
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
         self.recent_files = s.recent_files.clone();
+        self.theme = s.theme;
+        self.accent = s.accent;
+        self.custom_accent = s.custom_accent;
+        self.corner_style = s.corner_style;
+        self.max_triangles = s.max_triangles;
     }
 
     /// Rescan user and workspace plugin directories for Python plugins.
@@ -1230,25 +1268,11 @@ impl Editor {
                 true
             }
             Drag::Deferred { .. } => true,
-            Drag::Gizmo(g) => {
-                let input = pose::DragInput {
-                    mode: self.gizmo.unwrap_or(GizmoMode::Move),
-                    handle: g.handle,
-                    delta: pos - g.start,
-                    screen_axis: g.screen_axis,
-                    length: g.length,
-                    right: self.camera.forward().cross(self.camera.up()).normalize_or(Vec3::X),
-                    up: self.camera.up(),
-                    forward: self.camera.forward(),
-                    world_per_px: g.world_per_px,
-                };
-                let t = pose::drag_transform(&input);
-                let mesh = &mut self.scene.active_mut().mesh;
-                let moved = pose::apply(mesh, &g.original, &g.weights, g.pivot, &t);
-                g.current = t;
-                mesh.update_after_move(&moved);
+            Drag::Gizmo(g) if self.coalesce_strokes => {
+                g.queued_pos = Some(pos);
                 true
             }
+            Drag::Gizmo(_) => self.gizmo_to(pos),
             Drag::Select { points, lasso, .. } => {
                 if *lasso {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
@@ -1316,6 +1340,54 @@ impl Editor {
         true
     }
 
+    /// Apply pointer position to the active gizmo drag.
+    pub fn gizmo_to(&mut self, pos: Vec2) -> bool {
+        let (mode, right, up, forward) = match &self.drag {
+            Drag::Gizmo(_) => (
+                self.gizmo.unwrap_or(GizmoMode::Move),
+                self.camera.forward().cross(self.camera.up()).normalize_or(Vec3::X),
+                self.camera.up(),
+                self.camera.forward(),
+            ),
+            _ => return false,
+        };
+        match &mut self.drag {
+            Drag::Gizmo(g) => {
+                let input = pose::DragInput {
+                    mode,
+                    handle: g.handle,
+                    delta: pos - g.start,
+                    screen_axis: g.screen_axis,
+                    length: g.length,
+                    right,
+                    up,
+                    forward,
+                    world_per_px: g.world_per_px,
+                };
+                let t = pose::drag_transform(&input);
+                let mesh = &mut self.scene.active_mut().mesh;
+                pose::apply_interactive(mesh, &g.original, &g.original_normals, &g.weights, g.pivot, &t);
+                for &c in &g.affected_chunks {
+                    let orig = g.original_chunk_aabbs[c as usize];
+                    let transformed = pose::transform_aabb(&orig, g.pivot, &t);
+                    mesh.update_chunk_bounds(c, orig.union(&transformed));
+                }
+                g.current = t;
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    /// Flush any queued gizmo drag transform before drawing a frame.
+    pub fn flush_gizmo(&mut self) -> bool {
+        let queued = match &mut self.drag {
+            Drag::Gizmo(g) => g.queued_pos.take(),
+            _ => None,
+        };
+        queued.is_some_and(|pos| self.gizmo_to(pos))
+    }
+
     /// Call once per frame, before drawing.
     pub fn flush_stroke(&mut self) -> bool {
         let queued = match &mut self.drag {
@@ -1325,8 +1397,15 @@ impl Editor {
         queued.is_some_and(|pos| self.stroke_to(pos))
     }
 
+    /// Call once per frame before drawing to process any queued pointer actions.
+    pub fn flush_drag(&mut self) -> bool {
+        let a = self.flush_stroke();
+        let b = self.flush_gizmo();
+        a || b
+    }
+
     pub fn pointer_up(&mut self) {
-        self.flush_stroke();
+        self.flush_drag();
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
             && p0.distance(p) < 5.0 * self.pixels_per_point
         {
@@ -1334,7 +1413,20 @@ impl Editor {
         }
         self.snap_orbit = None;
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { .. } | Drag::Gizmo(_) => self.history.commit(),
+            Drag::Stroke { .. } => self.history.commit(),
+            Drag::Gizmo(g) => {
+                if g.has_soft_weights {
+                    let mesh = &mut self.scene.active_mut().mesh;
+                    let moved: Vec<u32> = g
+                        .weights
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(v, &w)| (w > 0.0).then_some(v as u32))
+                        .collect();
+                    mesh.update_after_move(&moved);
+                }
+                self.history.commit();
+            }
             Drag::Deferred { mode, kind, invert, start } => {
                 if let Some(end) = self.pointer {
                     self.finish_deferred(mode, kind, invert, start, end);
@@ -1364,8 +1456,10 @@ impl Editor {
             Drag::Gizmo(g) => {
                 let mesh = &mut self.scene.active_mut().mesh;
                 mesh.positions.copy_from_slice(&g.original);
-                let all: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
-                mesh.update_after_move(&all);
+                mesh.normals.copy_from_slice(&g.original_normals);
+                for &c in &g.affected_chunks {
+                    mesh.restore_chunk_bounds(c, g.original_chunk_aabbs[c as usize]);
+                }
                 mesh.tighten_bounds();
                 self.history.cancel();
                 self.status = "Transform cancelled".into();
@@ -1911,8 +2005,12 @@ impl Editor {
         let piece = self.scene.active();
         let top_tris =
             piece.multires.as_ref().map_or(piece.mesh.triangle_count(), |m| m.triangle_count(m.level_count() - 1));
-        if top_tris * 4 > MAX_TRIANGLES {
-            self.status = format!("Another level would have {} triangles (limit {MAX_TRIANGLES})", top_tris * 4);
+        if self.max_triangles > 0 && top_tris * 4 > self.max_triangles {
+            self.status = format!(
+                "Another level would have {} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
+                top_tris * 4,
+                self.max_triangles
+            );
             return;
         }
         self.multires_op("Add subdivision level", top_tris * 4, LevelChange::Add);
@@ -1952,8 +2050,11 @@ impl Editor {
 
     pub fn subdivide(&mut self, smooth: bool) {
         let n = self.scene.active().mesh.triangle_count() * 4;
-        if n > MAX_TRIANGLES {
-            self.status = format!("Subdivision would create {n} triangles (limit {MAX_TRIANGLES})");
+        if self.max_triangles > 0 && n > self.max_triangles {
+            self.status = format!(
+                "Subdivision would create {n} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
+                self.max_triangles
+            );
             return;
         }
         let mesh = topo::subdivide(&self.scene.active().mesh, if smooth { 1 } else { 0 });
@@ -2043,8 +2144,11 @@ impl Editor {
     /// Subdivide off the UI thread. The menu's [`subdivide`](Self::subdivide) stays instant for small meshes.
     pub fn subdivide_background(&mut self, smooth: bool) {
         let n = self.scene.active().mesh.triangle_count().saturating_mul(4);
-        if n > MAX_TRIANGLES {
-            self.status = format!("Subdivision would create {n} triangles (limit {MAX_TRIANGLES})");
+        if self.max_triangles > 0 && n > self.max_triangles {
+            self.status = format!(
+                "Subdivision would create {n} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
+                self.max_triangles
+            );
             return;
         }
         let mesh = self.scene.active().mesh.clone();
@@ -2253,16 +2357,37 @@ impl Editor {
             Handle::Axis(a) => layout.axes[a].map(|e| e - layout.center),
             Handle::Center => None,
         };
+        let mut affected_chunk_flags = vec![false; piece.mesh.chunks.len()];
+        let mut has_soft_weights = false;
+        for (v, &w) in weights.iter().enumerate() {
+            if w > 0.0 {
+                affected_chunk_flags[piece.mesh.vertex_chunk(v as u32) as usize] = true;
+                if w < 1.0 {
+                    has_soft_weights = true;
+                }
+            }
+        }
+        let affected_chunks: Vec<u32> = affected_chunk_flags
+            .iter()
+            .enumerate()
+            .filter_map(|(c, &aff)| aff.then_some(c as u32))
+            .collect();
+        let original_chunk_aabbs: Vec<oxy_mesh::Aabb> = piece.mesh.chunks.iter().map(|c| c.aabb).collect();
         self.drag = Drag::Gizmo(Box::new(GizmoDrag {
             handle,
             start: p,
             pivot: layout.pivot,
             original: piece.mesh.positions.clone(),
+            original_normals: piece.mesh.normals.clone(),
+            original_chunk_aabbs,
+            affected_chunks,
+            has_soft_weights,
             weights,
             screen_axis,
             length: layout.length,
             world_per_px,
             current: pose::Transform::IDENTITY,
+            queued_pos: None,
         }));
         true
     }
@@ -2599,6 +2724,54 @@ mod tests {
         }
         e.pointer_up();
         assert!(e.history.can_undo());
+    }
+
+    #[test]
+    fn gizmo_coalescing_and_flushing() {
+        let mut e = editor();
+        e.coalesce_strokes = true;
+        e.toggle_gizmo(GizmoMode::Move);
+        let layout = e.gizmo_layout().expect("gizmo layout");
+        let end = layout.axes[0].expect("X axis handle");
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::Gizmo(_)));
+        for i in 1..=5 {
+            e.pointer_moved(end + Vec2::new(i as f32 * 5.0, 0.0));
+        }
+        match &e.drag {
+            Drag::Gizmo(g) => {
+                assert!(g.queued_pos.is_some());
+            }
+            _ => panic!("expected Drag::Gizmo"),
+        }
+        assert!(e.flush_drag());
+        match &e.drag {
+            Drag::Gizmo(g) => {
+                assert!(g.queued_pos.is_none());
+            }
+            _ => panic!("expected Drag::Gizmo"),
+        }
+        e.pointer_up();
+        assert!(e.history.can_undo());
+    }
+
+    #[test]
+    fn subdivision_triangle_ceiling() {
+        let mut e = editor();
+        e.max_triangles = 1000;
+        let before_tris = e.scene.active().mesh.triangle_count();
+        e.subdivide(false);
+        assert_eq!(e.scene.active().mesh.triangle_count(), before_tris);
+        assert!(e.status.contains("limit 1000"));
+
+        e.max_triangles = 100_000;
+        e.subdivide(false);
+        assert_eq!(e.scene.active().mesh.triangle_count(), before_tris * 4);
+
+        e.max_triangles = 0; // unlimited
+        e.subdivide(false);
+        assert_eq!(e.scene.active().mesh.triangle_count(), before_tris * 16);
     }
 
     #[test]
@@ -3079,6 +3252,11 @@ mod tests {
             background_center: [0.3, 0.32, 0.34],
             focal_mm: 50.0,
             recent_files: vec![std::path::PathBuf::from("/tmp/a.oxb")],
+            theme: crate::settings::ThemePreset::Slate,
+            accent: crate::settings::AccentPreset::Cyan,
+            custom_accent: [0x38, 0xBD, 0xF8],
+            corner_style: crate::settings::CornerStyle::Soft,
+            max_triangles: 48_000_000,
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);

@@ -269,6 +269,201 @@ pub struct Settings {
     pub focal_mm: f32,
     /// Recently used files, most recent first (one `recent = ` line each).
     pub recent_files: Vec<PathBuf>,
+    /// Active visual theme preset.
+    pub theme: ThemePreset,
+    /// Accent color preset.
+    pub accent: AccentPreset,
+    /// Custom accent RGB when `accent == AccentPreset::Custom`.
+    pub custom_accent: [u8; 3],
+    /// Window and button corner rounding style.
+    pub corner_style: CornerStyle,
+    /// Maximum triangles allowed during subdivision (0 = unlimited).
+    pub max_triangles: usize,
+}
+
+/// Overall visual theme preset.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemePreset {
+    /// Neutral dark gray (industry standard graphite).
+    #[default]
+    Graphite,
+    /// OLED deep black and dark gray.
+    Charcoal,
+    /// Cool slate blue-gray tone (Blender / Maya feel).
+    Slate,
+    /// Sculptor's warm studio umber / clay tone.
+    WarmUmber,
+    /// Clean bright neutral studio light theme.
+    StudioLight,
+    /// Pure black & white maximum contrast mode.
+    HighContrast,
+}
+
+impl ThemePreset {
+    pub const ALL: [ThemePreset; 6] = [
+        ThemePreset::Graphite,
+        ThemePreset::Charcoal,
+        ThemePreset::Slate,
+        ThemePreset::WarmUmber,
+        ThemePreset::StudioLight,
+        ThemePreset::HighContrast,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemePreset::Graphite => "Graphite (Neutral Dark)",
+            ThemePreset::Charcoal => "Charcoal (OLED Deep)",
+            ThemePreset::Slate => "Slate (Cool Studio)",
+            ThemePreset::WarmUmber => "Warm Umber (Clay)",
+            ThemePreset::StudioLight => "Studio Light (Bright)",
+            ThemePreset::HighContrast => "High Contrast",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ThemePreset::Graphite => "graphite",
+            ThemePreset::Charcoal => "charcoal",
+            ThemePreset::Slate => "slate",
+            ThemePreset::WarmUmber => "warm_umber",
+            ThemePreset::StudioLight => "studio_light",
+            ThemePreset::HighContrast => "high_contrast",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|t| t.key() == k)
+    }
+
+    #[allow(dead_code)]
+    pub fn is_light(self) -> bool {
+        matches!(self, ThemePreset::StudioLight)
+    }
+}
+
+/// Highlight and selection accent color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AccentPreset {
+    /// OxyBrush signature clay #E07A4F.
+    #[default]
+    Terracotta,
+    /// Precision electric cyan #38BDF8.
+    Cyan,
+    /// Calming mint emerald #10B981.
+    Emerald,
+    /// Warm golden amber #F59E0B.
+    Amber,
+    /// Dynamic vivid ruby #F43F5E.
+    Crimson,
+    /// Modern studio violet #A855F7.
+    Violet,
+    /// Custom RGB swatch.
+    Custom,
+}
+
+impl AccentPreset {
+    pub const ALL: [AccentPreset; 7] = [
+        AccentPreset::Terracotta,
+        AccentPreset::Cyan,
+        AccentPreset::Emerald,
+        AccentPreset::Amber,
+        AccentPreset::Crimson,
+        AccentPreset::Violet,
+        AccentPreset::Custom,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            AccentPreset::Terracotta => "Terracotta (Clay)",
+            AccentPreset::Cyan => "Cyan (Electric)",
+            AccentPreset::Emerald => "Emerald (Mint)",
+            AccentPreset::Amber => "Amber (Gold)",
+            AccentPreset::Crimson => "Crimson (Ruby)",
+            AccentPreset::Violet => "Violet (Purple)",
+            AccentPreset::Custom => "Custom RGB",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            AccentPreset::Terracotta => "terracotta",
+            AccentPreset::Cyan => "cyan",
+            AccentPreset::Emerald => "emerald",
+            AccentPreset::Amber => "amber",
+            AccentPreset::Crimson => "crimson",
+            AccentPreset::Violet => "violet",
+            AccentPreset::Custom => "custom",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.key() == k)
+    }
+
+    pub fn rgb(self, custom: [u8; 3]) -> [u8; 3] {
+        match self {
+            AccentPreset::Terracotta => [0xE0, 0x7A, 0x4F],
+            AccentPreset::Cyan => [0x38, 0xBD, 0xF8],
+            AccentPreset::Emerald => [0x10, 0xB9, 0x81],
+            AccentPreset::Amber => [0xF5, 0x9E, 0x0B],
+            AccentPreset::Crimson => [0xF4, 0x3F, 0x5E],
+            AccentPreset::Violet => [0xA8, 0x55, 0xF7],
+            AccentPreset::Custom => custom,
+        }
+    }
+}
+
+/// Interface corner rounding style.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CornerStyle {
+    /// Crisp sharp corners (0 px).
+    Sharp,
+    /// Balanced rounded corners (6 px).
+    #[default]
+    Rounded,
+    /// Smooth soft corners (10 px).
+    Soft,
+}
+
+impl CornerStyle {
+    pub const ALL: [CornerStyle; 3] = [CornerStyle::Sharp, CornerStyle::Rounded, CornerStyle::Soft];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            CornerStyle::Sharp => "Sharp (0 px)",
+            CornerStyle::Rounded => "Rounded (6 px)",
+            CornerStyle::Soft => "Soft (10 px)",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            CornerStyle::Sharp => "sharp",
+            CornerStyle::Rounded => "rounded",
+            CornerStyle::Soft => "soft",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == k)
+    }
+
+    pub fn radius_pt(self) -> f32 {
+        match self {
+            CornerStyle::Sharp => 0.0,
+            CornerStyle::Rounded => 6.0,
+            CornerStyle::Soft => 10.0,
+        }
+    }
+}
+
+pub fn default_max_triangles() -> usize {
+    if let Ok(v) = std::env::var("OXYBRUSH_MAX_TRIANGLES") {
+        if let Ok(n) = v.parse::<usize>() {
+            return n;
+        }
+    }
+    24_000_000
 }
 
 /// How many recent files are remembered.
@@ -305,8 +500,24 @@ impl Default for Settings {
             background_center: view.background_center,
             focal_mm: oxy_render::default_focal_mm(),
             recent_files: Vec::new(),
+            theme: ThemePreset::Graphite,
+            accent: AccentPreset::Terracotta,
+            custom_accent: [0xE0, 0x7A, 0x4F],
+            corner_style: CornerStyle::Rounded,
+            max_triangles: default_max_triangles(),
         }
     }
+}
+
+fn parse_u8_rgb(v: &str) -> Option<[u8; 3]> {
+    let parts: Vec<&str> = v.split(',').map(str::trim).filter(|s| !s.is_empty()).collect();
+    if parts.len() != 3 {
+        return None;
+    }
+    let r = parts[0].parse::<u8>().ok()?;
+    let g = parts[1].parse::<u8>().ok()?;
+    let b = parts[2].parse::<u8>().ok()?;
+    Some([r, g, b])
 }
 
 fn format_rgb(c: [f64; 3]) -> String {
@@ -356,7 +567,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -383,6 +594,13 @@ impl Settings {
             background,
             background_center,
             focal_mm,
+            self.theme.key(),
+            self.accent.key(),
+            self.custom_accent[0],
+            self.custom_accent[1],
+            self.custom_accent[2],
+            self.corner_style.key(),
+            self.max_triangles,
         ) + &self
             .recent_files
             .iter()
@@ -481,6 +699,34 @@ impl Settings {
                 "update_skip" if v.is_empty() || oxy_update::Version::parse(v).is_some() => {
                     s.update_skip = v.to_owned();
                 }
+                "theme" => {
+                    if let Some(t) = ThemePreset::from_key(v) {
+                        s.theme = t;
+                        if t == ThemePreset::HighContrast {
+                            s.high_contrast = true;
+                        }
+                    }
+                }
+                "accent" => {
+                    if let Some(a) = AccentPreset::from_key(v) {
+                        s.accent = a;
+                    }
+                }
+                "custom_accent" => {
+                    if let Some(c) = parse_u8_rgb(v) {
+                        s.custom_accent = c;
+                    }
+                }
+                "corner_style" => {
+                    if let Some(c) = CornerStyle::from_key(v) {
+                        s.corner_style = c;
+                    }
+                }
+                "max_triangles" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        s.max_triangles = n;
+                    }
+                }
                 _ => {}
             }
         }
@@ -560,6 +806,11 @@ mod tests {
             background_center: [0.4, 0.45, 0.5],
             focal_mm: 85.0,
             recent_files: vec![PathBuf::from("/work/head = v2.oxb"), PathBuf::from("C:\\Sculpts\\Dragon.obj")],
+            theme: ThemePreset::Slate,
+            accent: AccentPreset::Cyan,
+            custom_accent: [0x38, 0xBD, 0xF8],
+            corner_style: CornerStyle::Soft,
+            max_triangles: 48_000_000,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

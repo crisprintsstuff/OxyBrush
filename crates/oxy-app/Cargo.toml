@@ -42,6 +42,7 @@ png.workspace = true
 # JPEG matcaps (pure Rust; MIT OR Apache-2.0 OR Zlib).
 zune-jpeg = "0.5"
 oxy-update.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

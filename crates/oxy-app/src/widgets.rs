@@ -464,8 +464,9 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, enabled: bool, toolt
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, enabled, selected, tooltip));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
+        let accent = v.selection.stroke.color;
         let bg = if selected {
-            ACCENT.linear_multiply(0.45)
+            accent.linear_multiply(0.45)
         } else if response.hovered() && enabled {
             v.widgets.hovered.weak_bg_fill
         } else {
@@ -513,8 +514,9 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
+        let accent = v.selection.stroke.color;
         let (bg, stroke) = if selected {
-            (ACCENT.linear_multiply(0.28), Stroke::new(1.0, ACCENT))
+            (accent.linear_multiply(0.28), Stroke::new(1.0, accent))
         } else if response.hovered() {
             (v.widgets.hovered.weak_bg_fill, Stroke::NONE)
         } else {
@@ -550,8 +552,9 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, k
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         paint_brush_icon(ui.painter(), rect.shrink(2.0), k);
+        let accent = ui.visuals().selection.stroke.color;
         let stroke = if selected {
-            Stroke::new(1.5, ACCENT)
+            Stroke::new(1.5, accent)
         } else if response.hovered() {
             Stroke::new(1.0, Color32::from_gray(150))
         } else {
@@ -568,8 +571,9 @@ pub fn card(ui: &mut Ui, icon: Icon, title: &str, subtitle: &str, tooltip: &str)
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, title));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
+        let accent = v.selection.stroke.color;
         let (fill, stroke) = if response.hovered() {
-            (v.widgets.hovered.weak_bg_fill, Stroke::new(1.0, ACCENT))
+            (v.widgets.hovered.weak_bg_fill, Stroke::new(1.0, accent))
         } else {
             (v.faint_bg_color, Stroke::new(1.0, v.widgets.noninteractive.bg_stroke.color))
         };
@@ -602,8 +606,9 @@ pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
+        let accent = v.selection.stroke.color;
         let bg = if response.dragged() {
-            ACCENT.linear_multiply(0.45)
+            accent.linear_multiply(0.45)
         } else if response.hovered() {
             v.widgets.hovered.weak_bg_fill
         } else {
@@ -734,9 +739,10 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
+        let accent = v.selection.stroke.color;
         let img = Rect::from_min_size(rect.min, Vec2::splat(size));
         let stroke =
-            if response.hovered() { Stroke::new(1.0, ACCENT) } else { Stroke::new(1.0, Color32::from_gray(52)) };
+            if response.hovered() { Stroke::new(1.0, accent) } else { Stroke::new(1.0, Color32::from_gray(52)) };
         ui.painter().rect(img, 6.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
         match tex {
             Some(t) => {
@@ -795,8 +801,9 @@ pub fn thumb_sized(
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let img = Rect::from_min_size(rect.min, Vec2::splat(size));
+        let accent = ui.visuals().selection.stroke.color;
         let stroke = if selected {
-            Stroke::new(1.5, ACCENT)
+            Stroke::new(1.5, accent)
         } else if response.hovered() {
             Stroke::new(1.0, Color32::from_gray(140))
         } else {

@@ -177,6 +177,132 @@ fn commands(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Keymap, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
         cmd(ed, Cmd::Guide, "help manual documentation", |e| e.guide.open = true),
         cmd(ed, Cmd::Welcome, "help start", |e| e.show_welcome = true),
+        Entry {
+            label: "Theme: Graphite".into(),
+            detail: String::new(),
+            keywords: "theme style dark graphite appearance",
+            tooltip: "Switch to neutral dark Graphite theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Graphite;
+                e.high_contrast = false;
+                e.status = "Theme: Graphite".into();
+            }),
+        },
+        Entry {
+            label: "Theme: Charcoal".into(),
+            detail: String::new(),
+            keywords: "theme style dark charcoal oled black appearance",
+            tooltip: "Switch to OLED deep dark Charcoal theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Charcoal;
+                e.high_contrast = false;
+                e.status = "Theme: Charcoal".into();
+            }),
+        },
+        Entry {
+            label: "Theme: Slate".into(),
+            detail: String::new(),
+            keywords: "theme style slate blue cool dark appearance",
+            tooltip: "Switch to cool slate blue-gray theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Slate;
+                e.high_contrast = false;
+                e.status = "Theme: Slate".into();
+            }),
+        },
+        Entry {
+            label: "Theme: Warm Umber".into(),
+            detail: String::new(),
+            keywords: "theme style warm umber clay dark appearance",
+            tooltip: "Switch to warm sculpting studio umber theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::WarmUmber;
+                e.high_contrast = false;
+                e.status = "Theme: Warm Umber".into();
+            }),
+        },
+        Entry {
+            label: "Theme: Studio Light".into(),
+            detail: String::new(),
+            keywords: "theme style light bright appearance",
+            tooltip: "Switch to clean bright Studio Light theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::StudioLight;
+                e.high_contrast = false;
+                e.status = "Theme: Studio Light".into();
+            }),
+        },
+        Entry {
+            label: "Theme: High Contrast".into(),
+            detail: String::new(),
+            keywords: "theme style high contrast black white accessibility",
+            tooltip: "Switch to High Contrast theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::HighContrast;
+                e.high_contrast = true;
+                e.status = "Theme: High Contrast".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Terracotta".into(),
+            detail: String::new(),
+            keywords: "accent color clay terracotta orange",
+            tooltip: "Switch accent color to Terracotta clay".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Terracotta;
+                e.status = "Accent: Terracotta".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Cyan".into(),
+            detail: String::new(),
+            keywords: "accent color cyan blue electric",
+            tooltip: "Switch accent color to Electric Cyan".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Cyan;
+                e.status = "Accent: Cyan".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Emerald".into(),
+            detail: String::new(),
+            keywords: "accent color emerald green mint",
+            tooltip: "Switch accent color to Emerald Mint".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Emerald;
+                e.status = "Accent: Emerald".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Amber".into(),
+            detail: String::new(),
+            keywords: "accent color amber gold yellow",
+            tooltip: "Switch accent color to Golden Amber".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Amber;
+                e.status = "Accent: Amber".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Crimson".into(),
+            detail: String::new(),
+            keywords: "accent color crimson red ruby",
+            tooltip: "Switch accent color to Vivid Crimson".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Crimson;
+                e.status = "Accent: Crimson".into();
+            }),
+        },
+        Entry {
+            label: "Accent: Violet".into(),
+            detail: String::new(),
+            keywords: "accent color violet purple",
+            tooltip: "Switch accent color to Studio Violet".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::Violet;
+                e.status = "Accent: Violet".into();
+            }),
+        },
         cmd(ed, Cmd::CheckUpdates, "help version", |e| {
             e.updater.show_window = true;
             if !e.updater.managed_by_flatpak() {
