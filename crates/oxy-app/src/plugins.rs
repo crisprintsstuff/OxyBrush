@@ -27,9 +27,43 @@ pub struct PluginProcess {
     pub rx: Receiver<Result<String, String>>,
 }
 
-/// Path to the user plugins directory (`<data_local_dir>/oxybrush/plugins`).
+/// Path to the application data directory (`<data_local_dir>/OxyBrush` on Windows, `oxybrush` elsewhere).
+pub fn app_data_dir() -> Option<PathBuf> {
+    let app = if cfg!(windows) { "OxyBrush" } else { "oxybrush" };
+    dirs::data_local_dir().map(|d| d.join(app))
+}
+
+/// Path to the user plugins directory (`<data_local_dir>/OxyBrush/plugins` on Windows, `oxybrush/plugins` elsewhere).
 pub fn plugins_dir() -> Option<PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("oxybrush").join("plugins"))
+    app_data_dir().map(|d| d.join("plugins"))
+}
+
+const BUNDLED_SDK_INIT: &str = include_str!("../../../python/oxybrush/__init__.py");
+const BUNDLED_SDK_CLIENT: &str = include_str!("../../../python/oxybrush/client.py");
+
+const BUNDLED_EXAMPLE_MESH_STATS: &str = include_str!("../../../examples/plugins/mesh_stats.py");
+const BUNDLED_EXAMPLE_REPORTER: &str = include_str!("../../../examples/plugins/mesh_stats_reporter.py");
+const BUNDLED_EXAMPLE_SPIRAL: &str = include_str!("../../../examples/plugins/spiral_generator.py");
+
+/// Ensure the bundled pure-Python SDK is extracted into `<data_local_dir>/OxyBrush/python/oxybrush`.
+pub fn ensure_sdk_extracted() -> Option<PathBuf> {
+    let base = app_data_dir()?;
+    let py_dir = base.join("python");
+    let pkg_dir = py_dir.join("oxybrush");
+    if std::fs::create_dir_all(&pkg_dir).is_ok() {
+        let init_file = pkg_dir.join("__init__.py");
+        let client_file = pkg_dir.join("client.py");
+        if std::fs::read_to_string(&init_file).map_or(true, |c| c != BUNDLED_SDK_INIT) {
+            let _ = std::fs::write(&init_file, BUNDLED_SDK_INIT);
+        }
+        if std::fs::read_to_string(&client_file).map_or(true, |c| c != BUNDLED_SDK_CLIENT) {
+            let _ = std::fs::write(&client_file, BUNDLED_SDK_CLIENT);
+        }
+        if init_file.is_file() && client_file.is_file() {
+            return Some(py_dir);
+        }
+    }
+    None
 }
 
 /// Open the given folder in the system file manager.
@@ -120,8 +154,9 @@ pub fn discover_plugins() -> Vec<PluginInfo> {
 }
 
 fn ensure_plugins_dir_initialized(dir: &Path) {
-    if !dir.exists() && std::fs::create_dir_all(dir).is_ok() {
-        let readme = dir.join("README.txt");
+    let _ = std::fs::create_dir_all(dir);
+    let readme = dir.join("README.txt");
+    if !readme.exists() {
         let _ = std::fs::write(
             readme,
             "OxyBrush Plugins Directory\n\
@@ -137,6 +172,24 @@ fn ensure_plugins_dir_initialized(dir: &Path) {
              app.select_brush('Clay')\n",
         );
     }
+
+    let stats_path = dir.join("mesh_stats.py");
+    if !stats_path.exists() {
+        let _ = std::fs::write(stats_path, BUNDLED_EXAMPLE_MESH_STATS);
+    }
+
+    let reporter_path = dir.join("mesh_stats_reporter.py");
+    if !reporter_path.exists() {
+        let _ = std::fs::write(reporter_path, BUNDLED_EXAMPLE_REPORTER);
+    }
+
+    let spiral_path = dir.join("spiral_generator.py");
+    if !spiral_path.exists() {
+        let _ = std::fs::write(spiral_path, BUNDLED_EXAMPLE_SPIRAL);
+    }
+
+    // Ensure the pure-Python SDK is provisioned into the user data dir
+    let _ = ensure_sdk_extracted();
 }
 
 fn scan_dir(dir: &Path, out: &mut Vec<PluginInfo>) {
@@ -233,12 +286,9 @@ pub fn python_sdk_dir() -> Option<PathBuf> {
         }
     }
 
-    // Try local data dir
-    if let Some(data_dir) = dirs::data_local_dir() {
-        let candidate = data_dir.join("oxybrush").join("python");
-        if candidate.join("oxybrush").join("__init__.py").is_file() {
-            return Some(candidate);
-        }
+    // Fall back to extracting and provisioning the bundled SDK into the user data dir
+    if let Some(sdk) = ensure_sdk_extracted() {
+        return Some(sdk);
     }
 
     None
@@ -488,5 +538,24 @@ mod tests {
         let output = res.expect("process should complete").expect("mesh_stats_reporter should succeed");
         assert!(output.contains("piece(s)"), "{output}");
         assert!(output.contains("tris"), "{output}");
+    }
+
+    #[test]
+    fn test_ensure_sdk_extracted() {
+        let sdk_dir = ensure_sdk_extracted().expect("should extract bundled sdk");
+        let pkg = sdk_dir.join("oxybrush");
+        assert!(pkg.join("__init__.py").is_file());
+        assert!(pkg.join("client.py").is_file());
+
+        // Verify that python can import oxybrush from this directory
+        if let Some(py) = find_python() {
+            let status = Command::new(py)
+                .env("PYTHONPATH", &sdk_dir)
+                .arg("-c")
+                .arg("import oxybrush; assert hasattr(oxybrush, 'Session'); assert hasattr(oxybrush, 'MeshStats')")
+                .status()
+                .expect("run python import test");
+            assert!(status.success());
+        }
     }
 }

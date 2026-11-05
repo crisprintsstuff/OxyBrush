@@ -53,6 +53,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.5.2-alpha" date="2026-11-04" type="development">
+      <description>
+        <p>Embedded Python SDK auto-provisioning into user data directory, auto-provisioned bundled example plugins in plugins folder, and standalone script candidate loader.</p>
+      </description>
+    </release>
     <release version="0.5.1-alpha" date="2026-11-04" type="development">
       <description>
         <p>Python plugin error diagnostic improvements, expanded oxybrush SDK with MeshStats dataclass, bundled mesh stats reporter plugin, and comprehensive GitHub Wiki documentation.</p>
