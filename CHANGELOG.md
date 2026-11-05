@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [0.5.2-alpha] - 2026-11-04
+
+### Fixed
+
+- **Embedded Python SDK auto-provisioning:** Fixed `ModuleNotFoundError: No module named 'oxybrush'` on standalone binary installs. OxyBrush now embeds the pure-Python `oxybrush` SDK (`client.py` and `__init__.py`) directly into the executable and automatically provisions it to `<AppData>/Local/OxyBrush/python` (on Windows) or `<data_local_dir>/oxybrush/python` (on Linux/macOS) upon launch.
+- **Auto-provisioned plugin examples:** When starting OxyBrush on a new installation or opening the plugins directory, OxyBrush now automatically provisions the bundled example plugins (`mesh_stats_reporter.py`, `mesh_stats.py`, and `spiral_generator.py`) into the user plugins directory (`<AppData>/Local/OxyBrush/plugins` on Windows) alongside `README.txt`.
+- **Standalone execution fallback:** Added automatic OxyBrush application data directory discovery to all example scripts so they can be run directly from terminal/PowerShell outside of OxyBrush without requiring manual `PYTHONPATH` exports.
+
 ## [0.5.1-alpha] - 2026-11-04
 
 ### Fixed
@@ -183,7 +191,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...HEAD
+[0.5.2-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...v0.5.2-alpha
 [0.5.1-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.0-alpha...v0.5.1-alpha
 [0.5.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.4.0-alpha...v0.5.0-alpha
 [0.4.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.3.0-alpha...v0.4.0-alpha
