@@ -91,6 +91,18 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             inspector_width: 330.0,
             strip_width: 64.0,
         },
+        UiLayout::ZBrushClassic => Metrics {
+            item_spacing: egui::vec2(4.0, 3.0),
+            button_padding: egui::vec2(4.0, 2.0),
+            interact_height: 22.0,
+            slider_width: 120.0,
+            body: 12.0,
+            small: 10.0,
+            heading: 18.0,
+            shelf_width: 88.0,
+            inspector_width: 275.0,
+            strip_width: 40.0,
+        },
     }
 }
 
@@ -542,6 +554,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     wireframe_window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
+    mesh_diagnostics_dialog(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     keymap::window(ui.ctx(), ed);
@@ -555,7 +568,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         if ed.show_panels {
             orientation_gizmo(ui.ctx(), ed, canvas);
         }
-        if ed.quick_bar != QuickBar::Toolbar {
+        if ed.quick_bar != QuickBar::Toolbar && ed.layout != UiLayout::ZBrushClassic {
             floating_quick_bar(ui.ctx(), ed, canvas);
         }
     }
@@ -759,6 +772,47 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
         });
     });
     ed.show_print_dialog = open;
+}
+
+fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_diagnostics {
+        return;
+    }
+    let mut open = ed.show_diagnostics;
+    egui::Window::new("Mesh Topology Diagnostics").open(&mut open).default_width(340.0).resizable(false).show(
+        ctx,
+        |ui| {
+            ui.vertical(|ui| {
+                let active = ed.scene.active();
+                ui.heading(format!("Diagnostics: {}", active.name));
+                ui.add_space(4.0);
+
+                let v_count = active.mesh.vertex_count();
+                let t_count = active.mesh.triangle_count();
+                ui.label(format!("Vertices: {v_count}  |  Triangles: {t_count}"));
+
+                let report = ed.check_manifold();
+                ui.add_space(6.0);
+
+                if report.is_manifold {
+                    ui.colored_label(egui::Color32::from_rgb(80, 220, 100), "✔ 2-Manifold Watertight Surface");
+                } else {
+                    ui.colored_label(egui::Color32::from_rgb(240, 140, 40), "⚠ Non-Manifold / Boundary Seams Present");
+                }
+
+                ui.add_space(4.0);
+                ui.label(format!("Boundary edges: {}", report.boundary_edge_count));
+                ui.label(format!("Non-manifold edges: {}", report.non_manifold_edge_count));
+                ui.label(format!("Degenerate triangles: {}", report.degenerate_triangle_count));
+
+                ui.add_space(8.0);
+                if ui.button("Clean Degenerate Triangles").clicked() {
+                    ed.clean_mesh();
+                }
+            });
+        },
+    );
+    ed.show_diagnostics = open;
 }
 
 fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
@@ -1305,7 +1359,7 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
             ui.separator();
 
-            if ed.quick_bar == QuickBar::Toolbar {
+            if ed.quick_bar == QuickBar::Toolbar || ed.layout == UiLayout::ZBrushClassic {
                 ui.spacing_mut().slider_width = 110.0;
                 quick_controls(ui, ed);
                 ui.separator();
@@ -1394,6 +1448,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         let r = match (ed.layout, horizontal) {
             (UiLayout::Standard, false) => widgets::brush_row(ui, k, selected, key),
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
+            (UiLayout::ZBrushClassic, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
             (layout, _) => {
                 let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
                 let t = widgets::brush_texture(&ctx, k);
@@ -1427,7 +1482,11 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
                 }
             }
             layout => {
-                let (cols, gap) = if layout == UiLayout::Compact { (4, 3.0) } else { (3, 8.0) };
+                let (cols, gap) = match layout {
+                    UiLayout::Compact => (4, 3.0),
+                    UiLayout::ZBrushClassic => (2, 3.0),
+                    _ => (3, 8.0),
+                };
                 egui::Grid::new("brush_grid").spacing([gap, gap]).show(ui, |ui| {
                     for (i, k) in order.iter().enumerate() {
                         item(ui, i, *k, ed);
@@ -1569,16 +1628,21 @@ fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
 
 /// Raise / Carve, size and strength: the controls used most while sculpting.
 fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
-    let raise = egui::Button::selectable(!ed.carve, RichText::new("Raise").strong()).min_size(egui::vec2(58.0, 26.0));
+    let is_zbrush = ed.layout == UiLayout::ZBrushClassic;
+    let raise_text = if is_zbrush { "ZAdd" } else { "Raise" };
+    let carve_text = if is_zbrush { "ZSub" } else { "Carve" };
+    let raise =
+        egui::Button::selectable(!ed.carve, RichText::new(raise_text).strong()).min_size(egui::vec2(58.0, 26.0));
     if tips::hover(ui.add(raise), Cmd::Raise.tip()).clicked() {
         ed.carve = false;
     }
-    let carve = egui::Button::selectable(ed.carve, RichText::new("Carve").strong()).min_size(egui::vec2(58.0, 26.0));
+    let carve = egui::Button::selectable(ed.carve, RichText::new(carve_text).strong()).min_size(egui::vec2(58.0, 26.0));
     if tips::hover(ui.add(carve), Cmd::Carve.tip()).clicked() {
         ed.carve = true;
     }
     ui.separator();
-    ui.label(RichText::new("Size").weak());
+    let size_label = if is_zbrush { "Draw Size" } else { "Size" };
+    ui.label(RichText::new(size_label).weak());
     tips::hover(
         ui.add(
             egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
@@ -1590,7 +1654,13 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     );
     let shift_smooth = ed.brush_roles().shift;
     let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
-    let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+    let strength_label = if shift_smooth {
+        "Smooth Strength"
+    } else if is_zbrush {
+        "Z Intensity"
+    } else {
+        "Strength"
+    };
     ui.label(RichText::new(strength_label).weak());
     tips::hover(
         ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true)),
@@ -2516,6 +2586,14 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     {
         ed.show_print_dialog = true;
         ed.update_print_dimensions();
+    }
+    if tips::hover(
+        ui.button("Topology Diagnostics..."),
+        "Inspect mesh manifold topology, boundary seams, and clean degenerate triangles",
+    )
+    .clicked()
+    {
+        ed.show_diagnostics = true;
     }
     ui.separator();
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
@@ -4409,5 +4487,24 @@ mod tests {
         assert!(ed.symmetry.is_active());
         let rad_xforms = ed.symmetry.transforms();
         assert_eq!(rad_xforms.len(), 4);
+    }
+
+    #[test]
+    fn test_mesh_diagnostics_dialog_and_clean_mesh() {
+        let mut ed = Editor::default();
+        ed.show_diagnostics = true;
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            mesh_diagnostics_dialog(ui.ctx(), &mut ed);
+        });
+        out.textures_delta.clear();
+        assert!(ed.show_diagnostics);
+
+        let report = ed.check_manifold();
+        assert!(report.is_manifold, "default sphere is 2-manifold");
+        assert_eq!(report.degenerate_triangle_count, 0);
+
+        let removed = ed.clean_mesh();
+        assert_eq!(removed, 0);
     }
 }

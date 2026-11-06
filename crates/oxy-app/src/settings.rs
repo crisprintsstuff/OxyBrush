@@ -22,16 +22,19 @@ pub enum UiLayout {
     /// Touch screens and pen tablets: large targets, brush tiles, on-screen
     /// Smooth / Mask / Invert buttons instead of modifier keys.
     Touch,
+    /// Classic ZBrush workstation layout with dual-column tools and quick top bar.
+    ZBrushClassic,
 }
 
 impl UiLayout {
-    pub const ALL: [UiLayout; 3] = [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch];
+    pub const ALL: [UiLayout; 4] = [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch, UiLayout::ZBrushClassic];
 
     pub fn label(self) -> &'static str {
         match self {
             UiLayout::Standard => "Standard",
             UiLayout::Compact => "Compact",
             UiLayout::Touch => "Touch friendly",
+            UiLayout::ZBrushClassic => "ZBrush Classic",
         }
     }
 
@@ -40,6 +43,7 @@ impl UiLayout {
             UiLayout::Standard => "Mouse and keyboard. Brush list with names.",
             UiLayout::Compact => "Small screens. Tighter spacing and an icon-only brush grid.",
             UiLayout::Touch => "Touch screens and pens. Large buttons and on-screen Smooth, Mask and Invert.",
+            UiLayout::ZBrushClassic => "ZBrush workstation layout: dual-column brush shelf and quick top controls.",
         }
     }
 
@@ -48,6 +52,7 @@ impl UiLayout {
             UiLayout::Standard => "standard",
             UiLayout::Compact => "compact",
             UiLayout::Touch => "touch",
+            UiLayout::ZBrushClassic => "zbrush_classic",
         }
     }
 }
@@ -933,6 +938,9 @@ mod tests {
         let s = Settings { layout: UiLayout::Compact, ..Default::default() };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), Some(s));
+        let s2 = Settings { layout: UiLayout::ZBrushClassic, ..Default::default() };
+        s2.save(&path).unwrap();
+        assert_eq!(Settings::load(&path), Some(s2));
         assert!(!path.with_extension("txt.tmp").exists());
         std::fs::remove_dir_all(dir).ok();
     }

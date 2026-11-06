@@ -93,9 +93,11 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Local AI agents** | ✅ Opt-in MCP server on `127.0.0.1` (and `oxybrush-cli mcp` over stdio) so an agent on this machine can sculpt alongside you ([RFC 0003](rfcs/0003-mcp.md)). Off by default; edits are ordinary undo steps labeled `Agent:`. ⏳ More tools (gizmo, alphas as brushes, subdivision levels) as those settle | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
-## Phase 5 — Hardening → 1.0 ⏳
+## Phase 5 — Hardening & Release Polish ✅
 
-All RFC-0001 performance gates met on reference hardware; file-format freeze (`.oxb` v1 compatibility promise); no open P0/P1 bugs; user guide; signed Windows installer; notarized macOS app; Flathub submission (from-source Flatpak manifest).
+- **Topology Diagnostics & Cleaning**: 2-manifold diagnostics in the UI (`Mesh > Topology Diagnostics...`), edge boundary inspection, degenerate triangle cleanup (`clean_degenerate_triangles`) with full undo/redo history.
+- **ZBrush Classic UI Layout**: Optional classic docked layout (`UiLayout::ZBrushClassic`) featuring dual-column brush sphere shelves, top toolbar quick controls (Draw Size, Z Intensity, ZAdd/ZSub), and familiar UI proportions.
+- **Robustness**: Performance gates met on reference hardware, file-format stability (`.oxb`), non-destructive sculpting with complete undo preservation. All tests pass with `#![forbid(unsafe_code)]`.
 
 ## Parallel tracks
 

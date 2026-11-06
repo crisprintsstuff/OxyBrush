@@ -526,6 +526,40 @@ impl Mesh {
         self.groups.iter().max().map_or(0, |m| m + 1)
     }
 
+    /// Remove zero-area and degenerate triangles.
+    pub fn clean_degenerate_triangles(&mut self) -> usize {
+        let mut d = self.to_data();
+        let before = d.triangles.len();
+        let mut keep = Vec::with_capacity(before);
+        for &tri in &d.triangles {
+            let [a, b, c] = tri;
+            if a == b || b == c || c == a {
+                keep.push(false);
+                continue;
+            }
+            let pa = d.positions[a as usize];
+            let pb = d.positions[b as usize];
+            let pc = d.positions[c as usize];
+            let area_sq = (pb - pa).cross(pc - pa).length_squared();
+            keep.push(area_sq >= 1e-12);
+        }
+        let mut k = keep.iter();
+        d.triangles.retain(|_| *k.next().unwrap_or(&true));
+        let mut k = keep.iter();
+        if !d.groups.is_empty() {
+            d.groups.retain(|_| *k.next().unwrap_or(&true));
+        }
+        let mut k = keep.iter();
+        if !d.hidden.is_empty() {
+            d.hidden.retain(|_| *k.next().unwrap_or(&true));
+        }
+        let removed = before - d.triangles.len();
+        if removed > 0 {
+            *self = Mesh::from_data(d);
+        }
+        removed
+    }
+
     /// Assign a new group to visible triangles whose vertices are all masked above 0.5.
     pub fn group_from_mask(&mut self) {
         let g = self.next_free_group();
@@ -2197,5 +2231,26 @@ mod tests {
         let f = trimmed.triangle_count() as i64;
         let e = f * 3 / 2;
         assert_eq!(trimmed.vertex_count() as i64 - e + f, 2, "trimmed capped mesh is a closed genus-0 manifold");
+    }
+
+    #[test]
+    fn test_clean_degenerate_triangles() {
+        let mut data = primitives::cube(1, 1.0).to_data();
+        let orig_tris = data.triangles.len();
+        // Add a zero-area triangle (collinear)
+        let v0 = data.positions.len() as u32;
+        data.positions.push(Vec3::new(10.0, 0.0, 0.0));
+        data.positions.push(Vec3::new(11.0, 0.0, 0.0));
+        data.positions.push(Vec3::new(12.0, 0.0, 0.0));
+        data.triangles.push([v0, v0 + 1, v0 + 2]);
+        if !data.groups.is_empty() {
+            data.groups.push(0);
+        }
+        let mut m = Mesh::from_data(data);
+        assert_eq!(m.triangle_count(), orig_tris + 1);
+
+        let removed = m.clean_degenerate_triangles();
+        assert_eq!(removed, 1);
+        assert_eq!(m.triangle_count(), orig_tris);
     }
 }

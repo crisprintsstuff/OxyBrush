@@ -499,6 +499,8 @@ pub struct Editor {
     pub extract_smooth: usize,
     /// 3D Print tools dialog visibility.
     pub show_print_dialog: bool,
+    /// Mesh topology diagnostics dialog visibility.
+    pub show_diagnostics: bool,
     /// Unit scale: millimeters per world unit.
     pub print_scale_mm_per_unit: f32,
     /// Minimum wall thickness in millimeters for 3D printing and hollowing.
@@ -659,6 +661,7 @@ impl Default for Editor {
             extract_thickness: 0.02,
             extract_smooth: 2,
             show_print_dialog: false,
+            show_diagnostics: false,
             print_scale_mm_per_unit: 10.0,
             print_wall_thickness_mm: 2.0,
             print_drain_hole_radius_mm: 2.5,
@@ -3144,6 +3147,30 @@ impl Editor {
         piece.mesh.mark_all_dirty();
         self.history.commit();
         self.status = label.into();
+    }
+
+    /// Run a 2-manifold topology check on the active piece.
+    pub fn check_manifold(&self) -> oxy_mesh::topo::ManifoldReport {
+        oxy_mesh::topo::check_manifold(&self.scene.active().mesh)
+    }
+
+    /// Clean zero-area and degenerate triangles on the active piece, undoably.
+    pub fn clean_mesh(&mut self) -> usize {
+        self.pointer_up();
+        let piece = self.scene.active_mut();
+        self.history.begin("Clean mesh", piece.id, &piece.mesh);
+        for c in 0..piece.mesh.chunks.len() as u32 {
+            self.history.touch(&piece.mesh, c);
+        }
+        let removed = piece.mesh.clean_degenerate_triangles();
+        if removed > 0 {
+            self.history.commit();
+            self.status = format!("Removed {removed} degenerate triangles");
+        } else {
+            self.history.cancel();
+            self.status = "Mesh is already clean (0 degenerate triangles)".into();
+        }
+        removed
     }
 
     /// Run a mask operation on the active piece, undoably.
