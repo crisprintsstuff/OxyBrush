@@ -166,6 +166,14 @@ pub enum Drag {
         hit: oxy_mesh::RayHit,
         ray_dir: Vec3,
     },
+    /// Dragging to scale and orient an inserted primitive on the surface.
+    InsertPrimitive {
+        start_pixel: Vec2,
+        anchor: Vec3,
+        normal: Vec3,
+        scale: f32,
+        shape: oxy_sculpt::InsertShape,
+    },
 }
 
 /// The quick menu: shown at `pos` (window physical px). `held`: it closes
@@ -292,6 +300,8 @@ pub struct Editor {
     pub noise_scale: f32,
     /// Crease brush pinch intensity factor (how tightly walls are pulled together).
     pub crease_pinch: f32,
+    /// Shape used when BrushKind::InsertPrimitive is active.
+    pub insert_shape: oxy_sculpt::InsertShape,
     /// Built-in alphas followed by user-loaded ones.
     pub alphas: Vec<Arc<Alpha>>,
     /// Index into `alphas`; None = no alpha.
@@ -532,6 +542,7 @@ impl Default for Editor {
             pressure_gamma: 1.0,
             noise_scale: 3.0,
             crease_pinch: 0.3,
+            insert_shape: oxy_sculpt::InsertShape::Sphere,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
             alpha: None,
             alpha_rotation_deg: 0.0,
@@ -771,7 +782,7 @@ impl Editor {
     }
 
     pub fn is_stroking(&self) -> bool {
-        matches!(self.drag, Drag::Stroke { .. })
+        matches!(self.drag, Drag::Stroke { .. } | Drag::InsertPrimitive { .. })
     }
 
     /// The user is mid-edit. An agent waits rather than applying a change
@@ -780,6 +791,7 @@ impl Editor {
         matches!(
             self.drag,
             Drag::Stroke { .. }
+                | Drag::InsertPrimitive { .. }
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
                 | Drag::Select { .. }
@@ -1170,6 +1182,17 @@ impl Editor {
     /// along ray direction `d`.
     fn start_stroke_at(&mut self, p: Vec2, hit: oxy_mesh::RayHit, d: Vec3) {
         let (kind, invert) = self.effective_brush();
+        if kind == BrushKind::InsertPrimitive {
+            let normal = facing(hit.normal, d);
+            self.drag = Drag::InsertPrimitive {
+                start_pixel: p,
+                anchor: hit.point,
+                normal,
+                scale: 0.0,
+                shape: self.insert_shape,
+            };
+            return;
+        }
         let mode = if kind.is_grab_like()
             || kind == BrushKind::SnakeHook
             || kind == BrushKind::Smooth
@@ -1270,6 +1293,7 @@ impl Editor {
             spray: self.spray,
             noise_scale: self.noise_scale,
             crease_pinch: self.crease_pinch,
+            insert_shape: self.insert_shape,
         };
         // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
         let stamp =
@@ -1310,6 +1334,7 @@ impl Editor {
             alpha: self.alpha.and_then(|i| self.alphas.get(i)).map(|a| a.name.clone()),
             alpha_rotation_deg: self.alpha_rotation_deg,
             alpha_follow_stroke: self.alpha_follow_stroke,
+            insert_shape: self.insert_shape,
         }
     }
 
@@ -1327,6 +1352,7 @@ impl Editor {
         self.spray = p.spray;
         self.noise_scale = p.noise_scale;
         self.crease_pinch = p.crease_pinch;
+        self.insert_shape = p.insert_shape;
         self.stroke_mode = StrokeMode::from_key(&p.stroke_mode).unwrap_or_default();
         self.stabilizer_pt = p.stabilizer_pt;
         self.pressure_gamma = p.pressure_gamma;
@@ -1440,6 +1466,12 @@ impl Editor {
             }
             Drag::Pan => {
                 self.camera.pan(delta, size.y);
+                true
+            }
+            Drag::InsertPrimitive { start_pixel, anchor, scale, .. } => {
+                let d = pos.distance(*start_pixel);
+                let world_per_pixel = self.camera.world_per_pixel(*anchor, size.y);
+                *scale = d * world_per_pixel;
                 true
             }
             Drag::Deferred { .. } => true,
@@ -1673,6 +1705,13 @@ impl Editor {
                     self.clear_mask();
                 } else {
                     self.invert_mask();
+                }
+            }
+            Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
+                let d = self.pointer.map_or(0.0, |p| p.distance(start_pixel));
+                let min_drag = 4.0 * self.pixels_per_point.max(0.1);
+                if d >= min_drag && scale > 1e-4 {
+                    self.commit_inserted_primitive(anchor, normal, scale, shape);
                 }
             }
             _ => {}
@@ -2769,6 +2808,76 @@ impl Editor {
         self.custom_gizmo_pivot = None;
         self.status = "Duplicated unmasked geometry".into();
         true
+    }
+
+    /// Insert a primitive shape at surface `anchor` oriented with +Y along `normal`,
+    /// scaled by `scale`, respecting active symmetry transforms.
+    ///
+    /// Pre-existing vertices are 100% masked, the new primitive is unmasked and assigned
+    /// a new polygroup ID. Recorded in undo history.
+    pub fn commit_inserted_primitive(
+        &mut self,
+        anchor: Vec3,
+        normal: Vec3,
+        scale: f32,
+        shape: oxy_sculpt::InsertShape,
+    ) {
+        let piece = self.scene.active();
+        let base_mesh = &piece.mesh;
+        let prim_mesh = shape.build_mesh();
+
+        let transforms = self.symmetry.transforms();
+        let added_tris = prim_mesh.triangle_count() * transforms.len();
+        if base_mesh.triangle_count() + added_tris > self.max_triangles {
+            self.status = format!(
+                "Inserting primitive would exceed maximum triangle limit {} (mesh has {})",
+                self.max_triangles,
+                base_mesh.triangle_count() + added_tris
+            );
+            return;
+        }
+
+        let n = normal.normalize_or(Vec3::Y);
+        let rot = if n.dot(Vec3::Y) < -0.9999 {
+            glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
+        } else {
+            glam::Quat::from_rotation_arc(Vec3::Y, n)
+        };
+
+        let mut all_prim_positions = Vec::with_capacity(prim_mesh.positions.len() * transforms.len());
+        let mut all_prim_triangles = Vec::with_capacity(prim_mesh.triangles.len() * transforms.len());
+
+        for sym_m in transforms {
+            let is_mirror = sym_m.determinant() < 0.0;
+            let base_idx = all_prim_positions.len() as u32;
+
+            for p in &prim_mesh.positions {
+                let p_scaled = *p * scale;
+                let p_rot = rot * p_scaled;
+                let p_world = anchor + p_rot;
+                all_prim_positions.push(sym_m * p_world);
+            }
+
+            for tri in &prim_mesh.triangles {
+                if is_mirror {
+                    all_prim_triangles.push([tri[0] + base_idx, tri[2] + base_idx, tri[1] + base_idx]);
+                } else {
+                    all_prim_triangles.push([tri[0] + base_idx, tri[1] + base_idx, tri[2] + base_idx]);
+                }
+            }
+        }
+
+        let combined_prim = oxy_mesh::Mesh::new(all_prim_positions, all_prim_triangles);
+        let new_mesh = base_mesh.insert_mesh(&combined_prim, glam::Affine3A::IDENTITY);
+
+        let piece = self.scene.active_mut();
+        let id = piece.id;
+        let prev_mesh = std::mem::replace(&mut piece.mesh, new_mesh);
+        let prev_multires = piece.multires.take();
+        self.history.record_topology(format!("Insert {}", shape.label()), id, prev_mesh, prev_multires);
+        self.gizmo_pivot = None;
+        self.custom_gizmo_pivot = None;
+        self.status = format!("Inserted {} (pre-existing mesh masked)", shape.label());
     }
 
     /// Where the transform gizmo is drawn (canvas-local physical px), or
@@ -4464,5 +4573,55 @@ mod tests {
         e.redo();
         assert_eq!(e.scene.pieces.len(), 2);
         assert_eq!(e.scene.active_index(), 1);
+    }
+
+    #[test]
+    fn insert_primitive_brush_drags_scales_and_auto_masks() {
+        let mut e = editor();
+        e.symmetry = Symmetry::default(); // Solo insert without mirror
+        e.brush_kind = BrushKind::InsertPrimitive;
+        e.insert_shape = oxy_sculpt::InsertShape::Cone;
+
+        let orig_vcount = e.scene.active().mesh.vertex_count();
+        let orig_tcount = e.scene.active().mesh.triangle_count();
+
+        center(&mut e);
+        let start_pos = e.pointer.unwrap();
+        e.pointer_down(PointerButton::Primary);
+
+        assert!(matches!(e.drag, Drag::InsertPrimitive { .. }), "mouse down enters InsertPrimitive drag");
+
+        // Drag 50 pixels away
+        e.pointer_moved(start_pos + Vec2::new(50.0, 50.0));
+        if let Drag::InsertPrimitive { scale, .. } = &e.drag {
+            assert!(*scale > 0.0, "dragging increases scale: scale = {scale}");
+        } else {
+            panic!("expected Drag::InsertPrimitive");
+        }
+
+        e.pointer_up();
+
+        let active = e.scene.active();
+        assert!(active.mesh.vertex_count() > orig_vcount, "vertices added");
+        assert!(active.mesh.triangle_count() > orig_tcount, "triangles added");
+
+        // Check auto-masking: all original vertices must be 1.0, inserted vertices 0.0
+        let masked_count = active.mesh.mask.iter().filter(|&&m| m > 0.99).count();
+        let unmasked_count = active.mesh.mask.iter().filter(|&&m| m < 0.01).count();
+        assert_eq!(masked_count, orig_vcount, "original mesh is 100% masked");
+        assert_eq!(unmasked_count, active.mesh.vertex_count() - orig_vcount, "inserted shape is 100% unmasked");
+
+        // Face groups
+        let groups: std::collections::HashSet<u32> = active.mesh.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "inserted shape has a distinct face group");
+
+        // Undo restores original mesh
+        e.undo();
+        assert_eq!(e.scene.active().mesh.vertex_count(), orig_vcount);
+        assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount);
+
+        // Redo re-inserts the shape
+        e.redo();
+        assert!(e.scene.active().mesh.vertex_count() > orig_vcount);
     }
 }

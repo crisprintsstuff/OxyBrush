@@ -4,6 +4,33 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [2.0.0-beta] - 2026-11-06
+
+### Added
+
+- **Insert Primitives Brush (IMM / Multi-Mesh):**
+  - Interactive drag-to-scale and orient placement of 3D primitives (**Sphere**, **Cube**, **Cylinder**, **Cone**, **Torus**, and **Plane**) directly on mesh surfaces.
+  - Live 3D wireframe preview rendered on surface normals with active symmetry transformations (radial and mirror axes).
+  - Automatic pre-existing mesh masking: all original vertices are 100% masked (`mask = 1.0`) while newly inserted primitive vertices remain unmasked (`mask = 0.0`), enabling immediate transposition and posing with the Gizmo (`W`).
+  - Distinct polygroup face group assignment and full undo/redo history recording for topology modifications.
+  - Interactive shape selection buttons in the brush shelf, quick menu, and properties panel.
+- **ZBrush Classic UI Theme & Preset:**
+  - Added dedicated ZBrush classic dark theme preset closely mirroring the signature ZBrush palette and styling, accessible from Preferences > Theme.
+- **ZBrush Keymap & Navigation Profile:**
+  - Added official Maxon ZBrush navigation keybindings and cheat sheet shortcut bindings (Right-click / Alt-navigation, brush palettes, masking gestures), selectable in Preferences > Keymap.
+- **Tablet Hardware Detection & Wayland Fallback:**
+  - Automatic graphics tablet hardware detection via `/proc/bus/input/devices` and `/sys/class/input`.
+  - Auto-fallback to X11/XWayland on Linux when a drawing tablet is detected to eliminate Wayland driver pointer dropouts and missing pressure events.
+  - Added CLI flags `--x11`, `--backend <x11|wayland>`, and `OXY_BACKEND=x11` environment variable.
+
+### Fixed
+
+- **3D Print Tools (Watertight Hollow & Keyed Split):**
+  - Fixed OpenVDB signed distance field exterior signing using angle-weighted vertex pseudonormal interpolation, eliminating false negative cavities along sharp geometric edges and corners.
+  - Implemented dynamic narrow band allocation $\max(4.0, \lceil \text{wall}/h \rceil + 4.0)$ preventing narrow band boundary leaks on thick hollow shells.
+  - Replaced high-memory raster grid splits with instantaneous analytic half-space signed distance field intersections, delivering sub-second, 100% watertight plane splits with keyed alignment pins and sockets.
+  - Fixed CCW vertex winding on primitive cylinder caps and cone side triangles.
+
 ## [1.7.7-beta] - 2026-11-06
 
 ### Fixed

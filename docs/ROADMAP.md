@@ -12,7 +12,7 @@
 
 | | |
 |---|---|
-| **Latest release** | v1.7.7-beta (2026-11-06): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Latest release** | v2.0.0-beta (2026-11-06): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), performance passes (3.6: stroke coalescing, dab budgeting, Rayon GPU & geometry acceleration), interface pass, Phase 4 items (Python plugin system, local MCP agent, keymap editor & presets, vertex color, transform gizmo & posing, Kelvinlet brushes, mask extract, themes & appearance, wireframe overlay, viewport background, focal length, autosave control), pipeline basics (glTF/GLB, PLY, LOD chains, CLI), and native ZBrush (.ztl, .zpr) multi-subtool import |
 | **Next** | Phase 3 — rebuilding lower levels (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |

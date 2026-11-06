@@ -43,11 +43,92 @@ pub enum BrushKind {
     KelvinGrab,
     KelvinTwist,
     KelvinScale,
+    InsertPrimitive,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum InsertShape {
+    #[default]
+    Sphere,
+    Cube,
+    Cylinder,
+    Cone,
+    Torus,
+    Plane,
+}
+
+impl InsertShape {
+    pub const ALL: [InsertShape; 6] = [
+        InsertShape::Sphere,
+        InsertShape::Cube,
+        InsertShape::Cylinder,
+        InsertShape::Cone,
+        InsertShape::Torus,
+        InsertShape::Plane,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InsertShape::Sphere => "Sphere",
+            InsertShape::Cube => "Cube",
+            InsertShape::Cylinder => "Cylinder",
+            InsertShape::Cone => "Cone",
+            InsertShape::Torus => "Torus",
+            InsertShape::Plane => "Plane",
+        }
+    }
+
+    /// Build a normalized unit mesh for this shape.
+    ///
+    /// The mesh is positioned such that its base/anchor rests at Y = 0 (Plane at Y = 0),
+    /// and its outward orientation points along +Y.
+    pub fn build_mesh(self) -> oxy_mesh::Mesh {
+        match self {
+            InsertShape::Sphere => {
+                let mut m = oxy_mesh::primitives::icosphere(3, 1.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            InsertShape::Cube => {
+                let mut m = oxy_mesh::primitives::cube(4, 2.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            InsertShape::Cylinder => {
+                let mut m = oxy_mesh::primitives::cylinder(24, 1.0, 2.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            InsertShape::Cone => {
+                let mut m = oxy_mesh::primitives::cone(24, 1.0, 2.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            InsertShape::Torus => {
+                let r_major = 1.0;
+                let r_minor = 0.35;
+                let mut m = oxy_mesh::primitives::torus(24, 16, r_major, r_minor);
+                for p in &mut m.positions {
+                    p.y += r_minor;
+                }
+                m
+            }
+            InsertShape::Plane => oxy_mesh::primitives::plane(8, 2.0),
+        }
+    }
 }
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 20] = [
+    pub const ALL: [BrushKind; 21] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -66,6 +147,7 @@ impl BrushKind {
         BrushKind::Polish,
         BrushKind::PlanarTrim,
         BrushKind::Noise,
+        BrushKind::InsertPrimitive,
         BrushKind::Mask,
         BrushKind::Paint,
     ];
@@ -109,6 +191,7 @@ impl BrushKind {
             BrushKind::PlanarTrim => "Planar Trim",
             BrushKind::TopoMove => "Topological Move",
             BrushKind::Noise => "Noise",
+            BrushKind::InsertPrimitive => "Insert Primitive",
         }
     }
 
@@ -121,7 +204,8 @@ impl BrushKind {
             | BrushKind::TopoMove
             | BrushKind::KelvinGrab
             | BrushKind::KelvinTwist
-            | BrushKind::KelvinScale => 1.0,
+            | BrushKind::KelvinScale
+            | BrushKind::InsertPrimitive => 1.0,
             BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
@@ -155,6 +239,8 @@ pub struct BrushSettings {
     pub noise_scale: f32,
     /// Crease brush: pinch intensity factor (0.0 = no pinch, 0.3 = default, 1.0 = sharp pinch).
     pub crease_pinch: f32,
+    /// Insert shape for BrushKind::InsertPrimitive.
+    pub insert_shape: InsertShape,
 }
 
 impl Default for BrushSettings {
@@ -172,6 +258,7 @@ impl Default for BrushSettings {
             spray: 0.0,
             noise_scale: 3.0,
             crease_pinch: 0.3,
+            insert_shape: InsertShape::Sphere,
         }
     }
 }
@@ -1063,7 +1150,8 @@ fn target_positions(
                 | BrushKind::KelvinScale
                 | BrushKind::Mask
                 | BrushKind::Paint
-                | BrushKind::Layer => p,
+                | BrushKind::Layer
+                | BrushKind::InsertPrimitive => p,
             };
             (v, np)
         })

@@ -1446,6 +1446,18 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         ed.move_brush(from, to);
         ed.status = format!("Moved {} in the shelf", ed.brush_order[to].label());
     }
+    if ed.brush_kind == BrushKind::InsertPrimitive {
+        ui.add_space(6.0);
+        ui.label(RichText::new("Insert Shape").strong().small());
+        ui.horizontal_wrapped(|ui| {
+            for shape in oxy_sculpt::InsertShape::ALL {
+                if ui.selectable_label(ed.insert_shape == shape, shape.label()).clicked() {
+                    ed.insert_shape = shape;
+                    ed.status = format!("Insert Primitive shape: {}", shape.label());
+                }
+            }
+        });
+    }
     if !horizontal {
         ui.add_space(6.0);
         ui.label(RichText::new("Drag brushes to rearrange. Right-click for placement.").weak().small());
@@ -1663,6 +1675,18 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                                 ),
                                 plain::CREASE_PINCH,
                             );
+                        }
+
+                        if ed.brush_kind == BrushKind::InsertPrimitive {
+                            ui.add_space(2.0);
+                            ui.label(RichText::new("Shape").weak().small());
+                            egui::ComboBox::from_id_salt("quick_menu_insert_shape")
+                                .selected_text(ed.insert_shape.label())
+                                .show_ui(ui, |ui| {
+                                    for s in oxy_sculpt::InsertShape::ALL {
+                                        ui.selectable_value(&mut ed.insert_shape, s, s.label());
+                                    }
+                                });
                         }
 
                         ui.add_space(4.0);
@@ -2887,6 +2911,18 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             );
             ui.end_row();
         }
+        if ed.brush_kind == BrushKind::InsertPrimitive {
+            ui.label("Primitive");
+            egui::ComboBox::from_id_salt("properties_insert_shape").selected_text(ed.insert_shape.label()).show_ui(
+                ui,
+                |ui| {
+                    for s in oxy_sculpt::InsertShape::ALL {
+                        ui.selectable_value(&mut ed.insert_shape, s, s.label());
+                    }
+                },
+            );
+            ui.end_row();
+        }
     });
     tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
     tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
@@ -3713,6 +3749,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Select { points: Vec<Vec2>, lasso: bool, action: crate::editor::SelectAction },
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
+        InsertPrimitive { start_pixel: Vec2, anchor: Vec3, normal: Vec3, scale: f32, shape: oxy_sculpt::InsertShape },
         Lazy(Vec2),
         Brush { kind: BrushKind, invert: bool },
     }
@@ -3723,6 +3760,13 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
         Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
         Drag::MaskGesture { start } => Mark::MaskGesture { start: *start },
+        Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => Mark::InsertPrimitive {
+            start_pixel: *start_pixel,
+            anchor: *anchor,
+            normal: *normal,
+            scale: *scale,
+            shape: *shape,
+        },
         Drag::Stroke { lazy: Some(b), .. } => Mark::Lazy(*b),
         Drag::Stroke { stroke, .. } => Mark::Brush { kind: stroke.settings().kind, invert: false },
         _ => Mark::Brush { kind: fallback_kind, invert: fallback_invert },
@@ -3747,6 +3791,46 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
         Mark::MaskGesture { start } => {
             painter.line_segment([to_pt(start), pos], EStroke::new(1.5, Color32::from_rgb(110, 150, 255)));
+        }
+        Mark::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
+            let s_pt = to_pt(start_pixel);
+            let accent = ed.accent_color();
+            painter.line_segment([s_pt, pos], EStroke::new(1.5, accent));
+
+            if scale > 1e-4 {
+                let prim_mesh = shape.build_mesh();
+                let n = normal.normalize_or(Vec3::Y);
+                let rot = if n.dot(Vec3::Y) < -0.9999 {
+                    glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
+                } else {
+                    glam::Quat::from_rotation_arc(Vec3::Y, n)
+                };
+
+                let wire_color = Color32::from_rgb(255, 200, 80);
+                let stroke = EStroke::new(1.0, wire_color);
+
+                for sym_m in ed.symmetry.transforms() {
+                    let mut proj_vertices = Vec::with_capacity(prim_mesh.positions.len());
+                    for p in &prim_mesh.positions {
+                        let p_scaled = *p * scale;
+                        let p_rot = rot * p_scaled;
+                        let p_world = sym_m * (anchor + p_rot);
+                        proj_vertices.push(project_point(ed, p_world));
+                    }
+
+                    for tri in &prim_mesh.triangles {
+                        if let (Some(p0), Some(p1), Some(p2)) = (
+                            proj_vertices[tri[0] as usize],
+                            proj_vertices[tri[1] as usize],
+                            proj_vertices[tri[2] as usize],
+                        ) {
+                            painter.line_segment([p0, p1], stroke);
+                            painter.line_segment([p1, p2], stroke);
+                            painter.line_segment([p2, p0], stroke);
+                        }
+                    }
+                }
+            }
         }
         Mark::Deferred { mode, start } => {
             let s = to_pt(start);

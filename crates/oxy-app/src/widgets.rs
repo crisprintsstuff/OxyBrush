@@ -46,6 +46,7 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::KelvinScale => "Scales or pinches the volume radially with elastodynamic decay. Alt inverts.",
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
+        BrushKind::InsertPrimitive => "Inserts 3D primitives onto the surface with auto-masking.",
     }
 }
 
@@ -87,6 +88,7 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::Mask => 0.18 * bump(x, 0.8),
         // Paint leaves the shape alone: the same gentle surface, wider.
         BrushKind::Paint => 0.14 * bump(x, 1.1),
+        BrushKind::InsertPrimitive => 0.65 * bump(x, 0.35),
     }
 }
 

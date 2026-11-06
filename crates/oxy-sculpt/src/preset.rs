@@ -50,6 +50,8 @@ pub struct BrushPreset {
     pub alpha: Option<String>,
     pub alpha_rotation_deg: f32,
     pub alpha_follow_stroke: bool,
+    /// Shape used when kind is BrushKind::InsertPrimitive.
+    pub insert_shape: crate::InsertShape,
 }
 
 impl BrushPreset {
@@ -75,6 +77,7 @@ impl BrushPreset {
             alpha: None,
             alpha_rotation_deg: 0.0,
             alpha_follow_stroke: false,
+            insert_shape: crate::InsertShape::Sphere,
         }
     }
 
@@ -102,6 +105,7 @@ impl BrushPreset {
         kv("alpha", self.alpha.as_deref().map(one_line).unwrap_or_default());
         kv("alpha_rotation_deg", self.alpha_rotation_deg.to_string());
         kv("alpha_follow_stroke", self.alpha_follow_stroke.to_string());
+        kv("insert_shape", shape_key(self.insert_shape).into());
         s
     }
 
@@ -170,6 +174,9 @@ impl BrushPreset {
         if let Some(b) = flag("alpha_follow_stroke") {
             p.alpha_follow_stroke = b;
         }
+        if let Some(s) = get("insert_shape").and_then(shape_from_key) {
+            p.insert_shape = s;
+        }
         Ok(p)
     }
 
@@ -219,11 +226,27 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::KelvinScale => "kelvin_scale",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
+        BrushKind::InsertPrimitive => "insert_primitive",
     }
 }
 
 pub fn kind_from_key(key: &str) -> Option<BrushKind> {
     BrushKind::ALL.into_iter().find(|k| kind_key(*k) == key)
+}
+
+pub fn shape_key(s: crate::InsertShape) -> &'static str {
+    match s {
+        crate::InsertShape::Sphere => "sphere",
+        crate::InsertShape::Cube => "cube",
+        crate::InsertShape::Cylinder => "cylinder",
+        crate::InsertShape::Cone => "cone",
+        crate::InsertShape::Torus => "torus",
+        crate::InsertShape::Plane => "plane",
+    }
+}
+
+pub fn shape_from_key(key: &str) -> Option<crate::InsertShape> {
+    crate::InsertShape::ALL.into_iter().find(|s| shape_key(*s) == key)
 }
 
 fn falloff_key(f: Falloff) -> &'static str {

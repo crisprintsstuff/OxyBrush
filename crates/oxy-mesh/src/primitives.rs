@@ -127,6 +127,87 @@ pub fn cylinder(segments: u32, radius: f32, height: f32) -> Mesh {
     Mesh::new(positions, tris)
 }
 
+/// Cone along the Y axis spanning `-height/2..=height/2`, with base at `-height/2` and apex at `+height/2`.
+pub fn cone(segments: u32, radius: f32, height: f32) -> Mesh {
+    let n = segments.max(3);
+    let half_h = height * 0.5;
+    let mut positions = Vec::with_capacity((n + 2) as usize);
+    let mut tris = Vec::with_capacity((n * 2) as usize);
+
+    let bot_center_idx = 0u32;
+    positions.push(Vec3::new(0.0, -half_h, 0.0));
+    let apex_idx = 1u32;
+    positions.push(Vec3::new(0.0, half_h, 0.0));
+
+    let base_idx = 2u32;
+    for i in 0..n {
+        let theta = (i as f32 / n as f32) * std::f32::consts::TAU;
+        let x = theta.cos() * radius;
+        let z = theta.sin() * radius;
+        positions.push(Vec3::new(x, -half_h, z));
+    }
+
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let b0 = base_idx + i;
+        let b1 = base_idx + next;
+
+        // Bottom cap facing -Y
+        tris.push([bot_center_idx, b0, b1]);
+
+        // Cone side facing outward
+        tris.push([b0, apex_idx, b1]);
+    }
+
+    Mesh::new(positions, tris)
+}
+
+/// Torus in the XZ plane revolving around the Y axis.
+/// `major_radius` is the distance from the center of the tube to the center of the torus.
+/// `minor_radius` is the radius of the tube.
+pub fn torus(major_segments: u32, minor_segments: u32, major_radius: f32, minor_radius: f32) -> Mesh {
+    let m = major_segments.max(3);
+    let n = minor_segments.max(3);
+    let mut positions = Vec::with_capacity((m * n) as usize);
+    let mut tris = Vec::with_capacity((m * n * 2) as usize);
+
+    for i in 0..m {
+        let u = (i as f32 / m as f32) * std::f32::consts::TAU;
+        let cos_u = u.cos();
+        let sin_u = u.sin();
+        for j in 0..n {
+            let v = (j as f32 / n as f32) * std::f32::consts::TAU;
+            let cos_v = v.cos();
+            let sin_v = v.sin();
+
+            let r = major_radius + minor_radius * cos_v;
+            let x = r * cos_u;
+            let y = minor_radius * sin_v;
+            let z = r * sin_u;
+            positions.push(Vec3::new(x, y, z));
+        }
+    }
+
+    let idx = |i: u32, j: u32| i * n + j;
+
+    for i in 0..m {
+        let i_next = (i + 1) % m;
+        for j in 0..n {
+            let j_next = (j + 1) % n;
+            let a = idx(i, j);
+            let b = idx(i_next, j);
+            let c = idx(i_next, j_next);
+            let d = idx(i, j_next);
+
+            // Outward facing triangles
+            tris.push([a, d, b]);
+            tris.push([b, d, c]);
+        }
+    }
+
+    Mesh::new(positions, tris)
+}
+
 fn grid(divisions: u32, f: impl Fn(f32, f32) -> Vec3) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let n = divisions.max(1);
     let mut p = Vec::with_capacity(((n + 1) * (n + 1)) as usize);
@@ -207,6 +288,46 @@ mod tests {
                 let dot = center.x * n.x + center.z * n.z;
                 assert!(dot > 0.0, "side normal points inward: {dot}");
             }
+        }
+    }
+
+    #[test]
+    fn cone_is_closed() {
+        let m = cone(16, 1.0, 2.0);
+        let f = m.triangle_count() as i64;
+        let e = f * 3 / 2;
+        assert_eq!(m.vertex_count() as i64 - e + f, 2);
+        for tri in &m.triangles {
+            let v0 = m.positions[tri[0] as usize];
+            let v1 = m.positions[tri[1] as usize];
+            let v2 = m.positions[tri[2] as usize];
+            let n = (v1 - v0).cross(v2 - v0);
+            let center = (v0 + v1 + v2) / 3.0;
+            if center.y < -0.99 {
+                assert!(n.y < 0.0, "bottom cap points inward");
+            } else {
+                let dot = center.x * n.x + center.z * n.z;
+                assert!(dot > 0.0, "side normal points inward: {dot}");
+            }
+        }
+    }
+
+    #[test]
+    fn torus_is_closed() {
+        let m = torus(16, 12, 2.0, 0.5);
+        let f = m.triangle_count() as i64;
+        let e = f * 3 / 2;
+        // Genus 1: V - E + F = 0
+        assert_eq!(m.vertex_count() as i64 - e + f, 0);
+        for tri in &m.triangles {
+            let v0 = m.positions[tri[0] as usize];
+            let v1 = m.positions[tri[1] as usize];
+            let v2 = m.positions[tri[2] as usize];
+            let n = (v1 - v0).cross(v2 - v0);
+            let center = (v0 + v1 + v2) / 3.0;
+            let center_tube = Vec3::new(center.x, 0.0, center.z).normalize() * 2.0;
+            let outward = center - center_tube;
+            assert!(outward.dot(n) > 0.0, "torus normal points inward");
         }
     }
 }

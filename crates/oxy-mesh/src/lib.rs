@@ -763,6 +763,39 @@ impl Mesh {
         Some(Mesh::from_data(data))
     }
 
+    /// Insert another mesh into this mesh, transforming the inserted vertices by `transform`.
+    ///
+    /// Pre-existing vertices have `mask` set to `1.0` (fully masked), while the newly inserted
+    /// primitive's vertices have `mask` set to `0.0` (unmasked).
+    /// The inserted triangles are assigned a new unique face group id.
+    pub fn insert_mesh(&self, primitive: &Mesh, transform: glam::Affine3A) -> Mesh {
+        let mut data = self.to_data();
+        let new_group = self.next_free_group();
+
+        if data.color.len() != data.positions.len() {
+            data.color = vec![WHITE; data.positions.len()];
+        }
+        // Auto-mask all pre-existing vertices
+        data.mask = vec![1.0; data.positions.len()];
+
+        let base_v = data.positions.len() as u32;
+
+        for p in &primitive.positions {
+            let p_world = transform.transform_point3(*p);
+            data.positions.push(p_world);
+            data.mask.push(0.0);
+            data.color.push(WHITE);
+        }
+
+        for tri in &primitive.triangles {
+            data.triangles.push([tri[0] + base_v, tri[1] + base_v, tri[2] + base_v]);
+            data.groups.push(new_group);
+            data.hidden.push(false);
+        }
+
+        Mesh::from_data(data)
+    }
+
     /// One group per visible triangle set; hidden triangles keep their group.
     pub fn group_visible(&mut self) {
         let g = self.next_free_group();
@@ -1701,5 +1734,29 @@ mod tests {
         let mut fully_masked = m.clone();
         fully_masked.mask.fill(1.0);
         assert!(fully_masked.duplicate_unmasked().is_none());
+    }
+
+    #[test]
+    fn test_insert_mesh() {
+        let base = primitives::cube(2, 2.0);
+        let prim = primitives::cone(8, 0.5, 1.0);
+        let transform = glam::Affine3A::from_scale_rotation_translation(
+            Vec3::splat(1.0),
+            glam::Quat::IDENTITY,
+            Vec3::new(0.0, 1.0, 0.0),
+        );
+        let combined = base.insert_mesh(&prim, transform);
+        assert_eq!(combined.vertex_count(), base.vertex_count() + prim.vertex_count());
+        assert_eq!(combined.triangle_count(), base.triangle_count() + prim.triangle_count());
+
+        // Pre-existing vertices masked (1.0), new vertices unmasked (0.0)
+        let masked = combined.mask.iter().filter(|&&m| m > 0.99).count();
+        let unmasked = combined.mask.iter().filter(|&&m| m < 0.01).count();
+        assert_eq!(masked, base.vertex_count());
+        assert_eq!(unmasked, prim.vertex_count());
+
+        // Groups should have at least 2 distinct IDs
+        let groups: std::collections::HashSet<u32> = combined.groups().iter().copied().collect();
+        assert!(groups.len() >= 2);
     }
 }

@@ -196,6 +196,7 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::KelvinScale => "kelvin_scale",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
+        BrushKind::InsertPrimitive => "insert_primitive",
     }
 }
 
