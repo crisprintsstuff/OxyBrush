@@ -3474,10 +3474,14 @@ fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 }
                 Phase::Ready { update, path } => {
+                    let step = install_step(ed.updater.kind, path.clone());
+                    if let InstallStep::ShowFile { how, .. } = &step {
+                        ui.label(RichText::new(*how).italics());
+                    }
                     tips::hover(ui.hyperlink_to("Release notes", &update.release.page_url), plain::RELEASE_NOTES);
-                    let (label, tip) = match install_step(ed.updater.kind, path.clone()) {
+                    let (label, tip) = match &step {
                         InstallStep::RunInstaller(_) => ("Install and restart", plain::INSTALL),
-                        InstallStep::ShowFile { .. } => ("Show the file", plain::SHOW_FILE),
+                        InstallStep::ShowFile { .. } => ("Open download folder", plain::SHOW_FILE),
                     };
                     if tips::hover(ui.button(RichText::new(label).strong()), tip).clicked() {
                         action = Some("install");

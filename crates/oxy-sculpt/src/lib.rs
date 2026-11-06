@@ -480,6 +480,8 @@ pub struct DabBudget {
     pub max_dabs: u32,
     /// Maximum strength multiplier used to compensate for wider spacing.
     pub max_strength_scale: f32,
+    /// Maximum spacing multiplier to prevent dabs from detaching into separated circles at high resolution.
+    pub max_spacing_scale: f32,
     recent: [f32; 8],
     count: usize,
     spacing_scale: f32,
@@ -487,7 +489,15 @@ pub struct DabBudget {
 
 impl DabBudget {
     pub fn new(ms: f32) -> Self {
-        Self { ms, max_dabs: 8, max_strength_scale: 4.0, recent: [0.0; 8], count: 0, spacing_scale: 1.0 }
+        Self {
+            ms,
+            max_dabs: 8,
+            max_strength_scale: 2.0,
+            max_spacing_scale: 1.5,
+            recent: [0.0; 8],
+            count: 0,
+            spacing_scale: 1.0,
+        }
     }
 
     /// Median duration of recent dabs in milliseconds, if any have run.
@@ -648,7 +658,8 @@ impl Stroke {
         let (step, max_dabs) = match &mut self.budget {
             Some(b) => {
                 let wanted = (len + self.carry) / nominal;
-                let (n_max, k) = plan_dabs(wanted, b.dab_ms(), b.ms, b.max_dabs);
+                let (n_max, raw_k) = plan_dabs(wanted, b.dab_ms(), b.ms, b.max_dabs);
+                let k = raw_k.min(b.max_spacing_scale);
                 b.spacing_scale = k;
                 self.strength_scale = k.min(b.max_strength_scale);
                 (nominal * k, n_max)
@@ -2281,6 +2292,25 @@ mod tests {
             disp_budgeted >= disp_unbudgeted * 0.3 && disp_budgeted <= disp_unbudgeted * 1.5,
             "budgeted disp {disp_budgeted} vs unbudgeted {disp_unbudgeted}"
         );
+    }
+
+    #[test]
+    fn stroke_budget_clamps_spacing_scale_to_prevent_beading() {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let settings =
+            BrushSettings { kind: BrushKind::Draw, radius: 0.3, strength: 1.0, spacing: 0.1, ..Default::default() };
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_budget(1.0); // 1ms budget
+        // Simulate a slow dab (e.g. 50ms per dab as on 83M triangle mesh):
+        if let Some(b) = &mut stroke.budget {
+            b.record(50.0);
+            b.record(50.0);
+        }
+        let start = Vec3::Y;
+        let end = (Vec3::Y + Vec3::X * 0.8).normalize();
+        stroke.add_sample(&mut mesh, StrokeSample { position: start, normal: start, pressure: 1.0 }, &mut |_, _| {});
+        stroke.add_sample(&mut mesh, StrokeSample { position: end, normal: end, pressure: 1.0 }, &mut |_, _| {});
+        // Spacing scale must be clamped to max_spacing_scale (1.5) instead of blowing up to 8+
+        assert!(stroke.spacing_scale() <= 1.5, "spacing scale clamped to {}", stroke.spacing_scale());
     }
 
     #[test]

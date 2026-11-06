@@ -148,10 +148,20 @@ impl Multires {
                 }
             }
         }
-        if k > 0 {
-            let smooth = self.loop_from(k);
-            let lvl = &mut self.levels[k];
-            lvl.details = lvl.positions.iter().zip(&smooth).map(|(p, s)| *p - *s).collect();
+        // Propagate deformations downward to coarse levels so lower levels
+        // reflect sculpting done at higher subdivision levels.
+        for j in (1..=k).rev() {
+            let smooth = self.loop_from(j);
+            let (lower, upper) = self.levels.split_at_mut(j);
+            let coarse_pos = &mut lower[j - 1].positions;
+            let fine_pos = &upper[0].positions;
+            for (p_coarse, (&p_fine, &sm)) in coarse_pos.iter_mut().zip(fine_pos.iter().zip(&smooth)) {
+                let disp = p_fine - sm;
+                *p_coarse += disp;
+            }
+            let new_smooth = self.loop_from(j);
+            let lvl = &mut self.levels[j];
+            lvl.details = lvl.positions.iter().zip(&new_smooth).map(|(p, s)| *p - *s).collect();
         }
         for j in k + 1..self.levels.len() {
             let smooth = self.loop_from(j);
@@ -719,5 +729,54 @@ mod tests {
             assert!(p.y.abs() < 1e-6);
             assert!(p.x.abs() <= 1.0 + 1e-5 && p.z.abs() <= 1.0 + 1e-5);
         }
+    }
+
+    #[test]
+    fn high_level_strokes_propagate_down_when_lowering_subd() {
+        let base = primitives::icosphere(1, 1.0);
+        let mut mr = Multires::new(&base);
+        let d1 = mr.add_level(&base);
+        let mut m1 = rebuild(&mut mr, d1);
+        let d2 = mr.add_level(&m1);
+        let mut m2 = rebuild(&mut mr, d2);
+        assert_eq!((mr.level_count(), mr.active()), (3, 2));
+
+        // Find a vertex at level 2 that originated from level 0:
+        let top0_src =
+            (0..base.vertex_count()).max_by(|&a, &b| base.positions[a].y.total_cmp(&base.positions[b].y)).unwrap();
+        // In m2, find the vertex corresponding to top0_src:
+        let top2 = (0..m2.vertex_count()).find(|&v| m2.source_vertices()[v] == top0_src as u32).unwrap();
+        let orig_y = m2.positions[top2].y;
+
+        // Sculpt a stroke/bump at level 2:
+        m2.positions[top2] += Vec3::Y * 0.5;
+        m2.refresh_all();
+        let bumped_y = m2.positions[top2].y;
+        assert!((bumped_y - (orig_y + 0.5)).abs() < 1e-5);
+
+        // Lower subdivision to level 1:
+        let d = mr.set_level(&m2, 1);
+        m1 = rebuild(&mut mr, d);
+        let top1 = (0..m1.vertex_count()).find(|&v| m1.source_vertices()[v] == top0_src as u32).unwrap();
+        assert!(m1.positions[top1].y > orig_y + 0.3, "stroke propagated down to level 1: got {}", m1.positions[top1].y);
+
+        // Lower subdivision to level 0:
+        let d0 = mr.set_level(&m1, 0);
+        let m0 = rebuild(&mut mr, d0);
+        let top0 = (0..m0.vertex_count()).find(|&v| m0.source_vertices()[v] == top0_src as u32).unwrap();
+        assert!(m0.positions[top0].y > orig_y + 0.3, "stroke propagated down to level 0: got {}", m0.positions[top0].y);
+
+        // Step back up to level 2:
+        let d1_back = mr.set_level(&m0, 1);
+        let m1_back = rebuild(&mut mr, d1_back);
+        let d2_back = mr.set_level(&m1_back, 2);
+        let m2_back = rebuild(&mut mr, d2_back);
+        let top2_back = (0..m2_back.vertex_count()).find(|&v| m2_back.source_vertices()[v] == top0_src as u32).unwrap();
+        assert!(
+            (m2_back.positions[top2_back].y - bumped_y).abs() < 1e-4,
+            "high level detail preserved exactly: {} vs {}",
+            m2_back.positions[top2_back].y,
+            bumped_y
+        );
     }
 }

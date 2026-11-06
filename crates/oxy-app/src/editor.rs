@@ -3775,6 +3775,14 @@ mod tests {
     fn multires_levels_keep_detail_and_undo() {
         let mut e = editor();
         let base_tris = e.scene.active().mesh.triangle_count();
+        let level_order = |m: &Mesh| {
+            let mut out = vec![Vec3::ZERO; m.vertex_count()];
+            for (v, &src) in m.source_vertices().iter().enumerate() {
+                out[src as usize] = m.positions[v];
+            }
+            out
+        };
+        let base_verts = level_order(&e.scene.active().mesh);
         e.add_level();
         e.add_level();
         assert_eq!(e.multires_level(), Some((2, 3)));
@@ -3785,14 +3793,6 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         e.pointer_moved(Vec2::new(430.0, 300.0));
         e.pointer_up();
-        // Compare in level order: rebuilding a mesh may reorder its vertices.
-        let level_order = |m: &Mesh| {
-            let mut out = vec![Vec3::ZERO; m.vertex_count()];
-            for (v, &src) in m.source_vertices().iter().enumerate() {
-                out[src as usize] = m.positions[v];
-            }
-            out
-        };
         let sculpted = level_order(&e.scene.active().mesh);
 
         // Down to the base and back up: the sculpted detail is still there.
@@ -3800,6 +3800,10 @@ mod tests {
         e.step_level(-1);
         assert_eq!(e.multires_level(), Some((0, 3)));
         assert_eq!(e.scene.active().mesh.triangle_count(), base_tris);
+        // Verify strokes were propagated down to the base level:
+        let base_sculpted = level_order(&e.scene.active().mesh);
+        let base_moved = base_sculpted.iter().zip(&base_verts).any(|(a, b)| a.distance(*b) > 0.01);
+        assert!(base_moved, "strokes propagated down to base level instead of disappearing");
         e.step_level(1);
         e.step_level(1);
         let back = level_order(&e.scene.active().mesh);
