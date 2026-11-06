@@ -214,6 +214,17 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             }),
         },
         Entry {
+            label: "Theme: ZBrush Classic".into(),
+            detail: String::new(),
+            keywords: "theme style dark zbrush classic pixologic charcoal appearance",
+            tooltip: "Switch to authentic classic ZBrush dark theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::ZBrushClassic;
+                e.high_contrast = false;
+                e.status = "Theme: ZBrush Classic".into();
+            }),
+        },
+        Entry {
             label: "Theme: Charcoal".into(),
             detail: String::new(),
             keywords: "theme style dark charcoal oled black appearance",
@@ -276,6 +287,16 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             act: Act::Run(|e| {
                 e.accent = crate::settings::AccentPreset::Terracotta;
                 e.status = "Accent: Terracotta".into();
+            }),
+        },
+        Entry {
+            label: "Accent: ZBrush Orange".into(),
+            detail: String::new(),
+            keywords: "accent color zbrush orange pixologic highlight",
+            tooltip: "Switch accent color to authentic ZBrush Orange #FF9229".into(),
+            act: Act::Run(|e| {
+                e.accent = crate::settings::AccentPreset::ZBrushOrange;
+                e.status = "Accent: ZBrush Orange".into();
             }),
         },
         Entry {

@@ -297,6 +297,8 @@ pub enum ThemePreset {
     /// Neutral dark gray (industry standard graphite).
     #[default]
     Graphite,
+    /// Authentic classic ZBrush dark styling (deep matte charcoal panels, crisp contrast).
+    ZBrushClassic,
     /// OLED deep black and dark gray.
     Charcoal,
     /// Cool slate blue-gray tone (Blender / Maya feel).
@@ -310,8 +312,9 @@ pub enum ThemePreset {
 }
 
 impl ThemePreset {
-    pub const ALL: [ThemePreset; 6] = [
+    pub const ALL: [ThemePreset; 7] = [
         ThemePreset::Graphite,
+        ThemePreset::ZBrushClassic,
         ThemePreset::Charcoal,
         ThemePreset::Slate,
         ThemePreset::WarmUmber,
@@ -322,6 +325,7 @@ impl ThemePreset {
     pub fn label(self) -> &'static str {
         match self {
             ThemePreset::Graphite => "Graphite (Neutral Dark)",
+            ThemePreset::ZBrushClassic => "ZBrush Classic (Dark)",
             ThemePreset::Charcoal => "Charcoal (OLED Deep)",
             ThemePreset::Slate => "Slate (Cool Studio)",
             ThemePreset::WarmUmber => "Warm Umber (Clay)",
@@ -333,6 +337,7 @@ impl ThemePreset {
     pub fn key(self) -> &'static str {
         match self {
             ThemePreset::Graphite => "graphite",
+            ThemePreset::ZBrushClassic => "zbrush_classic",
             ThemePreset::Charcoal => "charcoal",
             ThemePreset::Slate => "slate",
             ThemePreset::WarmUmber => "warm_umber",
@@ -357,6 +362,8 @@ pub enum AccentPreset {
     /// OxyBrush signature clay #E07A4F.
     #[default]
     Terracotta,
+    /// Authentic ZBrush vibrant orange #FF9229.
+    ZBrushOrange,
     /// Precision electric cyan #38BDF8.
     Cyan,
     /// Calming mint emerald #10B981.
@@ -372,8 +379,9 @@ pub enum AccentPreset {
 }
 
 impl AccentPreset {
-    pub const ALL: [AccentPreset; 7] = [
+    pub const ALL: [AccentPreset; 8] = [
         AccentPreset::Terracotta,
+        AccentPreset::ZBrushOrange,
         AccentPreset::Cyan,
         AccentPreset::Emerald,
         AccentPreset::Amber,
@@ -385,6 +393,7 @@ impl AccentPreset {
     pub fn label(self) -> &'static str {
         match self {
             AccentPreset::Terracotta => "Terracotta (Clay)",
+            AccentPreset::ZBrushOrange => "ZBrush Orange",
             AccentPreset::Cyan => "Cyan (Electric)",
             AccentPreset::Emerald => "Emerald (Mint)",
             AccentPreset::Amber => "Amber (Gold)",
@@ -397,6 +406,7 @@ impl AccentPreset {
     pub fn key(self) -> &'static str {
         match self {
             AccentPreset::Terracotta => "terracotta",
+            AccentPreset::ZBrushOrange => "zbrush_orange",
             AccentPreset::Cyan => "cyan",
             AccentPreset::Emerald => "emerald",
             AccentPreset::Amber => "amber",
@@ -413,6 +423,7 @@ impl AccentPreset {
     pub fn rgb(self, custom: [u8; 3]) -> [u8; 3] {
         match self {
             AccentPreset::Terracotta => [0xE0, 0x7A, 0x4F],
+            AccentPreset::ZBrushOrange => [0xFF, 0x92, 0x29],
             AccentPreset::Cyan => [0x38, 0xBD, 0xF8],
             AccentPreset::Emerald => [0x10, 0xB9, 0x81],
             AccentPreset::Amber => [0xF5, 0x9E, 0x0B],
@@ -560,6 +571,7 @@ fn parse_rgb(v: &str) -> Option<[f64; 3]> {
 fn matcap_key(m: MatcapPreset) -> &'static str {
     match m {
         MatcapPreset::Terracotta => "terracotta",
+        MatcapPreset::RedWax => "red_wax",
         MatcapPreset::GreyClay => "grey_clay",
         MatcapPreset::Jade => "jade",
         MatcapPreset::Pearl => "pearl",

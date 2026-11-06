@@ -159,6 +159,19 @@ pub fn apply_theme(
                 stroke: Color32::from_gray(48),
                 window_stroke: Color32::from_gray(60),
             },
+            ThemePreset::ZBrushClassic => Palette {
+                bg: Color32::from_gray(16),
+                panel: Color32::from_gray(26),
+                window: Color32::from_gray(32),
+                faint: Color32::from_gray(20),
+                text: Color32::from_gray(222),
+                inactive_weak: Color32::from_gray(36),
+                inactive_fill: Color32::from_gray(46),
+                hovered_weak: Color32::from_gray(54),
+                hovered_fill: Color32::from_gray(64),
+                stroke: Color32::from_gray(42),
+                window_stroke: Color32::from_gray(54),
+            },
             ThemePreset::Charcoal => Palette {
                 bg: Color32::from_gray(12),
                 panel: Color32::from_gray(18),
@@ -258,6 +271,9 @@ pub fn apply_theme(
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
         v.widgets.active.bg_fill = accent_color;
+        if accent == AccentPreset::ZBrushOrange {
+            v.widgets.active.fg_stroke.color = Color32::from_gray(20);
+        }
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
@@ -978,6 +994,40 @@ fn theme_appearance_window(ctx: &egui::Context, ed: &mut Editor) {
 }
 
 fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Quick presets").strong());
+    ui.horizontal(|ui| {
+        if ui
+            .button("ZBrush Classic")
+            .on_hover_text("Authentic ZBrush dark UI: matte charcoal panels, vibrant orange highlights, sharp corners, and red wax")
+            .clicked()
+        {
+            ed.theme = ThemePreset::ZBrushClassic;
+            ed.accent = AccentPreset::ZBrushOrange;
+            ed.corner_style = CornerStyle::Sharp;
+            ed.matcap = oxy_render::MatcapPreset::RedWax;
+            ed.custom_matcap = None;
+            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
+            ed.view.background = [0.08, 0.08, 0.08];
+            ed.view.background_center = [0.02, 0.02, 0.02];
+            ed.status = "Applied ZBrush Classic theme preset".into();
+        }
+        if ui
+            .button("Default Studio")
+            .on_hover_text("Standard neutral graphite theme with clay accent and rounded corners")
+            .clicked()
+        {
+            ed.theme = ThemePreset::Graphite;
+            ed.accent = AccentPreset::Terracotta;
+            ed.corner_style = CornerStyle::Rounded;
+            ed.matcap = oxy_render::MatcapPreset::Terracotta;
+            ed.custom_matcap = None;
+            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
+            ed.view.background = [0.12, 0.12, 0.12];
+            ed.view.background_center = [0.04, 0.04, 0.04];
+            ed.status = "Applied Default Studio theme preset".into();
+        }
+    });
+    ui.separator();
     ui.label(RichText::new("Base theme").strong());
     for t in ThemePreset::ALL {
         let is_selected = ed.theme == t && (!ed.high_contrast || t == ThemePreset::HighContrast);

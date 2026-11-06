@@ -436,6 +436,7 @@ pub fn stroke_tip(mode: crate::editor::StrokeMode) -> &'static str {
 pub fn matcap_tip(m: MatcapPreset) -> &'static str {
     match m {
         MatcapPreset::Terracotta => "Warm red clay. The default look.",
+        MatcapPreset::RedWax => "Classic red wax with specular sheen.",
         MatcapPreset::GreyClay => "Neutral grey, useful for reading the form.",
         MatcapPreset::Jade => "Green and glossy.",
         MatcapPreset::Pearl => "Pale and soft. Vertex color reads more truly.",
