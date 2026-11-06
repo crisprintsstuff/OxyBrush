@@ -37,6 +37,7 @@ pub enum Handle {
     Center,
 }
 
+#[allow(dead_code)]
 pub const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 /// Axis handle length on screen, in logical points.
 pub const HANDLE_PT: f32 = 80.0;
@@ -51,6 +52,8 @@ pub struct Layout {
     /// End of each axis handle (None when it points straight at the viewer
     /// and would be too short to use).
     pub axes: [Option<Vec2>; 3],
+    /// World direction vector for each of the 3 axes.
+    pub axis_dirs: [Vec3; 3],
     /// World length of an axis handle.
     pub length: f32,
 }
@@ -120,6 +123,7 @@ pub struct DragInput {
     pub handle: Handle,
     pub delta: Vec2,
     pub screen_axis: Option<Vec2>,
+    pub axis_dirs: [Vec3; 3],
     pub length: f32,
     pub right: Vec3,
     pub up: Vec3,
@@ -154,7 +158,7 @@ pub fn drag_transform(i: &DragInput) -> Transform {
     match (i.mode, i.handle) {
         (GizmoMode::Move, Handle::Axis(a)) => {
             let t = i.screen_axis.map_or(0.0, along) * i.length;
-            Transform { translate: AXES[a] * t, ..Transform::IDENTITY }
+            Transform { translate: i.axis_dirs[a] * t, ..Transform::IDENTITY }
         }
         (GizmoMode::Move, Handle::Center) => {
             // Screen y grows downward.
@@ -167,7 +171,7 @@ pub fn drag_transform(i: &DragInput) -> Transform {
                 let n = s.normalize_or_zero();
                 i.delta.dot(Vec2::new(-n.y, n.x))
             });
-            let q = Quat::from_axis_angle(AXES[a], across * RADIANS_PER_PX);
+            let q = Quat::from_axis_angle(i.axis_dirs[a], across * RADIANS_PER_PX);
             Transform { linear: Mat3::from_quat(q), ..Transform::IDENTITY }
         }
         (GizmoMode::Rotate, Handle::Center) => {
@@ -177,9 +181,10 @@ pub fn drag_transform(i: &DragInput) -> Transform {
         }
         (GizmoMode::Scale, Handle::Axis(a)) => {
             let f = (1.0 + i.screen_axis.map_or(0.0, along)).max(0.05);
-            let mut s = Vec3::ONE;
-            s[a] = f;
-            Transform { linear: Mat3::from_diagonal(s), ..Transform::IDENTITY }
+            let u = i.axis_dirs[a];
+            let outer = Mat3::from_cols(u * u.x, u * u.y, u * u.z);
+            let linear = Mat3::IDENTITY + outer * (f - 1.0);
+            Transform { linear, ..Transform::IDENTITY }
         }
         (GizmoMode::Scale, Handle::Center) => {
             let f = (1.0 + (i.delta.x - i.delta.y) / 200.0).max(0.05);
@@ -285,6 +290,7 @@ mod tests {
             handle,
             delta,
             screen_axis: Some(Vec2::new(100.0, 0.0)),
+            axis_dirs: AXES,
             length: 1.0,
             right: Vec3::X,
             up: Vec3::Y,
@@ -347,6 +353,7 @@ mod tests {
             pivot: Vec3::ZERO,
             center: Vec2::new(100.0, 100.0),
             axes: [Some(Vec2::new(180.0, 100.0)), Some(Vec2::new(100.0, 20.0)), None],
+            axis_dirs: AXES,
             length: 1.0,
         };
         assert_eq!(l.pick(Vec2::new(178.0, 102.0), 14.0), Some(Handle::Axis(0)));

@@ -693,6 +693,76 @@ impl Mesh {
         })
     }
 
+    /// Duplicate unmasked geometry within the mesh.
+    ///
+    /// Visible triangles whose non-hidden vertices are unmasked (`mask < 0.99`) are duplicated.
+    /// Original unmasked vertices become masked (`mask = 1.0`), while duplicated vertices
+    /// are completely unmasked (`mask = 0.0`). The duplicated triangles are assigned a new
+    /// unique face group.
+    pub fn duplicate_unmasked(&self) -> Option<Mesh> {
+        let is_unmasked =
+            |v: usize| self.mask.get(v).copied().unwrap_or(0.0) < 0.99 && !self.is_vertex_hidden(v as u32);
+
+        let unmasked_tris: Vec<usize> = self
+            .triangles
+            .iter()
+            .enumerate()
+            .filter(|&(ti, tri)| {
+                !self.hidden.get(ti).copied().unwrap_or(false)
+                    && is_unmasked(tri[0] as usize)
+                    && is_unmasked(tri[1] as usize)
+                    && is_unmasked(tri[2] as usize)
+            })
+            .map(|(ti, _)| ti)
+            .collect();
+
+        if unmasked_tris.is_empty() {
+            return None;
+        }
+
+        let mut data = self.to_data();
+        let new_group = self.next_free_group();
+        let mut old_to_new = vec![u32::MAX; data.positions.len()];
+
+        if data.color.len() != data.positions.len() {
+            data.color = vec![WHITE; data.positions.len()];
+        }
+        if data.mask.len() != data.positions.len() {
+            data.mask = vec![0.0; data.positions.len()];
+        }
+
+        // Mask the original vertices that will be duplicated so they remain stationary
+        for &ti in &unmasked_tris {
+            let tri = data.triangles[ti];
+            for &v in &tri {
+                data.mask[v as usize] = 1.0;
+            }
+        }
+
+        // Clone unmasked vertices and construct new triangles
+        for &ti in &unmasked_tris {
+            let orig_tri = data.triangles[ti];
+            let mut new_tri = [0u32; 3];
+            for (k, &orig_v) in orig_tri.iter().enumerate() {
+                let ov = orig_v as usize;
+                if old_to_new[ov] == u32::MAX {
+                    let nv = data.positions.len() as u32;
+                    old_to_new[ov] = nv;
+                    data.positions.push(data.positions[ov]);
+                    data.mask.push(0.0);
+                    let col = data.color.get(ov).copied().unwrap_or(WHITE);
+                    data.color.push(col);
+                }
+                new_tri[k] = old_to_new[ov];
+            }
+            data.triangles.push(new_tri);
+            data.groups.push(new_group);
+            data.hidden.push(false);
+        }
+
+        Some(Mesh::from_data(data))
+    }
+
     /// One group per visible triangle set; hidden triangles keep their group.
     pub fn group_visible(&mut self) {
         let g = self.next_free_group();
@@ -1604,5 +1674,32 @@ mod tests {
 
         assert_ne!(m1.positions[0], m2.positions[0]);
         assert_ne!(m1.normals[0], m2.normals[0]);
+    }
+
+    #[test]
+    fn test_duplicate_unmasked() {
+        let m = primitives::cube(2, 1.0);
+        let orig_tris = m.triangle_count();
+        let orig_verts = m.vertex_count();
+
+        // When unmasked, duplicating doubles the triangle count
+        let dup = m.duplicate_unmasked().expect("should duplicate unmasked cube");
+        assert_eq!(dup.triangle_count(), orig_tris * 2);
+        assert_eq!(dup.vertex_count(), orig_verts * 2);
+
+        // Original vertices are now masked (1.0), duplicate vertices are unmasked (0.0)
+        let unmasked = dup.mask.iter().filter(|&&w| w < 0.01).count();
+        let masked = dup.mask.iter().filter(|&&w| w > 0.99).count();
+        assert_eq!(unmasked, orig_verts);
+        assert_eq!(masked, orig_verts);
+
+        // Duplicated triangles have a distinct face group
+        let groups: std::collections::HashSet<u32> = dup.groups().iter().copied().collect();
+        assert!(groups.len() >= 2);
+
+        // Fully masked mesh returns None
+        let mut fully_masked = m.clone();
+        fully_masked.mask.fill(1.0);
+        assert!(fully_masked.duplicate_unmasked().is_none());
     }
 }

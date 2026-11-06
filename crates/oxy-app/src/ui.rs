@@ -2023,6 +2023,15 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ui.label(RichText::new("Masked parts stay put").weak().small()),
                             plain::GIZMO_MASKED,
                         );
+                        if (ed.custom_gizmo_pivot.is_some() || ed.custom_gizmo_rotation.is_some())
+                            && tips::hover(
+                                ui.button("Reset Pivot"),
+                                "Reset the gizmo pivot and orientation back to the unmasked center",
+                            )
+                            .clicked()
+                        {
+                            ed.reset_gizmo_pivot();
+                        }
                         if tips::hover(ui.button("Done"), plain::GIZMO_DONE).clicked() {
                             ed.gizmo = None;
                         }

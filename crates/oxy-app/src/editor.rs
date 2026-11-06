@@ -3,7 +3,7 @@
 
 use crate::keymap::{self, CommandEffect, CommandId, NavAction, NavButton};
 use crate::pose::{self, GizmoMode, Handle};
-use glam::{Vec2, Vec3};
+use glam::{Mat3, Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, primitives, topo};
@@ -152,6 +152,20 @@ pub enum Drag {
     MaskGesture {
         start: Vec2,
     },
+    /// Click with Ctrl on mesh while Gizmo is active snaps pivot and aligns to normal;
+    /// dragging beyond threshold falls through to mask painting.
+    GizmoSnapOrMask {
+        start: Vec2,
+        hit: oxy_mesh::RayHit,
+        ray_dir: Vec3,
+    },
+    /// Click with Alt on mesh while Gizmo is active snaps pivot;
+    /// dragging beyond threshold falls through to carve brush stroke.
+    GizmoSnapOrCarve {
+        start: Vec2,
+        hit: oxy_mesh::RayHit,
+        ray_dir: Vec3,
+    },
 }
 
 /// The quick menu: shown at `pos` (window physical px). `held`: it closes
@@ -167,6 +181,9 @@ pub struct GizmoDrag {
     handle: Handle,
     start: Vec2,
     pivot: Vec3,
+    rotation: Mat3,
+    axis_dirs: [Vec3; 3],
+    reposition_pivot: bool,
     original: Vec<Vec3>,
     original_normals: Vec<Vec3>,
     original_chunk_aabbs: Vec<oxy_mesh::Aabb>,
@@ -403,6 +420,10 @@ pub struct Editor {
     pub gizmo: Option<GizmoMode>,
     /// Cached gizmo pivot, keyed by (piece id, history revision, vertex count).
     gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
+    /// User-customized gizmo pivot point (repositioned via Alt-drag or Ctrl-click snap).
+    pub custom_gizmo_pivot: Option<Vec3>,
+    /// User-customized gizmo rotation / orientation basis.
+    pub custom_gizmo_rotation: Option<Mat3>,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -587,6 +608,8 @@ impl Default for Editor {
             paint_color: Vec3::new(0.75, 0.22, 0.18),
             gizmo: None,
             gizmo_pivot: None,
+            custom_gizmo_pivot: None,
+            custom_gizmo_rotation: None,
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
@@ -756,7 +779,13 @@ impl Editor {
     pub fn agent_input_busy(&self) -> bool {
         matches!(
             self.drag,
-            Drag::Stroke { .. } | Drag::Gizmo(_) | Drag::Deferred { .. } | Drag::Select { .. } | Drag::PendingStroke
+            Drag::Stroke { .. }
+                | Drag::Gizmo(_)
+                | Drag::Deferred { .. }
+                | Drag::Select { .. }
+                | Drag::PendingStroke
+                | Drag::GizmoSnapOrMask { .. }
+                | Drag::GizmoSnapOrCarve { .. }
         )
     }
 
@@ -1060,6 +1089,27 @@ impl Editor {
 
         let active = self.scene.active_index();
         let active_hit = if self.scene.active().visible { self.scene.active().mesh.raycast(o, d) } else { None };
+
+        // When Gizmo is active, Ctrl+click on the active mesh snaps the gizmo pivot
+        // to the hit point and aligns its primary axis to the surface normal.
+        // Dragging beyond the threshold falls through to mask painting.
+        if self.gizmo.is_some()
+            && (m.ctrl || self.modifiers.ctrl)
+            && let Some(hit) = active_hit
+        {
+            self.drag = Drag::GizmoSnapOrMask { start: p, hit, ray_dir: d };
+            return;
+        }
+
+        // When Gizmo is active, Alt+click on the active mesh snaps the gizmo pivot.
+        // Dragging beyond the threshold falls through to carve brush stroke.
+        if self.gizmo.is_some()
+            && (m.alt || self.modifiers.alt)
+            && let Some(hit) = active_hit
+        {
+            self.drag = Drag::GizmoSnapOrCarve { start: p, hit, ray_dir: d };
+            return;
+        }
 
         // Mask+Smooth drag: box/lasso visibility (Invert hides the selection).
         // A click without dragging isolates the group under the cursor, or
@@ -1415,6 +1465,46 @@ impl Editor {
                 true
             }
             Drag::Stroke { .. } => self.stroke_to(pos),
+            Drag::GizmoSnapOrMask { start, hit, ray_dir } => {
+                if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
+                    let (s, h, d) = (*start, *hit, *ray_dir);
+                    self.start_stroke_at(s, h, d);
+                    let (o, ray_d) = self.camera.ray(self.canvas_local(pos), size);
+                    if let Some(sample_hit) = self.scene.active().mesh.raycast(o, ray_d) {
+                        let sample = StrokeSample {
+                            position: sample_hit.point,
+                            normal: facing(sample_hit.normal, ray_d),
+                            pressure: self.pressure(),
+                        };
+                        let piece = self.scene.active_mut();
+                        let history = &mut self.history;
+                        if let Drag::Stroke { stroke, .. } = &mut self.drag {
+                            stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+                        }
+                    }
+                }
+                true
+            }
+            Drag::GizmoSnapOrCarve { start, hit, ray_dir } => {
+                if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
+                    let (s, h, d) = (*start, *hit, *ray_dir);
+                    self.start_stroke_at(s, h, d);
+                    let (o, ray_d) = self.camera.ray(self.canvas_local(pos), size);
+                    if let Some(sample_hit) = self.scene.active().mesh.raycast(o, ray_d) {
+                        let sample = StrokeSample {
+                            position: sample_hit.point,
+                            normal: facing(sample_hit.normal, ray_d),
+                            pressure: self.pressure(),
+                        };
+                        let piece = self.scene.active_mut();
+                        let history = &mut self.history;
+                        if let Drag::Stroke { stroke, .. } = &mut self.drag {
+                            stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+                        }
+                    }
+                }
+                true
+            }
         }
     }
 
@@ -1483,6 +1573,7 @@ impl Editor {
                     handle: g.handle,
                     delta: pos - g.start,
                     screen_axis: g.screen_axis,
+                    axis_dirs: g.axis_dirs,
                     length: g.length,
                     right,
                     up,
@@ -1490,14 +1581,22 @@ impl Editor {
                     world_per_px: g.world_per_px,
                 };
                 let t = pose::drag_transform(&input);
+                g.current = t;
+                if g.reposition_pivot {
+                    self.custom_gizmo_pivot = Some(g.pivot + t.translate);
+                    if mode == GizmoMode::Rotate {
+                        self.custom_gizmo_rotation = Some(t.linear * g.rotation);
+                    }
+                    return true;
+                }
                 let mesh = &mut self.scene.active_mut().mesh;
                 pose::apply_interactive(mesh, &g.original, &g.original_normals, &g.weights, g.pivot, &t);
                 for &c in &g.affected_chunks {
                     let orig = g.original_chunk_aabbs[c as usize];
                     let transformed = pose::transform_aabb(&orig, g.pivot, &t);
                     mesh.update_chunk_bounds(c, orig.union(&transformed));
+                    mesh.mark_dirty(c);
                 }
-                g.current = t;
             }
             _ => return false,
         }
@@ -1540,13 +1639,25 @@ impl Editor {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } => self.history.commit(),
             Drag::Gizmo(g) => {
-                if g.has_soft_weights {
-                    let mesh = &mut self.scene.active_mut().mesh;
-                    let moved: Vec<u32> =
-                        g.weights.iter().enumerate().filter_map(|(v, &w)| (w > 0.0).then_some(v as u32)).collect();
-                    mesh.update_after_move(&moved);
+                if g.reposition_pivot {
+                    self.status = "Gizmo pivot repositioned".into();
+                } else {
+                    if g.has_soft_weights {
+                        let mesh = &mut self.scene.active_mut().mesh;
+                        let moved: Vec<u32> =
+                            g.weights.iter().enumerate().filter_map(|(v, &w)| (w > 0.0).then_some(v as u32)).collect();
+                        mesh.update_after_move(&moved);
+                    }
+                    self.history.commit();
                 }
-                self.history.commit();
+            }
+            Drag::GizmoSnapOrMask { hit, .. } => {
+                self.snap_gizmo_to_surface(hit.point, hit.normal);
+            }
+            Drag::GizmoSnapOrCarve { hit, .. } => {
+                self.custom_gizmo_pivot = Some(hit.point);
+                self.gizmo_pivot = None;
+                self.status = "Gizmo pivot snapped to surface point".into();
             }
             Drag::Deferred { mode, kind, invert, start } => {
                 if let Some(end) = self.pointer {
@@ -1575,15 +1686,21 @@ impl Editor {
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } => self.history.commit(),
             Drag::Gizmo(g) => {
-                let mesh = &mut self.scene.active_mut().mesh;
-                mesh.positions.copy_from_slice(&g.original);
-                mesh.normals.copy_from_slice(&g.original_normals);
-                for &c in &g.affected_chunks {
-                    mesh.restore_chunk_bounds(c, g.original_chunk_aabbs[c as usize]);
+                if g.reposition_pivot {
+                    self.custom_gizmo_pivot = Some(g.pivot);
+                    self.custom_gizmo_rotation = Some(g.rotation);
+                    self.status = "Gizmo reposition cancelled".into();
+                } else {
+                    let mesh = &mut self.scene.active_mut().mesh;
+                    mesh.positions.copy_from_slice(&g.original);
+                    mesh.normals.copy_from_slice(&g.original_normals);
+                    for &c in &g.affected_chunks {
+                        mesh.restore_chunk_bounds(c, g.original_chunk_aabbs[c as usize]);
+                    }
+                    mesh.tighten_bounds();
+                    self.history.cancel();
+                    self.status = "Transform cancelled".into();
                 }
-                mesh.tighten_bounds();
-                self.history.cancel();
-                self.status = "Transform cancelled".into();
             }
             _ => self.status = "Cancelled".into(),
         }
@@ -2598,32 +2715,99 @@ impl Editor {
         self.edit_mesh_mask(label, |mesh| mesh.mask.iter_mut().for_each(|m| *m = f(*m)));
     }
 
+    /// Reset custom gizmo pivot and orientation to the unmasked geometry centre.
+    pub fn reset_gizmo_pivot(&mut self) {
+        self.custom_gizmo_pivot = None;
+        self.custom_gizmo_rotation = None;
+        self.gizmo_pivot = None;
+        self.status = "Gizmo pivot reset to unmasked centre".into();
+    }
+
+    /// Snap gizmo pivot to `point` and align primary (Z) axis to surface `normal`.
+    pub fn snap_gizmo_to_surface(&mut self, point: Vec3, normal: Vec3) {
+        let z = normal.normalize_or(Vec3::Z);
+        let ref_axis = if z.y.abs() < 0.99 { Vec3::Y } else { Vec3::X };
+        let x = ref_axis.cross(z).normalize();
+        let y = z.cross(x).normalize();
+        self.custom_gizmo_pivot = Some(point);
+        self.custom_gizmo_rotation = Some(Mat3::from_cols(x, y, z));
+        self.gizmo_pivot = None;
+        self.status = "Gizmo aligned to surface normal".into();
+    }
+
+    /// Duplicate unmasked geometry within the active piece, mask the original geometry,
+    /// and record the topology modification in history.
+    pub fn duplicate_unmasked_geometry(&mut self) -> bool {
+        let piece = self.scene.active();
+        let weights = pose::weights(&piece.mesh);
+        let unmasked_count = weights.iter().filter(|&&w| w > 0.0).count();
+        if unmasked_count == 0 {
+            self.status = "No unmasked geometry to duplicate".into();
+            return false;
+        }
+
+        let Some(new_mesh) = piece.mesh.duplicate_unmasked() else {
+            self.status = "No unmasked geometry to duplicate".into();
+            return false;
+        };
+
+        if new_mesh.triangle_count() > self.max_triangles {
+            self.status = format!(
+                "Duplication would exceed maximum triangle limit {} (mesh has {})",
+                self.max_triangles,
+                new_mesh.triangle_count()
+            );
+            return false;
+        }
+
+        let piece = self.scene.active_mut();
+        let id = piece.id;
+        let prev_mesh = std::mem::replace(&mut piece.mesh, new_mesh);
+        let prev_multires = piece.multires.take();
+        self.history.record_topology("Duplicate geometry", id, prev_mesh, prev_multires);
+        self.gizmo_pivot = None;
+        self.custom_gizmo_pivot = None;
+        self.status = "Duplicated unmasked geometry".into();
+        true
+    }
+
     /// Where the transform gizmo is drawn (canvas-local physical px), or
     /// None when it is off or there is nothing to move.
     pub fn gizmo_layout(&mut self) -> Option<pose::Layout> {
         self.gizmo?;
-        let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
-        let pivot = match self.gizmo_pivot {
-            Some((k, p)) if k == key => p,
-            _ => {
-                let mesh = &self.scene.active().mesh;
-                let p = pose::pivot(mesh, &pose::weights(mesh));
-                self.gizmo_pivot = Some((key, p));
-                p
-            }
+        let base_pivot = if let Some(p) = self.custom_gizmo_pivot {
+            p
+        } else {
+            let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
+            match self.gizmo_pivot {
+                Some((k, p)) if k == key => p,
+                _ => {
+                    let mesh = &self.scene.active().mesh;
+                    let p = pose::pivot(mesh, &pose::weights(mesh));
+                    self.gizmo_pivot = Some((key, p));
+                    p
+                }
+            }?
         };
         // While dragging, the gizmo follows the transformed pivot.
-        let pivot = match &self.drag {
-            Drag::Gizmo(g) => g.pivot + g.current.translate,
-            _ => pivot?,
+        let (pivot, rot) = match &self.drag {
+            Drag::Gizmo(g) => {
+                if g.reposition_pivot {
+                    (g.pivot + g.current.translate, g.current.linear * g.rotation)
+                } else {
+                    (g.pivot + g.current.translate, g.rotation)
+                }
+            }
+            _ => (base_pivot, self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY)),
         };
         let size = self.canvas_size();
         let center = self.camera.project(pivot, size)?;
         let length = pose::HANDLE_PT * self.pixels_per_point * self.camera.world_per_pixel(pivot, size.y);
-        let axes = pose::AXES.map(|a| {
+        let axis_dirs = [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z];
+        let axes = axis_dirs.map(|a| {
             self.camera.project(pivot + a * length, size).filter(|e| e.distance(center) > 12.0 * self.pixels_per_point)
         });
-        Some(pose::Layout { pivot, center, axes, length })
+        Some(pose::Layout { pivot, center, axes, axis_dirs, length })
     }
 
     /// Start dragging a gizmo handle under `p` (window physical px).
@@ -2635,13 +2819,29 @@ impl Editor {
             self.status = "Wait for the background job to finish before transforming this piece".into();
             return true;
         }
+
+        let m = self.brush_roles();
+        let is_ctrl = m.ctrl || self.modifiers.ctrl;
+        let is_alt = m.alt || self.modifiers.alt;
+
+        // Ctrl + Gizmo Drag: duplicate unmasked geometry
+        if is_ctrl && !self.duplicate_unmasked_geometry() {
+            return true;
+        }
+
         let mode = self.gizmo.unwrap_or(GizmoMode::Move);
         let world_per_px = self.camera.world_per_pixel(layout.pivot, self.canvas_size().y);
         let piece = self.scene.active_mut();
-        self.history.begin(mode.label(), piece.id, &piece.mesh);
-        for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+
+        // If Alt is held, we are repositioning the gizmo pivot without modifying mesh vertices.
+        let reposition_pivot = is_alt;
+        if !reposition_pivot {
+            self.history.begin(mode.label(), piece.id, &piece.mesh);
+            for c in 0..piece.mesh.chunks.len() as u32 {
+                self.history.touch(&piece.mesh, c);
+            }
         }
+
         let weights = pose::weights(&piece.mesh);
         let screen_axis = match handle {
             Handle::Axis(a) => layout.axes[a].map(|e| e - layout.center),
@@ -2660,10 +2860,15 @@ impl Editor {
         let affected_chunks: Vec<u32> =
             affected_chunk_flags.iter().enumerate().filter_map(|(c, &aff)| aff.then_some(c as u32)).collect();
         let original_chunk_aabbs: Vec<oxy_mesh::Aabb> = piece.mesh.chunks.iter().map(|c| c.aabb).collect();
+        let current_rot = self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY);
+
         self.drag = Drag::Gizmo(Box::new(GizmoDrag {
             handle,
             start: p,
             pivot: layout.pivot,
+            rotation: current_rot,
+            axis_dirs: layout.axis_dirs,
+            reposition_pivot,
             original: piece.mesh.positions.clone(),
             original_normals: piece.mesh.normals.clone(),
             original_chunk_aabbs,
@@ -2676,6 +2881,11 @@ impl Editor {
             current: pose::Transform::IDENTITY,
             queued_pos: None,
         }));
+        if reposition_pivot {
+            self.status = "Repositioning gizmo pivot (Alt held)".into();
+        } else if is_ctrl {
+            self.status = "Duplicated unmasked geometry: drag to transform".into();
+        }
         true
     }
 
@@ -3731,6 +3941,75 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         assert!(e.is_stroking() || matches!(e.drag, Drag::Gizmo(_)));
         e.pointer_up();
+    }
+
+    #[test]
+    fn gizmo_alt_drag_repositions_pivot_without_moving_vertices() {
+        let mut e = editor();
+        e.toggle_gizmo(GizmoMode::Move);
+        let before_pos = e.scene.active().mesh.positions.clone();
+        let layout0 = e.gizmo_layout().expect("gizmo layout");
+        let orig_pivot = layout0.pivot;
+
+        // Holding Alt while dragging a gizmo handle repositions the pivot
+        e.modifiers.alt = true;
+        let end = layout0.axes[0].expect("X axis handle");
+        let to = end + Vec2::new(60.0, 0.0);
+        drag(&mut e, end, to);
+        e.modifiers.alt = false;
+
+        // Mesh vertices must not have changed at all
+        assert_eq!(e.scene.active().mesh.positions, before_pos);
+        assert!(e.custom_gizmo_pivot.is_some());
+        let new_pivot = e.custom_gizmo_pivot.unwrap();
+        assert_ne!(new_pivot, orig_pivot);
+
+        // Reset pivot restores unmasked centre
+        e.reset_gizmo_pivot();
+        assert!(e.custom_gizmo_pivot.is_none());
+        assert_eq!(e.gizmo_layout().unwrap().pivot, orig_pivot);
+    }
+
+    #[test]
+    fn gizmo_ctrl_click_mesh_snaps_pivot_and_aligns_normal() {
+        let mut e = editor();
+        e.toggle_gizmo(GizmoMode::Move);
+        assert!(e.custom_gizmo_pivot.is_none());
+        assert!(e.custom_gizmo_rotation.is_none());
+
+        // Ctrl + click on mesh surface away from the center handle (400, 300)
+        e.pointer = Some(Vec2::new(450.0, 350.0));
+        e.modifiers.ctrl = true;
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::GizmoSnapOrMask { .. }));
+        e.pointer_up();
+        e.modifiers.ctrl = false;
+
+        assert!(e.custom_gizmo_pivot.is_some(), "pivot should snap to hit point");
+        assert!(e.custom_gizmo_rotation.is_some(), "orientation should align to surface normal");
+    }
+
+    #[test]
+    fn gizmo_ctrl_drag_duplicates_unmasked_geometry() {
+        let mut e = editor();
+        e.toggle_gizmo(GizmoMode::Move);
+        let tris_before = e.scene.active().mesh.triangle_count();
+        let layout = e.gizmo_layout().expect("gizmo layout");
+        let end = layout.axes[0].expect("X axis handle");
+
+        // Ctrl + drag gizmo handle duplicates unmasked geometry
+        e.modifiers.ctrl = true;
+        let to = end + Vec2::new(80.0, 0.0);
+        drag(&mut e, end, to);
+        e.modifiers.ctrl = false;
+
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris_before * 2);
+        assert!(e.history.can_undo());
+
+        // Undo restores original mesh
+        e.undo(); // undoes move
+        e.undo(); // undoes duplicate
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris_before);
     }
 
     #[test]
