@@ -4,6 +4,17 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.5.1-beta] - 2026-11-05
+
+### Fixed
+
+- **Interactive Color Swatches & Dedicated Dialogs (Wireframe & Accent Color):**
+  - Resolved issue where clicking color swatches inside menu dropdowns would close the menu before opening color pickers.
+  - Added dedicated floating **Theme & Appearance** window (`Settings > Theme & Appearance…` and Command Palette) and **Wireframe settings** window (`View > Wireframe settings…`, Command Palette, and right-click on the view strip wireframe icon).
+  - Made all accent color preset swatches (`Terracotta`, `Cyan`, `Emerald`, `Amber`, `Crimson`, `Violet`, `Custom`) fully clickable with interactive response.
+  - Added quick-pick color preset swatches for wireframe (`Dark Slate`, `Light Gray`, `Terracotta`, `Electric Cyan`, `Emerald Mint`, `Golden Amber`) alongside the custom RGB/HSV color picker and reset button.
+  - Right-clicking the wireframe toggle button in the viewport view strip now opens the wireframe settings window.
+
 ## [1.5.0-beta] - 2026-11-05
 
 ### Added

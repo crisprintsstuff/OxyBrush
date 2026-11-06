@@ -160,6 +160,8 @@ commands! {
     BackgroundGradient => "Viewport background: gradient", "", "Use a soft radial gradient for the viewport background.";
     BackgroundFlat => "Viewport background: flat", "", "Use a solid color for the viewport background.";
     ResetBackground => "Reset viewport background", "", "Restore the default gradient and viewport background colors.";
+    ThemeWindow => "Theme & Appearance…", "", "Open the theme and accent colors window.";
+    WireframeWindow => "Wireframe settings…", "", "Open the wireframe color and opacity window.";
     AlignCursor => "Align cursor to surface on / off", "", "Draw the brush ring flat against the surface under the pointer.";
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
 }

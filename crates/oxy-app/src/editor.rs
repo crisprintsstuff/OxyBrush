@@ -261,6 +261,10 @@ pub struct Editor {
     /// Color pickers for the viewport backdrop. A menu closes on click, so
     /// the pickers live in this window (opened from View and Settings).
     pub show_background: bool,
+    /// Theme and accent color window (with clickable swatches and color pickers).
+    pub show_theme: bool,
+    /// Wireframe settings window (opacity, color picker, presets).
+    pub show_wireframe: bool,
     /// Welcome window with starter shapes and the basics (shown at startup).
     pub show_welcome: bool,
     /// Carve instead of raise by default (the invert key still flips it while held).
@@ -453,6 +457,8 @@ impl Default for Editor {
             show_shortcuts: false,
             show_about: false,
             show_background: false,
+            show_theme: false,
+            show_wireframe: false,
             show_welcome: true,
             carve: false,
             layout: crate::settings::UiLayout::Standard,

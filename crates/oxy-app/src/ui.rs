@@ -386,19 +386,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
                 tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
                 tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
-                if ed.view.wireframe {
-                    tips::hover(
-                        ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity")),
-                        "Wireframe line opacity",
-                    );
-                    ui.horizontal(|ui| {
-                        ui.label("Wireframe color");
-                        edit_linear_color(ui, &mut ed.view.wireframe_color)
-                            .on_hover_text("Color of the wireframe lines");
-                        if ui.button("Reset").on_hover_text("Reset wireframe color to default").clicked() {
-                            ed.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
-                        }
-                    });
+                if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
+                    ed.show_wireframe = true;
                 }
                 surface_cursor_checkbox(ui, ed);
                 ui.separator();
@@ -494,9 +483,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.separator();
                 ui.label("Interface scale");
                 tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
-                tips::menu(ui, "Theme & Appearance", "Visual themes, accent colors and corner rounding", |ui| {
-                    theme_appearance_menu(ui, ed);
-                });
+                if tips::button(ui, "Theme & Appearance…", Cmd::ThemeWindow).clicked() {
+                    ed.show_theme = true;
+                }
                 tips::menu(ui, "Subdivision limit", "Maximum triangles allowed for subdivision", |ui| {
                     subdivision_limit_menu(ui, ed);
                 });
@@ -602,6 +591,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     dialogs(ui, ed, &mut action);
     background_window(ui.ctx(), ed);
+    theme_appearance_window(ui.ctx(), ed);
+    wireframe_window(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     keymap::window(ui.ctx(), ed);
@@ -628,7 +619,29 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     (action, canvas)
 }
 
-fn theme_appearance_menu(ui: &mut Ui, ed: &mut Editor) {
+fn theme_appearance_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_theme {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Theme & Appearance")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .default_pos(egui::pos2(300.0, 90.0))
+        .show(ctx, |ui| {
+            ui.label(
+                RichText::new("Visual theme, accent color, and wireframe styling. Remembered between sessions.")
+                    .weak()
+                    .small(),
+            );
+            ui.add_space(4.0);
+            theme_appearance_controls(ui, ed);
+        });
+    ed.show_theme = open;
+}
+
+fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new("Base theme").strong());
     for t in ThemePreset::ALL {
         let is_selected = ed.theme == t && (!ed.high_contrast || t == ThemePreset::HighContrast);
@@ -643,9 +656,10 @@ fn theme_appearance_menu(ui: &mut Ui, ed: &mut Editor) {
         let rgb = a.rgb(ed.custom_accent);
         let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
         ui.horizontal(|ui| {
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
             ui.painter().rect_filled(rect, 3.0, color);
-            if ui.selectable_label(ed.accent == a, a.label()).clicked() {
+            let label_resp = ui.selectable_label(ed.accent == a, a.label());
+            if resp.clicked() || label_resp.clicked() {
                 ed.accent = a;
             }
         });
@@ -668,12 +682,77 @@ fn theme_appearance_menu(ui: &mut Ui, ed: &mut Editor) {
         });
     }
     ui.separator();
+    ui.label(RichText::new("Wireframe overlay").strong());
+    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe enabled", Cmd::Wireframe);
+    ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity"));
+    ui.horizontal(|ui| {
+        ui.label("Wireframe color:");
+        edit_linear_color(ui, &mut ed.view.wireframe_color).on_hover_text("Color of the wireframe lines");
+        if ui.button("Reset").on_hover_text("Reset wireframe color to default").clicked() {
+            ed.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
+        }
+    });
+    ui.separator();
     ui.label(RichText::new("Corner rounding").strong());
     for c in CornerStyle::ALL {
         if ui.selectable_label(ed.corner_style == c, c.label()).clicked() {
             ed.corner_style = c;
         }
     }
+}
+
+fn wireframe_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_wireframe {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Wireframe settings")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .default_pos(egui::pos2(280.0, 110.0))
+        .show(ctx, |ui| {
+            wireframe_controls(ui, ed);
+        });
+    ed.show_wireframe = open;
+}
+
+fn wireframe_controls(ui: &mut Ui, ed: &mut Editor) {
+    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe enabled", Cmd::Wireframe);
+    ui.add_space(4.0);
+    tips::hover(
+        ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Line opacity")),
+        "Wireframe line opacity",
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label("Line color:");
+        edit_linear_color(ui, &mut ed.view.wireframe_color).on_hover_text("Color of the wireframe lines");
+        if ui.button("Reset").on_hover_text("Reset wireframe color to default").clicked() {
+            ed.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
+        }
+    });
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label("Color presets:");
+        let presets: [(&str, [f64; 3]); 6] = [
+            ("Dark Slate", [0.10, 0.12, 0.16]),
+            ("Light Gray", [0.85, 0.88, 0.92]),
+            ("Terracotta", [0.88, 0.48, 0.31]),
+            ("Electric Cyan", [0.22, 0.74, 0.97]),
+            ("Emerald Mint", [0.20, 0.78, 0.55]),
+            ("Golden Amber", [0.95, 0.72, 0.20]),
+        ];
+        for (name, col) in presets {
+            let srgb = col.map(linear_to_srgb_byte);
+            let color = Color32::from_rgb(srgb[0], srgb[1], srgb[2]);
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+            ui.painter().rect_filled(rect, 3.0, color);
+            if resp.on_hover_text(name).clicked() {
+                ed.view.wireframe_color = col;
+            }
+        }
+    });
 }
 
 fn subdivision_limit_menu(ui: &mut Ui, ed: &mut Editor) {
@@ -1479,9 +1558,13 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
                 ed.toggle_shading();
             }
             let wireframe = ed.view.wireframe;
-            if widgets::icon_button(ui, Icon::Wireframe, wireframe, true, &Cmd::Wireframe.tip_in(&ed.keymap)).clicked()
-            {
+            let tip = format!("{}\nRight-click for wireframe settings", Cmd::Wireframe.tip_in(&ed.keymap));
+            let btn = widgets::icon_button(ui, Icon::Wireframe, wireframe, true, &tip);
+            if btn.clicked() {
                 ed.view.wireframe = !wireframe;
+            }
+            if btn.secondary_clicked() {
+                ed.show_wireframe = true;
             }
             let on = ed.gizmo.is_some();
             if widgets::icon_button(ui, Icon::Transform, on, true, &Cmd::GizmoMove.tip_in(&ed.keymap)).clicked() {
