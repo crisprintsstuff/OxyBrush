@@ -176,7 +176,19 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             e.status = "Wireframe color reset to default".into();
         }),
         cmd(ed, Cmd::ThemeWindow, "settings visual theme accent color appearance corner rounding", |e| {
-            e.show_theme = true
+            e.open_settings(crate::editor::SettingsTab::Appearance);
+            e.show_theme = true;
+        }),
+        cmd(
+            ed,
+            Cmd::Preferences,
+            "settings preferences options configure plugins theme appearance keymap updates",
+            |e| {
+                e.open_settings(crate::editor::SettingsTab::General);
+            },
+        ),
+        cmd(ed, Cmd::RunScript, "plugins python script execute run api macro", |e| {
+            e.request_run_script = true;
         }),
         cmd(ed, Cmd::BackgroundWindow, "view color picker backdrop", |e| e.show_background = true),
         cmd(ed, Cmd::BackgroundGradient, "view color backdrop", |e| e.set_background_style(BackgroundStyle::Gradient)),

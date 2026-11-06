@@ -326,11 +326,22 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     action = Some(UiAction::Export);
                 }
                 ui.separator();
+                if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
+                    ed.request_run_script = true;
+                }
+                ui.separator();
                 if tips::button(ui, "Quit", Cmd::Quit).clicked() {
                     ed.request(Pending::Quit);
                 }
             });
             tips::menu(ui, "Edit", plain::EDIT, |ui| {
+                if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo", Cmd::Undo).clicked() {
+                    ed.undo();
+                }
+                if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
+                    ed.redo();
+                }
+                ui.separator();
                 if tips::button_km(ui, &ed.keymap, "Command palette…", Cmd::Palette).clicked() {
                     ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
                 }
@@ -338,11 +349,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
                 }
                 ui.separator();
-                if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo", Cmd::Undo).clicked() {
-                    ed.undo();
-                }
-                if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
-                    ed.redo();
+                if tips::button_km(ui, &ed.keymap, "Preferences…", Cmd::Preferences).clicked() {
+                    ed.open_settings(crate::editor::SettingsTab::General);
                 }
             });
             tips::menu(ui, "Pieces", plain::PIECES, |ui| piece_actions(ui, ed, busy));
@@ -416,97 +424,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.request_load_matcap = true;
                 }
                 ui.separator();
+                if tips::button(ui, "Appearance & Theme…", Cmd::ThemeWindow).clicked() {
+                    ed.open_settings(crate::editor::SettingsTab::Appearance);
+                }
+                ui.separator();
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
-            });
-            tips::menu(ui, "Plugins", plain::PLUGINS, |ui| {
-                if tips::hover(ui.button("Run Python script…"), plain::RUN_SCRIPT).clicked() {
-                    ed.request_run_script = true;
-                }
-                ui.separator();
-                if ed.plugins.is_empty() {
-                    ui.add_enabled(false, egui::Label::new("No plugins found"));
-                } else {
-                    ui.label(RichText::new("Installed plugins").weak().small());
-                    for plugin in &ed.plugins {
-                        let tip = if plugin.description.is_empty() {
-                            format!("Run {}", plugin.path.display())
-                        } else {
-                            format!("{}\n{}", plugin.description, plugin.path.display())
-                        };
-                        if tips::hover(ui.button(&plugin.name), tip).clicked() {
-                            ed.request_run_plugin = Some(plugin.path.clone());
-                        }
-                    }
-                }
-                ui.separator();
-                if tips::hover(ui.button("Open plugins folder…"), plain::OPEN_PLUGINS_DIR).clicked() {
-                    ed.request_open_plugins_dir = true;
-                }
-                if tips::hover(ui.button("Reload plugins"), plain::RELOAD_PLUGINS).clicked() {
-                    ed.request_reload_plugins = true;
-                }
-            });
-            tips::menu(ui, "Settings", plain::SETTINGS, |ui| {
-                ui.label("Layout");
-                for l in UiLayout::ALL {
-                    tips::hover(ui.radio_value(&mut ed.layout, l, l.label()), l.description());
-                }
-                tips::menu(ui, "Arrange panels", plain::ARRANGE, |ui| arrange_menu(ui, ed_layout_snapshot(ed)));
-                tips::check_plain(
-                    ui,
-                    &mut ed.welcome_at_startup,
-                    "Show welcome window at startup",
-                    plain::WELCOME_STARTUP,
-                );
-                tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
-                surface_cursor_checkbox(ui, ed);
-                if tips::hover(ui.button("Keymap…"), plain::KEYMAP_SETTINGS).clicked() {
-                    ed.show_keymap = true;
-                }
-                tips::menu(ui, "Updates", plain::UPDATES, |ui| update_menu(ui, ed));
-                ui.separator();
-                tips::check_plain(ui, &mut ed.agent_enabled, "Local AI agent", plain::AGENT_ENABLED);
-                if ed.agent_enabled {
-                    if ed.agent_endpoint.is_empty() {
-                        ui.label("Starting the local listener…");
-                    } else {
-                        ui.label(RichText::new(&ed.agent_endpoint).small());
-                        if tips::hover(ui.button("Copy connection"), plain::AGENT_COPY).clicked() {
-                            ui.ctx().copy_text(crate::agent::connection_text(&ed.agent_endpoint, &ed.agent_token));
-                            ed.status = "Copied the agent address and token".into();
-                        }
-                        if tips::hover(ui.button("New token"), plain::AGENT_DISCONNECT).clicked() {
-                            ed.agent_disconnect = true;
-                        }
-                    }
-                }
-                ui.separator();
-                ui.label("Interface scale");
-                tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
-                if tips::button(ui, "Theme & Appearance…", Cmd::ThemeWindow).clicked() {
-                    ed.show_theme = true;
-                }
-                tips::menu(ui, "Subdivision limit", "Maximum triangles allowed for subdivision", |ui| {
-                    subdivision_limit_menu(ui, ed);
-                });
-                ui.separator();
-                ui.label("Viewport background");
-                background_menu(ui, ed);
-                ui.separator();
-                ui.label("Autosave every");
-                let mut mins =
-                    if ed.autosaver.enabled { (ed.autosaver.interval.as_secs_f32() / 60.0).round() } else { 0.0 };
-                let slider = egui::Slider::new(&mut mins, 0.0..=30.0)
-                    .step_by(1.0)
-                    .custom_formatter(|v, _| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} min") });
-                if tips::hover(ui.add(slider), plain::AUTOSAVE).changed() {
-                    if mins <= 0.0 {
-                        ed.autosaver.enabled = false;
-                    } else {
-                        ed.autosaver.enabled = true;
-                        ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
-                    }
-                }
             });
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
         });
@@ -593,6 +515,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     background_window(ui.ctx(), ed);
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
+    settings_window(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     keymap::window(ui.ctx(), ed);
@@ -617,6 +540,263 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_brush_cursor(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
+}
+
+fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_settings {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Preferences")
+        .open(&mut open)
+        .resizable(true)
+        .collapsible(false)
+        .default_size(egui::vec2(760.0, 520.0))
+        .min_size(egui::vec2(580.0, 380.0))
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(140.0);
+                    ui.add_space(4.0);
+                    for tab in crate::editor::SettingsTab::ALL {
+                        let selected = ed.settings_tab == tab;
+                        let (icon, tip) = match tab {
+                            crate::editor::SettingsTab::General => ("⚙️", plain::SETTINGS),
+                            crate::editor::SettingsTab::Appearance => {
+                                ("🎨", "Theme, accent color, wireframe, and background")
+                            }
+                            crate::editor::SettingsTab::Plugins => ("🔌", plain::PLUGINS),
+                            crate::editor::SettingsTab::Keymap => ("⌨️", plain::KEYMAP_SETTINGS),
+                            crate::editor::SettingsTab::Agent => ("🤖", plain::AGENT_ENABLED),
+                            crate::editor::SettingsTab::Updates => ("🔄", plain::UPDATES),
+                        };
+                        let text = format!("{icon}  {}", tab.label());
+                        if tips::hover(ui.selectable_label(selected, text), tip).clicked() {
+                            ed.settings_tab = tab;
+                        }
+                    }
+                });
+                ui.separator();
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                    ui.set_min_width(420.0);
+                    ui.add_space(4.0);
+                    match ed.settings_tab {
+                        crate::editor::SettingsTab::General => settings_general_tab(ui, ed),
+                        crate::editor::SettingsTab::Appearance => settings_appearance_tab(ui, ed),
+                        crate::editor::SettingsTab::Plugins => settings_plugins_tab(ui, ed),
+                        crate::editor::SettingsTab::Keymap => settings_keymap_tab(ui, ed),
+                        crate::editor::SettingsTab::Agent => settings_agent_tab(ui, ed),
+                        crate::editor::SettingsTab::Updates => settings_updates_tab(ui, ed),
+                    }
+                });
+            });
+        });
+    ed.show_settings = open;
+}
+
+fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("General & Workflow");
+    ui.label(RichText::new("Interface layout, arrangement, and default sculpting behavior.").weak().small());
+    ui.add_space(6.0);
+
+    ui.label(RichText::new("Layout preset").strong());
+    for l in UiLayout::ALL {
+        tips::hover(ui.radio_value(&mut ed.layout, l, l.label()), l.description());
+    }
+    ui.add_space(4.0);
+
+    ui.separator();
+    tips::hover(ui.label(RichText::new("Panel arrangement").strong()), plain::ARRANGE);
+    arrange_menu(ui, ed_layout_snapshot(ed));
+    ui.add_space(4.0);
+
+    ui.separator();
+    ui.label(RichText::new("Startup & Sculpting").strong());
+    tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
+    tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
+    surface_cursor_checkbox(ui, ed);
+    ui.add_space(4.0);
+
+    ui.separator();
+    ui.label(RichText::new("Autosave").strong());
+    let mut mins = if ed.autosaver.enabled { (ed.autosaver.interval.as_secs_f32() / 60.0).round() } else { 0.0 };
+    let slider = egui::Slider::new(&mut mins, 0.0..=30.0)
+        .step_by(1.0)
+        .custom_formatter(|v, _| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} min") });
+    if tips::hover(ui.add(slider), plain::AUTOSAVE).changed() {
+        if mins <= 0.0 {
+            ed.autosaver.enabled = false;
+        } else {
+            ed.autosaver.enabled = true;
+            ed.autosaver.interval = std::time::Duration::from_secs_f32(mins * 60.0);
+        }
+    }
+    ui.add_space(4.0);
+
+    ui.separator();
+    subdivision_limit_menu(ui, ed);
+}
+
+fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Appearance & Themes");
+    ui.label(
+        RichText::new("Color schemes, UI scaling, accent highlights, wireframe colors, and viewport backdrops.")
+            .weak()
+            .small(),
+    );
+    ui.add_space(6.0);
+
+    ui.label(RichText::new("Interface scale").strong());
+    ui.horizontal(|ui| {
+        tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
+        if ui.button("Reset (100%)").clicked() {
+            ed.ui_scale = 1.0;
+        }
+    });
+    ui.add_space(4.0);
+
+    ui.separator();
+    theme_appearance_controls(ui, ed);
+    ui.add_space(4.0);
+
+    ui.separator();
+    ui.label(RichText::new("Viewport background").strong());
+    background_menu(ui, ed);
+}
+
+fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Plugins & Scripting");
+    ui.label(RichText::new("Extend OxyBrush with custom Python scripts and add-ons.").weak().small());
+    ui.add_space(6.0);
+
+    if let Some(dir) = crate::plugins::plugins_dir() {
+        ui.label(RichText::new(format!("Plugins folder: {}", dir.display())).small().weak());
+    }
+
+    ui.horizontal(|ui| {
+        if tips::hover(ui.button("Run Python script…"), plain::RUN_SCRIPT).clicked() {
+            ed.request_run_script = true;
+        }
+        if tips::hover(ui.button("Open plugins folder…"), plain::OPEN_PLUGINS_DIR).clicked() {
+            ed.request_open_plugins_dir = true;
+        }
+        if tips::hover(ui.button("Reload plugins"), plain::RELOAD_PLUGINS).clicked() {
+            ed.request_reload_plugins = true;
+        }
+    });
+    ui.add_space(8.0);
+
+    ui.separator();
+    ui.label(RichText::new("Installed plugins").strong());
+    if ed.plugins.is_empty() {
+        ui.label("No plugins found in the plugins directory.");
+        ui.label(
+            RichText::new("Save .py scripts with a manifest or docstring into the plugins folder to see them here.")
+                .weak()
+                .small(),
+        );
+    } else {
+        for plugin in &ed.plugins {
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(&plugin.name).strong());
+                        if !plugin.description.is_empty() {
+                            ui.label(RichText::new(&plugin.description).weak().small());
+                        }
+                        ui.label(RichText::new(plugin.path.display().to_string()).weak().small().monospace());
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button("Run").clicked() {
+                            ed.request_run_plugin = Some(plugin.path.clone());
+                        }
+                    });
+                });
+            });
+            ui.add_space(4.0);
+        }
+    }
+}
+
+fn settings_keymap_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Keymap & Navigation");
+    ui.label(RichText::new("Configure mouse orbit, pan, zoom, and keyboard shortcuts.").weak().small());
+    ui.add_space(6.0);
+
+    ui.label(RichText::new("Navigation preset").strong());
+    for preset in crate::keymap::Preset::ALL {
+        if ui.radio(ed.keymap.preset == preset, preset.label()).on_hover_text(preset.description()).clicked()
+            && ed.keymap.preset != preset
+        {
+            ed.keymap.apply_navigation_preset(preset);
+        }
+    }
+    ui.label(RichText::new(ed.keymap.preset.description()).weak().small());
+    ui.add_space(6.0);
+
+    ui.separator();
+    ui.horizontal(|ui| {
+        if ui.button("Reset all keys to preset default").clicked() {
+            ed.keymap.reset_all();
+            ed.keymap_capture = None;
+        }
+        if ui.button("Export keymap…").clicked() {
+            ed.request_export_keymap = true;
+        }
+        if ui.button("Import keymap…").clicked() {
+            ed.request_import_keymap = true;
+        }
+    });
+    ui.add_space(6.0);
+
+    ui.separator();
+    if tips::hover(ui.button("Open full keymap editor window…"), plain::KEYMAP_SETTINGS).clicked() {
+        ed.show_keymap = true;
+    }
+}
+
+fn settings_agent_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Local AI Agent");
+    ui.label(
+        RichText::new("Connect external AI coding and agent tools via local MCP server (127.0.0.1).").weak().small(),
+    );
+    ui.add_space(6.0);
+
+    tips::check_plain(ui, &mut ed.agent_enabled, "Enable local AI agent listener", plain::AGENT_ENABLED);
+    if ed.agent_enabled {
+        ui.add_space(4.0);
+        if ed.agent_endpoint.is_empty() {
+            ui.label("Starting the local listener…");
+        } else {
+            ui.label(RichText::new(format!("Endpoint: {}", ed.agent_endpoint)).monospace().small());
+            ui.horizontal(|ui| {
+                if tips::hover(ui.button("Copy connection info"), plain::AGENT_COPY).clicked() {
+                    ui.ctx().copy_text(crate::agent::connection_text(&ed.agent_endpoint, &ed.agent_token));
+                    ed.status = "Copied the agent address and token to clipboard".into();
+                }
+                if tips::hover(ui.button("Generate new token"), plain::AGENT_DISCONNECT).clicked() {
+                    ed.agent_disconnect = true;
+                }
+            });
+        }
+    }
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(
+            "The local listener binds exclusively to localhost (127.0.0.1) and enforces token authentication.",
+        )
+        .weak()
+        .small(),
+    );
+}
+
+fn settings_updates_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Software Updates");
+    ui.label(RichText::new(format!("Installed version: OxyBrush {}", env!("CARGO_PKG_VERSION"))).weak().small());
+    ui.add_space(6.0);
+
+    update_menu(ui, ed);
 }
 
 fn theme_appearance_window(ctx: &egui::Context, ed: &mut Editor) {

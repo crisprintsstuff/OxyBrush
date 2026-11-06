@@ -69,6 +69,40 @@ impl StrokeMode {
     }
 }
 
+/// Category tabs in the unified Preferences / Settings window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SettingsTab {
+    #[default]
+    General,
+    Appearance,
+    Plugins,
+    Keymap,
+    Agent,
+    Updates,
+}
+
+impl SettingsTab {
+    pub const ALL: [SettingsTab; 6] = [
+        SettingsTab::General,
+        SettingsTab::Appearance,
+        SettingsTab::Plugins,
+        SettingsTab::Keymap,
+        SettingsTab::Agent,
+        SettingsTab::Updates,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SettingsTab::General => "General",
+            SettingsTab::Appearance => "Appearance",
+            SettingsTab::Plugins => "Plugins",
+            SettingsTab::Keymap => "Keymap",
+            SettingsTab::Agent => "AI Agent",
+            SettingsTab::Updates => "Updates",
+        }
+    }
+}
+
 /// What a box/lasso selection does on release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectAction {
@@ -265,6 +299,9 @@ pub struct Editor {
     pub show_theme: bool,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
+    /// Preferences / Settings window system (replaces the bloated settings dropdown).
+    pub show_settings: bool,
+    pub settings_tab: SettingsTab,
     /// Welcome window with starter shapes and the basics (shown at startup).
     pub show_welcome: bool,
     /// Carve instead of raise by default (the invert key still flips it while held).
@@ -459,6 +496,8 @@ impl Default for Editor {
             show_background: false,
             show_theme: false,
             show_wireframe: false,
+            show_settings: false,
+            settings_tab: SettingsTab::default(),
             show_welcome: true,
             carve: false,
             layout: crate::settings::UiLayout::Standard,
@@ -800,6 +839,12 @@ impl Editor {
     /// Whether viewport shading (ambient occlusion or cavity) is on.
     pub fn shading_on(&self) -> bool {
         self.view.ambient_occlusion > 0.0 || self.view.cavity > 0.0
+    }
+
+    /// Open the unified Preferences / Settings window at the given tab.
+    pub fn open_settings(&mut self, tab: SettingsTab) {
+        self.show_settings = true;
+        self.settings_tab = tab;
     }
 
     /// Turn viewport shading off, or back on at the strengths it had.
@@ -2684,6 +2729,10 @@ impl Editor {
             }
             C::Guide => {
                 self.guide.open = !self.guide.open;
+                E::None
+            }
+            C::Preferences => {
+                self.open_settings(SettingsTab::General);
                 E::None
             }
         }

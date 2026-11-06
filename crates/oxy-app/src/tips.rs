@@ -164,6 +164,8 @@ commands! {
     WireframeWindow => "Wireframe settings…", "", "Open the wireframe color and opacity window.";
     AlignCursor => "Align cursor to surface on / off", "", "Draw the brush ring flat against the surface under the pointer.";
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
+    Preferences => "Preferences…", "Ctrl+,", "Open preferences to customize layout, appearance, plugins, keymap and updates.";
+    RunScript => "Run Python script…", "", "Execute a Python script using the OxyBrush API.";
 }
 
 use crate::keymap::CommandId;
@@ -210,6 +212,7 @@ impl Cmd {
             Cmd::Remesh => CommandId::Remesh,
             Cmd::GroupVisible => CommandId::GroupVisible,
             Cmd::Guide => CommandId::Guide,
+            Cmd::Preferences => CommandId::Preferences,
             _ => return None,
         })
     }
@@ -517,7 +520,7 @@ pub const SWATCH_NAMES: [&str; 8] = ["skin", "clay", "bone", "moss", "sea", "plu
 /// Explanations for controls that are not registered commands.
 pub mod plain {
     pub const FILE: &str = "Projects and meshes: new, open, save, import and export.";
-    pub const EDIT: &str = "Undo, redo, and finding a command or a brush.";
+    pub const EDIT: &str = "Undo, redo, command palette, and preferences.";
     pub const PIECES: &str = "Add, copy, split and merge the meshes in the scene.";
     pub const MESH: &str = "Subdivision levels, remesh, decimate, color and the transform gizmo.";
     pub const GROUPS: &str = "Face groups, and which faces are hidden.";

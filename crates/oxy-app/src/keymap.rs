@@ -214,6 +214,7 @@ impl KeyId {
             "equal" | "=" => Some(KeyId::Char('=')),
             "bracketleft" | "[" => Some(KeyId::Char('[')),
             "bracketright" | "]" => Some(KeyId::Char(']')),
+            "comma" | "," => Some(KeyId::Char(',')),
             "up" => Some(KeyId::Up),
             "down" => Some(KeyId::Down),
             "left" => Some(KeyId::Left),
@@ -376,6 +377,7 @@ pub enum CommandId {
     Remesh,
     GroupVisible,
     Guide,
+    Preferences,
 }
 
 impl CommandId {
@@ -484,6 +486,7 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::Remesh, name: "Voxel remesh", group: "Mask and mesh", defaults: &["ctrl+r"] },
     CommandMeta { id: CommandId::GroupVisible, name: "Group visible", group: "Mask and mesh", defaults: &["ctrl+w"] },
     CommandMeta { id: CommandId::Guide, name: "Guide", group: "Help", defaults: &["f2"] },
+    CommandMeta { id: CommandId::Preferences, name: "Preferences", group: "Edit", defaults: &["ctrl+,"] },
 ];
 
 const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Help"];
@@ -1247,6 +1250,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::Remesh => "remesh",
         CommandId::GroupVisible => "group_visible",
         CommandId::Guide => "guide",
+        CommandId::Preferences => "preferences",
     }
 }
 
