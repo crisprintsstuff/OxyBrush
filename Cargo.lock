@@ -2663,6 +2663,7 @@ version = "1.5.1-beta"
 dependencies = [
  "glam",
  "oxy-mesh",
+ "oxy-vdb",
  "rayon",
 ]
 
@@ -2675,6 +2676,15 @@ dependencies = [
  "serde_json",
  "sha2",
  "ureq",
+]
+
+[[package]]
+name = "oxy-vdb"
+version = "1.5.1-beta"
+dependencies = [
+ "glam",
+ "oxy-mesh",
+ "rayon",
 ]
 
 [[package]]

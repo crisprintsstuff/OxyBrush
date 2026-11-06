@@ -1,0 +1,137 @@
+//! Hierarchical sparse VDB grid, voxel remeshing, volumetric CSG booleans,
+//! and level set filters for digital sculpting.
+//!
+//! Based on the OpenVDB sparse volumetric tree architecture (Academy Software Foundation).
+//! Implemented in pure, safe Rust.
+
+pub mod csg;
+pub mod filter;
+pub mod mesh_to_volume;
+pub mod tree;
+pub mod volume_to_mesh;
+
+pub use csg::{BooleanOp, csg_difference, csg_intersection, csg_operation, csg_union};
+pub use filter::{FilterType, offset, shell, smooth_laplacian};
+pub use mesh_to_volume::{MeshToVolumeOptions, closest_point_on_triangle, mesh_to_level_set};
+pub use tree::{BitMask512, LEAF_DIM, LEAF_VOXELS, LeafNode, Transform, VdbFloatGrid};
+pub use volume_to_mesh::{VolumeToMeshOptions, volume_to_mesh};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec3;
+    use oxy_mesh::primitives;
+
+    #[test]
+    fn test_sphere_vdb_roundtrip() {
+        let sphere = primitives::icosphere(3, 1.0);
+        let grid = mesh_to_level_set(
+            &sphere.positions,
+            &sphere.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 3.0 },
+        );
+
+        assert!(grid.leaf_count() > 0, "should have active leaf nodes");
+        assert!(grid.active_voxel_count() > 100, "should have active voxels");
+
+        // Voxels slightly inside the sphere should have negative SDF (interior)
+        let inside_val = grid.eval_trilinear(Vec3::new(0.95, 0.0, 0.0));
+        assert!(inside_val < 0.0, "interior of sphere must be negative, got {inside_val}");
+        let outside_val = grid.eval_trilinear(Vec3::new(1.05, 0.0, 0.0));
+        assert!(outside_val > 0.0, "exterior of sphere must be positive, got {outside_val}");
+
+        // Extract mesh back
+        let remeshed = volume_to_mesh(&grid, VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 1 })
+            .expect("should extract mesh from sphere grid");
+
+        assert!(remeshed.vertex_count() > 100);
+        assert!(remeshed.triangle_count() > 100);
+
+        // Check radial distance of extracted vertices
+        for p in &remeshed.positions {
+            assert!((p.length() - 1.0).abs() < 0.12, "vertex should be close to radius 1.0, got length {}", p.length());
+        }
+    }
+
+    #[test]
+    fn test_vdb_csg_difference() {
+        let sphere_a = primitives::icosphere(3, 1.0);
+        let mut grid_a = mesh_to_level_set(
+            &sphere_a.positions,
+            &sphere_a.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 3.0 },
+        );
+
+        // Create a cutter sphere shifted slightly
+        let sphere_b = primitives::icosphere(3, 0.7);
+        let cutter_positions: Vec<Vec3> = sphere_b.positions.iter().map(|&p| p + Vec3::new(0.5, 0.0, 0.0)).collect();
+        let grid_b = mesh_to_level_set(
+            &cutter_positions,
+            &sphere_b.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 3.0 },
+        );
+
+        // Subtract grid_b from grid_a
+        csg_difference(&mut grid_a, &grid_b);
+
+        let remeshed =
+            volume_to_mesh(&grid_a, VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 0 })
+                .expect("should produce mesh from CSG difference");
+
+        // The point (0.5, 0.0, 0.0) where the cutter was centered should now be hollowed out / not inside!
+        for p in &remeshed.positions {
+            // No vertices should be inside cutter's deep interior
+            assert!(
+                p.distance(Vec3::new(0.5, 0.0, 0.0)) > 0.4 || p.length() > 0.8,
+                "vertex {} improperly inside difference void",
+                p
+            );
+        }
+    }
+
+    #[test]
+    fn test_vdb_csg_union() {
+        let sphere_a = primitives::icosphere(3, 1.0);
+        let mut grid_a = mesh_to_level_set(
+            &sphere_a.positions,
+            &sphere_a.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 3.0 },
+        );
+
+        let sphere_b = primitives::icosphere(3, 1.0);
+        let shifted_positions: Vec<Vec3> = sphere_b.positions.iter().map(|&p| p + Vec3::new(1.0, 0.0, 0.0)).collect();
+        let grid_b = mesh_to_level_set(
+            &shifted_positions,
+            &sphere_b.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 3.0 },
+        );
+
+        csg_union(&mut grid_a, &grid_b);
+
+        let remeshed =
+            volume_to_mesh(&grid_a, VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 1 })
+                .expect("should produce mesh from CSG union");
+
+        assert!(remeshed.bounds().extent().x > 2.5, "union should span across both spheres");
+    }
+
+    #[test]
+    fn test_vdb_offset() {
+        let sphere = primitives::icosphere(3, 1.0);
+        let mut grid = mesh_to_level_set(
+            &sphere.positions,
+            &sphere.triangles,
+            MeshToVolumeOptions { voxel_size: 0.08, half_width: 5.0 },
+        );
+
+        // Dilate outward by 0.15
+        offset(&mut grid, 0.15);
+
+        let remeshed = volume_to_mesh(&grid, VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 0 })
+            .expect("should extract dilated mesh");
+
+        for p in &remeshed.positions {
+            assert!((p.length() - 1.15).abs() < 0.15, "dilated sphere radius should be ~1.15, got {}", p.length());
+        }
+    }
+}

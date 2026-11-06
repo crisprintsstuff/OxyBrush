@@ -1,0 +1,18 @@
+[package]
+name = "oxy-vdb"
+description = "Hierarchical sparse VDB voxel grid, voxel remeshing, CSG booleans, and level set filters for OxyBrush (pure Rust)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+oxy-mesh.workspace = true
+glam.workspace = true
+rayon.workspace = true
+
+[dev-dependencies]
+
+[lints]
+workspace = true

@@ -15,8 +15,18 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Largest supported resolution (grid memory grows with its cube).
+/// Largest supported resolution for dense regular grid mode.
 pub const MAX_RESOLUTION: u32 = 320;
+
+/// Volumetric engine used for remeshing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RemeshEngine {
+    /// Hierarchical sparse OpenVDB-style level set remesher (sparse leaf tree, low memory, scales past 1024).
+    #[default]
+    Vdb,
+    /// Dense regular grid narrow-band remesher (legacy, capped at MAX_RESOLUTION).
+    RegularGrid,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct RemeshOptions {
@@ -24,11 +34,36 @@ pub struct RemeshOptions {
     pub resolution: u32,
     /// Laplacian relaxation passes on the result.
     pub smooth_passes: u32,
+    /// Adaptivity factor (0.0 = uniform grid; >0.0 simplifies flat regions).
+    pub adaptivity: f32,
+    /// Which volumetric engine to use.
+    pub engine: RemeshEngine,
 }
 
 impl Default for RemeshOptions {
     fn default() -> Self {
-        Self { resolution: 128, smooth_passes: 1 }
+        Self { resolution: 128, smooth_passes: 1, adaptivity: 0.0, engine: RemeshEngine::Vdb }
+    }
+}
+
+/// Options specifically for sparse VDB remeshing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VdbRemeshOptions {
+    /// Voxel size in world units (if specified, overrides resolution).
+    pub voxel_size: Option<f32>,
+    /// Voxels along longest axis (used if voxel_size is None).
+    pub resolution: u32,
+    /// Adaptivity factor in [0.0, 1.0].
+    pub adaptivity: f32,
+    /// Laplacian relaxation passes.
+    pub smooth_passes: u32,
+    /// Surface offset dilation (>0) or erosion (<0).
+    pub offset: f32,
+}
+
+impl Default for VdbRemeshOptions {
+    fn default() -> Self {
+        Self { voxel_size: None, resolution: 128, adaptivity: 0.0, smooth_passes: 1, offset: 0.0 }
     }
 }
 
@@ -72,6 +107,125 @@ impl Grid {
 /// Remesh the union of `meshes`. Hidden triangles are included; masks and
 /// face groups are reset.
 pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, RemeshError> {
+    match opts.engine {
+        RemeshEngine::Vdb => vdb_remesh(
+            meshes,
+            VdbRemeshOptions {
+                voxel_size: None,
+                resolution: opts.resolution,
+                adaptivity: opts.adaptivity,
+                smooth_passes: opts.smooth_passes,
+                offset: 0.0,
+            },
+        ),
+        RemeshEngine::RegularGrid => regular_grid_remesh(meshes, opts),
+    }
+}
+
+/// Sparse OpenVDB-style hierarchical voxel remeshing.
+pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, RemeshError> {
+    let bounds = meshes.iter().fold(Aabb::EMPTY, |a, m| a.union(&m.bounds()));
+    if bounds.is_empty() || meshes.iter().all(|m| m.triangle_count() == 0) {
+        return Err(RemeshError::Empty);
+    }
+
+    let h = opts.voxel_size.unwrap_or_else(|| {
+        let res = opts.resolution.clamp(8, 2048);
+        (bounds.extent().max_element() / res as f32).max(1e-5)
+    });
+
+    let mut combined_grid: Option<oxy_vdb::VdbFloatGrid> = None;
+
+    for &m in meshes {
+        if m.triangle_count() == 0 {
+            continue;
+        }
+        let part_grid = oxy_vdb::mesh_to_level_set(
+            &m.positions,
+            &m.triangles,
+            oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
+        );
+
+        match &mut combined_grid {
+            Some(target) => oxy_vdb::csg_union(target, &part_grid),
+            None => combined_grid = Some(part_grid),
+        }
+    }
+
+    let mut grid = combined_grid.ok_or(RemeshError::Empty)?;
+
+    if opts.offset.abs() > 1e-5 {
+        oxy_vdb::offset(&mut grid, opts.offset);
+    }
+
+    let mut mesh = oxy_vdb::volume_to_mesh(
+        &grid,
+        oxy_vdb::VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: opts.smooth_passes },
+    )
+    .ok_or(RemeshError::NoSurface)?;
+
+    if opts.adaptivity > 0.0 {
+        let decimate_ratio = (1.0 - opts.adaptivity * 0.7).clamp(0.2, 0.99);
+        let target_tris = ((mesh.triangle_count() as f32 * decimate_ratio) as usize).max(4);
+        mesh = crate::decimate(&mesh, target_tris);
+    }
+
+    Ok(mesh)
+}
+
+/// CSG volumetric Boolean operation between two meshes (Union, Difference, Intersection).
+pub fn boolean_mesh(
+    target: &Mesh,
+    tool: &Mesh,
+    op: oxy_vdb::BooleanOp,
+    voxel_size: Option<f32>,
+) -> Result<Mesh, RemeshError> {
+    if target.triangle_count() == 0 || tool.triangle_count() == 0 {
+        return Err(RemeshError::Empty);
+    }
+
+    let h = voxel_size.unwrap_or_else(|| {
+        let extent = target.bounds().union(&tool.bounds()).extent();
+        (extent.max_element() / 128.0).max(1e-5)
+    });
+
+    let mut target_grid = oxy_vdb::mesh_to_level_set(
+        &target.positions,
+        &target.triangles,
+        oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
+    );
+
+    let tool_grid = oxy_vdb::mesh_to_level_set(
+        &tool.positions,
+        &tool.triangles,
+        oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
+    );
+
+    oxy_vdb::csg_operation(&mut target_grid, &tool_grid, op);
+
+    let mesh = oxy_vdb::volume_to_mesh(
+        &target_grid,
+        oxy_vdb::VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 1 },
+    )
+    .ok_or(RemeshError::NoSurface)?;
+
+    Ok(mesh)
+}
+
+pub fn boolean_union(a: &Mesh, b: &Mesh) -> Result<Mesh, RemeshError> {
+    boolean_mesh(a, b, oxy_vdb::BooleanOp::Union, None)
+}
+
+pub fn boolean_difference(target: &Mesh, tool: &Mesh) -> Result<Mesh, RemeshError> {
+    boolean_mesh(target, tool, oxy_vdb::BooleanOp::Difference, None)
+}
+
+pub fn boolean_intersection(a: &Mesh, b: &Mesh) -> Result<Mesh, RemeshError> {
+    boolean_mesh(a, b, oxy_vdb::BooleanOp::Intersection, None)
+}
+
+/// Dense regular-grid remesher (legacy narrow-band array).
+pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, RemeshError> {
     let bounds = meshes.iter().fold(Aabb::EMPTY, |a, m| a.union(&m.bounds()));
     if bounds.is_empty() || meshes.iter().all(|m| m.triangle_count() == 0) {
         return Err(RemeshError::Empty);
@@ -404,7 +558,7 @@ mod tests {
     #[test]
     fn sphere_remesh_is_closed_and_outward() {
         let s = primitives::icosphere(3, 1.0);
-        let r = voxel_remesh(&[&s], RemeshOptions { resolution: 48, smooth_passes: 0 }).unwrap();
+        let r = voxel_remesh(&[&s], RemeshOptions { resolution: 48, smooth_passes: 0, ..Default::default() }).unwrap();
         assert_eq!(euler(&r), 2, "remeshed sphere should be a closed genus-0 surface");
         for (p, n) in r.positions.iter().zip(&r.normals) {
             assert!((p.length() - 1.0).abs() < 0.06, "vertex off surface: {}", p.length());
@@ -418,7 +572,8 @@ mod tests {
         let mut d = primitives::icosphere(3, 1.0).to_data();
         d.positions.iter_mut().for_each(|p| *p += Vec3::X * 1.2);
         let b = Mesh::from_data(d);
-        let r = voxel_remesh(&[&a, &b], RemeshOptions { resolution: 64, smooth_passes: 1 }).unwrap();
+        let r =
+            voxel_remesh(&[&a, &b], RemeshOptions { resolution: 64, smooth_passes: 1, ..Default::default() }).unwrap();
         assert_eq!(euler(&r), 2, "union should be one closed surface");
         // No vertex buried inside the other sphere.
         for p in &r.positions {
@@ -429,9 +584,21 @@ mod tests {
     #[test]
     fn open_plane_becomes_shell() {
         let p = primitives::plane(10, 2.0);
-        let r = voxel_remesh(&[&p], RemeshOptions { resolution: 32, smooth_passes: 0 }).unwrap();
+        let r = voxel_remesh(&[&p], RemeshOptions { resolution: 32, smooth_passes: 0, ..Default::default() }).unwrap();
         assert!(r.triangle_count() > 100);
         assert!(r.bounds().extent().y < 0.3);
+    }
+
+    #[test]
+    fn boolean_difference_cuts_hole() {
+        let target = primitives::icosphere(3, 1.0);
+        let mut d = primitives::icosphere(3, 0.6).to_data();
+        d.positions.iter_mut().for_each(|p| *p += Vec3::X * 0.7);
+        let tool = Mesh::from_data(d);
+
+        let result = boolean_difference(&target, &tool).unwrap();
+        assert!(result.vertex_count() > 50);
+        assert!(result.triangle_count() > 50);
     }
 
     #[test]

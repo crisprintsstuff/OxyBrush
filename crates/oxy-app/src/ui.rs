@@ -2148,6 +2148,31 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
+    tips::menu(ui, "Boolean (OpenVDB)", "Volumetric CSG Boolean tools (Union, Difference, Intersection)", |ui| {
+        let other_pieces: Vec<(u64, String)> =
+            ed.scene.pieces.iter().filter(|p| p.id != ed.scene.active().id).map(|p| (p.id, p.name.clone())).collect();
+        if other_pieces.is_empty() {
+            ui.label(RichText::new("Needs at least 2 pieces in the scene").weak());
+        } else {
+            for (id, name) in other_pieces {
+                let label = format!("With \"{name}\"");
+                tips::menu(ui, &label, "Choose Boolean operation with this piece", |ui| {
+                    if ui.button("Difference (Subtract from active)").clicked() {
+                        ed.boolean_operation(id, oxy_topo::BooleanOp::Difference);
+                        ui.close();
+                    }
+                    if ui.button("Union (Weld into active)").clicked() {
+                        ed.boolean_operation(id, oxy_topo::BooleanOp::Union);
+                        ui.close();
+                    }
+                    if ui.button("Intersection (Common volume)").clicked() {
+                        ed.boolean_operation(id, oxy_topo::BooleanOp::Intersection);
+                        ui.close();
+                    }
+                });
+            }
+        }
+    });
     ui.separator();
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
@@ -2731,10 +2756,32 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.label(RichText::new("Rebuild").small().weak());
     ui.horizontal(|ui| {
         ui.label("Resolution");
-        tips::hover(
-            ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=oxy_topo::MAX_RESOLUTION)),
-            plain::REMESH_RES,
-        );
+        let max_res = match ed.remesh_engine {
+            oxy_topo::RemeshEngine::Vdb => 1024,
+            oxy_topo::RemeshEngine::RegularGrid => oxy_topo::MAX_RESOLUTION,
+        };
+        tips::hover(ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=max_res)), plain::REMESH_RES);
+    });
+    if ed.remesh_engine == oxy_topo::RemeshEngine::Vdb {
+        ui.horizontal(|ui| {
+            ui.label("Adaptivity");
+            tips::hover(
+                ui.add(egui::Slider::new(&mut ed.remesh_adaptivity, 0.0..=1.0)),
+                "Simplifies flat planar areas while keeping high-curvature areas dense",
+            );
+        });
+    }
+    ui.horizontal(|ui| {
+        ui.label("Engine");
+        egui::ComboBox::from_id_salt("remesh_engine")
+            .selected_text(match ed.remesh_engine {
+                oxy_topo::RemeshEngine::Vdb => "OpenVDB (Sparse)",
+                oxy_topo::RemeshEngine::RegularGrid => "Regular Grid",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::Vdb, "OpenVDB (Sparse)");
+                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::RegularGrid, "Regular Grid");
+            });
     });
     ui.horizontal_wrapped(|ui| {
         if tips::button_on_km(ui, &ed.keymap, !busy, "Remesh", Cmd::Remesh).clicked() {

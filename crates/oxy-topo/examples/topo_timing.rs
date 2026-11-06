@@ -7,7 +7,8 @@ fn main() {
     let sphere = primitives::icosphere(7, 1.0);
     for res in [128, 256, 320] {
         let t = Instant::now();
-        let r = voxel_remesh(&[&sphere], RemeshOptions { resolution: res, smooth_passes: 1 }).unwrap();
+        let r = voxel_remesh(&[&sphere], RemeshOptions { resolution: res, smooth_passes: 1, ..Default::default() })
+            .unwrap();
         println!(
             "remesh {} tris @ {res}: {} tris in {:.0} ms",
             sphere.triangle_count(),

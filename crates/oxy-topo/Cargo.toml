@@ -9,6 +9,7 @@ rust-version.workspace = true
 
 [dependencies]
 oxy-mesh.workspace = true
+oxy-vdb.workspace = true
 glam.workspace = true
 rayon.workspace = true
 

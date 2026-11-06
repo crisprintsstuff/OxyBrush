@@ -455,7 +455,7 @@ impl HeadlessSession {
         let resolution = resolution.unwrap_or(self.remesh_resolution).clamp(8, oxy_topo::MAX_RESOLUTION);
         self.remesh_resolution = resolution;
         let mesh = self.scene.active().mesh.clone();
-        let opts = oxy_topo::RemeshOptions { resolution, smooth_passes: 1 };
+        let opts = oxy_topo::RemeshOptions { resolution, smooth_passes: 1, ..Default::default() };
         match oxy_topo::voxel_remesh(&[&mesh], opts) {
             Ok(mesh) => {
                 let tris = mesh.triangle_count();

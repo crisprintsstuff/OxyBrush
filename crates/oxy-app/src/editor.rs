@@ -287,6 +287,8 @@ pub struct Editor {
     pub view: ViewSettings,
     pub matcap: MatcapPreset,
     pub remesh_resolution: u32,
+    pub remesh_adaptivity: f32,
+    pub remesh_engine: oxy_topo::RemeshEngine,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     pub show_panels: bool,
@@ -488,6 +490,8 @@ impl Default for Editor {
             view: ViewSettings::default(),
             matcap: MatcapPreset::Terracotta,
             remesh_resolution: 128,
+            remesh_adaptivity: 0.0,
+            remesh_engine: oxy_topo::RemeshEngine::Vdb,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             show_panels: true,
@@ -2184,7 +2188,12 @@ impl Editor {
     /// Voxel-remesh the active piece.
     pub fn remesh_active(&mut self) {
         let mesh = self.scene.active().mesh.clone();
-        let opts = RemeshOptions { resolution: self.remesh_resolution, smooth_passes: 1 };
+        let opts = RemeshOptions {
+            resolution: self.remesh_resolution,
+            smooth_passes: 1,
+            adaptivity: self.remesh_adaptivity,
+            engine: self.remesh_engine,
+        };
         self.start_job(format!("Remesh ({})", opts.resolution), Vec::new(), move || {
             oxy_topo::voxel_remesh(&[&mesh], opts).map(JobResult::Mesh).map_err(|e| e.to_string())
         });
@@ -2200,10 +2209,44 @@ impl Editor {
         }
         let meshes: Vec<Mesh> = visible.iter().map(|p| p.mesh.clone()).collect();
         let consumed = visible.iter().map(|p| p.id).filter(|&id| id != active).collect();
-        let opts = RemeshOptions { resolution: self.remesh_resolution, smooth_passes: 1 };
+        let opts = RemeshOptions {
+            resolution: self.remesh_resolution,
+            smooth_passes: 1,
+            adaptivity: self.remesh_adaptivity,
+            engine: self.remesh_engine,
+        };
         self.start_job(format!("Merge {} pieces", meshes.len()), consumed, move || {
             let refs: Vec<&Mesh> = meshes.iter().collect();
             oxy_topo::voxel_remesh(&refs, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
+        });
+    }
+
+    /// Volumetric CSG boolean between the active piece and another piece.
+    pub fn boolean_operation(&mut self, tool_id: u64, op: oxy_topo::BooleanOp) {
+        let active = self.scene.active().id;
+        if active == tool_id {
+            self.status = "Cannot perform Boolean operation on the same piece".into();
+            return;
+        }
+        let Some(tool_piece) = self.scene.pieces.iter().find(|p| p.id == tool_id) else {
+            self.status = "Tool piece not found".into();
+            return;
+        };
+        let target_mesh = self.scene.active().mesh.clone();
+        let tool_mesh = tool_piece.mesh.clone();
+        let op_name = match op {
+            oxy_topo::BooleanOp::Union => "Boolean Union",
+            oxy_topo::BooleanOp::Difference => "Boolean Difference",
+            oxy_topo::BooleanOp::Intersection => "Boolean Intersection",
+        };
+        let consumed = vec![tool_id];
+        let res = self.remesh_resolution;
+        self.start_job(format!("{op_name} with piece #{tool_id}"), consumed, move || {
+            let extent = target_mesh.bounds().union(&tool_mesh.bounds()).extent();
+            let h = (extent.max_element() / res as f32).max(1e-5);
+            oxy_topo::boolean_mesh(&target_mesh, &tool_mesh, op, Some(h))
+                .map(JobResult::Mesh)
+                .map_err(|e| e.to_string())
         });
     }
 

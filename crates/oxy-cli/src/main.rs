@@ -96,7 +96,8 @@ fn run(args: &[String]) -> Result<String, String> {
         "remesh" => {
             need(2)?;
             let resolution = flag_num(args, "--resolution")?.unwrap_or(128.0) as u32;
-            let opts = oxy_topo::RemeshOptions { resolution, smooth_passes: 1 };
+            let adaptivity = flag_num(args, "--adaptivity")?.unwrap_or(0.0) as f32;
+            let opts = oxy_topo::RemeshOptions { resolution, smooth_passes: 1, adaptivity, ..Default::default() };
             let pieces = map_meshes(load(Path::new(pos[0]))?, |m| {
                 oxy_topo::voxel_remesh(&[m], opts).map_err(|e| e.to_string())
             })?;
