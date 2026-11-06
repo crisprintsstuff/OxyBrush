@@ -4,6 +4,45 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.6.0-beta] - 2026-11-05
+
+### Added
+
+- **OpenVDB Sparse Volumetric Grid & Voxel Remesher (`oxy-vdb`):**
+  - Implemented Academy Software Foundation (ASWF) OpenVDB-style hierarchical sparse volumetric B-tree in pure, safe Rust.
+  - Standard $8^3 = 512$ voxel leaf nodes with 512-bit active value masks (`BitMask512`) and linear spatial index-to-world transforms.
+  - Narrow-band signed distance field (SDF) rasterization (`mesh_to_level_set`) with parallel triangle processing and normal-oriented winding.
+  - Exterior topological flood-filling identifying and populating interior leaves (`-bg`), enabling solid manifold geometry without dense memory overhead.
+  - Lifts the previous $320^3$ resolution ceiling; sculptors can now remesh up to 1024 or 2048 voxels with low memory usage.
+  - Dual contouring surface extraction (`volume_to_mesh`) with built-in surface relaxation and zero false crossings against unallocated background.
+  - **Adaptivity Slider:** Simplifies flat planar regions while retaining maximum polygon density in high-curvature sculpt areas.
+  - **Engine Selector:** Toggle between high-performance `OpenVDB (Sparse)` (default) and legacy `Regular Grid` remeshing.
+
+- **Volumetric CSG Booleans (`Mesh > Boolean (OpenVDB)`):**
+  - Added full Constructive Solid Geometry Boolean tools operating directly on VDB signed distance fields:
+    - **Boolean Difference:** Cleanly subtracts a cutter piece from the active sculpt piece.
+    - **Boolean Union:** Seamlessly welds two pieces into one watertight manifold surface without internal geometry or seam cracks.
+    - **Boolean Intersection:** Retains only the common overlapping volume of two pieces.
+  - Fully immune to non-manifold edges, self-intersecting polygons, and co-planar face errors.
+  - Runs asynchronously off the main thread with full compound undo/redo history.
+
+- **Unified Preferences Window System (`Ctrl+,` or `Edit > Preferences…`):**
+  - Replaced the large Settings dropdown menu with an industry-standard, multi-tab floating Preferences dialog.
+  - Tabs for **General** (UI scale, layout, autosaver), **Appearance** (theme, accent color, viewport background, wireframe), **Plugins**, **Keymap** (presets, search, interactive chord remapping), **AI Agent** (status, model, endpoint), and **Updates**.
+
+- **Top Menu Bar Reorganization:**
+  - Streamlined top menu bar into 8 clean, consistent categories: `File`, `Edit`, `Pieces`, `Mesh`, `Groups`, `Mask`, `View`, `Help`.
+  - Moved Preferences to `Edit > Preferences…` (`Ctrl+,`) and relocated plugin management into Preferences.
+
+- **Level Set Filtering & Shelling:**
+  - Added volumetric level set dilation/erosion offset (`offset`), hollow wall shelling for 3D printing (`shell`), and 3D Laplacian smoothing directly on the narrow-band SDF (`smooth_laplacian`).
+
+### Fixed
+
+- **Grab Brush Symmetry Overlap Creasing & Boundary Tearing:**
+  - Resolved circular boundary tears and midline creasing when grabbing across or near symmetry planes.
+  - Replaced singular radial derivative blending with $C^2$ cubic directional weighting ($\omega_i = w_i^3$) and maximum envelope blending, guaranteeing zero derivative boundaries ($\frac{d}{dw_1} = 0, \frac{d^2}{dw_1^2} = 0$) and seamless symmetry transitions.
+
 ## [1.5.1-beta] - 2026-11-05
 
 ### Fixed
