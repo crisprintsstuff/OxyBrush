@@ -4,7 +4,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-11-05
+## [1.7.0-beta] - 2026-11-05
 
 ### Added
 
