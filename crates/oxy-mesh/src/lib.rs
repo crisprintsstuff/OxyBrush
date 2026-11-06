@@ -129,6 +129,7 @@ pub struct Mesh {
     topology_version: u64,
     vert_stamp: Stamps,
     stamp: u32,
+    quad_cache: std::sync::OnceLock<(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>)>,
 }
 
 impl Mesh {
@@ -238,6 +239,7 @@ impl Mesh {
             topology_version: NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed),
             vert_stamp: Stamps::new(vcount),
             stamp: 0,
+            quad_cache: std::sync::OnceLock::new(),
         };
         mesh.recompute_all_normals();
         let bounds: Vec<Aabb> = (0..mesh.chunks.len()).into_par_iter().map(|c| mesh.chunk_bounds(c)).collect();
@@ -774,14 +776,38 @@ impl Mesh {
         self.triangles.len()
     }
 
-    /// Number of paired quads and remaining standalone triangles in the mesh.
-    pub fn quad_and_triangle_counts(&self) -> (usize, usize) {
-        crate::topo::quad_and_triangle_counts(&self.positions, &self.triangles)
+    fn get_quad_cache(&self) -> &(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>) {
+        self.quad_cache.get_or_init(|| {
+            let diagonals = crate::topo::find_quad_diagonals(&self.positions, &self.triangles);
+            let count = diagonals.len();
+            (count, std::sync::Arc::new(diagonals))
+        })
     }
 
-    /// Set of internal diagonal edges `[min(u, v), max(u, v)]` for all paired quads.
+    /// Number of paired quads and remaining standalone triangles in the mesh (cached, O(1)).
+    #[inline]
+    pub fn quad_and_triangle_counts(&self) -> (usize, usize) {
+        let (quads, _) = self.get_quad_cache();
+        let tris = self.triangles.len().saturating_sub(*quads * 2);
+        (*quads, tris)
+    }
+
+    /// Number of paired quads in the mesh (cached, O(1)).
+    #[inline]
+    pub fn quad_count(&self) -> usize {
+        self.get_quad_cache().0
+    }
+
+    /// Set of internal diagonal edges `[min(u, v), max(u, v)]` for all paired quads (cached).
+    #[inline]
     pub fn quad_diagonals(&self) -> std::collections::HashSet<[u32; 2]> {
-        crate::topo::find_quad_diagonals(&self.positions, &self.triangles)
+        (*self.get_quad_cache().1).clone()
+    }
+
+    /// Reference to internal diagonal edges for all paired quads (cached, O(1)).
+    #[inline]
+    pub fn quad_diagonals_ref(&self) -> &std::collections::HashSet<[u32; 2]> {
+        &self.get_quad_cache().1
     }
 
     /// Globally unique per topology; renderers rebuild index buffers when it changes.

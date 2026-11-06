@@ -173,6 +173,20 @@ fn is_valid_quad(positions: &[Vec3], t1: [u32; 3], t2: [u32; 3], u: u32, v: u32)
         return false;
     }
 
+    // Corner angles at u and v must not be overly obtuse (rejects equilateral triangle pairs / diamonds)
+    let len_ub = (pb - pu).length();
+    let len_ud = (pd - pu).length();
+    let len_vb = (pb - pv).length();
+    let len_vd = (pd - pv).length();
+    if len_ub < 1e-6 || len_ud < 1e-6 || len_vb < 1e-6 || len_vd < 1e-6 {
+        return false;
+    }
+    let cos_u = (pb - pu).dot(pd - pu) / (len_ub * len_ud);
+    let cos_v = (pb - pv).dot(pd - pv) / (len_vb * len_vd);
+    if cos_u < -0.45 || cos_v < -0.45 {
+        return false;
+    }
+
     true
 }
 
@@ -186,8 +200,9 @@ pub fn find_quad_diagonals(positions: &[Vec3], triangles: &[[u32; 3]]) -> std::c
     }
 
     let mut used = vec![false; n];
+    let mut consecutive_quads = 0;
 
-    // Pass 1: Check consecutive pairs (as produced by OpenVDB dual contouring and Surface Nets)
+    // Pass 1: Check consecutive pairs (as produced by OpenVDB dual contouring, surface nets, and primitives)
     for i in (0..n - 1).step_by(2) {
         let t1 = triangles[i];
         let t2 = triangles[i + 1];
@@ -209,29 +224,55 @@ pub fn find_quad_diagonals(positions: &[Vec3], triangles: &[[u32; 3]]) -> std::c
                 diagonals.insert([u.min(v), u.max(v)]);
                 used[i] = true;
                 used[i + 1] = true;
+                consecutive_quads += 1;
             }
         }
     }
 
-    // Pass 2: Check any remaining unused triangles via edge map
-    let mut edge_map: HashMap<[u32; 2], usize> = HashMap::with_capacity(n);
+    if consecutive_quads * 2 >= n.saturating_sub(1) {
+        return diagonals;
+    }
+
+    // If a large mesh (>= 1000 triangles) has zero consecutive quads, it is a pure triangle
+    // mesh (e.g., icosphere, STL, dynamic topology sculpt, subdivided triangles).
+    // Avoid expensive pairing and avoid falsely turning equilateral triangles into quads.
+    if consecutive_quads == 0 && n >= 1000 {
+        return diagonals;
+    }
+
+    // Pass 2: Check any remaining unused triangles via sorted edge list (O(E log E) cache-friendly, no SipHash)
+    let unused_count = n - consecutive_quads * 2;
+    let mut edges: Vec<([u32; 2], u32)> = Vec::with_capacity(unused_count * 3);
     for (idx, &tri) in triangles.iter().enumerate() {
-        if used[idx] {
-            continue;
-        }
-        for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-            let key = [u.min(v), u.max(v)];
-            if let Some(&other_idx) = edge_map.get(&key) {
-                if !used[other_idx] && is_valid_quad(positions, tri, triangles[other_idx], u, v) {
-                    diagonals.insert(key);
-                    used[idx] = true;
-                    used[other_idx] = true;
-                    edge_map.remove(&key);
-                    break;
-                }
-            } else {
-                edge_map.insert(key, idx);
+        if !used[idx] {
+            for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                edges.push(([u.min(v), u.max(v)], idx as u32));
             }
+        }
+    }
+
+    use rayon::prelude::*;
+    edges.par_sort_unstable_by_key(|e| e.0);
+
+    let mut i = 0;
+    while i + 1 < edges.len() {
+        if edges[i].0 == edges[i + 1].0 {
+            let key = edges[i].0;
+            let t1_idx = edges[i].1 as usize;
+            let t2_idx = edges[i + 1].1 as usize;
+            if !used[t1_idx]
+                && !used[t2_idx]
+                && is_valid_quad(positions, triangles[t1_idx], triangles[t2_idx], key[0], key[1])
+            {
+                diagonals.insert(key);
+                used[t1_idx] = true;
+                used[t2_idx] = true;
+            }
+            while i < edges.len() && edges[i].0 == key {
+                i += 1;
+            }
+        } else {
+            i += 1;
         }
     }
 

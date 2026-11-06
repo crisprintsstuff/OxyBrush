@@ -216,7 +216,7 @@ pub fn write_obj(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
     for n in &mesh.normals {
         writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
     }
-    write_obj_faces(&mesh.positions, &mesh.triangles, 1, w)
+    write_obj_faces_with_diagonals(&mesh.positions, &mesh.triangles, 1, Some(mesh.quad_diagonals_ref()), w)
 }
 
 pub(crate) fn write_obj_faces(
@@ -225,7 +225,31 @@ pub(crate) fn write_obj_faces(
     base: u32,
     w: &mut impl Write,
 ) -> io::Result<()> {
-    let diagonals = oxy_mesh::topo::find_quad_diagonals(positions, triangles);
+    write_obj_faces_with_diagonals(positions, triangles, base, None, w)
+}
+
+pub(crate) fn write_obj_faces_with_diagonals(
+    positions: &[glam::Vec3],
+    triangles: &[[u32; 3]],
+    base: u32,
+    diagonals: Option<&std::collections::HashSet<[u32; 2]>>,
+    w: &mut impl Write,
+) -> io::Result<()> {
+    let owned;
+    let diagonals = match diagonals {
+        Some(d) => d,
+        None => {
+            owned = oxy_mesh::topo::find_quad_diagonals(positions, triangles);
+            &owned
+        }
+    };
+    if diagonals.is_empty() {
+        for t in triangles {
+            let [a, b, c] = t.map(|v| v + base);
+            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+        }
+        return Ok(());
+    }
     let mut used = vec![false; triangles.len()];
 
     // Pass 1: consecutive pairs sharing a quad diagonal

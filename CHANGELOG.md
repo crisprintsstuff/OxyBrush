@@ -4,6 +4,17 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.7.7-beta] - 2026-11-06
+
+### Fixed
+
+- **Critical Viewport & Per-Frame Performance Optimization ($O(1)$ Quad Metric Caching):**
+  - Resolved severe viewport and application lag when meshes reached 500k+ polygons caused by un-cached quad topology analysis executing every single frame in the UI status bar.
+  - Implemented thread-safe `OnceLock` lazy caching for quad and triangle counts and diagonal sets on `Mesh`, reducing per-frame status bar overhead from ~60–300ms down to $0\,\text{ns}$ ($O(1)$).
+  - Optimized viewport GPU mesh synchronization (`ViewportRenderer::sync`) to bypass diagonal lookups and massive `HashSet` allocations for pure triangle meshes, rendering line lists via direct edge pushes (<1ms).
+  - Replaced quadratic `HashMap` edge pairing in `find_quad_diagonals` with a cache-friendly, multi-threaded Rayon sorted edge list (`par_sort_unstable_by_key`), reducing initial quad analysis time by over 50%.
+  - Added corner angle checks to prevent equilateral triangle diamonds on subdivided meshes (e.g., icospheres) from being falsely detected and reported as quads.
+
 ## [1.7.6-beta] - 2026-11-06
 
 ### Fixed

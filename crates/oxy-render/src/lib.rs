@@ -687,19 +687,29 @@ impl ViewportRenderer {
                     Some(vis) => vis,
                     None => &mesh.triangles,
                 };
-                let diagonals = mesh.quad_diagonals();
-                let mut lines = Vec::with_capacity(tris_slice.len() * 2);
-                let mut seen = std::collections::HashSet::with_capacity(tris_slice.len() * 2);
-                for tri in tris_slice {
-                    for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                        let edge = if u < v { [u, v] } else { [v, u] };
-                        if !diagonals.contains(&edge) && seen.insert(edge) {
-                            lines.push(edge);
+                if mesh.quad_count() == 0 {
+                    let mut lines = Vec::with_capacity(tris_slice.len() * 3);
+                    for tri in tris_slice {
+                        lines.push([tri[0], tri[1]]);
+                        lines.push([tri[1], tri[2]]);
+                        lines.push([tri[2], tri[0]]);
+                    }
+                    let count = lines.len() as u32 * 2;
+                    (lines, count)
+                } else {
+                    let diagonals = mesh.quad_diagonals_ref();
+                    let mut lines = Vec::with_capacity(tris_slice.len() * 2);
+                    for tri in tris_slice {
+                        for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+                            let edge = if u < v { [u, v] } else { [v, u] };
+                            if !diagonals.contains(&edge) {
+                                lines.push(edge);
+                            }
                         }
                     }
+                    let count = lines.len() as u32 * 2;
+                    (lines, count)
                 }
-                let count = lines.len() as u32 * 2;
-                (lines, count)
             };
             let line_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy line indices"),

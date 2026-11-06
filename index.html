@@ -687,13 +687,33 @@
 
         <div class="space-y-6">
           
-          <!-- v1.7.6-beta -->
+          <!-- v1.7.7-beta -->
           <div class="rounded-3xl glass overflow-hidden border-oxy-pink/30">
             <div class="px-8 py-5 border-b border-white/5 bg-white/5 flex items-center justify-between">
               <div class="flex items-center gap-4">
-                <span class="font-display font-bold text-white text-lg">1.7.6-beta</span>
+                <span class="font-display font-bold text-white text-lg">1.7.7-beta</span>
                 <span class="text-sm text-slate-400">2026-11-06</span>
                 <span class="px-3 py-1 rounded-full bg-oxy-pink text-white text-xs font-bold uppercase tracking-wide shadow-[0_0_10px_rgba(236,72,153,0.5)]">Latest</span>
+              </div>
+            </div>
+            <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
+              <div>
+                <span class="font-bold text-oxy-pink block mb-2 uppercase tracking-wider font-mono text-[11px]">O(1) Quad Metric Caching</span>
+                <p class="text-slate-400">Fixed severe 500k+ polygon lag by lazily computing and caching quad and triangle counts on the mesh via OnceLock, eliminating heavy per-frame status bar recalculations.</p>
+              </div>
+              <div>
+                <span class="font-bold text-oxy-purple block mb-2 uppercase tracking-wider font-mono text-[11px]">Direct GPU Wireframe Paths</span>
+                <p class="text-slate-400">Accelerated viewport mesh synchronization with direct edge generation for triangle meshes and zero-allocation diagonal lookups for quad meshes.</p>
+              </div>
+            </div>
+          </div>
+
+          <!-- v1.7.6-beta -->
+          <div class="rounded-3xl glass overflow-hidden opacity-90 hover:opacity-100 transition-opacity">
+            <div class="px-8 py-5 border-b border-white/5 flex items-center justify-between">
+              <div class="flex items-center gap-4">
+                <span class="font-display font-bold text-white text-lg">1.7.6-beta</span>
+                <span class="text-sm text-slate-400">2026-11-06</span>
               </div>
             </div>
             <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
