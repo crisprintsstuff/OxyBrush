@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="release" src="https://img.shields.io/github/v/release/crisprintsstuff/OxyBrush?include_prereleases&logo=github&label=release"></a>
   <a href="https://github.com/crisprintsstuff/OxyBrush/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/crisprintsstuff/OxyBrush/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white"></a>
-  <img alt="stage" src="https://img.shields.io/badge/stage-alpha-orange">
+  <img alt="stage" src="https://img.shields.io/badge/stage-beta-blue">
   <a href="rust-toolchain.toml"><img alt="language" src="https://img.shields.io/badge/language-Rust%201.99-dea584?logo=rust"></a>
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078d4">
   <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-4c1"></a>
@@ -29,7 +29,7 @@
 
 OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
 
-> **Beta:** [v1.0.0-beta](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes with subdivision levels, paint vertex color, pose with a transform gizmo, remesh, decimate, run Python plugins, connect local AI agents, customize keymaps, save projects and export for game engines (glTF) or 3D printing, in a layout that suits mouse, small screens or touch. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
+> **Beta:** [v1.5.0-beta](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes with subdivision levels, import native ZBrush (`.ztl`, `.zpr`) models and multi-subtool hierarchies, paint vertex color, pose with a transform gizmo, extract masks into solid shells, deform with Pixar regularized Kelvinlet brushes, inspect with real-time customizable wireframe overlays, customize themes and UI rounding, remesh, decimate, run Python plugins, connect local AI agents, customize keymaps, save projects and export for game engines (glTF) or 3D printing, in a layout that suits mouse, small screens or touch. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
 
 ## Download and install
 
@@ -91,16 +91,20 @@ Testers are the most useful contribution right now — especially with **pen tab
 
 ## Features
 
-- **16 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Topological Move, Polish, Planar Trim, Noise, Mask. Each has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **19 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Topological Move, Polish, Planar Trim, Noise, Mask, plus Pixar regularized volume-preserving elastodynamic brushes (Kelvin Grab, Kelvin Twist, Kelvin Scale). Each has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **Pixar regularized Kelvinlet brushes:** volume-preserving elastodynamic Grab, Twist, and Scale brushes based on *de Goes & James (SIGGRAPH 2017)* for organic pulling, non-pinching twisting, and radial expansion.
+- **Real-time wireframe overlay:** hardware-accelerated wireframe rendering (`Shift+W`) over shaded matcaps with depth bias to eliminate Z-fighting, and user-selectable wireframe colors that persist across sessions.
+- **Mask extract for sculpting:** extract masked regions into a new piece with customizable extrusion thickness and Laplacian boundary smoothing iterations to create watertight 2-manifold shells or flat surface patches with front, back, and rim face groups.
+- **Customizable theme & appearance:** 6 theme presets (`Graphite`, `Charcoal`, `Slate`, `Warm Umber`, `Studio Light`, `High Contrast`), 7 accent color presets (`Terracotta`, `Cyan`, `Emerald`, `Amber`, `Crimson`, `Violet`, and custom RGB picker), and adjustable corner rounding styles (`Sharp`, `Rounded`, `Soft`).
 - **Stroke control:** stabilizer for smooth lines, Freehand / Line / Stamp stroke modes, spray, pressure curve.
 - **Brush presets:** save any brush (kind, size, strength, falloff, stroke, alpha) as a preset; five starter presets included. Share a brush as a one-line code (`oxyb1:…`) you can paste into a chat, or as an `.oxbrush` file. Everything stays on your computer.
 - **Alphas:** grayscale images shape each dab; seven built-in procedural alphas plus your own grayscale PNGs, with rotation and follow-stroke.
 - **Masking and selection:** box or lasso mask/unmask and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
 - **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks that respect the mask. Saved in projects and carried through subdivision levels.
 - **Transform gizmo (T):** move, rotate or scale a piece in the viewport. With a mask, only the unmasked part moves, and a soft mask edge bends smoothly, which makes it a quick posing tool (mask the body, rotate an arm at the shoulder).
-- **Symmetry:** X/Y/Z mirroring plus radial symmetry (up to 64 copies around any axis).
+- **Symmetry:** X/Y/Z mirroring with $C^1$ smooth maximum partition-of-unity blending across midline boundaries, plus radial symmetry (up to 64 copies around any axis).
 - **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active.
-- **Subdivision levels (multiresolution):** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo.
+- **Subdivision levels (multiresolution):** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo. Configurable ceiling for high-density meshes (`max_triangles`).
 - **Voxel remesh:** rebuilds clean, even topology. "Merge visible" remeshes several pieces into one (a union).
 - **Decimation:** quadric edge collapse that keeps open borders and face-group borders.
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, delete hidden, and a group color overlay.
@@ -112,7 +116,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
 - **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets), with **ambient occlusion and cavity shading** that darken folds, creases and pores so fine detail reads clearly (toggle in the view strip, strengths in View > Shading). Load your own matcaps (PNG or JPEG) from the material picker, and switch to **flat shading** in the View menu to see every polygon. **View > Background** (also under Settings) switches the soft gradient and one flat color; Colors… sets the center and edge, or the single flat color, and Reset to default restores the original gradient. The choice is remembered. **View > Align cursor to surface** (also in Settings, off by default and remembered) draws the brush ring on the clay under the pointer; off the model it stays flat to the screen.
 - **Focal length:** the perspective lens is a 35mm-equivalent focal length from 15 to 200 mm (View > Focal length, the lens button in the view strip, or the command palette), with a slider, a numeric field, presets and the field of view in degrees. The model stays the same size; orthographic view is unchanged. Remembered between sessions.
-- **Import/export:** OBJ and STL import (each object in an OBJ file becomes its own piece). Export of all visible pieces to glTF 2.0 (`.glb`/`.gltf`, one object per piece), OBJ (one object per piece), binary STL and binary PLY.
+- **Import/export:** Native ZBrush (`.ztl`, `.zpr`) subtool import with geometry decompression, quad/triangle polygon reconstruction, polygroup extraction, and world transformation matrices. OBJ and STL import (each object or SubTool becomes its own piece). Export of all visible pieces to glTF 2.0 (`.glb`/`.gltf`, one object per piece), OBJ (one object per piece), binary STL and binary PLY.
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4, 1/8 of the triangles), split a piece by face groups or into loose parts, and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting (`cargo run -p oxy-cli -- --help`).
 - **Friendly interface:** a welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and a short tooltip on every control (what it does, and its shortcut); a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, focal length, handy with a pen) and a clickable axis gizmo; collapsible panel sections; and a status bar that explains what the held keys do. On a touch screen, press and hold a control to read its tooltip.
   - **Fast workflow:** a command palette (Ctrl+K) that finds any command, brush, recent file or guide topic as you type; a type-to-pick brush finder (Space); recent files in File > Open recent and on the welcome window; and a built-in, searchable guide (F2) that works offline.
@@ -166,11 +170,11 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v1.0.0-beta |
-| 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 v0.3.0-alpha |
-| 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport, quick palette ✅, keymap editor ✅, Python plugins ✅, local AI agent (MCP) ✅ | 🚧 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v1.5.0-beta |
+| 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 |
+| 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport & wireframe ✅, themes ✅, quick palette ✅, keymap editor ✅, Python plugins ✅, local AI agent (MCP) ✅ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
-| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · 🔬 M0 |
+| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ⏳ · 🚧 · ✅ Native .ztl/.zpr import live |
 | After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
 
 ## For developers
@@ -216,10 +220,11 @@ crates/
   oxy-doc      scenes of pieces, .oxb project format, autosave/recovery           (no GPU)
   oxy-sculpt   stroke engine, brush kernels, symmetry, falloff                     (no GPU)
   oxy-history  scene-wide undo/redo (chunk snapshots, topology, pieces)           (no GPU)
-  oxy-io       OBJ/STL import; glTF/GLB, OBJ, STL, PLY export                      (no GPU)
+  oxy-io       OBJ/STL and ZBrush import; glTF/GLB, OBJ, STL, PLY export          (no GPU)
+  oxy-ztl      clean-room ZBrush (.ztl/.zpr) format parser & geometry loader      (no GPU)
   oxy-cli      headless command-line tool (binary: `oxybrush-cli`)                (no GPU)
-  oxy-mcp      local MCP server for an on-machine AI agent                      (no GPU)
-  oxy-render   wgpu matcap renderer and orbit camera
+  oxy-mcp      local MCP server for an on-machine AI agent                        (no GPU)
+  oxy-render   wgpu matcap renderer, wireframe overlay, and orbit camera
   oxy-app      winit + egui desktop app (binary: `oxybrush`)
 ```
 
