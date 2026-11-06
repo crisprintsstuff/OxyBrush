@@ -4,6 +4,37 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-05
+
+### Added
+
+- **3D-Print Preparation Tools (`crates/oxy-topo/src/print3d.rs`, `Mesh > 3D Print Tools...`):**
+  - **Scale & Dimensions:** Configurable real-world millimeters scale (`unit_scale`). Displays physical bounding dimensions ($W \times D \times H$ in mm), surface area ($cm^2$), and divergence theorem watertight volume ($cm^3$).
+  - **Material Weight Estimators:** Automatically estimates photopolymer resin weight (~1.15 g/cm³) and PLA filament weight (~1.24 g/cm³) in grams.
+  - **Watertight Manifold Check:** Topologically validates 2-manifold closed surface condition without boundary holes or non-manifold edges.
+  - **Wall-Thickness Analyzer:** Parallel inward raycasting along negative normals measuring local wall thickness across all vertices. Flags fragile areas below the user-defined threshold and visualizes thin walls via a warning heatmap on the sculpt.
+  - **OpenVDB Volumetric Hollowing:** Inward narrow-band level set erosion creating uniform hollow shells, with automatic cylindrical drain holes punched through the shell for resin and powder evacuation.
+  - **Split into Interlocking Parts with Alignment Keys:** Planar cutting along X, Y, or Z axes producing Part A with male registration pins and Part B with matching sockets (+0.2mm clearance tolerance) for easy post-print assembly.
+
+- **Tablet Input & Multi-Touch Gestures:**
+  - **Continuous Stylus Pressure Pipeline:** Fixed issue where `CursorMoved` unconditionally reset pen pressure to 1.0 during active strokes. Fully supports graphics tablet drivers (Wacom, Huion, XP-Pen, Apple Pencil, Windows Ink, Linux XInput2/Wayland) with pressure sensitivity, `TouchpadPressure`, and analog axis events.
+  - **Multi-Touch Gesture Layer:**
+    - 1 finger: Sculpting or painting with pressure.
+    - 2 fingers: Pinch-to-zoom, two-finger orbit and pan, and **two-finger tap for Undo**.
+    - Trackpad gestures: Native `PinchGesture` zoom and `RotationGesture` camera roll.
+
+- **Vertical Right-Click Quick Menu:**
+  - Reorganized the quick menu at the cursor (right-click or held `Q`) from a wide horizontal bar into a sleek vertical card (175px width) featuring Raise/Carve selectors, vertical Size and Strength sliders, and brush-specific controls.
+
+- **Crease Brush Pinch Parameter:**
+  - Exposed a configurable `Pinch` slider (`0.0..=1.0`) in both the brush settings panel and the vertical quick menu, controlling how strongly groove walls are pulled together. Saved in brush presets.
+
+- **Software Hardening & Safety Guards:**
+  - **Autosave on Suspend / Blur:** Immediate non-blocking autosave when the window loses focus (`Focused(false)`) or when suspended by the OS.
+  - **Corrupt File Import Guards:** Validates triangle vertex indices against vertex counts and rejects non-finite (`NaN`/`Inf`) coordinates across OBJ, STL, and PLY loaders.
+  - **Subdivision Memory Ceiling:** Enforces safety ceilings (`max_triangles`) using saturating multiplications to prevent integer overflow or out-of-memory crashes on dense multires meshes.
+  - **Topological Manifold Diagnostics:** Added `check_manifold` in `oxy-mesh::topo` detecting open boundary edges, non-manifold edges, and degenerate triangles.
+
 ## [1.6.1-beta] - 2026-11-05
 
 ### Fixed
