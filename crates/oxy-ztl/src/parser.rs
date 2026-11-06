@@ -84,7 +84,12 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                 let t0 = f32::from_le_bytes([data[p + 12], data[p + 13], data[p + 14], data[p + 15]]);
                 let t1 = f32::from_le_bytes([data[p + 16], data[p + 17], data[p + 18], data[p + 19]]);
                 let t2 = f32::from_le_bytes([data[p + 20], data[p + 21], data[p + 22], data[p + 23]]);
-                if (s0 - s1).abs() < 1e-6 && (s1 - s2).abs() < 1e-6 && s0 > 0.00001 && s0 < 10000.0 && (s0 - 100.0).abs() > 1e-4 {
+                if (s0 - s1).abs() < 1e-6
+                    && (s1 - s2).abs() < 1e-6
+                    && s0 > 0.00001
+                    && s0 < 10000.0
+                    && (s0 - 100.0).abs() > 1e-4
+                {
                     transforms.push((idx, 1.0 / s0, Vec3::new(t0, t1, t2)));
                 }
             }
@@ -109,23 +114,23 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                     curr_g: Option<Vec<u32>>,
                     curr_start: usize,
                     end_offset: usize| {
-        if let (Some(v), Some(f)) = (curr_v, curr_f) {
-            if v.len() > 2 && !f.is_empty() {
-                let mut best_t = None;
-                for (t_idx, scale, trans) in &transforms {
-                    if *t_idx >= curr_start && *t_idx <= end_offset + 0x20000 {
-                        best_t = Some((*scale, *trans));
-                    }
-                }
-                subtools.push(SubtoolRaw {
-                    name: curr_name.to_string(),
-                    vertices: v,
-                    faces: f,
-                    groups: curr_g.unwrap_or_default(),
-                    transform: best_t,
-                });
+        let (Some(v), Some(f)) = (curr_v, curr_f) else { return };
+        if v.len() <= 2 || f.is_empty() {
+            return;
+        }
+        let mut best_t = None;
+        for (t_idx, scale, trans) in &transforms {
+            if *t_idx >= curr_start && *t_idx <= end_offset + 0x20000 {
+                best_t = Some((*scale, *trans));
             }
         }
+        subtools.push(SubtoolRaw {
+            name: curr_name.to_string(),
+            vertices: v,
+            faces: f,
+            groups: curr_g.unwrap_or_default(),
+            transform: best_t,
+        });
     };
 
     for &(idx, t, l) in &records {
@@ -144,9 +149,17 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                 {
                     // Clean path / Windows backslashes
                     let stem = clean.replace('\\', "/");
-                    let name = stem.split('/').last().unwrap_or(clean).to_string();
-                    if curr_v.as_ref().map_or(false, |v| v.len() > 2) && curr_f.is_some() {
-                        finalize(&mut subtools, &curr_name, curr_v.take(), curr_f.take(), curr_g.take(), curr_start, idx);
+                    let name = stem.split('/').next_back().unwrap_or(clean).to_string();
+                    if curr_v.as_ref().is_some_and(|v| v.len() > 2) && curr_f.is_some() {
+                        finalize(
+                            &mut subtools,
+                            &curr_name,
+                            curr_v.take(),
+                            curr_f.take(),
+                            curr_g.take(),
+                            curr_start,
+                            idx,
+                        );
                     }
                     curr_name = name;
                     curr_start = idx;
@@ -172,7 +185,8 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                         let mut chunk_sizes = Vec::with_capacity(num_chunks);
                         for i in 0..num_chunks {
                             let o = chunk_sizes_off + i * 4;
-                            chunk_sizes.push(u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]) as usize);
+                            chunk_sizes
+                                .push(u32::from_le_bytes([data[o], data[o + 1], data[o + 2], data[o + 3]]) as usize);
                         }
 
                         match stride {
@@ -192,21 +206,60 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                             let bz = unshuffle_planar(&dec[8 * m..12 * m]);
 
                                             let is_float = (0..m.min(20)).all(|i| {
-                                                let f = f32::from_le_bytes([bx[i * 4], bx[i * 4 + 1], bx[i * 4 + 2], bx[i * 4 + 3]]);
+                                                let f = f32::from_le_bytes([
+                                                    bx[i * 4],
+                                                    bx[i * 4 + 1],
+                                                    bx[i * 4 + 2],
+                                                    bx[i * 4 + 3],
+                                                ]);
                                                 f.is_finite() && f.abs() < 1e6
                                             });
 
                                             for i in 0..m {
                                                 let (x, y, z) = if is_float {
-                                                    let x = f32::from_le_bytes([bx[i * 4], bx[i * 4 + 1], bx[i * 4 + 2], bx[i * 4 + 3]]);
-                                                    let y = f32::from_le_bytes([by[i * 4], by[i * 4 + 1], by[i * 4 + 2], by[i * 4 + 3]]);
-                                                    let z = f32::from_le_bytes([bz[i * 4], bz[i * 4 + 1], bz[i * 4 + 2], bz[i * 4 + 3]]);
+                                                    let x = f32::from_le_bytes([
+                                                        bx[i * 4],
+                                                        bx[i * 4 + 1],
+                                                        bx[i * 4 + 2],
+                                                        bx[i * 4 + 3],
+                                                    ]);
+                                                    let y = f32::from_le_bytes([
+                                                        by[i * 4],
+                                                        by[i * 4 + 1],
+                                                        by[i * 4 + 2],
+                                                        by[i * 4 + 3],
+                                                    ]);
+                                                    let z = f32::from_le_bytes([
+                                                        bz[i * 4],
+                                                        bz[i * 4 + 1],
+                                                        bz[i * 4 + 2],
+                                                        bz[i * 4 + 3],
+                                                    ]);
                                                     (x, y, z)
                                                 } else {
-                                                    let ix = i32::from_le_bytes([bx[i * 4], bx[i * 4 + 1], bx[i * 4 + 2], bx[i * 4 + 3]]);
-                                                    let iy = i32::from_le_bytes([by[i * 4], by[i * 4 + 1], by[i * 4 + 2], by[i * 4 + 3]]);
-                                                    let iz = i32::from_le_bytes([bz[i * 4], bz[i * 4 + 1], bz[i * 4 + 2], bz[i * 4 + 3]]);
-                                                    (ix as f32 / 1_048_576.0, iy as f32 / 1_048_576.0, iz as f32 / 1_048_576.0)
+                                                    let ix = i32::from_le_bytes([
+                                                        bx[i * 4],
+                                                        bx[i * 4 + 1],
+                                                        bx[i * 4 + 2],
+                                                        bx[i * 4 + 3],
+                                                    ]);
+                                                    let iy = i32::from_le_bytes([
+                                                        by[i * 4],
+                                                        by[i * 4 + 1],
+                                                        by[i * 4 + 2],
+                                                        by[i * 4 + 3],
+                                                    ]);
+                                                    let iz = i32::from_le_bytes([
+                                                        bz[i * 4],
+                                                        bz[i * 4 + 1],
+                                                        bz[i * 4 + 2],
+                                                        bz[i * 4 + 3],
+                                                    ]);
+                                                    (
+                                                        ix as f32 / 1_048_576.0,
+                                                        iy as f32 / 1_048_576.0,
+                                                        iz as f32 / 1_048_576.0,
+                                                    )
                                                 };
                                                 raw_verts.push(Vec3::new(x, y, z));
                                                 if raw_verts.len() >= count {
@@ -220,10 +273,8 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                         break;
                                     }
                                 }
-                                if !raw_verts.is_empty() {
-                                    if curr_v.as_ref().map_or(true, |v| raw_verts.len() > v.len()) {
-                                        curr_v = Some(raw_verts);
-                                    }
+                                if !raw_verts.is_empty() && curr_v.as_ref().is_none_or(|v| raw_verts.len() > v.len()) {
+                                    curr_v = Some(raw_verts);
                                 }
                             }
                             16 => {
@@ -243,16 +294,41 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                             let b3 = unshuffle_planar(&dec[12 * m..16 * m]);
 
                                             let is_face_index = (0..m.min(20)).all(|i| {
-                                                let u0 = u32::from_le_bytes([b0[i * 4], b0[i * 4 + 1], b0[i * 4 + 2], b0[i * 4 + 3]]);
+                                                let u0 = u32::from_le_bytes([
+                                                    b0[i * 4],
+                                                    b0[i * 4 + 1],
+                                                    b0[i * 4 + 2],
+                                                    b0[i * 4 + 3],
+                                                ]);
                                                 u0 < 50_000_000
                                             });
 
                                             if is_face_index {
                                                 for i in 0..m {
-                                                    let v0 = u32::from_le_bytes([b0[i * 4], b0[i * 4 + 1], b0[i * 4 + 2], b0[i * 4 + 3]]);
-                                                    let v1 = u32::from_le_bytes([b1[i * 4], b1[i * 4 + 1], b1[i * 4 + 2], b1[i * 4 + 3]]);
-                                                    let v2 = u32::from_le_bytes([b2[i * 4], b2[i * 4 + 1], b2[i * 4 + 2], b2[i * 4 + 3]]);
-                                                    let v3 = u32::from_le_bytes([b3[i * 4], b3[i * 4 + 1], b3[i * 4 + 2], b3[i * 4 + 3]]);
+                                                    let v0 = u32::from_le_bytes([
+                                                        b0[i * 4],
+                                                        b0[i * 4 + 1],
+                                                        b0[i * 4 + 2],
+                                                        b0[i * 4 + 3],
+                                                    ]);
+                                                    let v1 = u32::from_le_bytes([
+                                                        b1[i * 4],
+                                                        b1[i * 4 + 1],
+                                                        b1[i * 4 + 2],
+                                                        b1[i * 4 + 3],
+                                                    ]);
+                                                    let v2 = u32::from_le_bytes([
+                                                        b2[i * 4],
+                                                        b2[i * 4 + 1],
+                                                        b2[i * 4 + 2],
+                                                        b2[i * 4 + 3],
+                                                    ]);
+                                                    let v3 = u32::from_le_bytes([
+                                                        b3[i * 4],
+                                                        b3[i * 4 + 1],
+                                                        b3[i * 4 + 2],
+                                                        b3[i * 4 + 3],
+                                                    ]);
                                                     raw_faces.push([v0, v1, v2, v3]);
                                                     if raw_faces.len() >= count {
                                                         break;
@@ -266,10 +342,8 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                         break;
                                     }
                                 }
-                                if !raw_faces.is_empty() {
-                                    if curr_f.as_ref().map_or(true, |f| raw_faces.len() > f.len()) {
-                                        curr_f = Some(raw_faces);
-                                    }
+                                if !raw_faces.is_empty() && curr_f.as_ref().is_none_or(|f| raw_faces.len() > f.len()) {
+                                    curr_f = Some(raw_faces);
                                 }
                             }
                             4 => {
@@ -285,7 +359,12 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                         if m > 0 {
                                             let b0 = unshuffle_planar(&dec[0..4 * m]);
                                             for i in 0..m {
-                                                let g = u32::from_le_bytes([b0[i * 4], b0[i * 4 + 1], b0[i * 4 + 2], b0[i * 4 + 3]]);
+                                                let g = u32::from_le_bytes([
+                                                    b0[i * 4],
+                                                    b0[i * 4 + 1],
+                                                    b0[i * 4 + 2],
+                                                    b0[i * 4 + 3],
+                                                ]);
                                                 raw_groups.push(g);
                                                 if raw_groups.len() >= count {
                                                     break;
@@ -298,10 +377,9 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
                                         break;
                                     }
                                 }
-                                if !raw_groups.is_empty() {
-                                    if curr_g.as_ref().map_or(true, |g| raw_groups.len() > g.len()) {
-                                        curr_g = Some(raw_groups);
-                                    }
+                                if !raw_groups.is_empty() && curr_g.as_ref().is_none_or(|g| raw_groups.len() > g.len())
+                                {
+                                    curr_g = Some(raw_groups);
                                 }
                             }
                             _ => {}
@@ -365,14 +443,8 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
             continue;
         }
 
-        let mesh_data = MeshData {
-            positions,
-            triangles,
-            groups,
-            mask: Vec::new(),
-            hidden: Vec::new(),
-            color: Vec::new(),
-        };
+        let mesh_data =
+            MeshData { positions, triangles, groups, mask: Vec::new(), hidden: Vec::new(), color: Vec::new() };
 
         let mesh = Mesh::from_data(mesh_data);
         out_pieces.push((subtool.name, mesh));

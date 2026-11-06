@@ -645,7 +645,10 @@ impl App {
         match action {
             UiAction::Open => {
                 if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("OxyBrush project or mesh", &["oxb", "obj", "stl", "ztl", "zpr", "OXB", "OBJ", "STL", "ZTL", "ZPR"])
+                    .add_filter(
+                        "OxyBrush project or mesh",
+                        &["oxb", "obj", "stl", "ztl", "zpr", "OXB", "OBJ", "STL", "ZTL", "ZPR"],
+                    )
                     .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
