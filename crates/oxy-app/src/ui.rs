@@ -896,6 +896,18 @@ fn settings_keymap_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new("Configure mouse orbit, pan, zoom, and keyboard shortcuts.").weak().small());
     ui.add_space(6.0);
 
+    ui.label(RichText::new("Keyboard shortcuts preset").strong());
+    ui.horizontal(|ui| {
+        for s in crate::keymap::ShortcutsPreset::ALL {
+            let is_sel = ed.keymap.shortcuts == s;
+            if ui.radio(is_sel, s.label()).on_hover_text(s.description()).clicked() && !is_sel {
+                ed.keymap.apply_shortcuts_preset(s);
+            }
+        }
+    });
+    ui.label(RichText::new(ed.keymap.shortcuts.description()).weak().small());
+    ui.add_space(6.0);
+
     ui.label(RichText::new("Navigation preset").strong());
     for preset in crate::keymap::Preset::ALL {
         if ui.radio(ed.keymap.preset == preset, preset.label()).on_hover_text(preset.description()).clicked()
@@ -998,7 +1010,7 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.horizontal(|ui| {
         if ui
             .button("ZBrush Classic")
-            .on_hover_text("Authentic ZBrush dark UI: matte charcoal panels, vibrant orange highlights, sharp corners, and red wax")
+            .on_hover_text("Authentic ZBrush dark UI: matte charcoal panels, vibrant orange highlights, sharp corners, red wax, and ZBrush shortcuts")
             .clicked()
         {
             ed.theme = ThemePreset::ZBrushClassic;
@@ -1009,11 +1021,13 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
             ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
             ed.view.background = [0.08, 0.08, 0.08];
             ed.view.background_center = [0.02, 0.02, 0.02];
+            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::ZBrush);
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::ZBrush);
             ed.status = "Applied ZBrush Classic theme preset".into();
         }
         if ui
             .button("Default Studio")
-            .on_hover_text("Standard neutral graphite theme with clay accent and rounded corners")
+            .on_hover_text("Standard neutral graphite theme with clay accent, rounded corners, and default shortcuts")
             .clicked()
         {
             ed.theme = ThemePreset::Graphite;
@@ -1024,6 +1038,8 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
             ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
             ed.view.background = [0.12, 0.12, 0.12];
             ed.view.background_center = [0.04, 0.04, 0.04];
+            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::Default);
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::OxyBrush);
             ed.status = "Applied Default Studio theme preset".into();
         }
     });

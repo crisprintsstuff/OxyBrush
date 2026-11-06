@@ -121,6 +121,7 @@ commands! {
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
     Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";
+    Polyframe => "Polyframe on / off", "", "Toggle wireframe edges and face group colors together.";
     ResetWireframeColor => "Reset wireframe color", "", "Reset wireframe overlay lines to the default dark slate.";
     LoadMatcap => "Load matcap…", "", "Use a PNG or JPEG of a lit sphere as the material.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
@@ -188,7 +189,9 @@ impl Cmd {
             Cmd::Strength => CommandId::StrengthUp,
             Cmd::SymX => CommandId::SymmetryX,
             Cmd::Lasso => CommandId::SelectionLasso,
-            Cmd::GizmoMove => CommandId::GizmoCycle,
+            Cmd::GizmoMove => CommandId::GizmoMove,
+            Cmd::GizmoRotate => CommandId::GizmoRotate,
+            Cmd::GizmoScale => CommandId::GizmoScale,
             Cmd::Frame => CommandId::Frame,
             Cmd::Front => CommandId::ViewFront,
             Cmd::Back => CommandId::ViewBack,
@@ -199,6 +202,7 @@ impl Cmd {
             Cmd::Ortho => CommandId::Orthographic,
             Cmd::GroupColors => CommandId::ShowGroups,
             Cmd::Wireframe => CommandId::Wireframe,
+            Cmd::Polyframe => CommandId::Polyframe,
             Cmd::Panels => CommandId::TogglePanels,
             Cmd::Shortcuts => CommandId::Shortcuts,
             Cmd::ShowMask => CommandId::ShowMask,

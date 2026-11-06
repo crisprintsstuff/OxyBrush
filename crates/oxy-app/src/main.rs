@@ -48,6 +48,10 @@ fn main() {
                         args.next();
                         keymap::Preset::MmbOrbit
                     }
+                    Some("zbrush") => {
+                        args.next();
+                        keymap::Preset::ZBrush
+                    }
                     Some("oxybrush") => {
                         args.next();
                         keymap::Preset::OxyBrush

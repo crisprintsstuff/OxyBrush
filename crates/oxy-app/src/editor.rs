@@ -3050,6 +3050,23 @@ impl Editor {
                 };
                 E::None
             }
+            C::GizmoMove => {
+                self.toggle_gizmo(GizmoMode::Move);
+                E::None
+            }
+            C::GizmoRotate => {
+                self.toggle_gizmo(GizmoMode::Rotate);
+                E::None
+            }
+            C::GizmoScale => {
+                self.toggle_gizmo(GizmoMode::Scale);
+                E::None
+            }
+            C::DrawMode => {
+                self.gizmo = None;
+                self.status = "Draw mode (sculpt)".into();
+                E::None
+            }
             C::Frame => {
                 self.frame();
                 E::None
@@ -3094,6 +3111,13 @@ impl Editor {
             }
             C::Wireframe => {
                 self.view.wireframe = !self.view.wireframe;
+                E::None
+            }
+            C::Polyframe => {
+                let active = self.view.wireframe || self.view.show_groups;
+                self.view.wireframe = !active;
+                self.view.show_groups = !active;
+                self.status = format!("Polyframe {}", if !active { "on" } else { "off" });
                 E::None
             }
             C::TogglePanels => {

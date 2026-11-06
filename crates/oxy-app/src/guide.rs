@@ -27,7 +27,7 @@ pub const TOPICS: &[Topic] = &[
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
 - Tab hides the panels to give the model the whole window.\n\n\
 Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.\n\n\
-Every shortcut and the mouse buttons can be changed in Settings > Keymap, including the numpad view keys. The MMB orbit preset uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan.",
+Every shortcut and the mouse buttons can be changed in Settings > Keymap, including switching between OxyBrush Default and ZBrush shortcut schemes. The MMB orbit preset uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan.",
     },
     Topic {
         title: "Sculpting basics",

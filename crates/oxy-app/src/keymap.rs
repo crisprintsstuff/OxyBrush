@@ -30,15 +30,18 @@ pub enum Preset {
     OxyBrush,
     /// Middle-drag orbits, Ctrl+middle zooms, Shift+middle pans.
     MmbOrbit,
+    /// ZBrush navigation and hotkeys.
+    ZBrush,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 2] = [Preset::OxyBrush, Preset::MmbOrbit];
+    pub const ALL: [Preset; 3] = [Preset::OxyBrush, Preset::MmbOrbit, Preset::ZBrush];
 
     pub fn key(self) -> &'static str {
         match self {
             Preset::OxyBrush => "oxybrush",
             Preset::MmbOrbit => "mmb_orbit",
+            Preset::ZBrush => "zbrush",
         }
     }
 
@@ -46,6 +49,7 @@ impl Preset {
         match self {
             Preset::OxyBrush => "OxyBrush",
             Preset::MmbOrbit => "MMB orbit",
+            Preset::ZBrush => "ZBrush",
         }
     }
 
@@ -60,10 +64,57 @@ impl Preset {
                  45° snapping starts on Alt (change it below). Left-drag on the model still sculpts, \
                  and left-drag on empty space still orbits."
             }
+            Preset::ZBrush => {
+                "ZBrush navigation: Right-drag orbits, Alt+Right-drag pans, Ctrl+Right-drag zooms, \
+                 Middle-drag pans. Left-drag on canvas orbits, Alt+Left-drag pans. Shift while orbiting snaps to 90°."
+            }
         }
     }
 
     fn from_key(k: &str) -> Option<Preset> {
+        Self::ALL.into_iter().find(|p| p.key() == k)
+    }
+}
+
+/// Which keyboard shortcut layout to use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShortcutsPreset {
+    /// Default OxyBrush shortcuts (Space for find brush, Q for quick menu, T for gizmo, etc.).
+    #[default]
+    Default,
+    /// Standard ZBrush shortcuts (B for brush palette, Space for quick menu, Q for draw, W/E/R for gizmo move/scale/rotate, Shift+F for polyframe).
+    ZBrush,
+}
+
+impl ShortcutsPreset {
+    pub const ALL: [ShortcutsPreset; 2] = [ShortcutsPreset::Default, ShortcutsPreset::ZBrush];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ShortcutsPreset::Default => "default",
+            ShortcutsPreset::ZBrush => "zbrush",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShortcutsPreset::Default => "Default (OxyBrush)",
+            ShortcutsPreset::ZBrush => "ZBrush",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            ShortcutsPreset::Default => {
+                "Space finds brushes, Q opens quick menu, T cycles transform gizmo, Shift+W toggles wireframe."
+            }
+            ShortcutsPreset::ZBrush => {
+                "B opens brush palette, Space opens quick menu, Q returns to Draw, W/E/R move/scale/rotate gizmo, Shift+F toggles Polyframe."
+            }
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<ShortcutsPreset> {
         Self::ALL.into_iter().find(|p| p.key() == k)
     }
 }
@@ -354,6 +405,10 @@ pub enum CommandId {
     SymmetryX,
     SelectionLasso,
     GizmoCycle,
+    GizmoMove,
+    GizmoRotate,
+    GizmoScale,
+    DrawMode,
     Frame,
     ViewFront,
     ViewBack,
@@ -364,6 +419,7 @@ pub enum CommandId {
     Orthographic,
     ShowGroups,
     Wireframe,
+    Polyframe,
     TogglePanels,
     Shortcuts,
     ShowMask,
@@ -453,6 +509,10 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::SymmetryX, name: "Toggle X symmetry", group: "Brushes", defaults: &["x"] },
     CommandMeta { id: CommandId::SelectionLasso, name: "Rectangle / lasso", group: "Brushes", defaults: &["l"] },
     CommandMeta { id: CommandId::GizmoCycle, name: "Transform gizmo", group: "Brushes", defaults: &["t"] },
+    CommandMeta { id: CommandId::GizmoMove, name: "Transform: move", group: "Brushes", defaults: &[] },
+    CommandMeta { id: CommandId::GizmoRotate, name: "Transform: rotate", group: "Brushes", defaults: &[] },
+    CommandMeta { id: CommandId::GizmoScale, name: "Transform: scale", group: "Brushes", defaults: &[] },
+    CommandMeta { id: CommandId::DrawMode, name: "Draw / sculpt mode", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::Frame, name: "Frame scene", group: "View", defaults: &["f"] },
     CommandMeta { id: CommandId::ViewFront, name: "Front view", group: "View", defaults: &["numpad1"] },
     CommandMeta { id: CommandId::ViewBack, name: "Back view", group: "View", defaults: &[] },
@@ -463,6 +523,7 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::Orthographic, name: "Orthographic", group: "View", defaults: &["o"] },
     CommandMeta { id: CommandId::ShowGroups, name: "Face group colors", group: "View", defaults: &["g"] },
     CommandMeta { id: CommandId::Wireframe, name: "Wireframe overlay", group: "View", defaults: &["shift+w"] },
+    CommandMeta { id: CommandId::Polyframe, name: "Polyframe (wireframe & groups)", group: "View", defaults: &[] },
     CommandMeta { id: CommandId::TogglePanels, name: "Show / hide panels", group: "View", defaults: &["tab"] },
     CommandMeta { id: CommandId::Shortcuts, name: "Shortcut list", group: "View", defaults: &["f1"] },
     CommandMeta { id: CommandId::ShowMask, name: "Show / hide mask", group: "Mask and mesh", defaults: &["m"] },
@@ -493,6 +554,24 @@ const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "H
 
 fn command_meta(id: CommandId) -> &'static CommandMeta {
     COMMANDS.iter().find(|c| c.id == id).expect("every command has metadata")
+}
+
+pub fn command_defaults(id: CommandId, preset: ShortcutsPreset) -> &'static [&'static str] {
+    match preset {
+        ShortcutsPreset::Default => command_meta(id).defaults,
+        ShortcutsPreset::ZBrush => match id {
+            CommandId::BrushFinder => &["b"],
+            CommandId::QuickMenu => &["space"],
+            CommandId::DrawMode => &["q"],
+            CommandId::GizmoMove => &["w"],
+            CommandId::GizmoScale => &["e"],
+            CommandId::GizmoRotate => &["r"],
+            CommandId::GizmoCycle => &["t"],
+            CommandId::Polyframe => &["shift+f"],
+            CommandId::ShowMask => &["ctrl+h", "m"],
+            other => command_meta(other).defaults,
+        },
+    }
 }
 
 /// Name shown in the keymap editor and in status text.
@@ -721,6 +800,12 @@ fn navigation_for(preset: Preset) -> Vec<NavRule> {
             rule(Middle, Yes, No, No, Pan),
             rule(Right, Any, Any, Any, Pan),
         ],
+        Preset::ZBrush => vec![
+            rule(Right, No, No, No, Orbit),
+            rule(Right, Any, No, Yes, Pan),
+            rule(Right, No, Yes, No, Zoom),
+            rule(Middle, Any, Any, Any, Pan),
+        ],
     }
 }
 
@@ -741,6 +826,7 @@ pub struct Keymap {
     /// Format version read from the file (this build's version when new).
     pub version: u32,
     pub preset: Preset,
+    pub shortcuts: ShortcutsPreset,
     commands: Vec<(CommandId, Vec<Chord>)>,
     pub nav: Vec<NavRule>,
     pub wheel_zoom: bool,
@@ -765,14 +851,23 @@ impl Default for Keymap {
 
 impl Keymap {
     pub fn builtin(preset: Preset) -> Self {
+        let shortcuts = match preset {
+            Preset::ZBrush => ShortcutsPreset::ZBrush,
+            _ => ShortcutsPreset::Default,
+        };
+        Self::builtin_with(preset, shortcuts)
+    }
+
+    pub fn builtin_with(preset: Preset, shortcuts: ShortcutsPreset) -> Self {
         let snap = match preset {
-            Preset::OxyBrush => Some(ModKey::Shift),
+            Preset::OxyBrush | Preset::ZBrush => Some(ModKey::Shift),
             Preset::MmbOrbit => Some(ModKey::Alt),
         };
         Self {
             version: VERSION,
             preset,
-            commands: COMMANDS.iter().map(|c| (c.id, parse_chords(c.defaults))).collect(),
+            shortcuts,
+            commands: COMMANDS.iter().map(|c| (c.id, parse_chords(command_defaults(c.id, shortcuts)))).collect(),
             nav: navigation_for(preset),
             wheel_zoom: true,
             snap,
@@ -789,10 +884,18 @@ impl Keymap {
         crate::settings::Settings::default_path().map(|p| p.with_file_name("keymap.txt"))
     }
 
+    /// Apply a keyboard shortcut preset (Default or ZBrush).
+    pub fn apply_shortcuts_preset(&mut self, shortcuts: ShortcutsPreset) {
+        self.shortcuts = shortcuts;
+        for (id, chords) in &mut self.commands {
+            *chords = parse_chords(command_defaults(*id, shortcuts));
+        }
+    }
+
     /// Replace mouse navigation and the snap key with a preset. Command
     /// bindings and sculpt modifiers are left as they are.
     pub fn apply_navigation_preset(&mut self, preset: Preset) {
-        let fresh = Self::builtin(preset);
+        let fresh = Self::builtin_with(preset, self.shortcuts);
         self.preset = preset;
         self.nav = fresh.nav;
         self.snap = fresh.snap;
@@ -803,14 +906,15 @@ impl Keymap {
     pub fn reset_all(&mut self) {
         let version = self.version;
         let extra = std::mem::take(&mut self.extra);
-        *self = Self::builtin(self.preset);
+        *self = Self::builtin_with(self.preset, self.shortcuts);
         self.version = version;
         self.extra = extra;
     }
 
     pub fn reset_command(&mut self, id: CommandId) {
+        let shortcuts = self.shortcuts;
         if let Some(chords) = self.chords_mut(id) {
-            *chords = parse_chords(command_meta(id).defaults);
+            *chords = parse_chords(command_defaults(id, shortcuts));
         }
     }
 
@@ -873,7 +977,7 @@ impl Keymap {
     }
 
     pub fn command_is_default(&self, id: CommandId) -> bool {
-        self.chords(id) == parse_chords(command_meta(id).defaults)
+        self.chords(id) == parse_chords(command_defaults(id, self.shortcuts))
     }
 
     /// The key a menu, tooltip or the command palette should show for `id`.
@@ -1015,10 +1119,11 @@ impl Keymap {
         let mut out = format!(
             "# OxyBrush keymap {VERSION}. Delete this file to restore the defaults.\n\
              # Unknown lines are kept. A missing command keeps the preset's binding.\n\
-             version = {}\npreset = {}\nsmooth = {}\nmask = {}\ninvert = {}\nsnap = {}\n\
+             version = {}\npreset = {}\nshortcuts = {}\nsmooth = {}\nmask = {}\ninvert = {}\nsnap = {}\n\
              wheel_zoom = {}\nmask_empty = {}\n",
             self.version,
             self.preset.key(),
+            self.shortcuts.key(),
             self.smooth.token(),
             self.mask.token(),
             self.invert.token(),
@@ -1054,6 +1159,7 @@ impl Keymap {
     pub fn from_text(text: &str) -> Keymap {
         let mut version = VERSION;
         let mut preset = Preset::OxyBrush;
+        let mut shortcuts = None;
         let mut extra = Vec::new();
         let mut body = Vec::new();
         for line in text.lines() {
@@ -1075,10 +1181,18 @@ impl Keymap {
                     Some(p) => preset = p,
                     None => extra.push(trimmed.to_string()),
                 },
+                "shortcuts" => match ShortcutsPreset::from_key(v) {
+                    Some(s) => shortcuts = Some(s),
+                    None => extra.push(trimmed.to_string()),
+                },
                 _ => body.push(trimmed.to_string()),
             }
         }
-        let mut map = Keymap::builtin(preset);
+        let shortcuts = shortcuts.unwrap_or(match preset {
+            Preset::ZBrush => ShortcutsPreset::ZBrush,
+            _ => ShortcutsPreset::Default,
+        });
+        let mut map = Keymap::builtin_with(preset, shortcuts);
         map.version = version;
         let mut replaced_bind = Vec::new();
         let mut replaced_nav = false;
@@ -1227,6 +1341,10 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::SymmetryX => "symmetry_x",
         CommandId::SelectionLasso => "selection_lasso",
         CommandId::GizmoCycle => "gizmo",
+        CommandId::GizmoMove => "gizmo_move",
+        CommandId::GizmoScale => "gizmo_scale",
+        CommandId::GizmoRotate => "gizmo_rotate",
+        CommandId::DrawMode => "draw_mode",
         CommandId::Frame => "frame",
         CommandId::ViewFront => "view_front",
         CommandId::ViewBack => "view_back",
@@ -1237,6 +1355,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::Orthographic => "orthographic",
         CommandId::ShowGroups => "face_groups",
         CommandId::Wireframe => "wireframe",
+        CommandId::Polyframe => "polyframe",
         CommandId::TogglePanels => "panels",
         CommandId::Shortcuts => "shortcuts",
         CommandId::ShowMask => "show_mask",
@@ -1279,6 +1398,16 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             );
             ui.add_space(4.0);
             ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Shortcuts:").strong());
+                for s in ShortcutsPreset::ALL {
+                    let is_sel = ed.keymap.shortcuts == s;
+                    if ui.radio(is_sel, s.label()).on_hover_text(s.description()).clicked() && !is_sel {
+                        ed.keymap.apply_shortcuts_preset(s);
+                    }
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Navigation:").strong());
                 for preset in Preset::ALL {
                     if ui.radio(ed.keymap.preset == preset, preset.label()).on_hover_text(preset.description()).clicked()
                         && ed.keymap.preset != preset
@@ -1600,6 +1729,20 @@ mod tests {
         assert_eq!(mmb.snap, Some(ModKey::Alt));
         // Sculpt keys are unchanged by the navigation preset.
         assert!(mmb.is_standard_gestures());
+
+        let zb = Keymap::builtin(Preset::ZBrush);
+        assert_eq!(zb.command_for(chord("b")), Some(CommandId::BrushFinder));
+        assert_eq!(zb.command_for(chord("space")), Some(CommandId::QuickMenu));
+        assert_eq!(zb.command_for(chord("w")), Some(CommandId::GizmoMove));
+        assert_eq!(zb.command_for(chord("e")), Some(CommandId::GizmoScale));
+        assert_eq!(zb.command_for(chord("r")), Some(CommandId::GizmoRotate));
+        assert_eq!(zb.command_for(chord("q")), Some(CommandId::DrawMode));
+        assert_eq!(zb.command_for(chord("shift+f")), Some(CommandId::Polyframe));
+        assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, false)), Some(NavAction::Orbit));
+        assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, true)), Some(NavAction::Pan));
+        assert_eq!(zb.nav_action(NavButton::Right, mods(false, true, false)), Some(NavAction::Zoom));
+        assert_eq!(zb.snap, Some(ModKey::Shift));
+        assert_eq!(zb.shortcuts, ShortcutsPreset::ZBrush);
     }
 
     fn mods(shift: bool, ctrl: bool, alt: bool) -> crate::editor::Modifiers {
