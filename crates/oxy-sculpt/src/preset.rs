@@ -38,6 +38,8 @@ pub struct BrushPreset {
     pub auto_smooth: f32,
     pub spray: f32,
     pub noise_scale: f32,
+    /// Crease brush: pinch intensity factor (0.0 = groove only, 0.3 = default, 1.0 = sharp pinch).
+    pub crease_pinch: f32,
     /// "freehand", "line" or "stamp" (interpreted by the app).
     pub stroke_mode: String,
     /// Stabilizer distance in points (0 = off).
@@ -66,6 +68,7 @@ impl BrushPreset {
             auto_smooth: 0.0,
             spray: 0.0,
             noise_scale: 3.0,
+            crease_pinch: 0.3,
             stroke_mode: "freehand".into(),
             stabilizer_pt: 0.0,
             pressure_gamma: 1.0,
@@ -92,6 +95,7 @@ impl BrushPreset {
         kv("auto_smooth", self.auto_smooth.to_string());
         kv("spray", self.spray.to_string());
         kv("noise_scale", self.noise_scale.to_string());
+        kv("crease_pinch", self.crease_pinch.to_string());
         kv("stroke_mode", self.stroke_mode.clone());
         kv("stabilizer_pt", self.stabilizer_pt.to_string());
         kv("pressure_gamma", self.pressure_gamma.to_string());
@@ -146,6 +150,9 @@ impl BrushPreset {
         }
         if let Some(x) = num("noise_scale", 0.1..=100.0) {
             p.noise_scale = x;
+        }
+        if let Some(x) = num("crease_pinch", 0.0..=2.0) {
+            p.crease_pinch = x;
         }
         if let Some(m) = get("stroke_mode").filter(|m| ["freehand", "line", "stamp"].contains(m)) {
             p.stroke_mode = m.into();
@@ -277,6 +284,7 @@ pub fn starter_presets() -> Vec<BrushPreset> {
     fine_crease.strength = 0.5;
     fine_crease.falloff = Falloff::Sharp;
     fine_crease.stabilizer_pt = 20.0;
+    fine_crease.crease_pinch = 0.5;
     let mut scales = BrushPreset::new("Scale stamps", BrushKind::Draw);
     scales.stroke_mode = "stamp".into();
     scales.falloff = Falloff::Constant;

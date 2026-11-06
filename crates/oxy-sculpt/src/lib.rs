@@ -153,6 +153,8 @@ pub struct BrushSettings {
     pub spray: f32,
     /// Noise brush: features per brush radius.
     pub noise_scale: f32,
+    /// Crease brush: pinch intensity factor (0.0 = no pinch, 0.3 = default, 1.0 = sharp pinch).
+    pub crease_pinch: f32,
 }
 
 impl Default for BrushSettings {
@@ -169,6 +171,7 @@ impl Default for BrushSettings {
             auto_smooth: 0.0,
             spray: 0.0,
             noise_scale: 3.0,
+            crease_pinch: 0.3,
         }
     }
 }
@@ -974,9 +977,10 @@ fn target_positions(
         .par_iter()
         .map(|&(v, w)| {
             let p = mesh.positions[v as usize];
+            let pinch_factor = if kind == BrushKind::Crease { settings.crease_pinch } else { 0.3 };
             let pinch = |p: Vec3| {
                 let to_center = dab.center - p;
-                (to_center - area_normal * to_center.dot(area_normal)) * (0.3 * w * dab.strength)
+                (to_center - area_normal * to_center.dot(area_normal)) * (pinch_factor * w * dab.strength)
             };
             let np = match kind {
                 BrushKind::Draw => p + area_normal * (sign * amount * w),
@@ -1430,6 +1434,33 @@ mod tests {
         assert!(min_radius(&a) < min_radius(&b) - 0.005);
         let (b, a) = drag_stroke(BrushKind::Pinch, false);
         assert_ne!(b.positions, a.positions);
+    }
+
+    #[test]
+    fn crease_pinch_parameter_controls_gather() {
+        let mesh0 = primitives::icosphere(5, 1.0);
+        let dab_pos = Vec3::new(0.0, 0.0, 1.0);
+
+        let stroke_with_pinch = |pinch: f32| {
+            let mut mesh = mesh0.clone();
+            let settings = BrushSettings {
+                kind: BrushKind::Crease,
+                radius: 0.3,
+                strength: 1.0,
+                crease_pinch: pinch,
+                ..Default::default()
+            };
+            let mut s = Stroke::new(settings, Symmetry::default(), false);
+            s.add_sample(&mut mesh, StrokeSample { position: dab_pos, normal: Vec3::Z, pressure: 1.0 }, &mut |_, _| {});
+            mesh
+        };
+
+        let mesh_no_pinch = stroke_with_pinch(0.0);
+        let mesh_high_pinch = stroke_with_pinch(1.0);
+
+        // A vertex slightly offset from center (e.g. at x = 0.1)
+        // With high pinch, it should be drawn closer to the center line than with zero pinch.
+        assert_ne!(mesh_no_pinch.positions, mesh_high_pinch.positions);
     }
 
     #[test]

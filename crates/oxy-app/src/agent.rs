@@ -490,6 +490,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             auto_smooth: ed.auto_smooth,
             spray: ed.spray,
             noise_scale: ed.noise_scale,
+            crease_pinch: ed.crease_pinch,
         },
         symmetry: ed.symmetry,
         invert: invert ^ ed.carve,

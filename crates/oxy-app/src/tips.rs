@@ -586,6 +586,8 @@ pub mod plain {
     pub const GRAB_THROUGH: &str =
         "Move everything under the brush circle, front to back, not just the surface you click.";
     pub const NOISE: &str = "Size of the noise pattern.";
+    pub const CREASE_PINCH: &str =
+        "How strongly the crease draws its groove walls together. 0 = carving only, 0.3 = default, 1 = tight pinch.";
     pub const PRESSURE_STRENGTH: &str = "A lighter pen touch makes a weaker dab.";
     pub const PRESSURE_RADIUS: &str = "A lighter pen touch makes a smaller brush.";
     pub const FRONT_FACES: &str = "Do not affect surfaces facing away from you, such as the back of a thin part.";

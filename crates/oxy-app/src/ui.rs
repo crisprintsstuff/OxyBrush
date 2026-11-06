@@ -1561,6 +1561,19 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                             Cmd::Strength.tip(),
                         );
 
+                        if ed.brush_kind == BrushKind::Crease {
+                            ui.add_space(2.0);
+                            ui.label(RichText::new("Pinch").weak().small());
+                            tips::hover(
+                                ui.add(
+                                    egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0)
+                                        .max_decimals(2)
+                                        .trailing_fill(true),
+                                ),
+                                plain::CREASE_PINCH,
+                            );
+                        }
+
                         ui.add_space(4.0);
                         let hint = if q.held {
                             format!("Release {} to close", Cmd::QuickMenu.shortcut())
@@ -2744,6 +2757,14 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         if ed.brush_kind == BrushKind::Noise {
             ui.label("Noise scale");
             tips::hover(ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)), plain::NOISE);
+            ui.end_row();
+        }
+        if ed.brush_kind == BrushKind::Crease {
+            ui.label("Pinch");
+            tips::hover(
+                ui.add(egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0).max_decimals(2)),
+                plain::CREASE_PINCH,
+            );
             ui.end_row();
         }
     });

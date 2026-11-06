@@ -273,6 +273,8 @@ pub struct Editor {
     /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
     pub pressure_gamma: f32,
     pub noise_scale: f32,
+    /// Crease brush pinch intensity factor (how tightly walls are pulled together).
+    pub crease_pinch: f32,
     /// Built-in alphas followed by user-loaded ones.
     pub alphas: Vec<Arc<Alpha>>,
     /// Index into `alphas`; None = no alpha.
@@ -504,6 +506,7 @@ impl Default for Editor {
             spray: 0.0,
             pressure_gamma: 1.0,
             noise_scale: 3.0,
+            crease_pinch: 0.3,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
             alpha: None,
             alpha_rotation_deg: 0.0,
@@ -1200,6 +1203,7 @@ impl Editor {
             auto_smooth: self.auto_smooth,
             spray: self.spray,
             noise_scale: self.noise_scale,
+            crease_pinch: self.crease_pinch,
         };
         // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
         let stamp =
@@ -1233,6 +1237,7 @@ impl Editor {
             auto_smooth: self.auto_smooth,
             spray: self.spray,
             noise_scale: self.noise_scale,
+            crease_pinch: self.crease_pinch,
             stroke_mode: self.stroke_mode.key().into(),
             stabilizer_pt: self.stabilizer_pt,
             pressure_gamma: self.pressure_gamma,
@@ -1255,6 +1260,7 @@ impl Editor {
         self.auto_smooth = p.auto_smooth;
         self.spray = p.spray;
         self.noise_scale = p.noise_scale;
+        self.crease_pinch = p.crease_pinch;
         self.stroke_mode = StrokeMode::from_key(&p.stroke_mode).unwrap_or_default();
         self.stabilizer_pt = p.stabilizer_pt;
         self.pressure_gamma = p.pressure_gamma;
