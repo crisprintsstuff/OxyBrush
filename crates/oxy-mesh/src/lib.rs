@@ -796,6 +796,305 @@ impl Mesh {
         Mesh::from_data(data)
     }
 
+    /// Project/clamp all unmasked vertices on the negative side of the plane
+    /// ((p - plane_point).dot(plane_normal) < 0) onto the plane.
+    /// Returns the indices of vertices that were moved.
+    pub fn clip_plane(&mut self, plane_point: Vec3, plane_normal: Vec3) -> Vec<u32> {
+        let n = plane_normal.normalize_or_zero();
+        if n.length_squared() < 1e-4 {
+            return Vec::new();
+        }
+        let mut moved = Vec::new();
+        for (i, p) in self.positions.iter_mut().enumerate() {
+            let signed_dist = (*p - plane_point).dot(n);
+            if signed_dist < 0.0 {
+                let mask = self.mask.get(i).copied().unwrap_or(0.0);
+                let w = (1.0 - mask).clamp(0.0, 1.0);
+                if w > 1e-4 {
+                    *p -= n * (signed_dist * w);
+                    moved.push(i as u32);
+                }
+            }
+        }
+        if !moved.is_empty() {
+            self.update_after_move(&moved);
+        }
+        moved
+    }
+
+    /// Bisect the mesh along the given plane, assigning a new face group id
+    /// to all triangles on the negative side ((p - plane_point).dot(plane_normal) < 0).
+    /// Watertight topology is strictly preserved.
+    pub fn slice_plane(&self, plane_point: Vec3, plane_normal: Vec3) -> Mesh {
+        let n = plane_normal.normalize_or_zero();
+        if n.length_squared() < 1e-4 {
+            return self.clone();
+        }
+
+        let mut data = self.to_data();
+        let new_group = self.next_free_group();
+        if data.color.len() != data.positions.len() {
+            data.color = vec![WHITE; data.positions.len()];
+        }
+        if data.mask.len() != data.positions.len() {
+            data.mask = vec![0.0; data.positions.len()];
+        }
+
+        let dists: Vec<f32> = data
+            .positions
+            .iter()
+            .map(|&p| {
+                let d = (p - plane_point).dot(n);
+                if d == 0.0 { 1e-12 } else { d }
+            })
+            .collect();
+
+        let mut new_triangles = Vec::with_capacity(data.triangles.len() + 64);
+        let mut new_groups = Vec::with_capacity(data.groups.len() + 64);
+        let mut new_hidden = Vec::with_capacity(data.hidden.len() + 64);
+
+        let mut edge_cache: HashMap<[u32; 2], u32> = HashMap::new();
+
+        let mut get_interp_vertex = |u: u32,
+                                     v: u32,
+                                     du: f32,
+                                     dv: f32,
+                                     positions: &mut Vec<Vec3>,
+                                     mask: &mut Vec<f32>,
+                                     color: &mut Vec<Vec3>|
+         -> u32 {
+            let key = if u < v { [u, v] } else { [v, u] };
+            if let Some(&idx) = edge_cache.get(&key) {
+                return idx;
+            }
+            let denom = dv - du;
+            let t = if denom.abs() > 1e-9 { (-du / denom).clamp(0.0, 1.0) } else { 0.5 };
+            let pu = positions[u as usize];
+            let pv = positions[v as usize];
+            let p_new = pu.lerp(pv, t);
+            let mu = mask[u as usize];
+            let mv = mask[v as usize];
+            let m_new = mu + t * (mv - mu);
+            let cu = color[u as usize];
+            let cv = color[v as usize];
+            let c_new = cu.lerp(cv, t);
+
+            let new_idx = positions.len() as u32;
+            positions.push(p_new);
+            mask.push(m_new);
+            color.push(c_new);
+            edge_cache.insert(key, new_idx);
+            new_idx
+        };
+
+        for (ti, &tri) in data.triangles.iter().enumerate() {
+            let orig_group = data.groups.get(ti).copied().unwrap_or(0);
+            let is_hid = data.hidden.get(ti).copied().unwrap_or(false);
+
+            let d0 = dists[tri[0] as usize];
+            let d1 = dists[tri[1] as usize];
+            let d2 = dists[tri[2] as usize];
+
+            let pos_count = (d0 > 0.0) as u8 + (d1 > 0.0) as u8 + (d2 > 0.0) as u8;
+
+            if pos_count == 3 {
+                new_triangles.push(tri);
+                new_groups.push(orig_group);
+                new_hidden.push(is_hid);
+            } else if pos_count == 0 {
+                new_triangles.push(tri);
+                new_groups.push(new_group);
+                new_hidden.push(is_hid);
+            } else {
+                let (va, vb, vc, da, db, dc) = if (pos_count == 1 && d0 > 0.0) || (pos_count == 2 && d0 < 0.0) {
+                    (tri[0], tri[1], tri[2], d0, d1, d2)
+                } else if (pos_count == 1 && d1 > 0.0) || (pos_count == 2 && d1 < 0.0) {
+                    (tri[1], tri[2], tri[0], d1, d2, d0)
+                } else {
+                    (tri[2], tri[0], tri[1], d2, d0, d1)
+                };
+
+                let i_ab = get_interp_vertex(va, vb, da, db, &mut data.positions, &mut data.mask, &mut data.color);
+                let i_ca = get_interp_vertex(vc, va, dc, da, &mut data.positions, &mut data.mask, &mut data.color);
+
+                let a_group = if da < 0.0 { new_group } else { orig_group };
+                let bc_group = if da < 0.0 { orig_group } else { new_group };
+
+                new_triangles.push([va, i_ab, i_ca]);
+                new_groups.push(a_group);
+                new_hidden.push(is_hid);
+
+                new_triangles.push([i_ab, vb, vc]);
+                new_groups.push(bc_group);
+                new_hidden.push(is_hid);
+
+                new_triangles.push([i_ab, vc, i_ca]);
+                new_groups.push(bc_group);
+                new_hidden.push(is_hid);
+            }
+        }
+
+        data.triangles = new_triangles;
+        data.groups = new_groups;
+        data.hidden = new_hidden;
+
+        Mesh::from_data(data)
+    }
+
+    /// Cut away geometry on the negative side of the plane ((p - plane_point).dot(plane_normal) < 0),
+    /// and cap the resulting planar hole with watertight triangles.
+    pub fn trim_plane(&self, plane_point: Vec3, plane_normal: Vec3) -> Mesh {
+        let n = plane_normal.normalize_or_zero();
+        if n.length_squared() < 1e-4 {
+            return self.clone();
+        }
+
+        let mut data = self.to_data();
+        let cap_group = self.next_free_group();
+        if data.color.len() != data.positions.len() {
+            data.color = vec![WHITE; data.positions.len()];
+        }
+        if data.mask.len() != data.positions.len() {
+            data.mask = vec![0.0; data.positions.len()];
+        }
+
+        let dists: Vec<f32> = data
+            .positions
+            .iter()
+            .map(|&p| {
+                let d = (p - plane_point).dot(n);
+                if d == 0.0 { 1e-12 } else { d }
+            })
+            .collect();
+
+        let mut new_triangles = Vec::with_capacity(data.triangles.len());
+        let mut new_groups = Vec::with_capacity(data.groups.len());
+        let mut new_hidden = Vec::with_capacity(data.hidden.len());
+
+        let mut edge_cache: HashMap<[u32; 2], u32> = HashMap::new();
+        let mut cut_segments: Vec<(u32, u32)> = Vec::new();
+
+        let mut get_interp_vertex = |u: u32,
+                                     v: u32,
+                                     du: f32,
+                                     dv: f32,
+                                     positions: &mut Vec<Vec3>,
+                                     mask: &mut Vec<f32>,
+                                     color: &mut Vec<Vec3>|
+         -> u32 {
+            let key = if u < v { [u, v] } else { [v, u] };
+            if let Some(&idx) = edge_cache.get(&key) {
+                return idx;
+            }
+            let denom = dv - du;
+            let t = if denom.abs() > 1e-9 { (-du / denom).clamp(0.0, 1.0) } else { 0.5 };
+            let pu = positions[u as usize];
+            let pv = positions[v as usize];
+            let p_new = pu.lerp(pv, t);
+            let mu = mask[u as usize];
+            let mv = mask[v as usize];
+            let m_new = mu + t * (mv - mu);
+            let cu = color[u as usize];
+            let cv = color[v as usize];
+            let c_new = cu.lerp(cv, t);
+
+            let new_idx = positions.len() as u32;
+            positions.push(p_new);
+            mask.push(m_new);
+            color.push(c_new);
+            edge_cache.insert(key, new_idx);
+            new_idx
+        };
+
+        for (ti, &tri) in data.triangles.iter().enumerate() {
+            let orig_group = data.groups.get(ti).copied().unwrap_or(0);
+            let is_hid = data.hidden.get(ti).copied().unwrap_or(false);
+
+            let d0 = dists[tri[0] as usize];
+            let d1 = dists[tri[1] as usize];
+            let d2 = dists[tri[2] as usize];
+
+            let pos_count = (d0 > 0.0) as u8 + (d1 > 0.0) as u8 + (d2 > 0.0) as u8;
+
+            if pos_count == 3 {
+                new_triangles.push(tri);
+                new_groups.push(orig_group);
+                new_hidden.push(is_hid);
+            } else if pos_count == 0 {
+                // Discarded
+            } else {
+                let (va, vb, vc, da, db, dc) = if (pos_count == 1 && d0 > 0.0) || (pos_count == 2 && d0 < 0.0) {
+                    (tri[0], tri[1], tri[2], d0, d1, d2)
+                } else if (pos_count == 1 && d1 > 0.0) || (pos_count == 2 && d1 < 0.0) {
+                    (tri[1], tri[2], tri[0], d1, d2, d0)
+                } else {
+                    (tri[2], tri[0], tri[1], d2, d0, d1)
+                };
+
+                let i_ab = get_interp_vertex(va, vb, da, db, &mut data.positions, &mut data.mask, &mut data.color);
+                let i_ca = get_interp_vertex(vc, va, dc, da, &mut data.positions, &mut data.mask, &mut data.color);
+
+                if da > 0.0 {
+                    new_triangles.push([va, i_ab, i_ca]);
+                    new_groups.push(orig_group);
+                    new_hidden.push(is_hid);
+                    cut_segments.push((i_ca, i_ab));
+                } else {
+                    new_triangles.push([i_ab, vb, vc]);
+                    new_groups.push(orig_group);
+                    new_hidden.push(is_hid);
+
+                    new_triangles.push([i_ab, vc, i_ca]);
+                    new_groups.push(orig_group);
+                    new_hidden.push(is_hid);
+                    cut_segments.push((i_ab, i_ca));
+                }
+            }
+        }
+
+        if !cut_segments.is_empty() {
+            let mut next_map: HashMap<u32, u32> = HashMap::new();
+            for &(u, v) in &cut_segments {
+                next_map.insert(u, v);
+            }
+
+            let mut visited = HashSet::new();
+            for &start in next_map.keys() {
+                if visited.contains(&start) {
+                    continue;
+                }
+                let mut poly = Vec::new();
+                let mut curr = start;
+                while !visited.contains(&curr) {
+                    visited.insert(curr);
+                    poly.push(curr);
+                    if let Some(&nxt) = next_map.get(&curr) {
+                        curr = nxt;
+                        if curr == start {
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+
+                if poly.len() >= 3 {
+                    triangulate_cap(&poly, &data.positions, n, &mut new_triangles);
+                    while new_groups.len() < new_triangles.len() {
+                        new_groups.push(cap_group);
+                        new_hidden.push(false);
+                    }
+                }
+            }
+        }
+
+        data.triangles = new_triangles;
+        data.groups = new_groups;
+        data.hidden = new_hidden;
+
+        Mesh::from_data(data)
+    }
+
     /// One group per visible triangle set; hidden triangles keep their group.
     pub fn group_visible(&mut self) {
         let g = self.next_free_group();
@@ -1328,6 +1627,99 @@ fn morton3(n: Vec3) -> u32 {
     spread(q.x) | (spread(q.y) << 1) | (spread(q.z) << 2)
 }
 
+fn triangulate_cap(poly: &[u32], positions: &[Vec3], normal: Vec3, triangles: &mut Vec<[u32; 3]>) {
+    if poly.len() < 3 {
+        return;
+    }
+    if poly.len() == 3 {
+        triangles.push([poly[0], poly[1], poly[2]]);
+        return;
+    }
+
+    let ex = if normal.y.abs() < 0.99 { normal.cross(Vec3::Y).normalize() } else { normal.cross(Vec3::X).normalize() };
+    let ey = normal.cross(ex).normalize();
+
+    let pts2d: Vec<glam::Vec2> = poly
+        .iter()
+        .map(|&idx| {
+            let p = positions[idx as usize];
+            glam::Vec2::new(p.dot(ex), p.dot(ey))
+        })
+        .collect();
+
+    let mut indices: Vec<usize> = (0..poly.len()).collect();
+
+    let mut area = 0.0;
+    for i in 0..pts2d.len() {
+        let j = (i + 1) % pts2d.len();
+        area += pts2d[i].x * pts2d[j].y - pts2d[j].x * pts2d[i].y;
+    }
+    if area < 0.0 {
+        indices.reverse();
+    }
+
+    let is_point_in_tri = |p: glam::Vec2, a: glam::Vec2, b: glam::Vec2, c: glam::Vec2| -> bool {
+        let cross = |p1: glam::Vec2, p2: glam::Vec2, p3: glam::Vec2| {
+            (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x)
+        };
+        let c1 = cross(a, b, p);
+        let c2 = cross(b, c, p);
+        let c3 = cross(c, a, p);
+        (c1 >= -1e-6 && c2 >= -1e-6 && c3 >= -1e-6) || (c1 <= 1e-6 && c2 <= 1e-6 && c3 <= 1e-6)
+    };
+
+    let mut iterations = 0;
+    while indices.len() > 3 && iterations < poly.len() * 4 {
+        iterations += 1;
+        let mut ear_found = false;
+        let n = indices.len();
+        for i in 0..n {
+            let prev = indices[(i + n - 1) % n];
+            let curr = indices[i];
+            let next = indices[(i + 1) % n];
+
+            let a = pts2d[prev];
+            let b = pts2d[curr];
+            let c = pts2d[next];
+
+            let cross = (b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x);
+            if cross <= 1e-6 {
+                continue;
+            }
+
+            let mut has_inside = false;
+            for (k, &idx) in indices.iter().enumerate() {
+                if k == (i + n - 1) % n || k == i || k == (i + 1) % n {
+                    continue;
+                }
+                if is_point_in_tri(pts2d[idx], a, b, c) {
+                    has_inside = true;
+                    break;
+                }
+            }
+
+            if !has_inside {
+                triangles.push([poly[prev], poly[curr], poly[next]]);
+                indices.remove(i);
+                ear_found = true;
+                break;
+            }
+        }
+
+        if !ear_found {
+            let prev = indices[indices.len() - 1];
+            let curr = indices[0];
+            let next = indices[1];
+            triangles.push([poly[prev], poly[curr], poly[next]]);
+            indices.remove(0);
+        }
+    }
+
+    if indices.len() == 3 {
+        triangles.push([poly[indices[0]], poly[indices[1]], poly[indices[2]]]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1758,5 +2150,52 @@ mod tests {
         // Groups should have at least 2 distinct IDs
         let groups: std::collections::HashSet<u32> = combined.groups().iter().copied().collect();
         assert!(groups.len() >= 2);
+    }
+
+    #[test]
+    fn test_clip_plane() {
+        let mut m = primitives::cube(2, 2.0); // cube spanning [-1, 1] in x, y, z
+        let orig_verts = m.vertex_count();
+        let orig_tris = m.triangle_count();
+
+        // Clip along Y = 0 facing +Y (so y < 0 is clamped onto y = 0)
+        let moved = m.clip_plane(Vec3::ZERO, Vec3::Y);
+        assert!(!moved.is_empty(), "some vertices moved");
+        assert_eq!(m.vertex_count(), orig_verts, "vertex count unchanged");
+        assert_eq!(m.triangle_count(), orig_tris, "triangle count unchanged");
+
+        // No vertex should have y < -1e-5
+        for p in &m.positions {
+            assert!(p.y >= -1e-5, "vertex below plane: {p}");
+        }
+    }
+
+    #[test]
+    fn test_slice_plane() {
+        let m = primitives::cube(2, 2.0);
+        // Slice along Y = 0 facing +Y
+        let sliced = m.slice_plane(Vec3::ZERO, Vec3::Y);
+        assert!(sliced.triangle_count() > m.triangle_count(), "bisected triangles created");
+
+        let groups: std::collections::HashSet<u32> = sliced.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "at least 2 face groups created");
+    }
+
+    #[test]
+    fn test_trim_plane() {
+        let m = primitives::cube(2, 2.0);
+        // Trim along Y = 0 facing +Y (negative side y < 0 is cut away and capped)
+        let trimmed = m.trim_plane(Vec3::ZERO, Vec3::Y);
+        assert!(trimmed.triangle_count() > 0, "trimmed mesh has triangles");
+
+        // All vertices must have y >= -1e-5
+        for p in &trimmed.positions {
+            assert!(p.y >= -1e-5, "vertex below cut plane: {p}");
+        }
+
+        // Capped mesh should be closed: V - E + F = 2
+        let f = trimmed.triangle_count() as i64;
+        let e = f * 3 / 2;
+        assert_eq!(trimmed.vertex_count() as i64 - e + f, 2, "trimmed capped mesh is a closed genus-0 manifold");
     }
 }

@@ -3750,6 +3750,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
         InsertPrimitive { start_pixel: Vec2, anchor: Vec3, normal: Vec3, scale: f32, shape: oxy_sculpt::InsertShape },
+        CurveCut { kind: BrushKind, start: Vec2, current: Vec2, offset: Vec2 },
         Lazy(Vec2),
         Brush { kind: BrushKind, invert: bool },
     }
@@ -3767,6 +3768,9 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             scale: *scale,
             shape: *shape,
         },
+        Drag::CurveCut { kind, start, current, offset, .. } => {
+            Mark::CurveCut { kind: *kind, start: *start, current: *current, offset: *offset }
+        }
         Drag::Stroke { lazy: Some(b), .. } => Mark::Lazy(*b),
         Drag::Stroke { stroke, .. } => Mark::Brush { kind: stroke.settings().kind, invert: false },
         _ => Mark::Brush { kind: fallback_kind, invert: fallback_invert },
@@ -3830,6 +3834,61 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                         }
                     }
                 }
+            }
+        }
+        Mark::CurveCut { kind, start, current, offset } => {
+            let p0 = start + offset;
+            let p1 = current + offset;
+            let s0 = to_pt(p0);
+            let s1 = to_pt(p1);
+            let line_color = match kind {
+                BrushKind::ClipCurve => Color32::from_rgb(255, 170, 40),
+                BrushKind::SliceCurve => Color32::from_rgb(80, 220, 120),
+                BrushKind::TrimCurve => Color32::from_rgb(255, 80, 80),
+                _ => Color32::WHITE,
+            };
+
+            let delta = s1 - s0;
+            let len = delta.length();
+            if len > 2.0 {
+                let mut n = egui::vec2(delta.y, -delta.x) / len;
+                if ed.modifiers.alt {
+                    n = -n;
+                }
+                // Shaded region on the cut side
+                let band = 60.0;
+                let q0 = s0;
+                let q1 = s1;
+                let q2 = s1 + n * band;
+                let q3 = s0 + n * band;
+
+                let mut mesh = egui::Mesh::default();
+                let c_line = line_color.linear_multiply(0.28);
+                let c_fade = line_color.linear_multiply(0.02);
+                mesh.colored_vertex(q0, c_line);
+                mesh.colored_vertex(q1, c_line);
+                mesh.colored_vertex(q2, c_fade);
+                mesh.colored_vertex(q3, c_fade);
+                mesh.add_triangle(0, 1, 2);
+                mesh.add_triangle(0, 2, 3);
+                painter.add(egui::Shape::mesh(mesh));
+
+                // Draw cut line and endpoints
+                painter.line_segment([s0, s1], EStroke::new(2.5, line_color));
+                painter.circle_filled(s0, 4.0, line_color);
+                painter.circle_filled(s1, 4.0, line_color);
+
+                // Small arrow in center of line pointing toward the cut side
+                let mid = s0 + delta * 0.5;
+                let arrow_tip = mid + n * 16.0;
+                let perp = egui::vec2(-n.y, n.x);
+                let arrow_left = arrow_tip - n * 6.0 + perp * 4.0;
+                let arrow_right = arrow_tip - n * 6.0 - perp * 4.0;
+                painter.line_segment([mid, arrow_tip], EStroke::new(1.5, line_color));
+                painter.line_segment([arrow_left, arrow_tip], EStroke::new(1.5, line_color));
+                painter.line_segment([arrow_right, arrow_tip], EStroke::new(1.5, line_color));
+            } else {
+                painter.circle_filled(s0, 5.0, line_color);
             }
         }
         Mark::Deferred { mode, start } => {

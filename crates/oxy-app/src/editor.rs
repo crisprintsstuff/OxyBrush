@@ -174,6 +174,14 @@ pub enum Drag {
         scale: f32,
         shape: oxy_sculpt::InsertShape,
     },
+    /// Screen curve cutting gesture (ClipCurve, SliceCurve, TrimCurve).
+    CurveCut {
+        kind: BrushKind,
+        start: Vec2,
+        current: Vec2,
+        offset: Vec2,
+        pan_origin: Option<(Vec2, Vec2)>,
+    },
 }
 
 /// The quick menu: shown at `pos` (window physical px). `held`: it closes
@@ -371,6 +379,7 @@ pub struct Editor {
     /// Pointer position in physical pixels.
     pub pointer: Option<Vec2>,
     pub modifiers: Modifiers,
+    pub space_held: bool,
     /// Keyboard and mouse bindings. Defaults to the original OxyBrush layout.
     pub keymap: keymap::Keymap,
     /// Waiting for a key: the command, and which of its chords to replace (`None` adds one).
@@ -586,6 +595,7 @@ impl Default for Editor {
             canvas: [0.0, 0.0, 1.0, 1.0],
             pointer: None,
             modifiers: Modifiers::default(),
+            space_held: false,
             keymap: keymap::Keymap::default(),
             keymap_capture: None,
             show_keymap: false,
@@ -782,7 +792,7 @@ impl Editor {
     }
 
     pub fn is_stroking(&self) -> bool {
-        matches!(self.drag, Drag::Stroke { .. } | Drag::InsertPrimitive { .. })
+        matches!(self.drag, Drag::Stroke { .. } | Drag::InsertPrimitive { .. } | Drag::CurveCut { .. })
     }
 
     /// The user is mid-edit. An agent waits rather than applying a change
@@ -792,6 +802,7 @@ impl Editor {
             self.drag,
             Drag::Stroke { .. }
                 | Drag::InsertPrimitive { .. }
+                | Drag::CurveCut { .. }
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
                 | Drag::Select { .. }
@@ -1095,6 +1106,23 @@ impl Editor {
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
             return;
         }
+        let (kind, _invert) = self.effective_brush();
+        if kind.is_curve_cut() {
+            if self.job_blocks_active() {
+                let label = self.job.as_ref().map_or(String::new(), |j| j.label.clone());
+                self.status = format!("Wait for \"{label}\" to finish before editing this piece");
+                self.drag = Drag::Orbit;
+                return;
+            }
+            if self.scene.active().visible {
+                if let Some(action) = self.keymap.nav_action(NavButton::Left, self.active_modifiers()) {
+                    self.drag = self.drag_for_nav(Some(action), PointerButton::Primary);
+                } else {
+                    self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+                }
+                return;
+            }
+        }
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
         // Roles, not raw keys: Ctrl masks only while that key is still the mask key.
         let m = self.brush_roles();
@@ -1182,6 +1210,10 @@ impl Editor {
     /// along ray direction `d`.
     fn start_stroke_at(&mut self, p: Vec2, hit: oxy_mesh::RayHit, d: Vec3) {
         let (kind, invert) = self.effective_brush();
+        if kind.is_curve_cut() {
+            self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+            return;
+        }
         if kind == BrushKind::InsertPrimitive {
             let normal = facing(hit.normal, d);
             self.drag = Drag::InsertPrimitive {
@@ -1474,6 +1506,16 @@ impl Editor {
                 *scale = d * world_per_pixel;
                 true
             }
+            Drag::CurveCut { current, offset, pan_origin, .. } => {
+                if self.space_held {
+                    let (p0, o0) = *pan_origin.get_or_insert_with(|| (prev.unwrap_or(pos), *offset));
+                    *offset = o0 + (pos - p0);
+                } else {
+                    *pan_origin = None;
+                    *current = pos - *offset;
+                }
+                true
+            }
             Drag::Deferred { .. } => true,
             Drag::Gizmo(g) if self.coalesce_strokes => {
                 g.queued_pos = Some(pos);
@@ -1714,6 +1756,13 @@ impl Editor {
                     self.commit_inserted_primitive(anchor, normal, scale, shape);
                 }
             }
+            Drag::CurveCut { kind, start, current, offset, .. } => {
+                let p0 = start + offset;
+                let p1 = current + offset;
+                if (p1 - p0).length() >= 3.0 * self.pixels_per_point.max(0.1) {
+                    self.finish_curve_cut(kind, p0, p1);
+                }
+            }
             _ => {}
         }
         // Strokes only grow chunk bounds per dab; tighten them once at the end.
@@ -1741,7 +1790,81 @@ impl Editor {
                     self.status = "Transform cancelled".into();
                 }
             }
+            Drag::CurveCut { .. } => self.status = "Cut cancelled".into(),
             _ => self.status = "Cancelled".into(),
+        }
+    }
+
+    fn finish_curve_cut(&mut self, kind: BrushKind, p0: Vec2, p1: Vec2) {
+        let size = self.canvas_size();
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let ray = |p: Vec2| self.camera.ray(p - origin, size);
+        let (o0, d0) = ray(p0);
+        let (o1, d1) = ray(p1);
+
+        let bounds = self.scene.active().mesh.bounds();
+        let center = if bounds.is_empty() { Vec3::ZERO } else { bounds.center() };
+
+        let to_center = center - o0;
+        let t0 = to_center.dot(d0).max(0.1);
+        let plane_point = o0 + d0 * t0;
+
+        let to_center1 = center - o1;
+        let t1 = to_center1.dot(d1).max(0.1);
+        let p1_3d = o1 + d1 * t1;
+        let line_3d = p1_3d - plane_point;
+
+        let mut plane_normal = d0.cross(line_3d).normalize_or_zero();
+        if plane_normal == Vec3::ZERO {
+            plane_normal = self.camera.forward();
+        }
+
+        // Screen vector p1 - p0 and 2D normal to the left (shaded side).
+        let v2d = p1 - p0;
+        let n2d = Vec2::new(v2d.y, -v2d.x).normalize_or_zero();
+        let test_ray = ray(p0 + n2d * 50.0);
+        let test_3d = test_ray.0 + test_ray.1 * t0;
+
+        // Points on the cut side must have signed_dist < 0.
+        if (test_3d - plane_point).dot(plane_normal) > 0.0 {
+            plane_normal = -plane_normal;
+        }
+
+        // Holding Alt flips the cut direction.
+        if self.modifiers.alt {
+            plane_normal = -plane_normal;
+        }
+
+        match kind {
+            BrushKind::ClipCurve => {
+                let piece = self.scene.active_mut();
+                self.history.begin(kind.label(), piece.id, &piece.mesh);
+                for c in 0..piece.mesh.chunks.len() as u32 {
+                    self.history.touch(&piece.mesh, c);
+                }
+                let moved = piece.mesh.clip_plane(plane_point, plane_normal);
+                if !moved.is_empty() {
+                    piece.mesh.update_after_move(&moved);
+                    self.history.commit();
+                    self.status = format!("Clipped {} vertices", moved.len());
+                } else {
+                    self.history.cancel();
+                    self.status = "No vertices clipped".into();
+                }
+            }
+            BrushKind::SliceCurve => {
+                let new_mesh = self.scene.active().mesh.slice_plane(plane_point, plane_normal);
+                let tri_count = new_mesh.triangle_count();
+                self.replace_active_mesh(kind.label(), new_mesh);
+                self.status = format!("Sliced mesh ({tri_count} faces, new polygroup)");
+            }
+            BrushKind::TrimCurve => {
+                let new_mesh = self.scene.active().mesh.trim_plane(plane_point, plane_normal);
+                let tri_count = new_mesh.triangle_count();
+                self.replace_active_mesh(kind.label(), new_mesh);
+                self.status = format!("Trimmed mesh ({tri_count} faces, capped watertight)");
+            }
+            _ => {}
         }
     }
 
@@ -4623,5 +4746,130 @@ mod tests {
         // Redo re-inserts the shape
         e.redo();
         assert!(e.scene.active().mesh.vertex_count() > orig_vcount);
+    }
+
+    #[test]
+    fn curve_cut_clip_curve_gesture_and_undo() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::ClipCurve;
+        let orig_vcount = e.scene.active().mesh.vertex_count();
+        let orig_positions = e.scene.active().mesh.positions.clone();
+
+        // Start drag across viewport cutting horizontally through center
+        let p0 = Vec2::new(100.0, 300.0);
+        let p1 = Vec2::new(700.0, 300.0);
+        e.pointer = Some(p0);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::ClipCurve, .. }));
+
+        // Move to p1
+        e.pointer_moved(p1);
+        if let Drag::CurveCut { current, .. } = e.drag {
+            assert_eq!(current, p1);
+        } else {
+            panic!("expected Drag::CurveCut");
+        }
+
+        // Test spacebar panning
+        e.space_held = true;
+        let p_pan = p1 + Vec2::new(50.0, -20.0);
+        e.pointer_moved(p_pan);
+        if let Drag::CurveCut { offset, .. } = e.drag {
+            assert_eq!(offset, Vec2::new(50.0, -20.0));
+        } else {
+            panic!("expected offset to change with spacebar");
+        }
+        e.space_held = false;
+
+        // Finish cut
+        e.pointer_up();
+        assert!(matches!(e.drag, Drag::None));
+
+        // Vertex count and topology must be 100% preserved
+        let active = e.scene.active();
+        assert_eq!(active.mesh.vertex_count(), orig_vcount);
+        // Positions should have changed on the clipped side
+        assert_ne!(active.mesh.positions, orig_positions);
+
+        // Undo restores exact original positions
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, orig_positions);
+
+        // Redo re-applies
+        e.redo();
+        assert_ne!(e.scene.active().mesh.positions, orig_positions);
+    }
+
+    #[test]
+    fn curve_cut_slice_curve_bisection_and_polygroup() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::SliceCurve;
+        let orig_tcount = e.scene.active().mesh.triangle_count();
+
+        let p0 = Vec2::new(100.0, 300.0);
+        let p1 = Vec2::new(700.0, 300.0);
+        e.pointer = Some(p0);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::SliceCurve, .. }));
+
+        e.pointer_moved(p1);
+        e.pointer_up();
+
+        let active = e.scene.active();
+        // Triangles should have been bisected
+        assert!(active.mesh.triangle_count() > orig_tcount);
+        // At least two distinct polygroups should exist
+        let groups: std::collections::HashSet<u32> = active.mesh.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "slice curve assigns a new polygroup");
+
+        // Undo restores original mesh
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount);
+        assert_eq!(e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>().len(), 1);
+    }
+
+    #[test]
+    fn curve_cut_trim_curve_geometry_cut_and_watertight_cap() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::TrimCurve;
+        let orig_tcount = e.scene.active().mesh.triangle_count();
+
+        let p0 = Vec2::new(100.0, 300.0);
+        let p1 = Vec2::new(700.0, 300.0);
+        e.pointer = Some(p0);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::TrimCurve, .. }));
+
+        e.pointer_moved(p1);
+        e.pointer_up();
+
+        let active = e.scene.active();
+        // Geometry was trimmed away and capped
+        assert!(active.mesh.triangle_count() > 0);
+        // Cut cap has a distinct polygroup
+        let groups: std::collections::HashSet<u32> = active.mesh.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "trim cap has distinct polygroup");
+
+        // Check watertightness (Euler characteristic = 2)
+        let v = active.mesh.vertex_count() as i32;
+        let f = active.mesh.triangle_count() as i32;
+        let mut edges = std::collections::HashSet::new();
+        for tri in &active.mesh.triangles {
+            for i in 0..3 {
+                let a = tri[i].min(tri[(i + 1) % 3]);
+                let b = tri[i].max(tri[(i + 1) % 3]);
+                edges.insert((a, b));
+            }
+        }
+        let e_count = edges.len() as i32;
+        let chi = v - e_count + f;
+        assert_eq!(chi, 2, "trimmed sphere with cap is a closed topological sphere");
+
+        // Undo restores original sphere
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount);
     }
 }

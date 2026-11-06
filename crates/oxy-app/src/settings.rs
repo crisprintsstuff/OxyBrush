@@ -197,6 +197,9 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
         BrushKind::InsertPrimitive => "insert_primitive",
+        BrushKind::ClipCurve => "clip_curve",
+        BrushKind::SliceCurve => "slice_curve",
+        BrushKind::TrimCurve => "trim_curve",
     }
 }
 

@@ -44,6 +44,9 @@ pub enum BrushKind {
     KelvinTwist,
     KelvinScale,
     InsertPrimitive,
+    ClipCurve,
+    SliceCurve,
+    TrimCurve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -128,7 +131,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 21] = [
+    pub const ALL: [BrushKind; 24] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -148,9 +151,17 @@ impl BrushKind {
         BrushKind::PlanarTrim,
         BrushKind::Noise,
         BrushKind::InsertPrimitive,
+        BrushKind::ClipCurve,
+        BrushKind::SliceCurve,
+        BrushKind::TrimCurve,
         BrushKind::Mask,
         BrushKind::Paint,
     ];
+
+    /// Brushes that cut or clamp geometry along a screen-projected plane.
+    pub fn is_curve_cut(self) -> bool {
+        matches!(self, BrushKind::ClipCurve | BrushKind::SliceCurve | BrushKind::TrimCurve)
+    }
 
     /// Brushes that move a captured region with the pointer instead of dabbing.
     pub fn is_grab_like(self) -> bool {
@@ -192,6 +203,9 @@ impl BrushKind {
             BrushKind::TopoMove => "Topological Move",
             BrushKind::Noise => "Noise",
             BrushKind::InsertPrimitive => "Insert Primitive",
+            BrushKind::ClipCurve => "Clip Curve",
+            BrushKind::SliceCurve => "Slice Curve",
+            BrushKind::TrimCurve => "Trim Curve",
         }
     }
 
@@ -205,7 +219,10 @@ impl BrushKind {
             | BrushKind::KelvinGrab
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
-            | BrushKind::InsertPrimitive => 1.0,
+            | BrushKind::InsertPrimitive
+            | BrushKind::ClipCurve
+            | BrushKind::SliceCurve
+            | BrushKind::TrimCurve => 1.0,
             BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
@@ -1151,7 +1168,10 @@ fn target_positions(
                 | BrushKind::Mask
                 | BrushKind::Paint
                 | BrushKind::Layer
-                | BrushKind::InsertPrimitive => p,
+                | BrushKind::InsertPrimitive
+                | BrushKind::ClipCurve
+                | BrushKind::SliceCurve
+                | BrushKind::TrimCurve => p,
             };
             (v, np)
         })

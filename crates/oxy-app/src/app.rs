@@ -1090,6 +1090,7 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(focused) => {
                 if !*focused {
                     self.editor.modifiers = Modifiers::default();
+                    self.editor.space_held = false;
                     if self.editor.is_stroking() {
                         self.editor.pointer_up();
                     }
@@ -1258,22 +1259,18 @@ impl ApplicationHandler for App {
             }
             // A keymap capture, or releasing the quick-menu key, wins over a focused
             // slider so the key the user pressed is the one that gets bound.
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. }
-                if self.editor.keymap_capture.is_some()
-                    || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held)) =>
-            {
-                if let Some(a) = self.handle_key(event) {
-                    self.run_action(a);
+            WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
+                if let PhysicalKey::Code(KeyCode::Space) = event.physical_key {
+                    self.editor.space_held = event.state == ElementState::Pressed;
                 }
-                redraw = true;
-            }
-            WindowEvent::KeyboardInput { event, is_synthetic: false, .. }
-                if !self.egui_ctx.egui_wants_keyboard_input() =>
-            {
-                if let Some(a) = self.handle_key(event) {
-                    self.run_action(a);
+                let capture_or_quick = self.editor.keymap_capture.is_some()
+                    || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held));
+                if capture_or_quick || !self.egui_ctx.egui_wants_keyboard_input() {
+                    if let Some(a) = self.handle_key(event) {
+                        self.run_action(a);
+                    }
+                    redraw = true;
                 }
-                redraw = true;
             }
             _ => {}
         }
