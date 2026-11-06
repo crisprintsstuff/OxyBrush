@@ -399,6 +399,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.show_wireframe = true;
                 }
                 surface_cursor_checkbox(ui, ed);
+                ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
+                    .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
                 ui.separator();
                 tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
                 ui.separator();
@@ -764,6 +766,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
     surface_cursor_checkbox(ui, ed);
+    tips::check_plain(
+        ui,
+        &mut ed.hide_cursor_during_stroke,
+        "Hide brush circle during stroke",
+        "Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.",
+    );
     ui.add_space(4.0);
 
     ui.separator();
@@ -3570,8 +3578,34 @@ fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32,
     painter.circle_filled(pos, 1.5, color);
 }
 
+fn draw_symmetry_indicators(painter: &egui::Painter, ed: &Editor, canvas: egui::Rect, pointer_px: Vec2) {
+    if !ed.symmetry.is_active() {
+        return;
+    }
+    let Some(hit) = ed.surface_hit_at(pointer_px) else { return };
+    let transforms = ed.symmetry.transforms();
+    if transforms.len() <= 1 {
+        return;
+    }
+    let accent = ed.accent_color();
+    for transform in &transforms[1..] {
+        let sym_pos = *transform * hit.point;
+        if let Some(screen_pos) = project_point(ed, sym_pos)
+            && canvas.contains(screen_pos)
+        {
+            let sym_norm = *transform * hit.normal;
+            let view_dir = (sym_pos - ed.camera.eye()).normalize_or(Vec3::Z);
+            let facing = sym_norm.dot(-view_dir) > -0.2;
+            let alpha = if facing { 0.95 } else { 0.4 };
+            let col = accent.linear_multiply(alpha);
+            painter.circle_filled(screen_pos, 3.0, col);
+            painter.circle_stroke(screen_pos, 3.5, EStroke::new(1.0, Color32::from_black_alpha(180)));
+        }
+    }
+}
+
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
-    if !ed.pointer_in_canvas() || matches!(ed.drag, Drag::Orbit | Drag::Pan) {
+    if !ed.pointer_in_canvas() {
         return;
     }
     let Some(p) = ed.pointer else { return };
@@ -3579,7 +3613,24 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     if !canvas.contains(pos) || ui.ctx().is_pointer_over_egui() {
         return;
     }
+    match ed.drag {
+        Drag::Orbit => ui.ctx().set_cursor_icon(egui::CursorIcon::AllScroll),
+        Drag::Pan => ui.ctx().set_cursor_icon(egui::CursorIcon::Move),
+        Drag::Zoom => ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn),
+        _ => ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair),
+    }
+    if matches!(ed.drag, Drag::Orbit | Drag::Pan | Drag::Zoom) {
+        return;
+    }
     let painter = ui.painter().with_clip_rect(canvas);
+
+    // Draw symmetry reflection indicators on the active sculpt surface
+    draw_symmetry_indicators(&painter, ed, canvas, p);
+
+    // Hide circular brush ring while actively performing a stroke to give an unobstructed view of the sculpt
+    if ed.is_stroking() && ed.hide_cursor_during_stroke {
+        return;
+    }
     let to_pt = |v: glam::Vec2| egui::pos2(v.x, v.y) / ed.pixels_per_point;
     // Copy what the drag needs before any `&mut ed` call. Matching on
     // `ed.drag` holds a borrow that the surface cursor cannot share.
@@ -4114,5 +4165,31 @@ mod tests {
         });
         output.textures_delta.clear();
         assert_eq!(*ed.strength_mut(BrushKind::Smooth), 0.8);
+    }
+
+    #[test]
+    fn test_hide_cursor_during_stroke_setting() {
+        let mut ed = Editor::default();
+        assert!(ed.hide_cursor_during_stroke);
+        assert!(!ed.is_stroking());
+
+        ed.hide_cursor_during_stroke = false;
+        assert!(!ed.hide_cursor_during_stroke);
+    }
+
+    #[test]
+    fn test_symmetry_is_active_and_indicators() {
+        let mut ed = Editor::default();
+        // X symmetry is enabled by default in OxyBrush
+        assert!(ed.symmetry.is_active());
+        assert!(ed.symmetry.x);
+
+        ed.symmetry.x = false;
+        assert!(!ed.symmetry.is_active());
+
+        ed.symmetry.radial = 4;
+        assert!(ed.symmetry.is_active());
+        let rad_xforms = ed.symmetry.transforms();
+        assert_eq!(rad_xforms.len(), 4);
     }
 }

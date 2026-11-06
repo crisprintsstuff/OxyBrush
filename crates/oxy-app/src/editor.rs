@@ -381,6 +381,8 @@ pub struct Editor {
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
+    /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
+    pub hide_cursor_during_stroke: bool,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
@@ -574,6 +576,7 @@ impl Default for Editor {
             rmb_press: None,
             stroke_from_empty: false,
             surface_cursor: false,
+            hide_cursor_during_stroke: true,
             cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
@@ -723,12 +726,18 @@ impl Editor {
         &mut self.strengths[kind_index(k)]
     }
 
-    fn canvas_size(&self) -> Vec2 {
+    pub fn canvas_size(&self) -> Vec2 {
         Vec2::new(self.canvas[2].max(1.0), self.canvas[3].max(1.0))
     }
 
-    fn canvas_local(&self, p: Vec2) -> Vec2 {
+    pub fn canvas_local(&self, p: Vec2) -> Vec2 {
         p - Vec2::new(self.canvas[0], self.canvas[1])
+    }
+
+    /// Surface raycast hit on the active mesh under a physical pixel position.
+    pub fn surface_hit_at(&self, pixel: Vec2) -> Option<oxy_mesh::RayHit> {
+        let (o, d) = self.camera.ray(self.canvas_local(pixel), self.canvas_size());
+        self.scene.active().mesh.raycast(o, d)
     }
 
     pub fn pointer_in_canvas(&self) -> bool {
@@ -820,6 +829,7 @@ impl Editor {
             wireframe_color: self.view.wireframe_color,
             stroke_from_empty: self.stroke_from_empty,
             surface_cursor: self.surface_cursor,
+            hide_cursor_during_stroke: self.hide_cursor_during_stroke,
             agent_mcp: self.agent_enabled,
             custom_matcap: self
                 .custom_matcap
@@ -960,6 +970,7 @@ impl Editor {
         self.stroke_from_empty = s.stroke_from_empty;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
+        self.hide_cursor_during_stroke = s.hide_cursor_during_stroke;
         self.agent_enabled = s.agent_mcp;
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
@@ -3526,6 +3537,7 @@ mod tests {
             wireframe_color: [0.2, 0.22, 0.25],
             stroke_from_empty: true,
             surface_cursor: true,
+            hide_cursor_during_stroke: false,
             agent_mcp: false,
             custom_matcap: String::new(),
             background_style: BackgroundStyle::Flat,

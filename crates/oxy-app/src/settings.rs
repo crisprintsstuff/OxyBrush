@@ -256,6 +256,8 @@ pub struct Settings {
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
+    /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
+    pub hide_cursor_during_stroke: bool,
     /// Local MCP agent listener (off unless the user turns it on). The token is not stored.
     pub agent_mcp: bool,
     /// Name of the custom matcap in use ("" for a built-in material).
@@ -502,6 +504,7 @@ impl Default for Settings {
             wireframe_color: view.wireframe_color,
             stroke_from_empty: false,
             surface_cursor: false,
+            hide_cursor_during_stroke: true,
             agent_mcp: false,
             custom_matcap: String::new(),
             background_style: view.background_style,
@@ -580,7 +583,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -602,6 +605,7 @@ impl Settings {
             wireframe_color,
             self.stroke_from_empty,
             self.surface_cursor,
+            self.hide_cursor_during_stroke,
             self.agent_mcp,
             self.custom_matcap,
             self.background_style.key(),
@@ -698,6 +702,9 @@ impl Settings {
                 "wireframe_color" => s.wireframe_color = parse_rgb(v).unwrap_or(s.wireframe_color),
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
+                "hide_cursor_during_stroke" => {
+                    s.hide_cursor_during_stroke = v.parse().unwrap_or(s.hide_cursor_during_stroke)
+                }
                 "agent_mcp" => s.agent_mcp = v.parse().unwrap_or(s.agent_mcp),
                 "custom_matcap" => s.custom_matcap = v.to_owned(),
                 "background_style" => s.background_style = BackgroundStyle::from_key(v).unwrap_or(s.background_style),
@@ -841,6 +848,7 @@ mod tests {
             wireframe_color: [0.15, 0.2, 0.25],
             stroke_from_empty: true,
             surface_cursor: true,
+            hide_cursor_during_stroke: false,
             agent_mcp: false,
             custom_matcap: "Red Wax".into(),
             background_style: BackgroundStyle::Flat,

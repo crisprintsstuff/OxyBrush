@@ -220,6 +220,12 @@ pub struct Symmetry {
 }
 
 impl Symmetry {
+    /// True if any mirror plane or radial symmetry copy is active.
+    #[inline]
+    pub fn is_active(&self) -> bool {
+        self.x || self.y || self.z || self.radial > 1
+    }
+
     /// Every symmetry transform, the identity first.
     pub fn transforms(&self) -> Vec<Mat3> {
         let n = self.radial.clamp(1, 64);
