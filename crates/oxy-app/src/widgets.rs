@@ -13,10 +13,12 @@ use oxy_sculpt::BrushKind;
 
 pub const ACCENT: Color32 = Color32::from_rgb(0xE0, 0x7A, 0x4F);
 pub const MASK_BLUE: Color32 = Color32::from_rgb(110, 150, 255);
+#[allow(dead_code)]
 const PAINT_TEAL: Color32 = Color32::from_rgb(70, 180, 160);
 const CLAY_TOP: Color32 = Color32::from_rgb(0xD9, 0x9A, 0x78);
 const CLAY_BOTTOM: Color32 = Color32::from_rgb(0x7A, 0x45, 0x30);
 const CLAY_EDGE: Color32 = Color32::from_rgb(0xF2, 0xC2, 0xA4);
+#[allow(dead_code)]
 const GHOST: Color32 = Color32::from_gray(150);
 
 /// One-line explanation of each brush, shown in tooltips.
@@ -89,6 +91,7 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
 }
 
 /// Surface before the brush, drawn dashed where it explains the effect.
+#[allow(dead_code)]
 fn brush_ghost(k: BrushKind, x: f32) -> Option<f32> {
     match k {
         BrushKind::Smooth => Some(0.26 * (x * 9.0).sin() * bump(x, 0.7)),
@@ -118,6 +121,7 @@ fn arrow(p: &Painter, from: Pos2, to: Pos2, stroke: Stroke) {
 }
 
 /// Paint a brush icon (surface cross-section) into `rect`.
+#[allow(dead_code)]
 pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
     // Neutral gray behind the clay profile. The old 0x26, 0x28, 0x2D well was blue.
     p.rect_filled(rect, 5.0, Color32::from_gray(41));
@@ -524,7 +528,8 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -
         };
         ui.painter().rect(rect, 6.0, bg, stroke, egui::StrokeKind::Inside);
         let icon = Rect::from_min_size(rect.left_top() + vec2(4.0, 3.0), Vec2::splat(30.0));
-        paint_brush_icon(ui.painter(), icon, k);
+        let tex = brush_texture(ui.ctx(), k);
+        ui.painter().image(tex.id(), icon, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let text_color = if selected { Color32::WHITE } else { v.text_color() };
         ui.painter().text(
             pos2(icon.right() + 8.0, rect.center().y),
@@ -551,7 +556,13 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, k
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
-        paint_brush_icon(ui.painter(), rect.shrink(2.0), k);
+        let tex = brush_texture(ui.ctx(), k);
+        ui.painter().image(
+            tex.id(),
+            rect.shrink(2.0),
+            Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+            Color32::WHITE,
+        );
         let accent = ui.visuals().selection.stroke.color;
         let stroke = if selected {
             Stroke::new(1.5, accent)
