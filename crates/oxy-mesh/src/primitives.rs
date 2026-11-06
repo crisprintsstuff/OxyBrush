@@ -114,14 +114,14 @@ pub fn cylinder(segments: u32, radius: f32, height: f32) -> Mesh {
         let t1 = base_idx + next * 2 + 1;
 
         // Side quads (two triangles, CCW seen from outside)
-        tris.push([b0, b1, t0]);
-        tris.push([b1, t1, t0]);
+        tris.push([b0, t0, b1]);
+        tris.push([b1, t0, t1]);
 
         // Bottom cap (facing -Y)
-        tris.push([bot_center_idx, b1, b0]);
+        tris.push([bot_center_idx, b0, b1]);
 
         // Top cap (facing +Y)
-        tris.push([top_center_idx, t0, t1]);
+        tris.push([top_center_idx, t1, t0]);
     }
 
     Mesh::new(positions, tris)
@@ -195,5 +195,18 @@ mod tests {
         let f = m.triangle_count() as i64;
         let e = f * 3 / 2;
         assert_eq!(m.vertex_count() as i64 - e + f, 2);
+        for tri in &m.triangles {
+            let v0 = m.positions[tri[0] as usize];
+            let v1 = m.positions[tri[1] as usize];
+            let v2 = m.positions[tri[2] as usize];
+            let n = (v1 - v0).cross(v2 - v0);
+            let center = (v0 + v1 + v2) / 3.0;
+            if center.y.abs() > 0.9 {
+                assert!(center.y * n.y > 0.0, "cap normal points inward");
+            } else {
+                let dot = center.x * n.x + center.z * n.z;
+                assert!(dot > 0.0, "side normal points inward: {dot}");
+            }
+        }
     }
 }

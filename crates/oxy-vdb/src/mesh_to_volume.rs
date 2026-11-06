@@ -5,44 +5,54 @@ use glam::{IVec3, Vec3};
 use rayon::prelude::*;
 use std::collections::HashMap;
 
-/// Closest point on triangle (Ericson, Real-Time Collision Detection 5.1.5).
-pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+/// Closest point on triangle (Ericson, Real-Time Collision Detection 5.1.5),
+/// returning both the closest point and the barycentric coordinates (u, v, w) on the triangle.
+pub fn closest_point_and_barycentric(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> (Vec3, Vec3) {
     let ab = b - a;
     let ac = c - a;
     let ap = p - a;
+
     let d1 = ab.dot(ap);
     let d2 = ac.dot(ap);
     if d1 <= 0.0 && d2 <= 0.0 {
-        return a;
+        return (a, Vec3::new(1.0, 0.0, 0.0));
     }
     let bp = p - b;
     let d3 = ab.dot(bp);
     let d4 = ac.dot(bp);
     if d3 >= 0.0 && d4 <= d3 {
-        return b;
+        return (b, Vec3::new(0.0, 1.0, 0.0));
     }
     let vc = d1 * d4 - d3 * d2;
     if vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0 {
-        return a + ab * (d1 / (d1 - d3));
+        let v = d1 / (d1 - d3);
+        return (a + ab * v, Vec3::new(1.0 - v, v, 0.0));
     }
     let cp = p - c;
     let d5 = ab.dot(cp);
     let d6 = ac.dot(cp);
     if d6 >= 0.0 && d5 <= d6 {
-        return c;
+        return (c, Vec3::new(0.0, 0.0, 1.0));
     }
     let vb = d5 * d2 - d1 * d6;
     if vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0 {
-        return a + ac * (d2 / (d2 - d6));
+        let w = d2 / (d2 - d6);
+        return (a + ac * w, Vec3::new(1.0 - w, 0.0, w));
     }
     let va = d3 * d6 - d5 * d4;
     if va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0 {
-        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+        let w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
+        return (b + (c - b) * w, Vec3::new(0.0, 1.0 - w, w));
     }
     let denom = 1.0 / (va + vb + vc);
     let v = vb * denom;
     let w = vc * denom;
-    a + ab * v + ac * w
+    let u = 1.0 - v - w;
+    (a + ab * v + ac * w, Vec3::new(u, v, w))
+}
+
+pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
+    closest_point_and_barycentric(p, a, b, c).0
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -122,6 +132,33 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
         return grid;
     }
 
+    // Precompute angle-weighted vertex pseudonormals for exact watertight inside/outside classification.
+    let vert_normals: Vec<Vec3> = {
+        let mut v_norms = vec![Vec3::ZERO; positions.len()];
+        for tri in triangles {
+            let i0 = tri[0] as usize;
+            let i1 = tri[1] as usize;
+            let i2 = tri[2] as usize;
+            let p0 = positions[i0];
+            let p1 = positions[i1];
+            let p2 = positions[i2];
+            let e0 = (p1 - p0).normalize_or_zero();
+            let e1 = (p2 - p1).normalize_or_zero();
+            let e2 = (p0 - p2).normalize_or_zero();
+            let a0 = (-e2).dot(e0).clamp(-1.0, 1.0).acos();
+            let a1 = (-e0).dot(e1).clamp(-1.0, 1.0).acos();
+            let a2 = (-e1).dot(e2).clamp(-1.0, 1.0).acos();
+            let fnorm = (p1 - p0).cross(p2 - p0).normalize_or_zero();
+            v_norms[i0] += fnorm * a0;
+            v_norms[i1] += fnorm * a1;
+            v_norms[i2] += fnorm * a2;
+        }
+        for n in &mut v_norms {
+            *n = n.normalize_or_zero();
+        }
+        v_norms
+    };
+
     // 2. Compute narrow-band signed distance values per leaf node in parallel.
     struct LeafResult {
         origin: IVec3,
@@ -157,16 +194,19 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
 
                 for &ti in &tis {
                     let tri = &triangles[ti];
-                    let v0 = positions[tri[0] as usize];
-                    let v1 = positions[tri[1] as usize];
-                    let v2 = positions[tri[2] as usize];
+                    let i0 = tri[0] as usize;
+                    let i1 = tri[1] as usize;
+                    let i2 = tri[2] as usize;
+                    let v0 = positions[i0];
+                    let v1 = positions[i1];
+                    let v2 = positions[i2];
 
-                    let c = closest_point_on_triangle(p, v0, v1, v2);
+                    let (c, bary) = closest_point_and_barycentric(p, v0, v1, v2);
                     let d = p.distance(c);
                     if d < best_dist {
                         best_dist = d;
                         best_c = c;
-                        let n = (v1 - v0).cross(v2 - v0);
+                        let n = bary.x * vert_normals[i0] + bary.y * vert_normals[i1] + bary.z * vert_normals[i2];
                         let len = n.length();
                         best_normal = if len > 1e-6 { n / len } else { Vec3::Y };
                     }
@@ -199,8 +239,8 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
             let outside = if diff.length_squared() > 1e-10 { diff.dot(n) >= 0.0 } else { true };
 
             let signed_d = if outside { d } else { -d };
-            if d < bg {
-                leaf.set(offset, signed_d);
+            if d < bg || !outside {
+                leaf.set(offset, signed_d.clamp(-bg, bg));
             } else {
                 leaf.values[offset] = signed_d;
             }
@@ -236,27 +276,8 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
             lz += LEAF_DIM;
         }
 
-        // Leaves that cross zero (surface boundary)
-        let blocking: std::collections::HashSet<IVec3> = grid
-            .leaves
-            .iter()
-            .filter(|(_, leaf)| {
-                let mut has_pos = false;
-                let mut has_neg = false;
-                for offset in 0..LEAF_VOXELS {
-                    if leaf.mask.is_set(offset) {
-                        if leaf.values[offset] < 0.0 {
-                            has_neg = true;
-                        }
-                        if leaf.values[offset] > 0.0 {
-                            has_pos = true;
-                        }
-                    }
-                }
-                has_pos && has_neg
-            })
-            .map(|(&orig, _)| orig)
-            .collect();
+        // Leaves that intersect the surface boundary
+        let blocking: std::collections::HashSet<IVec3> = grid.leaves.keys().copied().collect();
 
         let mut outside_leaves: std::collections::HashSet<IVec3> = std::collections::HashSet::new();
         let mut queue: Vec<IVec3> = Vec::new();

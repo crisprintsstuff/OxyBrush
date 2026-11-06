@@ -69,9 +69,15 @@ pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: Boolean
                     }
                 };
 
-                if is_active && v_out.abs() <= combined_bg {
-                    out_leaf.set(offset, v_out);
+                let is_inside = v_out < 0.0;
+                let is_near_surface = is_active && v_out < combined_bg;
+
+                if is_inside || is_near_surface {
+                    out_leaf.set(offset, v_out.clamp(-combined_bg, combined_bg));
                     active_count += 1;
+                } else {
+                    out_leaf.values[offset] = combined_bg;
+                    out_leaf.mask.set_off(offset);
                 }
             }
 

@@ -39,6 +39,14 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it.",
     },
     Topic {
+        title: "Pen tablets and stylus",
+        keywords: "tablet pen stylus pressure wacom huion kamvas xppen x11 wayland linux cachy",
+        body: "OxyBrush supports pressure-sensitive stylus and drawing tablets (Wacom, Huion, XP-Pen, etc.).\n\n\
+- Stylus pressure controls brush strength, and can also modulate brush radius when enabled in the brush settings.\n\
+- Pen side buttons can be mapped to right-click (quick menu), middle-click (navigation/scrolling), or modifier keys in your tablet driver.\n\
+- On Linux under Wayland compositors (CachyOS, KDE Wayland, GNOME Wayland, Hyprland), drawing tablets require the X11/XWayland backend because native Wayland tablet events are not exposed to winit. OxyBrush automatically detects connected tablets and defaults to the X11 backend when available. You can also manually force X11 mode by starting with `oxybrush --x11` (or `oxybrush --backend x11`), or by setting `OXY_BACKEND=x11`.",
+    },
+    Topic {
         title: "Brush cursor",
         keywords: "ring circle orientation surface normal tangent align screen",
         body: "The ring under the pointer is the brush cursor. It shows the brush size, and the inner ring is where the falloff is about halfway.\n\n\

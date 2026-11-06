@@ -4,7 +4,7 @@
 use crate::remesh::RemeshError;
 use glam::{Quat, Vec3};
 use oxy_mesh::{Mesh, primitives};
-use oxy_vdb::MeshToVolumeOptions;
+use oxy_vdb::{LEAF_VOXELS, MeshToVolumeOptions};
 use rayon::prelude::*;
 
 /// Real-world physical dimensions and material consumption metrics.
@@ -208,7 +208,8 @@ pub fn hollow_mesh(mesh: &Mesh, opts: HollowOptions) -> Result<Mesh, RemeshError
 
     let wall_world = (opts.wall_thickness_mm / opts.unit_scale).max(h * 0.5);
 
-    let vdb_opts = MeshToVolumeOptions { voxel_size: h, half_width: 3.0 };
+    let half_width = ((wall_world / h).ceil() + 4.0).max(4.0);
+    let vdb_opts = MeshToVolumeOptions { voxel_size: h, half_width };
 
     // Convert input mesh to solid level set
     let mut outer_grid = oxy_vdb::mesh_to_level_set(&mesh.positions, &mesh.triangles, vdb_opts);
@@ -302,33 +303,6 @@ pub fn split_with_keys(mesh: &Mesh, opts: SplitOptions) -> Result<(Mesh, Mesh), 
         }
     };
 
-    // Construct half-space cutting boxes
-    let pad = size.max_element() * 2.0;
-    let (box_pos_min, box_pos_max, box_neg_min, box_neg_max) = match opts.axis {
-        SplitAxis::X => (
-            Vec3::new(opts.offset, bounds.min.y - pad, bounds.min.z - pad),
-            Vec3::new(bounds.max.x + pad, bounds.max.y + pad, bounds.max.z + pad),
-            Vec3::new(bounds.min.x - pad, bounds.min.y - pad, bounds.min.z - pad),
-            Vec3::new(opts.offset, bounds.max.y + pad, bounds.max.z + pad),
-        ),
-        SplitAxis::Y => (
-            Vec3::new(bounds.min.x - pad, opts.offset, bounds.min.z - pad),
-            Vec3::new(bounds.max.x + pad, bounds.max.y + pad, bounds.max.z + pad),
-            Vec3::new(bounds.min.x - pad, bounds.min.y - pad, bounds.min.z - pad),
-            Vec3::new(bounds.max.x + pad, opts.offset, bounds.max.z + pad),
-        ),
-        SplitAxis::Z => (
-            Vec3::new(bounds.min.x - pad, bounds.min.y - pad, opts.offset),
-            Vec3::new(bounds.max.x + pad, bounds.max.y + pad, bounds.max.z + pad),
-            Vec3::new(bounds.min.x - pad, bounds.min.y - pad, bounds.min.z - pad),
-            Vec3::new(bounds.max.x + pad, bounds.max.y + pad, opts.offset),
-        ),
-    };
-
-    let box_pos = box_from_extents(box_pos_min, box_pos_max);
-    let box_neg = box_from_extents(box_neg_min, box_neg_max);
-
-    // Male registration pin centered on the cut plane and extending into Part B
     let pin_mesh = oriented_cylinder(cut_center - cut_dir * (pin_h * 0.5), cut_dir, pin_r, pin_h);
     // Female registration socket (slightly larger for clearance)
     let socket_mesh = oriented_cylinder(cut_center - cut_dir * (socket_h * 0.5), cut_dir, socket_r, socket_h);
@@ -337,19 +311,53 @@ pub fn split_with_keys(mesh: &Mesh, opts: SplitOptions) -> Result<(Mesh, Mesh), 
 
     // Base mesh level set
     let base_grid = oxy_vdb::mesh_to_level_set(&mesh.positions, &mesh.triangles, vdb_opts);
-    let box_pos_grid = oxy_vdb::mesh_to_level_set(&box_pos.positions, &box_pos.triangles, vdb_opts);
-    let box_neg_grid = oxy_vdb::mesh_to_level_set(&box_neg.positions, &box_neg.triangles, vdb_opts);
     let pin_grid = oxy_vdb::mesh_to_level_set(&pin_mesh.positions, &pin_mesh.triangles, vdb_opts);
     let socket_grid = oxy_vdb::mesh_to_level_set(&socket_mesh.positions, &socket_mesh.triangles, vdb_opts);
 
-    // Part A: Positive half + alignment pin
+    let bg = base_grid.background;
+
+    // Part A: Positive half (along axis) + alignment pin
     let mut part_a_grid = base_grid.clone();
-    oxy_vdb::csg_intersection(&mut part_a_grid, &box_pos_grid);
+    for leaf in part_a_grid.leaves.values_mut() {
+        for off in 0..LEAF_VOXELS {
+            let p = part_a_grid.transform.index_to_world(leaf.coord_of(off));
+            let d_half = match opts.axis {
+                SplitAxis::X => opts.offset - p.x,
+                SplitAxis::Y => opts.offset - p.y,
+                SplitAxis::Z => opts.offset - p.z,
+            };
+            let new_val = leaf.values[off].max(d_half);
+            if new_val < 2.0 * h {
+                leaf.set(off, new_val.clamp(-bg, bg));
+            } else {
+                leaf.values[off] = bg;
+                leaf.mask.set_off(off);
+            }
+        }
+    }
+    part_a_grid.leaves.retain(|_, leaf| leaf.mask.count_ones() > 0);
     oxy_vdb::csg_union(&mut part_a_grid, &pin_grid);
 
-    // Part B: Negative half - alignment socket
+    // Part B: Negative half (along axis) - alignment socket
     let mut part_b_grid = base_grid;
-    oxy_vdb::csg_intersection(&mut part_b_grid, &box_neg_grid);
+    for leaf in part_b_grid.leaves.values_mut() {
+        for off in 0..LEAF_VOXELS {
+            let p = part_b_grid.transform.index_to_world(leaf.coord_of(off));
+            let d_half = match opts.axis {
+                SplitAxis::X => p.x - opts.offset,
+                SplitAxis::Y => p.y - opts.offset,
+                SplitAxis::Z => p.z - opts.offset,
+            };
+            let new_val = leaf.values[off].max(d_half);
+            if new_val < 2.0 * h {
+                leaf.set(off, new_val.clamp(-bg, bg));
+            } else {
+                leaf.values[off] = bg;
+                leaf.mask.set_off(off);
+            }
+        }
+    }
+    part_b_grid.leaves.retain(|_, leaf| leaf.mask.count_ones() > 0);
     oxy_vdb::csg_difference(&mut part_b_grid, &socket_grid);
 
     let mesh_a = oxy_vdb::volume_to_mesh(
@@ -379,15 +387,6 @@ fn oriented_cylinder(center: Vec3, direction: Vec3, radius: f32, height: f32) ->
     let mut out = Mesh::new(pos, base.triangles);
     out.normals = norm;
     out
-}
-
-/// Helper to build a closed box mesh between `min` and `max`.
-fn box_from_extents(min: Vec3, max: Vec3) -> Mesh {
-    let size = max - min;
-    let center = (min + max) * 0.5;
-    let base = primitives::cube(1, 1.0);
-    let pos: Vec<Vec3> = base.positions.iter().map(|&p| p * size + center).collect();
-    Mesh::new(pos, base.triangles)
 }
 
 #[cfg(test)]
@@ -422,6 +421,7 @@ mod tests {
     #[test]
     fn test_hollow_mesh() {
         let sphere = primitives::icosphere(2, 1.0);
+        let sphere_dims = calculate_print_dimensions(&sphere, 10.0);
         let opts = HollowOptions {
             wall_thickness_mm: 3.0,
             unit_scale: 10.0,
@@ -437,7 +437,16 @@ mod tests {
         let hollowed = hollow_mesh(&sphere, opts).expect("hollowing succeeds");
         assert!(hollowed.triangle_count() > 0);
         // Hollowed mesh has outer and inner surface, so triangle count should exceed original
-        assert!(hollowed.triangle_count() >= sphere.triangle_count());
+        assert!(hollowed.triangle_count() > sphere.triangle_count());
+
+        // Solid material volume of hollowed sphere should be significantly lower than solid sphere
+        let hollow_dims = calculate_print_dimensions(&hollowed, 10.0);
+        assert!(
+            hollow_dims.volume_cm3 < sphere_dims.volume_cm3 * 0.85,
+            "hollow volume ({}) should be noticeably smaller than solid ({})",
+            hollow_dims.volume_cm3,
+            sphere_dims.volume_cm3
+        );
     }
 
     #[test]
@@ -460,5 +469,10 @@ mod tests {
         assert!(part_a.bounds().max.y > 0.5);
         // Bounds of Part B should be predominantly negative Y
         assert!(part_b.bounds().min.y < -0.5);
+
+        let dims_a = calculate_print_dimensions(&part_a, 10.0);
+        let dims_b = calculate_print_dimensions(&part_b, 10.0);
+        assert!(dims_a.is_watertight, "part A should be watertight");
+        assert!(dims_b.is_watertight, "part B should be watertight");
     }
 }
