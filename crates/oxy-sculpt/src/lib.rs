@@ -733,10 +733,10 @@ impl Stroke {
                             kelvin_tensor(self.settings.kind, orig - *center, *n, dab.radius, self.view, self.invert);
                         k * (*m) * self.settings.strength
                     } else {
-                        *m
+                        *m * self.settings.strength
                     };
                     e.sum_m += local_m * omega;
-                    e.sum_n += *n * omega;
+                    e.sum_n += *n * (self.settings.strength * omega);
                     e.sum_omega += omega;
                     if w > e.top_w[0] {
                         e.top_w[1] = e.top_w[0];
@@ -749,7 +749,21 @@ impl Stroke {
             let verts = acc
                 .into_iter()
                 .map(|(index, e)| {
-                    let w_eff = e.top_w[0];
+                    // C1 polynomial smooth maximum between overlapping symmetry influences:
+                    // eliminates the sharp V-crease / cutoff line along the mirror plane.
+                    let w_eff = if e.top_w[1] > 1e-6 {
+                        let eps = 0.25_f32;
+                        let m = 0.5 * (e.top_w[0] + e.top_w[1]);
+                        let d = 0.5 * (e.top_w[0] - e.top_w[1]);
+                        if d < eps {
+                            let ratio = d / eps;
+                            m + (d * d / (2.0 * eps)) * (3.0 - ratio * ratio)
+                        } else {
+                            e.top_w[0]
+                        }
+                    } else {
+                        e.top_w[0]
+                    };
                     let scale = if e.sum_omega > 1e-8 { w_eff / e.sum_omega } else { 0.0 };
                     BlendedGrab { index, orig: e.orig, blend: e.sum_m * scale, along: e.sum_n * scale }
                 })
@@ -1315,6 +1329,43 @@ mod tests {
         s.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
         s.add_sample(&mut mesh, StrokeSample { position: Vec3::Y * 1.5, ..top_sample() }, &mut |_, _| {});
         assert!(mesh.bounds().max.y > 1.4);
+    }
+
+    #[test]
+    fn grab_strength_controls_displacement() {
+        let mesh0 = primitives::icosphere(4, 1.0);
+        let sample0 = top_sample();
+        let sample1 = StrokeSample { position: Vec3::Y * 1.5, ..sample0 };
+
+        // Strength 0.0 should not move vertices at all
+        let mut mesh_zero = mesh0.clone();
+        let settings_zero = BrushSettings { kind: BrushKind::Grab, radius: 0.3, strength: 0.0, ..Default::default() };
+        let mut s_zero = Stroke::new(settings_zero, Symmetry::default(), false);
+        s_zero.add_sample(&mut mesh_zero, sample0, &mut |_, _| {});
+        s_zero.add_sample(&mut mesh_zero, sample1, &mut |_, _| {});
+        assert_eq!(mesh_zero.positions, mesh0.positions);
+
+        // Strength 0.5 should move exactly half as much as strength 1.0
+        let mut mesh_half = mesh0.clone();
+        let settings_half = BrushSettings { kind: BrushKind::Grab, radius: 0.3, strength: 0.5, ..Default::default() };
+        let mut s_half = Stroke::new(settings_half, Symmetry::default(), false);
+        s_half.add_sample(&mut mesh_half, sample0, &mut |_, _| {});
+        s_half.add_sample(&mut mesh_half, sample1, &mut |_, _| {});
+
+        let mut mesh_full = mesh0.clone();
+        let settings_full = BrushSettings { kind: BrushKind::Grab, radius: 0.3, strength: 1.0, ..Default::default() };
+        let mut s_full = Stroke::new(settings_full, Symmetry::default(), false);
+        s_full.add_sample(&mut mesh_full, sample0, &mut |_, _| {});
+        s_full.add_sample(&mut mesh_full, sample1, &mut |_, _| {});
+
+        let peak_idx = mesh0.positions.iter().enumerate().max_by(|(_, a), (_, b)| a.y.total_cmp(&b.y)).unwrap().0;
+        let d_half = mesh_half.positions[peak_idx].y - mesh0.positions[peak_idx].y;
+        let d_full = mesh_full.positions[peak_idx].y - mesh0.positions[peak_idx].y;
+        assert!(d_full > 0.4);
+        assert!(
+            (d_half - d_full * 0.5).abs() < 1e-4,
+            "half strength should produce half displacement: {d_half} vs {d_full}"
+        );
     }
 
     #[test]
