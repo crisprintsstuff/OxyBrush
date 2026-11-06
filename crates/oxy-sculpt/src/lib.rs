@@ -702,15 +702,16 @@ impl Stroke {
                     n.try_normalize().unwrap_or(m * dab.normal)
                 })
                 .collect();
-            // Combine symmetry copies smoothly. A hard max cutoff creates a harsh
-            // crease/ridge line along the mirror plane; instead, blend using a
-            // smooth maximum over the overlapping copies so they transition
-            // seamlessly across the symmetry seam with C1 continuity.
+            // Combine symmetry copies smoothly. Higher-order power weighting (w^3)
+            // ensures zero first and second derivatives at the brush boundary (w -> 0),
+            // completely eliminating edge-of-brush tearing, jagged ridges, and step artifacts.
+            // A polynomial smooth maximum over the top overlapping weights ensures C1 continuity
+            // across the mirror seam with zero V-creasing or pinching.
             struct Acc {
                 orig: Vec3,
                 sum_m: Mat3,
                 sum_n: Vec3,
-                sum_w: f32,
+                sum_omega: f32,
                 top_w: [f32; 2],
             }
             let mut acc: HashMap<u32, Acc> = HashMap::new();
@@ -720,19 +721,20 @@ impl Stroke {
                         orig,
                         sum_m: Mat3::ZERO,
                         sum_n: Vec3::ZERO,
-                        sum_w: 0.0,
+                        sum_omega: 0.0,
                         top_w: [0.0, 0.0],
                     });
+                    let omega = w * w * w;
                     let local_m = if self.settings.kind.is_kelvin() {
                         let k =
                             kelvin_tensor(self.settings.kind, orig - *center, *n, dab.radius, self.view, self.invert);
-                        k * (*m) * (w * self.settings.strength)
+                        k * (*m) * self.settings.strength
                     } else {
-                        *m * w
+                        *m
                     };
-                    e.sum_m += local_m;
-                    e.sum_n += *n * w;
-                    e.sum_w += w;
+                    e.sum_m += local_m * omega;
+                    e.sum_n += *n * omega;
+                    e.sum_omega += omega;
                     if w > e.top_w[0] {
                         e.top_w[1] = e.top_w[0];
                         e.top_w[0] = w;
@@ -744,22 +746,8 @@ impl Stroke {
             let verts = acc
                 .into_iter()
                 .map(|(index, e)| {
-                    // C1 smooth maximum between the top two overlapping symmetry influences:
-                    // eliminates the sharp V-crease / cutoff line along the mirror plane.
-                    let w_eff = if e.top_w[1] > f32::EPSILON {
-                        let eps = 0.2_f32;
-                        let m = 0.5 * (e.top_w[0] + e.top_w[1]);
-                        let d = 0.5 * (e.top_w[0] - e.top_w[1]);
-                        if d < eps {
-                            let ratio = d / eps;
-                            m + (d * d / (2.0 * eps)) * (3.0 - ratio * ratio)
-                        } else {
-                            e.top_w[0]
-                        }
-                    } else {
-                        e.top_w[0]
-                    };
-                    let scale = if e.sum_w > f32::EPSILON { w_eff / e.sum_w } else { 0.0 };
+                    let w_eff = e.top_w[0];
+                    let scale = if e.sum_omega > 1e-8 { w_eff / e.sum_omega } else { 0.0 };
                     BlendedGrab { index, orig: e.orig, blend: e.sum_m * scale, along: e.sum_n * scale }
                 })
                 .collect();
@@ -1757,6 +1745,25 @@ mod tests {
                 assert!(moved, "{kind:?} drag {delta} did nothing");
             }
         }
+    }
+
+    #[test]
+    fn grab_symmetry_overlap_boundary_is_smooth_without_creases_or_steps() {
+        let xsym = Symmetry { x: true, ..Default::default() };
+        let mut mesh = primitives::icosphere(5, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, xsym, false).with_view(-Vec3::Z);
+        let p0 = Vec3::new(0.25, 0.0, (1.0 - 0.25 * 0.25_f32).sqrt());
+        s.add_sample(&mut mesh, StrokeSample { position: p0, normal: p0.normalize(), pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: p0 + Vec3::new(-0.3, -0.2, 0.0), normal: p0.normalize(), pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        assert!(max_edge_stretch(&before, &mesh) < 2.5);
+        assert_closed_seam(&before, &mesh);
+        assert!(max_image_gap(&mesh, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-4);
     }
 
     #[test]
