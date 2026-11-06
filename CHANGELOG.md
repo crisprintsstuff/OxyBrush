@@ -8,6 +8,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Hover Tooltips Event Loop Waker (Windows & All Platforms):**
+  - Resolved issue where hover tooltips would not render until an explicit key (such as `Ctrl`) or mouse action woke the winit event loop.
+  - Correctly wired egui delayed repaints (`repaint_delay`) into winit's control flow (`ControlFlow::WaitUntil`) and requested redraws upon timer expiry, allowing tooltips to appear cleanly when hovering without needing additional input.
 - **Interactive Color Swatches & Dedicated Dialogs (Wireframe & Accent Color):**
   - Resolved issue where clicking color swatches inside menu dropdowns would close the menu before opening color pickers.
   - Added dedicated floating **Theme & Appearance** window (`Settings > Theme & Appearance…` and Command Palette) and **Wireframe settings** window (`View > Wireframe settings…`, Command Palette, and right-click on the view strip wireframe icon).

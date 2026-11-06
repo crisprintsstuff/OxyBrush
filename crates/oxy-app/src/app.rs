@@ -81,6 +81,8 @@ pub struct App {
     shot_reply: Option<std::sync::mpsc::Sender<oxy_mcp::ToolResult>>,
     /// Running Python plugin process.
     plugin_process: Option<crate::plugins::PluginProcess>,
+    /// When egui requested a delayed repaint (e.g. for hover tooltips).
+    egui_repaint_at: Option<Instant>,
 }
 
 impl App {
@@ -173,12 +175,19 @@ impl App {
             agent: None,
             shot_reply: None,
             plugin_process: None,
+            egui_repaint_at: None,
         }
     }
 
     /// The event-loop proxy is created in `main`, before the loop starts
     /// (`ActiveEventLoop` cannot build one). The agent thread uses it to wake the UI.
     pub(crate) fn set_event_proxy(&mut self, proxy: EventLoopProxy<()>) {
+        let p = proxy.clone();
+        self.egui_ctx.set_request_repaint_callback(move |info| {
+            if info.delay.is_zero() {
+                let _ = p.send_event(());
+            }
+        });
         self.proxy = Some(proxy);
     }
 
@@ -612,9 +621,18 @@ impl App {
             g.egui_renderer.free_texture(id);
         }
 
-        let repaint_now = out.viewport_output.get(&egui::ViewportId::ROOT).is_some_and(|v| v.repaint_delay.is_zero());
-        if repaint_now || self.auto.screenshot.is_some() {
+        let repaint_delay = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay);
+        if repaint_delay == Some(Duration::ZERO) || self.auto.screenshot.is_some() {
             g.window.request_redraw();
+            self.egui_repaint_at = None;
+        } else if let Some(delay) = repaint_delay {
+            if delay < Duration::from_secs(3600) {
+                self.egui_repaint_at = Some(Instant::now() + delay);
+            } else {
+                self.egui_repaint_at = None;
+            }
+        } else {
+            self.egui_repaint_at = None;
         }
 
         if let Some(a) = action {
@@ -957,7 +975,7 @@ impl ApplicationHandler for App {
         self.persist_settings(false);
         // Wake up regularly to finish background jobs, pending settings,
         // autosave and a waiting agent even when the window is idle.
-        let wait = if self.editor.job.is_some()
+        let mut wait = if self.editor.job.is_some()
             || self.shot_reply.is_some()
             || self.editor.updater.busy()
             || self.plugin_process.is_some()
@@ -970,6 +988,17 @@ impl ApplicationHandler for App {
         } else {
             Duration::from_secs(20)
         };
+        if let Some(target) = self.egui_repaint_at {
+            let now = Instant::now();
+            if now >= target {
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+                self.egui_repaint_at = None;
+            } else {
+                wait = wait.min(target.saturating_duration_since(now));
+            }
+        }
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wait));
     }
 
