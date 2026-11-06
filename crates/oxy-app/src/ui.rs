@@ -551,44 +551,50 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
         .open(&mut open)
         .resizable(true)
         .collapsible(false)
-        .default_size(egui::vec2(760.0, 520.0))
-        .min_size(egui::vec2(580.0, 380.0))
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .default_size(egui::vec2(780.0, 520.0))
+        .min_size(egui::vec2(600.0, 400.0))
         .show(ctx, |ui| {
-            ui.horizontal(|ui| {
+            ui.horizontal_top(|ui| {
+                // Left category navigation
                 ui.vertical(|ui| {
                     ui.set_width(140.0);
                     ui.add_space(4.0);
                     for tab in crate::editor::SettingsTab::ALL {
                         let selected = ed.settings_tab == tab;
-                        let (icon, tip) = match tab {
-                            crate::editor::SettingsTab::General => ("⚙️", plain::SETTINGS),
-                            crate::editor::SettingsTab::Appearance => {
-                                ("🎨", "Theme, accent color, wireframe, and background")
-                            }
-                            crate::editor::SettingsTab::Plugins => ("🔌", plain::PLUGINS),
-                            crate::editor::SettingsTab::Keymap => ("⌨️", plain::KEYMAP_SETTINGS),
-                            crate::editor::SettingsTab::Agent => ("🤖", plain::AGENT_ENABLED),
-                            crate::editor::SettingsTab::Updates => ("🔄", plain::UPDATES),
+                        let text = tab.label();
+                        let tip = match tab {
+                            crate::editor::SettingsTab::General => plain::SETTINGS,
+                            crate::editor::SettingsTab::Appearance => "Theme, accent color, wireframe, and background",
+                            crate::editor::SettingsTab::Plugins => plain::PLUGINS,
+                            crate::editor::SettingsTab::Keymap => plain::KEYMAP_SETTINGS,
+                            crate::editor::SettingsTab::Agent => plain::AGENT_ENABLED,
+                            crate::editor::SettingsTab::Updates => plain::UPDATES,
                         };
-                        let text = format!("{icon}  {}", tab.label());
-                        if tips::hover(ui.selectable_label(selected, text), tip).clicked() {
+                        let btn = ui
+                            .add_sized([130.0, 28.0], egui::Button::selectable(selected, RichText::new(text).strong()));
+                        if tips::hover(btn, tip).clicked() {
                             ed.settings_tab = tab;
                         }
                     }
                 });
                 ui.separator();
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                    ui.set_min_width(420.0);
-                    ui.add_space(4.0);
-                    match ed.settings_tab {
-                        crate::editor::SettingsTab::General => settings_general_tab(ui, ed),
-                        crate::editor::SettingsTab::Appearance => settings_appearance_tab(ui, ed),
-                        crate::editor::SettingsTab::Plugins => settings_plugins_tab(ui, ed),
-                        crate::editor::SettingsTab::Keymap => settings_keymap_tab(ui, ed),
-                        crate::editor::SettingsTab::Agent => settings_agent_tab(ui, ed),
-                        crate::editor::SettingsTab::Updates => settings_updates_tab(ui, ed),
-                    }
+                // Right content panel - explicitly vertical
+                ui.vertical(|ui| {
+                    egui::ScrollArea::vertical().id_salt("preferences_tab_content").auto_shrink([false, false]).show(
+                        ui,
+                        |ui| {
+                            ui.set_min_width(520.0);
+                            ui.add_space(4.0);
+                            match ed.settings_tab {
+                                crate::editor::SettingsTab::General => settings_general_tab(ui, ed),
+                                crate::editor::SettingsTab::Appearance => settings_appearance_tab(ui, ed),
+                                crate::editor::SettingsTab::Plugins => settings_plugins_tab(ui, ed),
+                                crate::editor::SettingsTab::Keymap => settings_keymap_tab(ui, ed),
+                                crate::editor::SettingsTab::Agent => settings_agent_tab(ui, ed),
+                                crate::editor::SettingsTab::Updates => settings_updates_tab(ui, ed),
+                            }
+                        },
+                    );
                 });
             });
         });
@@ -3796,6 +3802,21 @@ mod tests {
                     assert!(v.window_fill.a() > 0);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn test_settings_window_renders_all_tabs() {
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.show_settings = true;
+        for tab in crate::editor::SettingsTab::ALL {
+            ed.settings_tab = tab;
+            let mut output = ctx.run_ui(Default::default(), |ctx| {
+                settings_window(ctx, &mut ed);
+            });
+            output.textures_delta.clear();
+            assert!(ed.show_settings);
         }
     }
 }

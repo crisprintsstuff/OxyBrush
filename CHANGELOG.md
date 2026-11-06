@@ -4,6 +4,15 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.6.1-beta] - 2026-11-05
+
+### Fixed
+
+- **Preferences Window Layout & Geometry:**
+  - Resolved an issue where the Preferences dialog contents were rendered horizontally in a single cut-off row due to missing an explicit vertical layout inside the scroll area.
+  - Removed fixed viewport centering anchor (`anchor(CENTER_CENTER)`), restoring proper window title bar positioning, smooth dragging, and standard close button accessibility.
+  - Cleaned up tab navigation styling with dedicated selectable button items and tooltips.
+
 ## [1.6.0-beta] - 2026-11-05
 
 ### Added

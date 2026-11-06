@@ -29,7 +29,7 @@
 
 OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
 
-> **Beta:** [v1.6.0-beta](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes with subdivision levels, remesh with industry-standard OpenVDB sparse voxel grids, perform volumetric CSG Booleans (difference, union, intersection), import native ZBrush (`.ztl`, `.zpr`) models and multi-subtool hierarchies, paint vertex color, pose with a transform gizmo, extract masks into solid shells, deform with Pixar regularized Kelvinlet brushes, inspect with real-time customizable wireframe overlays, customize themes and UI rounding, decimate, run Python plugins, connect local AI agents, customize keymaps, save projects and export for game engines (glTF) or 3D printing, in a layout that suits mouse, small screens or touch. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
+> **Beta:** [v1.6.1-beta](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes with subdivision levels, remesh with industry-standard OpenVDB sparse voxel grids, perform volumetric CSG Booleans (difference, union, intersection), import native ZBrush (`.ztl`, `.zpr`) models and multi-subtool hierarchies, paint vertex color, pose with a transform gizmo, extract masks into solid shells, deform with Pixar regularized Kelvinlet brushes, inspect with real-time customizable wireframe overlays, customize themes and UI rounding, decimate, run Python plugins, connect local AI agents, customize keymaps, save projects and export for game engines (glTF) or 3D printing, in a layout that suits mouse, small screens or touch. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
 
 ## Download and install
 
@@ -173,7 +173,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v1.6.0-beta |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1 – v1.6.1-beta |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology, vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport & wireframe ✅, themes ✅, quick palette ✅, keymap editor ✅, Python plugins ✅, local AI agent (MCP) ✅ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
