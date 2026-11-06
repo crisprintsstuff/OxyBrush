@@ -774,6 +774,16 @@ impl Mesh {
         self.triangles.len()
     }
 
+    /// Number of paired quads and remaining standalone triangles in the mesh.
+    pub fn quad_and_triangle_counts(&self) -> (usize, usize) {
+        crate::topo::quad_and_triangle_counts(&self.positions, &self.triangles)
+    }
+
+    /// Set of internal diagonal edges `[min(u, v), max(u, v)]` for all paired quads.
+    pub fn quad_diagonals(&self) -> std::collections::HashSet<[u32; 2]> {
+        crate::topo::find_quad_diagonals(&self.positions, &self.triangles)
+    }
+
     /// Globally unique per topology; renderers rebuild index buffers when it changes.
     pub fn topology_version(&self) -> u64 {
         self.topology_version

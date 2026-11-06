@@ -488,12 +488,13 @@ impl App {
         ed.pixels_per_point = ppp;
         ed.canvas = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
 
-        let custom = ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i));
-        let want = (ed.matcap, custom.map(|m| m.name.clone()));
+        let (active_matcap, active_custom) = ed.preview_matcap.unwrap_or((ed.matcap, ed.custom_matcap));
+        let custom = active_custom.and_then(|i| ed.custom_matcaps.get(i));
+        let want = (active_matcap, custom.map(|m| m.name.clone()));
         if self.applied_matcap.as_ref() != Some(&want) {
             match custom {
                 Some(m) => g.viewport.set_matcap_pixels(&g.queue, &m.pixels),
-                None => g.viewport.set_matcap(&g.queue, ed.matcap),
+                None => g.viewport.set_matcap(&g.queue, active_matcap),
             }
             self.applied_matcap = Some(want);
         }

@@ -291,6 +291,7 @@ pub fn apply_theme(
 pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
     let busy = ed.job.is_some();
+    ed.preview_matcap = None;
 
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -403,12 +404,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 ui.separator();
                 ui.label("Material");
                 for m in MatcapPreset::ALL {
-                    if tips::hover(
+                    let resp = tips::hover(
                         ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()),
                         tips::matcap_tip(m),
-                    )
-                    .clicked()
-                    {
+                    );
+                    if resp.hovered() {
+                        ed.preview_matcap = Some((m, None));
+                    }
+                    if resp.clicked() {
                         ed.matcap = m;
                         ed.custom_matcap = None;
                     }
@@ -416,7 +419,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 for i in 0..ed.custom_matcaps.len() {
                     let name = ed.custom_matcaps[i].name.clone();
                     let tip = format!("{name}. A material you loaded.");
-                    if tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip).clicked() {
+                    let resp = tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip);
+                    if resp.hovered() {
+                        ed.preview_matcap = Some((ed.matcap, Some(i)));
+                    }
+                    if resp.clicked() {
                         ed.custom_matcap = Some(i);
                     }
                 }
@@ -1495,11 +1502,13 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
         ),
         Cmd::Radius.tip(),
     );
-    ui.label(RichText::new("Strength").weak());
-    let k = ed.brush_kind;
+    let shift_smooth = ed.brush_roles().shift;
+    let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
+    let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+    ui.label(RichText::new(strength_label).weak());
     tips::hover(
         ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true)),
-        Cmd::Strength.tip(),
+        if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
     );
 }
 
@@ -1518,7 +1527,11 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                 |ui| {
                     ui.set_width(175.0);
                     ui.vertical(|ui| {
-                        ui.label(RichText::new(format!("{} brush", ed.brush_kind.label())).strong());
+                        let shift_smooth = ed.brush_roles().shift;
+                        let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
+                        let brush_header =
+                            if shift_smooth { "Smooth brush".to_string() } else { format!("{} brush", k.label()) };
+                        ui.label(RichText::new(brush_header).strong());
                         ui.add_space(4.0);
 
                         ui.columns(2, |cols| {
@@ -1552,13 +1565,17 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         );
 
                         ui.add_space(2.0);
-                        ui.label(RichText::new("Strength").weak().small());
-                        let k = ed.brush_kind;
+                        let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+                        ui.label(RichText::new(strength_label).weak().small());
                         tips::hover(
                             ui.add(
                                 egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true),
                             ),
-                            Cmd::Strength.tip(),
+                            if shift_smooth {
+                                "Smoothing intensity when holding Shift".to_string()
+                            } else {
+                                Cmd::Strength.tip()
+                            },
                         );
 
                         if ed.brush_kind == BrushKind::Crease {
@@ -1709,15 +1726,17 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             ui.horizontal(|ui| {
                 for m in MatcapPreset::ALL {
                     let t = widgets::material_texture(&ctx, m);
-                    if widgets::thumb(
+                    let resp = widgets::thumb(
                         ui,
                         Some(&t),
                         m.label(),
                         ed.custom_matcap.is_none() && ed.matcap == m,
                         tips::matcap_tip(m),
-                    )
-                    .clicked()
-                    {
+                    );
+                    if resp.hovered() {
+                        ed.preview_matcap = Some((m, None));
+                    }
+                    if resp.clicked() {
                         ed.matcap = m;
                         ed.custom_matcap = None;
                     }
@@ -1732,6 +1751,9 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
                         let t = custom_matcap_texture(&ctx, m);
                         let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
                         let r = widgets::thumb(ui, Some(&t), &m.name, ed.custom_matcap == Some(i), &tip);
+                        if r.hovered() {
+                            ed.preview_matcap = Some((ed.matcap, Some(i)));
+                        }
                         if r.clicked() {
                             ed.custom_matcap = Some(i);
                         }
@@ -2158,11 +2180,21 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
         ui.horizontal(|ui| {
             let m = &ed.scene.active().mesh;
             ui.label(RichText::new(&ed.scene.active().name).strong());
+            let (quads, tris) = m.quad_and_triangle_counts();
+            let count_label = if quads > 0 && tris == 0 {
+                format!("{} quads", fmt_count(quads))
+            } else if quads > 0 {
+                format!("{} quads, {} tris", fmt_count(quads), fmt_count(tris))
+            } else {
+                format!("{} triangles", fmt_count(m.triangle_count()))
+            };
             tips::hover(
-                ui.label(format!("{} triangles", fmt_count(m.triangle_count()))),
+                ui.label(count_label),
                 format!(
-                    "{} vertices\n{} triangles in the scene\nUndo memory {:.1} MB\nFrame time {:.1} ms",
+                    "{} vertices\n{} quads, {} triangles in active piece\n{} triangles in the scene\nUndo memory {:.1} MB\nFrame time {:.1} ms",
                     fmt_count(m.vertex_count()),
+                    fmt_count(quads),
+                    fmt_count(m.triangle_count()),
                     fmt_count(ed.scene.triangle_count()),
                     ed.history.used_bytes() as f64 / 1e6,
                     ed.frame_ms
@@ -2726,9 +2758,14 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             Cmd::Radius.tip(),
         );
         ui.end_row();
-        ui.label("Strength");
-        let k = ed.brush_kind;
-        tips::hover(ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)), Cmd::Strength.tip());
+        let shift_smooth = ed.brush_roles().shift;
+        let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
+        let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+        ui.label(strength_label);
+        tips::hover(
+            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)),
+            if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
+        );
         ui.end_row();
         ui.label("Falloff");
         tips::hover(
@@ -4056,5 +4093,26 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(ed.quick_menu.is_some());
+    }
+
+    #[test]
+    fn test_shift_smooth_switches_strength_slider() {
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.brush_kind = BrushKind::Clay;
+        *ed.strength_mut(BrushKind::Clay) = 0.4;
+        *ed.strength_mut(BrushKind::Smooth) = 0.8;
+
+        // Holding shift should adjust Smooth strength
+        ed.modifiers.shift = true;
+        assert_eq!(ed.effective_brush().0, BrushKind::Smooth);
+
+        let mut output = ctx.run_ui(Default::default(), |ctx| {
+            egui::CentralPanel::default().show(ctx, |ui| {
+                quick_controls(ui, &mut ed);
+            });
+        });
+        output.textures_delta.clear();
+        assert_eq!(*ed.strength_mut(BrushKind::Smooth), 0.8);
     }
 }

@@ -216,9 +216,96 @@ pub fn write_obj(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
     for n in &mesh.normals {
         writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
     }
-    for t in &mesh.triangles {
-        let [a, b, c] = t.map(|i| i + 1);
-        writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+    write_obj_faces(&mesh.positions, &mesh.triangles, 1, w)
+}
+
+pub(crate) fn write_obj_faces(
+    positions: &[glam::Vec3],
+    triangles: &[[u32; 3]],
+    base: u32,
+    w: &mut impl Write,
+) -> io::Result<()> {
+    let diagonals = oxy_mesh::topo::find_quad_diagonals(positions, triangles);
+    let mut used = vec![false; triangles.len()];
+
+    // Pass 1: consecutive pairs sharing a quad diagonal
+    if triangles.len() >= 2 {
+        for i in (0..triangles.len() - 1).step_by(2) {
+            let t1 = triangles[i];
+            let t2 = triangles[i + 1];
+            let mut shared = [0u32; 2];
+            let mut count = 0;
+            for &v in &t1 {
+                if t2.contains(&v) {
+                    if count < 2 {
+                        shared[count] = v;
+                    }
+                    count += 1;
+                }
+            }
+            if count == 2 {
+                let key = [shared[0].min(shared[1]), shared[0].max(shared[1])];
+                if diagonals.contains(&key) {
+                    let u = shared[0];
+                    let v = shared[1];
+                    let b = t1.iter().copied().find(|&x| x != u && x != v).unwrap();
+                    let d = t2.iter().copied().find(|&x| x != u && x != v).unwrap();
+                    let (q0, q1, q2, q3) =
+                        if (t1[0] == u && t1[1] == b) || (t1[1] == u && t1[2] == b) || (t1[2] == u && t1[0] == b) {
+                            (u, b, v, d)
+                        } else {
+                            (v, b, u, d)
+                        };
+                    let [a, b, c, d] = [q0 + base, q1 + base, q2 + base, q3 + base];
+                    writeln!(w, "f {a}//{a} {b}//{b} {c}//{c} {d}//{d}")?;
+                    used[i] = true;
+                    used[i + 1] = true;
+                }
+            }
+        }
+    }
+
+    // Pass 2: pair non-consecutive triangles sharing a quad diagonal
+    let mut edge_map: std::collections::HashMap<[u32; 2], usize> =
+        std::collections::HashMap::with_capacity(triangles.len());
+    for (i, t) in triangles.iter().enumerate() {
+        if used[i] {
+            continue;
+        }
+        for (u, v) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+            let key = [u.min(v), u.max(v)];
+            if diagonals.contains(&key) {
+                if let Some(&other) = edge_map.get(&key) {
+                    if !used[other] {
+                        let t2 = triangles[other];
+                        let b = t.iter().copied().find(|&x| x != u && x != v).unwrap();
+                        let d = t2.iter().copied().find(|&x| x != u && x != v).unwrap();
+                        let (q0, q1, q2, q3) =
+                            if (t[0] == u && t[1] == b) || (t[1] == u && t[2] == b) || (t[2] == u && t[0] == b) {
+                                (u, b, v, d)
+                            } else {
+                                (v, b, u, d)
+                            };
+                        let [a, b, c, d] = [q0 + base, q1 + base, q2 + base, q3 + base];
+                        writeln!(w, "f {a}//{a} {b}//{b} {c}//{c} {d}//{d}")?;
+                        used[i] = true;
+                        used[other] = true;
+                        edge_map.remove(&key);
+                        break;
+                    }
+                } else {
+                    edge_map.insert(key, i);
+                }
+            }
+        }
+    }
+
+    // Remaining standalone triangles
+    for (i, t) in triangles.iter().enumerate() {
+        if !used[i] {
+            let [a, b, c] = t.map(|v| v + base);
+            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+        }
     }
     Ok(())
 }
@@ -299,6 +386,17 @@ mod tests {
         assert_eq!(back.triangle_count(), m.triangle_count());
         assert_eq!(back.vertex_count(), m.vertex_count());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn test_obj_writes_quads() {
+        let m = primitives::cube(1, 1.0);
+        let mut buf = Vec::new();
+        write_obj(&m, &mut buf).unwrap();
+        let text = String::from_utf8(buf).unwrap();
+        // A 1-division cube has 6 quads
+        let quad_count = text.lines().filter(|l| l.split_whitespace().count() == 5 && l.starts_with("f ")).count();
+        assert_eq!(quad_count, 6);
     }
 
     #[test]

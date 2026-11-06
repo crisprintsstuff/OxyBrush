@@ -285,6 +285,8 @@ pub struct Settings {
     pub extract_thickness: f32,
     /// Number of Laplacian boundary smoothing iterations for Mask Extract.
     pub extract_smooth: usize,
+    /// Preferred volumetric remeshing engine (OpenVDB sparse or Regular Grid).
+    pub remesh_engine: oxy_topo::RemeshEngine,
 }
 
 /// Overall visual theme preset.
@@ -514,6 +516,7 @@ impl Default for Settings {
             max_triangles: default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
+            remesh_engine: oxy_topo::RemeshEngine::Vdb,
         }
     }
 }
@@ -577,7 +580,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -614,6 +617,10 @@ impl Settings {
             self.max_triangles,
             self.extract_thickness,
             self.extract_smooth,
+            match self.remesh_engine {
+                oxy_topo::RemeshEngine::Vdb => "vdb",
+                oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
+            },
         ) + &self
             .recent_files
             .iter()
@@ -755,6 +762,12 @@ impl Settings {
                         s.extract_smooth = n;
                     }
                 }
+                "remesh_engine" => {
+                    s.remesh_engine = match v {
+                        "regular_grid" => oxy_topo::RemeshEngine::RegularGrid,
+                        _ => oxy_topo::RemeshEngine::Vdb,
+                    };
+                }
                 _ => {}
             }
         }
@@ -842,6 +855,7 @@ mod tests {
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,
+            remesh_engine: oxy_topo::RemeshEngine::Vdb,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

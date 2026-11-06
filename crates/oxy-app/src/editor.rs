@@ -389,6 +389,8 @@ pub struct Editor {
     /// instead of the built-in `matcap`.
     pub custom_matcaps: Vec<crate::matcaps::CustomMatcap>,
     pub custom_matcap: Option<usize>,
+    /// Live matcap preview while hovering a material tile or menu item; None when not hovering.
+    pub preview_matcap: Option<(MatcapPreset, Option<usize>)>,
     /// Library folder for custom matcaps; None in automated runs.
     pub matcap_dir: Option<PathBuf>,
     /// Set by the UI to ask the platform layer for a matcap file dialog.
@@ -576,6 +578,7 @@ impl Default for Editor {
             snap_orbit: None,
             custom_matcaps: Vec::new(),
             custom_matcap: None,
+            preview_matcap: None,
             matcap_dir: None,
             request_load_matcap: false,
             paint_color: Vec3::new(0.75, 0.22, 0.18),
@@ -834,6 +837,7 @@ impl Editor {
             max_triangles: self.max_triangles,
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
+            remesh_engine: self.remesh_engine,
         }
     }
 
@@ -968,6 +972,7 @@ impl Editor {
         self.max_triangles = s.max_triangles;
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
+        self.remesh_engine = s.remesh_engine;
     }
 
     /// Rescan user and workspace plugin directories for Python plugins.
@@ -3535,6 +3540,7 @@ mod tests {
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,
+            remesh_engine: oxy_topo::RemeshEngine::Vdb,
         };
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);

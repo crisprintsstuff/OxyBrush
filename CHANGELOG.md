@@ -4,6 +4,21 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.7.5-beta] - 2026-11-06
+
+### Added
+
+- **Realtime Matcap Preview on Hover:**
+  - Viewport material shading updates live as you mouse over built-in material thumbnails or custom imported matcaps in the shelf and View > Material menu, instantly reverting when the pointer leaves.
+- **Dynamic Shift-Smooth Intensity Switching:**
+  - Holding `Shift` to smooth dynamically switches the UI strength slider (in top controls, right-click quick menu, and brush settings) to control the Smooth brush's intensity directly on the fly, mirroring ZBrush behavior.
+- **Quad Topology Preservation & Detection for OpenVDB Remeshing:**
+  - OpenVDB dual contouring quads are now recognized as first-class quad topology rather than plain triangle soup.
+  - Wireframe overlay (`Shift+W`) hides internal quad diagonals, rendering crisp, uniform quad grids across the model.
+  - Status bar displays quad counts (e.g., `X quads`) for meshes with quad geometry.
+  - OBJ exporter automatically groups paired triangles into native quad faces (`f a b c d`).
+  - Saved `remesh_engine` preference across sessions in settings.
+
 ## [1.7.0-beta] - 2026-11-05
 
 ### Added

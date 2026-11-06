@@ -110,10 +110,7 @@ fn write_obj_objects(geoms: &[Geometry], w: &mut impl Write) -> io::Result<()> {
         for n in &g.normals {
             writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
         }
-        for t in &g.triangles {
-            let [a, b, c] = t.map(|i| i + base);
-            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
-        }
+        crate::write_obj_faces(&g.positions, &g.triangles, base, w)?;
         base += g.positions.len() as u32;
     }
     Ok(())
