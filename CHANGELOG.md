@@ -4,6 +4,17 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [1.7.6-beta] - 2026-11-06
+
+### Fixed
+
+- **Grab Brush Symmetry Blending ($C^1$ Smooth Maximum):**
+  - Resolved harsh midline seam cutoff and crease artifacts when sculpting across symmetry mirror planes with the Grab brush.
+  - Restored $C^1$ polynomial smooth maximum blending between overlapping symmetry dab influences, guaranteeing continuous, smooth transitions across the mirror plane.
+- **Grab Brush Strength Slider Scaling:**
+  - Resolved an issue where the strength slider had no effect on Grab brush displacement (brush always acted at 100% full displacement regardless of slider value).
+  - Wired brush strength directly into linear delta displacement and inverted normal translation, properly scaling displacement from 0% to 100%.
+
 ## [1.7.5-beta] - 2026-11-06
 
 ### Added

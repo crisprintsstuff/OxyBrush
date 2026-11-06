@@ -24,5 +24,9 @@ ureq = { workspace = true, optional = true }
 name = "oxy-update-sign"
 path = "src/bin/sign.rs"
 
+[[example]]
+name = "check"
+required-features = ["network"]
+
 [lints]
 workspace = true
