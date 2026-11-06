@@ -516,6 +516,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
+    print_tools_dialog(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     keymap::window(ui.ctx(), ed);
@@ -599,6 +600,140 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
             });
         });
     ed.show_settings = open;
+}
+
+fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_print_dialog {
+        return;
+    }
+    let mut open = ed.show_print_dialog;
+    egui::Window::new("3D Print Tools").open(&mut open).default_width(360.0).resizable(true).show(ctx, |ui| {
+        ui.vertical(|ui| {
+            ui.heading("Physical Scale & Metrics");
+            ui.horizontal(|ui| {
+                ui.label("Unit scale:");
+                if ui.add(egui::Slider::new(&mut ed.print_scale_mm_per_unit, 0.1..=100.0).suffix(" mm/unit")).changed()
+                {
+                    ed.update_print_dimensions();
+                }
+            });
+
+            if ed.print_dimensions_cache.is_none() {
+                ed.update_print_dimensions();
+            }
+
+            if let Some(dims) = &ed.print_dimensions_cache {
+                ui.label(format!(
+                    "Dimensions: {:.1} × {:.1} × {:.1} mm",
+                    dims.size_mm.x, dims.size_mm.y, dims.size_mm.z
+                ));
+                ui.label(format!("Volume: {:.2} cm³  |  Area: {:.1} cm²", dims.volume_cm3, dims.surface_area_cm2));
+                if dims.is_watertight {
+                    ui.colored_label(egui::Color32::from_rgb(80, 200, 100), "✔ Watertight manifold (Print Ready)");
+                } else {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 150, 40),
+                        "⚠ Mesh has open boundaries or non-manifold edges",
+                    );
+                }
+                ui.label(format!(
+                    "Resin weight: ~{:.1} g  |  PLA weight: ~{:.1} g",
+                    dims.resin_weight_grams, dims.pla_weight_grams
+                ));
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.heading("Wall-Thickness Check");
+            ui.horizontal(|ui| {
+                ui.label("Min wall thickness:");
+                ui.add(egui::Slider::new(&mut ed.print_wall_thickness_mm, 0.5..=10.0).suffix(" mm"));
+            });
+            if ui.button("Analyze Wall Thickness").clicked() {
+                ed.analyze_print_wall_thickness();
+            }
+            if let Some(rep) = &ed.wall_thickness_report {
+                if rep.thin_ratio > 0.0 {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(230, 80, 60),
+                        format!(
+                            "⚠ {:.1}% of surface is below {:.1} mm (min: {:.2} mm)",
+                            rep.thin_ratio * 100.0,
+                            ed.print_wall_thickness_mm,
+                            rep.min_thickness_mm
+                        ),
+                    );
+                } else {
+                    ui.colored_label(
+                        egui::Color32::from_rgb(80, 200, 100),
+                        format!("✔ All walls meet or exceed {:.1} mm threshold", ed.print_wall_thickness_mm),
+                    );
+                }
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.heading("Hollowing & Drain Holes");
+            ui.horizontal(|ui| {
+                ui.label("Wall thickness:");
+                ui.add(egui::Slider::new(&mut ed.print_wall_thickness_mm, 1.0..=8.0).suffix(" mm"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Drain hole radius:");
+                ui.add(egui::Slider::new(&mut ed.print_drain_hole_radius_mm, 1.0..=10.0).suffix(" mm"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Drain holes:");
+                ui.add(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4));
+            });
+            let busy = ed.job.is_some();
+            if ui.add_enabled(!busy, egui::Button::new("Hollow Mesh (OpenVDB)")).clicked() {
+                ed.hollow_active_piece();
+            }
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            ui.heading("Split with Alignment Keys");
+            ui.horizontal(|ui| {
+                ui.label("Cut Axis:");
+                ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::X, "X");
+                ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::Y, "Y");
+                ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::Z, "Z");
+            });
+            let bounds = ed.scene.active().mesh.bounds();
+            let (min_val, max_val) = match ed.print_split_axis {
+                oxy_topo::SplitAxis::X => (bounds.min.x, bounds.max.x),
+                oxy_topo::SplitAxis::Y => (bounds.min.y, bounds.max.y),
+                oxy_topo::SplitAxis::Z => (bounds.min.z, bounds.max.z),
+            };
+            ui.horizontal(|ui| {
+                ui.label("Plane Position:");
+                ui.add(egui::Slider::new(&mut ed.print_split_offset, min_val..=max_val).max_decimals(2));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Pin Radius:");
+                ui.add(egui::Slider::new(&mut ed.print_pin_radius_mm, 1.0..=10.0).suffix(" mm"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Pin Height:");
+                ui.add(egui::Slider::new(&mut ed.print_pin_height_mm, 2.0..=20.0).suffix(" mm"));
+            });
+            ui.horizontal(|ui| {
+                ui.label("Pin Clearance:");
+                ui.add(egui::Slider::new(&mut ed.print_clearance_mm, 0.05..=1.0).suffix(" mm"));
+            });
+            if ui.add_enabled(!busy, egui::Button::new("Split into Interlocking Parts")).clicked() {
+                ed.split_active_piece_with_keys();
+            }
+        });
+    });
+    ed.show_print_dialog = open;
 }
 
 fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
@@ -1378,20 +1513,62 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
         .fixed_pos(pos)
         .constrain(true)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 8)).show(
+            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 10)).show(
                 ui,
                 |ui| {
-                    ui.label(RichText::new(format!("{} brush", ed.brush_kind.label())).strong());
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().slider_width = 150.0;
-                        quick_controls(ui, ed);
+                    ui.set_width(175.0);
+                    ui.vertical(|ui| {
+                        ui.label(RichText::new(format!("{} brush", ed.brush_kind.label())).strong());
+                        ui.add_space(4.0);
+
+                        ui.columns(2, |cols| {
+                            let raise = egui::Button::selectable(!ed.carve, RichText::new("Raise").strong())
+                                .min_size(egui::vec2(cols[0].available_width(), 24.0));
+                            if tips::hover(cols[0].add(raise), Cmd::Raise.tip()).clicked() {
+                                ed.carve = false;
+                            }
+                            let carve = egui::Button::selectable(ed.carve, RichText::new("Carve").strong())
+                                .min_size(egui::vec2(cols[1].available_width(), 24.0));
+                            if tips::hover(cols[1].add(carve), Cmd::Carve.tip()).clicked() {
+                                ed.carve = true;
+                            }
+                        });
+
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(2.0);
+
+                        ui.spacing_mut().slider_width = 165.0;
+
+                        ui.label(RichText::new("Size").weak().small());
+                        tips::hover(
+                            ui.add(
+                                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
+                                    .logarithmic(true)
+                                    .max_decimals(0)
+                                    .trailing_fill(true),
+                            ),
+                            Cmd::Radius.tip(),
+                        );
+
+                        ui.add_space(2.0);
+                        ui.label(RichText::new("Strength").weak().small());
+                        let k = ed.brush_kind;
+                        tips::hover(
+                            ui.add(
+                                egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true),
+                            ),
+                            Cmd::Strength.tip(),
+                        );
+
+                        ui.add_space(4.0);
+                        let hint = if q.held {
+                            format!("Release {} to close", Cmd::QuickMenu.shortcut())
+                        } else {
+                            "Esc or click outside to close".into()
+                        };
+                        ui.label(RichText::new(hint).weak().small());
                     });
-                    let hint = if q.held {
-                        format!("Release {} to close", Cmd::QuickMenu.shortcut())
-                    } else {
-                        "Esc or click outside to close".into()
-                    };
-                    ui.label(RichText::new(hint).weak().small());
                 },
             );
         })
@@ -2179,6 +2356,15 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     });
+    if tips::hover(
+        ui.button("3D Print Tools..."),
+        "Open 3D print preparation tools (scale, volume, wall thickness, hollowing, split with keys)",
+    )
+    .clicked()
+    {
+        ed.show_print_dialog = true;
+        ed.update_print_dimensions();
+    }
     ui.separator();
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
@@ -3818,5 +4004,36 @@ mod tests {
             output.textures_delta.clear();
             assert!(ed.show_settings);
         }
+    }
+
+    #[test]
+    fn test_print_tools_dialog_renders() {
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.show_print_dialog = true;
+        ed.update_print_dimensions();
+        assert!(ed.print_dimensions_cache.is_some());
+
+        let mut output = ctx.run_ui(Default::default(), |ctx| {
+            print_tools_dialog(ctx, &mut ed);
+        });
+        output.textures_delta.clear();
+        assert!(ed.show_print_dialog);
+
+        ed.analyze_print_wall_thickness();
+        assert!(ed.wall_thickness_report.is_some());
+    }
+
+    #[test]
+    fn test_quick_menu_vertical_renders() {
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.quick_menu = Some(crate::editor::QuickMenu { pos: glam::Vec2::new(200.0, 200.0), held: false });
+
+        let mut output = ctx.run_ui(Default::default(), |ctx| {
+            quick_menu(ctx, &mut ed);
+        });
+        output.textures_delta.clear();
+        assert!(ed.quick_menu.is_some());
     }
 }

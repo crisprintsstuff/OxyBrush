@@ -136,6 +136,19 @@ fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>) -> Result<Mesh> {
     if tris.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
+    let n_verts = positions.len() as u32;
+    for (ti, &[a, b, c]) in tris.iter().enumerate() {
+        if a >= n_verts || b >= n_verts || c >= n_verts {
+            return Err(Error::Format(format!(
+                "triangle {ti} references out-of-bounds vertex index ({a}, {b}, {c} >= {n_verts})"
+            )));
+        }
+    }
+    for (vi, p) in positions.iter().enumerate() {
+        if !p.is_finite() {
+            return Err(Error::Format(format!("vertex {vi} contains non-finite coordinate: {p}")));
+        }
+    }
     let bounds = oxy_mesh::Aabb::from_points(positions.iter().copied());
     let eps = bounds.extent().max_element().max(1e-6) * 1e-6;
     let (positions, tris) = weld(positions, tris, eps);
@@ -293,6 +306,19 @@ mod tests {
         let mut bytes = vec![0u8; 84];
         bytes[80] = 10;
         assert!(import_stl(&bytes).is_err());
+    }
+
+    #[test]
+    fn corrupt_indices_and_nan_reject() {
+        let pos = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
+        // Index 5 is out of bounds for 3 vertices
+        let bad_tris = vec![[0, 1, 5]];
+        assert!(finish(pos.clone(), bad_tris).is_err());
+
+        // NaN position is rejected
+        let nan_pos = vec![Vec3::ZERO, Vec3::new(f32::NAN, 1.0, 0.0), Vec3::Y];
+        let good_tris = vec![[0, 1, 2]];
+        assert!(finish(nan_pos, good_tris).is_err());
     }
 
     #[test]

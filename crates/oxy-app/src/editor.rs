@@ -451,6 +451,30 @@ pub struct Editor {
     pub extract_thickness: f32,
     /// Number of Laplacian boundary smoothing iterations for Mask Extract.
     pub extract_smooth: usize,
+    /// 3D Print tools dialog visibility.
+    pub show_print_dialog: bool,
+    /// Unit scale: millimeters per world unit.
+    pub print_scale_mm_per_unit: f32,
+    /// Minimum wall thickness in millimeters for 3D printing and hollowing.
+    pub print_wall_thickness_mm: f32,
+    /// Radius of drain holes in millimeters.
+    pub print_drain_hole_radius_mm: f32,
+    /// Number of bottom drain holes.
+    pub print_drain_hole_count: usize,
+    /// Coordinate axis for keyed parts splitting.
+    pub print_split_axis: oxy_topo::SplitAxis,
+    /// Offset along split axis in world units.
+    pub print_split_offset: f32,
+    /// Registration pin radius in millimeters.
+    pub print_pin_radius_mm: f32,
+    /// Registration pin height in millimeters.
+    pub print_pin_height_mm: f32,
+    /// Clearance tolerance in millimeters for 3D printed pin socket.
+    pub print_clearance_mm: f32,
+    /// Cached physical print dimensions and material estimates.
+    pub print_dimensions_cache: Option<oxy_topo::PrintDimensions>,
+    /// Report of local wall thickness across the mesh.
+    pub wall_thickness_report: Option<oxy_topo::WallThicknessReport>,
 }
 
 impl Default for Editor {
@@ -581,6 +605,18 @@ impl Default for Editor {
             max_triangles: crate::settings::default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
+            show_print_dialog: false,
+            print_scale_mm_per_unit: 10.0,
+            print_wall_thickness_mm: 2.0,
+            print_drain_hole_radius_mm: 2.5,
+            print_drain_hole_count: 1,
+            print_split_axis: oxy_topo::SplitAxis::Y,
+            print_split_offset: 0.0,
+            print_pin_radius_mm: 3.0,
+            print_pin_height_mm: 6.0,
+            print_clearance_mm: 0.2,
+            print_dimensions_cache: None,
+            wall_thickness_report: None,
         }
     }
 }
@@ -1874,6 +1910,16 @@ impl Editor {
         }
     }
 
+    /// Force an immediate autosave if changes have been made (e.g. window blur or suspend).
+    pub fn force_autosave(&mut self) {
+        let changed = self.history.revision() != self.autosaved_revision && self.is_modified();
+        let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
+        if !self.is_stroking() && !levels_out && changed && self.autosaver.enabled {
+            self.autosaved_revision = self.history.revision();
+            self.autosaver.start(self.scene.to_data());
+        }
+    }
+
     pub fn recover(&mut self, r: &autosave::Recoverable) {
         match format::load(&r.path).map(Scene::from_data) {
             Ok(Some(scene)) => {
@@ -2247,6 +2293,102 @@ impl Editor {
             oxy_topo::boolean_mesh(&target_mesh, &tool_mesh, op, Some(h))
                 .map(JobResult::Mesh)
                 .map_err(|e| e.to_string())
+        });
+    }
+
+    /// Recalculates 3D print dimensions, surface area, watertight volume, and estimated material weights.
+    pub fn update_print_dimensions(&mut self) {
+        let piece = self.scene.active();
+        let dims = oxy_topo::calculate_print_dimensions(&piece.mesh, self.print_scale_mm_per_unit);
+        self.print_dimensions_cache = Some(dims);
+    }
+
+    /// Analyzes local wall thickness and highlights thin regions below threshold in vertex colors.
+    pub fn analyze_print_wall_thickness(&mut self) {
+        let piece = self.scene.active();
+        let rep = oxy_topo::analyze_wall_thickness(
+            &piece.mesh,
+            self.print_scale_mm_per_unit,
+            self.print_wall_thickness_mm,
+            self.print_wall_thickness_mm * 5.0,
+        );
+
+        let mut color = piece.mesh.color.clone();
+        if color.len() != piece.mesh.vertex_count() {
+            color = vec![Vec3::ONE; piece.mesh.vertex_count()];
+        }
+
+        for (i, &t) in rep.vertex_thickness_mm.iter().enumerate() {
+            if t < self.print_wall_thickness_mm {
+                let severity = (t / self.print_wall_thickness_mm).clamp(0.0, 1.0);
+                color[i] = Vec3::new(1.0, severity * 0.4, 0.0);
+            }
+        }
+
+        let piece_mut = self.scene.active_mut();
+        piece_mut.mesh.color = color;
+        piece_mut.mesh.mark_all_dirty();
+
+        self.status = format!(
+            "Wall thickness analysis: Min {:.2} mm, Avg {:.2} mm. {:.1}% thin surface.",
+            rep.min_thickness_mm,
+            rep.avg_thickness_mm,
+            rep.thin_ratio * 100.0
+        );
+        self.wall_thickness_report = Some(rep);
+    }
+
+    /// Hollow the active piece with OpenVDB and optional drain holes.
+    pub fn hollow_active_piece(&mut self) {
+        let active = self.scene.active();
+        let mesh = active.mesh.clone();
+        let bounds = mesh.bounds();
+        let wall_th = self.print_wall_thickness_mm;
+        let scale = self.print_scale_mm_per_unit;
+        let r_hole = self.print_drain_hole_radius_mm;
+        let n_holes = self.print_drain_hole_count;
+
+        let mut drain_holes = Vec::new();
+        if n_holes > 0 {
+            let center = bounds.center();
+            let bot_y = bounds.min.y;
+            drain_holes.push(oxy_topo::DrainHole {
+                position: Vec3::new(center.x, bot_y, center.z),
+                direction: Vec3::NEG_Y,
+                radius_mm: r_hole,
+                length_mm: wall_th * 3.0,
+            });
+        }
+
+        let opts =
+            oxy_topo::HollowOptions { wall_thickness_mm: wall_th, unit_scale: scale, drain_holes, voxel_size: None };
+
+        self.start_job(format!("Hollow piece (wall: {wall_th:.1}mm)"), Vec::new(), move || {
+            oxy_topo::hollow_mesh(&mesh, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
+        });
+    }
+
+    /// Split active piece along a plane and generate male/female interlocking alignment keys.
+    pub fn split_active_piece_with_keys(&mut self) {
+        let active = self.scene.active();
+        let mesh = active.mesh.clone();
+        let piece_name = active.name.clone();
+        let opts = oxy_topo::SplitOptions {
+            axis: self.print_split_axis,
+            offset: self.print_split_offset,
+            unit_scale: self.print_scale_mm_per_unit,
+            pin_radius_mm: self.print_pin_radius_mm,
+            pin_height_mm: self.print_pin_height_mm,
+            clearance_mm: self.print_clearance_mm,
+            voxel_size: None,
+        };
+
+        self.start_job(format!("Split piece with keys ({:?})", opts.axis), Vec::new(), move || {
+            let (mesh_a, mesh_b) = oxy_topo::split_with_keys(&mesh, opts).map_err(|e| e.to_string())?;
+            Ok(JobResult::NewPieces(vec![
+                (format!("{piece_name} Part A (Male Pin)"), mesh_a),
+                (format!("{piece_name} Part B (Female Socket)"), mesh_b),
+            ]))
         });
     }
 

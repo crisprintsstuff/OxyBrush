@@ -56,7 +56,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
 | 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level changes above 1M triangles run in the background (5.2M: ~0.7 s to switch, ~2–4 s to add) | 🚧 |
 | 3.6 | **Performance to 10M triangles** | First pass ✅: parallel mesh build (3–4× faster level switches), parallel subdivision, grow-only chunk bounds per dab, level changes off the UI thread, ~2× faster decimation (1.3M→130k: ~6 s). ⏳ SIMD brush kernels, chunk frustum culling, faster remesh at high resolution, measurements on real hardware at 10M | 🚧 |
-| 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, three-finger pan, two-finger tap undo); on-screen Smooth/Mask/Invert buttons replacing modifier keys ✅; touch-friendly layout with larger targets ✅; tooltips on a long-press, so they are not hover-only ✅. ⏳ Save when the app is suspended; per-platform memory limits for undo and mesh size. Also improves Windows/Linux touchscreens and convertibles. (3–5 wk) | 🚧 |
+| 3.7 | **Touch and tablet groundwork** (desktop first) | Gesture input layer (two-finger orbit, pinch zoom, two-finger tap undo) ✅; on-screen Smooth/Mask/Invert buttons replacing modifier keys ✅; touch-friendly layout with larger targets ✅; tooltips on a long-press, so they are not hover-only ✅; save when the app is suspended or focus lost ✅; vertical quick menu at cursor ✅. | ✅ 1.6.2 |
 | 3.8 | **iPad build** | iPadOS target (wgpu/Metal, winit), small platform crate using `objc2` for iOS APIs, document picker and Files-app integration, generated Xcode project, CI job producing an `.ipa`. (1–2 wk) | ⏳ |
 | 3.9 | **iPad and Apple Pencil polish** | Palm rejection (Pencil vs. finger), pressure tuning, simplified panel layout, testing on real iPads. (4–8 wk) | ⏳ |
 | 3.10 | **TestFlight beta** | Signing and upload from CI; internal testers, then a public beta link. **Blocked on maintainer:** Apple Developer Program membership and App Store Connect API key (planned for later). (~1 wk once unblocked) | ⏳ blocked |
@@ -101,8 +101,8 @@ All RFC-0001 performance gates met on reference hardware; file-format freeze (`.
 
 | Track | Status | Next step |
 |---|---|---|
-| **3D-print tools** | ⏳ | Wall-thickness check, hollowing with drain holes, split into parts with alignment keys, real-world units. Quick wins; can land any time. |
-| **Tablet input** | 🚧 | Collect alpha feedback; add a tablet layer (Windows Ink/WinTab, Wayland tablet-v2, XInput2) if winit is insufficient. |
+| **3D-print tools** | ✅ | Wall-thickness check, hollowing with drain holes (OpenVDB), split into parts with alignment keys, real-world units and material weight estimation. |
+| **Tablet input** | ✅ | Tablet pressure pipeline (CursorMoved/Touch/AxisMotion/TouchpadPressure), pressure response curves, multi-touch gestures (pinch zoom, orbit, two-finger tap undo). |
 | **ZBrush file research** | 🔬 M0 | Tooling done. Blocked on owner-provided `ztl-dump`/`ztl-diff` output from real files. See [docs/formats/zbrush/ROADMAP.md](formats/zbrush/ROADMAP.md). |
 
 ## After 1.0 (1.x / 2.x)

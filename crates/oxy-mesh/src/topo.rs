@@ -80,6 +80,56 @@ pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
     out
 }
 
+/// Diagnostics report on mesh manifoldness and edge topology.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManifoldReport {
+    /// True if the mesh is a closed watertight 2-manifold without boundary or non-manifold edges.
+    pub is_manifold: bool,
+    /// Number of open boundary edges (edges shared by only 1 face).
+    pub boundary_edge_count: usize,
+    /// Number of non-manifold edges (edges shared by > 2 faces).
+    pub non_manifold_edge_count: usize,
+    /// Number of degenerate triangles (triangles with duplicate vertex indices).
+    pub degenerate_triangle_count: usize,
+}
+
+/// Checks the 2-manifold topology of `mesh`, counting boundary edges, non-manifold edges, and degenerate faces.
+pub fn check_manifold(mesh: &Mesh) -> ManifoldReport {
+    let mut boundary_edges = 0usize;
+    let mut non_manifold_edges = 0usize;
+    let mut degenerate_triangles = 0usize;
+
+    let mut edge_counts: HashMap<(u32, u32), usize> = HashMap::with_capacity(mesh.triangle_count() * 3);
+
+    for &[a, b, c] in &mesh.triangles {
+        if a == b || b == c || c == a {
+            degenerate_triangles += 1;
+            continue;
+        }
+        for (u, v) in [(a, b), (b, c), (c, a)] {
+            let key = (u.min(v), u.max(v));
+            *edge_counts.entry(key).or_insert(0) += 1;
+        }
+    }
+
+    for &count in edge_counts.values() {
+        if count == 1 {
+            boundary_edges += 1;
+        } else if count > 2 {
+            non_manifold_edges += 1;
+        }
+    }
+
+    let is_manifold = boundary_edges == 0 && non_manifold_edges == 0 && degenerate_triangles == 0;
+
+    ManifoldReport {
+        is_manifold,
+        boundary_edge_count: boundary_edges,
+        non_manifold_edge_count: non_manifold_edges,
+        degenerate_triangle_count: degenerate_triangles,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,5 +140,19 @@ mod tests {
         let s = subdivide(&m, 1);
         assert_eq!(s.triangle_count(), m.triangle_count() * 4);
         assert_ne!(s.topology_version(), m.topology_version());
+    }
+
+    #[test]
+    fn manifold_check_cube_and_plane() {
+        let cube = crate::primitives::cube(2, 1.0);
+        let rep = check_manifold(&cube);
+        assert!(rep.is_manifold);
+        assert_eq!(rep.boundary_edge_count, 0);
+        assert_eq!(rep.non_manifold_edge_count, 0);
+
+        let plane = crate::primitives::plane(2, 1.0);
+        let rep_plane = check_manifold(&plane);
+        assert!(!rep_plane.is_manifold);
+        assert!(rep_plane.boundary_edge_count > 0);
     }
 }

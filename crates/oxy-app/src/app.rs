@@ -83,6 +83,18 @@ pub struct App {
     plugin_process: Option<crate::plugins::PluginProcess>,
     /// When egui requested a delayed repaint (e.g. for hover tooltips).
     egui_repaint_at: Option<Instant>,
+    /// Active multi-touch points for gestures and tablet input.
+    touches: std::collections::HashMap<u64, TouchPoint>,
+    touch_two_finger_start: Option<Instant>,
+    touch_prev_dist: Option<f32>,
+    touch_prev_mid: Option<Vec2>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TouchPoint {
+    start_pos: Vec2,
+    pos: Vec2,
+    _start_time: Instant,
 }
 
 impl App {
@@ -176,6 +188,10 @@ impl App {
             shot_reply: None,
             plugin_process: None,
             egui_repaint_at: None,
+            touches: std::collections::HashMap::new(),
+            touch_two_finger_start: None,
+            touch_prev_dist: None,
+            touch_prev_mid: None,
         }
     }
 
@@ -945,6 +961,11 @@ impl App {
 }
 
 impl ApplicationHandler for App {
+    fn suspended(&mut self, _event_loop: &ActiveEventLoop) {
+        self.editor.force_autosave();
+        self.editor.autosaver.finish();
+    }
+
     fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: StartCause) {
         if matches!(cause, StartCause::ResumeTimeReached { .. })
             && let Some(g) = &self.gfx
@@ -1071,6 +1092,7 @@ impl ApplicationHandler for App {
                     if self.editor.is_stroking() {
                         self.editor.pointer_up();
                     }
+                    self.editor.force_autosave();
                     self.editor.pointer = None;
                     self.editor.quick_menu = None;
                     self.editor.quick_menu_key = None;
@@ -1100,9 +1122,28 @@ impl ApplicationHandler for App {
                 redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
-                self.editor.pressure = 1.0;
+                if !self.editor.is_stroking() || self.editor.pressure <= 0.0 {
+                    self.editor.pressure = 1.0;
+                }
                 self.editor.pointer_moved(Vec2::new(position.x as f32, position.y as f32));
                 redraw = true;
+            }
+            WindowEvent::TouchpadPressure { pressure, .. } => {
+                self.editor.pressure = *pressure;
+                redraw = true;
+            }
+            WindowEvent::PinchGesture { delta, .. } if !over_egui => {
+                self.editor.scroll(*delta as f32 * 20.0);
+                redraw = true;
+            }
+            WindowEvent::RotationGesture { delta, .. } if !over_egui => {
+                self.editor.camera.orbit(Vec2::new(*delta * 2.0, 0.0));
+                redraw = true;
+            }
+            WindowEvent::AxisMotion { value, .. } => {
+                if self.editor.is_stroking() && *value > 0.0 && *value <= 1.0 {
+                    self.editor.pressure = *value as f32;
+                }
             }
             WindowEvent::CursorLeft { .. } => {
                 if !self.editor.is_stroking() {
@@ -1135,20 +1176,74 @@ impl ApplicationHandler for App {
                 redraw = true;
             }
             WindowEvent::Touch(t) => {
-                // Pen and touch input; pressure comes from `force` where the platform reports it.
-                self.editor.pressure = t.force.map_or(1.0, |f| f.normalized() as f32);
                 let pos = Vec2::new(t.location.x as f32, t.location.y as f32);
+                let force_pressure = t.force.map_or(1.0, |f| f.normalized() as f32);
                 match t.phase {
                     TouchPhase::Started => {
-                        self.editor.pointer = Some(pos);
-                        if !over_egui && self.editor.pointer_in_canvas() {
-                            self.editor.pointer_down(PointerButton::Primary);
+                        self.touches.insert(t.id, TouchPoint { start_pos: pos, pos, _start_time: Instant::now() });
+                        if self.touches.len() == 1 {
+                            self.editor.pressure = force_pressure;
+                            self.editor.pointer = Some(pos);
+                            if !over_egui && self.editor.pointer_in_canvas() {
+                                self.editor.pointer_down(PointerButton::Primary);
+                            }
+                        } else if self.touches.len() == 2 {
+                            if self.editor.is_stroking() {
+                                self.editor.pointer_up();
+                            }
+                            self.touch_two_finger_start = Some(Instant::now());
+                            let pts: Vec<Vec2> = self.touches.values().map(|tp| tp.pos).collect();
+                            if pts.len() >= 2 {
+                                self.touch_prev_dist = Some(pts[0].distance(pts[1]));
+                                self.touch_prev_mid = Some((pts[0] + pts[1]) * 0.5);
+                            }
                         }
                     }
                     TouchPhase::Moved => {
-                        self.editor.pointer_moved(pos);
+                        if let Some(tp) = self.touches.get_mut(&t.id) {
+                            tp.pos = pos;
+                        }
+                        if self.touches.len() == 1 {
+                            self.editor.pressure = force_pressure;
+                            self.editor.pointer_moved(pos);
+                        } else if self.touches.len() == 2 {
+                            let pts: Vec<Vec2> = self.touches.values().map(|tp| tp.pos).collect();
+                            if pts.len() >= 2 {
+                                let d = pts[0].distance(pts[1]);
+                                let m = (pts[0] + pts[1]) * 0.5;
+                                if let (Some(prev_d), Some(prev_m)) = (self.touch_prev_dist, self.touch_prev_mid) {
+                                    let zoom_delta = (d - prev_d) / 40.0;
+                                    if zoom_delta.abs() > 0.01 {
+                                        self.editor.scroll(zoom_delta * 4.0);
+                                    }
+                                    let pan_delta = m - prev_m;
+                                    if pan_delta.length() > 0.5 {
+                                        self.editor.camera.orbit(pan_delta * 0.5);
+                                    }
+                                }
+                                self.touch_prev_dist = Some(d);
+                                self.touch_prev_mid = Some(m);
+                            }
+                        }
                     }
-                    TouchPhase::Ended | TouchPhase::Cancelled => self.editor.pointer_up(),
+                    TouchPhase::Ended | TouchPhase::Cancelled => {
+                        if self.touches.len() == 2 && self.touch_two_finger_start.is_some() {
+                            let start_time = self.touch_two_finger_start.take().unwrap();
+                            let elapsed = start_time.elapsed();
+                            let moved_far = self.touches.values().any(|tp| tp.start_pos.distance(tp.pos) > 15.0);
+                            if elapsed.as_millis() <= 300 && !moved_far {
+                                self.editor.undo();
+                                self.editor.status = "Two-finger tap: Undo".into();
+                            }
+                        }
+                        self.touches.remove(&t.id);
+                        if self.touches.is_empty() {
+                            self.touch_two_finger_start = None;
+                            self.touch_prev_dist = None;
+                            self.touch_prev_mid = None;
+                            self.editor.pointer_up();
+                        }
+                    }
                 }
                 redraw = true;
             }

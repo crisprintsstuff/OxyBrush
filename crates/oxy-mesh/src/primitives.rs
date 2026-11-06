@@ -84,6 +84,49 @@ pub fn cube(divisions: u32, size: f32) -> Mesh {
     Mesh::new(positions, tris)
 }
 
+/// Cylinder centered at origin along the Y axis, spanning `-height/2..=height/2`.
+pub fn cylinder(segments: u32, radius: f32, height: f32) -> Mesh {
+    let n = segments.max(3);
+    let half_h = height * 0.5;
+    let mut positions = Vec::with_capacity((n * 2 + 2) as usize);
+    let mut tris = Vec::with_capacity((n * 4) as usize);
+
+    // Bottom and top center vertices
+    let bot_center_idx = 0u32;
+    positions.push(Vec3::new(0.0, -half_h, 0.0));
+    let top_center_idx = 1u32;
+    positions.push(Vec3::new(0.0, half_h, 0.0));
+
+    let base_idx = 2u32;
+    for i in 0..n {
+        let theta = (i as f32 / n as f32) * std::f32::consts::TAU;
+        let x = theta.cos() * radius;
+        let z = theta.sin() * radius;
+        positions.push(Vec3::new(x, -half_h, z)); // bot: base_idx + i * 2
+        positions.push(Vec3::new(x, half_h, z)); // top: base_idx + i * 2 + 1
+    }
+
+    for i in 0..n {
+        let next = (i + 1) % n;
+        let b0 = base_idx + i * 2;
+        let t0 = base_idx + i * 2 + 1;
+        let b1 = base_idx + next * 2;
+        let t1 = base_idx + next * 2 + 1;
+
+        // Side quads (two triangles, CCW seen from outside)
+        tris.push([b0, b1, t0]);
+        tris.push([b1, t1, t0]);
+
+        // Bottom cap (facing -Y)
+        tris.push([bot_center_idx, b1, b0]);
+
+        // Top cap (facing +Y)
+        tris.push([top_center_idx, t0, t1]);
+    }
+
+    Mesh::new(positions, tris)
+}
+
 fn grid(divisions: u32, f: impl Fn(f32, f32) -> Vec3) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let n = divisions.max(1);
     let mut p = Vec::with_capacity(((n + 1) * (n + 1)) as usize);
@@ -144,5 +187,13 @@ mod tests {
         let m = icosphere(2, 1.0);
         assert_eq!(m.triangle_count(), 320);
         assert_eq!(m.vertex_count(), 162);
+    }
+
+    #[test]
+    fn cylinder_is_closed() {
+        let m = cylinder(16, 1.0, 2.0);
+        let f = m.triangle_count() as i64;
+        let e = f * 3 / 2;
+        assert_eq!(m.vertex_count() as i64 - e + f, 2);
     }
 }
