@@ -148,6 +148,7 @@ mod tests {
                 visible: true,
                 mesh: primitives::icosphere(2, 1.0).to_data(),
                 multires: None,
+                vertex_map: None,
             }],
             active: 0,
         };

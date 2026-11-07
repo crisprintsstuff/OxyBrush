@@ -63,6 +63,7 @@ commands! {
     Import => "Import mesh as piece…", "Ctrl+I", "Add an OBJ or STL file as a new piece.";
     Save => "Save", "Ctrl+S", "Save the project to its current file.";
     SaveAs => "Save as…", "Ctrl+Shift+S", "Save the project to a new file.";
+    SendBack => "Send back to OxyCharacter", "", "Save to the file OxyCharacter opened, so it picks up your changes. Works even after Save As.";
     Export => "Export visible pieces…", "Ctrl+E", "Write the visible pieces to a file for other programs or for printing.";
     NewSphere => "New sphere", "", "Start over with a sphere. You are asked before unsaved work is discarded.";
     NewCube => "New cube", "", "Start over with a cube. You are asked before unsaved work is discarded.";
@@ -610,6 +611,7 @@ pub mod plain {
     pub const STABILIZER: &str =
         "The brush trails the pointer on a short string, for smoother lines. Zero turns it off.";
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
+    pub const LINK_BADGE: &str = "This document came from OxyCharacter. Click to send it back (File > Send back to OxyCharacter); OxyCharacter picks up the changes.";
     pub const EXTRACT_PREVIEW: &str =
         "A preview of the shell made from the mask. Adjust it, then Accept to add it as a new piece.";
     pub const EXTRACT_THICKNESS: &str = "How thick the shell is. 0 makes an open surface with no thickness.";

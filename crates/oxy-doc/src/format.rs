@@ -20,6 +20,14 @@
 //!   `vcount:u32 rgb:f32*3v` (sRGB, 0..=1), indexed like its positions.
 //!   Only written for painted pieces; older readers skip it and show the
 //!   piece unpainted.
+//! - `VMAP` (optional, since 2.5.8): vertex origin of the **preceding**
+//!   `PIEC`: `vcount:u32 source:u32*vcount`. `source[i]` is the index of
+//!   vertex `i` in the vertex array of the `PIEC` the piece was originally
+//!   loaded from (OxyBrush reorders vertices when it loads a mesh), so a
+//!   program that wrote the original file can match vertices exactly.
+//!   Written only while the piece's topology is unchanged since it was
+//!   loaded and it has no `MRES`; a file saved again keeps pointing at the
+//!   first file. Older readers skip it.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -79,6 +87,14 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         sections.push((*b"PIEC", encode_piece(p)));
         if let Some(mr) = &p.multires {
             sections.push((*b"MRES", encode_multires(mr)));
+        }
+        if let Some(map) = &p.vertex_map {
+            let mut b = Vec::with_capacity(4 + map.len() * 4);
+            b.extend_from_slice(&(map.len() as u32).to_le_bytes());
+            for i in map {
+                b.extend_from_slice(&i.to_le_bytes());
+            }
+            sections.push((*b"VMAP", b));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -241,6 +257,17 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring vertex color that doesn't match piece {:?}", piece.name);
                 }
             }
+            b"VMAP" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("VMAP before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let n = r.u32()? as usize;
+                r.check(n, 4)?;
+                if n == piece.mesh.positions.len() && piece.multires.is_none() {
+                    piece.vertex_map = Some((0..n).map(|_| r.u32()).collect::<Result<_>>()?);
+                } else {
+                    log::warn!("ignoring vertex map that doesn't match piece {:?}", piece.name);
+                }
+            }
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
@@ -275,7 +302,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
     m.mask = (0..v).map(|_| r.f32()).collect::<Result<_>>()?;
     m.groups = (0..t).map(|_| r.u32()).collect::<Result<_>>()?;
     m.hidden = (0..t).map(|_| r.u8().map(|b| b != 0)).collect::<Result<_>>()?;
-    Ok(PieceData { name, visible, mesh: m, multires: None })
+    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None })
 }
 
 fn encode_multires(mr: &Multires) -> Vec<u8> {
@@ -355,8 +382,8 @@ mod tests {
         let b = primitives::cube(4, 1.0).to_data();
         SceneData {
             pieces: vec![
-                PieceData { name: "Head".into(), visible: true, mesh: a, multires: None },
-                PieceData { name: "Böx ✓".into(), visible: false, mesh: b, multires: None },
+                PieceData { name: "Head".into(), visible: true, mesh: a, multires: None, vertex_map: None },
+                PieceData { name: "Böx ✓".into(), visible: false, mesh: b, multires: None, vertex_map: None },
             ],
             active: 1,
         }
@@ -444,6 +471,66 @@ mod tests {
         plain.pieces[0].multires = None;
         let old = decode(&encode(&plain)).unwrap();
         assert_eq!(old.pieces[0].mesh.triangles.len(), mr.triangle_count(1));
+    }
+
+    #[test]
+    fn vertex_map_roundtrips_composes_and_old_readers_skip_it() {
+        use crate::Piece;
+        // A mesh written by another program, with its vertices in an order
+        // OxyBrush will change when it loads it (reversed here).
+        let mut theirs = primitives::icosphere(2, 1.0).to_data();
+        let n = theirs.positions.len() as u32;
+        theirs.positions.reverse();
+        for t in &mut theirs.triangles {
+            *t = t.map(|v| n - 1 - v);
+        }
+        let file = SceneData {
+            pieces: vec![PieceData {
+                name: "OxyCharacter Body".into(),
+                visible: true,
+                mesh: theirs.clone(),
+                multires: None,
+                vertex_map: None,
+            }],
+            active: 0,
+        };
+        let points_at_theirs = |p: &Piece| {
+            let map = p.current_origin().expect("origin while topology is unchanged");
+            p.mesh.positions.iter().zip(map).all(|(q, &i)| *q == theirs.positions[i as usize])
+        };
+
+        // Loaded: every vertex knows its index in their file.
+        let piece = decode(&encode(&file)).unwrap().pieces.remove(0).into_piece();
+        assert!(points_at_theirs(&piece));
+
+        // Saved: VMAP is written and round-trips exactly.
+        let saved = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let bytes = encode(&saved);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"VMAP").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back, saved);
+        assert_eq!(back.pieces[0].vertex_map.as_ref().unwrap().len(), n as usize);
+
+        // Loaded and saved again: still points at their original file.
+        let again = back.pieces[0].clone().into_piece();
+        assert!(points_at_theirs(&again));
+
+        // An older reader doesn't know VMAP and skips it like any unknown
+        // section (tags aren't checksummed, so renaming it simulates that).
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"VMAP").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let skipped = decode(&old).unwrap();
+        assert_eq!(skipped.pieces[0].vertex_map, None);
+        assert_eq!(skipped.pieces[0].mesh, saved.pieces[0].mesh);
+
+        // After a topology change the map no longer applies and isn't written.
+        let mut changed = again;
+        changed.mesh = oxy_mesh::Mesh::from_data(primitives::icosphere(3, 1.0).to_data());
+        assert!(changed.current_origin().is_none());
+        assert_eq!(changed.to_data().vertex_map, None);
+        // Pieces made in the session have none either.
+        assert_eq!(Piece::new("New", primitives::cube(2, 1.0)).to_data().vertex_map, None);
     }
 
     #[test]
