@@ -53,6 +53,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.5.5-beta" date="2026-11-07" type="development">
+      <description>
+        <p>Fixes: the Insert Primitives brush shows the shape growing as you
+        drag, the cut tools show their line and follow symmetry, a moved gizmo
+        pivot stays put, and the Windows Ink pen side button navigates instead
+        of sculpting. Options that used other products' names are renamed, the
+        Matte theme is readable again, and long menus fit on screen.</p>
+      </description>
+    </release>
     <release version="1.0.0-beta" date="2026-11-05" type="development">
       <description>
         <p>Mask extract sculpting feature with thickness extrusion and boundary smoothing, C1 smooth symmetry blending for Grab brush, customizable theme presets and accent colors, and high-poly gizmo performance fixes.</p>
