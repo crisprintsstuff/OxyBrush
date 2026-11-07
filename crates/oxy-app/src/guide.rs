@@ -40,10 +40,11 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
     },
     Topic {
         title: "Pen tablets and stylus",
-        keywords: "tablet pen stylus pressure wacom huion kamvas xppen x11 wayland linux cachy",
+        keywords: "tablet pen stylus side button barrel windows ink pressure wacom huion kamvas xppen x11 wayland linux cachy",
         body: "OxyBrush supports pressure-sensitive stylus and drawing tablets (Wacom, Huion, XP-Pen, etc.).\n\n\
 - Stylus pressure controls brush strength, and can also modulate brush radius when enabled in the brush settings.\n\
 - Pen side buttons can be mapped to right-click (quick menu), middle-click (navigation/scrolling), or modifier keys in your tablet driver.\n\
+- On Windows with Windows Ink, the pen's side button already acts as the right mouse button: a tap opens the quick menu, and with the Right-drag orbit preset (Settings > Keymap) holding it while you drag orbits the view and Ctrl + side button zooms.\n\
 - On Linux under Wayland compositors (CachyOS, KDE Wayland, GNOME Wayland, Hyprland), drawing tablets require the X11/XWayland backend because native Wayland tablet events are not exposed to winit. OxyBrush automatically detects connected tablets and defaults to the X11 backend when available. You can also manually force X11 mode by starting with `oxybrush --x11` (or `oxybrush --backend x11`), or by setting `OXY_BACKEND=x11`.",
     },
     Topic {
@@ -59,7 +60,7 @@ That direction is an average of the surface around the pointer, eased as you mov
         body: "Click a brush in the shelf, press its number key (1–9 and 0 select the first ten), or press Space and type part of its name: \"cs\" finds Clay Strips, Enter picks it.\n\n\
 Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. Hover any control for a short explanation and its shortcut. On a touch screen, press and hold the control: the same text stays up after you lift your finger, and the control does not activate.\n\n\
 - Grab, Topological Move and Snake Hook: hold Alt to move the surface along its normal.\n\
-- Kelvin Grab, Kelvin Twist and Kelvin Scale: elastodynamic Pixar Kelvinlet brushes for volume-preserving elastic deformation, twisting, and radial expansion/pinch.\n\
+- Kelvin Grab, Kelvin Twist and Kelvin Scale: elastodynamic Kelvinlet brushes (de Goes & James, 2017) for volume-preserving elastic deformation, twisting, and radial expansion/pinch.\n\
 - Grab through (Grab settings) moves everything under the brush circle, front to back.\n\
 - Middle-drag over a panel scrolls it, handy with a pen side button.",
     },

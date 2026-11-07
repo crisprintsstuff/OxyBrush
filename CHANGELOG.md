@@ -21,6 +21,21 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Cut tools follow symmetry:** clip, slice and trim cuts are repeated for mirror and radial symmetry, as one undo step. A trim that would remove the whole piece is refused with a message.
 - **Transform gizmo keeps a moved pivot:** after Alt-dragging the pivot and then transforming, the gizmo stays with the geometry instead of snapping back to its old spot.
 
+## [2.5.0-beta] - 2026-11-06
+
+Names below are the current ones; 2.5.0-beta shipped them as ClipCurve, SliceCurve, TrimCurve and "ZBrush Classic" (renamed in 2.5.5-beta).
+
+### Added
+- **Screen-line cutting tools:** **Plane Clip** flattens the shaded side onto a plane, **Line Split** gives the two sides their own face groups, and **Cut Away** removes the shaded side and caps the cut watertight. Ctrl+Shift+drag draws the line; Alt+tap adds a corner point, Alt+double-tap a smooth point, and Space+drag moves the whole line. Each cut is one undo step.
+- **Workstation layout:** a dense layout with a two-column brush shelf and the main controls in the top bar (Settings > Layout). Existing layouts are unchanged.
+- **Topology diagnostics (Mesh > Topology Diagnostics…):** watertightness, boundary and non-manifold edges and degenerate triangles, with one-click removal of degenerate triangles (undoable).
+
+### Fixed
+- **macOS save dialog crash ([#57](https://github.com/crisprintsstuff/OxyBrush/issues/57)):** resizing the Save or Save As dialog no longer crashes; file dialogs are now asynchronous.
+- **Subdivision levels:** sculpting at a high level now carries the shape changes down to the lower levels, so stepping down keeps your strokes.
+- **Strokes on dense meshes:** dab spacing is capped so strokes stay smooth instead of beading at high triangle counts.
+- **Updater:** clearer manual install steps and an "Open download folder" button for Linux and portable packages.
+
 ## [2.0.0-beta] - 2026-11-06
 
 ### Added
@@ -432,6 +447,16 @@ First public alpha.
 
 [Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...HEAD
 [2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
+[2.5.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.0.0-beta...v2.5.0-beta
+[2.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.7.7-beta...v2.0.0-beta
+[1.7.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.7.6-beta...v1.7.7-beta
+[1.7.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.7.5-beta...v1.7.6-beta
+[1.7.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.7.0-beta...v1.7.5-beta
+[1.7.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.6.1-beta...v1.7.0-beta
+[1.6.1-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.6.0-beta...v1.6.1-beta
+[1.6.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.5.1-beta...v1.6.0-beta
+[1.5.1-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.5.0-beta...v1.5.1-beta
+[1.5.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.0.0-beta...v1.5.0-beta
 [1.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.6.0-alpha...v1.0.0-beta
 [0.6.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...v0.6.0-alpha
 [0.5.2-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...v0.5.2-alpha
