@@ -4,8 +4,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [2.5.6-beta] - 2026-11-07
+
 ### Added
 - **Midnight theme:** deep navy panels that read as layered glass, thin blue outlines on every control, softer secondary text and soft shadows under windows and menus. A new **Pill** corner style gives buttons, fields and list rows fully rounded ends. The **Midnight** quick preset (Preferences > Appearance) applies the theme, pill corners, the emerald accent and a dark navy viewport; your material and shortcuts are left alone. Also in the command palette ("Theme: Midnight").
+
+### Changed
+- **Documentation:** the README, homepage, changelog and in-app guide describe 2.5.5 and later correctly (current brush, theme and preset names; a 2.5.0-beta changelog section; Windows Ink side button in the guide). "Pixar Kelvinlet" is now "Kelvinlet" in user-facing text; the paper is still cited.
 
 ## [2.5.5-beta] - 2026-11-07
 
@@ -445,7 +450,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...HEAD
+[2.5.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...v2.5.6-beta
 [2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
 [2.5.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.0.0-beta...v2.5.0-beta
 [2.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.7.7-beta...v2.0.0-beta
