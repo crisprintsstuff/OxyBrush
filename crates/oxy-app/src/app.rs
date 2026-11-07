@@ -88,6 +88,25 @@ pub struct App {
     touch_two_finger_start: Option<Instant>,
     touch_prev_dist: Option<f32>,
     touch_prev_mid: Option<Vec2>,
+    dialog_rx: std::sync::mpsc::Receiver<DialogReply>,
+    dialog_tx: std::sync::mpsc::Sender<DialogReply>,
+    dialog_active: bool,
+}
+
+#[derive(Debug)]
+enum DialogReply {
+    Open(Option<PathBuf>),
+    Import(Option<PathBuf>),
+    Save { path: Option<PathBuf>, and_continue: bool },
+    SaveAs(Option<PathBuf>),
+    LoadMatcap(Option<PathBuf>),
+    LoadAlpha(Option<PathBuf>),
+    ImportBrush(Option<PathBuf>),
+    ExportBrush { preset: oxy_sculpt::BrushPreset, path: Option<PathBuf> },
+    ImportKeymap(Option<PathBuf>),
+    ExportKeymap(Option<PathBuf>),
+    Export(Option<PathBuf>),
+    RunScript(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,6 +118,7 @@ struct TouchPoint {
 
 impl App {
     pub fn new(initial_file: Option<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
+        let (dialog_tx, dialog_rx) = std::sync::mpsc::channel();
         // Automated runs (CI screenshots) neither read nor write the user's settings.
         let settings_path = if auto.screenshot.is_none() { crate::settings::Settings::default_path() } else { None };
         let keymap_path = if settings_path.is_some() { keymap::Keymap::default_path() } else { None };
@@ -192,6 +212,9 @@ impl App {
             touch_two_finger_start: None,
             touch_prev_dist: None,
             touch_prev_mid: None,
+            dialog_rx,
+            dialog_tx,
+            dialog_active: false,
         }
     }
 
@@ -437,6 +460,7 @@ impl App {
 
     fn redraw(&mut self, event_loop: &ActiveEventLoop) {
         self.editor.flush_drag();
+        self.poll_dialog();
         // Before borrowing the GPU state, so a listener started last frame shows its address.
         self.sync_agent();
         let Some(g) = &mut self.gfx else { return };
@@ -674,12 +698,72 @@ impl App {
         }
     }
 
+    fn spawn_dialog<F>(&mut self, future: F, map: impl FnOnce(Option<PathBuf>) -> DialogReply + Send + 'static)
+    where
+        F: std::future::Future<Output = Option<rfd::FileHandle>> + Send + 'static,
+    {
+        self.dialog_active = true;
+        let tx = self.dialog_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let handle = pollster::block_on(future);
+            let path = handle.map(|h| h.path().to_path_buf());
+            let _ = tx.send(map(path));
+            if let Some(proxy) = proxy {
+                let _ = proxy.send_event(());
+            }
+        });
+    }
+
     fn run_action(&mut self, action: UiAction) {
         let ed = &mut self.editor;
-        let project_dialog = || rfd::FileDialog::new().add_filter("OxyBrush project", &[oxy_doc::format::EXTENSION]);
         match action {
+            UiAction::Save | UiAction::SaveThenContinue => {
+                if let Some(path) = ed.path.clone() {
+                    let saved = ed.save(&path);
+                    if action == UiAction::SaveThenContinue {
+                        if saved {
+                            if let Some(pending) = ed.pending.take() {
+                                ed.perform(pending);
+                            }
+                        } else {
+                            ed.pending = None;
+                        }
+                    }
+                    if let Some(g) = &self.gfx {
+                        g.window.request_redraw();
+                    }
+                    return;
+                }
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("OxyBrush project (*.oxb)", &[oxy_doc::format::EXTENSION])
+                    .set_file_name("sculpt.oxb");
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                let and_continue = action == UiAction::SaveThenContinue;
+                self.spawn_dialog(dialog.save_file(), move |path| DialogReply::Save { path, and_continue });
+            }
+            UiAction::SaveAs => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("OxyBrush project (*.oxb)", &[oxy_doc::format::EXTENSION])
+                    .set_file_name("sculpt.oxb");
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.save_file(), DialogReply::SaveAs);
+            }
             UiAction::Open => {
-                if let Some(p) = rfd::FileDialog::new()
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
                     .add_filter(
                         "OxyBrush project or mesh",
                         &["oxb", "obj", "stl", "ztl", "zpr", "OXB", "OBJ", "STL", "ZTL", "ZPR"],
@@ -687,45 +771,167 @@ impl App {
                     .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
-                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"])
-                    .pick_file()
-                {
-                    ed.open(&p);
+                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
                 }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::Open);
             }
             UiAction::Import => {
-                if let Some(p) = rfd::FileDialog::new()
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
                     .add_filter("Meshes", &["obj", "stl", "ztl", "zpr", "OBJ", "STL", "ZTL", "ZPR"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
-                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"])
-                    .pick_file()
-                {
-                    ed.import(&p);
+                    .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
                 }
-            }
-            UiAction::Save | UiAction::SaveThenContinue => {
-                let path = ed.path.clone().or_else(|| project_dialog().set_file_name("sculpt.oxb").save_file());
-                let saved = path.is_some_and(|p| ed.save(&p));
-                if action == UiAction::SaveThenContinue {
-                    if saved {
-                        if let Some(pending) = ed.pending.take() {
-                            ed.perform(pending);
-                        }
-                    } else {
-                        // Cancelled or failed: keep the document open.
-                        ed.pending = None;
-                    }
-                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::Import);
             }
             UiAction::LoadMatcap => {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("Matcap image", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"])
-                    .pick_file()
-                {
-                    // Copy into the library so it is there next time; without a
-                    // library folder, just use it for this session.
-                    let loaded = match &ed.matcap_dir {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("Matcap image", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::LoadMatcap);
+            }
+            UiAction::LoadAlpha => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("PNG image", &["png", "PNG"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::LoadAlpha);
+            }
+            UiAction::ImportBrush => {
+                if self.dialog_active {
+                    return;
+                }
+                let ext = oxy_sculpt::preset::EXTENSION;
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("OxyBrush brush preset", &[ext]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::ImportBrush);
+            }
+            UiAction::ExportBrush => {
+                if self.dialog_active {
+                    return;
+                }
+                if let Some(preset) = ed.request_export_preset.take() {
+                    let ext = oxy_sculpt::preset::EXTENSION;
+                    let mut dialog = rfd::AsyncFileDialog::new()
+                        .add_filter("OxyBrush brush preset", &[ext])
+                        .set_file_name(crate::presets::file_name(&preset.name));
+                    if let Some(g) = &self.gfx {
+                        dialog = dialog.set_parent(&g.window);
+                    }
+                    self.spawn_dialog(dialog.save_file(), move |path| DialogReply::ExportBrush { preset, path });
+                }
+            }
+            UiAction::ImportKeymap => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("OxyBrush keymap", &[keymap::EXTENSION, "txt"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::ImportKeymap);
+            }
+            UiAction::ExportKeymap => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("OxyBrush keymap", &[keymap::EXTENSION])
+                    .set_file_name("oxybrush.oxkeys");
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.save_file(), DialogReply::ExportKeymap);
+            }
+            UiAction::Export => {
+                if self.dialog_active {
+                    return;
+                }
+                let name = ed
+                    .path
+                    .as_ref()
+                    .and_then(|p| p.file_stem())
+                    .map(|s| format!("{}.glb", s.to_string_lossy()))
+                    .unwrap_or_else(|| "sculpt.glb".into());
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("glTF binary (games, engines, Blender)", &["glb"])
+                    .add_filter("glTF (single text file)", &["gltf"])
+                    .add_filter("Wavefront OBJ", &["obj"])
+                    .add_filter("STL (3D printing)", &["stl"])
+                    .add_filter("PLY", &["ply"])
+                    .set_file_name(name);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.save_file(), DialogReply::Export);
+            }
+            UiAction::RunScript => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("Python script", &["py", "PY"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::RunScript);
+            }
+        }
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
+        }
+    }
+
+    fn poll_dialog(&mut self) {
+        while let Ok(reply) = self.dialog_rx.try_recv() {
+            self.dialog_active = false;
+            match reply {
+                DialogReply::Open(Some(p)) => {
+                    self.editor.open(&p);
+                }
+                DialogReply::Import(Some(p)) => {
+                    self.editor.import(&p);
+                }
+                DialogReply::Save { path: Some(p), and_continue } => {
+                    let p = if p.extension().is_none() { p.with_extension(oxy_doc::format::EXTENSION) } else { p };
+                    let saved = self.editor.save(&p);
+                    if and_continue {
+                        if saved {
+                            if let Some(pending) = self.editor.pending.take() {
+                                self.editor.perform(pending);
+                            }
+                        } else {
+                            self.editor.pending = None;
+                        }
+                    }
+                }
+                DialogReply::Save { path: None, and_continue } => {
+                    if and_continue {
+                        self.editor.pending = None;
+                    }
+                }
+                DialogReply::SaveAs(Some(p)) => {
+                    let p = if p.extension().is_none() { p.with_extension(oxy_doc::format::EXTENSION) } else { p };
+                    self.editor.save(&p);
+                }
+                DialogReply::LoadMatcap(Some(p)) => {
+                    let loaded = match &self.editor.matcap_dir {
                         Some(dir) => crate::matcaps::import(dir, &p),
                         None => crate::matcaps::decode(&p).map(|(w, h, rgba)| crate::matcaps::CustomMatcap {
                             name: p.file_stem().map_or("Matcap".into(), |s| s.to_string_lossy().into_owned()),
@@ -733,62 +939,36 @@ impl App {
                         }),
                     };
                     match loaded {
-                        Ok(m) => ed.add_custom_matcap(m),
-                        Err(e) => ed.status = format!("Could not load {}: {e}", p.display()),
+                        Ok(m) => self.editor.add_custom_matcap(m),
+                        Err(e) => self.editor.status = format!("Could not load {}: {e}", p.display()),
                     }
                 }
-            }
-            UiAction::LoadAlpha => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("PNG image", &["png", "PNG"]).pick_file() {
-                    match crate::support::load_alpha_png(&p) {
-                        Ok(alpha) => ed.add_alpha(alpha),
-                        Err(e) => ed.status = format!("Could not load {}: {e}", p.display()),
+                DialogReply::LoadAlpha(Some(p)) => match crate::support::load_alpha_png(&p) {
+                    Ok(alpha) => self.editor.add_alpha(alpha),
+                    Err(e) => self.editor.status = format!("Could not load {}: {e}", p.display()),
+                },
+                DialogReply::ImportBrush(Some(p)) => match crate::presets::read_file(&p) {
+                    Ok(preset) => {
+                        self.editor.apply_preset(&preset);
+                        self.editor.add_preset(preset);
                     }
-                }
-            }
-            UiAction::ImportBrush => {
-                let ext = oxy_sculpt::preset::EXTENSION;
-                if let Some(p) = rfd::FileDialog::new().add_filter("OxyBrush brush preset", &[ext]).pick_file() {
-                    match crate::presets::read_file(&p) {
-                        Ok(preset) => {
-                            ed.apply_preset(&preset);
-                            ed.add_preset(preset);
-                        }
-                        Err(e) => ed.status = format!("Could not import {}: {e}", p.display()),
-                    }
-                }
-            }
-            UiAction::ExportBrush => {
-                if let Some(preset) = ed.request_export_preset.take() {
+                    Err(e) => self.editor.status = format!("Could not import {}: {e}", p.display()),
+                },
+                DialogReply::ExportBrush { preset, path: Some(p) } => {
                     let ext = oxy_sculpt::preset::EXTENSION;
-                    if let Some(p) = rfd::FileDialog::new()
-                        .add_filter("OxyBrush brush preset", &[ext])
-                        .set_file_name(crate::presets::file_name(&preset.name))
-                        .save_file()
-                    {
-                        let p = if p.extension().is_none() { p.with_extension(ext) } else { p };
-                        ed.status = match crate::presets::write_file(&preset, &p) {
-                            Ok(()) => format!("Exported brush preset to {}", p.display()),
-                            Err(e) => format!("Could not export: {e}"),
-                        };
-                    }
+                    let p = if p.extension().is_none() { p.with_extension(ext) } else { p };
+                    self.editor.status = match crate::presets::write_file(&preset, &p) {
+                        Ok(()) => format!("Exported brush preset to {}", p.display()),
+                        Err(e) => format!("Could not export: {e}"),
+                    };
                 }
-            }
-            UiAction::SaveAs => {
-                if let Some(p) = project_dialog().set_file_name("sculpt.oxb").save_file() {
-                    ed.save(&p);
-                }
-            }
-            UiAction::ImportKeymap => {
-                if let Some(p) =
-                    rfd::FileDialog::new().add_filter("OxyBrush keymap", &[keymap::EXTENSION, "txt"]).pick_file()
-                {
-                    ed.status = match std::fs::read_to_string(&p) {
+                DialogReply::ImportKeymap(Some(p)) => {
+                    self.editor.status = match std::fs::read_to_string(&p) {
                         Ok(text) => match keymap::Keymap::import_text(&text) {
                             Ok(map) => {
                                 let n = map.conflicts().len() + map.nav_conflicts().len();
-                                ed.keymap = map;
-                                ed.keymap_capture = None;
+                                self.editor.keymap = map;
+                                self.editor.keymap_capture = None;
                                 if n == 0 {
                                     format!("Imported keymap from {}", p.display())
                                 } else {
@@ -800,47 +980,24 @@ impl App {
                         Err(e) => format!("Could not import {}: {e}", p.display()),
                     };
                 }
-            }
-            UiAction::ExportKeymap => {
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("OxyBrush keymap", &[keymap::EXTENSION])
-                    .set_file_name("oxybrush.oxkeys")
-                    .save_file()
-                {
+                DialogReply::ExportKeymap(Some(p)) => {
                     let p = if p.extension().is_none() { p.with_extension(keymap::EXTENSION) } else { p };
-                    ed.status = match ed.keymap.save(&p) {
+                    self.editor.status = match self.editor.keymap.save(&p) {
                         Ok(()) => format!("Exported keymap to {}", p.display()),
                         Err(e) => format!("Could not export: {e}"),
                     };
                 }
-            }
-            UiAction::Export => {
-                let name = ed
-                    .path
-                    .as_ref()
-                    .and_then(|p| p.file_stem())
-                    .map(|s| format!("{}.glb", s.to_string_lossy()))
-                    .unwrap_or_else(|| "sculpt.glb".into());
-                if let Some(p) = rfd::FileDialog::new()
-                    .add_filter("glTF binary (games, engines, Blender)", &["glb"])
-                    .add_filter("glTF (single text file)", &["gltf"])
-                    .add_filter("Wavefront OBJ", &["obj"])
-                    .add_filter("STL (3D printing)", &["stl"])
-                    .add_filter("PLY", &["ply"])
-                    .set_file_name(name)
-                    .save_file()
-                {
-                    ed.export(&p);
+                DialogReply::Export(Some(p)) => {
+                    self.editor.export(&p);
                 }
-            }
-            UiAction::RunScript => {
-                if let Some(p) = rfd::FileDialog::new().add_filter("Python script", &["py", "PY"]).pick_file() {
+                DialogReply::RunScript(Some(p)) => {
                     self.run_python_script(&p);
                 }
+                _ => {}
             }
-        }
-        if let Some(g) = &self.gfx {
-            g.window.request_redraw();
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
         }
     }
 
@@ -979,6 +1136,7 @@ impl ApplicationHandler for App {
         // The agent thread woke us. Apply the call and draw it.
         self.poll_agent();
         self.poll_plugin();
+        self.poll_dialog();
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
@@ -988,6 +1146,7 @@ impl ApplicationHandler for App {
         self.sync_agent();
         self.poll_agent();
         self.poll_plugin();
+        self.poll_dialog();
         if self.shot_reply.is_some()
             && let Some(g) = &self.gfx
         {
@@ -1001,6 +1160,7 @@ impl ApplicationHandler for App {
             || self.shot_reply.is_some()
             || self.editor.updater.busy()
             || self.plugin_process.is_some()
+            || self.dialog_active
         {
             Duration::from_millis(50)
         } else if self.agent.is_some() {
