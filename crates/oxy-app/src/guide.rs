@@ -82,11 +82,12 @@ Everything in the palette is also in the menus; the palette just saves you looki
     },
     Topic {
         title: "Strokes, stabilizer and alphas",
-        keywords: "stroke mode freehand line stamp spray lazy alpha texture pattern",
+        keywords: "stroke mode freehand line stamp curve spline editable adjust fade taper spray lazy alpha texture pattern",
         body: "Stroke mode (in the Stroke section) sets how a drag turns into dabs:\n\n\
 - Freehand follows the pointer.\n\
 - Line draws a straight line from where you press to where you release.\n\
-- Stamp places a single dab: drag out from where you press to size it (good with alphas).\n\n\
+- Stamp places a single dab: drag out from where you press to size it (good with alphas).\n\
+- Curve draws a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the Fade in / Fade out sliders update it live. Accept (Enter) applies it as one undo step, as does starting the next stroke; Cancel (Esc) discards it. You can orbit around it while it is open.\n\n\
 The Spray slider scatters dabs around the stroke. The Stabilizer slider makes the brush trail behind the pointer for smooth, controlled lines. Alphas shape each dab: pick one in the Alpha section, or load your own grayscale PNG.",
     },
     Topic {

@@ -607,6 +607,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     if !ed.show_welcome {
         transform_gizmo(ui.ctx(), ed, canvas);
     }
+    draw_curve(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
@@ -3555,6 +3556,9 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
     if ed.extract_preview.is_some() {
         extract_window(&ctx, ed);
     }
+    if ed.curve.is_some() {
+        curve_window(&ctx, ed);
+    }
     toast(&ctx, ed);
     if ed.show_welcome && ed.pending.is_none() && ed.recoverable.is_empty() {
         welcome(&ctx, ed, action);
@@ -3987,6 +3991,88 @@ fn draw_symmetry_indicators(painter: &egui::Painter, ed: &Editor, canvas: egui::
             painter.circle_filled(screen_pos, 3.0, col);
             painter.circle_stroke(screen_pos, 3.5, EStroke::new(1.0, Color32::from_black_alpha(180)));
         }
+    }
+}
+
+/// The curve stroke being drawn or adjusted: its line and control points.
+fn draw_curve(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+    let painter = ui.painter_at(canvas);
+    let ppp = ed.pixels_per_point.max(0.1);
+    let accent = ui.visuals().selection.stroke.color;
+    let to_ui = |p: Vec2| egui::pos2(p.x, p.y) / ppp;
+    if let Drag::CurveDraw { points, .. } = &ed.drag {
+        let line: Vec<egui::Pos2> = points.iter().map(|&p| to_ui(p)).collect();
+        painter.add(egui::Shape::line(line, EStroke::new(1.5, accent.linear_multiply(0.8))));
+        return;
+    }
+    let Some(c) = &ed.curve else { return };
+    let origin = Vec2::new(ed.canvas[0], ed.canvas[1]);
+    let size = ed.canvas_size();
+    let project = |q: Vec3| ed.camera.project(q, size).map(|s| to_ui(s + origin));
+    let step = (ed.brush_radius_pt * 0.25).max(1.0) * ed.curve_world_per_pt();
+    let line: Vec<egui::Pos2> =
+        crate::editor::curve_points(&c.points, step).into_iter().filter_map(|(q, _, _)| project(q)).collect();
+    painter.add(egui::Shape::line(line.clone(), EStroke::new(3.0, Color32::from_black_alpha(110))));
+    painter.add(egui::Shape::line(line, EStroke::new(1.5, accent)));
+    let held = match ed.drag {
+        Drag::CurveHandle { index } => Some(index),
+        _ => None,
+    };
+    for (i, (q, _)) in c.points.iter().enumerate() {
+        if let Some(p) = project(*q) {
+            let r = if held == Some(i) { 6.5 } else { 5.0 };
+            painter.circle_filled(p, r + 1.5, Color32::from_black_alpha(140));
+            painter.circle_filled(p, r, if i == 0 || i + 1 == c.points.len() { accent } else { Color32::WHITE });
+        }
+    }
+}
+
+/// Fades and Accept / Cancel for the curve stroke. Enter accepts, Esc cancels.
+fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
+    let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+    let mut accept = enter && !ctx.egui_wants_keyboard_input();
+    let mut cancel = esc;
+    egui::Window::new("Curve stroke")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+        .show(ctx, |ui| {
+            ui.label(RichText::new(plain::CURVE_HELP).weak().small());
+            ui.add_space(4.0);
+            let Some(c) = ed.curve.as_mut() else { return };
+            egui::Grid::new("curve_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label("Fade in");
+                tips::hover(
+                    ui.add(
+                        egui::Slider::new(&mut c.fade_in, 0.0..=0.5)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    ),
+                    plain::CURVE_FADE,
+                );
+                ui.end_row();
+                ui.label("Fade out");
+                tips::hover(
+                    ui.add(
+                        egui::Slider::new(&mut c.fade_out, 0.0..=0.5)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                    ),
+                    plain::CURVE_FADE,
+                );
+                ui.end_row();
+            });
+            ed.curve_fade_in = c.fade_in;
+            ed.curve_fade_out = c.fade_out;
+            ui.label(RichText::new(plain::CURVE_SIZE).weak().small());
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                accept |= tips::hover(ui.button("Accept"), plain::CURVE_ACCEPT).clicked();
+                cancel |= tips::hover(ui.button("Cancel"), plain::CURVE_CANCEL).clicked();
+            });
+        });
+    if cancel {
+        ed.cancel_curve();
+    } else if accept {
+        ed.accept_curve();
     }
 }
 

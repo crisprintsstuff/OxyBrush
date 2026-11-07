@@ -540,21 +540,25 @@ impl App {
         // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
         ed.update_extract_preview();
+        ed.update_curve();
         ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
-        let previewing = ed.insert_preview.is_some() || ed.extract_preview.is_some();
+        let previewing = ed.insert_preview.is_some() || ed.extract_preview.is_some() || ed.curve.is_some();
+        // A curve stroke's preview is the whole piece with the stroke
+        // applied: draw it in the piece's place, looking like the piece.
+        let curve_piece = ed.curve.as_ref().map(|c| c.piece);
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();
         for p in ed.scene.pieces.iter_mut() {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
-            if p.visible {
+            if p.visible && Some(p.id) != curve_piece {
                 items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false });
             }
         }
         if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
-            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: true });
+            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: curve_piece.is_none() });
         }
 
         let frame = match g.surface.get_current_texture() {

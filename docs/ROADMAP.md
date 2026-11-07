@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-07 (since v2.5.7-beta: OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-07 (since v2.5.7-beta: Curve stroke mode (RFC 0004); OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
 
 ## Status at a glance
 
@@ -50,7 +50,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 | # | Feature | Details | Status |
 |---|---|---|---|
-| 3.1 | **Stroke control** | Stabilizer (lazy mouse), Stamp (drag to size), spray, Line, pressure curve | ✅ 0.1.0 |
+| 3.1 | **Stroke control** | Stabilizer (lazy mouse), Stamp (drag to size), spray, Line, pressure curve; editable Curve strokes ([RFC 0004](rfcs/0004-curve-stroke.md), after 2.5.7) | ✅ 0.1.0 |
 | 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
 | 3.3 | **Alphas and stencils** | Alphas ✅ (7 procedural CC0 + user PNGs, rotation, follow stroke). Stencils (screen-space overlays) ⏳ | 🚧 |
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
