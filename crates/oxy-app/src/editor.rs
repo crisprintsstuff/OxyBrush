@@ -42,10 +42,14 @@ pub enum StrokeMode {
     Line,
     /// Drag out one dab: distance sets the size, direction sets the alpha rotation.
     Stamp,
+    /// Draw a stroke that stays editable: it becomes a curve with control
+    /// points you can move, add or remove, with a live preview, and is
+    /// applied when accepted (see [`CurveEdit`]).
+    Curve,
 }
 
 impl StrokeMode {
-    pub const ALL: [StrokeMode; 3] = [StrokeMode::Freehand, StrokeMode::Line, StrokeMode::Stamp];
+    pub const ALL: [StrokeMode; 4] = [StrokeMode::Freehand, StrokeMode::Line, StrokeMode::Stamp, StrokeMode::Curve];
 
     /// Key used in brush presets.
     pub fn key(self) -> &'static str {
@@ -53,6 +57,7 @@ impl StrokeMode {
             StrokeMode::Freehand => "freehand",
             StrokeMode::Line => "line",
             StrokeMode::Stamp => "stamp",
+            StrokeMode::Curve => "curve",
         }
     }
 
@@ -65,8 +70,124 @@ impl StrokeMode {
             StrokeMode::Freehand => "Freehand",
             StrokeMode::Line => "Line",
             StrokeMode::Stamp => "Stamp (drag to size)",
+            StrokeMode::Curve => "Curve (adjust, then accept)",
         }
     }
+}
+
+/// A curve stroke being adjusted (see [`StrokeMode::Curve`]). The brush is
+/// applied along a smooth curve through `points` to a copy of the piece,
+/// drawn in its place; the piece itself and the undo history are only
+/// changed on accept, by replaying the same stroke (strokes are
+/// deterministic), so the result matches the preview exactly.
+pub struct CurveEdit {
+    pub piece: u64,
+    pub kind: BrushKind,
+    pub invert: bool,
+    /// Control points on the surface: (position, normal).
+    pub points: Vec<(Vec3, Vec3)>,
+    /// Fraction of the curve's length over which the stroke fades in and
+    /// out (0 = full strength from end to end).
+    pub fade_in: f32,
+    pub fade_out: f32,
+    /// World units per logical point, fixed when the curve was drawn, so
+    /// the brush size doesn't change as you zoom or orbit.
+    world_per_pt: f32,
+    pressure: f32,
+    /// The piece's history revision and topology when the curve was drawn;
+    /// if either changes, the preview no longer applies.
+    revision: u64,
+    topology: u64,
+    /// The piece with the stroke applied, and the chunks it changed.
+    pub preview: Mesh,
+    touched: Vec<u32>,
+    /// What the preview was built from.
+    built: Option<CurveKey>,
+    samples: Vec<StrokeSample>,
+}
+
+#[derive(Clone, PartialEq)]
+struct CurveKey {
+    points: Vec<(Vec3, Vec3)>,
+    fade: (f32, f32),
+    settings: BrushSettings,
+}
+
+/// Catmull-Rom through `points` (positions and normals), sampled about
+/// every `step` world units along the curve.
+pub fn curve_points(points: &[(Vec3, Vec3)], step: f32) -> Vec<(Vec3, Vec3, f32)> {
+    let n = points.len();
+    if n < 2 {
+        return Vec::new();
+    }
+    let at = |i: isize| points[i.clamp(0, n as isize - 1) as usize];
+    let mut out: Vec<(Vec3, Vec3)> = Vec::new();
+    for seg in 0..n - 1 {
+        let (p0, p1, p2, p3) = (at(seg as isize - 1), at(seg as isize), at(seg as isize + 1), at(seg as isize + 2));
+        let len = p1.0.distance(p2.0);
+        let k = ((len / step.max(1e-6)).ceil() as usize).clamp(1, 4096);
+        for j in 0..k + usize::from(seg == n - 2) {
+            let t = j as f32 / k as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let pos = 0.5
+                * ((2.0 * p1.0)
+                    + (-p0.0 + p2.0) * t
+                    + (2.0 * p0.0 - 5.0 * p1.0 + 4.0 * p2.0 - p3.0) * t2
+                    + (-p0.0 + 3.0 * p1.0 - 3.0 * p2.0 + p3.0) * t3);
+            let normal = p1.1.lerp(p2.1, t).normalize_or(p1.1);
+            out.push((pos, normal));
+        }
+    }
+    // Arc-length parameter 0..1, for the fades.
+    let mut acc = vec![0.0f32; out.len()];
+    for i in 1..out.len() {
+        acc[i] = acc[i - 1] + out[i].0.distance(out[i - 1].0);
+    }
+    let total = acc.last().copied().unwrap_or(0.0).max(1e-9);
+    out.into_iter().zip(acc).map(|((p, nrm), a)| (p, nrm, a / total)).collect()
+}
+
+/// Simplify a drawn screen path to a few control points (Ramer-Douglas-
+/// Peucker with tolerance `tol` px), keeping at most `max` points.
+fn simplify_path(path: &[Vec2], tol: f32, max: usize) -> Vec<Vec2> {
+    if path.len() <= 2 {
+        return path.to_vec();
+    }
+    let mut keep = vec![false; path.len()];
+    keep[0] = true;
+    *keep.last_mut().unwrap() = true;
+    let mut stack = vec![(0usize, path.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        let (pa, pb) = (path[a], path[b]);
+        let ab = pb - pa;
+        let mut best = (0.0f32, 0usize);
+        for (i, &p) in path.iter().enumerate().take(b).skip(a + 1) {
+            let d = if ab.length_squared() < 1e-6 { p.distance(pa) } else { (ab.perp_dot(p - pa)).abs() / ab.length() };
+            if d > best.0 {
+                best = (d, i);
+            }
+        }
+        if best.0 > tol {
+            keep[best.1] = true;
+            stack.push((a, best.1));
+            stack.push((best.1, b));
+        }
+    }
+    let mut pts: Vec<Vec2> = path.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| *p).collect();
+    // Too many: keep evenly spaced ones, always with both ends.
+    if pts.len() > max {
+        let last = pts.len() - 1;
+        pts = (0..max).map(|i| pts[i * last / (max - 1)]).collect();
+    }
+    pts
+}
+
+/// Fade factor at `t` (0..1 along the curve).
+fn curve_fade(t: f32, fade_in: f32, fade_out: f32) -> f32 {
+    let ramp = |x: f32, w: f32| if w <= 1e-4 { 1.0 } else { (x / w).clamp(0.0, 1.0) };
+    let (a, b) = (ramp(t, fade_in), ramp(1.0 - t, fade_out));
+    let s = |x: f32| x * x * (3.0 - 2.0 * x);
+    s(a) * s(b)
 }
 
 /// A mask extract being previewed (see [`Editor::begin_extract`]).
@@ -241,6 +362,16 @@ pub enum Drag {
         lazy: Option<Vec2>,
         /// Last pointer position queued for the next frame redraw if coalescing is on.
         queued: Option<Vec2>,
+    },
+    /// Drawing a curve stroke: the pointer path in physical px.
+    CurveDraw {
+        kind: BrushKind,
+        invert: bool,
+        points: Vec<Vec2>,
+    },
+    /// Moving control point `index` of the open curve stroke.
+    CurveHandle {
+        index: usize,
     },
     /// Line / Stamp strokes: nothing changes until release.
     Deferred {
@@ -550,6 +681,11 @@ pub struct Editor {
     /// Mask extract in progress: the shell is shown and can be adjusted, and
     /// becomes a piece only when accepted.
     pub extract_preview: Option<ExtractPreview>,
+    /// A curve stroke being adjusted (stroke mode Curve).
+    pub curve: Option<CurveEdit>,
+    /// Fade in / out for new curve strokes (fraction of the length).
+    pub curve_fade_in: f32,
+    pub curve_fade_out: f32,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
@@ -760,6 +896,9 @@ impl Default for Editor {
             hide_cursor_during_stroke: true,
             insert_preview: None,
             extract_preview: None,
+            curve: None,
+            curve_fade_in: 0.15,
+            curve_fade_out: 0.15,
             cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
@@ -947,6 +1086,8 @@ impl Editor {
                 | Drag::CurveCut { .. }
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
+                | Drag::CurveDraw { .. }
+                | Drag::CurveHandle { .. }
                 | Drag::Select { .. }
                 | Drag::PendingStroke
                 | Drag::GizmoSnapOrMask { .. }
@@ -1256,6 +1397,9 @@ impl Editor {
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
             return;
         }
+        if self.curve.is_some() && self.curve_pointer_down(p) {
+            return;
+        }
         let (kind, _invert) = self.effective_brush();
         if kind.is_curve_cut() {
             if self.job_blocks_active() {
@@ -1385,6 +1529,10 @@ impl Editor {
         } else {
             self.stroke_mode
         };
+        if mode == StrokeMode::Curve {
+            self.drag = Drag::CurveDraw { kind, invert, points: vec![p] };
+            return;
+        }
         if mode != StrokeMode::Freehand {
             self.drag = Drag::Deferred { mode, kind, invert, start: p };
             return;
@@ -1674,6 +1822,23 @@ impl Editor {
                 true
             }
             Drag::Deferred { .. } => true,
+            Drag::CurveDraw { points, .. } => {
+                if points.last().is_none_or(|l| l.distance(pos) > 2.0) {
+                    points.push(pos);
+                }
+                true
+            }
+            Drag::CurveHandle { index } => {
+                let index = *index;
+                let (o, d) = self.camera.ray(self.canvas_local(pos), size);
+                if let Some(c) = &mut self.curve
+                    && let Some(hit) = self.scene.active().mesh.raycast(o, d)
+                    && let Some(p) = c.points.get_mut(index)
+                {
+                    *p = (hit.point, facing(hit.normal, d));
+                }
+                true
+            }
             Drag::Gizmo(g) if self.coalesce_strokes => {
                 g.queued_pos = Some(pos);
                 true
@@ -1903,6 +2068,8 @@ impl Editor {
                     self.finish_deferred(mode, kind, invert, start, end);
                 }
             }
+            Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
+            Drag::CurveHandle { .. } => {}
             Drag::Select { action, points, lasso, click_group } => {
                 self.finish_select(action, points, lasso, click_group)
             }
@@ -2534,6 +2701,205 @@ impl Editor {
         self.status = format!("Created {name}");
     }
 
+    /// Turn a drawn path (physical px) into an editable curve stroke on the
+    /// active piece.
+    fn begin_curve(&mut self, kind: BrushKind, invert: bool, path: &[Vec2]) {
+        let tol = 6.0 * self.pixels_per_point.max(0.5);
+        let mut screen = simplify_path(path, tol, 16);
+        if screen.len() == 1 {
+            // A click: a short curve isn't useful; nothing to do.
+            return;
+        }
+        if screen.len() == 2 && screen[0].distance(screen[1]) < tol {
+            return;
+        }
+        // Long straight drags still get a middle point to bend.
+        if screen.len() == 2 {
+            screen.insert(1, screen[0].lerp(screen[1], 0.5));
+        }
+        let size = self.canvas_size();
+        let mesh = &self.scene.active().mesh;
+        let points: Vec<(Vec3, Vec3)> = screen
+            .iter()
+            .filter_map(|&p| {
+                let (o, d) = self.camera.ray(self.canvas_local(p), size);
+                mesh.raycast(o, d).map(|h| (h.point, facing(h.normal, d)))
+            })
+            .collect();
+        if points.len() < 2 {
+            self.status = "Draw the curve on the model".into();
+            return;
+        }
+        let piece = self.scene.active();
+        let mut preview = piece.mesh.clone();
+        preview.mark_all_dirty();
+        self.curve = Some(CurveEdit {
+            piece: piece.id,
+            kind,
+            invert,
+            fade_in: self.curve_fade_in,
+            fade_out: self.curve_fade_out,
+            world_per_pt: self.world_radius(points[0].0, 1.0),
+            pressure: self.pressure(),
+            revision: self.history.revision(),
+            topology: piece.mesh.topology_version(),
+            points,
+            preview,
+            touched: Vec::new(),
+            built: None,
+            samples: Vec::new(),
+        });
+        self.status =
+            "Drag the points to adjust the curve, click it to add one, Alt+click to remove one; Enter applies it"
+                .into();
+    }
+
+    /// A primary press while a curve is open: grab a control point, add
+    /// one on the curve, remove one (Alt), or otherwise apply the curve
+    /// and let the press do what it normally does. True if handled.
+    fn curve_pointer_down(&mut self, p: Vec2) -> bool {
+        let Some(c) = &self.curve else { return false };
+        let size = self.canvas_size();
+        let local = self.canvas_local(p);
+        let reach = 10.0 * self.pixels_per_point.max(0.5);
+        let projected: Vec<Option<Vec2>> = c.points.iter().map(|(q, _)| self.camera.project(*q, size)).collect();
+        let handle = projected
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| s.map(|s| (i, s.distance(local))))
+            .filter(|(_, d)| *d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i);
+        if let Some(i) = handle {
+            if self.active_modifiers().alt {
+                let c = self.curve.as_mut().expect("open");
+                if c.points.len() > 2 {
+                    c.points.remove(i);
+                } else {
+                    self.status = "A curve needs at least two points".into();
+                }
+            } else {
+                self.drag = Drag::CurveHandle { index: i };
+            }
+            return true;
+        }
+        // On the curve between two points: insert one there and drag it.
+        let samples = curve_points(&c.points, c.world_per_pt * 2.0);
+        let near = samples
+            .iter()
+            .filter_map(|(q, _, t)| self.camera.project(*q, size).map(|s| (s.distance(local), *t)))
+            .filter(|(d, _)| *d <= reach * 0.8)
+            .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, t)) = near {
+            let (o, d) = self.camera.ray(local, size);
+            if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                let c = self.curve.as_mut().expect("open");
+                let segs = (c.points.len() - 1) as f32;
+                let at = ((t * segs).floor() as usize + 1).min(c.points.len() - 1);
+                c.points.insert(at, (hit.point, facing(hit.normal, d)));
+                self.drag = Drag::CurveHandle { index: at };
+                return true;
+            }
+        }
+        // A press on the model starts the next stroke, so this curve is
+        // done. Elsewhere (orbit, pan, the view strip) it stays open.
+        let (o, d) = self.camera.ray(local, size);
+        if self.scene.active().visible && self.scene.active().mesh.raycast(o, d).is_some() {
+            self.accept_curve();
+        }
+        false
+    }
+
+    /// Rebuild the curve preview if anything it depends on changed, or
+    /// drop it if the piece changed underneath. Called every frame.
+    pub fn update_curve(&mut self) {
+        let Some(c) = &self.curve else { return };
+        let Some(piece) = self.scene.pieces.iter().find(|p| p.id == c.piece) else {
+            self.curve = None;
+            return;
+        };
+        if self.scene.active().id != c.piece
+            || piece.mesh.topology_version() != c.topology
+            || self.history.revision() != c.revision
+        {
+            self.curve = None;
+            self.status = "Curve stroke discarded: the model changed".into();
+            return;
+        }
+        let radius = self.brush_radius_pt * c.world_per_pt;
+        let settings = *self.new_stroke(c.kind, c.invert, radius, 0.0).settings();
+        let c = self.curve.as_mut().expect("checked");
+        let key = CurveKey { points: c.points.clone(), fade: (c.fade_in, c.fade_out), settings };
+        if c.built.as_ref() == Some(&key) {
+            return;
+        }
+        // The samples: the curve, snapped to the surface along its normals.
+        let real = &piece.mesh;
+        let probe = radius.max(c.world_per_pt * 4.0) * 2.0;
+        c.samples = curve_points(&c.points, (radius * 0.05).max(1e-5))
+            .into_iter()
+            .filter_map(|(q, n, t)| {
+                let hit = real.raycast(q + n * probe, -n).or_else(|| real.raycast(q - n * probe, n))?;
+                let pressure = c.pressure * curve_fade(t, c.fade_in, c.fade_out);
+                Some(StrokeSample { position: hit.point, normal: facing(hit.normal, -n), pressure })
+            })
+            .collect();
+        // Back to the untouched piece, then apply the stroke again.
+        for &chunk in &c.touched {
+            let r = real.chunks[chunk as usize].vertices.clone();
+            let r = r.start as usize..r.end as usize;
+            c.preview.positions[r.clone()].copy_from_slice(&real.positions[r.clone()]);
+            c.preview.mask[r.clone()].copy_from_slice(&real.mask[r.clone()]);
+            if c.preview.color.len() == real.color.len() {
+                c.preview.color[r.clone()].copy_from_slice(&real.color[r]);
+            }
+        }
+        if c.preview.color.len() != real.color.len() {
+            c.preview.color = real.color.clone();
+        }
+        let restored = std::mem::take(&mut c.touched);
+        c.preview.update_chunks(&restored);
+        let kind = c.kind;
+        let invert = c.invert;
+        let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
+        let c = self.curve.as_mut().expect("checked");
+        let mut touched = vec![false; c.preview.chunks.len()];
+        for &s in &c.samples {
+            stroke.add_sample(&mut c.preview, s, &mut |_, chunk| touched[chunk as usize] = true);
+        }
+        c.touched = touched.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| i as u32).collect();
+        c.built = Some(key);
+    }
+
+    /// Apply the curve stroke to the piece, as one undo step.
+    pub fn accept_curve(&mut self) {
+        self.update_curve();
+        let Some(c) = self.curve.take() else { return };
+        let radius = self.brush_radius_pt * c.world_per_pt;
+        let mut stroke = self.new_stroke(c.kind, c.invert, radius, 0.0);
+        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
+        let paint = c.kind == BrushKind::Paint || piece.mesh.is_painted();
+        self.history.begin_with(c.kind.label(), piece.id, &piece.mesh, paint);
+        let history = &mut self.history;
+        for &s in &c.samples {
+            stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
+        }
+        self.history.commit();
+        self.status = format!("Applied curve stroke ({})", c.kind.label());
+    }
+
+    /// World units per logical point of the open curve (1 when none).
+    pub fn curve_world_per_pt(&self) -> f32 {
+        self.curve.as_ref().map_or(1.0, |c| c.world_per_pt)
+    }
+
+    /// Discard the curve stroke; the piece is unchanged.
+    pub fn cancel_curve(&mut self) {
+        if self.curve.take().is_some() {
+            self.status = "Curve stroke cancelled".into();
+        }
+    }
+
     /// Start a mask extract: show the shell built from the active piece's
     /// mask as a preview. Nothing is added to the scene until
     /// [`Self::accept_extract`]; thickness and smoothing (`extract_thickness`,
@@ -2617,13 +2983,14 @@ impl Editor {
         }
     }
 
-    /// The mesh to draw as a preview (an inserted primitive or a mask
-    /// extract), if any.
+    /// The mesh to draw as a preview (an inserted primitive, a mask extract
+    /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
-        match (&mut self.insert_preview, &mut self.extract_preview) {
-            (Some(m), _) => Some(m),
-            (None, Some(p)) => Some(&mut p.mesh),
-            (None, None) => None,
+        match (&mut self.insert_preview, &mut self.extract_preview, &mut self.curve) {
+            (Some(m), _, _) => Some(m),
+            (None, Some(p), _) => Some(&mut p.mesh),
+            (None, None, Some(c)) => Some(&mut c.preview),
+            (None, None, None) => None,
         }
     }
 
@@ -4067,6 +4434,152 @@ mod tests {
             e.undo();
             assert_eq!(before, e.scene.active().mesh.positions);
         }
+    }
+
+    /// Draw a curve stroke from left to right across the sphere.
+    fn draw_curve(e: &mut Editor) {
+        e.stroke_mode = StrokeMode::Curve;
+        e.pointer = Some(Vec2::new(330.0, 320.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=40 {
+            let x = 330.0 + i as f32 * 3.5;
+            e.pointer_moved(Vec2::new(x, 320.0 - (i as f32 * 0.16).sin() * 30.0));
+        }
+        e.pointer_up();
+    }
+
+    #[test]
+    fn curve_stroke_previews_until_accepted_as_one_undo_step() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        let revision = e.history.revision();
+        draw_curve(&mut e);
+        let c = e.curve.as_ref().expect("an editable curve");
+        assert!((2..=16).contains(&c.points.len()), "{} control points", c.points.len());
+        e.update_curve();
+        // The piece and the history are untouched; only the preview changed.
+        assert_eq!(e.scene.active().mesh.positions, before);
+        assert_eq!(e.history.revision(), revision);
+        let preview = e.curve.as_ref().unwrap().preview.positions.clone();
+        assert_ne!(preview, before, "the preview shows the stroke");
+
+        // Changing the size rebuilds the preview.
+        e.brush_radius_pt *= 1.6;
+        e.update_curve();
+        let bigger = e.curve.as_ref().unwrap().preview.positions.clone();
+        assert_ne!(bigger, preview);
+
+        // Accept applies exactly what the preview showed, as one undo step.
+        e.accept_curve();
+        assert!(e.curve.is_none());
+        assert_eq!(e.scene.active().mesh.positions, bigger, "result matches the preview");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn curve_points_can_be_moved_added_and_removed() {
+        let mut e = editor();
+        draw_curve(&mut e);
+        e.update_curve();
+        let size = e.canvas_size();
+        let n = e.curve.as_ref().unwrap().points.len();
+        // Drag the first control point somewhere else on the sphere.
+        let p0 = e.camera.project(e.curve.as_ref().unwrap().points[0].0, size).unwrap();
+        e.pointer = Some(p0);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::CurveHandle { index: 0 }));
+        e.pointer_moved(p0 + Vec2::new(0.0, 40.0));
+        e.pointer_up();
+        let moved = e.camera.project(e.curve.as_ref().unwrap().points[0].0, size).unwrap();
+        assert!(moved.distance(p0 + Vec2::new(0.0, 40.0)) < 2.0, "point follows the pointer on the surface");
+        let before_rebuild = e.curve.as_ref().unwrap().preview.positions.clone();
+        e.update_curve();
+        assert_ne!(e.curve.as_ref().unwrap().preview.positions, before_rebuild, "preview follows the edit");
+
+        // Click on the curve between two points: a new point there.
+        let (a, b) = {
+            let c = e.curve.as_ref().unwrap();
+            (c.points[n - 2].0, c.points[n - 1].0)
+        };
+        let mid = curve_points(&e.curve.as_ref().unwrap().points, 0.01)
+            .into_iter()
+            .find(|(q, _, _)| {
+                q.distance(a) > 0.02 && q.distance(b) > 0.02 && {
+                    let t = (*q - a).dot(b - a) / (b - a).length_squared();
+                    (0.3..0.7).contains(&t)
+                }
+            })
+            .map(|(q, _, _)| q)
+            .unwrap();
+        e.pointer = e.camera.project(mid, size);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert_eq!(e.curve.as_ref().unwrap().points.len(), n + 1, "point added");
+
+        // Alt+click a point removes it.
+        let last = e.camera.project(e.curve.as_ref().unwrap().points.last().unwrap().0, size).unwrap();
+        e.pointer = Some(last);
+        e.modifiers.alt = true;
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        e.modifiers.alt = false;
+        assert_eq!(e.curve.as_ref().unwrap().points.len(), n, "point removed");
+
+        // Orbiting from empty space keeps the curve open; cancel leaves the
+        // model as it was.
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(25.0, 5.0));
+        e.pointer_up();
+        assert!(e.curve.is_some(), "still open after orbiting");
+        e.cancel_curve();
+        assert!(e.curve.is_none());
+        assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn a_new_stroke_applies_the_open_curve_and_undo_drops_it() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        draw_curve(&mut e);
+        e.update_curve();
+        // Pressing on the model away from the curve applies it first.
+        e.pointer = Some(Vec2::new(400.0, 230.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert_ne!(e.scene.active().mesh.positions, before, "the curve was applied");
+        assert!(e.history.can_undo());
+
+        // A change underneath (undo) discards an open curve without touching the model.
+        draw_curve(&mut e);
+        e.update_curve();
+        let now = e.scene.active().mesh.positions.clone();
+        e.undo();
+        e.update_curve();
+        assert!(e.curve.is_none(), "dropped: the model changed");
+        assert_ne!(e.scene.active().mesh.positions, now, "undo happened normally");
+    }
+
+    #[test]
+    fn curve_helpers_simplify_and_fade() {
+        let path: Vec<Vec2> = (0..100).map(|i| Vec2::new(i as f32, 0.0)).collect();
+        assert_eq!(simplify_path(&path, 2.0, 16).len(), 2, "a straight line needs only its ends");
+        let wiggly: Vec<Vec2> = (0..200).map(|i| Vec2::new(i as f32, (i as f32 * 0.3).sin() * 20.0)).collect();
+        assert!(simplify_path(&wiggly, 2.0, 16).len() <= 16);
+        assert_eq!(curve_fade(0.5, 0.2, 0.2), 1.0);
+        assert_eq!(curve_fade(0.0, 0.2, 0.0), 0.0);
+        assert_eq!(curve_fade(1.0, 0.0, 0.0), 1.0);
+        assert!(curve_fade(0.1, 0.2, 0.2) > 0.0 && curve_fade(0.1, 0.2, 0.2) < 1.0);
+        // The curve passes through its points.
+        let pts = [(Vec3::ZERO, Vec3::Y), (Vec3::X, Vec3::Y), (Vec3::new(2.0, 1.0, 0.0), Vec3::Y)];
+        let s = curve_points(&pts, 0.05);
+        for (p, _) in pts {
+            assert!(s.iter().any(|(q, _, _)| q.distance(p) < 1e-4));
+        }
+        assert_eq!(s.first().unwrap().2, 0.0);
+        assert!((s.last().unwrap().2 - 1.0).abs() < 1e-6);
     }
 
     #[test]

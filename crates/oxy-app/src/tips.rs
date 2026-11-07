@@ -446,6 +446,9 @@ pub fn stroke_tip(mode: crate::editor::StrokeMode) -> &'static str {
         StrokeMode::Freehand => "Dabs follow the pointer.",
         StrokeMode::Line => "Drag a straight line. The stroke is applied when you release.",
         StrokeMode::Stamp => "Drag out one dab. Distance sets the size, direction the rotation.",
+        StrokeMode::Curve => {
+            "Draw a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the fades update it live; Enter or Accept applies it."
+        }
     }
 }
 
@@ -612,6 +615,13 @@ pub mod plain {
         "The brush trails the pointer on a short string, for smoother lines. Zero turns it off.";
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
     pub const LINK_BADGE: &str = "This document came from OxyCharacter. Click to send it back (File > Send back to OxyCharacter); OxyCharacter picks up the changes.";
+    pub const CURVE_HELP: &str =
+        "Drag a point to reshape the stroke, click the curve to add a point, Alt+click a point to remove it.";
+    pub const CURVE_FADE: &str = "How much of the curve, from that end, the stroke takes to reach full strength.";
+    pub const CURVE_SIZE: &str = "Size, strength and the other brush settings update the stroke too.";
+    pub const CURVE_ACCEPT: &str =
+        "Apply the stroke (Enter). Starting another stroke also applies it. Undo removes it.";
+    pub const CURVE_CANCEL: &str = "Close without changing the model (Esc).";
     pub const EXTRACT_PREVIEW: &str =
         "A preview of the shell made from the mask. Adjust it, then Accept to add it as a new piece.";
     pub const EXTRACT_THICKNESS: &str = "How thick the shell is. 0 makes an open surface with no thickness.";
