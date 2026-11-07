@@ -634,7 +634,9 @@ pub mod plain {
     pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
     pub const PEN_SETTINGS: &str =
         "How hard you press the pen and how strong the brush gets. Remembered between sessions.";
-    pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
+    pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. Drag the two points to shape the curve (an S shape gives fine control at both ends); double-click to straighten it. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
+    pub const PRESSURE_S: &str =
+        "Gentle at both the lightest and the hardest presses, quick in between: fine control at both ends.";
     pub const PRESSURE_SOFT: &str =
         "Light touches already sculpt, and full strength comes before you press all the way.";
     pub const PRESSURE_LINEAR: &str = "Brush strength follows the pen exactly.";

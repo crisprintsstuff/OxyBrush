@@ -273,6 +273,8 @@ pub struct Settings {
     pub pressure_min: f32,
     /// Pen pressure that already counts as full, 0.3..1.
     pub pressure_full: f32,
+    /// Two-point pressure curve shape, [x1, y1, x2, y2] in 0..1.
+    pub pressure_shape: [f32; 4],
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
@@ -569,6 +571,7 @@ impl Default for Settings {
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
+            pressure_shape: crate::editor::LINEAR_PRESSURE_SHAPE,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
@@ -694,8 +697,16 @@ impl Settings {
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
         ) + &format!(
-            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\nfloor_grid = {}\nhold_to_curve = {}\n",
-            self.pressure_gamma, self.pressure_min, self.pressure_full, self.floor_grid, self.hold_to_curve
+            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\n",
+            self.pressure_gamma,
+            self.pressure_min,
+            self.pressure_full,
+            self.pressure_shape[0],
+            self.pressure_shape[1],
+            self.pressure_shape[2],
+            self.pressure_shape[3],
+            self.floor_grid,
+            self.hold_to_curve
         ) + &self
             .recent_files
             .iter()
@@ -805,6 +816,14 @@ impl Settings {
                 }
                 "pressure_min" => {
                     s.pressure_min = v.parse().ok().filter(|x| (0.0..=0.5).contains(x)).unwrap_or(s.pressure_min)
+                }
+                "pressure_shape" => {
+                    let v: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [a, b, c, d] = v[..]
+                        && [a, b, c, d].iter().all(|x| (0.0..=1.0).contains(x))
+                    {
+                        s.pressure_shape = [a, b, c, d];
+                    }
                 }
                 "pressure_full" => {
                     s.pressure_full = v.parse().ok().filter(|x| (0.3..=1.0).contains(x)).unwrap_or(s.pressure_full)
@@ -986,6 +1005,7 @@ mod tests {
             pressure_gamma: 1.6,
             pressure_min: 0.1,
             pressure_full: 0.8,
+            pressure_shape: [0.4, 0.1, 0.6, 0.9],
             surface_cursor: true,
             floor_grid: false,
             hide_cursor_during_stroke: false,

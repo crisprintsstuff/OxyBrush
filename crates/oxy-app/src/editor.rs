@@ -322,10 +322,43 @@ pub enum SettingsTab {
 /// pressing to `full` already counts as full pressure, the lightest touch
 /// gives `min`, and `gamma` bends the curve in between (1 is a straight
 /// line, below 1 light touches go further, above 1 you press harder).
+#[cfg(test)]
 pub fn map_pressure(raw: f32, gamma: f32, min: f32, full: f32) -> f32 {
+    map_pressure_shaped(raw, gamma, LINEAR_PRESSURE_SHAPE, min, full)
+}
+
+/// A straight two-point pressure shape (no change).
+pub const LINEAR_PRESSURE_SHAPE: [f32; 4] = [1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+
+/// [`map_pressure`] with a two-point shape on top of the curve: a cubic
+/// from (0, 0) to (1, 1) through the control points `shape` = [x1, y1, x2,
+/// y2], all clamped to 0..1, so it never decreases. Two points allow an S
+/// curve: fine control at both the lightest and the hardest presses.
+pub fn map_pressure_shaped(raw: f32, gamma: f32, shape: [f32; 4], min: f32, full: f32) -> f32 {
     let x = (raw / full.clamp(0.3, 1.0)).clamp(0.0, 1.0);
     let min = min.clamp(0.0, 0.5);
-    min + (1.0 - min) * x.powf(gamma.clamp(0.2, 5.0))
+    let bent = x.powf(gamma.clamp(0.2, 5.0));
+    min + (1.0 - min) * shape_pressure(bent, shape)
+}
+
+/// The cubic through (0,0), (x1,y1), (x2,y2), (1,1), evaluated at `x`.
+pub fn shape_pressure(x: f32, shape: [f32; 4]) -> f32 {
+    let [x1, y1, x2, y2] = shape.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 });
+    let cubic = |t: f32, a: f32, b: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+    };
+    // x(t) never decreases for control x in 0..1: find t by bisection.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if cubic(mid, x1, x2) < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    cubic(0.5 * (lo + hi), y1, y2).clamp(0.0, 1.0)
 }
 
 impl SettingsTab {
@@ -573,6 +606,9 @@ pub struct Editor {
     pub pen_seen: bool,
     /// Pen pressure that already counts as full (0.3..1).
     pub pressure_full: f32,
+    /// Two-point shape of the pressure curve: the inner control points of
+    /// a cubic from (0, 0) to (1, 1), as [x1, y1, x2, y2] (straight by default).
+    pub pressure_shape: [f32; 4],
     pub noise_scale: f32,
     /// Crease brush pinch intensity factor (how tightly walls are pulled together).
     pub crease_pinch: f32,
@@ -842,6 +878,7 @@ impl Default for Editor {
             pressure_min: 0.0,
             pen_seen: false,
             pressure_full: 1.0,
+            pressure_shape: LINEAR_PRESSURE_SHAPE,
             noise_scale: 3.0,
             crease_pinch: 0.3,
             insert_shape: oxy_sculpt::InsertShape::Sphere,
@@ -1189,6 +1226,7 @@ impl Editor {
             pressure_gamma: self.pressure_gamma,
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
+            pressure_shape: self.pressure_shape,
             surface_cursor: self.surface_cursor,
             floor_grid: self.floor_grid,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
@@ -1334,6 +1372,7 @@ impl Editor {
         self.pressure_gamma = s.pressure_gamma;
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
+        self.pressure_shape = s.pressure_shape;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
         self.floor_grid = s.floor_grid;
@@ -1594,7 +1633,13 @@ impl Editor {
 
     /// Pen pressure after the pressure curve.
     pub fn pressure(&self) -> f32 {
-        map_pressure(self.pressure, self.pressure_gamma, self.pressure_min, self.pressure_full)
+        map_pressure_shaped(
+            self.pressure,
+            self.pressure_gamma,
+            self.pressure_shape,
+            self.pressure_min,
+            self.pressure_full,
+        )
     }
 
     /// Screen-space radius (logical points) to world units at `at`.
@@ -4758,6 +4803,35 @@ mod tests {
     }
 
     #[test]
+    fn two_point_pressure_shape() {
+        // Straight by default: no change at all.
+        for i in 0..=20 {
+            let x = i as f32 / 20.0;
+            assert!((shape_pressure(x, LINEAR_PRESSURE_SHAPE) - x).abs() < 1e-3, "{x}");
+        }
+        // An S curve: gentle at both ends, steep in the middle, never decreasing.
+        let s = [0.45, 0.05, 0.55, 0.95];
+        assert!(shape_pressure(0.2, s) < 0.1 && shape_pressure(0.8, s) > 0.9);
+        assert!((shape_pressure(0.5, s) - 0.5).abs() < 0.02);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let y = shape_pressure(i as f32 / 100.0, s);
+            assert!(y + 1e-4 >= last && (0.0..=1.0).contains(&y));
+            last = y;
+        }
+        // Out-of-range points are clamped, not trusted.
+        assert!(shape_pressure(0.5, [9.0, -3.0, f32::NAN, 2.0]).is_finite());
+        // The editor's pressure goes through it.
+        let mut e = editor();
+        (e.pressure, e.pressure_shape) = (0.2, s);
+        assert!(e.pressure() < 0.1);
+        use crate::settings::Settings;
+        let back = Settings::from_text(&Settings { pressure_shape: s, ..Settings::default() }.to_text());
+        assert_eq!(back.pressure_shape, s);
+        assert_eq!(Settings::from_text("pressure_shape = 2, 0, 0, 1\n").pressure_shape, LINEAR_PRESSURE_SHAPE);
+    }
+
+    #[test]
     fn pressure_floor_and_full_point() {
         use super::map_pressure;
         // Defaults are a straight line.
@@ -5212,6 +5286,7 @@ mod tests {
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
+            pressure_shape: LINEAR_PRESSURE_SHAPE,
             surface_cursor: true,
             floor_grid: false,
             hide_cursor_during_stroke: false,
