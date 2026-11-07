@@ -72,6 +72,14 @@ fn ui_cmd(ed: &Editor, id: Cmd, keywords: &'static str, a: UiAction) -> Entry {
 
 /// Every command the palette offers (menus have the same actions).
 fn commands(ed: &Editor) -> Vec<Entry> {
+    let mut list = commands_always(ed);
+    if ed.send_back_available() {
+        list.insert(4, cmd(ed, Cmd::SendBack, "oxycharacter character link return export morph", Editor::send_back));
+    }
+    list
+}
+
+fn commands_always(ed: &Editor) -> Vec<Entry> {
     vec![
         ui_cmd(ed, Cmd::Open, "file project load", UiAction::Open),
         ui_cmd(ed, Cmd::Import, "obj stl file", UiAction::Import),

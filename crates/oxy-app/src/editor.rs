@@ -80,6 +80,94 @@ pub struct ExtractPreview {
     revision: u64,
 }
 
+/// Name of OxyCharacter's body piece.
+pub const LINK_BODY_NAME: &str = "OxyCharacter Body";
+
+pub const LINK_TOPOLOGY_HINT: &str = "This body will return to OxyCharacter as a separate mesh, not a morph. \
+     Use subdivision levels (Ctrl+D) to keep it a morph.";
+
+/// A document opened from OxyCharacter. It is linked when a
+/// `<file>.oxylink.json` sidecar sits next to it (OxyBrush rewrites `META`
+/// on save, so the sidecar, not the file, marks the link). OxyCharacter
+/// watches the original file and re-imports it when it changes; the
+/// sidecar holds what it needs to do that, and OxyBrush never reads,
+/// moves or deletes it.
+#[derive(Debug, Clone)]
+pub struct Link {
+    /// The `.oxb` OxyCharacter wrote and is watching.
+    pub path: PathBuf,
+    /// Its `<path>.oxylink.json`.
+    pub sidecar: PathBuf,
+    /// The `OxyCharacter Body` piece and its size when loaded.
+    pub body: Option<u64>,
+    body_vertices: usize,
+    body_triangles: usize,
+    /// The "returns as a separate mesh" hint was shown for this document.
+    pub hint_shown: bool,
+}
+
+impl Link {
+    /// `<path>.oxylink.json`.
+    pub fn sidecar_for(path: &Path) -> PathBuf {
+        let mut s = path.as_os_str().to_owned();
+        s.push(".oxylink.json");
+        PathBuf::from(s)
+    }
+
+    /// The link of a document just opened from `path`, if it has a sidecar.
+    pub fn detect(path: &Path, scene: &Scene) -> Option<Link> {
+        let sidecar = Self::sidecar_for(path);
+        if !sidecar.is_file() {
+            return None;
+        }
+        let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+        let sidecar = std::path::absolute(&sidecar).unwrap_or(sidecar);
+        let body = scene.pieces.iter().find(|p| p.name == LINK_BODY_NAME);
+        Some(Link {
+            path,
+            sidecar,
+            body: body.map(|p| p.id),
+            body_vertices: body.map_or(0, |p| p.mesh.vertex_count()),
+            body_triangles: body.map_or(0, |p| p.mesh.triangle_count()),
+            hint_shown: false,
+        })
+    }
+
+    /// Copy the sidecar, byte for byte, next to `target` (a Save As of the
+    /// linked document), through a temporary file. Nothing to do when
+    /// `target` is the original or already has an identical sidecar.
+    pub fn copy_sidecar_to(&self, target: &Path) -> std::io::Result<()> {
+        let dest = Self::sidecar_for(target);
+        let dest_abs = std::path::absolute(&dest).unwrap_or_else(|_| dest.clone());
+        if same_path(&dest_abs, &self.sidecar) {
+            return Ok(());
+        }
+        let bytes = std::fs::read(&self.sidecar)?;
+        if std::fs::read(&dest).is_ok_and(|b| b == bytes) {
+            return Ok(());
+        }
+        let tmp = Self::sidecar_for(&target.with_extension("oxb.tmp-link"));
+        std::fs::write(&tmp, &bytes).and_then(|()| std::fs::rename(&tmp, &dest)).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })
+    }
+}
+
+/// A message shown briefly over the viewport.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub text: String,
+    pub since: std::time::Instant,
+    /// Hints stay up longer than confirmations.
+    pub long: bool,
+}
+
+impl Toast {
+    pub fn duration(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(if self.long { 9 } else { 4 })
+    }
+}
+
 /// Category tabs in the unified Preferences / Settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
@@ -424,6 +512,10 @@ pub struct Editor {
     pub status: String,
     /// Project file (`.oxb`) the document was opened from / saved to.
     pub path: Option<PathBuf>,
+    /// The document came from OxyCharacter (see [`Link`]).
+    pub link: Option<Link>,
+    /// A short message shown over the viewport for a few seconds.
+    pub toast: Option<Toast>,
     /// History revision at the last save (or load).
     pub saved_revision: u64,
     pub autosaver: autosave::Autosaver,
@@ -649,6 +741,8 @@ impl Default for Editor {
             drag: Drag::None,
             status: "Welcome to OxyBrush. Drag on the model to sculpt, drag on empty space to orbit. Press F1 for shortcuts.".into(),
             path: None,
+            link: None,
+            toast: None,
             saved_revision: 0,
             autosaver: autosave::Autosaver::new(None, Duration::from_secs(120)),
             autosaved_revision: 0,
@@ -2144,6 +2238,7 @@ impl Editor {
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
         self.path = path;
+        self.link = None;
         self.camera.frame(self.scene.bounds());
     }
 
@@ -2152,6 +2247,7 @@ impl Editor {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
                 self.replace_document(scene, Some(path.to_path_buf()));
+                self.link = Link::detect(path, &self.scene);
                 self.protect_path(path);
                 self.remember_recent(path);
                 self.status = format!("Opened {} ({n} piece{})", path.display(), if n == 1 { "" } else { "s" });
@@ -2265,12 +2361,85 @@ impl Editor {
                 self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
+                // A linked document saved somewhere else takes its link
+                // file along, so OxyCharacter can still import the copy.
+                if let Some(link) = &self.link
+                    && let Err(e) = link.copy_sidecar_to(&path)
+                {
+                    self.status = format!("Saved {}, but could not copy its OxyCharacter link: {e}", path.display());
+                }
                 true
             }
             Err(e) => {
                 self.status = format!("Save failed: {e}");
                 false
             }
+        }
+    }
+
+    /// The document's OxyCharacter link, while its original file still
+    /// exists (Send back is offered only then).
+    pub fn send_back_available(&self) -> bool {
+        self.link.as_ref().is_some_and(|l| l.path.is_file())
+    }
+
+    /// Save to the file OxyCharacter wrote and is watching, even after a
+    /// Save As elsewhere. OxyCharacter sees the new modification time and
+    /// imports the changes.
+    pub fn send_back(&mut self) {
+        let Some(link) = &self.link else {
+            self.status = "This document didn't come from OxyCharacter".into();
+            return;
+        };
+        let target = link.path.clone();
+        if !target.is_file() {
+            self.status = format!("{} no longer exists, so there is nothing to send back to", target.display());
+            return;
+        }
+        if let Some(job) = self.job.as_ref().filter(|j| j.holds_levels) {
+            self.status = format!("Wait for \"{}\" to finish, then send back", job.label);
+            return;
+        }
+        self.pointer_up();
+        match format::save(&self.scene.to_data(), &target) {
+            Ok(()) => {
+                if self.path.as_ref().is_some_and(|p| same_path(p, &target)) {
+                    self.saved_revision = self.history.revision();
+                }
+                self.protect_path(&target);
+                self.status = format!("Sent to OxyCharacter ({})", target.display());
+                self.show_toast("Sent to OxyCharacter: changes appear there");
+            }
+            Err(e) => self.status = format!("Send back failed: {e}"),
+        }
+    }
+
+    /// Show `text` over the viewport for a few seconds.
+    pub fn show_toast(&mut self, text: impl Into<String>) {
+        self.toast = Some(Toast { text: text.into(), since: std::time::Instant::now(), long: false });
+    }
+
+    /// Once per linked document: when OxyCharacter's body loses the topology
+    /// it was loaded with (remesh, destructive subdivide, decimate, Boolean,
+    /// split, delete hidden…), explain that it will come back as a separate
+    /// mesh. Subdivision levels keep level 0, so they don't count. Called
+    /// every frame.
+    pub fn check_link_topology(&mut self) {
+        let Some(link) = &mut self.link else { return };
+        if link.hint_shown {
+            return;
+        }
+        let changed = match self.scene.pieces.iter().find(|p| Some(p.id) == link.body) {
+            Some(body) => {
+                let counts = (body.mesh.vertex_count(), body.mesh.triangle_count());
+                body.multires.is_none() && counts != (link.body_vertices, link.body_triangles)
+            }
+            // Split into parts (they keep the body's name), not deleted.
+            None => link.body.is_some() && self.scene.pieces.iter().any(|p| p.name.starts_with(LINK_BODY_NAME)),
+        };
+        if changed {
+            link.hint_shown = true;
+            self.toast = Some(Toast { text: LINK_TOPOLOGY_HINT.into(), since: std::time::Instant::now(), long: true });
         }
     }
 
@@ -4094,6 +4263,126 @@ mod tests {
         assert_eq!(f.multires_level(), Some((1, 3)));
         f.step_level(1);
         assert_eq!(f.multires_level(), Some((2, 3)));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A document as OxyCharacter writes it: `OxyCharacter Body` in a
+    /// project file, with or without the `.oxylink.json` sidecar.
+    fn oxycharacter_doc(name: &str, sidecar: bool) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("oxy-link-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("character-1762500000.oxb");
+        let scene = Scene::new(Piece::new(LINK_BODY_NAME, primitives::icosphere(3, 1.0)));
+        format::save(&scene.to_data(), &path).unwrap();
+        if sidecar {
+            std::fs::write(Link::sidecar_for(&path), b"{\"opaque\": [1, 2, 3]}\n").unwrap();
+        }
+        (dir, path)
+    }
+
+    #[test]
+    fn oxb_on_the_command_line_opens_as_a_project_and_detects_the_link() {
+        let (dir, path) = oxycharacter_doc("detect", true);
+        let mut e = editor();
+        e.open(&path);
+        assert_eq!(e.scene.pieces.len(), 1, "opened as the project, not imported next to the sphere");
+        assert_eq!(e.scene.active().name, LINK_BODY_NAME);
+        let link = e.link.as_ref().expect("linked: the sidecar exists");
+        assert_eq!(link.body, Some(e.scene.active().id));
+        assert!(e.send_back_available());
+        assert_eq!(Link::sidecar_for(Path::new("/a/b.oxb")), Path::new("/a/b.oxb.oxylink.json"));
+        // No sidecar, no link; a new document drops it.
+        let (dir2, plain) = oxycharacter_doc("plain", false);
+        e.open(&plain);
+        assert!(e.link.is_none() && !e.send_back_available());
+        e.open(&path);
+        e.perform(Pending::New("sphere"));
+        assert!(e.link.is_none());
+        std::fs::remove_dir_all(dir).ok();
+        std::fs::remove_dir_all(dir2).ok();
+    }
+
+    #[test]
+    fn send_back_writes_the_original_even_after_save_as_which_copies_the_sidecar() {
+        let (dir, path) = oxycharacter_doc("send", true);
+        let sidecar = Link::sidecar_for(&path);
+        let sidecar_bytes = std::fs::read(&sidecar).unwrap();
+        let mut e = editor();
+        e.open(&path);
+
+        // Save As elsewhere: the sidecar goes along, byte for byte, and the
+        // original stays where it was.
+        let copy = dir.join("my sculpt.oxb");
+        assert!(e.save(&copy));
+        assert_eq!(std::fs::read(Link::sidecar_for(&copy)).unwrap(), sidecar_bytes);
+        assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_bytes, "never touched");
+        assert!(e.send_back_available(), "still offered: the original exists");
+
+        // Sculpt, then send back: the original file gets the change, the
+        // document keeps its Save As name, and a toast confirms it.
+        let moved: Vec<u32> = vec![0];
+        {
+            let m = &mut e.scene.active_mut().mesh;
+            m.positions[0] += Vec3::Y * 0.25;
+            m.update_after_move(&moved);
+        }
+        let expected = e.scene.active().mesh.positions[0];
+        e.send_back();
+        let sent = format::load(&path).unwrap();
+        let sent_piece = sent.pieces[0].clone().into_piece();
+        assert!(sent_piece.mesh.positions.contains(&expected), "{}", e.status);
+        assert_eq!(sent.pieces[0].name, LINK_BODY_NAME);
+        assert!(sent.pieces[0].vertex_map.is_some(), "topology unchanged: VMAP written");
+        assert_eq!(e.path.as_deref(), Some(copy.as_path()));
+        assert!(e.toast.as_ref().is_some_and(|t| t.text.starts_with("Sent to OxyCharacter")));
+        assert_eq!(std::fs::read(&sidecar).unwrap(), sidecar_bytes);
+
+        // Ctrl+S on the copy keeps working and keeps its sidecar.
+        assert!(e.save(&copy));
+        assert!(Link::sidecar_for(&copy).is_file());
+
+        // Once the original is gone there is nothing to send back to.
+        std::fs::remove_file(&path).unwrap();
+        assert!(!e.send_back_available());
+        e.send_back();
+        assert!(!path.exists(), "doesn't recreate a file OxyCharacter stopped watching");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn topology_hint_fires_once_on_remesh_but_not_for_sculpting_or_levels() {
+        let (dir, path) = oxycharacter_doc("hint", true);
+        let mut e = editor();
+        e.open(&path);
+        // Sculpting and subdivision levels keep the morph.
+        {
+            let m = &mut e.scene.active_mut().mesh;
+            m.positions[3] += Vec3::X * 0.1;
+            m.update_after_move(&[3]);
+        }
+        e.check_link_topology();
+        e.add_level();
+        wait_job(&mut e);
+        e.check_link_topology();
+        assert!(e.toast.is_none(), "no hint for strokes or levels");
+        e.undo();
+        e.check_link_topology();
+        assert!(e.toast.is_none());
+
+        // A voxel remesh does change it: hint, once.
+        e.remesh_resolution = 32;
+        e.remesh_active();
+        wait_job(&mut e);
+        e.check_link_topology();
+        let hint = e.toast.take().expect("hint after remesh");
+        assert_eq!(hint.text, LINK_TOPOLOGY_HINT);
+        assert!(hint.long);
+        e.undo();
+        e.remesh_active();
+        wait_job(&mut e);
+        e.check_link_topology();
+        assert!(e.toast.is_none(), "only once per document");
         std::fs::remove_dir_all(dir).ok();
     }
 

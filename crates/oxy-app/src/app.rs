@@ -540,6 +540,7 @@ impl App {
         // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
         ed.update_extract_preview();
+        ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
         let previewing = ed.insert_preview.is_some() || ed.extract_preview.is_some();
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));

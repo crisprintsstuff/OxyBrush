@@ -28,11 +28,35 @@ pub struct Piece {
     /// Subdivision levels, when the piece uses multiresolution sculpting.
     /// `mesh` then shows the active level.
     pub multires: Option<Multires>,
+    /// Where each vertex came from in the file this piece was first loaded
+    /// from, while its topology is unchanged (written as the `VMAP`
+    /// section, see [`format`]). `None` for pieces made in this session.
+    pub origin: Option<VertexOrigin>,
+}
+
+/// For each vertex of a loaded piece, its index in the vertex array of the
+/// file the piece originally came from. Valid only while the mesh still has
+/// the topology it was loaded with.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VertexOrigin {
+    /// [`Mesh::topology_version`] when the piece was loaded.
+    pub topology_version: u64,
+    pub map: Vec<u32>,
 }
 
 impl Piece {
     pub fn new(name: impl Into<String>, mesh: Mesh) -> Self {
-        Self { id: new_piece_id(), name: name.into(), visible: true, mesh, multires: None }
+        Self { id: new_piece_id(), name: name.into(), visible: true, mesh, multires: None, origin: None }
+    }
+
+    /// The vertex origin map, if it still describes the mesh (topology
+    /// unchanged since load, and no subdivision levels).
+    pub fn current_origin(&self) -> Option<&[u32]> {
+        let o = self.origin.as_ref()?;
+        (self.multires.is_none()
+            && o.topology_version == self.mesh.topology_version()
+            && o.map.len() == self.mesh.vertex_count())
+        .then_some(o.map.as_slice())
     }
 
     pub fn to_data(&self) -> PieceData {
@@ -42,11 +66,15 @@ impl Piece {
             Some(mr) => {
                 let mut mr = mr.clone();
                 let mesh = mr.export_active(&self.mesh);
-                PieceData { name: self.name.clone(), visible: self.visible, mesh, multires: Some(mr) }
+                PieceData { name: self.name.clone(), visible: self.visible, mesh, multires: Some(mr), vertex_map: None }
             }
-            None => {
-                PieceData { name: self.name.clone(), visible: self.visible, mesh: self.mesh.to_data(), multires: None }
-            }
+            None => PieceData {
+                name: self.name.clone(),
+                visible: self.visible,
+                mesh: self.mesh.to_data(),
+                multires: None,
+                vertex_map: self.current_origin().map(<[u32]>::to_vec),
+            },
         }
     }
 }
@@ -58,6 +86,9 @@ pub struct PieceData {
     pub visible: bool,
     pub mesh: MeshData,
     pub multires: Option<Multires>,
+    /// The `VMAP` section: for each vertex of `mesh`, its index in the file
+    /// the piece originally came from.
+    pub vertex_map: Option<Vec<u32>>,
 }
 
 impl PieceData {
@@ -67,7 +98,19 @@ impl PieceData {
             mr.bind(&mesh);
             mr
         });
-        Piece { id: new_piece_id(), name: self.name, visible: self.visible, mesh, multires }
+        // `Mesh::from_data` reorders vertices; remember where each came from
+        // in the original file. If this file already carried a map (it was
+        // saved by OxyBrush from an earlier file), compose with it so the
+        // indices keep pointing at that first file.
+        let origin = multires.is_none().then(|| {
+            let local = mesh.source_vertices();
+            let map: Option<Vec<u32>> = match &self.vertex_map {
+                Some(v) => local.iter().map(|&i| v.get(i as usize).copied()).collect(),
+                None => Some(local.to_vec()),
+            };
+            map.map(|map| VertexOrigin { topology_version: mesh.topology_version(), map })
+        });
+        Piece { id: new_piece_id(), name: self.name, visible: self.visible, mesh, multires, origin: origin.flatten() }
     }
 }
 

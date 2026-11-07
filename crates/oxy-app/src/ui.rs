@@ -374,6 +374,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
                     action = Some(UiAction::SaveAs);
                 }
+                if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
+                    ed.send_back();
+                }
                 if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
@@ -1459,6 +1462,14 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
                     ed.show_shortcuts = !ed.show_shortcuts;
                 }
                 ui.separator();
+                if ed.send_back_available() {
+                    let badge = egui::Button::new(RichText::new("Linked to OxyCharacter").small())
+                        .fill(ui.visuals().selection.bg_fill.linear_multiply(0.35));
+                    if tips::hover(ui.add(badge), plain::LINK_BADGE).clicked() {
+                        ed.send_back();
+                    }
+                    ui.separator();
+                }
                 let active = ed.scene.active().mesh.triangle_count();
                 let total = ed.scene.triangle_count();
                 let limit_tip = if ed.max_triangles > 0 {
@@ -2801,6 +2812,36 @@ fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha) {
     tips::hover(ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0)))), tips::alpha_tip(&alpha.name));
 }
 
+/// A short message over the bottom of the viewport that fades out.
+fn toast(ctx: &egui::Context, ed: &mut Editor) {
+    let Some(t) = &ed.toast else { return };
+    let age = t.since.elapsed();
+    let total = t.duration();
+    if age >= total {
+        ed.toast = None;
+        return;
+    }
+    let fade = (1.0 - (age.as_secs_f32() - (total.as_secs_f32() - 0.6)).max(0.0) / 0.6).clamp(0.0, 1.0);
+    let canvas = egui::Rect::from_min_size(
+        egui::pos2(ed.canvas[0], ed.canvas[1]) / ed.pixels_per_point,
+        egui::vec2(ed.canvas[2], ed.canvas[3]) / ed.pixels_per_point,
+    );
+    let text = t.text.clone();
+    egui::Area::new(egui::Id::unique("toast"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .fixed_pos(egui::pos2(canvas.center().x, canvas.bottom() - 24.0))
+        .show(ctx, |ui| {
+            ui.set_opacity(fade);
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.set_max_width(420.0);
+                ui.label(text);
+            });
+        });
+    ctx.request_repaint_after(std::time::Duration::from_millis(50));
+}
+
 /// Thickness and smoothing for the mask extract being previewed, with
 /// Accept (adds the piece) and Cancel. Enter accepts and Esc cancels.
 fn extract_window(ctx: &egui::Context, ed: &mut Editor) {
@@ -3514,6 +3555,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
     if ed.extract_preview.is_some() {
         extract_window(&ctx, ed);
     }
+    toast(&ctx, ed);
     if ed.show_welcome && ed.pending.is_none() && ed.recoverable.is_empty() {
         welcome(&ctx, ed, action);
     }

@@ -17,6 +17,15 @@ pub struct Topic {
 
 pub const TOPICS: &[Topic] = &[
     Topic {
+        title: "Sculpting a character from OxyCharacter",
+        keywords: "oxycharacter character link linked send back return morph accessory oxylink sidecar",
+        body: "When OxyCharacter opens a character in OxyBrush, the top bar shows Linked to OxyCharacter.\n\n\
+- Sculpt the body, and add pieces for clothes or props.\n\
+- Click Linked to OxyCharacter (or File > Send back to OxyCharacter, or Ctrl+K) to save to the file OxyCharacter is watching. It picks up the changes: sculpting on OxyCharacter Body becomes a morph, new pieces become accessories. This works even after a Save As elsewhere; Ctrl+S saves as usual.\n\
+- To keep the body a morph, add detail with subdivision levels (Ctrl+D). Remesh, Subdivide once, Decimate, Boolean, Split and Delete hidden change its topology, and it then returns as a separate mesh; OxyBrush tells you the first time.\n\
+- The .oxylink.json file next to the project is what links it. Save As copies it next to the new file; OxyBrush never changes or deletes it.",
+    },
+    Topic {
         title: "Getting around",
         keywords: "camera navigate orbit rotate pan zoom view focal length fov lens",
         body: "Drag on empty space to orbit around the model. Right-drag (or Alt+drag on empty space) pans, and the mouse wheel zooms. With a pen, use the drag buttons in the strip beside the viewport.\n\n\
