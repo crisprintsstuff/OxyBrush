@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [2.5.5-beta] - 2026-11-07
+
 ### Changed
 - **Generic names for options that used other products' branding:** the "ZBrush Classic" layout is now **Workstation**, the theme is **Matte**, the "ZBrush Orange" accent is **Tangerine** (a new color), the "ZBrush" keymap presets are **Right-drag orbit** and **Single-key tools**, the "Red wax" material is **Crimson clay**, Polyframe is **Wireframe + groups**, and the curve tools are **Plane Clip**, **Line Split** and **Cut Away**. The top bar always says Raise/Carve, Size and Strength. Saved settings, keymaps and brush presets that use the old names still load.
 - **Menus fit on screen:** the View menu is split into Camera, Shading, Brush cursor and Material submenus, and any menu taller than the window scrolls instead of running off the screen.
@@ -425,7 +427,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v1.0.0-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...HEAD
+[2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
 [1.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.6.0-alpha...v1.0.0-beta
 [0.6.0-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.2-alpha...v0.6.0-alpha
 [0.5.2-alpha]: https://github.com/crisprintsstuff/OxyBrush/compare/v0.5.1-alpha...v0.5.2-alpha
