@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [2.5.7-beta] - 2026-11-07
+
 ### Added
 - **Floor grid (View > Shading > Floor grid, on by default):** a grid on the floor under the model, with a bolder line every ten cells, fading out with distance. It sits just under the bottom of the visible pieces and its spacing follows the model's size, so it moves and rescales as the model changes. Light lines on dark backgrounds, dark lines on light ones. Remembered between sessions; also in the command palette.
 - **Pen & tablet settings ([#70](https://github.com/crisprintsstuff/OxyBrush/issues/70)):** a new **Preferences > Pen & tablet** tab with a large pressure curve, **Soft / Linear / Firm** presets, the curve shape, a **Lightest touch** strength (so light strokes are never too faint) and **Full pressure at** (so you don't have to press as hard for a full stroke). While you draw, a dot shows your pen's pressure on the curve. The settings are remembered between sessions; clicking the small curve in the brush's Stroke section opens the tab.
@@ -460,7 +462,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...HEAD
+[2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
 [2.5.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...v2.5.6-beta
 [2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
 [2.5.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.0.0-beta...v2.5.0-beta
