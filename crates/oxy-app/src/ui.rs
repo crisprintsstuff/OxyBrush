@@ -91,7 +91,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             inspector_width: 330.0,
             strip_width: 64.0,
         },
-        UiLayout::ZBrushClassic => Metrics {
+        UiLayout::Workstation => Metrics {
             item_spacing: egui::vec2(4.0, 3.0),
             button_padding: egui::vec2(4.0, 2.0),
             interact_height: 22.0,
@@ -171,18 +171,20 @@ pub fn apply_theme(
                 stroke: Color32::from_gray(48),
                 window_stroke: Color32::from_gray(60),
             },
-            ThemePreset::ZBrushClassic => Palette {
+            // Matte: dark panels, but buttons and frames clearly lighter than
+            // the panel so they read as clickable.
+            ThemePreset::Matte => Palette {
                 bg: Color32::from_gray(16),
-                panel: Color32::from_gray(26),
-                window: Color32::from_gray(32),
-                faint: Color32::from_gray(20),
-                text: Color32::from_gray(222),
-                inactive_weak: Color32::from_gray(36),
-                inactive_fill: Color32::from_gray(46),
-                hovered_weak: Color32::from_gray(54),
-                hovered_fill: Color32::from_gray(64),
-                stroke: Color32::from_gray(42),
-                window_stroke: Color32::from_gray(54),
+                panel: Color32::from_gray(28),
+                window: Color32::from_gray(34),
+                faint: Color32::from_gray(36),
+                text: Color32::from_gray(230),
+                inactive_weak: Color32::from_gray(50),
+                inactive_fill: Color32::from_gray(62),
+                hovered_weak: Color32::from_gray(70),
+                hovered_fill: Color32::from_gray(82),
+                stroke: Color32::from_gray(58),
+                window_stroke: Color32::from_gray(70),
             },
             ThemePreset::Charcoal => Palette {
                 bg: Color32::from_gray(12),
@@ -283,9 +285,6 @@ pub fn apply_theme(
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
         v.widgets.active.bg_fill = accent_color;
-        if accent == AccentPreset::ZBrushOrange {
-            v.widgets.active.fg_stroke.color = Color32::from_gray(20);
-        }
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
@@ -390,81 +389,85 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
                     ed.frame();
                 }
-                if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
-                    ed.camera.snap(0.0, 0.0);
-                }
-                if tips::button_km(ui, &ed.keymap, "Back", Cmd::Back).clicked() {
-                    ed.camera.snap(std::f32::consts::PI, 0.0);
-                }
-                if tips::button_km(ui, &ed.keymap, "Left", Cmd::Left).clicked() {
-                    ed.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
-                }
-                if tips::button_km(ui, &ed.keymap, "Right", Cmd::Right).clicked() {
-                    ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
-                }
-                if tips::button_km(ui, &ed.keymap, "Top", Cmd::Top).clicked() {
-                    ed.camera.snap(0.0, 1.55);
-                }
-                if tips::button_km(ui, &ed.keymap, "Bottom", Cmd::Bottom).clicked() {
-                    ed.camera.snap(0.0, -1.55);
-                }
-                tips::check_km(ui, &ed.keymap, &mut ed.camera.orthographic, "Orthographic", Cmd::Ortho);
-                tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
-                    ui.set_min_width(280.0);
-                    focal_length_controls(ui, ed);
+                // Long groups live in submenus so the menu fits on small screens.
+                tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
+                    if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
+                        ed.camera.snap(0.0, 0.0);
+                    }
+                    if tips::button_km(ui, &ed.keymap, "Back", Cmd::Back).clicked() {
+                        ed.camera.snap(std::f32::consts::PI, 0.0);
+                    }
+                    if tips::button_km(ui, &ed.keymap, "Left", Cmd::Left).clicked() {
+                        ed.camera.snap(-std::f32::consts::FRAC_PI_2, 0.0);
+                    }
+                    if tips::button_km(ui, &ed.keymap, "Right", Cmd::Right).clicked() {
+                        ed.camera.snap(std::f32::consts::FRAC_PI_2, 0.0);
+                    }
+                    if tips::button_km(ui, &ed.keymap, "Top", Cmd::Top).clicked() {
+                        ed.camera.snap(0.0, 1.55);
+                    }
+                    if tips::button_km(ui, &ed.keymap, "Bottom", Cmd::Bottom).clicked() {
+                        ed.camera.snap(0.0, -1.55);
+                    }
+                    ui.separator();
+                    tips::check_km(ui, &ed.keymap, &mut ed.camera.orthographic, "Orthographic", Cmd::Ortho);
+                    tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
+                        ui.set_min_width(280.0);
+                        focal_length_controls(ui, ed);
+                    });
                 });
-                tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
-                ui.separator();
-                ui.label("Shading");
-                tips::hover(
-                    ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
-                    plain::AO,
-                );
-                tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
-                tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
-                tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
-                if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
-                    ed.show_wireframe = true;
-                }
-                surface_cursor_checkbox(ui, ed);
-                ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
-                    .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
-                ui.separator();
-                tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
-                ui.separator();
-                ui.label("Material");
-                for m in MatcapPreset::ALL {
-                    let resp = tips::hover(
-                        ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()),
-                        tips::matcap_tip(m),
+                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, wireframe and face group colors", |ui| {
+                    tips::hover(
+                        ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
+                        plain::AO,
                     );
-                    if resp.hovered() {
-                        ed.preview_matcap = Some((m, None));
+                    tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
+                    tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
+                    if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
+                        ed.show_wireframe = true;
                     }
-                    if resp.clicked() {
-                        ed.matcap = m;
-                        ed.custom_matcap = None;
+                    tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
+                });
+                tips::menu(ui, "Brush cursor", "How the brush circle is drawn over the model", |ui| {
+                    surface_cursor_checkbox(ui, ed);
+                    ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
+                        .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
+                });
+                tips::menu(ui, "Material", "The viewport material (matcap), including ones you loaded", |ui| {
+                    for m in MatcapPreset::ALL {
+                        let resp = tips::hover(
+                            ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()),
+                            tips::matcap_tip(m),
+                        );
+                        if resp.hovered() {
+                            ed.preview_matcap = Some((m, None));
+                        }
+                        if resp.clicked() {
+                            ed.matcap = m;
+                            ed.custom_matcap = None;
+                        }
                     }
-                }
-                for i in 0..ed.custom_matcaps.len() {
-                    let name = ed.custom_matcaps[i].name.clone();
-                    let tip = format!("{name}. A material you loaded.");
-                    let resp = tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip);
-                    if resp.hovered() {
-                        ed.preview_matcap = Some((ed.matcap, Some(i)));
+                    for i in 0..ed.custom_matcaps.len() {
+                        let name = ed.custom_matcaps[i].name.clone();
+                        let tip = format!("{name}. A material you loaded.");
+                        let resp = tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip);
+                        if resp.hovered() {
+                            ed.preview_matcap = Some((ed.matcap, Some(i)));
+                        }
+                        if resp.clicked() {
+                            ed.custom_matcap = Some(i);
+                        }
                     }
-                    if resp.clicked() {
-                        ed.custom_matcap = Some(i);
+                    if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
+                        ed.request_load_matcap = true;
                     }
-                }
-                if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
-                    ed.request_load_matcap = true;
-                }
+                });
+                tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
                 ui.separator();
                 if tips::button(ui, "Appearance & Theme…", Cmd::ThemeWindow).clicked() {
                     ed.open_settings(crate::editor::SettingsTab::Appearance);
                 }
-                ui.separator();
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
             });
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -568,7 +571,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         if ed.show_panels {
             orientation_gizmo(ui.ctx(), ed, canvas);
         }
-        if ed.quick_bar != QuickBar::Toolbar && ed.layout != UiLayout::ZBrushClassic {
+        if ed.quick_bar != QuickBar::Toolbar && ed.layout != UiLayout::Workstation {
             floating_quick_bar(ui.ctx(), ed, canvas);
         }
     }
@@ -729,7 +732,7 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
                 ui.add(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4));
             });
             let busy = ed.job.is_some();
-            if ui.add_enabled(!busy, egui::Button::new("Hollow Mesh (OpenVDB)")).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new("Hollow mesh (voxel)")).clicked() {
                 ed.hollow_active_piece();
             }
 
@@ -1063,21 +1066,24 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new("Quick presets").strong());
     ui.horizontal(|ui| {
         if ui
-            .button("ZBrush Classic")
-            .on_hover_text("Authentic ZBrush dark UI: matte charcoal panels, vibrant orange highlights, sharp corners, red wax, and ZBrush shortcuts")
+            .button("Workstation")
+            .on_hover_text(
+                "Matte dark panels, tangerine highlights, sharp corners, the crimson clay material, \
+                 right-drag orbit and single-key tool shortcuts",
+            )
             .clicked()
         {
-            ed.theme = ThemePreset::ZBrushClassic;
-            ed.accent = AccentPreset::ZBrushOrange;
+            ed.theme = ThemePreset::Matte;
+            ed.accent = AccentPreset::Tangerine;
             ed.corner_style = CornerStyle::Sharp;
-            ed.matcap = oxy_render::MatcapPreset::RedWax;
+            ed.matcap = oxy_render::MatcapPreset::CrimsonClay;
             ed.custom_matcap = None;
             ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
             ed.view.background = [0.08, 0.08, 0.08];
             ed.view.background_center = [0.02, 0.02, 0.02];
-            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::ZBrush);
-            ed.keymap.apply_navigation_preset(crate::keymap::Preset::ZBrush);
-            ed.status = "Applied ZBrush Classic theme preset".into();
+            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::SingleKey);
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::RightDrag);
+            ed.status = "Applied the Workstation preset".into();
         }
         if ui
             .button("Default Studio")
@@ -1359,7 +1365,7 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
             ui.separator();
 
-            if ed.quick_bar == QuickBar::Toolbar || ed.layout == UiLayout::ZBrushClassic {
+            if ed.quick_bar == QuickBar::Toolbar || ed.layout == UiLayout::Workstation {
                 ui.spacing_mut().slider_width = 110.0;
                 quick_controls(ui, ed);
                 ui.separator();
@@ -1448,7 +1454,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         let r = match (ed.layout, horizontal) {
             (UiLayout::Standard, false) => widgets::brush_row(ui, k, selected, key),
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
-            (UiLayout::ZBrushClassic, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
+            (UiLayout::Workstation, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
             (layout, _) => {
                 let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
                 let t = widgets::brush_texture(&ctx, k);
@@ -1484,7 +1490,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             layout => {
                 let (cols, gap) = match layout {
                     UiLayout::Compact => (4, 3.0),
-                    UiLayout::ZBrushClassic => (2, 3.0),
+                    UiLayout::Workstation => (2, 3.0),
                     _ => (3, 8.0),
                 };
                 egui::Grid::new("brush_grid").spacing([gap, gap]).show(ui, |ui| {
@@ -1628,9 +1634,7 @@ fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
 
 /// Raise / Carve, size and strength: the controls used most while sculpting.
 fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
-    let is_zbrush = ed.layout == UiLayout::ZBrushClassic;
-    let raise_text = if is_zbrush { "ZAdd" } else { "Raise" };
-    let carve_text = if is_zbrush { "ZSub" } else { "Carve" };
+    let (raise_text, carve_text) = ("Raise", "Carve");
     let raise =
         egui::Button::selectable(!ed.carve, RichText::new(raise_text).strong()).min_size(egui::vec2(58.0, 26.0));
     if tips::hover(ui.add(raise), Cmd::Raise.tip()).clicked() {
@@ -1641,7 +1645,7 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
         ed.carve = true;
     }
     ui.separator();
-    let size_label = if is_zbrush { "Draw Size" } else { "Size" };
+    let size_label = "Size";
     ui.label(RichText::new(size_label).weak());
     tips::hover(
         ui.add(
@@ -1654,13 +1658,7 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     );
     let shift_smooth = ed.brush_roles().shift;
     let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
-    let strength_label = if shift_smooth {
-        "Smooth Strength"
-    } else if is_zbrush {
-        "Z Intensity"
-    } else {
-        "Strength"
-    };
+    let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
     ui.label(RichText::new(strength_label).weak());
     tips::hover(
         ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true)),
@@ -2553,7 +2551,7 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
-    tips::menu(ui, "Boolean (OpenVDB)", "Volumetric CSG Boolean tools (Union, Difference, Intersection)", |ui| {
+    tips::menu(ui, "Boolean (voxel)", "Voxel boolean tools: union, difference, intersection", |ui| {
         let other_pieces: Vec<(u64, String)> =
             ed.scene.pieces.iter().filter(|p| p.id != ed.scene.active().id).map(|p| (p.id, p.name.clone())).collect();
         if other_pieces.is_empty() {
@@ -3222,11 +3220,11 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ui.label("Engine");
         egui::ComboBox::from_id_salt("remesh_engine")
             .selected_text(match ed.remesh_engine {
-                oxy_topo::RemeshEngine::Vdb => "OpenVDB (Sparse)",
+                oxy_topo::RemeshEngine::Vdb => "Sparse voxels (VDB)",
                 oxy_topo::RemeshEngine::RegularGrid => "Regular Grid",
             })
             .show_ui(ui, |ui| {
-                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::Vdb, "OpenVDB (Sparse)");
+                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::Vdb, "Sparse voxels (VDB)");
                 ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::RegularGrid, "Regular Grid");
             });
     });
@@ -3885,9 +3883,9 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             let s0 = to_pt(p0);
             let s1 = to_pt(p1);
             let line_color = match kind {
-                BrushKind::ClipCurve => Color32::from_rgb(255, 170, 40),
-                BrushKind::SliceCurve => Color32::from_rgb(80, 220, 120),
-                BrushKind::TrimCurve => Color32::from_rgb(255, 80, 80),
+                BrushKind::PlaneClip => Color32::from_rgb(255, 170, 40),
+                BrushKind::LineSplit => Color32::from_rgb(80, 220, 120),
+                BrushKind::CutAway => Color32::from_rgb(255, 80, 80),
                 _ => Color32::WHITE,
             };
 

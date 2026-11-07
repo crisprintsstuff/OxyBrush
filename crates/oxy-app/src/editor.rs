@@ -174,7 +174,7 @@ pub enum Drag {
         scale: f32,
         shape: oxy_sculpt::InsertShape,
     },
-    /// Screen curve cutting gesture (ClipCurve, SliceCurve, TrimCurve).
+    /// Screen curve cutting gesture (PlaneClip, LineSplit, CutAway).
     CurveCut {
         kind: BrushKind,
         start: Vec2,
@@ -1857,7 +1857,7 @@ impl Editor {
         let planes =
             symmetric_planes(&self.symmetry.transforms(), plane_point, plane_normal, bounds.extent().max_element());
         match kind {
-            BrushKind::ClipCurve => {
+            BrushKind::PlaneClip => {
                 let piece = self.scene.active_mut();
                 self.history.begin(kind.label(), piece.id, &piece.mesh);
                 for c in 0..piece.mesh.chunks.len() as u32 {
@@ -1878,7 +1878,7 @@ impl Editor {
                     self.status = "No vertices clipped".into();
                 }
             }
-            BrushKind::SliceCurve => {
+            BrushKind::LineSplit => {
                 let mut new_mesh = self.scene.active().mesh.slice_plane(planes[0].0, planes[0].1);
                 for &(p, n) in &planes[1..] {
                     new_mesh = new_mesh.slice_plane(p, n);
@@ -1887,7 +1887,7 @@ impl Editor {
                 self.replace_active_mesh(kind.label(), new_mesh);
                 self.status = format!("Sliced mesh ({tri_count} faces, new polygroup)");
             }
-            BrushKind::TrimCurve => {
+            BrushKind::CutAway => {
                 let mut new_mesh = self.scene.active().mesh.trim_plane(planes[0].0, planes[0].1);
                 for &(p, n) in &planes[1..] {
                     new_mesh = new_mesh.trim_plane(p, n);
@@ -3412,11 +3412,11 @@ impl Editor {
                 self.view.wireframe = !self.view.wireframe;
                 E::None
             }
-            C::Polyframe => {
+            C::WireGroups => {
                 let active = self.view.wireframe || self.view.show_groups;
                 self.view.wireframe = !active;
                 self.view.show_groups = !active;
-                self.status = format!("Polyframe {}", if !active { "on" } else { "off" });
+                self.status = format!("Wireframe + groups {}", if !active { "on" } else { "off" });
                 E::None
             }
             C::TogglePanels => {
@@ -4346,7 +4346,7 @@ mod tests {
         let run = |mirror: bool| {
             let mut e = editor();
             e.symmetry = Symmetry { x: mirror, ..Default::default() };
-            e.brush_kind = BrushKind::TrimCurve;
+            e.brush_kind = BrushKind::CutAway;
             // Drawn upward, the trimmed side is the outside (left of the line).
             e.pointer = Some(Vec2::new(330.0, 500.0));
             e.pointer_down(PointerButton::Primary);
@@ -4917,7 +4917,7 @@ mod tests {
     fn curve_cut_clip_curve_gesture_and_undo() {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
-        e.brush_kind = BrushKind::ClipCurve;
+        e.brush_kind = BrushKind::PlaneClip;
         let orig_vcount = e.scene.active().mesh.vertex_count();
         let orig_positions = e.scene.active().mesh.positions.clone();
 
@@ -4926,7 +4926,7 @@ mod tests {
         let p1 = Vec2::new(700.0, 300.0);
         e.pointer = Some(p0);
         e.pointer_down(PointerButton::Primary);
-        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::ClipCurve, .. }));
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::PlaneClip, .. }));
 
         // Move to p1
         e.pointer_moved(p1);
@@ -4970,14 +4970,14 @@ mod tests {
     fn curve_cut_slice_curve_bisection_and_polygroup() {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
-        e.brush_kind = BrushKind::SliceCurve;
+        e.brush_kind = BrushKind::LineSplit;
         let orig_tcount = e.scene.active().mesh.triangle_count();
 
         let p0 = Vec2::new(100.0, 300.0);
         let p1 = Vec2::new(700.0, 300.0);
         e.pointer = Some(p0);
         e.pointer_down(PointerButton::Primary);
-        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::SliceCurve, .. }));
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::LineSplit, .. }));
 
         e.pointer_moved(p1);
         e.pointer_up();
@@ -4999,14 +4999,14 @@ mod tests {
     fn curve_cut_trim_curve_geometry_cut_and_watertight_cap() {
         let mut e = editor();
         e.canvas = [0.0, 0.0, 800.0, 600.0];
-        e.brush_kind = BrushKind::TrimCurve;
+        e.brush_kind = BrushKind::CutAway;
         let orig_tcount = e.scene.active().mesh.triangle_count();
 
         let p0 = Vec2::new(100.0, 300.0);
         let p1 = Vec2::new(700.0, 300.0);
         e.pointer = Some(p0);
         e.pointer_down(PointerButton::Primary);
-        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::TrimCurve, .. }));
+        assert!(matches!(e.drag, Drag::CurveCut { kind: BrushKind::CutAway, .. }));
 
         e.pointer_moved(p1);
         e.pointer_up();

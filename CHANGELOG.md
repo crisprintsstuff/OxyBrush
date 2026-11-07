@@ -4,7 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **Generic names for options that used other products' branding:** the "ZBrush Classic" layout is now **Workstation**, the theme is **Matte**, the "ZBrush Orange" accent is **Tangerine** (a new color), the "ZBrush" keymap presets are **Right-drag orbit** and **Single-key tools**, the "Red wax" material is **Crimson clay**, Polyframe is **Wireframe + groups**, and the curve tools are **Plane Clip**, **Line Split** and **Cut Away**. The top bar always says Raise/Carve, Size and Strength. Saved settings, keymaps and brush presets that use the old names still load.
+- **Menus fit on screen:** the View menu is split into Camera, Shading, Brush cursor and Material submenus, and any menu taller than the window scrolls instead of running off the screen.
+
 ### Fixed
+- **Matte (formerly "ZBrush Classic") theme:** section headers, the Carve and Y/Z mirror toggles and the status bar were drawn in near-black (the orange accent darkened all strong text). Buttons are also lighter than the panels now, so they read as clickable.
 - **Insert Primitives shows what you're inserting:** the primitive (and its symmetry copies) is drawn solid on the surface and grows as you drag, instead of appearing only on release.
 - **Cut tools show their line:** the clip/slice/trim line, shaded side and direction arrow are visible while dragging. They were hidden (or blinked) because "Hide circle during stroke" also hid tool previews; it now hides only the brush circle.
 - **Cut tools follow symmetry:** clip, slice and trim cuts are repeated for mirror and radial symmetry, as one undo step. A trim that would remove the whole piece is refused with a message.

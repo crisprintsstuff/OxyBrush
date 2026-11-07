@@ -214,14 +214,14 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             }),
         },
         Entry {
-            label: "Theme: ZBrush Classic".into(),
+            label: "Theme: Matte".into(),
             detail: String::new(),
-            keywords: "theme style dark zbrush classic pixologic charcoal appearance",
-            tooltip: "Switch to authentic classic ZBrush dark theme".into(),
+            keywords: "theme style dark matte workstation appearance",
+            tooltip: "Matte dark panels with clearly visible buttons".into(),
             act: Act::Run(|e| {
-                e.theme = crate::settings::ThemePreset::ZBrushClassic;
+                e.theme = crate::settings::ThemePreset::Matte;
                 e.high_contrast = false;
-                e.status = "Theme: ZBrush Classic".into();
+                e.status = "Theme: Matte".into();
             }),
         },
         Entry {
@@ -290,13 +290,13 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             }),
         },
         Entry {
-            label: "Accent: ZBrush Orange".into(),
+            label: "Accent: Tangerine".into(),
             detail: String::new(),
-            keywords: "accent color zbrush orange pixologic highlight",
-            tooltip: "Switch accent color to authentic ZBrush Orange #FF9229".into(),
+            keywords: "accent color orange tangerine highlight",
+            tooltip: "Switch the accent color to tangerine orange".into(),
             act: Act::Run(|e| {
-                e.accent = crate::settings::AccentPreset::ZBrushOrange;
-                e.status = "Accent: ZBrush Orange".into();
+                e.accent = crate::settings::AccentPreset::Tangerine;
+                e.status = "Accent: Tangerine".into();
             }),
         },
         Entry {
