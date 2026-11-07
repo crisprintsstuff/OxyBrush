@@ -30,18 +30,18 @@ pub enum Preset {
     OxyBrush,
     /// Middle-drag orbits, Ctrl+middle zooms, Shift+middle pans.
     MmbOrbit,
-    /// ZBrush navigation and hotkeys.
-    ZBrush,
+    /// Right-drag orbits (familiar to people coming from ZBrush).
+    RightDrag,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 3] = [Preset::OxyBrush, Preset::MmbOrbit, Preset::ZBrush];
+    pub const ALL: [Preset; 3] = [Preset::OxyBrush, Preset::MmbOrbit, Preset::RightDrag];
 
     pub fn key(self) -> &'static str {
         match self {
             Preset::OxyBrush => "oxybrush",
             Preset::MmbOrbit => "mmb_orbit",
-            Preset::ZBrush => "zbrush",
+            Preset::RightDrag => "right_drag",
         }
     }
 
@@ -49,7 +49,7 @@ impl Preset {
         match self {
             Preset::OxyBrush => "OxyBrush",
             Preset::MmbOrbit => "MMB orbit",
-            Preset::ZBrush => "ZBrush",
+            Preset::RightDrag => "Right-drag orbit",
         }
     }
 
@@ -64,14 +64,16 @@ impl Preset {
                  45° snapping starts on Alt (change it below). Left-drag on the model still sculpts, \
                  and left-drag on empty space still orbits."
             }
-            Preset::ZBrush => {
-                "ZBrush navigation: Right-drag orbits, Alt+Right-drag pans, Ctrl+Right-drag zooms, \
+            Preset::RightDrag => {
+                "Right-drag orbits (similar to ZBrush), Alt+Right-drag pans, Ctrl+Right-drag zooms, \
                  Middle-drag pans. Left-drag on canvas orbits, Alt+Left-drag pans. Shift while orbiting snaps to 90°."
             }
         }
     }
 
     fn from_key(k: &str) -> Option<Preset> {
+        // Older settings files called this preset "zbrush".
+        let k = if k == "zbrush" { "right_drag" } else { k };
         Self::ALL.into_iter().find(|p| p.key() == k)
     }
 }
@@ -82,24 +84,25 @@ pub enum ShortcutsPreset {
     /// Default OxyBrush shortcuts (Space for find brush, Q for quick menu, T for gizmo, etc.).
     #[default]
     Default,
-    /// Standard ZBrush shortcuts (B for brush palette, Space for quick menu, Q for draw, W/E/R for gizmo move/scale/rotate, Shift+F for polyframe).
-    ZBrush,
+    /// Single-key tool shortcuts (B brush palette, Space quick menu, Q draw, W/E/R move/scale/rotate,
+    /// Shift+F wireframe), similar to ZBrush's defaults.
+    SingleKey,
 }
 
 impl ShortcutsPreset {
-    pub const ALL: [ShortcutsPreset; 2] = [ShortcutsPreset::Default, ShortcutsPreset::ZBrush];
+    pub const ALL: [ShortcutsPreset; 2] = [ShortcutsPreset::Default, ShortcutsPreset::SingleKey];
 
     pub fn key(self) -> &'static str {
         match self {
             ShortcutsPreset::Default => "default",
-            ShortcutsPreset::ZBrush => "zbrush",
+            ShortcutsPreset::SingleKey => "single_key",
         }
     }
 
     pub fn label(self) -> &'static str {
         match self {
             ShortcutsPreset::Default => "Default (OxyBrush)",
-            ShortcutsPreset::ZBrush => "ZBrush",
+            ShortcutsPreset::SingleKey => "Single-key tools",
         }
     }
 
@@ -108,13 +111,14 @@ impl ShortcutsPreset {
             ShortcutsPreset::Default => {
                 "Space finds brushes, Q opens quick menu, T cycles transform gizmo, Shift+W toggles wireframe."
             }
-            ShortcutsPreset::ZBrush => {
-                "B opens brush palette, Space opens quick menu, Q returns to Draw, W/E/R move/scale/rotate gizmo, Shift+F toggles Polyframe."
+            ShortcutsPreset::SingleKey => {
+                "B opens the brush palette, Space opens the quick menu, Q returns to Draw, W/E/R move/scale/rotate with the gizmo, Shift+F toggles the wireframe. Similar to ZBrush's defaults."
             }
         }
     }
 
     pub fn from_key(k: &str) -> Option<ShortcutsPreset> {
+        let k = if k == "zbrush" { "single_key" } else { k };
         Self::ALL.into_iter().find(|p| p.key() == k)
     }
 }
@@ -419,7 +423,7 @@ pub enum CommandId {
     Orthographic,
     ShowGroups,
     Wireframe,
-    Polyframe,
+    WireGroups,
     TogglePanels,
     Shortcuts,
     ShowMask,
@@ -523,7 +527,7 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::Orthographic, name: "Orthographic", group: "View", defaults: &["o"] },
     CommandMeta { id: CommandId::ShowGroups, name: "Face group colors", group: "View", defaults: &["g"] },
     CommandMeta { id: CommandId::Wireframe, name: "Wireframe overlay", group: "View", defaults: &["shift+w"] },
-    CommandMeta { id: CommandId::Polyframe, name: "Polyframe (wireframe & groups)", group: "View", defaults: &[] },
+    CommandMeta { id: CommandId::WireGroups, name: "Wireframe + face groups", group: "View", defaults: &[] },
     CommandMeta { id: CommandId::TogglePanels, name: "Show / hide panels", group: "View", defaults: &["tab"] },
     CommandMeta { id: CommandId::Shortcuts, name: "Shortcut list", group: "View", defaults: &["f1"] },
     CommandMeta { id: CommandId::ShowMask, name: "Show / hide mask", group: "Mask and mesh", defaults: &["m"] },
@@ -559,7 +563,7 @@ fn command_meta(id: CommandId) -> &'static CommandMeta {
 pub fn command_defaults(id: CommandId, preset: ShortcutsPreset) -> &'static [&'static str] {
     match preset {
         ShortcutsPreset::Default => command_meta(id).defaults,
-        ShortcutsPreset::ZBrush => match id {
+        ShortcutsPreset::SingleKey => match id {
             CommandId::BrushFinder => &["b"],
             CommandId::QuickMenu => &["space"],
             CommandId::DrawMode => &["q"],
@@ -567,7 +571,7 @@ pub fn command_defaults(id: CommandId, preset: ShortcutsPreset) -> &'static [&'s
             CommandId::GizmoScale => &["e"],
             CommandId::GizmoRotate => &["r"],
             CommandId::GizmoCycle => &["t"],
-            CommandId::Polyframe => &["shift+f"],
+            CommandId::WireGroups => &["shift+f"],
             CommandId::ShowMask => &["ctrl+h", "m"],
             other => command_meta(other).defaults,
         },
@@ -800,7 +804,7 @@ fn navigation_for(preset: Preset) -> Vec<NavRule> {
             rule(Middle, Yes, No, No, Pan),
             rule(Right, Any, Any, Any, Pan),
         ],
-        Preset::ZBrush => vec![
+        Preset::RightDrag => vec![
             rule(Right, No, No, No, Orbit),
             rule(Right, Any, No, Yes, Pan),
             rule(Right, No, Yes, No, Zoom),
@@ -852,7 +856,7 @@ impl Default for Keymap {
 impl Keymap {
     pub fn builtin(preset: Preset) -> Self {
         let shortcuts = match preset {
-            Preset::ZBrush => ShortcutsPreset::ZBrush,
+            Preset::RightDrag => ShortcutsPreset::SingleKey,
             _ => ShortcutsPreset::Default,
         };
         Self::builtin_with(preset, shortcuts)
@@ -860,7 +864,7 @@ impl Keymap {
 
     pub fn builtin_with(preset: Preset, shortcuts: ShortcutsPreset) -> Self {
         let snap = match preset {
-            Preset::OxyBrush | Preset::ZBrush => Some(ModKey::Shift),
+            Preset::OxyBrush | Preset::RightDrag => Some(ModKey::Shift),
             Preset::MmbOrbit => Some(ModKey::Alt),
         };
         Self {
@@ -884,7 +888,7 @@ impl Keymap {
         crate::settings::Settings::default_path().map(|p| p.with_file_name("keymap.txt"))
     }
 
-    /// Apply a keyboard shortcut preset (Default or ZBrush).
+    /// Apply a keyboard shortcut preset (Default or Single-key tools).
     pub fn apply_shortcuts_preset(&mut self, shortcuts: ShortcutsPreset) {
         self.shortcuts = shortcuts;
         for (id, chords) in &mut self.commands {
@@ -1189,7 +1193,7 @@ impl Keymap {
             }
         }
         let shortcuts = shortcuts.unwrap_or(match preset {
-            Preset::ZBrush => ShortcutsPreset::ZBrush,
+            Preset::RightDrag => ShortcutsPreset::SingleKey,
             _ => ShortcutsPreset::Default,
         });
         let mut map = Keymap::builtin_with(preset, shortcuts);
@@ -1355,7 +1359,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::Orthographic => "orthographic",
         CommandId::ShowGroups => "face_groups",
         CommandId::Wireframe => "wireframe",
-        CommandId::Polyframe => "polyframe",
+        CommandId::WireGroups => "wire_groups",
         CommandId::TogglePanels => "panels",
         CommandId::Shortcuts => "shortcuts",
         CommandId::ShowMask => "show_mask",
@@ -1374,6 +1378,8 @@ fn command_key(id: CommandId) -> &'static str {
 }
 
 fn command_from_key(s: &str) -> Option<CommandId> {
+    // Older settings files used "polyframe" for the wireframe + groups toggle.
+    let s = if s == "polyframe" { "wire_groups" } else { s };
     COMMANDS.iter().find(|c| command_key(c.id) == s).map(|c| c.id)
 }
 
@@ -1730,19 +1736,19 @@ mod tests {
         // Sculpt keys are unchanged by the navigation preset.
         assert!(mmb.is_standard_gestures());
 
-        let zb = Keymap::builtin(Preset::ZBrush);
+        let zb = Keymap::builtin(Preset::RightDrag);
         assert_eq!(zb.command_for(chord("b")), Some(CommandId::BrushFinder));
         assert_eq!(zb.command_for(chord("space")), Some(CommandId::QuickMenu));
         assert_eq!(zb.command_for(chord("w")), Some(CommandId::GizmoMove));
         assert_eq!(zb.command_for(chord("e")), Some(CommandId::GizmoScale));
         assert_eq!(zb.command_for(chord("r")), Some(CommandId::GizmoRotate));
         assert_eq!(zb.command_for(chord("q")), Some(CommandId::DrawMode));
-        assert_eq!(zb.command_for(chord("shift+f")), Some(CommandId::Polyframe));
+        assert_eq!(zb.command_for(chord("shift+f")), Some(CommandId::WireGroups));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, false)), Some(NavAction::Orbit));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, true)), Some(NavAction::Pan));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, true, false)), Some(NavAction::Zoom));
         assert_eq!(zb.snap, Some(ModKey::Shift));
-        assert_eq!(zb.shortcuts, ShortcutsPreset::ZBrush);
+        assert_eq!(zb.shortcuts, ShortcutsPreset::SingleKey);
     }
 
     fn mods(shift: bool, ctrl: bool, alt: bool) -> crate::editor::Modifiers {

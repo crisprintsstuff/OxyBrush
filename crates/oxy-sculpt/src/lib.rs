@@ -44,9 +44,9 @@ pub enum BrushKind {
     KelvinTwist,
     KelvinScale,
     InsertPrimitive,
-    ClipCurve,
-    SliceCurve,
-    TrimCurve,
+    PlaneClip,
+    LineSplit,
+    CutAway,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -151,16 +151,16 @@ impl BrushKind {
         BrushKind::PlanarTrim,
         BrushKind::Noise,
         BrushKind::InsertPrimitive,
-        BrushKind::ClipCurve,
-        BrushKind::SliceCurve,
-        BrushKind::TrimCurve,
+        BrushKind::PlaneClip,
+        BrushKind::LineSplit,
+        BrushKind::CutAway,
         BrushKind::Mask,
         BrushKind::Paint,
     ];
 
     /// Brushes that cut or clamp geometry along a screen-projected plane.
     pub fn is_curve_cut(self) -> bool {
-        matches!(self, BrushKind::ClipCurve | BrushKind::SliceCurve | BrushKind::TrimCurve)
+        matches!(self, BrushKind::PlaneClip | BrushKind::LineSplit | BrushKind::CutAway)
     }
 
     /// Brushes that move a captured region with the pointer instead of dabbing.
@@ -203,9 +203,9 @@ impl BrushKind {
             BrushKind::TopoMove => "Topological Move",
             BrushKind::Noise => "Noise",
             BrushKind::InsertPrimitive => "Insert Primitive",
-            BrushKind::ClipCurve => "Clip Curve",
-            BrushKind::SliceCurve => "Slice Curve",
-            BrushKind::TrimCurve => "Trim Curve",
+            BrushKind::PlaneClip => "Plane Clip",
+            BrushKind::LineSplit => "Line Split",
+            BrushKind::CutAway => "Cut Away",
         }
     }
 
@@ -220,9 +220,9 @@ impl BrushKind {
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
             | BrushKind::InsertPrimitive
-            | BrushKind::ClipCurve
-            | BrushKind::SliceCurve
-            | BrushKind::TrimCurve => 1.0,
+            | BrushKind::PlaneClip
+            | BrushKind::LineSplit
+            | BrushKind::CutAway => 1.0,
             BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
@@ -1180,9 +1180,9 @@ fn target_positions(
                 | BrushKind::Paint
                 | BrushKind::Layer
                 | BrushKind::InsertPrimitive
-                | BrushKind::ClipCurve
-                | BrushKind::SliceCurve
-                | BrushKind::TrimCurve => p,
+                | BrushKind::PlaneClip
+                | BrushKind::LineSplit
+                | BrushKind::CutAway => p,
             };
             (v, np)
         })

@@ -6,15 +6,15 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-04 (unreleased: keymap editor and navigation presets, perspective focal length, viewport background, surface-aligned brush cursor, tooltips on every control and touch long-press, local MCP server so an on-machine agent can sculpt alongside you, RFC 0003, disable autosave, stroke coalescing & dab budgeting, parallel update_after_move, zero-copy GPU packing; v0.4.0-alpha: vertex color, transform gizmo, brush presets, glTF/GLB export and pipeline tools, command palette and guide)
+> **Last updated:** 2026-11-07 (status brought up to v2.5.0-beta; ZBrush-branded options renamed to generic names; Workstation layout and Matte theme contrast fixed; long menus split into submenus and made scrollable)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | v2.0.0-beta (2026-11-06): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Latest release** | v2.5.0-beta (2026-11-06): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), performance passes (3.6: stroke coalescing, dab budgeting, Rayon GPU & geometry acceleration), interface pass, Phase 4 items (Python plugin system, local MCP agent, keymap editor & presets, vertex color, transform gizmo & posing, Kelvinlet brushes, mask extract, themes & appearance, wireframe overlay, viewport background, focal length, autosave control), pipeline basics (glTF/GLB, PLY, LOD chains, CLI), and native ZBrush (.ztl, .zpr) multi-subtool import |
-| **Next** | Phase 3 — rebuilding lower levels (3.5), performance (3.6), touch groundwork and iPad (3.7–3.10) |
+| **Next** | Phase 3 leftovers — rebuild lower levels from a dense mesh (3.5), stencils (3.3), SIMD kernels and culling for 10M triangles (3.6), iPad (3.8–3.10). Phase 4 — dynamic topology, sculpt layers, symmetry repair, vertex color in exports |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
 | **Supported platforms** | Windows 10/11, Linux (X11/Wayland), macOS 11+ (Apple Silicon and Intel; new in 0.1.0, untested on real Macs so far). iPadOS planned (Phase 3.7–3.10). |
 
@@ -70,7 +70,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - **Decision pending (before 3.8):** calling iOS APIs from Rust needs `unsafe`, which AGENTS.md currently forbids workspace-wide. The proposal is to allow it only in one small, reviewed platform crate.
 - **Bonus of the Apple account:** the same membership allows notarizing the macOS app, removing the "Open Anyway" step for Mac users.
 
-## Phase 4 — Workflow and experience 🚧 → 0.5 (first items in v0.4.0-alpha)
+## Phase 4 — Workflow and experience 🚧 (items shipped from v0.4.0-alpha to v2.5.0-beta)
 
 | Feature | Details | Effort |
 |---|---|---|
@@ -80,30 +80,30 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
 | **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ⏳ Bend, twist, taper, inflate; topological masking from a click | 4–6 wk |
 | **Transform gizmo** | ✅ Move, rotate and scale pieces and masked regions in the viewport. ⏳ Numeric input, snapping, local axes | 1–2 wk |
-| **Brush presets and editor** | Save brushes (kernel, alpha, falloff, settings) as presets; custom shelves of favorites | 2–3 wk |
-| **Insert-mesh and primitive brushes** | Stamp small meshes (eyes, bolts, teeth) or geometric primitives (spheres, cubes, cylinders) onto the surface with auto-orientation and automatic masking of base geometry (Discussion #21) | 3–5 wk |
-| **Hard-surface tools** | Clip brushes (push geometry to plane), slice brushes (insert edge loops and face groups), trim brushes (cut and hole-cap) (Discussion #21); edge-preserving polish | 2–4 wk |
+| **Brush presets and editor** | ✅ Presets (see below). ⏳ A brush editor and custom shelves of favorites | 2–3 wk |
+| **Insert-mesh and primitive brushes** | ✅ Insert Primitives brush (v2.0.0-beta): sphere, cube, cylinder, cone, torus and plane, dragged out on the surface, with the existing geometry auto-masked and a new face group per primitive. ⏳ Stamping your own meshes (eyes, bolts, teeth) | — |
+| **Hard-surface tools** | ✅ Screen-line cutting tools (v2.5.0-beta): Plane Clip (flatten to a plane), Line Split (new face group along a line), Cut Away (cut and cap watertight). ⏳ Edge-preserving polish | — |
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
 | **Viewport & lighting** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅, gradient or flat background with colors ✅, focal length (15–200 mm, remembered) ✅, surface-aligned brush cursor (optional, off by default) ✅. ⏳ Dynamic studio lights (directional, point, spot), atmospheric distance/depth fog, shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
 | **Path tracer renderer** | Progressive hardware-accelerated / compute path tracer for photorealistic render previews, realistic contact shadows and ambient lighting | 4–6 wk |
-| **Python plugin system** | Embedded Python runtime and scripting API (extending the MCP server architecture) for custom procedural brushes, generators, import/export filters and automation scripts | 3–5 wk |
+| **Python plugin system** | ✅ Pure-Python SDK and a Plugins menu that talk to the app over the local MCP server (v0.5.0-alpha), with example plugins. ⏳ Procedural brushes and import/export filters as plugins | — |
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
-| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. Keymap editor, mouse-navigation presets (OxyBrush and MMB orbit) and optional Ctrl-carve / Alt-mask gestures ✅. A tooltip on every control (what it does, plus the shortcut from one shared list), and the same text on a long-press in the Touch layout ✅. ⏳ Custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
+| **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch, Workstation), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. Keymap editor, mouse-navigation presets (OxyBrush and MMB orbit) and optional Ctrl-carve / Alt-mask gestures ✅. A tooltip on every control (what it does, plus the shortcut from one shared list), and the same text on a long-press in the Touch layout ✅. ⏳ Custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
 | **Updates** | ✅ Opt-in update checks and verified downloads ([RFC 0002](rfcs/0002-updates.md)). ⏳ Release signing key (maintainer), smoother macOS install once notarized | — |
 | **Local AI agents** | ✅ Opt-in MCP server on `127.0.0.1` (and `oxybrush-cli mcp` over stdio) so an agent on this machine can sculpt alongside you ([RFC 0003](rfcs/0003-mcp.md)). Off by default; edits are ordinary undo steps labeled `Agent:`. ⏳ More tools (gizmo, alphas as brushes, subdivision levels) as those settle | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
-## Phase 5 — Hardening & Release Polish ✅
+## Phase 5 — Hardening & release polish 🚧
 
 - **Topology Diagnostics & Cleaning**: 2-manifold diagnostics in the UI (`Mesh > Topology Diagnostics...`), edge boundary inspection, degenerate triangle cleanup (`clean_degenerate_triangles`) with full undo/redo history.
-- **ZBrush Classic UI Layout**: Optional classic docked layout (`UiLayout::ZBrushClassic`) featuring dual-column brush sphere shelves, top toolbar quick controls (Draw Size, Z Intensity, ZAdd/ZSub), and familiar UI proportions.
-- **Robustness**: Performance gates met on reference hardware, file-format stability (`.oxb`), non-destructive sculpting with complete undo preservation. All tests pass with `#![forbid(unsafe_code)]`.
+- **Workstation layout**: optional dense docked layout (`UiLayout::Workstation`) with a two-column brush shelf and the main controls (Raise/Carve, size, strength) in the top bar; pairs with the Matte theme.
+- **Robustness**: `.oxb` stays readable across versions, undo covers every edit, and the workspace forbids `unsafe`. ⏳ Measured 10M-triangle performance gate on reference hardware (3.6).
 
 ## Parallel tracks
 
 | Track | Status | Next step |
 |---|---|---|
-| **3D-print tools** | ✅ | Wall-thickness check, hollowing with drain holes (OpenVDB), split into parts with alignment keys, real-world units and material weight estimation. |
+| **3D-print tools** | ✅ | Wall-thickness check, hollowing with drain holes (sparse voxels), split into parts with alignment keys, real-world units and material weight estimation. |
 | **Tablet input** | ✅ | Tablet pressure pipeline (CursorMoved/Touch/AxisMotion/TouchpadPressure), pressure response curves, multi-touch gestures (pinch zoom, orbit, two-finger tap undo). |
 | **ZBrush file research** | 🔬 M0 | Tooling done. Blocked on owner-provided `ztl-dump`/`ztl-diff` output from real files. See [docs/formats/zbrush/ROADMAP.md](formats/zbrush/ROADMAP.md). |
 
@@ -126,16 +126,15 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v0.4.0-alpha)
+## Known limitations (v2.5.0-beta)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
-- Pen pressure unverified on real tablets (all platforms)
 - Decimation takes a few seconds on dense meshes (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; resolution capped at 320
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
 - Only interface settings are remembered between sessions (save brushes as presets to keep them)
 - Vertex color isn't exported yet, and remesh, decimate and merge drop it
-- Touch layout: no multi-touch gestures yet; untested on real touchscreens and tablets
+- Touch gestures (pinch, two-finger orbit and undo) and pen pressure are implemented but untested on real touchscreens and tablets
 - Windows installer is not code-signed (SmartScreen warning)
 
 ---

@@ -121,7 +121,7 @@ commands! {
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
     Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";
-    Polyframe => "Polyframe on / off", "", "Toggle wireframe edges and face group colors together.";
+    WireGroups => "Wireframe + groups on / off", "", "Toggle wireframe edges and face group colors together.";
     ResetWireframeColor => "Reset wireframe color", "", "Reset wireframe overlay lines to the default dark slate.";
     LoadMatcap => "Load matcap…", "", "Use a PNG or JPEG of a lit sphere as the material.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
@@ -202,7 +202,7 @@ impl Cmd {
             Cmd::Ortho => CommandId::Orthographic,
             Cmd::GroupColors => CommandId::ShowGroups,
             Cmd::Wireframe => CommandId::Wireframe,
-            Cmd::Polyframe => CommandId::Polyframe,
+            Cmd::WireGroups => CommandId::WireGroups,
             Cmd::Panels => CommandId::TogglePanels,
             Cmd::Shortcuts => CommandId::Shortcuts,
             Cmd::ShowMask => CommandId::ShowMask,
@@ -293,7 +293,17 @@ pub fn check_plain(ui: &mut Ui, on: &mut bool, label: &str, tip: &str) -> Respon
 
 /// Top-level or nested menu whose button itself explains the menu.
 pub fn menu(ui: &mut Ui, title: &str, tip: &str, add: impl FnOnce(&mut Ui)) {
-    let inner = ui.menu_button(title, add);
+    // Menus never grow past the window: a long one scrolls instead of
+    // running off the screen.
+    let max_height = (ui.ctx().content_rect().height() - 48.0).max(160.0);
+    let inner = ui.menu_button(title, |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt(("menu_scroll", title))
+            .max_height(max_height)
+            // Grow to fit the menu up to the window height before scrolling.
+            .min_scrolled_height(max_height)
+            .show(ui, add);
+    });
     hover(inner.response, tip);
 }
 
@@ -440,7 +450,7 @@ pub fn stroke_tip(mode: crate::editor::StrokeMode) -> &'static str {
 pub fn matcap_tip(m: MatcapPreset) -> &'static str {
     match m {
         MatcapPreset::Terracotta => "Warm red clay. The default look.",
-        MatcapPreset::RedWax => "Classic red wax with specular sheen.",
+        MatcapPreset::CrimsonClay => "Deep red clay with a soft specular sheen.",
         MatcapPreset::GreyClay => "Neutral grey, useful for reading the form.",
         MatcapPreset::Jade => "Green and glossy.",
         MatcapPreset::Pearl => "Pale and soft. Vertex color reads more truly.",

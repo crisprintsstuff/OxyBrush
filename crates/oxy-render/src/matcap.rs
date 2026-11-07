@@ -4,7 +4,7 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MatcapPreset {
     Terracotta,
-    RedWax,
+    CrimsonClay,
     GreyClay,
     Jade,
     Pearl,
@@ -13,12 +13,12 @@ pub enum MatcapPreset {
 
 impl MatcapPreset {
     pub const ALL: [MatcapPreset; 6] =
-        [Self::Terracotta, Self::RedWax, Self::GreyClay, Self::Jade, Self::Pearl, Self::Bronze];
+        [Self::Terracotta, Self::CrimsonClay, Self::GreyClay, Self::Jade, Self::Pearl, Self::Bronze];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Terracotta => "Terracotta",
-            Self::RedWax => "Red wax",
+            Self::CrimsonClay => "Crimson clay",
             Self::GreyClay => "Grey clay",
             Self::Jade => "Jade",
             Self::Pearl => "Pearl",
@@ -30,7 +30,7 @@ impl MatcapPreset {
     fn params(self) -> ([f32; 3], f32, f32, f32) {
         match self {
             Self::Terracotta => ([0.62, 0.26, 0.15], 0.25, 24.0, 0.25),
-            Self::RedWax => ([0.52, 0.20, 0.16], 0.45, 32.0, 0.35),
+            Self::CrimsonClay => ([0.52, 0.20, 0.16], 0.45, 32.0, 0.35),
             Self::GreyClay => ([0.42, 0.42, 0.40], 0.12, 16.0, 0.2),
             Self::Jade => ([0.10, 0.38, 0.26], 0.6, 60.0, 0.35),
             Self::Pearl => ([0.75, 0.72, 0.68], 0.4, 40.0, 0.3),

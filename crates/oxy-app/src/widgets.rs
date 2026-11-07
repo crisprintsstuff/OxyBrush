@@ -47,9 +47,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
         BrushKind::InsertPrimitive => "Inserts 3D primitives onto the surface with auto-masking.",
-        BrushKind::ClipCurve => "Clamps geometry to a screen-drawn plane, preserving topology and multires.",
-        BrushKind::SliceCurve => "Slices the mesh along a screen-drawn plane and creates a distinct polygroup.",
-        BrushKind::TrimCurve => "Trims away geometry on one side of a screen-drawn plane and caps the cut watertight.",
+        BrushKind::PlaneClip => "Clamps geometry to a screen-drawn plane, preserving topology and multires.",
+        BrushKind::LineSplit => "Slices the mesh along a screen-drawn plane and creates a distinct polygroup.",
+        BrushKind::CutAway => "Trims away geometry on one side of a screen-drawn plane and caps the cut watertight.",
     }
 }
 
@@ -92,9 +92,9 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         // Paint leaves the shape alone: the same gentle surface, wider.
         BrushKind::Paint => 0.14 * bump(x, 1.1),
         BrushKind::InsertPrimitive => 0.65 * bump(x, 0.35),
-        BrushKind::ClipCurve => 0.38 * (x + 0.5).clamp(0.0, 1.0),
-        BrushKind::SliceCurve => 0.48 * bump(x - 0.2, 0.3) - 0.2 * bump(x + 0.4, 0.25),
-        BrushKind::TrimCurve => {
+        BrushKind::PlaneClip => 0.38 * (x + 0.5).clamp(0.0, 1.0),
+        BrushKind::LineSplit => 0.48 * bump(x - 0.2, 0.3) - 0.2 * bump(x + 0.4, 0.25),
+        BrushKind::CutAway => {
             if x > 0.05 {
                 0.42
             } else {
@@ -211,13 +211,13 @@ pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
         BrushKind::PlanarTrim => {
             p.line_segment([at(-1.0, 0.28), at(1.0, 0.28)], Stroke::new(1.4, ACCENT));
         }
-        BrushKind::ClipCurve => {
+        BrushKind::PlaneClip => {
             p.line_segment([at(-0.8, -0.1), at(0.8, 0.5)], Stroke::new(1.4, ACCENT));
         }
-        BrushKind::SliceCurve => {
+        BrushKind::LineSplit => {
             p.line_segment([at(-0.8, -0.2), at(0.8, 0.6)], Stroke::new(1.4, Color32::from_rgb(100, 220, 120)));
         }
-        BrushKind::TrimCurve => {
+        BrushKind::CutAway => {
             p.line_segment([at(-0.8, -0.2), at(0.8, 0.6)], Stroke::new(1.4, Color32::from_rgb(240, 100, 100)));
         }
         _ => {}
@@ -708,11 +708,11 @@ pub fn brush_preview_image(k: BrushKind, size: usize) -> egui::ColorImage {
                 [0.18, 0.26, 0.6]
             } else if trimmed {
                 [0.8, 0.45, 0.3]
-            } else if k == BrushKind::ClipCurve {
+            } else if k == BrushKind::PlaneClip {
                 [0.72, 0.48, 0.2]
-            } else if k == BrushKind::SliceCurve {
+            } else if k == BrushKind::LineSplit {
                 if sx > 0.0 { [0.25, 0.65, 0.45] } else { [0.62, 0.26, 0.15] }
-            } else if k == BrushKind::TrimCurve {
+            } else if k == BrushKind::CutAway {
                 if sx > 0.0 { [0.75, 0.32, 0.25] } else { [0.45, 0.2, 0.15] }
             } else {
                 [0.62, 0.26, 0.15]

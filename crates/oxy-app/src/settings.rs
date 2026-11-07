@@ -22,19 +22,19 @@ pub enum UiLayout {
     /// Touch screens and pen tablets: large targets, brush tiles, on-screen
     /// Smooth / Mask / Invert buttons instead of modifier keys.
     Touch,
-    /// Classic ZBrush workstation layout with dual-column tools and quick top bar.
-    ZBrushClassic,
+    /// Dense workstation layout: two-column brush shelf and the main controls in the top bar.
+    Workstation,
 }
 
 impl UiLayout {
-    pub const ALL: [UiLayout; 4] = [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch, UiLayout::ZBrushClassic];
+    pub const ALL: [UiLayout; 4] = [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch, UiLayout::Workstation];
 
     pub fn label(self) -> &'static str {
         match self {
             UiLayout::Standard => "Standard",
             UiLayout::Compact => "Compact",
             UiLayout::Touch => "Touch friendly",
-            UiLayout::ZBrushClassic => "ZBrush Classic",
+            UiLayout::Workstation => "Workstation",
         }
     }
 
@@ -43,7 +43,9 @@ impl UiLayout {
             UiLayout::Standard => "Mouse and keyboard. Brush list with names.",
             UiLayout::Compact => "Small screens. Tighter spacing and an icon-only brush grid.",
             UiLayout::Touch => "Touch screens and pens. Large buttons and on-screen Smooth, Mask and Invert.",
-            UiLayout::ZBrushClassic => "ZBrush workstation layout: dual-column brush shelf and quick top controls.",
+            UiLayout::Workstation => {
+                "Dense workstation layout: two-column brush shelf and the main controls in the top bar."
+            }
         }
     }
 
@@ -52,7 +54,7 @@ impl UiLayout {
             UiLayout::Standard => "standard",
             UiLayout::Compact => "compact",
             UiLayout::Touch => "touch",
-            UiLayout::ZBrushClassic => "zbrush_classic",
+            UiLayout::Workstation => "workstation",
         }
     }
 }
@@ -202,9 +204,9 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
         BrushKind::InsertPrimitive => "insert_primitive",
-        BrushKind::ClipCurve => "clip_curve",
-        BrushKind::SliceCurve => "slice_curve",
-        BrushKind::TrimCurve => "trim_curve",
+        BrushKind::PlaneClip => "plane_clip",
+        BrushKind::LineSplit => "line_split",
+        BrushKind::CutAway => "cut_away",
     }
 }
 
@@ -214,6 +216,7 @@ pub fn brush_key(k: BrushKind) -> &'static str {
 pub fn parse_brush_order(v: &str) -> Vec<BrushKind> {
     let mut order: Vec<BrushKind> = Vec::new();
     for name in v.split(',').map(str::trim) {
+        let name = oxy_sculpt::preset::legacy_kind_key(name);
         if let Some(k) = BrushKind::ALL.into_iter().find(|k| brush_key(*k) == name)
             && !order.contains(&k)
         {
@@ -306,8 +309,8 @@ pub enum ThemePreset {
     /// Neutral dark gray (industry standard graphite).
     #[default]
     Graphite,
-    /// Authentic classic ZBrush dark styling (deep matte charcoal panels, crisp contrast).
-    ZBrushClassic,
+    /// Matte dark panels with brighter buttons for a dense workstation look.
+    Matte,
     /// OLED deep black and dark gray.
     Charcoal,
     /// Cool slate blue-gray tone (Blender / Maya feel).
@@ -323,7 +326,7 @@ pub enum ThemePreset {
 impl ThemePreset {
     pub const ALL: [ThemePreset; 7] = [
         ThemePreset::Graphite,
-        ThemePreset::ZBrushClassic,
+        ThemePreset::Matte,
         ThemePreset::Charcoal,
         ThemePreset::Slate,
         ThemePreset::WarmUmber,
@@ -334,7 +337,7 @@ impl ThemePreset {
     pub fn label(self) -> &'static str {
         match self {
             ThemePreset::Graphite => "Graphite (Neutral Dark)",
-            ThemePreset::ZBrushClassic => "ZBrush Classic (Dark)",
+            ThemePreset::Matte => "Matte (Workstation Dark)",
             ThemePreset::Charcoal => "Charcoal (OLED Deep)",
             ThemePreset::Slate => "Slate (Cool Studio)",
             ThemePreset::WarmUmber => "Warm Umber (Clay)",
@@ -346,7 +349,7 @@ impl ThemePreset {
     pub fn key(self) -> &'static str {
         match self {
             ThemePreset::Graphite => "graphite",
-            ThemePreset::ZBrushClassic => "zbrush_classic",
+            ThemePreset::Matte => "matte",
             ThemePreset::Charcoal => "charcoal",
             ThemePreset::Slate => "slate",
             ThemePreset::WarmUmber => "warm_umber",
@@ -371,8 +374,8 @@ pub enum AccentPreset {
     /// OxyBrush signature clay #E07A4F.
     #[default]
     Terracotta,
-    /// Authentic ZBrush vibrant orange #FF9229.
-    ZBrushOrange,
+    /// Warm tangerine orange.
+    Tangerine,
     /// Precision electric cyan #38BDF8.
     Cyan,
     /// Calming mint emerald #10B981.
@@ -390,7 +393,7 @@ pub enum AccentPreset {
 impl AccentPreset {
     pub const ALL: [AccentPreset; 8] = [
         AccentPreset::Terracotta,
-        AccentPreset::ZBrushOrange,
+        AccentPreset::Tangerine,
         AccentPreset::Cyan,
         AccentPreset::Emerald,
         AccentPreset::Amber,
@@ -402,7 +405,7 @@ impl AccentPreset {
     pub fn label(self) -> &'static str {
         match self {
             AccentPreset::Terracotta => "Terracotta (Clay)",
-            AccentPreset::ZBrushOrange => "ZBrush Orange",
+            AccentPreset::Tangerine => "Tangerine (Orange)",
             AccentPreset::Cyan => "Cyan (Electric)",
             AccentPreset::Emerald => "Emerald (Mint)",
             AccentPreset::Amber => "Amber (Gold)",
@@ -415,7 +418,7 @@ impl AccentPreset {
     pub fn key(self) -> &'static str {
         match self {
             AccentPreset::Terracotta => "terracotta",
-            AccentPreset::ZBrushOrange => "zbrush_orange",
+            AccentPreset::Tangerine => "tangerine",
             AccentPreset::Cyan => "cyan",
             AccentPreset::Emerald => "emerald",
             AccentPreset::Amber => "amber",
@@ -432,7 +435,7 @@ impl AccentPreset {
     pub fn rgb(self, custom: [u8; 3]) -> [u8; 3] {
         match self {
             AccentPreset::Terracotta => [0xE0, 0x7A, 0x4F],
-            AccentPreset::ZBrushOrange => [0xFF, 0x92, 0x29],
+            AccentPreset::Tangerine => [0xEC, 0x86, 0x3E],
             AccentPreset::Cyan => [0x38, 0xBD, 0xF8],
             AccentPreset::Emerald => [0x10, 0xB9, 0x81],
             AccentPreset::Amber => [0xF5, 0x9E, 0x0B],
@@ -580,7 +583,7 @@ fn parse_rgb(v: &str) -> Option<[f64; 3]> {
 fn matcap_key(m: MatcapPreset) -> &'static str {
     match m {
         MatcapPreset::Terracotta => "terracotta",
-        MatcapPreset::RedWax => "red_wax",
+        MatcapPreset::CrimsonClay => "crimson_clay",
         MatcapPreset::GreyClay => "grey_clay",
         MatcapPreset::Jade => "jade",
         MatcapPreset::Pearl => "pearl",
@@ -667,6 +670,8 @@ impl Settings {
             let (k, v) = (k.trim(), v.trim());
             match k {
                 "layout" => {
+                    // Older settings files used "zbrush_classic" for the workstation layout.
+                    let v = if v == "zbrush_classic" { "workstation" } else { v };
                     if let Some(l) = UiLayout::ALL.into_iter().find(|l| l.key() == v) {
                         s.layout = l;
                     }
@@ -688,6 +693,7 @@ impl Settings {
                     }
                 }
                 "material" => {
+                    let v = if v == "red_wax" { "crimson_clay" } else { v };
                     if let Some(m) = MatcapPreset::ALL.into_iter().find(|m| matcap_key(*m) == v) {
                         s.matcap = m;
                     }
@@ -749,6 +755,7 @@ impl Settings {
                     s.update_skip = v.to_owned();
                 }
                 "theme" => {
+                    let v = if v == "zbrush_classic" { "matte" } else { v };
                     if let Some(t) = ThemePreset::from_key(v) {
                         s.theme = t;
                         if t == ThemePreset::HighContrast {
@@ -757,6 +764,7 @@ impl Settings {
                     }
                 }
                 "accent" => {
+                    let v = if v == "zbrush_orange" { "tangerine" } else { v };
                     if let Some(a) = AccentPreset::from_key(v) {
                         s.accent = a;
                     }
@@ -837,6 +845,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn renamed_options_still_load_from_older_files() {
+        let old = "layout = zbrush_classic\ntheme = zbrush_classic\naccent = zbrush_orange\nmaterial = red_wax\n\
+                   brush_order = clip_curve, slice_curve, trim_curve\n";
+        let s = Settings::from_text(old);
+        assert_eq!(s.layout, UiLayout::Workstation);
+        assert_eq!(s.theme, ThemePreset::Matte);
+        assert_eq!(s.accent, AccentPreset::Tangerine);
+        assert_eq!(s.matcap, MatcapPreset::CrimsonClay);
+        assert_eq!(&s.brush_order[..3], &[BrushKind::PlaneClip, BrushKind::LineSplit, BrushKind::CutAway]);
+        // New files use the new names.
+        let text = s.to_text();
+        assert!(!text.contains("zbrush") && text.contains("workstation") && text.contains("plane_clip"));
+        assert_eq!(oxy_sculpt::preset::kind_from_key("trim_curve"), Some(BrushKind::CutAway));
+    }
+
+    #[test]
     fn welcome_shows_once_unless_asked_for() {
         assert!(show_welcome(true, false, false, false), "first start");
         assert!(!show_welcome(false, false, false, false), "later starts skip it");
@@ -871,7 +895,7 @@ mod tests {
             surface_cursor: true,
             hide_cursor_during_stroke: false,
             agent_mcp: false,
-            custom_matcap: "Red Wax".into(),
+            custom_matcap: "Crimson Wax".into(),
             background_style: BackgroundStyle::Flat,
             background: [0.2, 0.25, 0.3],
             background_center: [0.4, 0.45, 0.5],
@@ -938,7 +962,7 @@ mod tests {
         let s = Settings { layout: UiLayout::Compact, ..Default::default() };
         s.save(&path).unwrap();
         assert_eq!(Settings::load(&path), Some(s));
-        let s2 = Settings { layout: UiLayout::ZBrushClassic, ..Default::default() };
+        let s2 = Settings { layout: UiLayout::Workstation, ..Default::default() };
         s2.save(&path).unwrap();
         assert_eq!(Settings::load(&path), Some(s2));
         assert!(!path.with_extension("txt.tmp").exists());
