@@ -224,6 +224,7 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::KelvinGrab => "kelvin_grab",
         BrushKind::KelvinTwist => "kelvin_twist",
         BrushKind::KelvinScale => "kelvin_scale",
+        BrushKind::CurveMove => "curve_move",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
         BrushKind::InsertPrimitive => "insert_primitive",

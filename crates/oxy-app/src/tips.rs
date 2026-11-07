@@ -633,6 +633,17 @@ pub mod plain {
     pub const CURVE_ACCEPT: &str =
         "Apply the stroke (Enter). Starting another stroke also applies it. Undo removes it.";
     pub const CURVE_CANCEL: &str = "Close without changing the model (Esc).";
+    pub const MOVE_HELP: &str = "Drag a point and the model around the curve follows, bending and stretching. Click the curve to add a point, Alt+click a point to remove it. Ctrl+Z undoes an edit.";
+    pub const MOVE_SELECT: &str =
+        "Click a point to set how far its pull reaches and how strongly. Masked areas never move.";
+    pub const MOVE_POINT_REACH: &str =
+        "How far from the curve the model follows at the selected point, relative to the Size slider.";
+    pub const MOVE_POINT_STRENGTH: &str =
+        "How fully the model follows at the selected point (100% moves it all the way).";
+    pub const MOVE_SIZE: &str = "Size sets how far from the curve the model follows: make the circle cover the part's thickness so it moves as a whole. The falloff sets how softly the area beyond lets go.";
+    pub const MOVE_RESET: &str = "Put every point back where you drew it, and the model with them.";
+    pub const MOVE_ACCEPT: &str = "Apply the move (Enter). Starting another stroke also applies it. Undo removes it.";
+    pub const MOVE_CENTRED: &str = "Put the curve through the middle of the part you draw over (an arm's core, a tail's spine), so it bends around its centre. Off: the curve stays on the surface.";
     pub const EXTRACT_PREVIEW: &str =
         "A preview of the shell made from the mask. Adjust it, then Accept to add it as a new piece.";
     pub const EXTRACT_THICKNESS: &str = "How thick the shell is. 0 makes an open surface with no thickness.";
