@@ -225,6 +225,22 @@ pub fn apply_theme(
                 stroke: Color32::from_rgb(62, 54, 49),
                 window_stroke: Color32::from_rgb(78, 68, 62),
             },
+            // Midnight: deep navy with slightly lighter blue "glass" cards and
+            // thin blue-teal outlines, so panels read as layered translucent
+            // surfaces over a dark backdrop.
+            ThemePreset::Midnight => Palette {
+                bg: Color32::from_rgb(7, 11, 22),
+                panel: Color32::from_rgb(12, 20, 37),
+                window: Color32::from_rgb(16, 28, 50),
+                faint: Color32::from_rgb(19, 32, 56),
+                text: Color32::from_rgb(230, 237, 246),
+                inactive_weak: Color32::from_rgb(22, 37, 64),
+                inactive_fill: Color32::from_rgb(30, 50, 84),
+                hovered_weak: Color32::from_rgb(33, 54, 90),
+                hovered_fill: Color32::from_rgb(42, 67, 108),
+                stroke: Color32::from_rgb(31, 52, 78),
+                window_stroke: Color32::from_rgb(44, 72, 104),
+            },
             ThemePreset::StudioLight => Palette {
                 bg: Color32::from_gray(245),
                 panel: Color32::from_gray(236),
@@ -253,11 +269,9 @@ pub fn apply_theme(
     v.ime_composition.active_underline_stroke.color = p.text;
     v.ime_composition.inactive_underline_stroke.color = p.text.linear_multiply(0.5);
 
-    let radius_pt = corner_style.radius_pt();
-    let radius = egui::CornerRadius::same(radius_pt as u8);
-    let win_rad = egui::CornerRadius::same((radius_pt * 1.5).round() as u8);
-    v.window_corner_radius = win_rad;
-    v.menu_corner_radius = radius;
+    let radius = egui::CornerRadius::same(corner_style.radius_pt().min(255.0) as u8);
+    v.window_corner_radius = egui::CornerRadius::same(corner_style.window_radius_pt().min(255.0) as u8);
+    v.menu_corner_radius = egui::CornerRadius::same(corner_style.menu_radius_pt().min(255.0) as u8);
     v.window_stroke = EStroke::new(1.0, p.window_stroke);
 
     for w in [
@@ -285,6 +299,16 @@ pub fn apply_theme(
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
         v.widgets.active.bg_fill = accent_color;
+        if theme == ThemePreset::Midnight {
+            // Glass look: every control has a thin light-blue rim, and windows
+            // and menus float on a soft, wide shadow.
+            v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_rgb(46, 74, 110));
+            v.widgets.open.bg_stroke = EStroke::new(1.0, Color32::from_rgb(58, 92, 134));
+            v.weak_text_color = Some(Color32::from_rgb(143, 160, 184));
+            let shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(150) };
+            v.window_shadow = shadow;
+            v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, ..shadow };
+        }
     }
     ctx.set_visuals(v);
     ctx.all_styles_mut(|s| {
@@ -1084,6 +1108,20 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
             ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::SingleKey);
             ed.keymap.apply_navigation_preset(crate::keymap::Preset::RightDrag);
             ed.status = "Applied the Workstation preset".into();
+        }
+        if ui
+            .button("Midnight")
+            .on_hover_text("Deep navy glass panels, pill-shaped controls, emerald highlights and a navy viewport")
+            .clicked()
+        {
+            ed.theme = ThemePreset::Midnight;
+            ed.high_contrast = false;
+            ed.accent = AccentPreset::Emerald;
+            ed.corner_style = CornerStyle::Pill;
+            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
+            ed.view.background = [0.012, 0.024, 0.062];
+            ed.view.background_center = [0.003, 0.005, 0.014];
+            ed.status = "Applied the Midnight preset".into();
         }
         if ui
             .button("Default Studio")
@@ -4334,6 +4372,31 @@ mod tests {
         ] {
             assert_neutral(name, c);
         }
+    }
+
+    #[test]
+    fn midnight_theme_is_navy_glass_with_pill_controls() {
+        let ctx = egui::Context::default();
+        apply_theme(
+            &ctx,
+            ThemePreset::Midnight,
+            AccentPreset::Emerald,
+            [0, 0, 0],
+            CornerStyle::Pill,
+            false,
+            1.0,
+            UiLayout::Standard,
+        );
+        let v = ctx.global_style().visuals.clone();
+        // Navy: blue clearly above red and green.
+        let p = v.panel_fill;
+        assert!(p.b() > p.r() + 15 && p.b() > p.g() + 10, "panel is navy: {p:?}");
+        // Controls have a visible rim and fully round ends; windows don't.
+        assert!(v.widgets.inactive.bg_stroke.width > 0.0);
+        assert_eq!(v.widgets.inactive.corner_radius.nw, 255);
+        assert_eq!(v.window_corner_radius.nw, 20);
+        assert!(v.window_shadow.blur > 0);
+        assert_eq!(v.selection.stroke.color, Color32::from_rgb(0x10, 0xB9, 0x81));
     }
 
     #[test]

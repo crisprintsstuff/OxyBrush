@@ -225,6 +225,17 @@ fn commands(ed: &Editor) -> Vec<Entry> {
             }),
         },
         Entry {
+            label: "Theme: Midnight".into(),
+            detail: String::new(),
+            keywords: "theme style dark midnight navy blue glass pill appearance",
+            tooltip: "Deep navy glass panels with thin blue outlines".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Midnight;
+                e.high_contrast = false;
+                e.status = "Theme: Midnight".into();
+            }),
+        },
+        Entry {
             label: "Theme: Charcoal".into(),
             detail: String::new(),
             keywords: "theme style dark charcoal oled black appearance",

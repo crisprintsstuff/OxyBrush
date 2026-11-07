@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Midnight theme:** deep navy panels that read as layered glass, thin blue outlines on every control, softer secondary text and soft shadows under windows and menus. A new **Pill** corner style gives buttons, fields and list rows fully rounded ends. The **Midnight** quick preset (Preferences > Appearance) applies the theme, pill corners, the emerald accent and a dark navy viewport; your material and shortcuts are left alone. Also in the command palette ("Theme: Midnight").
+
 ## [2.5.5-beta] - 2026-11-07
 
 ### Changed

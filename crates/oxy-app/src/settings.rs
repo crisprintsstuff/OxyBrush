@@ -321,12 +321,16 @@ pub enum ThemePreset {
     StudioLight,
     /// Pure black & white maximum contrast mode.
     HighContrast,
+    /// Deep navy glass: dark blue panels, cards that read as frosted glass,
+    /// thin blue outlines. Pairs with pill corners and the emerald accent.
+    Midnight,
 }
 
 impl ThemePreset {
-    pub const ALL: [ThemePreset; 7] = [
+    pub const ALL: [ThemePreset; 8] = [
         ThemePreset::Graphite,
         ThemePreset::Matte,
+        ThemePreset::Midnight,
         ThemePreset::Charcoal,
         ThemePreset::Slate,
         ThemePreset::WarmUmber,
@@ -343,6 +347,7 @@ impl ThemePreset {
             ThemePreset::WarmUmber => "Warm Umber (Clay)",
             ThemePreset::StudioLight => "Studio Light (Bright)",
             ThemePreset::HighContrast => "High Contrast",
+            ThemePreset::Midnight => "Midnight (Navy Glass)",
         }
     }
 
@@ -355,6 +360,7 @@ impl ThemePreset {
             ThemePreset::WarmUmber => "warm_umber",
             ThemePreset::StudioLight => "studio_light",
             ThemePreset::HighContrast => "high_contrast",
+            ThemePreset::Midnight => "midnight",
         }
     }
 
@@ -456,16 +462,19 @@ pub enum CornerStyle {
     Rounded,
     /// Smooth soft corners (10 px).
     Soft,
+    /// Fully rounded pill buttons and fields, with large window corners.
+    Pill,
 }
 
 impl CornerStyle {
-    pub const ALL: [CornerStyle; 3] = [CornerStyle::Sharp, CornerStyle::Rounded, CornerStyle::Soft];
+    pub const ALL: [CornerStyle; 4] = [CornerStyle::Sharp, CornerStyle::Rounded, CornerStyle::Soft, CornerStyle::Pill];
 
     pub fn label(self) -> &'static str {
         match self {
             CornerStyle::Sharp => "Sharp (0 px)",
             CornerStyle::Rounded => "Rounded (6 px)",
             CornerStyle::Soft => "Soft (10 px)",
+            CornerStyle::Pill => "Pill (fully rounded)",
         }
     }
 
@@ -474,6 +483,7 @@ impl CornerStyle {
             CornerStyle::Sharp => "sharp",
             CornerStyle::Rounded => "rounded",
             CornerStyle::Soft => "soft",
+            CornerStyle::Pill => "pill",
         }
     }
 
@@ -481,11 +491,30 @@ impl CornerStyle {
         Self::ALL.into_iter().find(|c| c.key() == k)
     }
 
+    /// Corner radius of buttons, fields and other widgets. egui clamps a
+    /// radius to half the shape's height, so `Pill` gives fully round ends.
     pub fn radius_pt(self) -> f32 {
         match self {
             CornerStyle::Sharp => 0.0,
             CornerStyle::Rounded => 6.0,
             CornerStyle::Soft => 10.0,
+            CornerStyle::Pill => 255.0,
+        }
+    }
+
+    /// Corner radius of menus and popups.
+    pub fn menu_radius_pt(self) -> f32 {
+        match self {
+            CornerStyle::Pill => 14.0,
+            c => c.radius_pt(),
+        }
+    }
+
+    /// Corner radius of windows.
+    pub fn window_radius_pt(self) -> f32 {
+        match self {
+            CornerStyle::Pill => 20.0,
+            c => (c.radius_pt() * 1.5).round(),
         }
     }
 }
@@ -858,6 +887,19 @@ mod tests {
         let text = s.to_text();
         assert!(!text.contains("zbrush") && text.contains("workstation") && text.contains("plane_clip"));
         assert_eq!(oxy_sculpt::preset::kind_from_key("trim_curve"), Some(BrushKind::CutAway));
+    }
+
+    #[test]
+    fn midnight_theme_and_pill_corners_are_remembered() {
+        let s = Settings::from_text("theme = midnight\ncorner_style = pill\n");
+        assert_eq!(s.theme, ThemePreset::Midnight);
+        assert_eq!(s.corner_style, CornerStyle::Pill);
+        let back = Settings::from_text(&s.to_text());
+        assert_eq!((back.theme, back.corner_style), (ThemePreset::Midnight, CornerStyle::Pill));
+        // Pill: round-ended widgets, but windows and menus keep a sensible radius.
+        assert!(CornerStyle::Pill.radius_pt() >= 255.0);
+        assert_eq!(CornerStyle::Pill.window_radius_pt(), 20.0);
+        assert_eq!(CornerStyle::Soft.window_radius_pt(), 15.0);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-07 (v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-07 (v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen; since then: Midnight theme and Pill corner style)
 
 ## Status at a glance
 
