@@ -71,13 +71,33 @@ drops it without an undo step.
   Moving brushes (Grab, Snake Hook) and the Shift/Ctrl stand-ins stay
   freehand, as they do for Line and Stamp.
 
+## Second round (after a longer clip of the requested feature)
+
+- **Per-point size and strength.** Clicking a control point selects it;
+  the Curve window then shows Point size and Point strength for it, and a
+  ring on the model shows the brush size there. Values blend smoothly
+  (smoothstep) between points. The stroke engine gained
+  `Stroke::set_modulation(size, strength)`, two multipliers applied in
+  `make_dab`, set before each sample; the fades use it too, so they work
+  whatever the pen-pressure options are.
+- **Curve undo.** While a curve is open, Ctrl+Z / Ctrl+Shift+Z step
+  through its edits (points moved, added, removed; sizes, strengths,
+  fades, closing) instead of the document history. A finished edit is one
+  step: a point or slider drag is recorded when it ends.
+- **Closed curves.** "Join the ends" (three points or more) loops the
+  curve; fades don't apply to a loop.
+- **Ask first.** "Hold to adjust" can ask "Edit this stroke as a curve?"
+  instead of switching at once (off by default). Until answered the stroke
+  stays as drawn; Yes takes it back and opens the curve, No (or Esc, a new
+  press, or Ctrl+Z) keeps it as one undo step.
+
 ## Not in this change
 
 - Saving an open curve with the project, or editing a curve after it has
   been applied.
-- Per-point size or strength (only the two end fades).
-- Closed curves (loops).
-- Snapping to edges or face-group borders.
+- A second curve type whose control points lie off the curve.
+- Snapping to edges or face-group borders, or projecting the curve from
+  the view.
 
 ## Alternatives considered
 
