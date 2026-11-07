@@ -7,11 +7,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 - **OxyCharacter round trip:** a document opened from OxyCharacter (a `.oxb` with a `<file>.oxylink.json` next to it) shows **Linked to OxyCharacter** in the top bar. Clicking it, **File > Send back to OxyCharacter** or the command palette saves to the file OxyCharacter is watching (atomically, as any save), even after a Save As elsewhere, and confirms with "Sent to OxyCharacter: changes appear there". Save As copies the `.oxylink.json` byte for byte next to the new file; OxyBrush never reads, moves or deletes it. The first time `OxyCharacter Body` loses its topology (remesh, subdivide once, decimate, Boolean, split, delete hidden…), a hint explains that it will return as a separate mesh and that subdivision levels (Ctrl+D) keep it a morph.
 - **`VMAP` project section:** for each vertex of a loaded piece, its index in the file the piece was first loaded from (OxyBrush reorders vertices on load), so a program like OxyCharacter can match vertices exactly. Written only while the piece's topology is unchanged and it has no subdivision levels; older versions skip it.
+
+## [2.5.7-beta] - 2026-11-07
+
+### Added
 - **Floor grid (View > Shading > Floor grid, on by default):** a grid on the floor under the model, with a bolder line every ten cells, fading out with distance. It sits just under the bottom of the visible pieces and its spacing follows the model's size, so it moves and rescales as the model changes. Light lines on dark backgrounds, dark lines on light ones. Remembered between sessions; also in the command palette.
 - **Pen & tablet settings ([#70](https://github.com/crisprintsstuff/OxyBrush/issues/70)):** a new **Preferences > Pen & tablet** tab with a large pressure curve, **Soft / Linear / Firm** presets, the curve shape, a **Lightest touch** strength (so light strokes are never too faint) and **Full pressure at** (so you don't have to press as hard for a full stroke). While you draw, a dot shows your pen's pressure on the curve. The settings are remembered between sessions; clicking the small curve in the brush's Stroke section opens the tab.
 
 ### Changed
 - **Mask extract previews first:** Extract mask now shows the shell as a live preview instead of adding a piece straight away. Thickness and edge smoothing update the preview as you drag the sliders; **Accept** (Enter) adds it as a new piece in one undo step, and **Cancel** (Esc) leaves the scene unchanged. Editing the mask while the preview is open updates it too.
+- **Previews look like previews:** the mask extract preview and the Insert Primitives preview are drawn with a blue glaze, so they can't be mistaken for the model until they are added.
 
 ### Fixed
 - **macOS: Quit asks to save ([#69](https://github.com/crisprintsstuff/OxyBrush/issues/69)):** Cmd+Q, Quit in the Dock and logging out closed OxyBrush without asking to save unsaved changes. They now ask, like closing the window does. (The bundled copy of winit has a second small patch for this, see `third_party/README.md`.)
@@ -462,7 +467,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...HEAD
+[2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
 [2.5.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...v2.5.6-beta
 [2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
 [2.5.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.0.0-beta...v2.5.0-beta

@@ -549,12 +549,12 @@ impl App {
         for p in ed.scene.pieces.iter_mut() {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
             if p.visible {
-                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active });
+                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false });
             }
         }
         if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
-            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true });
+            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: true });
         }
 
         let frame = match g.surface.get_current_texture() {

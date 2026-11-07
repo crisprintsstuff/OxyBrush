@@ -20,7 +20,7 @@
 //!   `vcount:u32 rgb:f32*3v` (sRGB, 0..=1), indexed like its positions.
 //!   Only written for painted pieces; older readers skip it and show the
 //!   piece unpainted.
-//! - `VMAP` (optional, since 2.5.7): vertex origin of the **preceding**
+//! - `VMAP` (optional, since 2.5.8): vertex origin of the **preceding**
 //!   `PIEC`: `vcount:u32 source:u32*vcount`. `source[i]` is the index of
 //!   vertex `i` in the vertex array of the `PIEC` the piece was originally
 //!   loaded from (OxyBrush reorders vertices when it loads a mesh), so a
