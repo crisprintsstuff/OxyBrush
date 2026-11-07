@@ -69,6 +69,17 @@ impl StrokeMode {
     }
 }
 
+/// A mask extract being previewed (see [`Editor::begin_extract`]).
+pub struct ExtractPreview {
+    /// Piece the mask belongs to.
+    pub source: u64,
+    pub mesh: Mesh,
+    /// Settings and history revision the mesh was built with.
+    thickness: f32,
+    smooth: usize,
+    revision: u64,
+}
+
 /// Category tabs in the unified Preferences / Settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingsTab {
@@ -437,11 +448,16 @@ pub struct Editor {
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
+    /// Draw a grid on the floor under the model.
+    pub floor_grid: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
     /// The primitive being dragged out with the Insert Primitive brush,
     /// drawn solid so you can see it grow before it is inserted.
     pub insert_preview: Option<oxy_mesh::Mesh>,
+    /// Mask extract in progress: the shell is shown and can be adjusted, and
+    /// becomes a piece only when accepted.
+    pub extract_preview: Option<ExtractPreview>,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
@@ -646,8 +662,10 @@ impl Default for Editor {
             rmb_press: None,
             stroke_from_empty: false,
             surface_cursor: false,
+            floor_grid: true,
             hide_cursor_during_stroke: true,
             insert_preview: None,
+            extract_preview: None,
             cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
@@ -914,6 +932,7 @@ impl Editor {
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
             surface_cursor: self.surface_cursor,
+            floor_grid: self.floor_grid,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
             agent_mcp: self.agent_enabled,
             custom_matcap: self
@@ -1058,6 +1077,7 @@ impl Editor {
         self.pressure_full = s.pressure_full;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
+        self.floor_grid = s.floor_grid;
         self.hide_cursor_during_stroke = s.hide_cursor_during_stroke;
         self.agent_enabled = s.agent_mcp;
         // The library is loaded first, so the remembered matcap can be found by name.
@@ -2345,28 +2365,103 @@ impl Editor {
         self.status = format!("Created {name}");
     }
 
-    /// Extract the active piece's masked area into a new piece.
-    ///
-    /// If `thickness > 0.0`, extrudes into a solid shell; otherwise extracts an open surface.
-    /// `smooth_border` smooths jagged boundary edges.
-    pub fn extract_mask(&mut self, thickness: f32, smooth_border: usize) {
+    /// Start a mask extract: show the shell built from the active piece's
+    /// mask as a preview. Nothing is added to the scene until
+    /// [`Self::accept_extract`]; thickness and smoothing (`extract_thickness`,
+    /// `extract_smooth`) update the preview live.
+    pub fn begin_extract(&mut self) {
         if self.job_blocks_active() {
             self.status = "Wait for the running operation to finish first".into();
             return;
         }
-        let src = self.scene.active();
+        self.pointer_up();
+        let source = self.scene.active().id;
+        if let Some(mesh) = self.build_extract(source) {
+            self.extract_preview = Some(ExtractPreview {
+                source,
+                mesh,
+                thickness: self.extract_thickness,
+                smooth: self.extract_smooth,
+                revision: self.history.revision(),
+            });
+            self.status = "Adjust thickness and smoothing, then Accept (Esc cancels)".into();
+        }
+    }
+
+    /// The extract shell for piece `source`, or `None` (with a status message).
+    fn build_extract(&mut self, source: u64) -> Option<Mesh> {
+        let src = self.scene.pieces.iter().find(|p| p.id == source)?;
         if !src.mesh.mask.iter().any(|&m| m > 0.05) {
             self.status = "Nothing to extract: paint a mask on the mesh first".into();
+            return None;
+        }
+        let Some(data) = src.mesh.extract_mask(self.extract_thickness, self.extract_smooth) else {
+            self.status = "Masked area is too small or faint to extract".into();
+            return None;
+        };
+        Some(Mesh::from_data(data))
+    }
+
+    /// Keep the extract preview in step with its settings and the source:
+    /// rebuild it when thickness, smoothing or the mask changed, and drop it
+    /// when the source piece is gone or no longer active. Called every frame.
+    pub fn update_extract_preview(&mut self) {
+        let Some(p) = &self.extract_preview else { return };
+        if self.scene.active().id != p.source {
+            self.extract_preview = None;
+            self.status = "Extract cancelled: another piece was selected".into();
             return;
         }
-        let Some(data) = src.mesh.extract_mask(thickness, smooth_border) else {
-            self.status = "Masked area is too small or faint to extract".into();
+        let revision = self.history.revision();
+        if p.thickness == self.extract_thickness && p.smooth == self.extract_smooth && p.revision == revision {
             return;
-        };
-        let base = format!("{} extract", src.name);
-        let name = self.scene.unique_name(&base);
-        self.add_piece(Piece::new(name.clone(), Mesh::from_data(data)), "Extract mask");
+        }
+        let source = p.source;
+        match self.build_extract(source) {
+            Some(mesh) => {
+                self.extract_preview = Some(ExtractPreview {
+                    source,
+                    mesh,
+                    thickness: self.extract_thickness,
+                    smooth: self.extract_smooth,
+                    revision,
+                });
+            }
+            None => self.extract_preview = None,
+        }
+    }
+
+    /// Add the previewed extract to the scene as a new piece (one undo step).
+    pub fn accept_extract(&mut self) {
+        self.update_extract_preview();
+        let Some(p) = self.extract_preview.take() else { return };
+        let Some(src) = self.scene.pieces.iter().find(|q| q.id == p.source) else { return };
+        let name = self.scene.unique_name(&format!("{} extract", src.name));
+        self.add_piece(Piece::new(name.clone(), p.mesh), "Extract mask");
         self.status = format!("Extracted mask as {name}");
+    }
+
+    /// Discard the extract preview; the scene is unchanged.
+    pub fn cancel_extract(&mut self) {
+        if self.extract_preview.take().is_some() {
+            self.status = "Extract cancelled".into();
+        }
+    }
+
+    /// The mesh to draw as a preview (an inserted primitive or a mask
+    /// extract), if any.
+    pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        match (&mut self.insert_preview, &mut self.extract_preview) {
+            (Some(m), _) => Some(m),
+            (None, Some(p)) => Some(&mut p.mesh),
+            (None, None) => None,
+        }
+    }
+
+    /// The floor grid fitted under the visible pieces.
+    pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
+        let b = self.scene.bounds();
+        oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
     pub fn delete_active(&mut self) {
@@ -4160,6 +4255,7 @@ mod tests {
             pressure_min: 0.0,
             pressure_full: 1.0,
             surface_cursor: true,
+            floor_grid: false,
             hide_cursor_during_stroke: false,
             agent_mcp: false,
             custom_matcap: String::new(),
@@ -4917,13 +5013,13 @@ mod tests {
     }
 
     #[test]
-    fn mask_extract_creates_piece_and_undoes() {
+    fn mask_extract_previews_then_creates_piece_on_accept() {
         let mut e = Editor::default();
         assert_eq!(e.scene.pieces.len(), 1);
 
-        // Without a mask, extraction is a no-op with helpful status
-        e.extract_mask(0.02, 1);
-        assert_eq!(e.scene.pieces.len(), 1);
+        // Without a mask there is nothing to preview, with a helpful status.
+        e.begin_extract();
+        assert!(e.extract_preview.is_none());
         assert!(e.status.contains("Nothing to extract"));
 
         // Mask upper hemisphere
@@ -4934,8 +5030,31 @@ mod tests {
             }
         }
 
-        // Extract with thickness
-        e.extract_mask(0.04, 2);
+        // Extract shows a preview only: no new piece, nothing to undo yet.
+        (e.extract_thickness, e.extract_smooth) = (0.02, 1);
+        let revision = e.history.revision();
+        e.begin_extract();
+        let thin = e.extract_preview.as_ref().expect("preview").mesh.bounds();
+        assert_eq!(e.scene.pieces.len(), 1, "nothing added while previewing");
+        assert_eq!(e.history.revision(), revision);
+        assert!(e.preview_mesh_mut().is_some(), "the preview is drawn");
+
+        // Changing the thickness rebuilds the preview live.
+        e.extract_thickness = 0.08;
+        e.update_extract_preview();
+        let thick = e.extract_preview.as_ref().expect("preview").mesh.bounds();
+        assert!(thick.max.y - thick.min.y > thin.max.y - thin.min.y, "a thicker shell is taller");
+
+        // Cancel leaves the scene alone.
+        e.cancel_extract();
+        assert!(e.extract_preview.is_none());
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // Accept adds the piece, as one undo step.
+        e.extract_smooth = 2;
+        e.begin_extract();
+        e.accept_extract();
+        assert!(e.extract_preview.is_none());
         assert_eq!(e.scene.pieces.len(), 2, "extracted piece added to scene");
         assert_eq!(e.scene.active_index(), 1, "extracted piece is now active");
         let extracted = e.scene.active();
@@ -4952,6 +5071,32 @@ mod tests {
         e.redo();
         assert_eq!(e.scene.pieces.len(), 2);
         assert_eq!(e.scene.active_index(), 1);
+
+        // Selecting another piece drops a preview instead of extracting from it.
+        e.scene.set_active(0);
+        e.begin_extract();
+        assert!(e.extract_preview.is_some());
+        e.scene.set_active(1);
+        e.update_extract_preview();
+        assert!(e.extract_preview.is_none());
+        assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn floor_grid_follows_the_visible_pieces() {
+        let mut e = Editor::default();
+        let a = e.floor().expect("a floor under the sphere");
+        let b = e.scene.bounds();
+        assert!(a.height < b.min.y && a.height > b.min.y - 0.05);
+        // Moving the model up moves the floor with it.
+        let mesh = &mut e.scene.active_mut().mesh;
+        let moved: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
+        for p in mesh.positions.iter_mut() {
+            p.y += 3.0;
+        }
+        mesh.update_after_move(&moved);
+        let c = e.floor().unwrap();
+        assert!((c.height - a.height - 3.0).abs() < 1e-3, "{a:?} -> {c:?}");
     }
 
     #[test]

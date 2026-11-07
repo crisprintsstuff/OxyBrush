@@ -13,6 +13,10 @@ struct Uniforms {
     bg_center: vec4<f32>,
     bg_edge: vec4<f32>,
     wireframe_color: vec4<f32>,
+    // Floor grid: height, cell size, fade radius, opacity (0 = off).
+    floor: vec4<f32>,
+    // Floor grid: center x, center z.
+    floor_center: vec4<f32>,
 };
 
 struct Piece {
@@ -144,6 +148,54 @@ fn fs_background(i: BgOut) -> FsOut {
     let t = select(smoothstep(0.0, 1.35, d), 1.0, u.params.w > 0.5);
     var out: FsOut;
     out.color = vec4<f32>(mix(u.bg_center.rgb, u.bg_edge.rgb, t), 1.0);
+    out.normal_depth = vec4<f32>(0.0);
+    return out;
+}
+
+// ---- Floor grid ----
+
+struct FloorOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) world: vec2<f32>,
+};
+
+@vertex
+fn vs_floor(@builtin(vertex_index) i: u32) -> FloorOut {
+    // Two triangles covering the grid's square.
+    var corners = array<vec2<f32>, 6>(
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, -1.0), vec2<f32>(1.0, 1.0),
+        vec2<f32>(-1.0, -1.0), vec2<f32>(1.0, 1.0), vec2<f32>(-1.0, 1.0),
+    );
+    let xz = u.floor_center.xy + corners[i] * u.floor.z;
+    var o: FloorOut;
+    o.clip = u.view_proj * vec4<f32>(xz.x, u.floor.x, xz.y, 1.0);
+    o.world = xz;
+    return o;
+}
+
+// Antialiased grid lines: distance to the nearest line in pixels.
+fn grid_line(p: vec2<f32>, cell: f32, width: f32) -> f32 {
+    let g = p / cell;
+    let d = abs(fract(g - 0.5) - 0.5) / max(fwidth(g), vec2<f32>(1e-6));
+    return 1.0 - clamp(min(d.x, d.y) - (width - 1.0) * 0.5, 0.0, 1.0);
+}
+
+@fragment
+fn fs_floor(i: FloorOut) -> FsOut {
+    let cell = u.floor.y;
+    let minor = grid_line(i.world, cell, 1.0);
+    let major = grid_line(i.world, cell * 10.0, 1.3);
+    // Fade out towards the edge of the grid and where minor lines get
+    // denser than a few pixels (far away or at grazing angles).
+    let r = length(i.world - u.floor_center.xy) / u.floor.z;
+    let edge = 1.0 - smoothstep(0.45, 1.0, r);
+    let density = 1.0 - smoothstep(0.15, 0.45, max(fwidth(i.world.x), fwidth(i.world.y)) / cell);
+    let a = max(minor * 0.10 * density, major * 0.22) * edge * u.floor.w;
+    // Light lines on dark backgrounds, dark lines on light ones.
+    let bg = dot(u.bg_center.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let line = select(vec3<f32>(0.5), vec3<f32>(0.1), bg > 0.3);
+    var out: FsOut;
+    out.color = vec4<f32>(line, a);
     out.normal_depth = vec4<f32>(0.0);
     return out;
 }

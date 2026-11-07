@@ -120,6 +120,7 @@ commands! {
     GroupColors => "Face group colors", "G", "Show face groups as colors, or the normal material.";
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
+    FloorGrid => "Floor grid on / off", "", "A grid on the floor under the model. It stays at the bottom of the model and its spacing follows the model's size.";
     Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";
     WireGroups => "Wireframe + groups on / off", "", "Toggle wireframe edges and face group colors together.";
     ResetWireframeColor => "Reset wireframe color", "", "Reset wireframe overlay lines to the default dark slate.";
@@ -609,6 +610,12 @@ pub mod plain {
     pub const STABILIZER: &str =
         "The brush trails the pointer on a short string, for smoother lines. Zero turns it off.";
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
+    pub const EXTRACT_PREVIEW: &str =
+        "A preview of the shell made from the mask. Adjust it, then Accept to add it as a new piece.";
+    pub const EXTRACT_THICKNESS: &str = "How thick the shell is. 0 makes an open surface with no thickness.";
+    pub const EXTRACT_SMOOTH: &str = "Smooths the jagged edge of the mask before the shell is made.";
+    pub const EXTRACT_ACCEPT: &str = "Add the shell as a new piece (Enter). Undo removes it.";
+    pub const EXTRACT_CANCEL: &str = "Close without adding anything (Esc).";
     pub const PRESSURE_CURVE: &str =
         "Below 1 a light touch goes further. Above 1 the brush stays firm until you press harder.";
     pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
