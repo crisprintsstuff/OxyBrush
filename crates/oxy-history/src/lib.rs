@@ -234,6 +234,26 @@ impl History {
         });
     }
 
+    /// Undo the stroke being recorded: put back every chunk it changed and
+    /// drop it, without an undo step, as if it never happened.
+    pub fn revert_pending(&mut self, scene: &mut Scene) {
+        let Some(p) = self.pending.take() else { return };
+        let Some(piece) = scene.get_mut(p.piece) else { return };
+        let mesh = &mut piece.mesh;
+        let mut chunks = Vec::with_capacity(p.snapshots.len());
+        for s in p.snapshots {
+            let r = mesh.chunks[s.chunk as usize].vertices.clone();
+            let r = r.start as usize..r.end as usize;
+            mesh.positions[r.clone()].copy_from_slice(&s.positions);
+            mesh.mask[r.clone()].copy_from_slice(&s.mask);
+            if !s.color.is_empty() {
+                mesh.color[r].copy_from_slice(&s.color);
+            }
+            chunks.push(s.chunk);
+        }
+        mesh.update_chunks(&chunks);
+    }
+
     /// Drop the stroke being recorded without adding an undo step (the
     /// caller has already restored the mesh).
     pub fn cancel(&mut self) {
@@ -362,6 +382,30 @@ mod tests {
 
     fn scene() -> Scene {
         Scene::new(Piece::new("Sphere", primitives::icosphere(5, 1.0)))
+    }
+
+    #[test]
+    fn revert_pending_puts_the_stroke_back_without_an_undo_step() {
+        let mut s = scene();
+        let id = s.active().id;
+        let before = s.active().mesh.positions.clone();
+        let mut h = History::new(1 << 30);
+        let revision = h.revision();
+        h.begin("Draw", id, &s.active().mesh);
+        let mesh = &mut s.active_mut().mesh;
+        h.touch(mesh, 0);
+        let r = mesh.chunks[0].vertices.clone();
+        for v in r.start..r.end {
+            mesh.positions[v as usize].y += 0.5;
+            mesh.mask[v as usize] = 1.0;
+        }
+        h.revert_pending(&mut s);
+        assert_eq!(s.active().mesh.positions, before);
+        assert!(s.active().mesh.mask.iter().all(|&m| m == 0.0));
+        assert!(!h.can_undo(), "no undo step");
+        assert_eq!(h.revision(), revision);
+        h.commit();
+        assert!(!h.can_undo(), "nothing left to commit");
     }
 
     #[test]
