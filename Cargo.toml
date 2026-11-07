@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+# Vendored, patched dependencies (see third_party/README.md).
+exclude = ["third_party/winit"]
 
 [workspace.package]
 version = "2.5.0-beta"
@@ -66,3 +68,8 @@ inherits = "release"
 debug = 0
 strip = true
 lto = "thin"
+
+# winit 0.30.13 with one change: a Windows Ink pen touching down with its
+# barrel button held is reported as the right mouse button (issue #59).
+[patch.crates-io]
+winit = { path = "third_party/winit" }

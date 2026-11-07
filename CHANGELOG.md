@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+- **Pen side button on Windows (Windows Ink):** holding the pen's side button while touching the tablet started a sculpting stroke over the model, because the windowing library dropped the button from Windows Ink pen input ([#59](https://github.com/crisprintsstuff/OxyBrush/issues/59)). It now acts as the right mouse button: with the **Right-drag orbit** navigation preset it rotates the view (in the default preset right-drag pans), and a tap opens the quick menu. OxyBrush ships a patched copy of winit 0.30.13 for this (`third_party/winit`).
+
 ### Changed
 - **Generic names for options that used other products' branding:** the "ZBrush Classic" layout is now **Workstation**, the theme is **Matte**, the "ZBrush Orange" accent is **Tangerine** (a new color), the "ZBrush" keymap presets are **Right-drag orbit** and **Single-key tools**, the "Red wax" material is **Crimson clay**, Polyframe is **Wireframe + groups**, and the curve tools are **Plane Clip**, **Line Split** and **Cut Away**. The top bar always says Raise/Carve, Size and Strength. Saved settings, keymaps and brush presets that use the old names still load.
 - **Menus fit on screen:** the View menu is split into Camera, Shading, Brush cursor and Material submenus, and any menu taller than the window scrolls instead of running off the screen.
