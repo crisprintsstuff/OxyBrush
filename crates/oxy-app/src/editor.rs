@@ -4371,6 +4371,31 @@ mod tests {
     }
 
     #[test]
+    fn pen_side_button_navigates_in_the_right_drag_preset() {
+        // Issues #59 and #63: on Windows the patched winit reports a pen
+        // contact with the side button held as the right mouse button.
+        // In the Right-drag orbit preset that must orbit, and with Ctrl
+        // zoom, both over the model and on empty space, never sculpt or mask.
+        let mut e = editor();
+        e.keymap.apply_navigation_preset(crate::keymap::Preset::RightDrag);
+        for at in [Vec2::new(400.0, 300.0), Vec2::new(30.0, 30.0)] {
+            for (ctrl, expect_zoom) in [(false, false), (true, true)] {
+                e.modifiers.ctrl = ctrl;
+                e.pointer = Some(at);
+                e.pointer_down(PointerButton::Secondary);
+                if expect_zoom {
+                    assert!(matches!(e.drag, Drag::Zoom), "Ctrl + side button zooms at {at}");
+                } else {
+                    assert!(matches!(e.drag, Drag::Orbit), "side button orbits at {at}");
+                }
+                e.pointer_up();
+                e.quick_menu = None;
+            }
+        }
+        assert_eq!(e.history.undo_labels().count(), 0, "nothing was sculpted or masked");
+    }
+
+    #[test]
     fn moved_pivot_follows_the_geometry_after_a_transform() {
         let mut e = editor();
         e.toggle_gizmo(GizmoMode::Move);
