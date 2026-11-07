@@ -153,7 +153,7 @@ OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it eve
         title: "Layouts and panels",
         keywords: "interface layout touch compact tablet arrange panels scale theme",
         body: "Settings > Layout switches between Standard, Compact (small screens) and Touch friendly (bigger controls and on-screen Smooth/Mask/Invert buttons for tablets). Settings > Arrange panels moves the brush shelf, the settings panel and the size/strength bar.\n\n\
-Interface scale and a high-contrast theme are in Settings too. All of these are remembered.\n\n\
+Interface scale, themes (including the navy Midnight theme with pill-shaped controls) and a high-contrast theme are in Settings too. All of these are remembered.\n\n\
 The Touch layout has no mouse hover. Press and hold a control to read what it does.",
     },
     Topic {
