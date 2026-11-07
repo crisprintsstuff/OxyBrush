@@ -107,6 +107,12 @@ fn fs_main(
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
         color = mix(color, g * lum * 1.6, 0.75);
     }
+    if (piece.flags.y > 1.5) {
+        // Previews (not yet in the scene) get a cool blue glaze that keeps
+        // the matcap's shading, so they don't read as part of the model.
+        let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
+        color = mix(color, vec3<f32>(0.42, 0.66, 1.0) * (0.35 + lum), 0.6);
+    }
     if (piece.flags.y < 0.5) {
         // Inactive pieces are slightly desaturated and darker.
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));

@@ -224,6 +224,10 @@ pub struct RenderTarget<'a> {
 pub struct DrawItem {
     pub id: u64,
     pub active: bool,
+    /// Something not yet in the scene (an inserted primitive or a mask
+    /// extract being adjusted): drawn with a blue glaze so it reads as a
+    /// preview rather than part of the model.
+    pub preview: bool,
 }
 
 struct GpuMesh {
@@ -961,7 +965,14 @@ impl ViewportRenderer {
             if let Some(gpu) = self.meshes.get(&item.id) {
                 let flags = [
                     if settings.show_groups { 1.0 } else { 0.0 },
-                    if item.active || !multiple { 1.0 } else { 0.0 },
+                    // 2 = preview glaze, 1 = active, 0 = inactive (dimmed).
+                    if item.preview {
+                        2.0
+                    } else if item.active || !multiple {
+                        1.0
+                    } else {
+                        0.0
+                    },
                     if settings.wireframe { 1.0 } else { 0.0 },
                     settings.wireframe_opacity,
                 ];

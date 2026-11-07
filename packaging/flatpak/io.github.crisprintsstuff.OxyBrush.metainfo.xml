@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.5.7-beta" date="2026-11-07" type="development">
+      <description>
+        <p>Mask extract shows a live preview you can adjust before accepting
+        it. A floor grid under the model follows its size and position. New
+        Pen &amp; tablet settings shape the pressure curve, and on macOS
+        quitting now asks to save unsaved changes.</p>
+      </description>
+    </release>
     <release version="2.5.6-beta" date="2026-11-07" type="development">
       <description>
         <p>New Midnight theme: deep navy panels with thin blue outlines and
