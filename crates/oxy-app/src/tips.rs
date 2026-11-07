@@ -611,6 +611,19 @@ pub mod plain {
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
     pub const PRESSURE_CURVE: &str =
         "Below 1 a light touch goes further. Above 1 the brush stays firm until you press harder.";
+    pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
+    pub const PEN_SETTINGS: &str =
+        "How hard you press the pen and how strong the brush gets. Remembered between sessions.";
+    pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
+    pub const PRESSURE_SOFT: &str =
+        "Light touches already sculpt, and full strength comes before you press all the way.";
+    pub const PRESSURE_LINEAR: &str = "Brush strength follows the pen exactly.";
+    pub const PRESSURE_FIRM: &str = "Light touches stay gentle; you need to press harder for full strength.";
+    pub const PRESSURE_TRY: &str = "Press the pen on the tablet over the viewport to see its pressure on the curve.";
+    pub const PRESSURE_MIN: &str = "Brush strength for the lightest touch, so a light stroke is never too faint.";
+    pub const PRESSURE_FULL: &str =
+        "How hard you press for full strength. Lower it if you have to press very hard to get a strong stroke.";
+    pub const PRESSURE_DRIVER: &str = "Your tablet driver (Wacom, Huion, XP-Pen) may have its own pressure curve too. Keep that one straight and set the curve here, or the two add up.";
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const RADIAL: &str = "How many copies to repeat around the axis. Zero turns radial symmetry off.";

@@ -1299,6 +1299,7 @@ impl ApplicationHandler for App {
             }
             WindowEvent::TouchpadPressure { pressure, .. } => {
                 self.editor.pressure = *pressure;
+                self.editor.pen_seen = true;
                 redraw = true;
             }
             WindowEvent::PinchGesture { delta, .. } if !over_egui => {
@@ -1312,6 +1313,7 @@ impl ApplicationHandler for App {
             WindowEvent::AxisMotion { value, .. } => {
                 if self.editor.is_stroking() && *value > 0.0 && *value <= 1.0 {
                     self.editor.pressure = *value as f32;
+                    self.editor.pen_seen = true;
                 }
             }
             WindowEvent::CursorLeft { .. } => {
@@ -1347,6 +1349,9 @@ impl ApplicationHandler for App {
             WindowEvent::Touch(t) => {
                 let pos = Vec2::new(t.location.x as f32, t.location.y as f32);
                 let force_pressure = t.force.map_or(1.0, |f| f.normalized() as f32);
+                if t.force.is_some() {
+                    self.editor.pen_seen = true;
+                }
                 match t.phase {
                     TouchPhase::Started => {
                         self.touches.insert(t.id, TouchPoint { start_pos: pos, pos, _start_time: Instant::now() });
