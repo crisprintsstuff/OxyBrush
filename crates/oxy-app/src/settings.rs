@@ -265,6 +265,12 @@ pub struct Settings {
     pub wireframe_color: [f64; 3],
     /// Strokes may start on empty space (orbit with the middle mouse button).
     pub stroke_from_empty: bool,
+    /// Pen pressure curve shape (exponent; 1 is linear).
+    pub pressure_gamma: f32,
+    /// Strength of the lightest touch, 0..0.5 (output floor).
+    pub pressure_min: f32,
+    /// Pen pressure that already counts as full, 0.3..1.
+    pub pressure_full: f32,
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
@@ -555,6 +561,9 @@ impl Default for Settings {
             wireframe_opacity: 0.7,
             wireframe_color: view.wireframe_color,
             stroke_from_empty: false,
+            pressure_gamma: 1.0,
+            pressure_min: 0.0,
+            pressure_full: 1.0,
             surface_cursor: false,
             hide_cursor_during_stroke: true,
             agent_mcp: false,
@@ -678,6 +687,9 @@ impl Settings {
                 oxy_topo::RemeshEngine::Vdb => "vdb",
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
+        ) + &format!(
+            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\n",
+            self.pressure_gamma, self.pressure_min, self.pressure_full
         ) + &self
             .recent_files
             .iter()
@@ -780,6 +792,15 @@ impl Settings {
                     }
                 }
                 "update_last_check" => s.update_last_check = v.parse().unwrap_or(0),
+                "pressure_gamma" => {
+                    s.pressure_gamma = v.parse().ok().filter(|x| (0.2..=5.0).contains(x)).unwrap_or(s.pressure_gamma)
+                }
+                "pressure_min" => {
+                    s.pressure_min = v.parse().ok().filter(|x| (0.0..=0.5).contains(x)).unwrap_or(s.pressure_min)
+                }
+                "pressure_full" => {
+                    s.pressure_full = v.parse().ok().filter(|x| (0.3..=1.0).contains(x)).unwrap_or(s.pressure_full)
+                }
                 "update_skip" if v.is_empty() || oxy_update::Version::parse(v).is_some() => {
                     s.update_skip = v.to_owned();
                 }
@@ -890,6 +911,17 @@ mod tests {
     }
 
     #[test]
+    fn pen_pressure_settings_are_remembered_and_validated() {
+        let s = Settings::from_text("pressure_gamma = 1.6\npressure_min = 0.1\npressure_full = 0.8\n");
+        assert_eq!((s.pressure_gamma, s.pressure_min, s.pressure_full), (1.6, 0.1, 0.8));
+        let back = Settings::from_text(&s.to_text());
+        assert_eq!((back.pressure_gamma, back.pressure_min, back.pressure_full), (1.6, 0.1, 0.8));
+        // Nonsense keeps the defaults (a straight line).
+        let bad = Settings::from_text("pressure_gamma = 40\npressure_min = -1\npressure_full = 0.01\n");
+        assert_eq!((bad.pressure_gamma, bad.pressure_min, bad.pressure_full), (1.0, 0.0, 1.0));
+    }
+
+    #[test]
     fn midnight_theme_and_pill_corners_are_remembered() {
         let s = Settings::from_text("theme = midnight\ncorner_style = pill\n");
         assert_eq!(s.theme, ThemePreset::Midnight);
@@ -934,6 +966,9 @@ mod tests {
             wireframe_opacity: 0.85,
             wireframe_color: [0.15, 0.2, 0.25],
             stroke_from_empty: true,
+            pressure_gamma: 1.6,
+            pressure_min: 0.1,
+            pressure_full: 0.8,
             surface_cursor: true,
             hide_cursor_during_stroke: false,
             agent_mcp: false,

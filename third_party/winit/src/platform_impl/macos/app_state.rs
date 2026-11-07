@@ -6,13 +6,15 @@ use std::time::Instant;
 use objc2::rc::Retained;
 use objc2::{declare_class, msg_send_id, mutability, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSRunningApplication,
+    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
+    NSApplicationTerminateReply, NSRunningApplication,
 };
 use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol};
 
 use super::event_handler::EventHandler;
 use super::event_loop::{notify_windows_of_exit, stop_app_immediately, ActiveEventLoop, PanicInfo};
 use super::observer::{EventLoopWaker, RunLoop};
+use super::window::WinitWindow;
 use super::{menu, WindowId, DEVICE_ID};
 use crate::event::{DeviceEvent, Event, StartCause, WindowEvent};
 use crate::event_loop::{ActiveEventLoop as RootActiveEventLoop, ControlFlow};
@@ -69,6 +71,12 @@ declare_class!(
         #[method(applicationWillTerminate:)]
         fn app_will_terminate(&self, notification: &NSNotification) {
             self.will_terminate(notification)
+        }
+
+        // OxyBrush patch: see `should_terminate`.
+        #[method(applicationShouldTerminate:)]
+        fn app_should_terminate(&self, _sender: &NSApplication) -> NSApplicationTerminateReply {
+            self.should_terminate()
         }
     }
 );
@@ -160,6 +168,36 @@ impl ApplicationDelegate {
             // So we return from `pump_events` by stopping the application.
             let app = NSApplication::sharedApplication(mtm);
             stop_app_immediately(&app);
+        }
+    }
+
+    /// OxyBrush patch. Upstream winit has no `applicationShouldTerminate:`, so
+    /// Quit in the app menu (Cmd+Q), Quit in the Dock and logging out end the
+    /// process without the application hearing about it, and unsaved work is
+    /// lost. Instead, turn the request into a `CloseRequested` for each winit
+    /// window and cancel the termination: the application can then ask to save
+    /// and exit the event loop itself (or not, if the user cancels). Once the
+    /// application has asked the event loop to exit, or when there is no
+    /// window to ask, terminate as before.
+    fn should_terminate(&self) -> NSApplicationTerminateReply {
+        trace_scope!("applicationShouldTerminate:");
+        if self.exiting() || !self.is_running() {
+            return NSApplicationTerminateReply::NSTerminateNow;
+        }
+        let mtm = MainThreadMarker::from(self);
+        let app = NSApplication::sharedApplication(mtm);
+        let mut asked = false;
+        for window in app.windows() {
+            if window.is_kind_of::<WinitWindow>() {
+                let id = WindowId(Retained::as_ptr(&window) as usize);
+                self.maybe_queue_window_event(id, WindowEvent::CloseRequested);
+                asked = true;
+            }
+        }
+        if asked {
+            NSApplicationTerminateReply::NSTerminateCancel
+        } else {
+            NSApplicationTerminateReply::NSTerminateNow
         }
     }
 

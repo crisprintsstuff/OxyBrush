@@ -74,6 +74,8 @@ impl StrokeMode {
 pub enum SettingsTab {
     #[default]
     General,
+    /// Pen pressure curve and tablet options.
+    Pen,
     Appearance,
     Plugins,
     Keymap,
@@ -81,9 +83,20 @@ pub enum SettingsTab {
     Updates,
 }
 
+/// Pen pressure after the user's curve. `raw` is the tablet's 0..1 value;
+/// pressing to `full` already counts as full pressure, the lightest touch
+/// gives `min`, and `gamma` bends the curve in between (1 is a straight
+/// line, below 1 light touches go further, above 1 you press harder).
+pub fn map_pressure(raw: f32, gamma: f32, min: f32, full: f32) -> f32 {
+    let x = (raw / full.clamp(0.3, 1.0)).clamp(0.0, 1.0);
+    let min = min.clamp(0.0, 0.5);
+    min + (1.0 - min) * x.powf(gamma.clamp(0.2, 5.0))
+}
+
 impl SettingsTab {
-    pub const ALL: [SettingsTab; 6] = [
+    pub const ALL: [SettingsTab; 7] = [
         SettingsTab::General,
+        SettingsTab::Pen,
         SettingsTab::Appearance,
         SettingsTab::Plugins,
         SettingsTab::Keymap,
@@ -94,6 +107,7 @@ impl SettingsTab {
     pub fn label(self) -> &'static str {
         match self {
             SettingsTab::General => "General",
+            SettingsTab::Pen => "Pen & tablet",
             SettingsTab::Appearance => "Appearance",
             SettingsTab::Plugins => "Plugins",
             SettingsTab::Keymap => "Keymap",
@@ -305,6 +319,12 @@ pub struct Editor {
     pub spray: f32,
     /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
     pub pressure_gamma: f32,
+    /// Strength of the lightest touch (output floor, 0..0.5).
+    pub pressure_min: f32,
+    /// A pen (or other pressure source) has reported pressure this session.
+    pub pen_seen: bool,
+    /// Pen pressure that already counts as full (0.3..1).
+    pub pressure_full: f32,
     pub noise_scale: f32,
     /// Crease brush pinch intensity factor (how tightly walls are pulled together).
     pub crease_pinch: f32,
@@ -554,6 +574,9 @@ impl Default for Editor {
             stabilizer_pt: 0.0,
             spray: 0.0,
             pressure_gamma: 1.0,
+            pressure_min: 0.0,
+            pen_seen: false,
+            pressure_full: 1.0,
             noise_scale: 3.0,
             crease_pinch: 0.3,
             insert_shape: oxy_sculpt::InsertShape::Sphere,
@@ -887,6 +910,9 @@ impl Editor {
             wireframe_opacity: self.view.wireframe_opacity,
             wireframe_color: self.view.wireframe_color,
             stroke_from_empty: self.stroke_from_empty,
+            pressure_gamma: self.pressure_gamma,
+            pressure_min: self.pressure_min,
+            pressure_full: self.pressure_full,
             surface_cursor: self.surface_cursor,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
             agent_mcp: self.agent_enabled,
@@ -1027,6 +1053,9 @@ impl Editor {
         self.view.background = s.background;
         self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
+        self.pressure_gamma = s.pressure_gamma;
+        self.pressure_min = s.pressure_min;
+        self.pressure_full = s.pressure_full;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
         self.hide_cursor_during_stroke = s.hide_cursor_during_stroke;
@@ -1262,9 +1291,14 @@ impl Editor {
         self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None };
     }
 
+    /// A pen is drawing right now, so its pressure is live.
+    pub fn pen_active(&self) -> bool {
+        self.pen_seen && self.is_stroking()
+    }
+
     /// Pen pressure after the pressure curve.
     pub fn pressure(&self) -> f32 {
-        self.pressure.clamp(0.0, 1.0).powf(self.pressure_gamma.clamp(0.2, 5.0))
+        map_pressure(self.pressure, self.pressure_gamma, self.pressure_min, self.pressure_full)
     }
 
     /// Screen-space radius (logical points) to world units at `at`.
@@ -3792,6 +3826,35 @@ mod tests {
     }
 
     #[test]
+    fn pressure_floor_and_full_point() {
+        use super::map_pressure;
+        // Defaults are a straight line.
+        assert!((map_pressure(0.3, 1.0, 0.0, 1.0) - 0.3).abs() < 1e-6);
+        // The lightest touch still gives the floor; pressing all the way gives 1.
+        assert!((map_pressure(0.0, 1.0, 0.2, 1.0) - 0.2).abs() < 1e-6);
+        assert!((map_pressure(1.0, 2.0, 0.2, 1.0) - 1.0).abs() < 1e-6);
+        // Full strength already at 80 % pressure, and nothing goes past 1.
+        assert!((map_pressure(0.8, 1.0, 0.0, 0.8) - 1.0).abs() < 1e-6);
+        assert!((map_pressure(0.95, 1.0, 0.0, 0.8) - 1.0).abs() < 1e-6);
+        assert!((map_pressure(0.4, 1.0, 0.0, 0.8) - 0.5).abs() < 1e-6);
+        // Never decreasing, so a firmer press is never weaker.
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let y = map_pressure(i as f32 / 100.0, 0.6, 0.05, 0.85);
+            assert!(y >= last && (0.0..=1.0).contains(&y));
+            last = y;
+        }
+        // Out-of-range values from a settings file are clamped, not trusted.
+        assert!(map_pressure(0.5, 99.0, 9.0, 0.0).is_finite());
+        // The editor uses the same curve, and only reports a live pen while drawing.
+        let mut e = editor();
+        (e.pressure, e.pressure_gamma, e.pressure_min, e.pressure_full) = (0.4, 1.0, 0.1, 0.8);
+        assert!((e.pressure() - 0.55).abs() < 1e-5);
+        e.pen_seen = true;
+        assert!(!e.pen_active());
+    }
+
+    #[test]
     fn pressure_curve() {
         let mut e = editor();
         e.pressure = 0.5;
@@ -4093,6 +4156,9 @@ mod tests {
             wireframe_opacity: 0.8,
             wireframe_color: [0.2, 0.22, 0.25],
             stroke_from_empty: true,
+            pressure_gamma: 1.0,
+            pressure_min: 0.0,
+            pressure_full: 1.0,
             surface_cursor: true,
             hide_cursor_during_stroke: false,
             agent_mcp: false,
