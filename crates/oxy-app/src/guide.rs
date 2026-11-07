@@ -95,7 +95,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Symmetry",
         keywords: "mirror x y z radial",
-        body: "X symmetry is on by default: strokes on one side are mirrored to the other. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).",
+        body: "X symmetry is on by default: strokes on one side are mirrored to the other. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.",
     },
     Topic {
         title: "Masking",

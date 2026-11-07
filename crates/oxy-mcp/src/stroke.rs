@@ -24,6 +24,9 @@ pub enum Space {
 pub struct StrokeParams {
     pub settings: BrushSettings,
     pub symmetry: Symmetry,
+    /// Where the mirror planes and radial axis cross (the piece's symmetry
+    /// centre).
+    pub symmetry_center: Vec3,
     pub invert: bool,
     pub view_forward: Vec3,
     /// The user's alpha, when the desktop app has one selected.
@@ -159,6 +162,7 @@ pub fn apply_samples(mesh: &mut Mesh, params: &StrokeParams, touch: &mut dyn FnM
     settings.radius = settings.radius.max(1e-6);
     settings.strength = settings.strength.clamp(0.0, 1.0);
     let mut stroke = Stroke::new(settings, params.symmetry, params.invert)
+        .with_symmetry_center(params.symmetry_center)
         .with_view(params.view_forward)
         .with_alpha(params.alpha.clone());
     for sample in &params.samples {

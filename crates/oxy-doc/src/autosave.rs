@@ -149,6 +149,7 @@ mod tests {
                 mesh: primitives::icosphere(2, 1.0).to_data(),
                 multires: None,
                 vertex_map: None,
+                symmetry_center: None,
             }],
             active: 0,
         };

@@ -494,6 +494,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             insert_shape: ed.insert_shape,
         },
         symmetry: ed.symmetry,
+        symmetry_center: ed.symmetry_center(),
         invert: invert ^ ed.carve,
         view_forward: view.forward(),
         alpha,

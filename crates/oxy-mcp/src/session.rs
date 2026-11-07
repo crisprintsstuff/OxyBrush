@@ -52,7 +52,12 @@ impl HeadlessSession {
         Self::from_scene(Scene::new(Piece::new(name, mesh)))
     }
 
-    fn from_scene(scene: Scene) -> Self {
+    fn from_scene(mut scene: Scene) -> Self {
+        // Same as the app: pieces without a symmetry centre get one from
+        // their shape, once.
+        for p in &mut scene.pieces {
+            ensure_symmetry_center(p);
+        }
         let mut view = View::default();
         view.frame(scene.bounds());
         let mut strengths = [0.0; BrushKind::ALL.len()];
@@ -95,7 +100,7 @@ impl HeadlessSession {
         let mut session = Self::with_piece(&name, mesh);
         for (name, mesh) in parts {
             let name = session.scene.unique_name(&name);
-            session.scene.pieces.push(Piece::new(name, mesh));
+            session.scene.pieces.push(with_symmetry_center(Piece::new(name, mesh)));
         }
         session.sources.push(absolute(path));
         session.view.frame(session.scene.bounds());
@@ -282,7 +287,7 @@ impl HeadlessSession {
         for (name, mesh) in parts {
             let name = self.scene.unique_name(&name);
             let index = self.scene.pieces.len();
-            self.scene.pieces.push(Piece::new(name, mesh));
+            self.scene.pieces.push(with_symmetry_center(Piece::new(name, mesh)));
             steps.push(Step::Inserted { index });
         }
         self.scene.set_active(first);
@@ -407,6 +412,7 @@ impl HeadlessSession {
                 ..oxy_sculpt::BrushSettings::default()
             },
             symmetry,
+            symmetry_center: self.scene.active().symmetry_center.unwrap_or(glam::Vec3::ZERO),
             invert: do_invert,
             view_forward: view.forward(),
             alpha: None,
@@ -535,6 +541,18 @@ impl Host for HeadlessSession {
             Err(e) => ToolResult::error(e),
         }
     }
+}
+
+/// Give `piece` a symmetry centre from its shape if it has none yet.
+fn ensure_symmetry_center(piece: &mut Piece) {
+    if piece.symmetry_center.is_none() {
+        piece.symmetry_center = Some(oxy_sculpt::estimate_symmetry_center(&piece.mesh.positions));
+    }
+}
+
+fn with_symmetry_center(mut piece: Piece) -> Piece {
+    ensure_symmetry_center(&mut piece);
+    piece
 }
 
 fn piece_line(index: usize, piece: &Piece, active: bool) -> String {
