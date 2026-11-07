@@ -267,6 +267,8 @@ pub struct Settings {
     pub stroke_from_empty: bool,
     /// Holding still during a freehand stroke turns it into a curve.
     pub hold_to_curve: bool,
+    /// Ask before doing so.
+    pub hold_to_curve_ask: bool,
     /// Pen pressure curve shape (exponent; 1 is linear).
     pub pressure_gamma: f32,
     /// Strength of the lightest touch, 0..0.5 (output floor).
@@ -568,6 +570,7 @@ impl Default for Settings {
             wireframe_color: view.wireframe_color,
             stroke_from_empty: false,
             hold_to_curve: true,
+            hold_to_curve_ask: false,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
@@ -697,7 +700,7 @@ impl Settings {
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
         ) + &format!(
-            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\n",
+            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\n",
             self.pressure_gamma,
             self.pressure_min,
             self.pressure_full,
@@ -706,7 +709,8 @@ impl Settings {
             self.pressure_shape[2],
             self.pressure_shape[3],
             self.floor_grid,
-            self.hold_to_curve
+            self.hold_to_curve,
+            self.hold_to_curve_ask
         ) + &self
             .recent_files
             .iter()
@@ -788,6 +792,7 @@ impl Settings {
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
                 "floor_grid" => s.floor_grid = v.parse().unwrap_or(s.floor_grid),
                 "hold_to_curve" => s.hold_to_curve = v.parse().unwrap_or(s.hold_to_curve),
+                "hold_to_curve_ask" => s.hold_to_curve_ask = v.parse().unwrap_or(s.hold_to_curve_ask),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
                 "hide_cursor_during_stroke" => {
                     s.hide_cursor_during_stroke = v.parse().unwrap_or(s.hide_cursor_during_stroke)
@@ -1002,6 +1007,7 @@ mod tests {
             wireframe_color: [0.15, 0.2, 0.25],
             stroke_from_empty: true,
             hold_to_curve: false,
+            hold_to_curve_ask: true,
             pressure_gamma: 1.6,
             pressure_min: 0.1,
             pressure_full: 0.8,
