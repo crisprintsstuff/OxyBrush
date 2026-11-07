@@ -616,8 +616,18 @@ pub mod plain {
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
     pub const LINK_BADGE: &str = "This document came from OxyCharacter. Click to send it back (File > Send back to OxyCharacter); OxyCharacter picks up the changes.";
     pub const HOLD_TO_CURVE: &str = "While drawing a Freehand stroke, hold the pen or mouse still for a moment: the stroke becomes an editable curve. Keep moving to extend it, then drag its points, and press Enter (or start the next stroke) to apply it.";
-    pub const CURVE_HELP: &str =
-        "Drag a point to reshape the stroke, click the curve to add a point, Alt+click a point to remove it.";
+    pub const HOLD_TO_CURVE_ASK: &str =
+        "Ask \"Edit this stroke as a curve?\" when you hold still, instead of switching right away.";
+    pub const HOLD_YES: &str = "Turn the stroke into an editable curve (Enter).";
+    pub const HOLD_NO: &str = "Keep the stroke as you drew it (Esc).";
+    pub const CURVE_HELP: &str = "Drag a point to reshape the stroke, click the curve to add a point, Alt+click a point to remove it. Ctrl+Z undoes an edit.";
+    pub const CURVE_CLOSED: &str =
+        "Join the last point to the first, for rings and loops (needs three points; no fades).";
+    pub const CURVE_SELECT: &str =
+        "Click a point to set the size and strength there. Ctrl+Z undoes curve edits while it is open.";
+    pub const CURVE_POINT_SIZE: &str =
+        "Brush size at the selected point, relative to the Size slider. The stroke blends smoothly to the next points.";
+    pub const CURVE_POINT_STRENGTH: &str = "Strength at the selected point, relative to the Strength slider.";
     pub const CURVE_FADE: &str = "How much of the curve, from that end, the stroke takes to reach full strength.";
     pub const CURVE_SIZE: &str = "Size, strength and the other brush settings update the stroke too.";
     pub const CURVE_ACCEPT: &str =
@@ -634,7 +644,9 @@ pub mod plain {
     pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
     pub const PEN_SETTINGS: &str =
         "How hard you press the pen and how strong the brush gets. Remembered between sessions.";
-    pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
+    pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. Drag the two points to shape the curve (an S shape gives fine control at both ends); double-click to straighten it. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
+    pub const PRESSURE_S: &str =
+        "Gentle at both the lightest and the hardest presses, quick in between: fine control at both ends.";
     pub const PRESSURE_SOFT: &str =
         "Light touches already sculpt, and full strength comes before you press all the way.";
     pub const PRESSURE_LINEAR: &str = "Brush strength follows the pen exactly.";

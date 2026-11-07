@@ -113,35 +113,100 @@ pub struct CurveEdit {
     /// if either changes, the preview no longer applies.
     revision: u64,
     topology: u64,
+    /// Per control point: (size, strength) multipliers, blended along the
+    /// curve between points.
+    pub weights: Vec<(f32, f32)>,
+    /// The curve is a loop (last point joins the first; no fades).
+    pub closed: bool,
+    /// The control point whose size and strength the window edits.
+    pub selected: Option<usize>,
+    /// Set by the UI while one of the curve's sliders is being dragged, so
+    /// a whole drag becomes one undo step.
+    pub ui_dragging: bool,
+    /// Undo / redo of edits to the curve while it is open, and the last
+    /// shape that was recorded.
+    undo: Vec<CurveShape>,
+    redo: Vec<CurveShape>,
+    settled: CurveShape,
     /// The piece with the stroke applied, and the chunks it changed.
     pub preview: Mesh,
     touched: Vec<u32>,
     /// What the preview was built from.
     built: Option<CurveKey>,
-    samples: Vec<StrokeSample>,
+    /// Samples with their (size, strength) modulation.
+    samples: Vec<(StrokeSample, f32, f32)>,
+}
+
+/// What the user edits on an open curve, and what curve undo restores.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CurveShape {
+    points: Vec<(Vec3, Vec3)>,
+    weights: Vec<(f32, f32)>,
+    closed: bool,
+    fades: (f32, f32),
+}
+
+impl CurveEdit {
+    fn shape(&self) -> CurveShape {
+        CurveShape {
+            points: self.points.clone(),
+            weights: self.weights.clone(),
+            closed: self.closed,
+            fades: (self.fade_in, self.fade_out),
+        }
+    }
+
+    fn set_shape(&mut self, s: CurveShape) {
+        self.points = s.points;
+        self.weights = s.weights;
+        self.closed = s.closed;
+        (self.fade_in, self.fade_out) = s.fades;
+        if self.selected.is_some_and(|i| i >= self.points.len()) {
+            self.selected = None;
+        }
+    }
+
+    /// Size and strength at curve parameter `u` (segment index + fraction).
+    fn weight_at(&self, u: f32) -> (f32, f32) {
+        let n = self.weights.len();
+        if n == 0 {
+            return (1.0, 1.0);
+        }
+        let seg = (u.floor().max(0.0) as usize).min(n - 1);
+        let f = (u - seg as f32).clamp(0.0, 1.0);
+        let next = if self.closed { (seg + 1) % n } else { (seg + 1).min(n - 1) };
+        let (a, b) = (self.weights[seg], self.weights[next]);
+        let s = f * f * (3.0 - 2.0 * f);
+        (a.0 + (b.0 - a.0) * s, a.1 + (b.1 - a.1) * s)
+    }
 }
 
 #[derive(Clone, PartialEq)]
 struct CurveKey {
-    points: Vec<(Vec3, Vec3)>,
-    fade: (f32, f32),
+    shape: CurveShape,
     settings: BrushSettings,
 }
 
 /// Catmull-Rom through `points` (positions and normals), sampled about
-/// every `step` world units along the curve.
-pub fn curve_points(points: &[(Vec3, Vec3)], step: f32) -> Vec<(Vec3, Vec3, f32)> {
+/// every `step` world units along the curve: (position, normal, arc-length
+/// fraction 0..1, curve parameter = segment index + fraction). A closed
+/// curve also joins the last point to the first.
+pub fn curve_points(points: &[(Vec3, Vec3)], closed: bool, step: f32) -> Vec<(Vec3, Vec3, f32, f32)> {
     let n = points.len();
     if n < 2 {
         return Vec::new();
     }
-    let at = |i: isize| points[i.clamp(0, n as isize - 1) as usize];
-    let mut out: Vec<(Vec3, Vec3)> = Vec::new();
-    for seg in 0..n - 1 {
+    let closed = closed && n >= 3;
+    let at = |i: isize| {
+        if closed { points[i.rem_euclid(n as isize) as usize] } else { points[i.clamp(0, n as isize - 1) as usize] }
+    };
+    let segments = if closed { n } else { n - 1 };
+    let mut out: Vec<(Vec3, Vec3, f32)> = Vec::new();
+    for seg in 0..segments {
         let (p0, p1, p2, p3) = (at(seg as isize - 1), at(seg as isize), at(seg as isize + 1), at(seg as isize + 2));
         let len = p1.0.distance(p2.0);
         let k = ((len / step.max(1e-6)).ceil() as usize).clamp(1, 4096);
-        for j in 0..k + usize::from(seg == n - 2) {
+        for j in 0..k + usize::from(seg == segments - 1) {
             let t = j as f32 / k as f32;
             let (t2, t3) = (t * t, t * t * t);
             let pos = 0.5
@@ -150,7 +215,7 @@ pub fn curve_points(points: &[(Vec3, Vec3)], step: f32) -> Vec<(Vec3, Vec3, f32)
                     + (2.0 * p0.0 - 5.0 * p1.0 + 4.0 * p2.0 - p3.0) * t2
                     + (-p0.0 + 3.0 * p1.0 - 3.0 * p2.0 + p3.0) * t3);
             let normal = p1.1.lerp(p2.1, t).normalize_or(p1.1);
-            out.push((pos, normal));
+            out.push((pos, normal, seg as f32 + t));
         }
     }
     // Arc-length parameter 0..1, for the fades.
@@ -159,7 +224,7 @@ pub fn curve_points(points: &[(Vec3, Vec3)], step: f32) -> Vec<(Vec3, Vec3, f32)
         acc[i] = acc[i - 1] + out[i].0.distance(out[i - 1].0);
     }
     let total = acc.last().copied().unwrap_or(0.0).max(1e-9);
-    out.into_iter().zip(acc).map(|((p, nrm), a)| (p, nrm, a / total)).collect()
+    out.into_iter().zip(acc).map(|((p, nrm, u), a)| (p, nrm, a / total, u)).collect()
 }
 
 /// Simplify a drawn screen path to a few control points (Ramer-Douglas-
@@ -322,10 +387,43 @@ pub enum SettingsTab {
 /// pressing to `full` already counts as full pressure, the lightest touch
 /// gives `min`, and `gamma` bends the curve in between (1 is a straight
 /// line, below 1 light touches go further, above 1 you press harder).
+#[cfg(test)]
 pub fn map_pressure(raw: f32, gamma: f32, min: f32, full: f32) -> f32 {
+    map_pressure_shaped(raw, gamma, LINEAR_PRESSURE_SHAPE, min, full)
+}
+
+/// A straight two-point pressure shape (no change).
+pub const LINEAR_PRESSURE_SHAPE: [f32; 4] = [1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+
+/// [`map_pressure`] with a two-point shape on top of the curve: a cubic
+/// from (0, 0) to (1, 1) through the control points `shape` = [x1, y1, x2,
+/// y2], all clamped to 0..1, so it never decreases. Two points allow an S
+/// curve: fine control at both the lightest and the hardest presses.
+pub fn map_pressure_shaped(raw: f32, gamma: f32, shape: [f32; 4], min: f32, full: f32) -> f32 {
     let x = (raw / full.clamp(0.3, 1.0)).clamp(0.0, 1.0);
     let min = min.clamp(0.0, 0.5);
-    min + (1.0 - min) * x.powf(gamma.clamp(0.2, 5.0))
+    let bent = x.powf(gamma.clamp(0.2, 5.0));
+    min + (1.0 - min) * shape_pressure(bent, shape)
+}
+
+/// The cubic through (0,0), (x1,y1), (x2,y2), (1,1), evaluated at `x`.
+pub fn shape_pressure(x: f32, shape: [f32; 4]) -> f32 {
+    let [x1, y1, x2, y2] = shape.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 });
+    let cubic = |t: f32, a: f32, b: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+    };
+    // x(t) never decreases for control x in 0..1: find t by bisection.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if cubic(mid, x1, x2) < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    cubic(0.5 * (lo + hi), y1, y2).clamp(0.0, 1.0)
 }
 
 impl SettingsTab {
@@ -573,6 +671,9 @@ pub struct Editor {
     pub pen_seen: bool,
     /// Pen pressure that already counts as full (0.3..1).
     pub pressure_full: f32,
+    /// Two-point shape of the pressure curve: the inner control points of
+    /// a cubic from (0, 0) to (1, 1), as [x1, y1, x2, y2] (straight by default).
+    pub pressure_shape: [f32; 4],
     pub noise_scale: f32,
     /// Crease brush pinch intensity factor (how tightly walls are pulled together).
     pub crease_pinch: f32,
@@ -689,6 +790,11 @@ pub struct Editor {
     /// Holding the pointer still during a freehand stroke turns it into an
     /// editable curve.
     pub hold_to_curve: bool,
+    /// Ask before turning a held stroke into a curve.
+    pub hold_to_curve_ask: bool,
+    /// A held stroke waiting for Yes / No (with `hold_to_curve_ask`); the
+    /// stroke stays applied, unrecorded, until answered.
+    pub hold_offer: Option<HoldWatch>,
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
@@ -842,6 +948,7 @@ impl Default for Editor {
             pressure_min: 0.0,
             pen_seen: false,
             pressure_full: 1.0,
+            pressure_shape: LINEAR_PRESSURE_SHAPE,
             noise_scale: 3.0,
             crease_pinch: 0.3,
             insert_shape: oxy_sculpt::InsertShape::Sphere,
@@ -913,6 +1020,8 @@ impl Default for Editor {
             rmb_press: None,
             stroke_from_empty: false,
             hold_to_curve: true,
+            hold_to_curve_ask: false,
+            hold_offer: None,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
@@ -1186,9 +1295,11 @@ impl Editor {
             wireframe_color: self.view.wireframe_color,
             stroke_from_empty: self.stroke_from_empty,
             hold_to_curve: self.hold_to_curve,
+            hold_to_curve_ask: self.hold_to_curve_ask,
             pressure_gamma: self.pressure_gamma,
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
+            pressure_shape: self.pressure_shape,
             surface_cursor: self.surface_cursor,
             floor_grid: self.floor_grid,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
@@ -1331,9 +1442,11 @@ impl Editor {
         self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
         self.hold_to_curve = s.hold_to_curve;
+        self.hold_to_curve_ask = s.hold_to_curve_ask;
         self.pressure_gamma = s.pressure_gamma;
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
+        self.pressure_shape = s.pressure_shape;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
         self.floor_grid = s.floor_grid;
@@ -1421,6 +1534,8 @@ impl Editor {
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
             return;
         }
+        // A new press means "no" to an unanswered curve question.
+        self.answer_hold_offer(false);
         if self.curve.is_some() && self.curve_pointer_down(p) {
             return;
         }
@@ -1594,7 +1709,13 @@ impl Editor {
 
     /// Pen pressure after the pressure curve.
     pub fn pressure(&self) -> f32 {
-        map_pressure(self.pressure, self.pressure_gamma, self.pressure_min, self.pressure_full)
+        map_pressure_shaped(
+            self.pressure,
+            self.pressure_gamma,
+            self.pressure_shape,
+            self.pressure_min,
+            self.pressure_full,
+        )
     }
 
     /// Screen-space radius (logical points) to world units at `at`.
@@ -2384,6 +2505,12 @@ impl Editor {
     }
 
     pub fn undo(&mut self) {
+        // An unanswered "edit as a curve?" keeps the stroke, which this undoes.
+        self.answer_hold_offer(false);
+        // While a curve is open, undo steps through its edits.
+        if self.curve_undo() {
+            return;
+        }
         self.pointer_up();
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish before undoing".into();
@@ -2396,6 +2523,10 @@ impl Editor {
     }
 
     pub fn redo(&mut self) {
+        self.answer_hold_offer(false);
+        if self.curve_redo() {
+            return;
+        }
         self.pointer_up();
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish before redoing".into();
@@ -2786,6 +2917,18 @@ impl Editor {
             pressure: self.pressure(),
             revision: self.history.revision(),
             topology: piece.mesh.topology_version(),
+            weights: vec![(1.0, 1.0); points.len()],
+            closed: false,
+            selected: None,
+            ui_dragging: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            settled: CurveShape {
+                points: points.clone(),
+                weights: vec![(1.0, 1.0); points.len()],
+                closed: false,
+                fades: (self.curve_fade_in, self.curve_fade_out),
+            },
             points,
             preview,
             touched: Vec::new(),
@@ -2814,32 +2957,48 @@ impl Editor {
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(i, _)| i);
         if let Some(i) = handle {
+            let min = if c.closed { 3 } else { 2 };
             if self.active_modifiers().alt {
                 let c = self.curve.as_mut().expect("open");
-                if c.points.len() > 2 {
+                if c.points.len() > min {
                     c.points.remove(i);
+                    c.weights.remove(i);
+                    c.selected = match c.selected {
+                        Some(s) if s == i => None,
+                        Some(s) if s > i => Some(s - 1),
+                        s => s,
+                    };
                 } else {
-                    self.status = "A curve needs at least two points".into();
+                    self.status = if c.closed {
+                        "A closed curve needs at least three points".into()
+                    } else {
+                        "A curve needs at least two points".into()
+                    };
                 }
             } else {
+                self.curve.as_mut().expect("open").selected = Some(i);
                 self.drag = Drag::CurveHandle { index: i };
             }
             return true;
         }
         // On the curve between two points: insert one there and drag it.
-        let samples = curve_points(&c.points, c.world_per_pt * 2.0);
+        let samples = curve_points(&c.points, c.closed, c.world_per_pt * 2.0);
         let near = samples
             .iter()
-            .filter_map(|(q, _, t)| self.camera.project(*q, size).map(|s| (s.distance(local), *t)))
+            .filter_map(|(q, _, _, u)| self.camera.project(*q, size).map(|s| (s.distance(local), *u)))
             .filter(|(d, _)| *d <= reach * 0.8)
             .min_by(|a, b| a.0.total_cmp(&b.0));
-        if let Some((_, t)) = near {
+        if let Some((_, u)) = near {
             let (o, d) = self.camera.ray(local, size);
             if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
                 let c = self.curve.as_mut().expect("open");
-                let segs = (c.points.len() - 1) as f32;
-                let at = ((t * segs).floor() as usize + 1).min(c.points.len() - 1);
+                let n = c.points.len();
+                let seg = u.floor().max(0.0) as usize;
+                let at = if c.closed { (seg + 1).min(n) } else { (seg + 1).min(n - 1) };
+                let w = c.weight_at(u);
                 c.points.insert(at, (hit.point, facing(hit.normal, d)));
+                c.weights.insert(at, w);
+                c.selected = Some(at);
                 self.drag = Drag::CurveHandle { index: at };
                 return true;
             }
@@ -2882,6 +3041,12 @@ impl Editor {
         let Drag::Stroke { hold: Some(h), .. } = std::mem::replace(&mut self.drag, Drag::None) else {
             unreachable!("checked above")
         };
+        if self.hold_to_curve_ask {
+            // Ask first; the stroke stays as drawn until the answer.
+            self.hold_offer = Some(*h);
+            self.status = "Edit this stroke as a curve? Enter: yes, Esc: no".into();
+            return true;
+        }
         self.history.revert_pending(&mut self.scene);
         self.begin_curve(h.kind, h.invert, &h.path);
         if let Some(c) = &self.curve {
@@ -2890,6 +3055,20 @@ impl Editor {
             true
         } else {
             false
+        }
+    }
+
+    /// Answer the "edit this stroke as a curve?" question: yes takes the
+    /// stroke back and opens it as a curve; no keeps it as drawn (one undo
+    /// step, as usual).
+    pub fn answer_hold_offer(&mut self, yes: bool) {
+        let Some(h) = self.hold_offer.take() else { return };
+        if yes {
+            self.history.revert_pending(&mut self.scene);
+            self.begin_curve(h.kind, h.invert, &h.path);
+        } else {
+            self.history.commit();
+            self.status = format!("Kept the {} stroke", h.kind.label());
         }
     }
 
@@ -2911,22 +3090,33 @@ impl Editor {
         }
         let radius = self.brush_radius_pt * c.world_per_pt;
         let settings = *self.new_stroke(c.kind, c.invert, radius, 0.0).settings();
+        let dragging = matches!(self.drag, Drag::CurveHandle { .. });
         let c = self.curve.as_mut().expect("checked");
-        let key = CurveKey { points: c.points.clone(), fade: (c.fade_in, c.fade_out), settings };
+        // A finished edit (not mid-drag) becomes a curve undo step.
+        let shape = c.shape();
+        if shape != c.settled && !dragging && !c.ui_dragging {
+            c.undo.push(std::mem::replace(&mut c.settled, shape.clone()));
+            c.redo.clear();
+        }
+        let key = CurveKey { shape, settings };
         if c.built.as_ref() == Some(&key) {
             return;
         }
         // The samples: the curve, snapped to the surface along its normals.
         let real = &piece.mesh;
         let probe = radius.max(c.world_per_pt * 4.0) * 2.0;
-        c.samples = curve_points(&c.points, (radius * 0.05).max(1e-5))
+        let closed = c.closed && c.points.len() >= 3;
+        let samples: Vec<(StrokeSample, f32, f32)> = curve_points(&c.points, closed, (radius * 0.05).max(1e-5))
             .into_iter()
-            .filter_map(|(q, n, t)| {
+            .filter_map(|(q, n, t, u)| {
                 let hit = real.raycast(q + n * probe, -n).or_else(|| real.raycast(q - n * probe, n))?;
-                let pressure = c.pressure * curve_fade(t, c.fade_in, c.fade_out);
-                Some(StrokeSample { position: hit.point, normal: facing(hit.normal, -n), pressure })
+                let fade = if closed { 1.0 } else { curve_fade(t, c.fade_in, c.fade_out) };
+                let (size, strength) = c.weight_at(u);
+                let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, -n), pressure: c.pressure };
+                Some((sample, size, strength * fade))
             })
             .collect();
+        c.samples = samples;
         // Back to the untouched piece, then apply the stroke again.
         for &chunk in &c.touched {
             let r = real.chunks[chunk as usize].vertices.clone();
@@ -2947,7 +3137,8 @@ impl Editor {
         let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
         let c = self.curve.as_mut().expect("checked");
         let mut touched = vec![false; c.preview.chunks.len()];
-        for &s in &c.samples {
+        for &(s, size, strength) in &c.samples {
+            stroke.set_modulation(size, strength);
             stroke.add_sample(&mut c.preview, s, &mut |_, chunk| touched[chunk as usize] = true);
         }
         c.touched = touched.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| i as u32).collect();
@@ -2964,7 +3155,8 @@ impl Editor {
         let paint = c.kind == BrushKind::Paint || piece.mesh.is_painted();
         self.history.begin_with(c.kind.label(), piece.id, &piece.mesh, paint);
         let history = &mut self.history;
-        for &s in &c.samples {
+        for &(s, size, strength) in &c.samples {
+            stroke.set_modulation(size, strength);
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
         }
         self.history.commit();
@@ -2974,6 +3166,53 @@ impl Editor {
     /// World units per logical point of the open curve (1 when none).
     pub fn curve_world_per_pt(&self) -> f32 {
         self.curve.as_ref().map_or(1.0, |c| c.world_per_pt)
+    }
+
+    /// Undo the last edit of the open curve (moved, added or removed points,
+    /// size, strength, fades, closing). True if a curve is open.
+    pub fn curve_undo(&mut self) -> bool {
+        self.curve_step(true)
+    }
+
+    /// Redo an edit of the open curve. True if a curve is open.
+    pub fn curve_redo(&mut self) -> bool {
+        self.curve_step(false)
+    }
+
+    fn curve_step(&mut self, back: bool) -> bool {
+        let Some(c) = &mut self.curve else { return false };
+        let current = c.shape();
+        if current != c.settled {
+            c.undo.push(std::mem::replace(&mut c.settled, current));
+            c.redo.clear();
+        }
+        let (from, to) = if back { (&mut c.undo, &mut c.redo) } else { (&mut c.redo, &mut c.undo) };
+        match from.pop() {
+            Some(shape) => {
+                to.push(std::mem::replace(&mut c.settled, shape.clone()));
+                c.set_shape(shape);
+                self.status = if back { "Undid a curve edit".into() } else { "Redid a curve edit".into() };
+            }
+            None => {
+                self.status = if back {
+                    "Nothing to undo in this curve (Esc cancels it)".into()
+                } else {
+                    "Nothing to redo".into()
+                };
+            }
+        }
+        true
+    }
+
+    /// The screen radius (physical px) of the brush at control point `i`.
+    pub fn curve_point_radius_px(&self, i: usize) -> Option<f32> {
+        let c = self.curve.as_ref()?;
+        let (q, _) = *c.points.get(i)?;
+        let r = self.brush_radius_pt * c.world_per_pt * c.weights.get(i).map_or(1.0, |w| w.0);
+        let size = self.canvas_size();
+        let a = self.camera.project(q, size)?;
+        let b = self.camera.project(q + self.camera.up() * r, size)?;
+        Some(a.distance(b))
     }
 
     /// Discard the curve stroke; the piece is unchanged.
@@ -4585,15 +4824,15 @@ mod tests {
             let c = e.curve.as_ref().unwrap();
             (c.points[n - 2].0, c.points[n - 1].0)
         };
-        let mid = curve_points(&e.curve.as_ref().unwrap().points, 0.01)
+        let mid = curve_points(&e.curve.as_ref().unwrap().points, false, 0.01)
             .into_iter()
-            .find(|(q, _, _)| {
+            .find(|(q, _, _, _)| {
                 q.distance(a) > 0.02 && q.distance(b) > 0.02 && {
                     let t = (*q - a).dot(b - a) / (b - a).length_squared();
                     (0.3..0.7).contains(&t)
                 }
             })
-            .map(|(q, _, _)| q)
+            .map(|(q, _, _, _)| q)
             .unwrap();
         e.pointer = e.camera.project(mid, size);
         e.pointer_down(PointerButton::Primary);
@@ -4623,7 +4862,7 @@ mod tests {
     }
 
     #[test]
-    fn a_new_stroke_applies_the_open_curve_and_undo_drops_it() {
+    fn a_new_stroke_applies_the_open_curve_and_a_model_change_drops_it() {
         let mut e = editor();
         let before = e.scene.active().mesh.positions.clone();
         draw_curve(&mut e);
@@ -4635,14 +4874,19 @@ mod tests {
         assert_ne!(e.scene.active().mesh.positions, before, "the curve was applied");
         assert!(e.history.can_undo());
 
-        // A change underneath (undo) discards an open curve without touching the model.
+        // A change to the model underneath (here: inverting the mask from a
+        // menu) discards an open curve without touching the sculpt.
         draw_curve(&mut e);
         e.update_curve();
         let now = e.scene.active().mesh.positions.clone();
-        e.undo();
+        e.invert_mask();
         e.update_curve();
         assert!(e.curve.is_none(), "dropped: the model changed");
-        assert_ne!(e.scene.active().mesh.positions, now, "undo happened normally");
+        assert_eq!(e.scene.active().mesh.positions, now, "the open curve left nothing behind");
+        // With no curve open, Ctrl+Z undoes the applied curve as usual.
+        e.undo();
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
     }
 
     #[test]
@@ -4677,6 +4921,54 @@ mod tests {
         assert_ne!(e.scene.active().mesh.positions, before);
         e.undo();
         assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn ask_first_waits_for_an_answer() {
+        let draw = |e: &mut Editor| {
+            e.pointer = Some(Vec2::new(340.0, 300.0));
+            e.pointer_down(PointerButton::Primary);
+            for i in 1..=20 {
+                e.pointer_moved(Vec2::new(340.0 + i as f32 * 4.0, 300.0));
+            }
+            assert!(e.tick_hold(Instant::now() + HOLD_TO_CURVE * 2));
+            e.pointer_up();
+        };
+        // Yes: the stroke is taken back and opens as a curve.
+        let mut e = editor();
+        e.hold_to_curve_ask = true;
+        let before = e.scene.active().mesh.positions.clone();
+        draw(&mut e);
+        assert!(e.hold_offer.is_some() && e.curve.is_none(), "asks first");
+        assert_ne!(e.scene.active().mesh.positions, before, "the stroke stays while asking");
+        e.answer_hold_offer(true);
+        assert!(e.curve.is_some());
+        assert_eq!(e.scene.active().mesh.positions, before);
+        assert!(!e.history.can_undo());
+
+        // No: the stroke stays, as one undo step.
+        let mut e = editor();
+        e.hold_to_curve_ask = true;
+        draw(&mut e);
+        let drawn = e.scene.active().mesh.positions.clone();
+        e.answer_hold_offer(false);
+        assert!(e.curve.is_none() && e.hold_offer.is_none());
+        assert_eq!(e.scene.active().mesh.positions, drawn);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+
+        // Ignoring it and pressing again (or Ctrl+Z) counts as no.
+        let mut e = editor();
+        e.hold_to_curve_ask = true;
+        draw(&mut e);
+        e.undo();
+        assert!(e.hold_offer.is_none());
+        assert_eq!(e.scene.active().mesh.positions, before, "kept, then undone");
+        use crate::settings::Settings;
+        assert!(
+            Settings::from_text(&Settings { hold_to_curve_ask: true, ..Settings::default() }.to_text())
+                .hold_to_curve_ask
+        );
     }
 
     #[test]
@@ -4718,6 +5010,98 @@ mod tests {
     }
 
     #[test]
+    fn curve_points_have_their_own_size_and_strength() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        draw_curve(&mut e);
+        e.update_curve();
+        let even = e.curve.as_ref().unwrap().preview.positions.clone();
+        // Make the last point twice as big and the first one weaker.
+        {
+            let c = e.curve.as_mut().unwrap();
+            let last = c.points.len() - 1;
+            c.weights[last] = (2.0, 1.0);
+            c.weights[0] = (1.0, 0.2);
+            c.selected = Some(last);
+        }
+        e.update_curve();
+        let c = e.curve.as_ref().unwrap();
+        let shaped = c.preview.positions.clone();
+        let moved = |p: &[Vec3]| p.iter().zip(&before).filter(|(a, b)| a.distance(**b) > 1e-5).count();
+        assert_ne!(shaped, even, "weights change the result");
+        assert!(moved(&shaped) > moved(&even), "a bigger point reaches more of the surface");
+        // Weights blend smoothly from point to point.
+        let (a, b) = (c.weight_at(0.0), c.weight_at((c.points.len() - 1) as f32));
+        assert_eq!((a, b), ((1.0, 0.2), (2.0, 1.0)));
+        let mid = c.weight_at(0.5);
+        assert!(mid.1 > 0.2 && mid.1 < 1.0);
+        assert!(e.curve_point_radius_px(c.points.len() - 1).unwrap() > 0.0);
+        // Accept still gives exactly the preview.
+        e.accept_curve();
+        assert_eq!(e.scene.active().mesh.positions, shaped);
+    }
+
+    #[test]
+    fn ctrl_z_undoes_curve_edits_while_the_curve_is_open() {
+        let mut e = editor();
+        draw_curve(&mut e);
+        e.update_curve();
+        let original = e.curve.as_ref().unwrap().points.clone();
+        // An edit (moving a point), recorded once it's done.
+        e.curve.as_mut().unwrap().points[0].0 += Vec3::Y * 0.05;
+        e.update_curve();
+        let moved = e.curve.as_ref().unwrap().points.clone();
+        // A second edit: closing it.
+        e.curve.as_mut().unwrap().closed = true;
+        e.update_curve();
+        let revision = e.history.revision();
+
+        e.undo();
+        assert!(!e.curve.as_ref().unwrap().closed, "undid closing");
+        e.undo();
+        assert_eq!(e.curve.as_ref().unwrap().points, original, "undid the move");
+        e.undo();
+        assert!(e.status.contains("Nothing to undo"), "{}", e.status);
+        assert!(e.curve.is_some(), "the curve stays open");
+        e.redo();
+        assert_eq!(e.curve.as_ref().unwrap().points, moved);
+        assert_eq!(e.history.revision(), revision, "the document history wasn't touched");
+        // Mid-drag nothing is recorded; the whole drag is one step.
+        e.curve.as_mut().unwrap().ui_dragging = true;
+        e.curve.as_mut().unwrap().fade_in = 0.4;
+        e.update_curve();
+        e.curve.as_mut().unwrap().fade_in = 0.45;
+        e.update_curve();
+        e.curve.as_mut().unwrap().ui_dragging = false;
+        e.update_curve();
+        e.undo();
+        assert_eq!(e.curve.as_ref().unwrap().fade_in, e.curve_fade_in, "one step back to before the drag");
+    }
+
+    #[test]
+    fn closed_curves_loop_without_fades() {
+        let mut e = editor();
+        draw_curve(&mut e);
+        e.update_curve();
+        let open = e.curve.as_ref().unwrap().preview.positions.clone();
+        {
+            let c = e.curve.as_mut().unwrap();
+            assert!(c.points.len() >= 3);
+            c.closed = true;
+        }
+        e.update_curve();
+        let c = e.curve.as_ref().unwrap();
+        assert_ne!(c.preview.positions, open, "the closing segment is applied too");
+        let pts = curve_points(&c.points, true, 0.01);
+        let (first, last) = (pts.first().unwrap().0, pts.last().unwrap().0);
+        assert!(first.distance(last) < 1e-4, "a loop ends where it starts");
+        // Two points can't make a loop; it stays open.
+        let two = [(Vec3::ZERO, Vec3::Y), (Vec3::X, Vec3::Y)];
+        let line = curve_points(&two, true, 0.1);
+        assert!(line.last().unwrap().0.distance(Vec3::X) < 1e-4);
+    }
+
+    #[test]
     fn curve_helpers_simplify_and_fade() {
         let path: Vec<Vec2> = (0..100).map(|i| Vec2::new(i as f32, 0.0)).collect();
         assert_eq!(simplify_path(&path, 2.0, 16).len(), 2, "a straight line needs only its ends");
@@ -4729,9 +5113,9 @@ mod tests {
         assert!(curve_fade(0.1, 0.2, 0.2) > 0.0 && curve_fade(0.1, 0.2, 0.2) < 1.0);
         // The curve passes through its points.
         let pts = [(Vec3::ZERO, Vec3::Y), (Vec3::X, Vec3::Y), (Vec3::new(2.0, 1.0, 0.0), Vec3::Y)];
-        let s = curve_points(&pts, 0.05);
+        let s = curve_points(&pts, false, 0.05);
         for (p, _) in pts {
-            assert!(s.iter().any(|(q, _, _)| q.distance(p) < 1e-4));
+            assert!(s.iter().any(|(q, _, _, _)| q.distance(p) < 1e-4));
         }
         assert_eq!(s.first().unwrap().2, 0.0);
         assert!((s.last().unwrap().2 - 1.0).abs() < 1e-6);
@@ -4755,6 +5139,35 @@ mod tests {
             _ => panic!("expected a stabilized stroke"),
         }
         e.pointer_up();
+    }
+
+    #[test]
+    fn two_point_pressure_shape() {
+        // Straight by default: no change at all.
+        for i in 0..=20 {
+            let x = i as f32 / 20.0;
+            assert!((shape_pressure(x, LINEAR_PRESSURE_SHAPE) - x).abs() < 1e-3, "{x}");
+        }
+        // An S curve: gentle at both ends, steep in the middle, never decreasing.
+        let s = [0.45, 0.05, 0.55, 0.95];
+        assert!(shape_pressure(0.2, s) < 0.1 && shape_pressure(0.8, s) > 0.9);
+        assert!((shape_pressure(0.5, s) - 0.5).abs() < 0.02);
+        let mut last = 0.0;
+        for i in 0..=100 {
+            let y = shape_pressure(i as f32 / 100.0, s);
+            assert!(y + 1e-4 >= last && (0.0..=1.0).contains(&y));
+            last = y;
+        }
+        // Out-of-range points are clamped, not trusted.
+        assert!(shape_pressure(0.5, [9.0, -3.0, f32::NAN, 2.0]).is_finite());
+        // The editor's pressure goes through it.
+        let mut e = editor();
+        (e.pressure, e.pressure_shape) = (0.2, s);
+        assert!(e.pressure() < 0.1);
+        use crate::settings::Settings;
+        let back = Settings::from_text(&Settings { pressure_shape: s, ..Settings::default() }.to_text());
+        assert_eq!(back.pressure_shape, s);
+        assert_eq!(Settings::from_text("pressure_shape = 2, 0, 0, 1\n").pressure_shape, LINEAR_PRESSURE_SHAPE);
     }
 
     #[test]
@@ -5209,9 +5622,11 @@ mod tests {
             wireframe_color: [0.2, 0.22, 0.25],
             stroke_from_empty: true,
             hold_to_curve: false,
+            hold_to_curve_ask: true,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
+            pressure_shape: LINEAR_PRESSURE_SHAPE,
             surface_cursor: true,
             floor_grid: false,
             hide_cursor_during_stroke: false,

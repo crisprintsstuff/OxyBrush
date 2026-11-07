@@ -52,7 +52,7 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
         keywords: "tablet pen stylus side button barrel windows ink pressure curve sensitivity firm soft wacom huion kamvas xppen x11 wayland linux cachy",
         body: "OxyBrush supports pressure-sensitive stylus and drawing tablets (Wacom, Huion, XP-Pen, etc.).\n\n\
 - Stylus pressure controls brush strength, and can also modulate brush radius when enabled in the brush settings.\n\
-- Preferences > Pen & tablet sets how pressure feels: the curve shape, Lightest touch (the strength of a very light stroke) and Full pressure at (how hard you press for full strength), with Soft, Linear and Firm presets. While you draw, a dot shows your pen on the curve. If your tablet driver has its own pressure curve, keep that one straight so the two don't add up.\n\
+- Preferences > Pen & tablet sets how pressure feels: drag the two points on the curve (an S shape gives fine control at both ends; double-click to straighten), the curve bend, Lightest touch (the strength of a very light stroke) and Full pressure at (how hard you press for full strength), with Soft, Linear and Firm presets. While you draw, a dot shows your pen on the curve. If your tablet driver has its own pressure curve, keep that one straight so the two don't add up.\n\
 - Pen side buttons can be mapped to right-click (quick menu), middle-click (navigation/scrolling), or modifier keys in your tablet driver.\n\
 - On Windows with Windows Ink, the pen's side button already acts as the right mouse button: a tap opens the quick menu, and with the Right-drag orbit preset (Settings > Keymap) holding it while you drag orbits the view and Ctrl + side button zooms.\n\
 - On Linux under Wayland compositors (CachyOS, KDE Wayland, GNOME Wayland, Hyprland), drawing tablets require the X11/XWayland backend because native Wayland tablet events are not exposed to winit. OxyBrush automatically detects connected tablets and defaults to the X11 backend when available. You can also manually force X11 mode by starting with `oxybrush --x11` (or `oxybrush --backend x11`), or by setting `OXY_BACKEND=x11`.",
@@ -88,7 +88,8 @@ Everything in the palette is also in the menus; the palette just saves you looki
 - Line draws a straight line from where you press to where you release.\n\
 - Stamp places a single dab: drag out from where you press to size it (good with alphas).\n\
 - Curve draws a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the Fade in / Fade out sliders update it live. Accept (Enter) applies it as one undo step, as does starting the next stroke; Cancel (Esc) discards it. You can orbit around it while it is open.\n\
-- In Freehand mode, hold the pen or mouse still for about half a second while drawing: a ring fills up at the cursor and the stroke becomes a curve; keep moving to extend it. Turn this off with Hold to adjust in the Stroke section.\n\n\
+- In Freehand mode, hold the pen or mouse still for about half a second while drawing: a ring fills up at the cursor and the stroke becomes a curve; keep moving to extend it. Turn this off with Hold to adjust in the Stroke section, or tick Ask first to be asked each time.\n\
+- While a curve is open, click a point to give it its own size and strength (a ring shows the size), tick Join the ends for a loop, and use Ctrl+Z / Ctrl+Shift+Z to undo and redo your curve edits.\n\n\
 The Spray slider scatters dabs around the stroke. The Stabilizer slider makes the brush trail behind the pointer for smooth, controlled lines. Alphas shape each dab: pick one in the Alpha section, or load your own grayscale PNG.",
     },
     Topic {
