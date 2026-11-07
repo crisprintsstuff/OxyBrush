@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="2.5.6-beta" date="2026-11-07" type="development">
+      <description>
+        <p>New Midnight theme: deep navy panels with thin blue outlines and
+        soft shadows, plus a Pill corner style for fully rounded buttons and
+        fields. The Midnight quick preset applies both with the emerald accent
+        and a navy viewport. Documentation brought up to date.</p>
+      </description>
+    </release>
     <release version="2.5.5-beta" date="2026-11-07" type="development">
       <description>
         <p>Fixes: the Insert Primitives brush shows the shape growing as you
