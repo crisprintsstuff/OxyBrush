@@ -13,6 +13,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **`VMAP` project section:** for each vertex of a loaded piece, its index in the file the piece was first loaded from (OxyBrush reorders vertices on load), so a program like OxyCharacter can match vertices exactly. Written only while the piece's topology is unchanged and it has no subdivision levels; older versions skip it.
 
 ### Fixed
+- **Side panels keep their width ([#80](https://github.com/crisprintsstuff/OxyBrush/issues/80)):** the settings panel no longer grows and shrinks as sections open and close; drag its edge to resize it.
+- **Pen pressure in the Linux Flatpak ([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)):** the Flatpak only had X11 as a fallback, so on a Wayland desktop OxyBrush couldn't switch to X11 for a connected tablet, and pen pressure was lost. It now has the X11 socket too.
 - **macOS: pen pressure from drawing tablets ([#70](https://github.com/crisprintsstuff/OxyBrush/issues/70)):** pressure from Wacom, Huion, XP-Pen and other tablets had no effect on macOS; the brush always used full pressure. The windowing library only passed on trackpad Force Touch pressure; the bundled winit now also forwards the pen's pressure (a third small patch, see `third_party/README.md`).
 
 ## [2.5.7-beta] - 2026-11-07

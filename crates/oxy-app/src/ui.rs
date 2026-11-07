@@ -543,7 +543,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ui.horizontal(|ui| touch_modifier_buttons(ui, ed, w));
                     }
                     ui.separator();
-                    egui::ScrollArea::vertical().show(ui, |ui| brush_shelf(ui, ed, false));
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| brush_shelf(ui, ed, false));
                 });
             }
         }
@@ -553,7 +553,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
         inspector_panel.resizable(true).default_size(m.inspector_width).show(ui, |ui| {
-            egui::ScrollArea::vertical().show(ui, |ui| inspector(ui, ed, busy));
+            // Fill the panel's width whatever is open: a scroll area that
+            // shrinks to its content made the panel grow and shrink as
+            // sections opened and closed (#80). Dragging its edge still
+            // resizes it.
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
         });
         view_strip(ui, ed);
     }
