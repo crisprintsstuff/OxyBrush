@@ -631,6 +631,7 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
                         let text = tab.label();
                         let tip = match tab {
                             crate::editor::SettingsTab::General => plain::SETTINGS,
+                            crate::editor::SettingsTab::Pen => plain::PEN_SETTINGS,
                             crate::editor::SettingsTab::Appearance => "Theme, accent color, wireframe, and background",
                             crate::editor::SettingsTab::Plugins => plain::PLUGINS,
                             crate::editor::SettingsTab::Keymap => plain::KEYMAP_SETTINGS,
@@ -654,6 +655,7 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
                             ui.add_space(4.0);
                             match ed.settings_tab {
                                 crate::editor::SettingsTab::General => settings_general_tab(ui, ed),
+                                crate::editor::SettingsTab::Pen => settings_pen_tab(ui, ed),
                                 crate::editor::SettingsTab::Appearance => settings_appearance_tab(ui, ed),
                                 crate::editor::SettingsTab::Plugins => settings_plugins_tab(ui, ed),
                                 crate::editor::SettingsTab::Keymap => settings_keymap_tab(ui, ed),
@@ -2698,18 +2700,93 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// Small plot of the pressure response curve.
-fn pressure_curve_plot(ui: &mut Ui, gamma: f32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(36.0, 24.0), egui::Sense::hover());
+/// The pen pressure curve: pen pressure across, brush strength up. With
+/// `live`, the pen's current pressure is marked on the curve.
+fn pressure_curve_plot(ui: &mut Ui, ed: &Editor, size: egui::Vec2) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let p = ui.painter();
+    let faint = ui.visuals().widgets.noninteractive.bg_stroke.color;
     p.rect_stroke(rect, 2.0, EStroke::new(1.0, Color32::from_gray(80)), egui::StrokeKind::Inside);
-    let pts: Vec<egui::Pos2> = (0..=16)
-        .map(|i| {
-            let x = i as f32 / 16.0;
-            egui::pos2(rect.left() + x * rect.width(), rect.bottom() - x.powf(gamma) * rect.height())
-        })
-        .collect();
-    p.add(egui::Shape::line(pts, EStroke::new(1.5, ui.visuals().selection.stroke.color)));
+    let to_screen = |x: f32, y: f32| egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height());
+    if size.x >= 100.0 {
+        for t in [0.25, 0.5, 0.75] {
+            p.line_segment([to_screen(t, 0.0), to_screen(t, 1.0)], EStroke::new(1.0, faint));
+            p.line_segment([to_screen(0.0, t), to_screen(1.0, t)], EStroke::new(1.0, faint));
+        }
+        p.line_segment([to_screen(0.0, 0.0), to_screen(1.0, 1.0)], EStroke::new(1.0, faint.linear_multiply(1.6)));
+    }
+    let curve = |x: f32| crate::editor::map_pressure(x, ed.pressure_gamma, ed.pressure_min, ed.pressure_full);
+    let n = if size.x >= 100.0 { 64 } else { 16 };
+    let pts: Vec<egui::Pos2> = (0..=n).map(|i| i as f32 / n as f32).map(|x| to_screen(x, curve(x))).collect();
+    let accent = ui.visuals().selection.stroke.color;
+    p.add(egui::Shape::line(pts, EStroke::new(1.5, accent)));
+    if size.x >= 100.0 && ed.pen_active() {
+        let x = ed.pressure.clamp(0.0, 1.0);
+        p.circle_filled(to_screen(x, curve(x)), 4.0, accent);
+    }
     response
+}
+
+fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Pen & tablet");
+    ui.label(RichText::new(plain::PEN_SETTINGS).weak().small());
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let plot = pressure_curve_plot(ui, ed, egui::vec2(180.0, 180.0));
+        tips::hover(plot, plain::PRESSURE_PLOT);
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Presets").strong());
+            for (name, tip, gamma, min, full) in [
+                ("Soft", plain::PRESSURE_SOFT, 0.6, 0.05, 0.85),
+                ("Linear", plain::PRESSURE_LINEAR, 1.0, 0.0, 1.0),
+                ("Firm", plain::PRESSURE_FIRM, 1.8, 0.0, 1.0),
+            ] {
+                let current = (ed.pressure_gamma - gamma).abs() < 1e-3
+                    && (ed.pressure_min - min).abs() < 1e-3
+                    && (ed.pressure_full - full).abs() < 1e-3;
+                if tips::hover(ui.selectable_label(current, name), tip).clicked() {
+                    (ed.pressure_gamma, ed.pressure_min, ed.pressure_full) = (gamma, min, full);
+                }
+            }
+            ui.add_space(8.0);
+            ui.label(RichText::new("Try it").strong());
+            if ed.pen_active() {
+                ui.label(format!("Pen {:.2} → brush {:.2}", ed.pressure.clamp(0.0, 1.0), ed.pressure()));
+                ui.ctx().request_repaint();
+            } else {
+                ui.label(RichText::new(plain::PRESSURE_TRY).weak().small());
+            }
+        });
+    });
+    ui.add_space(8.0);
+    egui::Grid::new("pen_pressure_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        ui.label("Curve");
+        tips::hover(
+            ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true)),
+            plain::PRESSURE_CURVE,
+        );
+        ui.end_row();
+        ui.label("Lightest touch");
+        tips::hover(
+            ui.add(
+                egui::Slider::new(&mut ed.pressure_min, 0.0..=0.5)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            ),
+            plain::PRESSURE_MIN,
+        );
+        ui.end_row();
+        ui.label("Full pressure at");
+        tips::hover(
+            ui.add(
+                egui::Slider::new(&mut ed.pressure_full, 0.3..=1.0)
+                    .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+            ),
+            plain::PRESSURE_FULL,
+        );
+        ui.end_row();
+    });
+    ui.add_space(6.0);
+    ui.label(RichText::new(plain::PRESSURE_DRIVER).weak().small());
 }
 
 /// Preview of an alpha (texture cached per alpha name).
@@ -3173,7 +3250,10 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
                 ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true)),
                 plain::PRESSURE_CURVE,
             );
-            tips::hover(pressure_curve_plot(ui, ed.pressure_gamma), plain::PRESSURE_CURVE);
+            let plot = pressure_curve_plot(ui, ed, egui::vec2(36.0, 24.0)).interact(egui::Sense::click());
+            if tips::hover(plot, plain::PRESSURE_MORE).clicked() {
+                ed.open_settings(crate::editor::SettingsTab::Pen);
+            }
         });
         ui.end_row();
     });
