@@ -2,7 +2,8 @@
 
 - **Status:** proposed for the maintainer; implemented in the same change for review
 - **Requested by:** a user, after seeing a feature like this in another sculpting app.
-  Only the idea was taken; no documentation, code or UI of that app was consulted
+  Only the behaviour was taken, from a short clip of a public tutorial video the
+  user shared: no documentation, code, UI layout or assets of that app were used
   (see [CLEAN_ROOM.md](../CLEAN_ROOM.md)).
 
 ## Problem
