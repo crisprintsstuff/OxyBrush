@@ -7,8 +7,8 @@ use objc2::rc::{Retained, WeakId};
 use objc2::runtime::{AnyObject, Sel};
 use objc2::{declare_class, msg_send_id, mutability, sel, ClassType, DeclaredClass};
 use objc2_app_kit::{
-    NSApplication, NSCursor, NSEvent, NSEventPhase, NSResponder, NSTextInputClient,
-    NSTrackingRectTag, NSView, NSViewFrameDidChangeNotification,
+    NSApplication, NSCursor, NSEvent, NSEventPhase, NSEventSubtype, NSEventType, NSResponder,
+    NSTextInputClient, NSTrackingRectTag, NSView, NSViewFrameDidChangeNotification,
 };
 use objc2_foundation::{
     MainThreadMarker, NSArray, NSAttributedString, NSAttributedStringKey, NSCopying,
@@ -755,6 +755,13 @@ declare_class!(
             });
         }
 
+        // OxyBrush patch: some tablet drivers send pen positions as separate
+        // tablet-point events; forward their pressure (see `tablet_pressure`).
+        #[method(tabletPoint:)]
+        fn tablet_point(&self, event: &NSEvent) {
+            self.tablet_pressure(event);
+        }
+
         #[method(pressureChangeWithEvent:)]
         fn pressure_change_with_event(&self, event: &NSEvent) {
             trace_scope!("pressureChangeWithEvent:");
@@ -1079,10 +1086,42 @@ impl WinitView {
 
         self.update_modifiers(event, false);
 
+        // OxyBrush patch: pen pressure before and after the move, so it is
+        // current both for a stroke in progress and for the press that
+        // starts one (an app may reset pressure on a move while not drawing).
+        self.tablet_pressure(event);
         self.queue_event(WindowEvent::CursorMoved {
             device_id: DEVICE_ID,
             position: view_point.to_physical(self.scale_factor()),
         });
+        self.tablet_pressure(event);
+    }
+
+    /// OxyBrush patch. Upstream winit 0.30 reports pressure only for
+    /// Force Touch trackpads (`pressureChangeWithEvent:`). Drawing tablets
+    /// (Wacom, Huion, XP-Pen…) deliver it inside mouse events with the
+    /// tablet-point subtype, or as tablet-point events, and it was dropped,
+    /// so pen pressure never reached the application. Report it as
+    /// `TouchpadPressure` (0..=1, stage 0), which the application already
+    /// treats as pen pressure.
+    fn tablet_pressure(&self, event: &NSEvent) {
+        let is_tablet = unsafe {
+            event.r#type() == NSEventType::TabletPoint
+                || (matches!(
+                    event.r#type(),
+                    NSEventType::LeftMouseDown
+                        | NSEventType::LeftMouseUp
+                        | NSEventType::LeftMouseDragged
+                        | NSEventType::MouseMoved
+                ) && event.subtype() == NSEventSubtype::TabletPoint)
+        };
+        if is_tablet {
+            self.queue_event(WindowEvent::TouchpadPressure {
+                device_id: DEVICE_ID,
+                pressure: unsafe { event.pressure() },
+                stage: 0,
+            });
+        }
     }
 }
 
