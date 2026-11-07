@@ -75,6 +75,21 @@ impl StrokeMode {
     }
 }
 
+/// How long the pointer must stay still during a freehand stroke before
+/// the stroke turns into an editable curve.
+pub const HOLD_TO_CURVE: std::time::Duration = std::time::Duration::from_millis(550);
+
+/// A freehand stroke that may become a curve: its path so far (physical
+/// px) and where and since when the pointer has been still.
+#[derive(Debug, Clone)]
+pub struct HoldWatch {
+    pub kind: BrushKind,
+    pub invert: bool,
+    pub path: Vec<Vec2>,
+    pub still_at: Vec2,
+    pub still_since: std::time::Instant,
+}
+
 /// A curve stroke being adjusted (see [`StrokeMode::Curve`]). The brush is
 /// applied along a smooth curve through `points` to a copy of the piece,
 /// drawn in its place; the piece itself and the undo history are only
@@ -362,6 +377,9 @@ pub enum Drag {
         lazy: Option<Vec2>,
         /// Last pointer position queued for the next frame redraw if coalescing is on.
         queued: Option<Vec2>,
+        /// Freehand strokes that may turn into a curve when the pointer is
+        /// held still (see [`Editor::tick_hold`]).
+        hold: Option<Box<HoldWatch>>,
     },
     /// Drawing a curve stroke: the pointer path in physical px.
     CurveDraw {
@@ -668,6 +686,9 @@ pub struct Editor {
     /// Let a drag on empty space start a stroke when it reaches the model
     /// (orbit with the middle mouse button instead).
     pub stroke_from_empty: bool,
+    /// Holding the pointer still during a freehand stroke turns it into an
+    /// editable curve.
+    pub hold_to_curve: bool,
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
@@ -891,6 +912,7 @@ impl Default for Editor {
             quick_menu_key: None,
             rmb_press: None,
             stroke_from_empty: false,
+            hold_to_curve: true,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
@@ -1163,6 +1185,7 @@ impl Editor {
             wireframe_opacity: self.view.wireframe_opacity,
             wireframe_color: self.view.wireframe_color,
             stroke_from_empty: self.stroke_from_empty,
+            hold_to_curve: self.hold_to_curve,
             pressure_gamma: self.pressure_gamma,
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
@@ -1307,6 +1330,7 @@ impl Editor {
         self.view.background = s.background;
         self.view.background_center = s.background_center;
         self.stroke_from_empty = s.stroke_from_empty;
+        self.hold_to_curve = s.hold_to_curve;
         self.pressure_gamma = s.pressure_gamma;
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
@@ -1550,7 +1574,17 @@ impl Editor {
         let history = &mut self.history;
         stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
         let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
-        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None };
+        // Brushes that could be drawn as a curve may turn into one if the
+        // pointer is held still.
+        let curve_capable = self.stroke_mode == StrokeMode::Freehand
+            && !(kind.is_grab_like()
+                || kind == BrushKind::SnakeHook
+                || kind == BrushKind::Smooth
+                || self.brush_roles().ctrl);
+        let hold = (self.hold_to_curve && curve_capable).then(|| {
+            Box::new(HoldWatch { kind, invert, path: vec![p], still_at: p, still_since: std::time::Instant::now() })
+        });
+        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None, hold };
     }
 
     /// A pen is drawing right now, so its pressure is live.
@@ -1771,6 +1805,15 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
+        if let Drag::Stroke { hold: Some(h), .. } = &mut self.drag {
+            if h.path.last().is_none_or(|l| l.distance(pos) > 2.0) {
+                h.path.push(pos);
+            }
+            if pos.distance(h.still_at) > 4.0 * self.pixels_per_point.max(0.5) {
+                h.still_at = pos;
+                h.still_since = std::time::Instant::now();
+            }
+        }
         let delta = prev.map_or(Vec2::ZERO, |p| pos - p);
         let size = self.canvas_size();
         match &mut self.drag {
@@ -2808,6 +2851,46 @@ impl Editor {
             self.accept_curve();
         }
         false
+    }
+
+    /// While a freehand stroke may turn into a curve: how long the pointer
+    /// has been still, as a fraction of the hold time (for the cursor).
+    pub fn hold_progress(&self, now: std::time::Instant) -> Option<f32> {
+        match &self.drag {
+            Drag::Stroke { hold: Some(h), .. } if self.hold_reaches(h) => {
+                Some(now.saturating_duration_since(h.still_since).as_secs_f32() / HOLD_TO_CURVE.as_secs_f32())
+            }
+            _ => None,
+        }
+    }
+
+    /// A press-and-hold without drawing anything isn't a curve.
+    fn hold_reaches(&self, h: &HoldWatch) -> bool {
+        let reach = 12.0 * self.pixels_per_point.max(0.5);
+        h.path.iter().any(|q| q.distance(h.path[0]) > reach)
+    }
+
+    /// Called every frame: when the pointer has been held still long enough
+    /// during a freehand stroke, take the stroke back and turn its path into
+    /// an editable curve; the press now drags the curve's end, so moving on
+    /// extends and reshapes it. True if it did.
+    pub fn tick_hold(&mut self, now: std::time::Instant) -> bool {
+        let Drag::Stroke { hold: Some(h), .. } = &self.drag else { return false };
+        if now.saturating_duration_since(h.still_since) < HOLD_TO_CURVE || !self.hold_reaches(h) {
+            return false;
+        }
+        let Drag::Stroke { hold: Some(h), .. } = std::mem::replace(&mut self.drag, Drag::None) else {
+            unreachable!("checked above")
+        };
+        self.history.revert_pending(&mut self.scene);
+        self.begin_curve(h.kind, h.invert, &h.path);
+        if let Some(c) = &self.curve {
+            self.drag = Drag::CurveHandle { index: c.points.len() - 1 };
+            self.status = "Curve: keep moving to extend it, release, then drag its points; Enter applies it".into();
+            true
+        } else {
+            false
+        }
     }
 
     /// Rebuild the curve preview if anything it depends on changed, or
@@ -4563,6 +4646,78 @@ mod tests {
     }
 
     #[test]
+    fn holding_still_turns_a_freehand_stroke_into_a_curve() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer = Some(Vec2::new(330.0, 320.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=30 {
+            e.pointer_moved(Vec2::new(330.0 + i as f32 * 3.0, 320.0 - (i as f32 * 0.2).sin() * 20.0));
+        }
+        assert_ne!(e.scene.active().mesh.positions, before, "a normal stroke while moving");
+        assert!(!e.tick_hold(Instant::now()), "not still long enough yet");
+        assert!(e.hold_progress(Instant::now()).is_some());
+
+        // Held still: the stroke is taken back and becomes a curve whose end
+        // follows the pointer.
+        assert!(e.tick_hold(Instant::now() + HOLD_TO_CURVE * 2));
+        assert_eq!(e.scene.active().mesh.positions, before, "the freehand stroke was taken back");
+        assert!(!e.history.can_undo(), "and left no undo step");
+        let n = e.curve.as_ref().expect("a curve").points.len();
+        assert!(matches!(e.drag, Drag::CurveHandle { index } if index == n - 1));
+        let end = Vec2::new(470.0, 280.0);
+        e.pointer_moved(end);
+        e.pointer_up();
+        let size = e.canvas_size();
+        let last = e.camera.project(e.curve.as_ref().unwrap().points[n - 1].0, size).unwrap();
+        assert!(last.distance(end) < 2.0, "moving on drags the end");
+
+        // From here it is a curve stroke: Enter (accept) applies it once.
+        e.accept_curve();
+        assert_ne!(e.scene.active().mesh.positions, before);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn hold_needs_a_drawn_stroke_the_setting_and_a_curve_capable_brush() {
+        // Pressing and holding without drawing anything stays a stroke.
+        let mut e = editor();
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(402.0, 301.0));
+        assert!(!e.tick_hold(Instant::now() + HOLD_TO_CURVE * 2));
+        e.pointer_up();
+        assert!(e.curve.is_none());
+
+        let draw = |e: &mut Editor| {
+            e.pointer = Some(Vec2::new(340.0, 300.0));
+            e.pointer_down(PointerButton::Primary);
+            for i in 1..=20 {
+                e.pointer_moved(Vec2::new(340.0 + i as f32 * 4.0, 300.0));
+            }
+            let converted = e.tick_hold(Instant::now() + HOLD_TO_CURVE * 2);
+            e.pointer_up();
+            converted
+        };
+        // Switched off in the Stroke section.
+        let mut e = editor();
+        e.hold_to_curve = false;
+        assert!(!draw(&mut e));
+        // Moving brushes always stay freehand.
+        let mut e = editor();
+        e.brush_kind = BrushKind::Grab;
+        assert!(!draw(&mut e));
+        // Line mode has its own behaviour.
+        let mut e = editor();
+        e.stroke_mode = StrokeMode::Line;
+        assert!(!draw(&mut e));
+        // And the default: it does.
+        let mut e = editor();
+        assert!(draw(&mut e));
+    }
+
+    #[test]
     fn curve_helpers_simplify_and_fade() {
         let path: Vec<Vec2> = (0..100).map(|i| Vec2::new(i as f32, 0.0)).collect();
         assert_eq!(simplify_path(&path, 2.0, 16).len(), 2, "a straight line needs only its ends");
@@ -5053,6 +5208,7 @@ mod tests {
             wireframe_opacity: 0.8,
             wireframe_color: [0.2, 0.22, 0.25],
             stroke_from_empty: true,
+            hold_to_curve: false,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
