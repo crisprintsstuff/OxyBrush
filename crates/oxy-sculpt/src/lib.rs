@@ -552,6 +552,9 @@ pub struct Stroke {
     /// Paint brush color (sRGB).
     paint: Vec3,
     rng: u64,
+    /// Size and strength multipliers for the next samples (see
+    /// [`Stroke::set_modulation`]).
+    modulation: (f32, f32),
     budget: Option<DabBudget>,
     strength_scale: f32,
 }
@@ -573,6 +576,7 @@ impl Stroke {
             grab_through: false,
             paint: Vec3::ONE,
             rng: 0x9e37_79b9_7f4a_7c15,
+            modulation: (1.0, 1.0),
             budget: None,
             strength_scale: 1.0,
         }
@@ -629,6 +633,14 @@ impl Stroke {
         self.rng ^= self.rng >> 7;
         self.rng ^= self.rng << 17;
         (self.rng >> 40) as f32 / (1u64 << 24) as f32
+    }
+
+    /// Scale the brush size and strength of the dabs placed by the next
+    /// samples (1.0, 1.0 = as set). Used by curve strokes for per-point size
+    /// and strength and the fades; it applies whatever the pen-pressure
+    /// options are.
+    pub fn set_modulation(&mut self, size: f32, strength: f32) {
+        self.modulation = (size.max(0.0), strength.max(0.0));
     }
 
     pub fn settings(&self) -> &BrushSettings {
@@ -689,6 +701,7 @@ impl Stroke {
             if self.settings.pressure_radius { self.settings.radius * (0.2 + 0.8 * p) } else { self.settings.radius };
         let strength =
             if self.settings.pressure_strength { self.settings.strength * p } else { self.settings.strength };
+        let (radius, strength) = (radius * self.modulation.0, strength * self.modulation.1);
         let drag = self.last_dab.map_or(Vec3::ZERO, |l| s.position - l);
         // Direction in the tangent plane.
         let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
@@ -1361,6 +1374,22 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn modulation_scales_dab_size_and_strength() {
+        let base = BrushSettings { kind: BrushKind::Draw, radius: 0.3, strength: 0.5, ..Default::default() };
+        let mut s = Stroke::new(base, Symmetry::default(), false);
+        let sample = StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 };
+        let plain = s.make_dab(sample);
+        s.set_modulation(2.0, 0.25);
+        let scaled = s.make_dab(sample);
+        assert!((scaled.radius - plain.radius * 2.0).abs() < 1e-6);
+        assert!((scaled.strength - plain.strength * 0.25).abs() < 1e-6);
+        // Applies even when pen pressure doesn't drive strength.
+        let mut t = Stroke::new(BrushSettings { pressure_strength: false, ..base }, Symmetry::default(), false);
+        t.set_modulation(1.0, 0.0);
+        assert_eq!(t.make_dab(sample).strength, 0.0);
+    }
     use oxy_mesh::primitives;
     use std::collections::HashMap;
 

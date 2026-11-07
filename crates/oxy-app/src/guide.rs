@@ -88,7 +88,8 @@ Everything in the palette is also in the menus; the palette just saves you looki
 - Line draws a straight line from where you press to where you release.\n\
 - Stamp places a single dab: drag out from where you press to size it (good with alphas).\n\
 - Curve draws a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the Fade in / Fade out sliders update it live. Accept (Enter) applies it as one undo step, as does starting the next stroke; Cancel (Esc) discards it. You can orbit around it while it is open.\n\
-- In Freehand mode, hold the pen or mouse still for about half a second while drawing: a ring fills up at the cursor and the stroke becomes a curve; keep moving to extend it. Turn this off with Hold to adjust in the Stroke section.\n\n\
+- In Freehand mode, hold the pen or mouse still for about half a second while drawing: a ring fills up at the cursor and the stroke becomes a curve; keep moving to extend it. Turn this off with Hold to adjust in the Stroke section, or tick Ask first to be asked each time.\n\
+- While a curve is open, click a point to give it its own size and strength (a ring shows the size), tick Join the ends for a loop, and use Ctrl+Z / Ctrl+Shift+Z to undo and redo your curve edits.\n\n\
 The Spray slider scatters dabs around the stroke. The Stabilizer slider makes the brush trail behind the pointer for smooth, controlled lines. Alphas shape each dab: pick one in the Alpha section, or load your own grayscale PNG.",
     },
     Topic {
