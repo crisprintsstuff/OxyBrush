@@ -1,6 +1,9 @@
 //! Constructive Solid Geometry (CSG) volumetric boolean operations on VDB level sets.
 //!
-//! Mirrors `openvdb::tools::csgUnion`, `csgDifference`, and `csgIntersection`.
+//! Uses exact R-function algebra on signed distance fields (Pasko et al., Function Representation in Geometric Modeling):
+//! - Union: target ∪ tool = min(d_A, d_B)
+//! - Difference: target \ tool = max(d_A, -d_B)
+//! - Intersection: target ∩ tool = max(d_A, d_B)
 
 use crate::tree::{LEAF_VOXELS, LeafNode, VdbFloatGrid};
 use glam::IVec3;

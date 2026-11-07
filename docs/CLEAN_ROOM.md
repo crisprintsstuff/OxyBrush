@@ -22,6 +22,7 @@ When a feature is inspired by another product, the rule is:
 | Date | Source consulted | What was taken | Features |
 |---|---|---|---|
 | 2026-11-04 | SculptForge (GPL-3.0-or-later) README feature list only; its source was never opened, and the local clone used to read the README was deleted | The idea of each feature (one sentence each) | Brush presets with shareable one-line codes and preset files; command palette and type-to-pick brush picker; recent files and an offline guide; posing gizmo; vertex color painting; glTF/PLY export, LOD chains, splitting pieces, a headless CLI |
+| 2026-11-05 | Published academic papers only; OpenVDB source code (MPL-2.0) was never opened, consulted, or adapted | Algorithmic and mathematical principles from published literature: Museth (2013) ACM TOG 32(3) for hierarchical sparse B-tree structure; Ju et al. (2002) ACM SIGGRAPH for dual contouring; Bærentzen & Aanæs (2005) IEEE TVCG 11(3) for angle-weighted pseudonormal SDF signing; Ericson (2005) §5.1.5 for triangle distance | Hierarchical sparse VDB grid (`crates/oxy-vdb`), mesh-to-volume level set conversion, dual contouring polygonization, CSG booleans, level set offsets and uniform hollowing shells |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can

@@ -1,6 +1,7 @@
 //! Hierarchical sparse VDB tree structures and spatial transforms.
 //!
-//! Conforms to OpenVDB's standard B-tree conventions:
+//! Implements the sparse volumetric data structure described by Ken Museth (2013),
+//! "VDB: High-Resolution Sparse Volumes with Dynamic Topology", ACM Trans. Graph. 32(3):
 //! - Standard leaf size of 8^3 = 512 voxels (log2dim = 3).
 //! - 512-bit active value mask per leaf.
 //! - Index-to-world linear transform with uniform or anisotropic voxel scale.

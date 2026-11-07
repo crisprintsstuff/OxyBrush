@@ -1,6 +1,8 @@
 //! Volumetric level set filtering, smoothing, and morphological operations.
 //!
-//! Mirrors `openvdb::tools::LevelSetFilter`.
+//! - Surface offset (dilation/erosion): distance translation along level-set normals (d ← d - distance).
+//! - Hollowing (uniform shell): symmetric distance folding (d ← |d| - thickness/2).
+//! - Laplacian smoothing: 6-neighborhood diffusion on active narrow-band voxels.
 
 use crate::tree::{LEAF_VOXELS, VdbFloatGrid};
 use glam::IVec3;

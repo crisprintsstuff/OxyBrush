@@ -1,4 +1,9 @@
-//! Conversion of polygon meshes into narrow-band VDB level-set grids (`meshToLevelSet`).
+//! Conversion of polygon meshes into narrow-band VDB level-set grids (`mesh_to_level_set`).
+//!
+//! Signed distance computation uses angle-weighted vertex pseudonormals
+//! (Bærentzen & Aanæs, "Signed Distance Computation Using the Angle Weighted Pseudonormal", IEEE TVCG 2005)
+//! and closest-point triangle projections (Ericson, "Real-Time Collision Detection", 2005) followed by
+//! flood-fill exterior signing.
 
 use crate::tree::{LEAF_DIM, LEAF_VOXELS, LeafNode, Transform, VdbFloatGrid};
 use glam::{IVec3, Vec3};

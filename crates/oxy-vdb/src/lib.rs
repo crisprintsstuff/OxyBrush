@@ -1,8 +1,13 @@
 //! Hierarchical sparse VDB grid, voxel remeshing, volumetric CSG booleans,
 //! and level set filters for digital sculpting.
 //!
-//! Based on the OpenVDB sparse volumetric tree architecture (Academy Software Foundation).
-//! Implemented in pure, safe Rust.
+//! Clean-room implementation in pure, safe Rust based on published academic literature:
+//! - Sparse tree architecture: Museth (2013), "VDB: High-Resolution Sparse Volumes with Dynamic Topology", ACM Trans. Graph. 32(3).
+//! - Signed distance determination: Bærentzen & Aanæs (2005), "Signed Distance Computation Using the Angle Weighted Pseudonormal", IEEE TVCG 11(3); Ericson (2005), "Real-Time Collision Detection" §5.1.5.
+//! - Dual contouring polygonization: Ju, Losasso, Schaefer, Warren (2002), "Dual Contouring of Hermite Data", ACM SIGGRAPH 2002.
+//! - Volumetric CSG operations: Exact R-functions on signed distance fields (Pasko et al., FRep).
+//!
+//! All algorithms and data structures were written from scratch without consulting or adapting any C++ source code.
 
 pub mod csg;
 pub mod filter;

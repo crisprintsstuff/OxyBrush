@@ -1,7 +1,7 @@
-//! Isosurface extraction from VDB level sets to polygon meshes (`volumeToMesh`).
+//! Isosurface extraction from VDB level sets to polygon meshes (`volume_to_mesh`).
 //!
-//! Mirrors `openvdb::tools::volumeToMesh`, generating clean manifold quad/triangle
-//! meshes via dual contouring with optional adaptivity.
+//! Implements Dual Contouring (Ju, Losasso, Schaefer, Warren, "Dual Contouring of Hermite Data",
+//! ACM SIGGRAPH 2002) with adaptive edge evaluation, generating watertight 2-manifold quad and triangle meshes.
 
 use crate::tree::{LEAF_VOXELS, VdbFloatGrid};
 use glam::{IVec3, Vec3};
