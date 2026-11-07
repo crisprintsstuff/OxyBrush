@@ -3819,7 +3819,9 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     draw_symmetry_indicators(&painter, ed, canvas, p);
 
     // Hide circular brush ring while actively performing a stroke to give an unobstructed view of the sculpt
-    if ed.is_stroking() && ed.hide_cursor_during_stroke {
+    // (The Insert Primitive and cut previews are not "the circle": they must
+    // stay visible, or the tools give no feedback until release.)
+    if matches!(ed.drag, Drag::Stroke { .. }) && ed.hide_cursor_during_stroke {
         return;
     }
     let to_pt = |v: glam::Vec2| egui::pos2(v.x, v.y) / ed.pixels_per_point;
@@ -3829,7 +3831,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Select { points: Vec<Vec2>, lasso: bool, action: crate::editor::SelectAction },
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
-        InsertPrimitive { start_pixel: Vec2, anchor: Vec3, normal: Vec3, scale: f32, shape: oxy_sculpt::InsertShape },
+        InsertPrimitive { start_pixel: Vec2 },
         CurveCut { kind: BrushKind, start: Vec2, current: Vec2, offset: Vec2 },
         Lazy(Vec2),
         Brush { kind: BrushKind, invert: bool },
@@ -3841,13 +3843,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
         Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
         Drag::MaskGesture { start } => Mark::MaskGesture { start: *start },
-        Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => Mark::InsertPrimitive {
-            start_pixel: *start_pixel,
-            anchor: *anchor,
-            normal: *normal,
-            scale: *scale,
-            shape: *shape,
-        },
+        Drag::InsertPrimitive { start_pixel, .. } => Mark::InsertPrimitive { start_pixel: *start_pixel },
         Drag::CurveCut { kind, start, current, offset, .. } => {
             Mark::CurveCut { kind: *kind, start: *start, current: *current, offset: *offset }
         }
@@ -3876,45 +3872,10 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Mark::MaskGesture { start } => {
             painter.line_segment([to_pt(start), pos], EStroke::new(1.5, Color32::from_rgb(110, 150, 255)));
         }
-        Mark::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
-            let s_pt = to_pt(start_pixel);
-            let accent = ed.accent_color();
-            painter.line_segment([s_pt, pos], EStroke::new(1.5, accent));
-
-            if scale > 1e-4 {
-                let prim_mesh = shape.build_mesh();
-                let n = normal.normalize_or(Vec3::Y);
-                let rot = if n.dot(Vec3::Y) < -0.9999 {
-                    glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
-                } else {
-                    glam::Quat::from_rotation_arc(Vec3::Y, n)
-                };
-
-                let wire_color = Color32::from_rgb(255, 200, 80);
-                let stroke = EStroke::new(1.0, wire_color);
-
-                for sym_m in ed.symmetry.transforms() {
-                    let mut proj_vertices = Vec::with_capacity(prim_mesh.positions.len());
-                    for p in &prim_mesh.positions {
-                        let p_scaled = *p * scale;
-                        let p_rot = rot * p_scaled;
-                        let p_world = sym_m * (anchor + p_rot);
-                        proj_vertices.push(project_point(ed, p_world));
-                    }
-
-                    for tri in &prim_mesh.triangles {
-                        if let (Some(p0), Some(p1), Some(p2)) = (
-                            proj_vertices[tri[0] as usize],
-                            proj_vertices[tri[1] as usize],
-                            proj_vertices[tri[2] as usize],
-                        ) {
-                            painter.line_segment([p0, p1], stroke);
-                            painter.line_segment([p1, p2], stroke);
-                            painter.line_segment([p2, p0], stroke);
-                        }
-                    }
-                }
-            }
+        Mark::InsertPrimitive { start_pixel } => {
+            // The primitive itself is drawn solid by the renderer
+            // (`Editor::insert_preview`); here only the drag line from the anchor.
+            painter.line_segment([to_pt(start_pixel), pos], EStroke::new(1.5, ed.accent_color()));
         }
         Mark::CurveCut { kind, start, current, offset } => {
             let p0 = start + offset;

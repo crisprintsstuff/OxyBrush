@@ -536,8 +536,11 @@ impl App {
             g.window.set_title(&title);
             self.applied_title = title;
         }
+        // The Insert Primitive preview is drawn like a piece under a reserved id.
+        const PREVIEW_ID: u64 = u64::MAX;
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
-        g.viewport.retain(|id| ids.contains(&id));
+        let previewing = ed.insert_preview.is_some();
+        g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();
         for p in ed.scene.pieces.iter_mut() {
@@ -545,6 +548,10 @@ impl App {
             if p.visible {
                 items.push(oxy_render::DrawItem { id: p.id, active: p.id == active });
             }
+        }
+        if let Some(preview) = ed.insert_preview.as_mut() {
+            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
+            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true });
         }
 
         let frame = match g.surface.get_current_texture() {

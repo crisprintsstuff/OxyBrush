@@ -13,6 +13,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 - **Matte (formerly "ZBrush Classic") theme:** section headers, the Carve and Y/Z mirror toggles and the status bar were drawn in near-black (the orange accent darkened all strong text). Buttons are also lighter than the panels now, so they read as clickable.
+- **Insert Primitives shows what you're inserting:** the primitive (and its symmetry copies) is drawn solid on the surface and grows as you drag, instead of appearing only on release.
+- **Cut tools show their line:** the clip/slice/trim line, shaded side and direction arrow are visible while dragging. They were hidden (or blinked) because "Hide circle during stroke" also hid tool previews; it now hides only the brush circle.
+- **Cut tools follow symmetry:** clip, slice and trim cuts are repeated for mirror and radial symmetry, as one undo step. A trim that would remove the whole piece is refused with a message.
+- **Transform gizmo keeps a moved pivot:** after Alt-dragging the pivot and then transforming, the gizmo stays with the geometry instead of snapping back to its old spot.
 
 ## [2.0.0-beta] - 2026-11-06
 
