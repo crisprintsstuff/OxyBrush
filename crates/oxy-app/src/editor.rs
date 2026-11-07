@@ -419,6 +419,9 @@ pub struct Editor {
     pub surface_cursor: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
+    /// The primitive being dragged out with the Insert Primitive brush,
+    /// drawn solid so you can see it grow before it is inserted.
+    pub insert_preview: Option<oxy_mesh::Mesh>,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
@@ -621,6 +624,7 @@ impl Default for Editor {
             stroke_from_empty: false,
             surface_cursor: false,
             hide_cursor_during_stroke: true,
+            insert_preview: None,
             cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
@@ -1503,10 +1507,12 @@ impl Editor {
                 self.camera.pan(delta, size.y);
                 true
             }
-            Drag::InsertPrimitive { start_pixel, anchor, scale, .. } => {
+            Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
                 let d = pos.distance(*start_pixel);
                 let world_per_pixel = self.camera.world_per_pixel(*anchor, size.y);
                 *scale = d * world_per_pixel;
+                let (anchor, normal, scale, shape) = (*anchor, *normal, *scale, *shape);
+                self.insert_preview = (scale > 1e-4).then(|| self.primitive_geometry(anchor, normal, scale, shape));
                 true
             }
             Drag::CurveCut { current, offset, pan_origin, .. } => {
@@ -1719,6 +1725,14 @@ impl Editor {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
                 } else {
+                    // A pivot you placed yourself moves with the geometry (and
+                    // turns with it), instead of snapping back to where it was.
+                    if self.custom_gizmo_pivot.is_some() {
+                        self.custom_gizmo_pivot = Some(g.pivot + g.current.translate);
+                        if self.gizmo == Some(GizmoMode::Rotate) {
+                            self.custom_gizmo_rotation = Some(g.current.linear * g.rotation);
+                        }
+                    }
                     if g.has_soft_weights {
                         let mesh = &mut self.scene.active_mut().mesh;
                         let moved: Vec<u32> =
@@ -1753,6 +1767,7 @@ impl Editor {
                 }
             }
             Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
+                self.insert_preview = None;
                 let d = self.pointer.map_or(0.0, |p| p.distance(start_pixel));
                 let min_drag = 4.0 * self.pixels_per_point.max(0.1);
                 if d >= min_drag && scale > 1e-4 {
@@ -1774,6 +1789,7 @@ impl Editor {
 
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
+        self.insert_preview = None;
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { .. } => self.history.commit(),
             Drag::Gizmo(g) => {
@@ -1838,6 +1854,8 @@ impl Editor {
             plane_normal = -plane_normal;
         }
 
+        let planes =
+            symmetric_planes(&self.symmetry.transforms(), plane_point, plane_normal, bounds.extent().max_element());
         match kind {
             BrushKind::ClipCurve => {
                 let piece = self.scene.active_mut();
@@ -1845,7 +1863,12 @@ impl Editor {
                 for c in 0..piece.mesh.chunks.len() as u32 {
                     self.history.touch(&piece.mesh, c);
                 }
-                let moved = piece.mesh.clip_plane(plane_point, plane_normal);
+                let mut moved = Vec::new();
+                for &(p, n) in &planes {
+                    moved.extend(piece.mesh.clip_plane(p, n));
+                }
+                moved.sort_unstable();
+                moved.dedup();
                 if !moved.is_empty() {
                     piece.mesh.update_after_move(&moved);
                     self.history.commit();
@@ -1856,13 +1879,24 @@ impl Editor {
                 }
             }
             BrushKind::SliceCurve => {
-                let new_mesh = self.scene.active().mesh.slice_plane(plane_point, plane_normal);
+                let mut new_mesh = self.scene.active().mesh.slice_plane(planes[0].0, planes[0].1);
+                for &(p, n) in &planes[1..] {
+                    new_mesh = new_mesh.slice_plane(p, n);
+                }
                 let tri_count = new_mesh.triangle_count();
                 self.replace_active_mesh(kind.label(), new_mesh);
                 self.status = format!("Sliced mesh ({tri_count} faces, new polygroup)");
             }
             BrushKind::TrimCurve => {
-                let new_mesh = self.scene.active().mesh.trim_plane(plane_point, plane_normal);
+                let mut new_mesh = self.scene.active().mesh.trim_plane(planes[0].0, planes[0].1);
+                for &(p, n) in &planes[1..] {
+                    new_mesh = new_mesh.trim_plane(p, n);
+                }
+                if new_mesh.triangle_count() == 0 {
+                    self.status =
+                        "That cut would remove the whole piece; nothing was trimmed (Alt flips the side)".into();
+                    return;
+                }
                 let tri_count = new_mesh.triangle_count();
                 self.replace_active_mesh(kind.label(), new_mesh);
                 self.status = format!("Trimmed mesh ({tri_count} faces, capped watertight)");
@@ -2941,6 +2975,42 @@ impl Editor {
     ///
     /// Pre-existing vertices are 100% masked, the new primitive is unmasked and assigned
     /// a new polygroup ID. Recorded in undo history.
+    /// The primitive placed at `anchor`, standing on `normal` and scaled by
+    /// `scale`, with a copy for every symmetry transform. Used both for the
+    /// live preview while dragging and for the insert on release, so what
+    /// you see is what you get.
+    pub fn primitive_geometry(
+        &self,
+        anchor: Vec3,
+        normal: Vec3,
+        scale: f32,
+        shape: oxy_sculpt::InsertShape,
+    ) -> oxy_mesh::Mesh {
+        let prim_mesh = shape.build_mesh();
+        let transforms = self.symmetry.transforms();
+        let n = normal.normalize_or(Vec3::Y);
+        let rot = if n.dot(Vec3::Y) < -0.9999 {
+            glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
+        } else {
+            glam::Quat::from_rotation_arc(Vec3::Y, n)
+        };
+        let mut positions = Vec::with_capacity(prim_mesh.positions.len() * transforms.len());
+        let mut triangles = Vec::with_capacity(prim_mesh.triangles.len() * transforms.len());
+        for sym_m in transforms {
+            let is_mirror = sym_m.determinant() < 0.0;
+            let base = positions.len() as u32;
+            positions.extend(prim_mesh.positions.iter().map(|p| sym_m * (anchor + rot * (*p * scale))));
+            triangles.extend(prim_mesh.triangles.iter().map(|t| {
+                if is_mirror {
+                    [t[0] + base, t[2] + base, t[1] + base]
+                } else {
+                    [t[0] + base, t[1] + base, t[2] + base]
+                }
+            }));
+        }
+        oxy_mesh::Mesh::new(positions, triangles)
+    }
+
     pub fn commit_inserted_primitive(
         &mut self,
         anchor: Vec3,
@@ -2963,37 +3033,7 @@ impl Editor {
             return;
         }
 
-        let n = normal.normalize_or(Vec3::Y);
-        let rot = if n.dot(Vec3::Y) < -0.9999 {
-            glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
-        } else {
-            glam::Quat::from_rotation_arc(Vec3::Y, n)
-        };
-
-        let mut all_prim_positions = Vec::with_capacity(prim_mesh.positions.len() * transforms.len());
-        let mut all_prim_triangles = Vec::with_capacity(prim_mesh.triangles.len() * transforms.len());
-
-        for sym_m in transforms {
-            let is_mirror = sym_m.determinant() < 0.0;
-            let base_idx = all_prim_positions.len() as u32;
-
-            for p in &prim_mesh.positions {
-                let p_scaled = *p * scale;
-                let p_rot = rot * p_scaled;
-                let p_world = anchor + p_rot;
-                all_prim_positions.push(sym_m * p_world);
-            }
-
-            for tri in &prim_mesh.triangles {
-                if is_mirror {
-                    all_prim_triangles.push([tri[0] + base_idx, tri[2] + base_idx, tri[1] + base_idx]);
-                } else {
-                    all_prim_triangles.push([tri[0] + base_idx, tri[1] + base_idx, tri[2] + base_idx]);
-                }
-            }
-        }
-
-        let combined_prim = oxy_mesh::Mesh::new(all_prim_positions, all_prim_triangles);
+        let combined_prim = self.primitive_geometry(anchor, normal, scale, shape);
         let new_mesh = base_mesh.insert_mesh(&combined_prim, glam::Affine3A::IDENTITY);
 
         let piece = self.scene.active_mut();
@@ -3439,6 +3479,26 @@ impl Editor {
     }
 }
 
+/// The cut plane and its copies under the symmetry transforms (mirror and
+/// radial), so a cut on one side is repeated on the others. Copies that land
+/// on a plane already in the list (a cut drawn exactly on the mirror plane
+/// maps onto itself) are skipped: cutting the same plane from the other side
+/// would remove or flatten both halves.
+fn symmetric_planes(transforms: &[glam::Mat3], point: Vec3, normal: Vec3, size: f32) -> Vec<(Vec3, Vec3)> {
+    let eps = (size * 1e-5).max(1e-7);
+    let mut planes: Vec<(Vec3, Vec3)> = Vec::new();
+    for m in transforms {
+        let (p, n) = (*m * point, (*m * normal).normalize_or(normal));
+        let same = planes.iter().any(|&(q, k)| k.dot(n).abs() > 0.9999 && (p - q).dot(k).abs() < eps);
+        if !same {
+            planes.push((p, n));
+        }
+    }
+    if planes.is_empty() {
+        planes.push((point, normal));
+    }
+    planes
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4255,6 +4315,80 @@ mod tests {
         e.reset_gizmo_pivot();
         assert!(e.custom_gizmo_pivot.is_none());
         assert_eq!(e.gizmo_layout().unwrap().pivot, orig_pivot);
+    }
+
+    #[test]
+    fn insert_primitive_shows_a_live_preview_with_symmetry() {
+        let mut e = editor();
+        e.symmetry = Symmetry { x: true, ..Default::default() };
+        e.brush_kind = BrushKind::InsertPrimitive;
+        e.insert_shape = oxy_sculpt::InsertShape::Cylinder;
+        let one = e.insert_shape.build_mesh().triangle_count();
+        let p = Vec2::new(430.0, 280.0);
+        e.pointer = Some(p);
+        e.pointer_down(PointerButton::Primary);
+        assert!(e.insert_preview.is_none(), "nothing to show before dragging");
+        e.pointer_moved(p + Vec2::new(20.0, 0.0));
+        let small = e.insert_preview.as_ref().expect("preview while dragging").bounds().extent().length();
+        assert_eq!(e.insert_preview.as_ref().unwrap().triangle_count(), 2 * one, "mirrored copy previewed too");
+        e.pointer_moved(p + Vec2::new(60.0, 0.0));
+        let large = e.insert_preview.as_ref().unwrap().bounds().extent().length();
+        assert!(large > small, "the preview grows with the drag: {small} -> {large}");
+        let before = e.scene.active().mesh.triangle_count();
+        e.pointer_up();
+        assert!(e.insert_preview.is_none(), "preview cleared on release");
+        assert_eq!(e.scene.active().mesh.triangle_count(), before + 2 * one, "what was shown was inserted");
+    }
+
+    #[test]
+    fn cuts_follow_symmetry() {
+        // An X-mirrored cut on a vertical line left of centre also cuts the right side.
+        let run = |mirror: bool| {
+            let mut e = editor();
+            e.symmetry = Symmetry { x: mirror, ..Default::default() };
+            e.brush_kind = BrushKind::TrimCurve;
+            // Drawn upward, the trimmed side is the outside (left of the line).
+            e.pointer = Some(Vec2::new(330.0, 500.0));
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_moved(Vec2::new(330.0, 100.0));
+            e.pointer_up();
+            let b = e.scene.active().mesh.bounds();
+            (b.min.x, b.max.x)
+        };
+        let (min0, max0) = run(false);
+        let (min1, max1) = run(true);
+        assert!(min0 > -0.95 && max0 > 0.95, "one cut on the left: {min0} .. {max0}");
+        assert!(max1 < 0.95, "the mirrored cut trims the right side too: {max1}");
+        assert!((min1 + max1).abs() < 0.02, "and both sides match: {min1} .. {max1}");
+        assert!((min0 - min1).abs() < 0.02, "the drawn side is cut the same either way: {min0} vs {min1}");
+    }
+
+    #[test]
+    fn symmetric_planes_skip_a_cut_on_the_mirror_plane() {
+        let mirror = vec![glam::Mat3::IDENTITY, glam::Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0))];
+        assert_eq!(symmetric_planes(&mirror, Vec3::new(0.3, 0.0, 0.0), Vec3::X, 2.0).len(), 2);
+        assert_eq!(symmetric_planes(&mirror, Vec3::ZERO, Vec3::X, 2.0).len(), 1, "same plane: cut once");
+    }
+
+    #[test]
+    fn moved_pivot_follows_the_geometry_after_a_transform() {
+        let mut e = editor();
+        e.toggle_gizmo(GizmoMode::Move);
+        let layout0 = e.gizmo_layout().unwrap();
+        // Alt-drag the X handle: moves only the pivot.
+        e.modifiers.alt = true;
+        let end = layout0.axes[0].expect("X axis handle");
+        drag(&mut e, end, end + Vec2::new(60.0, 0.0));
+        e.modifiers.alt = false;
+        let placed = e.custom_gizmo_pivot.expect("pivot placed");
+        // Now move the geometry with the gizmo, from the moved pivot.
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[0].expect("X axis handle");
+        drag(&mut e, end, end + Vec2::new(0.0, -50.0) + (end - layout.center));
+        let after = e.custom_gizmo_pivot.expect("pivot kept");
+        assert!(after.distance(placed) > 1e-3, "the pivot moved with the geometry: {placed} -> {after}");
+        let shown = e.gizmo_layout().unwrap().pivot;
+        assert!(shown.distance(after) < 1e-5, "and the gizmo is drawn there, not at the old spot");
     }
 
     #[test]
