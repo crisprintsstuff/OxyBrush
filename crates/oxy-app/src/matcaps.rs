@@ -180,10 +180,10 @@ mod tests {
         let lib = dir.join("lib");
         std::fs::create_dir_all(&dir).unwrap();
         // A wide image: the center square is red, the sides blue.
-        let src = dir.join("Red Wax.png");
+        let src = dir.join("Crimson Wax.png");
         write_png(&src, 300, 100, |x, _| if (100..200).contains(&x) { [255, 0, 0] } else { [0, 0, 255] });
         let a = import(&lib, &src).unwrap();
-        assert_eq!(a.name, "Red Wax");
+        assert_eq!(a.name, "Crimson Wax");
         assert_eq!(a.pixels.len(), (MATCAP_SIZE * MATCAP_SIZE * 4) as usize);
         // Center crop only (the outermost columns blend with the neighbouring pixels).
         let n = MATCAP_SIZE as usize;
@@ -191,11 +191,11 @@ mod tests {
         assert!(inner.into_iter().all(|(_, p)| p[0] > 200 && p[2] < 50), "center crop only");
         // Importing again keeps both.
         let b = import(&lib, &src).unwrap();
-        assert_eq!(b.name, "Red Wax 2");
+        assert_eq!(b.name, "Crimson Wax 2");
         assert!(src.exists(), "the original stays where it was");
         let all = load_all(&lib);
-        assert_eq!(all.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Red Wax", "Red Wax 2"]);
-        remove(&lib, "Red Wax").unwrap();
+        assert_eq!(all.iter().map(|m| m.name.as_str()).collect::<Vec<_>>(), ["Crimson Wax", "Crimson Wax 2"]);
+        remove(&lib, "Crimson Wax").unwrap();
         assert_eq!(load_all(&lib).len(), 1);
         // Junk is rejected, not copied.
         let junk = dir.join("junk.png");

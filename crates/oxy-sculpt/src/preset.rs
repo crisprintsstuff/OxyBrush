@@ -227,14 +227,25 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
         BrushKind::InsertPrimitive => "insert_primitive",
-        BrushKind::ClipCurve => "clip_curve",
-        BrushKind::SliceCurve => "slice_curve",
-        BrushKind::TrimCurve => "trim_curve",
+        BrushKind::PlaneClip => "plane_clip",
+        BrushKind::LineSplit => "line_split",
+        BrushKind::CutAway => "cut_away",
     }
 }
 
 pub fn kind_from_key(key: &str) -> Option<BrushKind> {
+    let key = legacy_kind_key(key);
     BrushKind::ALL.into_iter().find(|k| kind_key(*k) == key)
+}
+
+/// Keys used by older versions for brushes that have since been renamed.
+pub fn legacy_kind_key(key: &str) -> &str {
+    match key {
+        "clip_curve" => "plane_clip",
+        "slice_curve" => "line_split",
+        "trim_curve" => "cut_away",
+        other => other,
+    }
 }
 
 pub fn shape_key(s: crate::InsertShape) -> &'static str {

@@ -126,9 +126,9 @@ fn main() {
                         args.next();
                         keymap::Preset::MmbOrbit
                     }
-                    Some("zbrush") => {
+                    Some("right-drag" | "zbrush") => {
                         args.next();
-                        keymap::Preset::ZBrush
+                        keymap::Preset::RightDrag
                     }
                     Some("oxybrush") => {
                         args.next();
