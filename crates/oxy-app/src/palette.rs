@@ -115,9 +115,7 @@ fn commands(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::InvertMask, "masking", Editor::invert_mask),
         cmd(ed, Cmd::ClearMask, "masking", Editor::clear_mask),
-        cmd(ed, Cmd::ExtractMask, "masking extract solidify piece new", |e| {
-            e.extract_mask(e.extract_thickness, e.extract_smooth)
-        }),
+        cmd(ed, Cmd::ExtractMask, "masking extract solidify piece new shell", Editor::begin_extract),
         cmd(ed, Cmd::BlurMask, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),
         cmd(ed, Cmd::SharpenMask, "masking", |e| e.edit_mesh_mask("Sharpen mask", oxy_mesh::Mesh::sharpen_mask)),
         cmd(ed, Cmd::MaskCavities, "masking concave creases", |e| {
@@ -167,6 +165,7 @@ fn commands(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::GroupColors, "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd(ed, Cmd::Shading, "view ambient occlusion cavity", Editor::toggle_shading),
         cmd(ed, Cmd::FlatShading, "view faceted polygons smooth", |e| e.view.flat_shading = !e.view.flat_shading),
+        cmd(ed, Cmd::FloorGrid, "view floor ground grid plane orientation", |e| e.floor_grid = !e.floor_grid),
         cmd(ed, Cmd::Wireframe, "view polygon edges lines mesh overlay", |e| e.view.wireframe = !e.view.wireframe),
         cmd(ed, Cmd::WireframeWindow, "view polygon edges lines mesh overlay color opacity settings", |e| {
             e.show_wireframe = true

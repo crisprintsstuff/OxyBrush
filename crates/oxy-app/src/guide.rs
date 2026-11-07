@@ -163,6 +163,7 @@ The Touch layout has no mouse hover. Press and hold a control to read what it do
 - Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
 - View > Flat shading shows every polygon as a flat facet.\n\
 - View > Wireframe (Shift+W or the wireframe icon in the view strip) overlays polygon edges atop the shaded surface, with adjustable line opacity.\n\
+- View > Shading > Floor grid draws a grid on the floor under the model. It stays at the bottom of the visible pieces and its spacing follows the model's size.\n\
 - View > Background (also under Settings) switches between a soft gradient and one flat color. Colors… sets the center and the edge, or the single flat color. Reset to default puts the original gradient back. The command palette can open the colors, switch the style or reset it. The choice is remembered.",
     },
     Topic {

@@ -447,6 +447,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     );
                     tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                    tips::check(ui, &mut ed.floor_grid, "Floor grid", Cmd::FloorGrid);
                     tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
                     if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
                         ed.show_wireframe = true;
@@ -2723,6 +2724,43 @@ fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha) {
     tips::hover(ui.add(egui::Image::new((tex.id(), egui::vec2(64.0, 64.0)))), tips::alpha_tip(&alpha.name));
 }
 
+/// Thickness and smoothing for the mask extract being previewed, with
+/// Accept (adds the piece) and Cancel. Enter accepts and Esc cancels.
+fn extract_window(ctx: &egui::Context, ed: &mut Editor) {
+    let (accept_key, cancel_key) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
+    let mut accept = accept_key && !ctx.egui_wants_keyboard_input();
+    let mut cancel = cancel_key;
+    egui::Window::new("Extract mask")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+        .show(ctx, |ui| {
+            ui.label(RichText::new(plain::EXTRACT_PREVIEW).weak().small());
+            ui.add_space(4.0);
+            egui::Grid::new("extract_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label("Thickness");
+                tips::hover(
+                    ui.add(egui::Slider::new(&mut ed.extract_thickness, 0.0..=0.5).logarithmic(true)),
+                    plain::EXTRACT_THICKNESS,
+                );
+                ui.end_row();
+                ui.label("Smooth edge");
+                tips::hover(ui.add(egui::Slider::new(&mut ed.extract_smooth, 0..=10)), plain::EXTRACT_SMOOTH);
+                ui.end_row();
+            });
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                accept |= tips::hover(ui.button("Accept"), plain::EXTRACT_ACCEPT).clicked();
+                cancel |= tips::hover(ui.button("Cancel"), plain::EXTRACT_CANCEL).clicked();
+            });
+        });
+    if cancel {
+        ed.cancel_extract();
+    } else if accept {
+        ed.accept_extract();
+    }
+}
+
 fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button_km(ui, &ed.keymap, "Invert", Cmd::InvertMask).clicked() {
         ed.invert_mask();
@@ -2731,7 +2769,7 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
         ed.clear_mask();
     }
     if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
-        ed.extract_mask(ed.extract_thickness, ed.extract_smooth);
+        ed.begin_extract();
     }
     ui.separator();
     let blur_label = format!("Blur  ({}+click empty space)", ed.keymap.mask.label());
@@ -3307,15 +3345,9 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
-        if tips::button(ui, "Extract mask", Cmd::ExtractMask).clicked() {
-            ed.extract_mask(ed.extract_thickness, ed.extract_smooth);
-        }
-        ui.label("Thickness");
-        ui.add(egui::DragValue::new(&mut ed.extract_thickness).speed(0.002).range(0.0..=0.5));
-        ui.label("Smooth");
-        ui.add(egui::DragValue::new(&mut ed.extract_smooth).range(0..=10));
-    });
+    if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
+        ed.begin_extract();
+    }
     ui.label(RichText::new("More in the Groups and Mask menus.").weak().small());
 }
 
@@ -3398,6 +3430,9 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
 
     if ed.updater.show_window {
         updates_window(&ctx, ed);
+    }
+    if ed.extract_preview.is_some() {
+        extract_window(&ctx, ed);
     }
     if ed.show_welcome && ed.pending.is_none() && ed.recoverable.is_empty() {
         welcome(&ctx, ed, action);

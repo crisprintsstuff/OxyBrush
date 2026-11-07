@@ -52,6 +52,10 @@ struct Uniforms {
     bg_center: [f32; 4],
     bg_edge: [f32; 4],
     wireframe_color: [f32; 4],
+    /// Floor grid: height, cell size, fade radius, opacity (0 hides it).
+    floor: [f32; 4],
+    /// Floor grid: center x, center z, unused, unused.
+    floor_center: [f32; 4],
 }
 
 #[repr(C)]
@@ -134,6 +138,42 @@ pub struct ViewSettings {
     pub wireframe_opacity: f32,
     /// Wireframe line color (linear RGB). Defaults to neutral dark slate.
     pub wireframe_color: [f64; 3],
+    /// Floor grid under the model, or `None` for no grid. Fit it to the
+    /// scene each frame with [`FloorGrid::fit`].
+    pub floor: Option<FloorGrid>,
+}
+
+/// A grid on the floor under the model: a horizontal plane at `height`,
+/// centered under the model, with lines every `cell` and a bolder line every
+/// ten cells, fading out towards `radius`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FloorGrid {
+    pub height: f32,
+    pub center: [f32; 2],
+    pub cell: f32,
+    pub radius: f32,
+}
+
+impl FloorGrid {
+    /// A grid that sits just under the bottom of `min..max` (the visible
+    /// scene's bounds), with a cell size that follows the model's size, so
+    /// the grid moves and rescales with the model.
+    pub fn fit(min: [f32; 3], max: [f32; 3]) -> Option<FloorGrid> {
+        if !(min.iter().chain(&max).all(|v| v.is_finite())) || (0..3).any(|i| max[i] < min[i]) {
+            return None;
+        }
+        let size = (0..3).map(|i| max[i] - min[i]).fold(0.0f32, f32::max).max(1e-3);
+        // A "nice" step (1, 2 or 5 times a power of ten) giving about 10–20
+        // cells across the model.
+        let raw = size / 12.0;
+        let pow = 10f32.powf(raw.log10().floor());
+        let cell = [1.0, 2.0, 5.0, 10.0].into_iter().map(|m| m * pow).find(|c| *c >= raw * 0.75).unwrap_or(10.0 * pow);
+        // Snap the center to the bold lines, so lines don't slide while sculpting.
+        let major = cell * 10.0;
+        let snap = |v: f32| (v / major).round() * major;
+        let center = [snap((min[0] + max[0]) * 0.5), snap((min[2] + max[2]) * 0.5)];
+        Some(FloorGrid { height: min[1] - size * 0.002, center, cell, radius: (size * 2.5).max(cell * 12.0) })
+    }
 }
 
 impl ViewSettings {
@@ -165,6 +205,7 @@ impl Default for ViewSettings {
             wireframe: false,
             wireframe_opacity: 0.7,
             wireframe_color: [0.10, 0.12, 0.16],
+            floor: None,
         }
     }
 }
@@ -202,6 +243,7 @@ pub struct ViewportRenderer {
     pipeline: wgpu::RenderPipeline,
     wireframe_pipeline: wgpu::RenderPipeline,
     background_pipeline: wgpu::RenderPipeline,
+    floor_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
     bind_group: wgpu::BindGroup,
     piece_layout: wgpu::BindGroupLayout,
@@ -441,6 +483,49 @@ impl ViewportRenderer {
             cache: None,
         });
 
+        // Floor grid: a quad drawn after the pieces, blended over the color
+        // target and depth-tested (not written), so the model hides it. It
+        // leaves the normal/depth target alone, so the screen-space shading
+        // treats the floor as background.
+        let floor_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("oxy floor grid pipeline"),
+            layout: Some(&background_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_floor"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: Default::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: Default::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_floor"),
+                compilation_options: Default::default(),
+                targets: &[
+                    Some(wgpu::ColorTargetState {
+                        format: color_format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    }),
+                    Some(wgpu::ColorTargetState {
+                        format: NORMAL_DEPTH_FORMAT,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::empty(),
+                    }),
+                ],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         // Screen-space shading passes (obscurance, then blur + cavity + composite).
         let wireframe_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("oxy wireframe shader"),
@@ -573,6 +658,7 @@ impl ViewportRenderer {
             pipeline,
             wireframe_pipeline,
             background_pipeline,
+            floor_pipeline,
             color_format,
             post_uniforms,
             post_layout,
@@ -866,6 +952,8 @@ impl ViewportRenderer {
             bg_center: rgba(settings.background_center),
             bg_edge: rgba(settings.background),
             wireframe_color: rgba(settings.wireframe_color),
+            floor: settings.floor.map_or([0.0; 4], |f| [f.height, f.cell, f.radius, 1.0]),
+            floor_center: settings.floor.map_or([0.0; 4], |f| [f.center[0], f.center[1], 0.0, 0.0]),
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
         let multiple = items.len() > 1;
@@ -946,6 +1034,11 @@ impl ViewportRenderer {
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                 pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
                 pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+            }
+            if settings.floor.is_some() {
+                // After the pieces, so the model hides the grid behind it.
+                pass.set_pipeline(&self.floor_pipeline);
+                pass.draw(0..6, 0..1);
             }
             if settings.wireframe && settings.wireframe_opacity > 0.001 {
                 pass.set_pipeline(&self.wireframe_pipeline);
@@ -1036,6 +1129,24 @@ mod tests {
     }
 
     #[test]
+    fn floor_grid_sits_under_the_model_and_follows_its_size() {
+        let f = FloorGrid::fit([-1.0, -0.5, -1.0], [1.0, 1.5, 1.0]).unwrap();
+        assert!(f.height < -0.5 && f.height > -0.52, "just under the bottom: {f:?}");
+        assert_eq!(f.center, [0.0, 0.0]);
+        assert!((0.1..=0.25).contains(&f.cell), "about 10-20 cells across: {f:?}");
+        assert!(f.radius >= 5.0);
+        // Ten times bigger: ten times bigger cells, and it moves down with the model.
+        let g = FloorGrid::fit([-10.0, -20.0, -10.0], [10.0, 0.0, 10.0]).unwrap();
+        assert!((g.cell / f.cell - 10.0).abs() < 1e-3, "{g:?}");
+        assert!(g.height < -20.0);
+        // Moving the model sideways a little doesn't slide the grid lines.
+        let h = FloorGrid::fit([-0.9, -0.5, -1.0], [1.1, 1.5, 1.0]).unwrap();
+        assert_eq!(h.center, f.center);
+        // Nothing to fit: no grid.
+        assert!(FloorGrid::fit([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]).is_none());
+    }
+
+    #[test]
     fn shaders_are_valid_wgsl() {
         // Both variants of the viewport shader: with exact per-face colors and without.
         let src = include_str!("shader.wgsl");
@@ -1048,7 +1159,7 @@ mod tests {
     #[test]
     fn uniform_layouts_match_wgsl() {
         // std140-style sizes the shaders expect (vec4/mat4 aligned).
-        assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 5 * 16);
+        assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 7 * 16);
         assert_eq!(std::mem::size_of::<PostUniforms>(), 3 * 16);
     }
 

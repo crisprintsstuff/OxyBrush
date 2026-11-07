@@ -268,6 +268,8 @@ pub struct Settings {
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
+    /// Grid on the floor under the model.
+    pub floor_grid: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
     /// Local MCP agent listener (off unless the user turns it on). The token is not stored.
@@ -556,6 +558,7 @@ impl Default for Settings {
             wireframe_color: view.wireframe_color,
             stroke_from_empty: false,
             surface_cursor: false,
+            floor_grid: true,
             hide_cursor_during_stroke: true,
             agent_mcp: false,
             custom_matcap: String::new(),
@@ -678,13 +681,14 @@ impl Settings {
                 oxy_topo::RemeshEngine::Vdb => "vdb",
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
-        ) + &self
-            .recent_files
-            .iter()
-            .filter_map(|p| p.to_str())
-            .filter(|p| !p.contains(['\n', '\r']))
-            .map(|p| format!("recent = {p}\n"))
-            .collect::<String>()
+        ) + &format!("floor_grid = {}\n", self.floor_grid)
+            + &self
+                .recent_files
+                .iter()
+                .filter_map(|p| p.to_str())
+                .filter(|p| !p.contains(['\n', '\r']))
+                .map(|p| format!("recent = {p}\n"))
+                .collect::<String>()
     }
 
     /// Parse; anything missing, unknown or invalid keeps its default.
@@ -757,6 +761,7 @@ impl Settings {
                 }
                 "wireframe_color" => s.wireframe_color = parse_rgb(v).unwrap_or(s.wireframe_color),
                 "stroke_from_empty" => s.stroke_from_empty = v.parse().unwrap_or(s.stroke_from_empty),
+                "floor_grid" => s.floor_grid = v.parse().unwrap_or(s.floor_grid),
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
                 "hide_cursor_during_stroke" => {
                     s.hide_cursor_during_stroke = v.parse().unwrap_or(s.hide_cursor_during_stroke)
@@ -890,6 +895,14 @@ mod tests {
     }
 
     #[test]
+    fn floor_grid_is_on_by_default_and_remembered() {
+        assert!(Settings::default().floor_grid);
+        let off = Settings::from_text("floor_grid = false\n");
+        assert!(!off.floor_grid);
+        assert!(!Settings::from_text(&off.to_text()).floor_grid);
+    }
+
+    #[test]
     fn midnight_theme_and_pill_corners_are_remembered() {
         let s = Settings::from_text("theme = midnight\ncorner_style = pill\n");
         assert_eq!(s.theme, ThemePreset::Midnight);
@@ -935,6 +948,7 @@ mod tests {
             wireframe_color: [0.15, 0.2, 0.25],
             stroke_from_empty: true,
             surface_cursor: true,
+            floor_grid: false,
             hide_cursor_during_stroke: false,
             agent_mcp: false,
             custom_matcap: "Crimson Wax".into(),

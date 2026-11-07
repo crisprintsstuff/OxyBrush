@@ -536,10 +536,12 @@ impl App {
             g.window.set_title(&title);
             self.applied_title = title;
         }
-        // The Insert Primitive preview is drawn like a piece under a reserved id.
+        // The Insert Primitive and mask extract previews are drawn like a
+        // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
+        ed.update_extract_preview();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
-        let previewing = ed.insert_preview.is_some();
+        let previewing = ed.insert_preview.is_some() || ed.extract_preview.is_some();
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();
@@ -549,7 +551,7 @@ impl App {
                 items.push(oxy_render::DrawItem { id: p.id, active: p.id == active });
             }
         }
-        if let Some(preview) = ed.insert_preview.as_mut() {
+        if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
             items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true });
         }
@@ -587,7 +589,7 @@ impl App {
             &mut encoder,
             &oxy_render::RenderTarget { view: &view, size: (g.config.width, g.config.height), viewport: ed.canvas },
             &ed.camera,
-            &ed.view,
+            &oxy_render::ViewSettings { floor: ed.floor_grid.then(|| ed.floor()).flatten(), ..ed.view },
             &items,
         );
         // The agent's screenshot is the viewport without the panels, so copy
