@@ -658,6 +658,8 @@ pub mod plain {
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const RADIAL: &str = "How many copies to repeat around the axis. Zero turns radial symmetry off.";
     pub const RADIAL_AXIS: &str = "The axis the radial copies go around.";
+    pub const SYM_RECENTER: &str = "Put this piece's mirror planes through the middle of its shape. Use it after moving the whole piece, or if mirroring lands in the wrong place.";
+    pub const SYM_WORLD: &str = "Put this piece's mirror planes back through the world origin (0, 0, 0).";
     pub const REMESH_RES: &str = "Voxel grid size for remeshing. Higher keeps more detail.";
     pub const KEEP: &str = "Share of triangles to keep when decimating.";
     pub const SELECTION_RECT: &str = "The selection is a rectangle.";
@@ -783,6 +785,8 @@ pub mod plain {
         ALPHA_FOLLOW,
         RADIAL,
         RADIAL_AXIS,
+        SYM_RECENTER,
+        SYM_WORLD,
         REMESH_RES,
         KEEP,
         SELECTION_RECT,

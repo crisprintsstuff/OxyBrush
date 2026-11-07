@@ -654,6 +654,11 @@ pub struct Editor {
     /// Set by the UI to ask the platform layer for an alpha file dialog.
     pub request_load_alpha: bool,
     pub symmetry: Symmetry,
+    /// The mirror settings last drawn, to notice a plane being turned on.
+    symmetry_seen: Symmetry,
+    /// When the mirror planes were last shown briefly (a plane turned on,
+    /// or the centre moved).
+    symmetry_flash: Option<Instant>,
     pub view: ViewSettings,
     pub matcap: MatcapPreset,
     pub remesh_resolution: u32,
@@ -922,6 +927,8 @@ impl Default for Editor {
             selection_lasso: false,
             request_load_alpha: false,
             symmetry: Symmetry { x: true, ..Default::default() },
+            symmetry_seen: Symmetry { x: true, ..Default::default() },
+            symmetry_flash: None,
             view: ViewSettings::default(),
             matcap: MatcapPreset::Terracotta,
             remesh_resolution: 128,
@@ -1749,11 +1756,54 @@ impl Editor {
                 up: self.camera.up(),
             });
         Stroke::new(settings, self.symmetry, invert)
+            .with_symmetry_center(self.symmetry_center())
             .with_alpha(stamp)
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
             .with_budget(self.dab_budget_ms)
+    }
+
+    /// Where the active piece's mirror planes and radial axis cross: its own
+    /// symmetry centre, or the world origin for pieces that have none (older
+    /// files, pieces modelled around the origin).
+    pub fn symmetry_center(&self) -> Vec3 {
+        self.scene.active().symmetry_center.unwrap_or(Vec3::ZERO)
+    }
+
+    /// Move the active piece's symmetry centre to the middle of its shape
+    /// (`world` = false) or back to the world origin.
+    pub fn recenter_symmetry(&mut self, world: bool) {
+        let piece = self.scene.active_mut();
+        let c = if world { Vec3::ZERO } else { piece.mesh.bounds().center() };
+        piece.symmetry_center = Some(c);
+        self.symmetry_flash = Some(Instant::now());
+        self.status = if world {
+            "Symmetry centre: world origin".into()
+        } else {
+            format!("Symmetry centre: middle of {} ({:.3}, {:.3}, {:.3})", piece.name, c.x, c.y, c.z)
+        };
+    }
+
+    /// How strongly to draw the mirror planes now (1 fading to 0 over a
+    /// moment after a plane is turned on or the centre moves). Call once per
+    /// frame.
+    pub fn symmetry_flash(&mut self) -> f32 {
+        const SHOW: f32 = 1.4;
+        let s = self.symmetry;
+        let was = self.symmetry_seen;
+        if (s.x && !was.x) || (s.y && !was.y) || (s.z && !was.z) {
+            self.symmetry_flash = Some(Instant::now());
+        }
+        self.symmetry_seen = s;
+        let Some(t) = self.symmetry_flash else { return 0.0 };
+        let age = t.elapsed().as_secs_f32();
+        if age >= SHOW {
+            self.symmetry_flash = None;
+            return 0.0;
+        }
+        // Hold, then fade.
+        (1.0 - (age - 0.5).max(0.0) / (SHOW - 0.5)).clamp(0.0, 1.0)
     }
 
     /// The current brush as a preset named `name`.
@@ -2288,8 +2338,13 @@ impl Editor {
             plane_normal = -plane_normal;
         }
 
-        let planes =
-            symmetric_planes(&self.symmetry.transforms(), plane_point, plane_normal, bounds.extent().max_element());
+        let planes = symmetric_planes(
+            &self.symmetry.transforms(),
+            self.symmetry_center(),
+            plane_point,
+            plane_normal,
+            bounds.extent().max_element(),
+        );
         match kind {
             BrushKind::PlaneClip => {
                 let piece = self.scene.active_mut();
@@ -2530,6 +2585,9 @@ impl Editor {
         self.pointer_up();
         self.job = None;
         self.scene = scene;
+        // Pieces from older files have no symmetry centre yet: pick one
+        // from their shape now, once, so it doesn't drift as they're sculpted.
+        self.scene.pieces.iter_mut().for_each(ensure_symmetry_center);
         self.history.clear();
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
@@ -2593,7 +2651,9 @@ impl Editor {
                 for (name, mesh) in parts {
                     let index = self.scene.pieces.len();
                     let name = self.scene.unique_name(&name);
-                    self.scene.pieces.push(Piece::new(name, mesh));
+                    let mut piece = Piece::new(name, mesh);
+                    ensure_symmetry_center(&mut piece);
+                    self.scene.pieces.push(piece);
                     steps.push(Step::Inserted { index });
                 }
                 // Make the first imported piece active.
@@ -2799,8 +2859,9 @@ impl Editor {
 
     // ---- pieces ----
 
-    fn add_piece(&mut self, piece: Piece, label: &str) {
+    fn add_piece(&mut self, mut piece: Piece, label: &str) {
         self.pointer_up();
+        ensure_symmetry_center(&mut piece);
         let index = self.scene.pieces.len();
         self.scene.pieces.push(piece);
         self.scene.set_active(index);
@@ -2822,9 +2883,10 @@ impl Editor {
             data.triangles.iter_mut().for_each(|t| t.swap(1, 2));
         }
         let base = if mirror_x { format!("{} (mirror)", src.name) } else { src.name.clone() };
+        let symmetry_center = src.symmetry_center.map(|c| if mirror_x { c * Vec3::new(-1.0, 1.0, 1.0) } else { c });
         let name = self.scene.unique_name(&base);
         self.add_piece(
-            Piece::new(name.clone(), Mesh::from_data(data)),
+            Piece { symmetry_center, ..Piece::new(name.clone(), Mesh::from_data(data)) },
             if mirror_x { "Mirror duplicate" } else { "Duplicate" },
         );
         self.status = format!("Created {name}");
@@ -3249,7 +3311,9 @@ impl Editor {
         let Some(p) = self.extract_preview.take() else { return };
         let Some(src) = self.scene.pieces.iter().find(|q| q.id == p.source) else { return };
         let name = self.scene.unique_name(&format!("{} extract", src.name));
-        self.add_piece(Piece::new(name.clone(), p.mesh), "Extract mask");
+        // A shell taken from one side keeps mirroring with its source.
+        let symmetry_center = src.symmetry_center;
+        self.add_piece(Piece { symmetry_center, ..Piece::new(name.clone(), p.mesh) }, "Extract mask");
         self.status = format!("Extracted mask as {name}");
     }
 
@@ -3749,6 +3813,7 @@ impl Editor {
             return;
         }
         let base_name = piece.name.clone();
+        let symmetry_center = piece.symmetry_center;
         let count = parts.len();
         // Insert the parts after the original, then remove it. (In this order,
         // undo puts the original back before taking the parts out, so the
@@ -3758,7 +3823,8 @@ impl Editor {
             let label =
                 if by_parts { format!("{base_name} part {}", k + 1) } else { format!("{base_name} group {key}") };
             let name = self.scene.unique_name(&label);
-            self.scene.pieces.insert(index + 1 + k, Piece::new(name, Mesh::from_data(data)));
+            let part = Piece { symmetry_center, ..Piece::new(name, Mesh::from_data(data)) };
+            self.scene.pieces.insert(index + 1 + k, part);
             steps.push(Step::Inserted { index: index + 1 + k });
         }
         let removed = self.scene.pieces.remove(index);
@@ -3802,10 +3868,11 @@ impl Editor {
                 };
                 let mut steps = Vec::new();
                 let count = new.len();
+                let symmetry_center = self.scene.pieces[index].symmetry_center;
                 for (k, (name, mesh)) in new.into_iter().enumerate() {
                     let at = index + 1 + k;
                     let name = self.scene.unique_name(&name);
-                    self.scene.pieces.insert(at, Piece::new(name, mesh));
+                    self.scene.pieces.insert(at, Piece { symmetry_center, ..Piece::new(name, mesh) });
                     steps.push(Step::Inserted { index: at });
                 }
                 self.scene.set_active(index);
@@ -3930,6 +3997,7 @@ impl Editor {
     ) -> oxy_mesh::Mesh {
         let prim_mesh = shape.build_mesh();
         let transforms = self.symmetry.transforms();
+        let center = self.symmetry_center();
         let n = normal.normalize_or(Vec3::Y);
         let rot = if n.dot(Vec3::Y) < -0.9999 {
             glam::Quat::from_axis_angle(Vec3::X, std::f32::consts::PI)
@@ -3941,7 +4009,8 @@ impl Editor {
         for sym_m in transforms {
             let is_mirror = sym_m.determinant() < 0.0;
             let base = positions.len() as u32;
-            positions.extend(prim_mesh.positions.iter().map(|p| sym_m * (anchor + rot * (*p * scale))));
+            positions
+                .extend(prim_mesh.positions.iter().map(|p| center + sym_m * (anchor - center + rot * (*p * scale))));
             triangles.extend(prim_mesh.triangles.iter().map(|t| {
                 if is_mirror {
                     [t[0] + base, t[2] + base, t[1] + base]
@@ -4426,11 +4495,24 @@ impl Editor {
 /// on a plane already in the list (a cut drawn exactly on the mirror plane
 /// maps onto itself) are skipped: cutting the same plane from the other side
 /// would remove or flatten both halves.
-fn symmetric_planes(transforms: &[glam::Mat3], point: Vec3, normal: Vec3, size: f32) -> Vec<(Vec3, Vec3)> {
+/// Give `piece` a symmetry centre from its shape if it has none yet.
+fn ensure_symmetry_center(piece: &mut Piece) {
+    if piece.symmetry_center.is_none() {
+        piece.symmetry_center = Some(oxy_sculpt::estimate_symmetry_center(&piece.mesh.positions));
+    }
+}
+
+fn symmetric_planes(
+    transforms: &[glam::Mat3],
+    center: Vec3,
+    point: Vec3,
+    normal: Vec3,
+    size: f32,
+) -> Vec<(Vec3, Vec3)> {
     let eps = (size * 1e-5).max(1e-7);
     let mut planes: Vec<(Vec3, Vec3)> = Vec::new();
     for m in transforms {
-        let (p, n) = (*m * point, (*m * normal).normalize_or(normal));
+        let (p, n) = (center + *m * (point - center), (*m * normal).normalize_or(normal));
         let same = planes.iter().any(|&(q, k)| k.dot(n).abs() > 0.9999 && (p - q).dot(k).abs() < eps);
         if !same {
             planes.push((p, n));
@@ -5778,6 +5860,50 @@ mod tests {
     }
 
     #[test]
+    fn grab_mirrors_on_an_off_centre_model() {
+        // A model that isn't at the world origin (as many imports are) gets
+        // its own symmetry centre when it is loaded, so Grab with X
+        // symmetry moves both sides.
+        let c = Vec3::new(0.4, 0.0, 0.0);
+        let mut data = primitives::icosphere(4, 1.0).to_data();
+        data.positions.iter_mut().for_each(|p| *p += c);
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Off", Mesh::from_data(data))), None);
+        let got = e.symmetry_center();
+        assert!((got - c).abs().max_element() < 0.05, "estimated centre {got}");
+        e.symmetry = Symmetry { x: true, ..Default::default() };
+        e.brush_kind = BrushKind::Grab;
+        e.brush_radius_pt = 60.0;
+        drag(&mut e, Vec2::new(520.0, 300.0), Vec2::new(600.0, 300.0));
+        let b = e.scene.active().mesh.bounds();
+        assert!(b.max.x > c.x + 1.05, "dragged side moved: {b:?}");
+        assert!(b.min.x < c.x - 1.05, "mirrored side moved too: {b:?}");
+        assert!(((b.max.x - got.x) + (b.min.x - got.x)).abs() < 0.02, "evenly: {b:?}");
+
+        // The centre is set once: sculpting doesn't move it, and it can be
+        // put back at the world origin or the shape's middle on request.
+        assert_eq!(e.symmetry_center(), got);
+        e.recenter_symmetry(true);
+        assert_eq!(e.symmetry_center(), Vec3::ZERO);
+        e.recenter_symmetry(false);
+        assert_eq!(e.symmetry_center(), e.scene.active().mesh.bounds().center());
+
+        // A mirrored duplicate mirrors its centre with it.
+        e.duplicate_active(true);
+        let dup = e.scene.active().symmetry_center.unwrap();
+        assert_eq!(dup.x, -e.scene.pieces[0].symmetry_center.unwrap().x);
+    }
+
+    #[test]
+    fn centred_models_keep_the_world_origin() {
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Sphere", primitives::icosphere(3, 1.0))), None);
+        assert_eq!(e.symmetry_center(), Vec3::ZERO);
+        e.add_primitive("cube");
+        assert_eq!(e.scene.active().symmetry_center, Some(Vec3::ZERO));
+    }
+
+    #[test]
     fn insert_primitive_shows_a_live_preview_with_symmetry() {
         let mut e = editor();
         e.symmetry = Symmetry { x: true, ..Default::default() };
@@ -5826,8 +5952,15 @@ mod tests {
     #[test]
     fn symmetric_planes_skip_a_cut_on_the_mirror_plane() {
         let mirror = vec![glam::Mat3::IDENTITY, glam::Mat3::from_diagonal(Vec3::new(-1.0, 1.0, 1.0))];
-        assert_eq!(symmetric_planes(&mirror, Vec3::new(0.3, 0.0, 0.0), Vec3::X, 2.0).len(), 2);
-        assert_eq!(symmetric_planes(&mirror, Vec3::ZERO, Vec3::X, 2.0).len(), 1, "same plane: cut once");
+        assert_eq!(symmetric_planes(&mirror, Vec3::ZERO, Vec3::new(0.3, 0.0, 0.0), Vec3::X, 2.0).len(), 2);
+        assert_eq!(symmetric_planes(&mirror, Vec3::ZERO, Vec3::ZERO, Vec3::X, 2.0).len(), 1, "same plane: cut once");
+        // About an off-origin centre, the copy lands the same distance on the
+        // other side of it.
+        let c = Vec3::new(0.4, 0.0, 0.0);
+        let planes = symmetric_planes(&mirror, c, Vec3::new(0.7, 0.0, 0.0), Vec3::X, 2.0);
+        assert_eq!(planes.len(), 2);
+        assert!((planes[1].0 - Vec3::new(0.1, 0.0, 0.0)).length() < 1e-6, "{planes:?}");
+        assert_eq!(symmetric_planes(&mirror, c, c, Vec3::X, 2.0).len(), 1);
     }
 
     #[test]

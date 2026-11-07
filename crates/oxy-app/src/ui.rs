@@ -608,6 +608,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         transform_gizmo(ui.ctx(), ed, canvas);
     }
     draw_curve(ui, ed, canvas);
+    draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
@@ -3384,6 +3385,15 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
             plain::RADIAL_AXIS,
         );
     });
+    ui.horizontal(|ui| {
+        ui.label("Centre");
+        if tips::hover(ui.small_button("Recentre"), plain::SYM_RECENTER).clicked() {
+            ed.recenter_symmetry(false);
+        }
+        if tips::hover(ui.small_button("World origin"), plain::SYM_WORLD).clicked() {
+            ed.recenter_symmetry(true);
+        }
+    });
 }
 
 fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
@@ -3983,6 +3993,38 @@ fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32,
     painter.circle_filled(pos, 1.5, color);
 }
 
+/// Outline each mirror plane across the active piece for a moment after it
+/// is turned on or the centre moves, so it's clear where mirroring happens.
+fn draw_symmetry_planes(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
+    let alpha = ed.symmetry_flash();
+    if alpha <= 0.0 || ed.show_welcome {
+        return;
+    }
+    ui.ctx().request_repaint();
+    let c = ed.symmetry_center();
+    let b = ed.scene.active().mesh.bounds();
+    // Reach a little past the piece on every side, around the centre.
+    let half = (b.max - c).max(c - b.min) * 1.1;
+    let painter = ui.painter().with_clip_rect(canvas);
+    let accent = ed.accent_color();
+    for (on, axis) in [(ed.symmetry.x, 0usize), (ed.symmetry.y, 1), (ed.symmetry.z, 2)] {
+        if !on {
+            continue;
+        }
+        let (u, v) = ((axis + 1) % 3, (axis + 2) % 3);
+        let corner = |su: f32, sv: f32| {
+            let mut p = c;
+            p[u] += su * half[u];
+            p[v] += sv * half[v];
+            p
+        };
+        let world = [corner(-1.0, -1.0), corner(1.0, -1.0), corner(1.0, 1.0), corner(-1.0, 1.0)];
+        let Some(pts) = project_points(ed, &world) else { continue };
+        painter.add(egui::Shape::convex_polygon(pts.clone(), accent.linear_multiply(0.08 * alpha), EStroke::NONE));
+        painter.add(egui::Shape::closed_line(pts, EStroke::new(1.5, accent.linear_multiply(0.9 * alpha))));
+    }
+}
+
 fn draw_symmetry_indicators(painter: &egui::Painter, ed: &Editor, canvas: egui::Rect, pointer_px: Vec2) {
     if !ed.symmetry.is_active() {
         return;
@@ -3993,8 +4035,9 @@ fn draw_symmetry_indicators(painter: &egui::Painter, ed: &Editor, canvas: egui::
         return;
     }
     let accent = ed.accent_color();
+    let center = ed.symmetry_center();
     for transform in &transforms[1..] {
-        let sym_pos = *transform * hit.point;
+        let sym_pos = center + *transform * (hit.point - center);
         if let Some(screen_pos) = project_point(ed, sym_pos)
             && canvas.contains(screen_pos)
         {

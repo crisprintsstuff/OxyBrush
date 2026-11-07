@@ -28,6 +28,9 @@
 //!   Written only while the piece's topology is unchanged since it was
 //!   loaded and it has no `MRES`; a file saved again keeps pointing at the
 //!   first file. Older readers skip it.
+//! - `SYMC` (optional, since 2.5.8): symmetry centre of the **preceding**
+//!   `PIEC`: `x:f32 y:f32 z:f32`, the point mirror and radial symmetry act
+//!   about. Without it (and in older readers) symmetry uses the world origin.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -87,6 +90,13 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         sections.push((*b"PIEC", encode_piece(p)));
         if let Some(mr) = &p.multires {
             sections.push((*b"MRES", encode_multires(mr)));
+        }
+        if let Some(c) = p.symmetry_center {
+            let mut b = Vec::with_capacity(12);
+            for x in c.to_array() {
+                b.extend_from_slice(&x.to_le_bytes());
+            }
+            sections.push((*b"SYMC", b));
         }
         if let Some(map) = &p.vertex_map {
             let mut b = Vec::with_capacity(4 + map.len() * 4);
@@ -257,6 +267,12 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring vertex color that doesn't match piece {:?}", piece.name);
                 }
             }
+            b"SYMC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("SYMC before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let c = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+                piece.symmetry_center = c.is_finite().then_some(c);
+            }
             b"VMAP" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("VMAP before any piece".into()))?;
                 let mut r = Reader { data: &raw, pos: 0 };
@@ -302,7 +318,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
     m.mask = (0..v).map(|_| r.f32()).collect::<Result<_>>()?;
     m.groups = (0..t).map(|_| r.u32()).collect::<Result<_>>()?;
     m.hidden = (0..t).map(|_| r.u8().map(|b| b != 0)).collect::<Result<_>>()?;
-    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None })
+    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None, symmetry_center: None })
 }
 
 fn encode_multires(mr: &Multires) -> Vec<u8> {
@@ -382,8 +398,22 @@ mod tests {
         let b = primitives::cube(4, 1.0).to_data();
         SceneData {
             pieces: vec![
-                PieceData { name: "Head".into(), visible: true, mesh: a, multires: None, vertex_map: None },
-                PieceData { name: "Böx ✓".into(), visible: false, mesh: b, multires: None, vertex_map: None },
+                PieceData {
+                    name: "Head".into(),
+                    visible: true,
+                    mesh: a,
+                    multires: None,
+                    vertex_map: None,
+                    symmetry_center: None,
+                },
+                PieceData {
+                    name: "Böx ✓".into(),
+                    visible: false,
+                    mesh: b,
+                    multires: None,
+                    vertex_map: None,
+                    symmetry_center: None,
+                },
             ],
             active: 1,
         }
@@ -401,6 +431,22 @@ mod tests {
         let back = decode(&encode(&bad)).unwrap();
         assert!(back.pieces[0].mesh.color.is_empty());
         assert_eq!(back.pieces[0].mesh.positions, s.pieces[0].mesh.positions);
+    }
+
+    #[test]
+    fn symmetry_center_roundtrips_per_piece() {
+        // Only pieces with their own centre write a SYMC section, and each
+        // centre lands on the piece it follows.
+        let mut s = sample();
+        s.pieces[1].symmetry_center = Some(Vec3::new(0.4, -1.25, 3.0));
+        let bytes = encode(&s);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"SYMC").count(), 1);
+        let d = decode(&bytes).unwrap();
+        assert_eq!(d.pieces[0].symmetry_center, None);
+        assert_eq!(d.pieces[1].symmetry_center, Some(Vec3::new(0.4, -1.25, 3.0)));
+        // A non-finite centre is dropped rather than poisoning every stroke.
+        s.pieces[1].symmetry_center = Some(Vec3::new(f32::NAN, 0.0, 0.0));
+        assert_eq!(decode(&encode(&s)).unwrap().pieces[1].symmetry_center, None);
     }
 
     #[test]
@@ -491,6 +537,7 @@ mod tests {
                 mesh: theirs.clone(),
                 multires: None,
                 vertex_map: None,
+                symmetry_center: None,
             }],
             active: 0,
         };

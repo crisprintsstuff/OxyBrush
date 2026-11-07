@@ -8,6 +8,7 @@
 pub mod autosave;
 pub mod format;
 
+use glam::Vec3;
 use oxy_mesh::multires::Multires;
 use oxy_mesh::{Aabb, Mesh, MeshData};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -32,6 +33,9 @@ pub struct Piece {
     /// from, while its topology is unchanged (written as the `VMAP`
     /// section, see [`format`]). `None` for pieces made in this session.
     pub origin: Option<VertexOrigin>,
+    /// The point symmetry mirrors and rotates about for this piece; `None`
+    /// is the world origin (pieces from projects saved before 2.5.8).
+    pub symmetry_center: Option<Vec3>,
 }
 
 /// For each vertex of a loaded piece, its index in the vertex array of the
@@ -46,7 +50,15 @@ pub struct VertexOrigin {
 
 impl Piece {
     pub fn new(name: impl Into<String>, mesh: Mesh) -> Self {
-        Self { id: new_piece_id(), name: name.into(), visible: true, mesh, multires: None, origin: None }
+        Self {
+            id: new_piece_id(),
+            name: name.into(),
+            visible: true,
+            mesh,
+            multires: None,
+            origin: None,
+            symmetry_center: None,
+        }
     }
 
     /// The vertex origin map, if it still describes the mesh (topology
@@ -66,7 +78,14 @@ impl Piece {
             Some(mr) => {
                 let mut mr = mr.clone();
                 let mesh = mr.export_active(&self.mesh);
-                PieceData { name: self.name.clone(), visible: self.visible, mesh, multires: Some(mr), vertex_map: None }
+                PieceData {
+                    name: self.name.clone(),
+                    visible: self.visible,
+                    mesh,
+                    multires: Some(mr),
+                    vertex_map: None,
+                    symmetry_center: self.symmetry_center,
+                }
             }
             None => PieceData {
                 name: self.name.clone(),
@@ -74,6 +93,7 @@ impl Piece {
                 mesh: self.mesh.to_data(),
                 multires: None,
                 vertex_map: self.current_origin().map(<[u32]>::to_vec),
+                symmetry_center: self.symmetry_center,
             },
         }
     }
@@ -89,6 +109,8 @@ pub struct PieceData {
     /// The `VMAP` section: for each vertex of `mesh`, its index in the file
     /// the piece originally came from.
     pub vertex_map: Option<Vec<u32>>,
+    /// The `SYMC` section: the piece's symmetry centre.
+    pub symmetry_center: Option<Vec3>,
 }
 
 impl PieceData {
@@ -110,7 +132,15 @@ impl PieceData {
             };
             map.map(|map| VertexOrigin { topology_version: mesh.topology_version(), map })
         });
-        Piece { id: new_piece_id(), name: self.name, visible: self.visible, mesh, multires, origin: origin.flatten() }
+        Piece {
+            id: new_piece_id(),
+            name: self.name,
+            visible: self.visible,
+            mesh,
+            multires,
+            origin: origin.flatten(),
+            symmetry_center: self.symmetry_center,
+        }
     }
 }
 

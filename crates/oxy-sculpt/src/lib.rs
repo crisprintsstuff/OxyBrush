@@ -312,7 +312,8 @@ impl Axis {
     }
 }
 
-/// Mirror planes and radial copies around the object origin.
+/// Mirror planes and radial copies. They pass through the stroke's symmetry
+/// centre ([`Stroke::with_symmetry_center`]), the world origin by default.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Symmetry {
     pub x: bool,
@@ -351,6 +352,68 @@ impl Symmetry {
         }
         out
     }
+}
+
+/// Where a shape's mirror planes most likely cross, for a piece that has just
+/// been imported or opened without its own symmetry centre.
+///
+/// Each axis is decided on its own. The shape is binned into a coarse
+/// occupancy grid, and candidate planes across its bounds are scored by the
+/// share of occupied cells whose mirror image is occupied too. The world
+/// origin wins whenever it scores about as well as the best plane, so a
+/// model built around the origin keeps mirroring there even when it isn't
+/// perfectly symmetric (an arm raised on one side, a prop held in one hand);
+/// only a shape that is clearly mirrored about somewhere else moves the plane.
+pub fn estimate_symmetry_center(positions: &[Vec3]) -> Vec3 {
+    const CELLS: f32 = 32.0;
+    // Enough points to fill the grid; keeps very dense meshes fast.
+    const MAX_SAMPLES: usize = 200_000;
+    let finite = || positions.iter().copied().filter(|p| p.is_finite());
+    let (lo, hi) = finite().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
+    let extent = (hi - lo).max_element();
+    if !(extent.is_finite() && extent > 0.0) {
+        return Vec3::ZERO;
+    }
+    let cell = extent / CELLS;
+    let key = |p: Vec3| ((p - lo) / cell).floor().as_ivec3();
+    let stride = (positions.len() / MAX_SAMPLES).max(1);
+    let occupied: HashSet<glam::IVec3> = finite().step_by(stride).map(key).collect();
+    let mut center = Vec3::ZERO;
+    for axis in 0..3 {
+        // Share of occupied cells whose mirror about `c` is occupied (or one
+        // cell away along the axis, which absorbs the grid's rounding).
+        let score = |c: f32| -> f32 {
+            let hits = occupied
+                .iter()
+                .filter(|k| {
+                    let mut q = lo + (k.as_vec3() + 0.5) * cell;
+                    q[axis] = 2.0 * c - q[axis];
+                    let m = key(q);
+                    let mut step = glam::IVec3::ZERO;
+                    step[axis] = 1;
+                    occupied.contains(&m) || occupied.contains(&(m + step)) || occupied.contains(&(m - step))
+                })
+                .count();
+            hits as f32 / occupied.len() as f32
+        };
+        let mid = 0.5 * (lo[axis] + hi[axis]);
+        // Half-cell steps across the bounds, nearest the middle first so a
+        // tie goes to the most central plane.
+        let half_span = 0.5 * (hi[axis] - lo[axis]);
+        let steps = (half_span / (0.5 * cell)).ceil() as i32;
+        let mut best = (score(mid), mid);
+        for k in 1..=steps {
+            for c in [mid - k as f32 * 0.5 * cell, mid + k as f32 * 0.5 * cell] {
+                let sc = score(c);
+                if sc > best.0 + 1e-4 {
+                    best = (sc, c);
+                }
+            }
+        }
+        let at_origin = if lo[axis] <= 0.0 && hi[axis] >= 0.0 { score(0.0) } else { 0.0 };
+        center[axis] = if at_origin >= best.0 - 0.03 { 0.0 } else { best.1 };
+    }
+    center
 }
 
 /// One pointer sample along a stroke.
@@ -403,9 +466,12 @@ fn along_normal(drag: Vec3, normal: Vec3, view: Vec3) -> Vec3 {
 }
 
 impl Dab {
-    fn transformed(&self, m: Mat3) -> Dab {
+    /// This dab copied by a symmetry transform `m` about the point `origin`
+    /// (the symmetry centre): positions are mirrored or rotated about it,
+    /// directions by `m` alone.
+    fn transformed(&self, m: Mat3, origin: Vec3) -> Dab {
         Dab {
-            center: m * self.center,
+            center: origin + m * (self.center - origin),
             normal: m * self.normal,
             direction: m * self.direction,
             drag: m * self.drag,
@@ -552,6 +618,9 @@ pub struct Stroke {
     /// Paint brush color (sRGB).
     paint: Vec3,
     rng: u64,
+    /// Point that symmetry mirrors and rotates about (world origin unless
+    /// set with [`Stroke::set_symmetry_center`]).
+    sym_center: Vec3,
     /// Size and strength multipliers for the next samples (see
     /// [`Stroke::set_modulation`]).
     modulation: (f32, f32),
@@ -576,6 +645,7 @@ impl Stroke {
             grab_through: false,
             paint: Vec3::ONE,
             rng: 0x9e37_79b9_7f4a_7c15,
+            sym_center: Vec3::ZERO,
             modulation: (1.0, 1.0),
             budget: None,
             strength_scale: 1.0,
@@ -641,6 +711,19 @@ impl Stroke {
     /// options are.
     pub fn set_modulation(&mut self, size: f32, strength: f32) {
         self.modulation = (size.max(0.0), strength.max(0.0));
+    }
+
+    /// Mirror and rotate the symmetry copies about `center` instead of the
+    /// world origin, so a model that isn't at the origin is still sculpted
+    /// symmetrically. Set before the first sample.
+    pub fn set_symmetry_center(&mut self, center: Vec3) {
+        self.sym_center = center;
+    }
+
+    /// Builder form of [`Stroke::set_symmetry_center`].
+    pub fn with_symmetry_center(mut self, center: Vec3) -> Self {
+        self.sym_center = center;
+        self
     }
 
     pub fn settings(&self) -> &BrushSettings {
@@ -767,12 +850,30 @@ impl Stroke {
         // displacements. Writing one after the other lets the second copy
         // chase vertices the first copy already moved, and the overlap tears.
         if copies.len() > 1 && kind == BrushKind::SnakeHook {
-            blend_snake_hook(mesh, &self.settings, self.invert, &base, &copies, alpha.as_deref(), touch);
+            blend_snake_hook(
+                mesh,
+                &self.settings,
+                self.invert,
+                &base,
+                &copies,
+                self.sym_center,
+                alpha.as_deref(),
+                touch,
+            );
         } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease) {
-            blend_symmetry_copies(mesh, &self.settings, self.invert, &base, &copies, alpha.as_deref(), touch);
+            blend_symmetry_copies(
+                mesh,
+                &self.settings,
+                self.invert,
+                &base,
+                &copies,
+                self.sym_center,
+                alpha.as_deref(),
+                touch,
+            );
         } else {
             for &m in &copies {
-                let dab = base.transformed(m);
+                let dab = base.transformed(m, self.sym_center);
                 apply_kernel(
                     mesh,
                     &self.settings,
@@ -788,7 +889,7 @@ impl Stroke {
             return;
         }
         for &m in &copies {
-            self.auto_smooth_dab(mesh, &base.transformed(m), touch);
+            self.auto_smooth_dab(mesh, &base.transformed(m, self.sym_center), touch);
         }
     }
 
@@ -812,7 +913,7 @@ impl Stroke {
                 .transforms
                 .iter()
                 .map(|&m| {
-                    let d = dab.transformed(m);
+                    let d = dab.transformed(m, self.sym_center);
                     let mut verts = Vec::new();
                     if through {
                         verts = capture_cylinder(mesh, &self.settings, &d);
@@ -1212,13 +1313,14 @@ fn blend_snake_hook(
     invert: bool,
     base: &Dab,
     copies: &[Mat3],
+    origin: Vec3,
     alpha: Option<&Alpha>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
     let mut chunks = Vec::new();
     for &m in copies {
-        let dab = base.transformed(m);
+        let dab = base.transformed(m, origin);
         let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
         if affected.is_empty() {
             continue;
@@ -1259,13 +1361,14 @@ fn blend_symmetry_copies(
     invert: bool,
     base: &Dab,
     copies: &[Mat3],
+    origin: Vec3,
     alpha: Option<&Alpha>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
     let mut chunks = Vec::new();
     for &m in copies {
-        let dab = base.transformed(m);
+        let dab = base.transformed(m, origin);
         let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
         if affected.is_empty() {
             continue;
@@ -1452,6 +1555,55 @@ mod tests {
         let b = mesh.bounds();
         assert!((b.max.x + b.min.x).abs() < 1e-3, "{b:?}");
         assert!(b.max.x > 1.01);
+    }
+
+    fn shifted_sphere(offset: Vec3) -> Mesh {
+        let mut data = primitives::icosphere(4, 1.0).to_data();
+        for p in &mut data.positions {
+            *p += offset;
+        }
+        Mesh::from_data(data)
+    }
+
+    #[test]
+    fn grab_mirrors_about_the_symmetry_center() {
+        // A sphere centred at x = 0.4: mirroring about the world origin would
+        // send the copy into empty space and move nothing on the other side.
+        let c = Vec3::new(0.4, 0.0, 0.0);
+        let mesh0 = shifted_sphere(c);
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.3, strength: 1.0, ..Default::default() };
+        let right = StrokeSample { position: c + Vec3::X, normal: Vec3::X, pressure: 1.0 };
+        let drag = StrokeSample { position: c + Vec3::X * 1.4, ..right };
+        let run = |center: Vec3| {
+            let mut mesh = mesh0.clone();
+            let mut s =
+                Stroke::new(settings, Symmetry { x: true, ..Default::default() }, false).with_symmetry_center(center);
+            s.add_sample(&mut mesh, right, &mut |_, _| {});
+            s.add_sample(&mut mesh, drag, &mut |_, _| {});
+            mesh.bounds()
+        };
+        let world = run(Vec3::ZERO);
+        assert!(world.min.x > c.x - 1.0 - 1e-3, "world origin: left side untouched {world:?}");
+        let own = run(c);
+        assert!(own.max.x > c.x + 1.3 && own.min.x < c.x - 1.3, "{own:?}");
+        assert!((own.max.x - c.x + (own.min.x - c.x)).abs() < 1e-3, "mirrored evenly: {own:?}");
+    }
+
+    #[test]
+    fn estimated_symmetry_center_prefers_the_origin() {
+        let sphere = primitives::icosphere(3, 1.0);
+        assert_eq!(estimate_symmetry_center(&sphere.positions), Vec3::ZERO);
+        // Off-centre and symmetric: the shape's own middle.
+        let off = shifted_sphere(Vec3::new(0.4, -2.0, 7.5));
+        let c = estimate_symmetry_center(&off.positions);
+        assert!((c - Vec3::new(0.4, -2.0, 7.5)).abs().max_element() < 0.05, "{c}");
+        // Centred but lopsided (an "arm" on one side): stays at the origin,
+        // where the bounds' middle would have moved the plane.
+        let mut lopsided = sphere.positions.clone();
+        lopsided.extend((0..200).map(|i| Vec3::new(1.0 + i as f32 * 0.01, 0.0, 0.0)));
+        assert_eq!(estimate_symmetry_center(&lopsided).x, 0.0);
+        assert_eq!(estimate_symmetry_center(&[]), Vec3::ZERO);
+        assert_eq!(estimate_symmetry_center(&[Vec3::splat(3.0)]), Vec3::ZERO);
     }
 
     #[test]
