@@ -33,6 +33,18 @@ A fourth stroke mode, **Curve**, next to Freehand, Line and Stamp.
 
 The result is shown live, on the model, while it is open.
 
+**Hold to adjust (any Freehand stroke).** Without switching modes: while
+drawing a Freehand stroke, hold the pen or mouse still for about half a
+second (a small ring fills up at the cursor). The stroke so far is taken
+back and becomes the same editable curve, and the press now drags its end
+point, so moving on extends and reshapes it. After release it behaves like
+any curve stroke. A press-and-hold that hasn't drawn anything yet stays a
+normal stroke. It can be turned off in the Stroke section ("Hold to
+adjust"); brushes that are always freehand (Grab, Snake Hook, Smooth, the
+Ctrl mask stand-in) never do it. Taking the stroke back uses
+`History::revert_pending`, which restores the chunks the stroke touched and
+drops it without an undo step.
+
 ## How it works
 
 - **Preview without touching the document.** The open curve keeps a copy of

@@ -540,6 +540,7 @@ impl App {
         // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
         ed.update_extract_preview();
+        ed.tick_hold(Instant::now());
         ed.update_curve();
         ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
