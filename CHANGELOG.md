@@ -10,6 +10,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **OxyCharacter round trip:** a document opened from OxyCharacter (a `.oxb` with a `<file>.oxylink.json` next to it) shows **Linked to OxyCharacter** in the top bar. Clicking it, **File > Send back to OxyCharacter** or the command palette saves to the file OxyCharacter is watching (atomically, as any save), even after a Save As elsewhere, and confirms with "Sent to OxyCharacter: changes appear there". Save As copies the `.oxylink.json` byte for byte next to the new file; OxyBrush never reads, moves or deletes it. The first time `OxyCharacter Body` loses its topology (remesh, subdivide once, decimate, Boolean, split, delete hidden…), a hint explains that it will return as a separate mesh and that subdivision levels (Ctrl+D) keep it a morph.
 - **`VMAP` project section:** for each vertex of a loaded piece, its index in the file the piece was first loaded from (OxyBrush reorders vertices on load), so a program like OxyCharacter can match vertices exactly. Written only while the piece's topology is unchanged and it has no subdivision levels; older versions skip it.
 
+### Fixed
+- **Side panels keep their width ([#80](https://github.com/crisprintsstuff/OxyBrush/issues/80)):** the settings panel no longer grows and shrinks as sections open and close; drag its edge to resize it.
+- **Pen pressure in the Linux Flatpak ([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)):** the Flatpak only had X11 as a fallback, so on a Wayland desktop OxyBrush couldn't switch to X11 for a connected tablet, and pen pressure was lost. It now has the X11 socket too.
+
 ## [2.5.7-beta] - 2026-11-07
 
 ### Added
