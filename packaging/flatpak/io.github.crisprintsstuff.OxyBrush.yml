@@ -14,10 +14,14 @@ runtime-version: '25.08'
 sdk: org.freedesktop.Sdk
 command: oxybrush
 finish-args:
-  # Display: Wayland with X11 fallback; GPU access for wgpu (Vulkan/GL).
+  # Display: Wayland and X11; GPU access for wgpu (Vulkan/GL). X11 is a
+  # full socket, not fallback-x11: on a Wayland desktop OxyBrush switches to
+  # X11 when a drawing tablet is connected, because pen pressure only
+  # reaches it there (winit has no Wayland tablet support), and
+  # fallback-x11 hides X11 whenever Wayland is available (#81).
   - --share=ipc
   - --socket=wayland
-  - --socket=fallback-x11
+  - --socket=x11
   - --device=dri
   # No broad filesystem access: open/save go through the file-chooser portal,
   # autosave lives in the app's own data directory.
