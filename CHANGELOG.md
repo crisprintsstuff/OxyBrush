@@ -12,6 +12,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **Mask extract previews first:** Extract mask now shows the shell as a live preview instead of adding a piece straight away. Thickness and edge smoothing update the preview as you drag the sliders; **Accept** (Enter) adds it as a new piece in one undo step, and **Cancel** (Esc) leaves the scene unchanged. Editing the mask while the preview is open updates it too.
+- **Previews look like previews:** the mask extract preview and the Insert Primitives preview are drawn with a blue glaze, so they can't be mistaken for the model until they are added.
 
 ### Fixed
 - **macOS: Quit asks to save ([#69](https://github.com/crisprintsstuff/OxyBrush/issues/69)):** Cmd+Q, Quit in the Dock and logging out closed OxyBrush without asking to save unsaved changes. They now ask, like closing the window does. (The bundled copy of winit has a second small patch for this, see `third_party/README.md`.)
