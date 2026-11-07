@@ -3283,6 +3283,12 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Stabilizer");
         tips::hover(ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt")), plain::STABILIZER);
         ui.end_row();
+        ui.label("Hold to adjust");
+        tips::hover(
+            ui.checkbox(&mut ed.hold_to_curve, "Hold still to turn a stroke into a curve"),
+            plain::HOLD_TO_CURVE,
+        );
+        ui.end_row();
         ui.label("Spray");
         tips::hover(ui.add(egui::Slider::new(&mut ed.spray, 0.0..=1.0)), plain::SPRAY);
         ui.end_row();
@@ -4004,6 +4010,24 @@ fn draw_curve(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
         let line: Vec<egui::Pos2> = points.iter().map(|&p| to_ui(p)).collect();
         painter.add(egui::Shape::line(line, EStroke::new(1.5, accent.linear_multiply(0.8))));
         return;
+    }
+    // Holding still during a freehand stroke: a ring fills up until the
+    // stroke turns into a curve. Keep repainting so it can.
+    if let Some(t) = ed.hold_progress(std::time::Instant::now()) {
+        ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+        if let (Some(p), true) = (ed.pointer, t > 0.25) {
+            let centre = to_ui(p);
+            let r = 11.0;
+            let frac = ((t - 0.25) / 0.75).clamp(0.0, 1.0);
+            let n = (frac * 40.0).ceil().max(1.0) as usize;
+            let arc: Vec<egui::Pos2> = (0..=n)
+                .map(|i| {
+                    let a = -std::f32::consts::FRAC_PI_2 + std::f32::consts::TAU * frac * i as f32 / n as f32;
+                    centre + egui::vec2(a.cos(), a.sin()) * r
+                })
+                .collect();
+            painter.add(egui::Shape::line(arc, EStroke::new(2.5, accent)));
+        }
     }
     let Some(c) = &ed.curve else { return };
     let origin = Vec2::new(ed.canvas[0], ed.canvas[1]);
