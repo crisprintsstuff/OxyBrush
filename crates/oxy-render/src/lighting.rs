@@ -136,10 +136,10 @@ impl Default for Lighting {
             on: true,
             kind: LightKind::Sun,
             color: [1.0, 0.93, 0.84],
-            intensity: 2.6,
+            intensity: 1.6,
             follow_camera: true,
-            azimuth: 35.0,
-            elevation: 35.0,
+            azimuth: 55.0,
+            elevation: 40.0,
             shadows: true,
             ..Light::default()
         };
@@ -147,23 +147,23 @@ impl Default for Lighting {
             on: true,
             kind: LightKind::Sun,
             color: [0.72, 0.82, 1.0],
-            intensity: 0.7,
+            intensity: 0.35,
             follow_camera: true,
-            azimuth: -60.0,
-            elevation: 10.0,
+            azimuth: -70.0,
+            elevation: 5.0,
             ..Light::default()
         };
-        let back = Light { azimuth: 170.0, elevation: 30.0, intensity: 1.2, ..Light::default() };
-        let spot = Light { kind: LightKind::Spot, position: [0.0, 1.0, 0.9], intensity: 3.0, ..Light::default() };
+        let back = Light { azimuth: 170.0, elevation: 30.0, intensity: 0.8, ..Light::default() };
+        let spot = Light { kind: LightKind::Spot, position: [0.0, 1.0, 0.9], intensity: 2.0, ..Light::default() };
         Self {
             enabled: false,
             lights: [key, fill, back, spot],
-            surface: [0.62, 0.42, 0.34],
+            surface: [0.48, 0.24, 0.15],
             roughness: 0.55,
             specular: 0.35,
             sky: [0.55, 0.62, 0.75],
             ground: [0.28, 0.24, 0.22],
-            ambient: 0.35,
+            ambient: 0.25,
             rim: 0.15,
             exposure: 0.0,
             shadows: true,
@@ -188,11 +188,11 @@ impl CameraFrame {
         Self { right, up: back.cross(right).normalize_or(Vec3::Y), back }
     }
 
-    fn to_world(&self, v: Vec3) -> Vec3 {
+    fn camera_to_world(&self, v: Vec3) -> Vec3 {
         self.right * v.x + self.up * v.y + self.back * v.z
     }
 
-    fn from_world(&self, v: Vec3) -> Vec3 {
+    fn world_to_camera(&self, v: Vec3) -> Vec3 {
         Vec3::new(v.dot(self.right), v.dot(self.up), v.dot(self.back))
     }
 }
@@ -234,17 +234,17 @@ impl Light {
     /// Direction toward a sun, in world space.
     pub fn sun_direction(&self, cam: &CameraFrame) -> Vec3 {
         let d = dir_from_angles(self.azimuth, self.elevation);
-        if self.follow_camera { cam.to_world(d) } else { d }
+        if self.follow_camera { cam.camera_to_world(d) } else { d }
     }
 
     fn place(&self, rel: [f32; 3], scene: &SceneFrame, cam: &CameraFrame) -> Vec3 {
         let r = Vec3::from_array(rel) * scene.size;
-        scene.center + if self.follow_camera { cam.to_world(r) } else { r }
+        scene.center + if self.follow_camera { cam.camera_to_world(r) } else { r }
     }
 
     fn unplace(&self, world: Vec3, scene: &SceneFrame, cam: &CameraFrame) -> [f32; 3] {
         let r = world - scene.center;
-        let r = if self.follow_camera { cam.from_world(r) } else { r };
+        let r = if self.follow_camera { cam.world_to_camera(r) } else { r };
         (r / scene.size).to_array()
     }
 
@@ -268,7 +268,7 @@ impl Light {
 
     /// Point a sun so it shines from `dir` (world space).
     pub fn set_sun_direction(&mut self, dir: Vec3, cam: &CameraFrame) {
-        let d = if self.follow_camera { cam.from_world(dir) } else { dir };
+        let d = if self.follow_camera { cam.world_to_camera(dir) } else { dir };
         (self.azimuth, self.elevation) = angles_from_dir(d);
     }
 
@@ -276,7 +276,7 @@ impl Light {
     /// scene in its direction, a point or spot at its position.
     pub fn marker(&self, scene: &SceneFrame, cam: &CameraFrame) -> Vec3 {
         match self.kind {
-            LightKind::Sun => scene.center + self.sun_direction(cam) * scene.radius() * 1.3,
+            LightKind::Sun => scene.center + self.sun_direction(cam) * scene.radius(),
             _ => self.world_position(scene, cam),
         }
     }

@@ -1,9 +1,10 @@
 //! The Lights window and the light markers drawn over the viewport.
 
 use crate::editor::Editor;
+use crate::editor::LightHandle;
 use crate::tips::{self, Cmd};
 use egui::{Color32, RichText, Stroke, Ui};
-use glam::{Vec2, Vec3};
+use glam::Vec2;
 use oxy_render::lighting::{self, LightKind, Lighting};
 
 /// Tooltips for this window.
@@ -51,9 +52,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         .open(&mut open)
         .resizable(false)
         .collapsible(true)
-        .default_pos(egui::pos2(300.0, 110.0))
+        .default_pos(egui::pos2(ctx.content_rect().right() - 760.0, 110.0))
         .show(ctx, |ui| {
-            egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.75).show(ui, |ui| {
+            {
+                let h = (ctx.content_rect().height() - 200.0).max(240.0);
+                egui::ScrollArea::vertical().min_scrolled_height(h).max_height(h)
+            }
+            .show(ui, |ui| {
                 controls(ui, ed);
             });
         });
@@ -105,13 +110,7 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
     ui.add_space(6.0);
     for i in 0..lighting::MAX_LIGHTS {
         let light = &mut l.lights[i];
-        let title = format!(
-            "{}  Light {}: {}{}",
-            if light.on { "●" } else { "○" },
-            i + 1,
-            light.kind.label(),
-            if light.on { "" } else { " (off)" }
-        );
+        let title = format!("Light {}: {}{}", i + 1, light.kind.label(), if light.on { "" } else { " (off)" });
         egui::CollapsingHeader::new(title).id_salt(("light", i)).default_open(i == 0).show(ui, |ui| {
             egui::Grid::new(("light_grid", i)).num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("On");
@@ -212,140 +211,73 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
-/// What a marker drag moves.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Handle {
-    Light(usize),
-    Aim(usize),
-}
-
-/// Numbered dots for the lights over the viewport (while the Lights window
-/// is open and lighting is on). Dragging one moves its light; they sit on
-/// egui's top layer, so a drag never reaches the model.
-pub fn markers(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
-    if !(ed.show_lights && ed.view.lighting.enabled) {
+/// Numbered dots for the lights over the viewport, while the Lights window
+/// is open and lighting is on. The editor handles dragging them (see
+/// `Editor::light_handles`); they are drawn in the viewport's own layer, so
+/// windows stay on top.
+pub fn markers(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+    let handles = ed.light_handles();
+    if handles.is_empty() {
         return;
     }
-    let (scene, cam) = ed.light_frames();
+    let (scene, _) = ed.light_frames();
+    let painter = ui.painter_at(canvas);
     let accent = ed.accent_color();
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("light_markers")));
-    let painter = painter.with_clip_rect(canvas);
-    let center = crate::ui::project_point(ed, scene.center);
-    let mut handles: Vec<(Handle, egui::Pos2)> = Vec::new();
-    for (i, light) in ed.view.lighting.lights.iter().enumerate() {
-        if !light.on {
-            continue;
-        }
-        let Some(p) = crate::ui::project_point(ed, light.marker(&scene, &cam)) else { continue };
-        let p = canvas.shrink(10.0).clamp(p);
-        let col = Color32::from_rgb(
-            (light.color[0].powf(1.0 / 2.2) * 255.0) as u8,
-            (light.color[1].powf(1.0 / 2.2) * 255.0) as u8,
-            (light.color[2].powf(1.0 / 2.2) * 255.0) as u8,
-        );
-        match light.kind {
-            LightKind::Sun => {
-                if let Some(c) = center {
-                    painter.line_segment([p, c], Stroke::new(1.0, col.gamma_multiply(0.35)));
-                }
-            }
-            LightKind::Spot => {
-                if let Some(a) = crate::ui::project_point(ed, light.world_aim(&scene, &cam)) {
-                    let a = canvas.shrink(10.0).clamp(a);
-                    painter.line_segment([p, a], Stroke::new(1.0, col.gamma_multiply(0.6)));
-                    let d = 6.0;
-                    painter.add(egui::Shape::convex_polygon(
-                        vec![
-                            a + egui::vec2(0.0, -d),
-                            a + egui::vec2(d, 0.0),
-                            a + egui::vec2(0.0, d),
-                            a + egui::vec2(-d, 0.0),
-                        ],
-                        col.gamma_multiply(0.8),
-                        Stroke::new(1.2, Color32::from_black_alpha(180)),
-                    ));
-                    handles.push((Handle::Aim(i), a));
-                }
-            }
-            LightKind::Point => {}
-        }
-        painter.circle_filled(p, 10.0, Color32::from_black_alpha(170));
-        painter.circle_filled(p, 8.0, col);
-        painter.circle_stroke(p, 10.0, Stroke::new(1.5, accent));
-        let text_col = if light.color.iter().sum::<f32>() > 1.6 { Color32::BLACK } else { Color32::WHITE };
-        painter.text(p, egui::Align2::CENTER_CENTER, format!("{}", i + 1), egui::FontId::proportional(11.0), text_col);
-        handles.push((Handle::Light(i), p));
-    }
-    // Interaction: an invisible area per handle, on top of the viewport.
-    egui::Area::new(egui::Id::unique("light_marker_area")).order(egui::Order::Foreground).fixed_pos(canvas.min).show(
-        ctx,
-        |ui| {
-            for (h, pos) in handles.iter().rev() {
-                let rect = egui::Rect::from_center_size(*pos, egui::vec2(22.0, 22.0));
-                let r = ui.interact(rect, egui::Id::unique(("light_handle", format!("{h:?}"))), egui::Sense::drag());
-                let r = r.on_hover_text(match h {
-                    Handle::Light(i) => format!("Light {}: drag to move it", i + 1),
-                    Handle::Aim(i) => format!("Light {}: drag to change where it aims", i + 1),
-                });
-                if r.hovered() || r.dragged() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
-                }
-                if r.dragged()
-                    && let Some(pointer) = r.interact_pointer_pos()
-                {
-                    drag_handle(ed, *h, pointer);
-                }
-            }
-        },
-    );
-}
-
-/// Move a light's handle to follow the pointer (logical points).
-fn drag_handle(ed: &mut Editor, handle: Handle, pointer: egui::Pos2) {
-    let (scene, cam) = ed.light_frames();
     let ppp = ed.pixels_per_point.max(0.1);
-    let px = Vec2::new(pointer.x * ppp - ed.canvas[0], pointer.y * ppp - ed.canvas[1]);
-    let (o, d) = ed.camera.ray(px, ed.canvas_size());
-    let forward = ed.camera.forward();
-    // The point under the pointer on the view plane through `at`.
-    let on_plane = |at: Vec3| {
-        let denom = d.dot(forward);
-        if denom.abs() < 1e-6 {
-            return None;
-        }
-        let t = (at - o).dot(forward) / denom;
-        (t > 0.0).then(|| o + d * t)
+    let to_ui = |v: Vec2| egui::pos2(v.x / ppp, v.y / ppp);
+    let center = crate::ui::project_point(ed, scene.center);
+    let held = match ed.drag {
+        crate::editor::Drag::LightHandle(h) => Some(h),
+        _ => None,
     };
-    let light = match handle {
-        Handle::Light(i) | Handle::Aim(i) => &mut ed.view.lighting.lights[i],
-    };
-    match (handle, light.kind) {
-        (Handle::Light(_), LightKind::Sun) => {
-            // The sun's dot moves on a sphere around the scene; its
-            // direction is from the middle to the dot.
-            let r = scene.radius() * 1.3;
-            let oc = o - scene.center;
-            let b = oc.dot(d);
-            let c = oc.length_squared() - r * r;
-            let disc = b * b - c;
-            let hit = if disc >= 0.0 {
-                o + d * (-b - disc.sqrt())
-            } else {
-                // Past the edge of the sphere: the nearest point on the ray.
-                o + d * (-b)
-            };
-            light.set_sun_direction((hit - scene.center).normalize_or(Vec3::Y), &cam);
-        }
-        (Handle::Light(_), _) => {
-            let at = light.world_position(&scene, &cam);
-            if let Some(p) = on_plane(at) {
-                light.set_world_position(p, &scene, &cam);
+    let at = |h: LightHandle| handles.iter().find(|(k, _)| *k == h).map(|(_, p)| to_ui(*p));
+    for (h, p) in &handles {
+        let p = to_ui(*p);
+        let (LightHandle::Light(i) | LightHandle::Aim(i)) = *h;
+        let light = &ed.view.lighting.lights[i];
+        let col = Color32::from_rgb(
+            (light.color[0].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8,
+            (light.color[1].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8,
+            (light.color[2].clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8,
+        );
+        let big = held == Some(*h);
+        match h {
+            LightHandle::Light(_) => {
+                if light.kind == LightKind::Sun
+                    && let Some(c) = center
+                {
+                    painter.line_segment([p, c], Stroke::new(1.0, col.gamma_multiply(0.4)));
+                }
+                if light.kind == LightKind::Spot
+                    && let Some(a) = at(LightHandle::Aim(i))
+                {
+                    painter.line_segment([p, a], Stroke::new(1.0, col.gamma_multiply(0.6)));
+                }
+                let r = if big { 11.0 } else { 9.0 };
+                painter.circle_filled(p, r + 2.0, Color32::from_black_alpha(170));
+                painter.circle_filled(p, r, col);
+                painter.circle_stroke(p, r + 2.0, Stroke::new(1.5, accent));
+                let text = if light.color.iter().sum::<f32>() > 1.6 { Color32::BLACK } else { Color32::WHITE };
+                painter.text(
+                    p,
+                    egui::Align2::CENTER_CENTER,
+                    format!("{}", i + 1),
+                    egui::FontId::proportional(11.0),
+                    text,
+                );
             }
-        }
-        (Handle::Aim(_), _) => {
-            let at = light.world_aim(&scene, &cam);
-            if let Some(p) = on_plane(at) {
-                light.set_world_aim(p, &scene, &cam);
+            LightHandle::Aim(_) => {
+                let d = if big { 8.0 } else { 6.0 };
+                painter.add(egui::Shape::convex_polygon(
+                    vec![
+                        p + egui::vec2(0.0, -d),
+                        p + egui::vec2(d, 0.0),
+                        p + egui::vec2(0.0, d),
+                        p + egui::vec2(-d, 0.0),
+                    ],
+                    col,
+                    Stroke::new(1.5, accent),
+                ));
             }
         }
     }

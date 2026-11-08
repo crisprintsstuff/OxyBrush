@@ -53,10 +53,17 @@ fn main() {
     println!("{} triangles, viewport {}x{}", mesh.triangle_count(), 844, 800);
 
     let frames = 60;
-    for (label, ao, cavity) in
-        [("plain", 0.0, 0.0), ("cavity only", 0.0, 0.6), ("ambient occlusion + cavity", 0.7, 0.6)]
-    {
-        let settings = ViewSettings { ambient_occlusion: ao, cavity, ..Default::default() };
+    let lit = |shadows: bool| oxy_render::lighting::Lighting { enabled: true, shadows, ..Default::default() };
+    let bounds = mesh.bounds();
+    let scene_bounds = Some((bounds.min.to_array(), bounds.max.to_array()));
+    for (label, ao, cavity, lighting) in [
+        ("plain", 0.0, 0.0, oxy_render::lighting::Lighting::default()),
+        ("cavity only", 0.0, 0.6, oxy_render::lighting::Lighting::default()),
+        ("ambient occlusion + cavity", 0.7, 0.6, oxy_render::lighting::Lighting::default()),
+        ("lights (no shadows) + AO + cavity", 0.7, 0.6, lit(false)),
+        ("lights + 1 shadow map + AO + cavity", 0.7, 0.6, lit(true)),
+    ] {
+        let settings = ViewSettings { ambient_occlusion: ao, cavity, lighting, scene_bounds, ..Default::default() };
         let mut run = |n: usize| {
             let t = Instant::now();
             for _ in 0..n {
@@ -68,6 +75,6 @@ fn main() {
             t.elapsed().as_secs_f64() * 1000.0 / n as f64
         };
         run(5); // warm up
-        println!("{label:>28}: {:7.2} ms/frame", run(frames));
+        println!("{label:>36}: {:7.2} ms/frame", run(frames));
     }
 }

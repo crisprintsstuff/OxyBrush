@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Viewport lights and shadows** ([RFC 0008](docs/rfcs/0008-viewport-lights.md)): **View > Shading > Light the viewport** shades the model with up to four lights (sun, point or spot) instead of the material, and **Lights…** sets them up: color (with warm, daylight and cool presets), intensity, direction or position, spot cone and aim, lights that follow the view, sky and ground light, rim light, exposure, the surface color, roughness and specular, and soft **shadows** from suns and spots. While the Lights window is open, numbered markers in the viewport can be dragged to move the lights. Face-group colors, paint, masks, ambient occlusion and cavity still show. Off by default; the matcap stays the default look.
+
 ### Changed
 - **Floor grid button on the view strip:** the strip beside the viewport has a floor grid toggle under the wireframe button, so it no longer takes a trip to **View > Shading**.
 

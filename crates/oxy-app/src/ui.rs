@@ -619,7 +619,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_curve(ui, ed, canvas);
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
-    crate::lights_ui::markers(ui.ctx(), ed, canvas);
+    crate::lights_ui::markers(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
