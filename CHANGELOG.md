@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.1-beta] - 2026-11-08
+
 ### Added
 - **Tube tool** ([RFC 0009](docs/rfcs/0009-tube-tool.md)): **Pieces > + Add > Tube (draw)…** — drag a path from the model or empty space and get a smooth tube along it. Drag its points to reshape it, **Shift+drag** a point to make the tube thicker or thinner there, click the line to add a point and **Alt+click** to remove one. The Tube window sets thickness, sides, rounded ends and a mirror copy across X. **Accept** adds it as a new piece in one undo step. For horns, tentacles, tails, limbs and cables.
 - **More shapes under Add piece:** **Cylinder**, **Cone** and **Torus**, alongside sphere, cube and plane (Pieces > + Add, the Pieces menu and the command palette). Cylinder and cone are built with even triangles, ready to sculpt (in the background, so the window doesn't pause).
