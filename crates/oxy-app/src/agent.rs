@@ -569,6 +569,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             radius: view.world_radius(samples[0].position, ed.brush_radius_pt),
             strength: ed.strength(kind),
             falloff: ed.falloff,
+            focal_shift: ed.focal_shift,
             spacing: ed.spacing,
             pressure_strength: ed.pressure_strength,
             pressure_radius: ed.pressure_radius,

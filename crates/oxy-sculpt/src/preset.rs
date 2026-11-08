@@ -31,6 +31,8 @@ pub struct BrushPreset {
     pub radius_pt: f32,
     pub strength: f32,
     pub falloff: Falloff,
+    /// Moves the falloff's middle, -1..=1 (see `BrushSettings::focal_shift`).
+    pub focal_shift: f32,
     pub spacing: f32,
     pub pressure_strength: bool,
     pub pressure_radius: bool,
@@ -63,6 +65,7 @@ impl BrushPreset {
             radius_pt: 50.0,
             strength: kind.default_strength(),
             falloff: Falloff::Smooth,
+            focal_shift: 0.0,
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
@@ -91,6 +94,7 @@ impl BrushPreset {
         kv("radius_pt", self.radius_pt.to_string());
         kv("strength", self.strength.to_string());
         kv("falloff", falloff_key(self.falloff).into());
+        kv("focal_shift", self.focal_shift.to_string());
         kv("spacing", self.spacing.to_string());
         kv("pressure_strength", self.pressure_strength.to_string());
         kv("pressure_radius", self.pressure_radius.to_string());
@@ -133,6 +137,9 @@ impl BrushPreset {
         }
         if let Some(f) = get("falloff").and_then(falloff_from_key) {
             p.falloff = f;
+        }
+        if let Some(x) = num("focal_shift", -1.0..=1.0) {
+            p.focal_shift = x;
         }
         if let Some(x) = num("spacing", 0.01..=2.0) {
             p.spacing = x;
@@ -347,6 +354,7 @@ mod tests {
         p.radius_pt = 33.5;
         p.strength = 0.73;
         p.falloff = Falloff::Constant;
+        p.focal_shift = -0.35;
         p.spray = 0.2;
         p.stroke_mode = "stamp".into();
         p.alpha = Some("Scales".into());

@@ -407,6 +407,10 @@ pub enum CommandId {
     RadiusUp,
     StrengthDown,
     StrengthUp,
+    SizeSlider,
+    StrengthSlider,
+    PaintSlider,
+    FocalSlider,
     SymmetryX,
     SelectionLasso,
     GizmoCycle,
@@ -511,6 +515,25 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::RadiusUp, name: "Brush larger", group: "Brushes", defaults: &["]"] },
     CommandMeta { id: CommandId::StrengthDown, name: "Strength down", group: "Brushes", defaults: &["-"] },
     CommandMeta { id: CommandId::StrengthUp, name: "Strength up", group: "Brushes", defaults: &["=", "shift+="] },
+    CommandMeta { id: CommandId::SizeSlider, name: "Size slider at the pointer", group: "Brushes", defaults: &["s"] },
+    CommandMeta {
+        id: CommandId::StrengthSlider,
+        name: "Strength slider at the pointer",
+        group: "Brushes",
+        defaults: &["u"],
+    },
+    CommandMeta {
+        id: CommandId::PaintSlider,
+        name: "Paint strength slider at the pointer",
+        group: "Brushes",
+        defaults: &["i"],
+    },
+    CommandMeta {
+        id: CommandId::FocalSlider,
+        name: "Focal shift slider at the pointer",
+        group: "Brushes",
+        defaults: &["shift+o"],
+    },
     CommandMeta { id: CommandId::SymmetryX, name: "Toggle X symmetry", group: "Brushes", defaults: &["x"] },
     CommandMeta { id: CommandId::SelectionLasso, name: "Rectangle / lasso", group: "Brushes", defaults: &["l"] },
     CommandMeta { id: CommandId::GizmoCycle, name: "Transform gizmo", group: "Brushes", defaults: &["t"] },
@@ -574,6 +597,9 @@ pub fn command_defaults(id: CommandId, preset: ShortcutsPreset) -> &'static [&'s
             CommandId::GizmoCycle => &["t"],
             CommandId::WireGroups => &["shift+f"],
             CommandId::ShowMask => &["ctrl+h", "m"],
+            // O sets focal shift here, so the projection toggle moves to P.
+            CommandId::FocalSlider => &["o"],
+            CommandId::Orthographic => &["p"],
             other => command_meta(other).defaults,
         },
     }
@@ -1347,6 +1373,10 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::RadiusUp => "radius_up",
         CommandId::StrengthDown => "strength_down",
         CommandId::StrengthUp => "strength_up",
+        CommandId::SizeSlider => "size_slider",
+        CommandId::StrengthSlider => "strength_slider",
+        CommandId::PaintSlider => "paint_slider",
+        CommandId::FocalSlider => "focal_slider",
         CommandId::SymmetryX => "symmetry_x",
         CommandId::SelectionLasso => "selection_lasso",
         CommandId::GizmoCycle => "gizmo",
@@ -1749,6 +1779,16 @@ mod tests {
         assert_eq!(zb.command_for(chord("r")), Some(CommandId::GizmoRotate));
         assert_eq!(zb.command_for(chord("q")), Some(CommandId::DrawMode));
         assert_eq!(zb.command_for(chord("shift+f")), Some(CommandId::WireGroups));
+        // S, U, I, O open the pointer sliders; the projection toggle moves to P.
+        assert_eq!(zb.command_for(chord("s")), Some(CommandId::SizeSlider));
+        assert_eq!(zb.command_for(chord("u")), Some(CommandId::StrengthSlider));
+        assert_eq!(zb.command_for(chord("i")), Some(CommandId::PaintSlider));
+        assert_eq!(zb.command_for(chord("o")), Some(CommandId::FocalSlider));
+        assert_eq!(zb.command_for(chord("p")), Some(CommandId::Orthographic));
+        let std = Keymap::builtin(Preset::OxyBrush);
+        assert_eq!(std.command_for(chord("s")), Some(CommandId::SizeSlider));
+        assert_eq!(std.command_for(chord("o")), Some(CommandId::Orthographic), "O keeps its old meaning");
+        assert_eq!(std.command_for(chord("shift+o")), Some(CommandId::FocalSlider));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, false)), Some(NavAction::Orbit));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, false, true)), Some(NavAction::Pan));
         assert_eq!(zb.nav_action(NavButton::Right, mods(false, true, false)), Some(NavAction::Zoom));

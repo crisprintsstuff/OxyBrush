@@ -613,6 +613,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         }
     }
     quick_menu(ui.ctx(), ed);
+    pointer_slider(ui.ctx(), ed);
     if !ed.show_welcome {
         transform_gizmo(ui.ctx(), ed, canvas);
     }
@@ -1798,6 +1799,15 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                             },
                         );
 
+                        ui.add_space(2.0);
+                        ui.label(RichText::new("Focal shift").weak().small());
+                        tips::hover(
+                            ui.add(
+                                egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2).trailing_fill(true),
+                            ),
+                            plain::FOCAL_SHIFT,
+                        );
+
                         if ed.brush_kind == BrushKind::Crease {
                             ui.add_space(2.0);
                             ui.label(RichText::new("Pinch").weak().small());
@@ -1843,6 +1853,62 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
         if esc || clicked_outside {
             ed.quick_menu = None;
         }
+    }
+}
+
+/// The one-setting slider opened by S, U, I or O, centred under the
+/// pointer so a small sideways drag changes the value.
+fn pointer_slider(ctx: &egui::Context, ed: &mut Editor) {
+    use crate::editor::SliderKind;
+    let Some(ps) = ed.pointer_slider else { return };
+    let pos = egui::pos2(ps.pos.x, ps.pos.y) / ed.pixels_per_point;
+    let key = ed.keymap.chords(ps.kind.command()).first().map(|c| c.label());
+    let r = egui::Area::new(egui::Id::unique("pointer_slider"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_CENTER)
+        .fixed_pos(pos)
+        .constrain(true)
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 8)).show(
+                ui,
+                |ui| {
+                    ui.spacing_mut().slider_width = 180.0;
+                    let k = ed.brush_kind;
+                    let (title, tip) = match ps.kind {
+                        SliderKind::Size => (format!("{} size", k.label()), Cmd::Radius.tip()),
+                        SliderKind::Strength => (format!("{} strength", k.label()), Cmd::Strength.tip()),
+                        SliderKind::PaintStrength => {
+                            ("Paint strength".to_string(), "How strongly the Paint brush lays down color.".into())
+                        }
+                        SliderKind::FocalShift => ("Focal shift".to_string(), plain::FOCAL_SHIFT.to_string()),
+                    };
+                    ui.label(RichText::new(title).strong());
+                    let slider = match ps.kind {
+                        SliderKind::Size => {
+                            egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0)
+                        }
+                        SliderKind::Strength => egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2),
+                        SliderKind::PaintStrength => {
+                            egui::Slider::new(ed.strength_mut(BrushKind::Paint), 0.01..=1.0).max_decimals(2)
+                        }
+                        SliderKind::FocalShift => egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2),
+                    };
+                    tips::hover(ui.add(slider.trailing_fill(true)), tip);
+                    let hint = match key {
+                        Some(key) => format!("{key}, Esc or click outside to close"),
+                        None => "Esc or click outside to close".into(),
+                    };
+                    ui.label(RichText::new(hint).weak().small());
+                },
+            );
+        })
+        .response;
+    let (esc, clicked_outside) = ctx.input(|i| {
+        let outside = i.pointer.interact_pos().is_some_and(|p| !r.rect.contains(p));
+        (i.key_pressed(egui::Key::Escape), i.pointer.any_pressed() && outside)
+    });
+    if esc || clicked_outside {
+        ed.pointer_slider = None;
     }
 }
 
@@ -3235,6 +3301,9 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             plain::FALLOFF,
         );
         ui.end_row();
+        ui.label("Focal shift");
+        tips::hover(ui.add(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2)), plain::FOCAL_SHIFT);
+        ui.end_row();
         ui.label("Spacing");
         tips::hover(ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0)), plain::SPACING);
         ui.end_row();
@@ -4077,7 +4146,7 @@ fn try_draw_surface_cursor(
     let Some(outer) = project_points(ed, &outer_world) else { return false };
     painter.add(egui::Shape::closed_line(outer, EStroke::new(1.5, color)));
     if inner && !square {
-        let inner_world = surface_circle(plane.point, plane.normal, plane.radius * 0.5, up, 48);
+        let inner_world = surface_circle(plane.point, plane.normal, plane.radius * ed.focal_ring(), up, 48);
         if let Some(inner_pts) = project_points(ed, &inner_world) {
             painter.add(egui::Shape::closed_line(inner_pts, EStroke::new(1.0, color.linear_multiply(0.45))));
         }
@@ -4096,7 +4165,14 @@ fn try_draw_surface_cursor(
     true
 }
 
-fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32, kind: BrushKind, color: Color32) {
+fn paint_screen_cursor(
+    painter: &egui::Painter,
+    pos: egui::Pos2,
+    radius_pt: f32,
+    ring: f32,
+    kind: BrushKind,
+    color: Color32,
+) {
     if kind == BrushKind::ClayStrips {
         painter.rect_stroke(
             egui::Rect::from_center_size(pos, egui::vec2(2.0 * radius_pt, 2.0 * radius_pt)),
@@ -4106,8 +4182,8 @@ fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32,
         );
     } else {
         painter.circle_stroke(pos, radius_pt, EStroke::new(1.5, color));
-        // Inner ring marks where the falloff reaches ~50%.
-        painter.circle_stroke(pos, radius_pt * 0.5, EStroke::new(1.0, color.linear_multiply(0.45)));
+        // Inner ring marks where the falloff reaches ~50% (moved by focal shift).
+        painter.circle_stroke(pos, radius_pt * ring, EStroke::new(1.0, color.linear_multiply(0.45)));
     }
     painter.circle_filled(pos, 1.5, color);
 }
@@ -4534,7 +4610,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             };
             let square = kind == BrushKind::ClayStrips;
             if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, color, square, !square) {
-                paint_screen_cursor(&painter, pos, ed.brush_radius_pt, kind, color);
+                paint_screen_cursor(&painter, pos, ed.brush_radius_pt, ed.focal_ring(), kind, color);
             }
         }
     }
@@ -4973,6 +5049,30 @@ mod tests {
 
         ed.analyze_print_wall_thickness();
         assert!(ed.wall_thickness_report.is_some());
+    }
+
+    #[test]
+    fn pointer_sliders_open_under_the_pointer_and_change_their_setting() {
+        use crate::editor::SliderKind;
+        let ctx = egui::Context::default();
+        let mut ed = Editor::default();
+        ed.pointer = Some(glam::Vec2::new(300.0, 250.0));
+        for kind in [SliderKind::Size, SliderKind::Strength, SliderKind::PaintStrength, SliderKind::FocalShift] {
+            ed.perform_command(kind.command());
+            assert_eq!(ed.pointer_slider.map(|s| s.kind), Some(kind));
+            let mut output = ctx.run_ui(Default::default(), |ctx| pointer_slider(ctx, &mut ed));
+            output.textures_delta.clear();
+            assert!(ed.pointer_slider.is_some(), "stays open until closed");
+        }
+        // The same key again closes it.
+        ed.perform_command(SliderKind::FocalShift.command());
+        assert!(ed.pointer_slider.is_none());
+        // Focal shift moves the cursor's inner ring.
+        assert!((ed.focal_ring() - 0.5).abs() < 1e-6);
+        ed.focal_shift = -0.5;
+        assert!(ed.focal_ring() > 0.5, "firmer: the ring moves out");
+        ed.focal_shift = 0.5;
+        assert!(ed.focal_ring() < 0.5, "softer: the ring moves in");
     }
 
     #[test]
