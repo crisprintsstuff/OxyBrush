@@ -2188,6 +2188,10 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             if btn.secondary_clicked() {
                 ed.show_wireframe = true;
             }
+            let floor = ed.floor_grid;
+            if widgets::icon_button(ui, Icon::Floor, floor, true, &Cmd::FloorGrid.tip_in(&ed.keymap)).clicked() {
+                ed.floor_grid = !floor;
+            }
             let on = ed.gizmo.is_some();
             if widgets::icon_button(ui, Icon::Transform, on, true, &Cmd::GizmoMove.tip_in(&ed.keymap)).clicked() {
                 if on {

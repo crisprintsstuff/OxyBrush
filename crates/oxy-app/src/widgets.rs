@@ -266,6 +266,8 @@ pub enum Icon {
     Transform,
     /// Perspective lens (focal length).
     Lens,
+    /// A floor grid seen in perspective.
+    Floor,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -492,6 +494,25 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             p.circle_stroke(ctr, r * 0.62, s);
             p.circle_stroke(ctr, r * 0.28, s);
             p.line_segment([ctr + vec2(0.0, -r * 0.62), ctr + vec2(0.0, -r * 0.95)], s);
+        }
+        Icon::Floor => {
+            // A grid on the ground, receding: a trapezoid narrower at the back,
+            // with lines running back and across.
+            let (back, front) = (ctr.y - r * 0.45, ctr.y + r * 0.6);
+            let (bw, fw) = (r * 0.55, r * 0.95);
+            let at = |u: f32, v: f32| {
+                let y = back + (front - back) * v;
+                let half = bw + (fw - bw) * v;
+                pos2(ctr.x + half * u, y)
+            };
+            p.add(Shape::closed_line(vec![at(-1.0, 0.0), at(1.0, 0.0), at(1.0, 1.0), at(-1.0, 1.0)], s));
+            let thin = Stroke::new(s.width * 0.75, c);
+            for u in [-1.0 / 3.0, 1.0 / 3.0] {
+                p.line_segment([at(u, 0.0), at(u, 1.0)], thin);
+            }
+            for v in [0.42, 0.72] {
+                p.line_segment([at(-1.0, v), at(1.0, v)], thin);
+            }
         }
     }
 }
