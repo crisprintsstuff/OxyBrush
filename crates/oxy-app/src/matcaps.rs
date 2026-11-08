@@ -46,7 +46,7 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((w, h, rgba))
 }
 
-fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+pub(crate) fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: 256 << 20 });
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().map_err(|e| e.to_string())?;

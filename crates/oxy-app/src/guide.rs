@@ -102,7 +102,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         keywords: "mask protect freeze unmask invert blur selection",
         body: "Masked areas (shown darker or tinted) are protected from brushes. Hold Ctrl and paint to mask; add Alt to unmask.\n\n\
 - Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso.\n\
-- Ctrl+click on empty space blurs the mask edge.\n\
+- Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it.\n\
 - The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically.",
     },

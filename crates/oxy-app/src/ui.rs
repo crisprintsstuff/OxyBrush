@@ -2507,7 +2507,7 @@ fn recent_menu(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn help_menu(ui: &mut Ui, ed: &mut Editor) {
-    use crate::support::{REPO_URL, folder_url};
+    use crate::support::REPO_URL;
     let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     if tips::button_km(ui, &ed.keymap, "Guide", Cmd::Guide).clicked() {
         ed.guide.open = true;
@@ -2536,7 +2536,7 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     if tips::hover(ui.add_enabled(log_dir.is_some(), egui::Button::new("Open log folder")), plain::OPEN_LOG).clicked()
         && let Some(dir) = log_dir
     {
-        open(ui, folder_url(&dir));
+        crate::support::open_folder(&dir);
     }
     ui.separator();
     if tips::button(ui, "Check for updates…", Cmd::CheckUpdates).clicked() {
@@ -2958,8 +2958,7 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
         ed.begin_extract();
     }
     ui.separator();
-    let blur_label = format!("Blur  ({}+click empty space)", ed.keymap.mask.label());
-    if tips::hover(ui.button(blur_label), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
+    if tips::hover(ui.button("Blur"), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
         ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
     }
     if tips::button(ui, "Sharpen", Cmd::SharpenMask).clicked() {
@@ -3845,7 +3844,7 @@ fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
                         Err(e) => ed.status = format!("Could not start the installer: {e}"),
                     },
                     InstallStep::ShowFile { folder, how } => {
-                        ctx.open_url(egui::OpenUrl::new_tab(crate::support::folder_url(&folder)));
+                        crate::support::open_folder(&folder);
                         ed.status = how.into();
                     }
                 }

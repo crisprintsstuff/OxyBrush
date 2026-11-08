@@ -8,7 +8,15 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Viewport lights and shadows** ([RFC 0008](docs/rfcs/0008-viewport-lights.md)): **View > Shading > Light the viewport** shades the model with up to four lights (sun, point or spot) instead of the material, and **Lights…** sets them up: color (with warm, daylight and cool presets), intensity, direction or position, spot cone and aim, lights that follow the view, sky and ground light, rim light, exposure, the surface color, roughness and specular, and soft **shadows** from suns and spots. While the Lights window is open, numbered markers in the viewport can be dragged to move the lights. Face-group colors, paint, masks, ambient occlusion and cavity still show. Off by default; the matcap stays the default look.
 
 ### Changed
+- **Ctrl on empty space inverts or clears the mask:** with the default mask gestures, **Ctrl+click on empty space now inverts the mask** (with no mask, that masks everything) instead of blurring it, and a **Ctrl box or lasso drawn around none of the model clears the mask**. A box over the model still masks what it encloses. Blur is in the Mask menu and the command palette.
 - **Floor grid button on the view strip:** the strip beside the viewport has a floor grid toggle under the wireframe button, so it no longer takes a trip to **View > Shading**.
+
+### Fixed
+- **Open log folder** (and the updater's "show the downloaded file") opened a web browser on Windows instead of the file manager. Folders now open with Explorer, Finder or the desktop's file manager directly.
+- **Tab kept moving through the menus:** after Tab hid the panels, the next Tab moved keyboard focus through the menu bar instead of bringing the panels back. Tab now always shows or hides the panels, except while typing in a text field.
+- **Brush count in the README and website:** the README said "25 brushes" counting the masking, painting, insert and cutting tools, and the website still said 17. Both now say 19 sculpting brushes plus 6 tools, and the README lists them by kind.
+- **Brush shelf icons:** in the brush list beside the viewport the icons were small and didn't line up with the current brush / alpha / material tiles above them; at the bottom of the window the brush thumbnails were smaller than those tiles and sat lower. They now match the tiles in size and line up with them.
+- **Windows: app icon:** the window and taskbar showed a generic icon. OxyBrush now sets its window and taskbar icons, and the icon file stores the small sizes uncompressed, the way Windows draws them reliably (PNG is kept for the 256 px size only).
 
 ## [3.0.0-beta] - 2026-11-08
 

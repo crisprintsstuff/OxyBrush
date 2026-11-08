@@ -108,14 +108,37 @@ def png(size: int) -> bytes:
     return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", ihdr) + chunk(b"IDAT", zlib.compress(render(size), 9)) + chunk(b"IEND", b"")
 
 
+def dib(size: int) -> bytes:
+    """Uncompressed 32-bit icon image (BITMAPINFOHEADER, BGRA bottom-up, then
+    the 1-bit AND mask). Windows draws these at every size and in every
+    place (title bar, taskbar, Alt+Tab); PNG entries are only reliable at 256."""
+    rows = render(size)
+    stride = 1 + size * 4
+    pixels = bytearray()
+    mask = bytearray()
+    mask_stride = ((size + 31) // 32) * 4
+    for j in reversed(range(size)):  # bottom-up
+        row = rows[j * stride + 1:(j + 1) * stride]
+        bits = bytearray(mask_stride)
+        for i in range(size):
+            r, g, b, a = row[i * 4:i * 4 + 4]
+            pixels += bytes((b, g, r, a))
+            if a == 0:
+                bits[i // 8] |= 0x80 >> (i % 8)
+        mask += bits
+    header = struct.pack("<IiiHHIIiiII", 40, size, size * 2, 1, 32, 0, len(pixels) + len(mask), 0, 0, 0, 0)
+    return header + bytes(pixels) + bytes(mask)
+
+
 def ico(pngs: dict) -> bytes:
-    """ICO container with PNG-compressed entries (supported since Windows Vista)."""
+    """ICO container: uncompressed images below 256 px, PNG at 256 px (the
+    layout Windows expects; PNG small sizes can show wrongly)."""
     sizes = sorted(pngs)
     header = struct.pack("<HHH", 0, 1, len(sizes))
     offset = 6 + 16 * len(sizes)
     entries, data = b"", b""
     for s in sizes:
-        blob = pngs[s]
+        blob = pngs[s] if s >= 256 else dib(s)
         dim = 0 if s >= 256 else s
         entries += struct.pack("<BBBBHHII", dim, dim, 0, 0, 1, 32, len(blob), offset + len(data))
         data += blob
