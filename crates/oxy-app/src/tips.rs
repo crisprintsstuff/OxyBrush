@@ -94,6 +94,7 @@ commands! {
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
     CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white. It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
+    CloseHoles => "Close holes", "", "Fill every hole in this piece with a smooth patch of new faces, in a face group of its own. Useful before 3D printing or after cutting.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
     GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";

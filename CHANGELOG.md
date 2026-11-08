@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 - **Capture alpha from view** (Alpha section and command palette): makes an alpha from what the viewport shows: a depth image of the visible model, nearest parts white, cropped to the model. Sculpt a detail, look at it straight on, capture it, and stamp it elsewhere. It is added to the alphas and selected; captures last until OxyBrush closes.
+- **Close holes** (Mesh menu and command palette): fills every opening in the active piece with a smooth patch of new faces, sized like the faces around it, in a face group of its own. Handy after Delete hidden, a cut or an import with gaps, and before 3D printing. One undo step.
 
 ## [3.0.1-beta] - 2026-11-08
 

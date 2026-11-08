@@ -2749,6 +2749,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
     }
+    if tips::button(ui, "Close holes", Cmd::CloseHoles).clicked() {
+        ed.close_holes();
+    }
     if tips::button(ui, "Split hidden", Cmd::SplitHidden).clicked() {
         ed.split_hidden();
     }

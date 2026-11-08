@@ -115,6 +115,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Decimate, "topology reduce polygons triangles", Editor::decimate_active),
         cmd(ed, Cmd::DeleteHidden, "topology visibility", Editor::delete_hidden),
         cmd(ed, Cmd::CaptureAlpha, "alpha stamp screen grab depth height map snapshot", Editor::capture_alpha),
+        cmd(ed, Cmd::CloseHoles, "topology fill cap watertight print gap boundary", Editor::close_holes),
         cmd(ed, Cmd::SplitHidden, "topology visibility separate piece", Editor::split_hidden),
         cmd(ed, Cmd::GroupVisible, "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
         cmd(ed, Cmd::GroupFromMask, "face groups", |e| {

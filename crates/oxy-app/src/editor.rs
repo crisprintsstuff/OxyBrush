@@ -4254,6 +4254,19 @@ impl Editor {
         self.status = format!("Subdivided: {} triangles", self.scene.active().mesh.triangle_count());
     }
 
+    /// Fill every hole (open boundary) in the active piece with a smooth
+    /// patch, one undo step.
+    pub fn close_holes(&mut self) {
+        let mut data = self.scene.active().mesh.to_data();
+        let closed = topo::close_holes(&mut data);
+        if closed == 0 {
+            self.status = "No holes to close: the piece is already closed".into();
+            return;
+        }
+        self.replace_active_mesh("Close holes", Mesh::from_data(data));
+        self.status = format!("Closed {closed} hole{}", if closed == 1 { "" } else { "s" });
+    }
+
     pub fn delete_hidden(&mut self) {
         if !self.scene.active().mesh.any_hidden() {
             self.status = "Nothing is hidden".into();
@@ -5365,6 +5378,29 @@ mod tests {
         e.capture_alpha();
         assert_eq!(e.alphas.len(), count + 1);
         assert!(e.status.starts_with("Nothing to capture"));
+    }
+
+    #[test]
+    fn close_holes_fills_cut_openings_in_one_undo_step() {
+        let mut e = editor();
+        e.close_holes();
+        assert_eq!(e.status, "No holes to close: the piece is already closed");
+        // Cut a hole: hide the top cap and delete it.
+        let hidden: Vec<bool> = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.7)).collect()
+        };
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.delete_hidden();
+        let open = e.scene.active().mesh.triangle_count();
+        assert!(!topo::boundary_loops(&e.scene.active().mesh.triangles).is_empty());
+        e.close_holes();
+        assert_eq!(e.status, "Closed 1 hole");
+        let m = &e.scene.active().mesh;
+        assert!(m.triangle_count() > open);
+        assert!(topo::boundary_loops(&m.triangles).is_empty(), "still open");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), open);
     }
 
     #[test]
