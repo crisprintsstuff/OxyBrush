@@ -18,6 +18,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Floor grid button on the view strip:** the strip beside the viewport has a floor grid toggle under the wireframe button, so it no longer takes a trip to **View > Shading**.
 
 ### Fixed
+- **Grab no longer leaves jagged seams.** Two causes, both fixed: with **X symmetry**, where the mirrored brush's reach began a vertex could move less than its neighbour, cutting a jagged line along that edge (the V lines between two mirrored bulges, worst when pulling along the normal with Alt); and **Front faces only** dropped vertices outright once their surface turned past sideways, tearing steep walls. It now fades those vertices out instead. This applies to every brush, so strokes over steep walls also blend in more softly.
 - **Open log folder** (and the updater's "show the downloaded file") opened a web browser on Windows instead of the file manager. Folders now open with Explorer, Finder or the desktop's file manager directly.
 - **Tab kept moving through the menus:** after Tab hid the panels, the next Tab moved keyboard focus through the menu bar instead of bringing the panels back. Tab now always shows or hides the panels, except while typing in a text field.
 - **Brush count in the README and website:** the README said "25 brushes" counting the masking, painting, insert and cutting tools, and the website still said 17. Both now say 19 sculpting brushes plus 6 tools, and the README lists them by kind.
