@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.3-beta" date="2026-11-08" type="development">
+      <description>
+        <p>Primitives are parametric and low-poly by default, with voxel
+        remesh as an option. A Tube brush adds tubes into the piece being
+        sculpted. Plugins can be installed from a single .oxyaddon file,
+        for in-app or Python plugins, and in-app plugins can now set the
+        mask and colors and add pieces. F frames the active piece, and the
+        zoom direction can be inverted.</p>
+      </description>
+    </release>
     <release version="3.0.2-beta" date="2026-11-08" type="development">
       <description>
         <p>A Blender bridge sends meshes from Blender to OxyBrush and back,

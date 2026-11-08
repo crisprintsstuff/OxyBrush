@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.3-beta] - 2026-11-08
+
 ### Added
 - **Tube brush:** the tube tool is also a brush in the shelf, **Tube**, next to Insert Primitive. It draws a tube the same way, but **Accept adds it into the active piece** (one undo step, in a face group of its own) instead of making a new piece. The Tube window has a checkbox to switch between the two.
 - **Add-on packages (`.oxyaddon`)**: one file that installs a plugin, either an in-app (WebAssembly) plugin or a **Python** plugin. **Settings > Plugins > Install add-on…** (or opening the file) puts it in the plugins folder, replacing an older version; it then appears with the other plugins. Make one with `oxybrush-cli addon pack <folder> <file.oxyaddon>`. Archives can't write outside their folder and are size-limited.
