@@ -143,6 +143,12 @@ Masked parts stay put and partly masked parts move partly, so a soft mask edge b
 Remesh and decimate rebuild the mesh, so they remove the levels (undo brings them back).",
     },
     Topic {
+        title: "Dynamic detail",
+        keywords: "dynamic topology detail triangles adaptive refine sphere sketch",
+        body: "Turn on Dynamic detail in the Topology section (or from the command palette) and sculpting brushes add triangles where they need more detail, and remove ones that have become too small. Start from a plain sphere and pull out shapes with Snake Hook, build up with Clay, without remeshing.\n\n\
+How fine it gets depends on the Detail slider and the brush size: a smaller brush gives smaller triangles. Mask, Paint, the Grab-like brushes and the cutting tools don't change triangles. Each stroke is one undo step. It is off on pieces with subdivision levels, and works best up to a few hundred thousand triangles.",
+    },
+    Topic {
         title: "Remesh and decimate",
         keywords: "topology voxel rebuild reduce polygons triangles resolution",
         body: "Voxel remesh (Ctrl+R) rebuilds the active piece with even triangles, so stretched areas sculpt well again. Resolution sets how fine the new mesh is.\n\n\

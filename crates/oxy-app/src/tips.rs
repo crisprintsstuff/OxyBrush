@@ -121,6 +121,7 @@ commands! {
     GroupColors => "Face group colors", "G", "Show face groups as colors, or the normal material.";
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
+    DynDetail => "Dynamic detail on / off", "", "Sculpting brushes add triangles where they need more detail and remove ones that have become too small, so you can build a shape from a simple sphere without remeshing.";
     FloorGrid => "Floor grid on / off", "", "A grid on the floor under the model. It stays at the bottom of the model and its spacing follows the model's size.";
     Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";
     WireGroups => "Wireframe + groups on / off", "", "Toggle wireframe edges and face group colors together.";
@@ -658,6 +659,8 @@ pub mod plain {
     pub const PRESSURE_DRIVER: &str = "Your tablet driver (Wacom, Huion, XP-Pen) may have its own pressure curve too. Keep that one straight and set the curve here, or the two add up.";
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
+    pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
+    pub const DYN_LEVELS: &str = "Dynamic detail changes the triangles, which would remove subdivision levels, so it is off on pieces that have them.";
     pub const RADIAL: &str = "How many copies to repeat around the axis. Zero turns radial symmetry off.";
     pub const RADIAL_AXIS: &str = "The axis the radial copies go around.";
     pub const SYM_RECENTER: &str = "Put this piece's mirror planes through the middle of its shape. Use it after moving the whole piece, or if mirroring lands in the wrong place.";

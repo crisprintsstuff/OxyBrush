@@ -269,6 +269,9 @@ pub struct Settings {
     pub hold_to_curve: bool,
     /// Ask before doing so.
     pub hold_to_curve_ask: bool,
+    /// Dynamic detail on, and how fine (0..=1).
+    pub dyntopo: bool,
+    pub dyntopo_detail: f32,
     /// Pen pressure curve shape (exponent; 1 is linear).
     pub pressure_gamma: f32,
     /// Strength of the lightest touch, 0..0.5 (output floor).
@@ -571,6 +574,8 @@ impl Default for Settings {
             stroke_from_empty: false,
             hold_to_curve: true,
             hold_to_curve_ask: false,
+            dyntopo: false,
+            dyntopo_detail: 0.5,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
@@ -700,7 +705,7 @@ impl Settings {
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
         ) + &format!(
-            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\n",
+            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\ndyntopo = {}\ndyntopo_detail = {}\n",
             self.pressure_gamma,
             self.pressure_min,
             self.pressure_full,
@@ -710,7 +715,9 @@ impl Settings {
             self.pressure_shape[3],
             self.floor_grid,
             self.hold_to_curve,
-            self.hold_to_curve_ask
+            self.hold_to_curve_ask,
+            self.dyntopo,
+            self.dyntopo_detail
         ) + &self
             .recent_files
             .iter()
@@ -793,6 +800,11 @@ impl Settings {
                 "floor_grid" => s.floor_grid = v.parse().unwrap_or(s.floor_grid),
                 "hold_to_curve" => s.hold_to_curve = v.parse().unwrap_or(s.hold_to_curve),
                 "hold_to_curve_ask" => s.hold_to_curve_ask = v.parse().unwrap_or(s.hold_to_curve_ask),
+                "dyntopo" => s.dyntopo = v.parse().unwrap_or(s.dyntopo),
+                "dyntopo_detail" => {
+                    s.dyntopo_detail =
+                        v.parse::<f32>().ok().filter(|d| d.is_finite()).map_or(s.dyntopo_detail, |d| d.clamp(0.0, 1.0))
+                }
                 "surface_cursor" => s.surface_cursor = v.parse().unwrap_or(s.surface_cursor),
                 "hide_cursor_during_stroke" => {
                     s.hide_cursor_during_stroke = v.parse().unwrap_or(s.hide_cursor_during_stroke)
@@ -1008,6 +1020,8 @@ mod tests {
             stroke_from_empty: true,
             hold_to_curve: false,
             hold_to_curve_ask: true,
+            dyntopo: true,
+            dyntopo_detail: 0.25,
             pressure_gamma: 1.6,
             pressure_min: 0.1,
             pressure_full: 0.8,

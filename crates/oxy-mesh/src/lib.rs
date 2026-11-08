@@ -8,6 +8,7 @@
 
 mod aabb;
 mod adjacency;
+pub mod dyntopo;
 pub mod multires;
 
 pub mod primitives;
