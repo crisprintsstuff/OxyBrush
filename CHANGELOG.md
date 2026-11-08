@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Capture alpha from view** (Alpha section and command palette): makes an alpha from what the viewport shows: a depth image of the visible model, nearest parts white, cropped to the model. Sculpt a detail, look at it straight on, capture it, and stamp it elsewhere. It is added to the alphas and selected; captures last until OxyBrush closes.
+
 ## [3.0.1-beta] - 2026-11-08
 
 ### Added

@@ -823,6 +823,8 @@ pub struct Editor {
     pub selection_lasso: bool,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
     pub request_load_alpha: bool,
+    /// How many alphas have been captured from the view this session (for names).
+    captures: u32,
     pub symmetry: Symmetry,
     /// The mirror settings last drawn, to notice a plane being turned on.
     symmetry_seen: Symmetry,
@@ -1115,6 +1117,7 @@ impl Default for Editor {
             alpha_follow_stroke: false,
             selection_lasso: false,
             request_load_alpha: false,
+            captures: 0,
             symmetry: Symmetry { x: true, ..Default::default() },
             symmetry_seen: Symmetry { x: true, ..Default::default() },
             symmetry_flash: None,
@@ -2252,6 +2255,68 @@ impl Editor {
                 false
             }
         }
+    }
+
+    /// Make an alpha from what the viewport shows: a depth image of the
+    /// visible pieces inside the largest square centred in the viewport,
+    /// nearest surface white, empty space black. It is added to the alpha
+    /// list and selected, so a stamp of it reproduces the shape seen.
+    pub fn capture_alpha(&mut self) {
+        const RES: u32 = 256;
+        let size = self.canvas_size();
+        let forward = self.camera.forward();
+        let meshes: Vec<&Mesh> = self.scene.pieces.iter().filter(|p| p.visible).map(|p| &p.mesh).collect();
+        let camera = &self.camera;
+        // View depth of the nearest visible surface under each cell of a
+        // `res`-square grid with its top-left at `corner`, `side` px wide.
+        let grid = |corner: Vec2, side: f32, res: u32| -> Vec<Option<f32>> {
+            use rayon::prelude::*;
+            (0..res * res)
+                .into_par_iter()
+                .map(|k| {
+                    let (i, j) = (k % res, k / res);
+                    let px = corner + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * (side / res as f32);
+                    let (o, d) = camera.ray(px, size);
+                    meshes
+                        .iter()
+                        .filter_map(|m| m.raycast(o, d))
+                        .map(|h| (h.point - o).dot(forward))
+                        .min_by(f32::total_cmp)
+                })
+                .collect()
+        };
+        // A quick coarse pass over the largest centred square finds where the
+        // model is; the capture then fills a square around just that.
+        const COARSE: u32 = 48;
+        let side = size.x.min(size.y);
+        let corner = (size - Vec2::splat(side)) * 0.5;
+        let coarse = grid(corner, side, COARSE);
+        let cell = side / COARSE as f32;
+        let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
+        for (k, z) in coarse.iter().enumerate() {
+            if z.is_some() {
+                let c = corner + Vec2::new((k as u32 % COARSE) as f32, (k as u32 / COARSE) as f32) * cell;
+                lo = lo.min(c);
+                hi = hi.max(c + Vec2::splat(cell));
+            }
+        }
+        if lo.x > hi.x {
+            self.status = "Nothing to capture: no model in the middle of the view".into();
+            return;
+        }
+        let tight = (hi - lo).max_element() * 1.06;
+        let depth = grid((lo + hi) * 0.5 - Vec2::splat(tight * 0.5), tight, RES);
+        let (near, far) = depth.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), &z| (lo.min(z), hi.max(z)));
+        if near > far {
+            self.status = "Nothing to capture: no model in the middle of the view".into();
+            return;
+        }
+        let range = (far - near).max(1e-6);
+        let data: Vec<f32> = depth.iter().map(|z| z.map_or(0.0, |z| 1.0 - 0.9 * (z - near) / range)).collect();
+        self.captures += 1;
+        let name = format!("Capture {}", self.captures);
+        self.add_alpha(Alpha { name: name.clone(), size: RES, data });
+        self.status = format!("{name} added to the alphas and selected");
     }
 
     /// Add a user alpha and select it.
@@ -5275,6 +5340,31 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn capture_alpha_makes_a_depth_image_of_the_view() {
+        let mut e = editor();
+        let count = e.alphas.len();
+        e.capture_alpha();
+        assert_eq!(e.alphas.len(), count + 1);
+        assert_eq!(e.alpha, Some(count), "the capture is selected");
+        let a = e.alphas.last().unwrap().clone();
+        assert_eq!(a.name, "Capture 1");
+        assert_eq!(a.size, 256);
+        // The sphere's nearest point (the middle) is white; it falls off toward its edge.
+        let at = |x: f32, y: f32| a.sample(Vec2::new(x, y));
+        assert!(at(0.0, 0.0) > 0.95, "centre {}", at(0.0, 0.0));
+        // Cropped to the model: it fills the image, with only a thin empty margin.
+        assert!(at(0.0, 0.0) > at(0.6, 0.0) && at(0.6, 0.0) > 0.0);
+        assert!(at(0.9, 0.0) > 0.0 || at(0.85, 0.0) > 0.0, "the sphere reaches near the edge");
+        assert_eq!(at(0.99, 0.99), 0.0, "the corners are empty space");
+        assert!((at(0.6, 0.0) - at(-0.6, 0.0)).abs() < 0.02, "symmetric");
+        // Nothing visible: nothing captured.
+        e.scene.active_mut().visible = false;
+        e.capture_alpha();
+        assert_eq!(e.alphas.len(), count + 1);
+        assert!(e.status.starts_with("Nothing to capture"));
     }
 
     #[test]

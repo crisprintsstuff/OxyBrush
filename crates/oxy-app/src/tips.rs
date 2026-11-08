@@ -93,6 +93,7 @@ commands! {
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
+    CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white. It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
     GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
