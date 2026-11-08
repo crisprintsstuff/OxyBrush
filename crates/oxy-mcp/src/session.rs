@@ -40,6 +40,8 @@ pub struct HeadlessSession {
     carve: bool,
     remesh_resolution: u32,
     view: View,
+    /// What changed between tool calls, for the `changes` tool.
+    changes: crate::state::ChangeLog,
 }
 
 impl HeadlessSession {
@@ -77,6 +79,7 @@ impl HeadlessSession {
             carve: false,
             remesh_resolution: 128,
             view,
+            changes: crate::state::ChangeLog::default(),
         }
     }
 
@@ -143,6 +146,14 @@ impl HeadlessSession {
                 None => ToolResult::error("nothing to redo"),
             },
             Action::SetCamera(camera) => self.set_camera(camera),
+            Action::SceneState => ToolResult::ok(crate::state::scene_state(&self.doc_state()).to_string()),
+            // Only this client's own calls change a headless document, so
+            // there is never anything to wait for.
+            Action::Changes { since, .. } => {
+                let (events, cursor, truncated) = self.changes.since(since);
+                ToolResult::ok(crate::state::changes_json(events, cursor, truncated).to_string())
+            }
+            Action::GetGeometry { id, index, name, fields } => self.get_geometry(id, index, name, fields),
             Action::Screenshot => {
                 ToolResult::error("viewport screenshots need the OxyBrush desktop app (this session is headless)")
             }
@@ -207,31 +218,53 @@ impl HeadlessSession {
         }
     }
 
+    fn doc_state(&self) -> crate::state::DocState<'_> {
+        let v = &self.view;
+        crate::state::DocState {
+            scene: &self.scene,
+            path: self.path.as_deref(),
+            modified: self.dirty(),
+            revision: self.history.revision(),
+            camera: crate::state::CameraState {
+                eye: v.eye(),
+                target: v.target,
+                up: v.up(),
+                forward: v.forward(),
+                distance: v.distance,
+                yaw: v.yaw,
+                pitch: v.pitch,
+                fov_y: v.fov_y,
+                orthographic: v.orthographic,
+                viewport: v.viewport,
+                pixels_per_point: v.pixels_per_point,
+                view: v.view_matrix(),
+                projection: v.projection(v.viewport.x / v.viewport.y.max(1.0)),
+            },
+        }
+    }
+
+    fn get_geometry(
+        &self,
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+        fields: Option<Vec<crate::state::Field>>,
+    ) -> ToolResult {
+        let i = match self.find_piece(id, index, name.as_deref()) {
+            Ok(i) => i,
+            Err(e) => return ToolResult::error(e),
+        };
+        let piece = &self.scene.pieces[i];
+        let fields = fields.unwrap_or_else(|| crate::state::default_fields(&piece.mesh));
+        let (bytes, layout) = crate::state::encode_geometry(&piece.mesh, &fields);
+        match crate::state::write_geometry_file(&bytes, piece.id) {
+            Ok(path) => ToolResult::ok(crate::state::geometry_json(&path, piece, layout).to_string()),
+            Err(e) => ToolResult::error(e),
+        }
+    }
+
     fn find_piece(&self, id: Option<u64>, index: Option<usize>, name: Option<&str>) -> Result<usize, String> {
-        if let Some(id) = id {
-            return self.scene.index_of(id).ok_or_else(|| format!("no piece with id {id}"));
-        }
-        if let Some(index) = index {
-            return (index < self.scene.pieces.len())
-                .then_some(index)
-                .ok_or_else(|| format!("index {index} is out of range"));
-        }
-        if let Some(name) = name {
-            let matches: Vec<usize> = self
-                .scene
-                .pieces
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.name.eq_ignore_ascii_case(name))
-                .map(|(i, _)| i)
-                .collect();
-            return match matches.as_slice() {
-                [i] => Ok(*i),
-                [] => Err(format!("no piece named {name}")),
-                _ => Err(format!("more than one piece named {name}; pass index or id")),
-            };
-        }
-        Ok(self.scene.active_index())
+        crate::state::find_piece(&self.scene, id, index, name)
     }
 
     fn open_path(&mut self, path: &Path, discard: bool) -> ToolResult {
@@ -536,10 +569,17 @@ impl Default for HeadlessSession {
 
 impl Host for HeadlessSession {
     fn call_tool(&mut self, name: &str, arguments: &serde_json::Value) -> ToolResult {
-        match parse_action(name, arguments) {
+        // Start following changes from the first call.
+        if self.changes.cursor() == 0 {
+            self.changes.observe(crate::state::Snapshot::of(&self.doc_state()));
+        }
+        let result = match parse_action(name, arguments) {
             Ok(action) => self.exec(action),
             Err(e) => ToolResult::error(e),
-        }
+        };
+        let now = crate::state::Snapshot::of(&self.doc_state());
+        self.changes.observe(now);
+        result
     }
 }
 
@@ -600,6 +640,63 @@ mod tests {
 
     fn small() -> HeadlessSession {
         HeadlessSession::with_piece("Sphere", oxy_mesh::primitives::icosphere(3, 1.0))
+    }
+
+    fn json(session: &mut HeadlessSession, tool: &str, args: serde_json::Value) -> serde_json::Value {
+        let r = session.call_tool(tool, &args);
+        assert!(!r.is_error, "{tool}: {}", r.text);
+        serde_json::from_str(&r.text).unwrap_or_else(|e| panic!("{tool} reply is not JSON ({e}): {}", r.text))
+    }
+
+    #[test]
+    fn scene_state_changes_and_geometry_for_plugins() {
+        let mut session = small();
+        let state = json(&mut session, "scene_state", serde_json::json!({}));
+        let id = state["active_piece"].as_u64().unwrap();
+        assert_eq!(state["pieces"][0]["id"], id);
+        let edits = state["pieces"][0]["edit_version"].as_u64().unwrap();
+        // The camera's matrices agree with its eye: the view matrix maps the
+        // eye to the origin.
+        let m: Vec<f32> =
+            state["camera"]["view_matrix"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+        let view = glam::Mat4::from_cols_slice(&m);
+        let eye: Vec<f32> =
+            state["camera"]["eye"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap() as f32).collect();
+        assert!(view.transform_point3(glam::Vec3::from_slice(&eye)).length() < 1e-3);
+
+        // Follow changes from now.
+        let start = json(&mut session, "changes", serde_json::json!({}));
+        let cursor = start["cursor"].as_u64().unwrap();
+        assert!(start["events"].as_array().unwrap().is_empty());
+        let r =
+            session.call_tool("stroke", &serde_json::json!({"space": "screen", "points": [[400, 300], [430, 300]]}));
+        assert!(!r.is_error, "{}", r.text);
+        session.call_tool("add_primitive", &serde_json::json!({"kind": "cube"}));
+        let ch = json(&mut session, "changes", serde_json::json!({"since": cursor, "timeout_ms": 50}));
+        let kinds: Vec<&str> = ch["events"].as_array().unwrap().iter().map(|e| e["kind"].as_str().unwrap()).collect();
+        assert!(kinds.contains(&"geometry_changed"), "{kinds:?}");
+        assert!(kinds.contains(&"piece_added") && kinds.contains(&"active_piece_changed"), "{kinds:?}");
+        assert!(ch["cursor"].as_u64().unwrap() > cursor);
+        let state = json(&mut session, "scene_state", serde_json::json!({}));
+        assert_ne!(state["pieces"][0]["edit_version"].as_u64().unwrap(), edits);
+
+        // Geometry of the sphere (by id), every field.
+        let g = json(
+            &mut session,
+            "get_geometry",
+            serde_json::json!({"id": id, "fields": ["positions", "indices", "mask", "groups", "hidden"]}),
+        );
+        let bytes = std::fs::read(g["path"].as_str().unwrap()).unwrap();
+        assert_eq!(&bytes[..4], b"OXYG");
+        assert_eq!(g["layout"]["bytes"].as_u64().unwrap() as usize, bytes.len());
+        let piece = &session.scene.pieces[0];
+        assert_eq!(g["layout"]["vertex_count"].as_u64().unwrap() as usize, piece.mesh.vertex_count());
+        let off = g["layout"]["sections"]["positions"]["offset"].as_u64().unwrap() as usize;
+        let x = f32::from_le_bytes(bytes[off..off + 4].try_into().unwrap());
+        assert_eq!(x, piece.mesh.positions[0].x);
+        // Bad requests fail before anything is written.
+        assert!(session.call_tool("get_geometry", &serde_json::json!({"fields": ["uvs"]})).is_error);
+        assert!(session.call_tool("get_geometry", &serde_json::json!({"id": 999_999})).is_error);
     }
 
     #[test]

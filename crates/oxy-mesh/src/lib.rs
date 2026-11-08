@@ -130,6 +130,8 @@ pub struct Mesh {
     topology_version: u64,
     vert_stamp: Stamps,
     stamp: u32,
+    /// Counts in-place edits (anything that marks a chunk for re-upload).
+    edits: u64,
     quad_cache: std::sync::OnceLock<(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>)>,
 }
 
@@ -240,6 +242,7 @@ impl Mesh {
             topology_version: NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed),
             vert_stamp: Stamps::new(vcount),
             stamp: 0,
+            edits: 0,
             quad_cache: std::sync::OnceLock::new(),
         };
         mesh.recompute_all_normals();
@@ -1252,6 +1255,15 @@ impl Mesh {
         self.topology_version
     }
 
+    /// Changes whenever the mesh is edited in place (positions, normals,
+    /// mask, color: anything that marks a chunk dirty). Together with
+    /// [`Self::topology_version`] and [`Self::face_version`] it tells
+    /// whether a mesh differs from one seen before. Compare for equality:
+    /// undo can bring back an older mesh with older numbers.
+    pub fn edit_version(&self) -> u64 {
+        self.edits
+    }
+
     /// Exact bounds of the mesh (chunks grown during a stroke are measured
     /// precisely here, so the result never includes stale extents).
     pub fn bounds(&self) -> Aabb {
@@ -1285,12 +1297,14 @@ impl Mesh {
 
     /// Mark a chunk as needing GPU re-upload.
     pub fn mark_dirty(&mut self, chunk: u32) {
+        self.edits += 1;
         self.dirty[chunk as usize] = true;
     }
 
     /// Update chunk bounds and mark dirty after an interactive transform.
     pub fn update_chunk_bounds(&mut self, chunk: u32, aabb: Aabb) {
         let c = chunk as usize;
+        self.edits += 1;
         self.chunks[c].aabb = aabb;
         self.dirty[c] = true;
         self.loose_bounds[c] = true;
@@ -1299,12 +1313,14 @@ impl Mesh {
     /// Restore exact chunk bounds and mark dirty (e.g. after cancelling a transform).
     pub fn restore_chunk_bounds(&mut self, chunk: u32, aabb: Aabb) {
         let c = chunk as usize;
+        self.edits += 1;
         self.chunks[c].aabb = aabb;
         self.dirty[c] = true;
         self.loose_bounds[c] = false;
     }
 
     pub fn mark_all_dirty(&mut self) {
+        self.edits += 1;
         self.dirty.iter_mut().for_each(|d| *d = true);
     }
 
@@ -1326,6 +1342,7 @@ impl Mesh {
         if moved.is_empty() {
             return;
         }
+        self.edits += 1;
         self.stamp = self.stamp.wrapping_add(1);
         if self.stamp == 0 {
             self.vert_stamp.reset();

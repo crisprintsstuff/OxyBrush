@@ -22,6 +22,8 @@ enum Apply {
     PendingJob,
     /// Reply after this frame's viewport has been read back.
     Screenshot,
+    /// Finish off the UI thread (writing a file), then reply.
+    Background(Box<dyn FnOnce() -> ToolResult + Send>),
 }
 
 struct Envelope {
@@ -34,12 +36,28 @@ struct Bridge {
     tx: SyncSender<Envelope>,
     closing: Arc<AtomicBool>,
     wake: Arc<dyn Fn() + Send + Sync>,
+    changes: Arc<oxy_mcp::state::SharedChanges>,
 }
 
 impl oxy_mcp::Host for Bridge {
     fn call_tool(&mut self, name: &str, arguments: &serde_json::Value) -> ToolResult {
         if self.closing.load(Ordering::Relaxed) {
             return ToolResult::error("the agent server is stopping");
+        }
+        // `changes` may wait for the next change; answer it here, from the
+        // log the UI thread keeps, so the wait never holds up a frame.
+        if name == "changes" {
+            return match parse_action(name, arguments) {
+                Ok(Action::Changes { since, timeout_ms }) => {
+                    let closing = Arc::clone(&self.closing);
+                    let reply = self.changes.wait(since, Duration::from_millis(timeout_ms.into()), &move || {
+                        closing.load(Ordering::Relaxed)
+                    });
+                    ToolResult::ok(reply.to_string())
+                }
+                Ok(_) => ToolResult::error("unexpected arguments for changes"),
+                Err(e) => ToolResult::error(e),
+            };
         }
         let (reply_tx, reply_rx) = std::sync::mpsc::channel();
         if self.tx.send(Envelope { name: name.to_owned(), args: arguments.clone(), reply: reply_tx }).is_err() {
@@ -69,6 +87,7 @@ pub struct Inbox {
     closing: Arc<AtomicBool>,
     held: Option<Envelope>,
     pending_job: Option<Sender<ToolResult>>,
+    changes: Arc<oxy_mcp::state::SharedChanges>,
     pub endpoint: String,
 }
 
@@ -78,10 +97,11 @@ impl Inbox {
         let control = Arc::new(oxy_mcp::Control::new(token));
         let (tx, rx) = sync_channel(8);
         let closing = Arc::new(AtomicBool::new(false));
-        let bridge = Bridge { tx, closing: Arc::clone(&closing), wake };
+        let changes = Arc::new(oxy_mcp::state::SharedChanges::default());
+        let bridge = Bridge { tx, closing: Arc::clone(&closing), wake, changes: Arc::clone(&changes) };
         let server = oxy_mcp::serve_loopback(oxy_mcp::Identity::oxybrush(), Box::new(bridge), Arc::clone(&control))?;
         let endpoint = server.endpoint.clone();
-        Ok(Self { rx, server: Some(server), control, closing, held: None, pending_job: None, endpoint })
+        Ok(Self { rx, server: Some(server), control, closing, held: None, pending_job: None, changes, endpoint })
     }
 
     pub fn token(&self) -> String {
@@ -99,6 +119,8 @@ impl Inbox {
 
     /// Run at most one queued call. `Some` is a screenshot to answer after the viewport is drawn.
     pub fn poll(&mut self, ed: &mut Editor) -> Option<Sender<ToolResult>> {
+        // Note what changed since the last frame, for `changes` callers.
+        self.changes.observe(oxy_mcp::state::Snapshot::of(&doc_state(ed)));
         if let Some(reply) = self.pending_job.take() {
             if ed.job.is_some() {
                 self.pending_job = Some(reply);
@@ -134,6 +156,12 @@ impl Inbox {
                     return None;
                 }
                 Apply::Screenshot => return Some(env.reply),
+                Apply::Background(work) => {
+                    let reply = env.reply;
+                    std::thread::spawn(move || {
+                        let _ = reply.send(work());
+                    });
+                }
             }
         }
     }
@@ -230,6 +258,64 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
         }
         Action::SetCamera(camera) => Apply::Done(set_camera(ed, camera)),
         Action::Screenshot => Apply::Screenshot,
+        Action::SceneState => Apply::Done(ToolResult::ok(oxy_mcp::state::scene_state(&doc_state(ed)).to_string())),
+        // Answered by the listener thread (see `Bridge::call_tool`).
+        Action::Changes { .. } => Apply::Done(ToolResult::error("changes is answered by the listener")),
+        Action::GetGeometry { id, index, name, fields } => {
+            let i = match oxy_mcp::state::find_piece(&ed.scene, id, index, name.as_deref()) {
+                Ok(i) => i,
+                Err(e) => return Apply::Done(ToolResult::error(e)),
+            };
+            // Copy the arrays now (fast), write the file off the UI thread.
+            let piece = &ed.scene.pieces[i];
+            let fields = fields.unwrap_or_else(|| oxy_mcp::state::default_fields(&piece.mesh));
+            let (bytes, layout) = oxy_mcp::state::encode_geometry(&piece.mesh, &fields);
+            let head = serde_json::json!({
+                "piece": piece.id,
+                "name": piece.name,
+                "topology_version": piece.mesh.topology_version(),
+                "edit_version": piece.mesh.edit_version(),
+                "face_version": piece.mesh.face_version(),
+            });
+            let id = piece.id;
+            Apply::Background(Box::new(move || match oxy_mcp::state::write_geometry_file(&bytes, id) {
+                Ok(path) => {
+                    let mut reply = head;
+                    reply["api_version"] = oxy_mcp::state::API_VERSION.into();
+                    reply["path"] = path.display().to_string().into();
+                    reply["layout"] = layout;
+                    ToolResult::ok(reply.to_string())
+                }
+                Err(e) => ToolResult::error(e),
+            }))
+        }
+    }
+}
+
+/// The document as the structured tools describe it.
+fn doc_state(ed: &Editor) -> oxy_mcp::state::DocState<'_> {
+    let c = &ed.camera;
+    let viewport = glam::Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
+    oxy_mcp::state::DocState {
+        scene: &ed.scene,
+        path: ed.path.as_deref(),
+        modified: ed.is_modified(),
+        revision: ed.history.revision(),
+        camera: oxy_mcp::state::CameraState {
+            eye: c.eye(),
+            target: c.target,
+            up: c.up(),
+            forward: c.forward(),
+            distance: c.distance,
+            yaw: c.yaw,
+            pitch: c.pitch,
+            fov_y: c.fov_y,
+            orthographic: c.orthographic,
+            viewport,
+            pixels_per_point: ed.pixels_per_point,
+            view: c.view(),
+            projection: c.projection(viewport.x / viewport.y),
+        },
     }
 }
 
@@ -607,7 +693,7 @@ mod tests {
                 assert!(!result.is_error, "{}", result.text);
                 assert!(result.text.contains("Agent: Draw"), "{}", result.text);
             }
-            Apply::PendingJob | Apply::Screenshot => panic!("stroke should finish immediately"),
+            Apply::PendingJob | Apply::Screenshot | Apply::Background(_) => panic!("stroke should finish immediately"),
         }
         assert_ne!(ed.scene.active().mesh.positions, before);
         assert!(ed.history.undo_labels().any(|label| label.starts_with("Agent:")));

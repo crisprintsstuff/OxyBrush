@@ -47,25 +47,83 @@ impl ToolResult {
 pub enum Action {
     SceneInfo,
     ListPieces,
-    PieceInfo { id: Option<u64>, index: Option<usize>, name: Option<String> },
-    SelectPiece { id: Option<u64>, index: Option<usize>, name: Option<String> },
-    Open { path: std::path::PathBuf, discard: bool },
-    Save { path: Option<std::path::PathBuf> },
-    Import { path: std::path::PathBuf },
-    Export { path: std::path::PathBuf },
-    AddPrimitive { kind: String },
-    SelectBrush { name: String },
-    SetBrush { size: Option<f32>, strength: Option<f32> },
-    SetSymmetry { x: Option<bool>, y: Option<bool>, z: Option<bool>, radial: Option<u32>, axis: Option<String> },
-    Stroke { space: Space, points: Vec<glam::Vec3>, invert: bool, pressure: f32 },
-    Mask { op: MaskOp },
-    Remesh { resolution: Option<u32> },
-    Decimate { keep_percent: Option<f32>, triangles: Option<u32> },
-    Subdivide { smooth: bool },
+    PieceInfo {
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+    },
+    SelectPiece {
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+    },
+    Open {
+        path: std::path::PathBuf,
+        discard: bool,
+    },
+    Save {
+        path: Option<std::path::PathBuf>,
+    },
+    Import {
+        path: std::path::PathBuf,
+    },
+    Export {
+        path: std::path::PathBuf,
+    },
+    AddPrimitive {
+        kind: String,
+    },
+    SelectBrush {
+        name: String,
+    },
+    SetBrush {
+        size: Option<f32>,
+        strength: Option<f32>,
+    },
+    SetSymmetry {
+        x: Option<bool>,
+        y: Option<bool>,
+        z: Option<bool>,
+        radial: Option<u32>,
+        axis: Option<String>,
+    },
+    Stroke {
+        space: Space,
+        points: Vec<glam::Vec3>,
+        invert: bool,
+        pressure: f32,
+    },
+    Mask {
+        op: MaskOp,
+    },
+    Remesh {
+        resolution: Option<u32>,
+    },
+    Decimate {
+        keep_percent: Option<f32>,
+        triangles: Option<u32>,
+    },
+    Subdivide {
+        smooth: bool,
+    },
     Undo,
     Redo,
     SetCamera(CameraSet),
     Screenshot,
+    /// The document, pieces and camera as JSON (see [`crate::state`]).
+    SceneState,
+    /// Changes after `since`, waiting up to `timeout_ms` for one.
+    Changes {
+        since: Option<u64>,
+        timeout_ms: u32,
+    },
+    /// A piece's arrays as an `OXYG` file.
+    GetGeometry {
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+        fields: Option<Vec<crate::state::Field>>,
+    },
 }
 
 /// Camera fields a `set_camera` call may change. Omitted JSON fields stay `None`.
@@ -82,7 +140,10 @@ pub struct CameraSet {
 
 /// Names that only read the document. The app runs these even mid-stroke.
 pub fn is_read_only(name: &str) -> bool {
-    matches!(name, "scene_info" | "list_pieces" | "piece_info" | "screenshot")
+    matches!(
+        name,
+        "scene_info" | "list_pieces" | "piece_info" | "screenshot" | "scene_state" | "changes" | "get_geometry"
+    )
 }
 
 pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
@@ -158,6 +219,41 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
             frame: opt_bool(args, "frame")?.unwrap_or(false),
         })),
         "screenshot" => Ok(Action::Screenshot),
+        "scene_state" => Ok(Action::SceneState),
+        "changes" => Ok(Action::Changes {
+            since: opt_u64(args, "since")?,
+            timeout_ms: opt_u32(args, "timeout_ms")?.unwrap_or(0),
+        }),
+        "get_geometry" => {
+            let fields = match args.get("fields") {
+                None | Some(Value::Null) => None,
+                Some(Value::Array(items)) => {
+                    let mut out = Vec::new();
+                    for item in items {
+                        let name = item.as_str().ok_or("`fields` must be an array of strings")?;
+                        let field = crate::state::Field::parse(name).ok_or_else(|| {
+                            format!(
+                                "unknown field `{name}` (positions, normals, indices, colors, mask, groups, hidden)"
+                            )
+                        })?;
+                        if !out.contains(&field) {
+                            out.push(field);
+                        }
+                    }
+                    if out.is_empty() {
+                        return Err("`fields` is empty".into());
+                    }
+                    Some(out)
+                }
+                Some(_) => return Err("`fields` must be an array of strings".into()),
+            };
+            Ok(Action::GetGeometry {
+                id: opt_u64(args, "id")?,
+                index: opt_usize(args, "index")?,
+                name: opt_string(args, "name")?,
+                fields,
+            })
+        }
         other => Err(format!("unknown tool `{other}`")),
     }
 }
@@ -416,6 +512,24 @@ pub fn tool_defs() -> Vec<Value> {
             "screenshot",
             "PNG of the 3D viewport in the desktop app (no panels). Screen-space stroke points use this image's pixels. Not available in oxybrush-cli.",
             &none,
+            &[],
+        ),
+        tool(
+            "scene_state",
+            "The document as JSON, for programs: every piece (id, name, counts, bounds, levels, symmetry centre, and topology/edit/face versions that change whenever it does), the visible bounds, and the camera as data (eye, target, up, field of view, column-major view and projection matrices, viewport size). Read-only.",
+            &none,
+            &[],
+        ),
+        tool(
+            "changes",
+            "What changed since a cursor, as JSON events (piece_added, piece_removed, geometry_changed, faces_changed, visibility_changed, renamed, active_piece_changed, camera_changed, document_changed). Call without since to get the current cursor; then pass the returned cursor each time. timeout_ms (up to 10000) waits for the next change instead of returning empty. truncated means some changes were dropped: re-read scene_state. Read-only.",
+            &json!({"since": {"type": "integer"}, "timeout_ms": {"type": "integer"}}),
+            &[],
+        ),
+        tool(
+            "get_geometry",
+            "Write a piece's arrays to a binary OXYG file in a temporary folder and return its path and layout (offsets, types, counts). fields: positions, normals, indices (default) plus colors when painted; also mask, groups, hidden. Omit id/index/name for the active piece. The folder keeps only the newest few files: read it right away. Read-only.",
+            &json!({"id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "fields": {"type": "array", "items": {"type": "string"}}}),
             &[],
         ),
     ]
