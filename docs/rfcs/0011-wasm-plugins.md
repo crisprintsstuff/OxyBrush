@@ -84,14 +84,28 @@ with a message, not run.
 wasmi is used with its portable (loop-based) interpreter, which can't
 overflow the native stack in any build profile.
 
+## API 2
+
+Additive, so `"api": 1` plugins keep working (OxyBrush runs API 1 and 2):
+
+- `read_normals` and `read_colors` (`read_mesh`);
+- `write_mask` and `write_colors` (`edit_mesh`), whole-piece like
+  `write_positions`; a command's edits to one piece (positions, mask,
+  colors) are applied together as one undo step;
+- `add_piece` with a new capability, `add_pieces`: a command's new pieces
+  are added as one more undo step, and the last becomes active;
+- every plugin command is listed in the command palette as
+  `Plugin: <name> — <command>`.
+
 ## Not in this version
 
-- More edit kinds: mask, face groups, vertex color, adding pieces,
-  topology (`from_data`). Positions first, because they cover deformers,
-  generators of shape and cleanup tools.
+- More edit kinds: face groups and topology changes of existing pieces
+  (`from_data`). (Mask, vertex color and adding pieces arrived in API 2,
+  below.)
 - Brushes written as plugins (a per-dab callback): that is on the per-dab
   path and needs measuring first (`dab_timing`).
-- Command shortcuts and command-palette entries for plugin commands.
+- Command shortcuts for plugin commands. (They are in the command palette
+  since API 2.)
 - A Rust SDK crate for plugin authors. It needs `unsafe` FFI declarations
   for the imports, which this workspace forbids, so it belongs in its own
   repository.

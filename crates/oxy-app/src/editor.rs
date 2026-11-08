@@ -5377,6 +5377,68 @@ mod tests {
     }
 
     #[test]
+    fn wasm_plugin_api2_masks_paints_adds_pieces_and_undoes() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-wasm2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tint")).unwrap();
+        std::fs::write(
+            dir.join("tint/plugin.json"),
+            r#"{"name":"Tint","api":2,"capabilities":["read_mesh","edit_mesh","add_pieces"],
+                "commands":[{"id":"go","label":"Tint and tag"}]}"#,
+        )
+        .unwrap();
+        // Masks every vertex 0.5, paints it red, and adds a one-triangle piece.
+        std::fs::write(
+            dir.join("tint/plugin.wat"),
+            r#"(module
+              (import "oxybrush" "active_piece" (func $active (result i32)))
+              (import "oxybrush" "vertex_count" (func $vc (param i32) (result i32)))
+              (import "oxybrush" "write_mask" (func $wm (param i32 i32 i32) (result i32)))
+              (import "oxybrush" "write_colors" (func $wc (param i32 i32 i32) (result i32)))
+              (import "oxybrush" "add_piece" (func $ap (param i32 i32 i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 64)
+              (data (i32.const 0) "Tag")
+              (data (i32.const 16) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00")
+              (data (i32.const 64) "\00\00\00\00\01\00\00\00\02\00\00\00")
+              (func (export "run") (param i32)
+                (local $p i32) (local $n i32) (local $i i32)
+                (local.set $p (call $active))
+                (local.set $n (call $vc (local.get $p)))
+                (block $d (loop $l
+                  (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+                  (f32.store (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))) (f32.const 0.5))
+                  (f32.store (i32.add (i32.const 2000000) (i32.mul (local.get $i) (i32.const 12))) (f32.const 1))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $l)))
+                (drop (call $wm (local.get $p) (i32.const 1024) (local.get $n)))
+                (drop (call $wc (local.get $p) (i32.const 2000000) (local.get $n)))
+                (drop (call $ap (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 3) (i32.const 64) (i32.const 1)))))"#,
+        )
+        .unwrap();
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugin_errors.is_empty(), "{:?}", e.wasm_plugin_errors);
+        // Its command is in the command palette.
+        let entries = crate::palette::entries(&e, crate::palette::PaletteMode::Everything);
+        assert!(entries.iter().any(|x| x.label == "Plugin: Tint — Tint and tag"));
+        e.run_wasm_plugin(0, 0);
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 2, "{}", e.status);
+        assert_eq!(e.scene.active().name, "Tag");
+        let sphere = &e.scene.pieces[0].mesh;
+        assert!(sphere.mask.iter().all(|&m| (m - 0.5).abs() < 1e-6));
+        assert!(sphere.color.iter().all(|c| c.distance(Vec3::X) < 1e-6));
+        // Two undo steps: the new piece, then the mask and paint together.
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        e.undo();
+        let sphere = &e.scene.pieces[0].mesh;
+        assert!(sphere.mask.iter().all(|&m| m == 0.0));
+        assert!(!sphere.is_painted());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn wasm_plugin_runs_in_the_background_and_undoes() {
         let dir = std::env::temp_dir().join(format!("oxy-app-wasm-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
