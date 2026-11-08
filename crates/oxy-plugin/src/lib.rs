@@ -49,6 +49,8 @@
 //! manifest command; optionally `overlay()`, called each frame while the
 //! plugin's panel is open.
 
+pub mod addon;
+
 use glam::Vec3;
 use std::path::{Path, PathBuf};
 use wasmi::{
@@ -688,6 +690,13 @@ pub fn discover(dir: &Path) -> Vec<Result<Plugin, String>> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.join("plugin.json").is_file())
+        // Python add-ons live here too; the app runs those as scripts.
+        .filter(|p| {
+            std::fs::read_to_string(p.join("plugin.json"))
+                .ok()
+                .and_then(|t| addon::manifest_kind(&t).ok())
+                .is_none_or(|(k, _)| k == addon::AddonKind::Wasm)
+        })
         .collect();
     dirs.sort();
     dirs.iter().map(|d| Plugin::load(d)).collect()

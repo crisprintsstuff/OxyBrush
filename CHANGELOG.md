@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Add-on packages (`.oxyaddon`)**: one file that installs a plugin, either an in-app (WebAssembly) plugin or a **Python** plugin. **Settings > Plugins > Install add-on…** (or opening the file) puts it in the plugins folder, replacing an older version; it then appears with the other plugins. Make one with `oxybrush-cli addon pack <folder> <file.oxyaddon>`. Archives can't write outside their folder and are size-limited.
 - **Plugin API 2** ([RFC 0011](docs/rfcs/0011-wasm-plugins.md)): in-app plugins can also read normals and vertex colors, set the **mask** and **vertex colors** of a piece, and **add new pieces** (new `add_pieces` capability). A command's changes to one piece are one undo step. Plugin commands now appear in the **command palette**. Plugins written for API 1 work unchanged.
 
 ## [3.0.2-beta] - 2026-11-08

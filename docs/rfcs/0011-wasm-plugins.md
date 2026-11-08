@@ -97,6 +97,29 @@ Additive, so `"api": 1` plugins keep working (OxyBrush runs API 1 and 2):
 - every plugin command is listed in the command palette as
   `Plugin: <name> — <command>`.
 
+## Add-on packages (`.oxyaddon`)
+
+One file to share and install a plugin, of either kind:
+
+- An `.oxyaddon` is a ZIP archive of the plugin folder, with `plugin.json`
+  at the top. `"kind"` is `"wasm"` (default: `plugin.wasm` or
+  `plugin.wat`, run in the sandbox) or `"python"` (`"entry"` names the
+  script, default `main.py`; it runs as a separate process over the local
+  agent server, like any Python plugin, so Python plugins keep working).
+  An optional `"id"` names the folder it installs to.
+- **Install:** Settings > Plugins > **Install add-on…**, or open the file
+  with OxyBrush. It unpacks into `<plugins>/<id>/`, replacing an older
+  version; the plugin then shows in the in-app or Python list.
+- **Make one:** `oxybrush-cli addon pack <folder> <out.oxyaddon>` (checks
+  it as an install would); `oxybrush-cli addon inspect <file>` lists it.
+- **Safety:** entry paths must stay inside the add-on folder (no absolute
+  paths, no `..`); at most 512 files and 256 MB unpacked; CRCs checked;
+  only stored and deflate entries, no encryption. Files are written to a
+  temporary folder and renamed into place, so a failed install changes
+  nothing. A WebAssembly add-on is loaded once before installing, so a
+  broken one is refused with its error. Installing does not run anything;
+  Python add-ons run only when you click Run, as before.
+
 ## Not in this version
 
 - More edit kinds: face groups and topology changes of existing pieces
