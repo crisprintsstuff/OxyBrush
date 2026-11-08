@@ -53,6 +53,17 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.0-beta" date="2026-11-08" type="development">
+      <description>
+        <p>Dynamic detail adds triangles where you sculpt, so you can build a
+        shape from a plain sphere. The new Curve Move brush bends and stretches
+        a part along a curve you draw. Strokes can be drawn as editable curves.
+        Each piece now mirrors about its own centre, which fixes symmetry on
+        models away from the origin. Tablet pressure works on macOS and in the
+        Flatpak, with a two-point pressure curve. Plugins can read the scene,
+        camera and geometry as data.</p>
+      </description>
+    </release>
     <release version="2.5.7-beta" date="2026-11-07" type="development">
       <description>
         <p>Mask extract shows a live preview you can adjust before accepting

@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.0-beta] - 2026-11-08
+
 ### Added
 - **Two-point pressure curve (Preferences > Pen & tablet):** drag two points on the large curve to shape the pressure response, like tablet drivers do; an **S-curve** preset gives fine control at both the lightest and the hardest presses. Double-click the curve to straighten it. Remembered between sessions.
 - **Curve stroke mode:** a stroke that stays editable after you draw it. It becomes a smooth curve through a few control points on the surface: drag a point to reshape it, click the curve to add a point, Alt+click to remove one. Size, strength, the other brush settings and **Fade in / Fade out** update the result live on the model; **Accept** (Enter) or starting the next stroke applies it as one undo step, **Cancel** (Esc) discards it. Orbiting and zooming keep it open. Works with symmetry, the mask and alphas. Design in [RFC 0004](docs/rfcs/0004-curve-stroke.md).
@@ -19,8 +21,6 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 - **Symmetry on models away from the origin ([#80](https://github.com/crisprintsstuff/OxyBrush/issues/80)):** mirroring, radial copies, symmetric cuts, Insert Primitives and the mirrored cursor dots all worked about the world origin, so on a model that isn't centred there (common with imports) the mirrored side of a Grab or any other stroke landed in empty space and nothing happened. Each piece now has its own symmetry centre, chosen once from its shape when it is imported, opened or added, and saved with the project, so it doesn't drift while you sculpt. A model already built around the origin keeps it, even if it isn't perfectly symmetric (an arm raised on one side); only a shape that is clearly mirrored about somewhere else moves it. Duplicates, extracts and split parts keep the centre of the piece they came from. The local AI agent's strokes use it too.
-
-### Fixed
 - **Side panels keep their width ([#80](https://github.com/crisprintsstuff/OxyBrush/issues/80)):** the settings panel no longer grows and shrinks as sections open and close; drag its edge to resize it.
 - **Pen pressure in the Linux Flatpak ([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)):** the Flatpak only had X11 as a fallback, so on a Wayland desktop OxyBrush couldn't switch to X11 for a connected tablet, and pen pressure was lost. It now has the X11 socket too.
 - **macOS: pen pressure from drawing tablets ([#70](https://github.com/crisprintsstuff/OxyBrush/issues/70)):** pressure from Wacom, Huion, XP-Pen and other tablets had no effect on macOS; the brush always used full pressure. The windowing library only passed on trackpad Force Touch pressure; the bundled winit now also forwards the pen's pressure (a third small patch, see `third_party/README.md`).
@@ -484,7 +484,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v3.0.0-beta...HEAD
+[3.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...v3.0.0-beta
 [2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
 [2.5.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...v2.5.6-beta
 [2.5.5-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.0-beta...v2.5.5-beta
