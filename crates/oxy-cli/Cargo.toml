@@ -17,6 +17,7 @@ oxy-io.workspace = true
 oxy-topo.workspace = true
 oxy-doc.workspace = true
 oxy-mcp.workspace = true
+oxy-plugin.workspace = true
 
 [lints]
 workspace = true

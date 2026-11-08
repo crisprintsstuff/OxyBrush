@@ -25,6 +25,8 @@ USAGE:
   oxybrush-cli split    <input> <output-folder> [--by groups|parts] [--format EXT]
   oxybrush-cli mcp      [file]            stdio MCP server for a local agent (no socket)
   oxybrush-cli mcp      --attach 127.0.0.1:PORT --token TOKEN
+  oxybrush-cli addon    pack <plugin-folder> <out.oxyaddon>
+  oxybrush-cli addon    inspect <file.oxyaddon>
 
 Inputs:  .oxb project (visible pieces), .obj, .stl
 Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
@@ -37,6 +39,16 @@ Examples:
   oxybrush-cli decimate scan.stl scan-light.obj --keep 10
   oxybrush-cli lod hero.oxb out/hero --levels 4        writes out/hero_LOD0.glb ... out/hero_LOD4.glb
 ";
+
+fn describe_addon(info: &oxy_plugin::addon::AddonInfo) -> String {
+    let kind = match info.kind {
+        oxy_plugin::addon::AddonKind::Wasm => "in-app (WebAssembly) plugin".to_owned(),
+        oxy_plugin::addon::AddonKind::Python => {
+            format!("Python plugin, runs {}", info.entry.as_deref().unwrap_or("main.py"))
+        }
+    };
+    format!("{} {} [{}]: {kind}; installs to plugins/{}/", info.name, info.version, info.id, info.id)
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -138,6 +150,31 @@ fn run(args: &[String]) -> Result<String, String> {
             Ok(format!("wrote {} LOD files:\n{}", levels + 1, written.join("\n")))
         }
         "mcp" => mcp(&args[1..]),
+        "addon" => match pos.first().copied().unwrap_or("") {
+            "pack" => {
+                need(3)?;
+                let bytes = oxy_plugin::addon::pack(Path::new(pos[1]))?;
+                let out = Path::new(pos[2]);
+                std::fs::write(out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+                let (info, files) = oxy_plugin::addon::inspect(&bytes)?;
+                Ok(format!(
+                    "wrote {} ({} files, {} bytes): {}",
+                    out.display(),
+                    files.len(),
+                    bytes.len(),
+                    describe_addon(&info)
+                ))
+            }
+            "inspect" => {
+                need(2)?;
+                let path = Path::new(pos[1]);
+                let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+                let (info, files) = oxy_plugin::addon::inspect(&bytes)?;
+                let list: Vec<String> = files.iter().map(|(n, c)| format!("  {n} ({} bytes)", c.len())).collect();
+                Ok(format!("{}\n{}", describe_addon(&info), list.join("\n")))
+            }
+            other => Err(format!("addon: unknown action `{other}` (use pack or inspect); usage")),
+        },
         "split" => {
             need(2)?;
             let by_parts = match flag_str(args, "--by").unwrap_or("parts") {
