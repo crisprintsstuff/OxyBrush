@@ -461,6 +461,66 @@ mod tests {
     }
 
     #[test]
+    fn test_python_sdk_structured_state_changes_and_geometry() {
+        if find_python().is_none() {
+            return;
+        }
+        let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+        let wake = Arc::new(move || {
+            let _ = wake_tx.send(());
+        });
+        let mut inbox = match crate::agent::Inbox::listen(wake.clone()) {
+            Ok(ib) => ib,
+            Err(_) => return, // port busy or network restricted
+        };
+        let endpoint = inbox.endpoint.clone();
+        let token = inbox.token();
+        let test_file = std::env::temp_dir().join(format!("test_sdk_state_{}.py", std::process::id()));
+        std::fs::write(
+            &test_file,
+            "import oxybrush\n\
+             app = oxybrush.attach()\n\
+             st = app.scene_state()\n\
+             assert st['api_version'] == 1, st\n\
+             piece = st['pieces'][0]\n\
+             assert len(st['camera']['view_matrix']) == 16\n\
+             cur = app.changes()['cursor']\n\
+             app.mask('fill')\n\
+             app.add_primitive('cube')\n\
+             kinds = set()\n\
+             for _ in range(20):\n\
+             \x20   r = app.changes(since=cur, timeout_ms=2000)\n\
+             \x20   cur = r['cursor']\n\
+             \x20   kinds |= {e['kind'] for e in r['events']}\n\
+             \x20   if {'geometry_changed', 'piece_added'} <= kinds: break\n\
+             assert {'geometry_changed', 'piece_added'} <= kinds, kinds\n\
+             g = app.get_geometry(id=piece['id'], fields=['positions', 'indices', 'mask'])\n\
+             assert len(g['arrays']['positions']) == 3 * piece['vertices'], g['layout']\n\
+             assert len(g['arrays']['indices']) == 3 * piece['triangles']\n\
+             assert min(g['arrays']['mask']) > 0.99\n\
+             print('STATE OK')\n",
+        )
+        .unwrap();
+
+        let proc = run_plugin(&test_file, &endpoint, &token, wake).expect("spawn plugin");
+        let mut ed = crate::editor::Editor::default();
+        let start = std::time::Instant::now();
+        let mut res = None;
+        while start.elapsed() < std::time::Duration::from_secs(60) {
+            let _ = inbox.poll(&mut ed);
+            ed.poll_job();
+            if let Ok(r) = proc.rx.try_recv() {
+                res = Some(r);
+                break;
+            }
+            let _ = wake_rx.recv_timeout(std::time::Duration::from_millis(20));
+        }
+        let _ = std::fs::remove_file(&test_file);
+        let output = res.expect("process should complete").expect("plugin should succeed");
+        assert_eq!(output, "STATE OK");
+    }
+
+    #[test]
     fn test_example_plugin_mesh_stats() {
         if find_python().is_none() {
             return;
