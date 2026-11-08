@@ -10,8 +10,6 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **Parametric primitives:** **Pieces > + Add** (and the command palette) now opens a small window for the shape instead of adding it at once: radius or size, height, segments around, rows up the side, closed caps, tube radius and so on, with a live preview and its triangle count. Shapes are **low-poly by default** (a cube is 8 vertices, a cylinder 50). **Even triangles (voxel remesh)** is a checkbox, with its resolution, for when you want a sculpt-ready mesh; cylinders and cones are no longer remeshed unless you ask. Accept (Enter) adds the piece, Cancel (Esc) discards it.
-
-### Changed
 - **F frames the active piece**, centred on it, instead of the whole scene; **Alt+F** frames every visible piece. With one piece nothing changes.
 - **Zoom drags follow ZBrush in the Right-drag orbit preset:** Ctrl+right-drag **down** zooms in. Other presets keep drag up = zoom in. Both directions can be flipped in **Settings > Keymap > Zoom direction**: **Invert zoom drag** and **Invert mouse wheel zoom**.
 
