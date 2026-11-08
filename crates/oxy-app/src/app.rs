@@ -604,7 +604,14 @@ impl App {
             &mut encoder,
             &oxy_render::RenderTarget { view: &view, size: (g.config.width, g.config.height), viewport: ed.canvas },
             &ed.camera,
-            &oxy_render::ViewSettings { floor: ed.floor_grid.then(|| ed.floor()).flatten(), ..ed.view },
+            &oxy_render::ViewSettings {
+                floor: ed.floor_grid.then(|| ed.floor()).flatten(),
+                scene_bounds: {
+                    let b = ed.scene.bounds();
+                    (!b.is_empty()).then(|| (b.min.to_array(), b.max.to_array()))
+                },
+                ..ed.view
+            },
             &items,
         );
         // The agent's screenshot is the viewport without the panels, so copy

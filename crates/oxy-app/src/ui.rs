@@ -443,13 +443,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
-                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, wireframe and face group colors", |ui| {
+                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, lights, wireframe and face group colors", |ui| {
                     tips::hover(
                         ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
                         plain::AO,
                     );
                     tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                    tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
+                    if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
+                        ed.show_lights = true;
+                    }
                     tips::check(ui, &mut ed.floor_grid, "Floor grid", Cmd::FloorGrid);
                     tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
                     if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
@@ -587,6 +591,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     background_window(ui.ctx(), ed);
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
+    crate::lights_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
     mesh_diagnostics_dialog(ui.ctx(), ed);
@@ -614,6 +619,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_curve(ui, ed, canvas);
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
+    crate::lights_ui::markers(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -2192,6 +2198,10 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             }
             if btn.secondary_clicked() {
                 ed.show_wireframe = true;
+            }
+            let floor = ed.floor_grid;
+            if widgets::icon_button(ui, Icon::Floor, floor, true, &Cmd::FloorGrid.tip_in(&ed.keymap)).clicked() {
+                ed.floor_grid = !floor;
             }
             let on = ed.gizmo.is_some();
             if widgets::icon_button(ui, Icon::Transform, on, true, &Cmd::GizmoMove.tip_in(&ed.keymap)).clicked() {
@@ -3990,7 +4000,7 @@ fn surface_square(center: Vec3, normal: Vec3, half: f32, up_hint: Vec3) -> Vec<V
     vec![center + (-t - b) * half, center + (t - b) * half, center + (t + b) * half, center + (-t + b) * half]
 }
 
-fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
+pub(crate) fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
     let vp = Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
     let s = ed.camera.project(p, vp)?;
     let w = s + Vec2::new(ed.canvas[0], ed.canvas[1]);
