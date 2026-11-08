@@ -8,6 +8,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Blender bridge** ([RFC 0010](docs/rfcs/0010-blender-bridge.md)): with the new **OxyBrush Bridge** add-on for Blender (`integrations/blender/`), **Object > Send to OxyBrush** opens the selected meshes in OxyBrush, placed as they were, with a **Linked to Blender** badge. **File > Send back to Blender** (or the badge), or **Send back to Blender and close**, returns them: objects whose vertices are unchanged keep their UVs, materials, modifiers and shape keys in Blender; pieces made in OxyBrush arrive as new objects. OxyBrush also opens such links from the command line with `--link`.
 
 ### Added
+- **Capture alpha from view** (Alpha section and command palette): makes an alpha from what the viewport shows: a depth image of the visible model, nearest parts white, cropped to the model. Sculpt a detail, look at it straight on, capture it, and stamp it elsewhere. It is added to the alphas and selected; captures last until OxyBrush closes.
 - **Close holes** (Mesh menu and command palette): fills every opening in the active piece with a smooth patch of new faces, sized like the faces around it, in a face group of its own. Handy after Delete hidden, a cut or an import with gaps, and before 3D printing. One undo step.
 
 ## [3.0.1-beta] - 2026-11-08

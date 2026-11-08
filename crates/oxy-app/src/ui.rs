@@ -2032,6 +2032,9 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
                 ed.request_load_alpha = true;
             }
+            if tips::button(ui, "Capture from view", Cmd::CaptureAlpha).clicked() {
+                ed.capture_alpha();
+            }
         });
 
         let mat_tex = match ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i)) {
@@ -3509,6 +3512,9 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
         );
         if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
             ed.request_load_alpha = true;
+        }
+        if tips::button(ui, "Capture from view", Cmd::CaptureAlpha).clicked() {
+            ed.capture_alpha();
         }
     });
     match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
