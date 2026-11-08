@@ -155,6 +155,12 @@ Remesh and decimate rebuild the mesh, so they remove the levels (undo brings the
 How fine it gets depends on the Detail slider and the brush size: a smaller brush gives smaller triangles. Mask, Paint, the Grab-like brushes and the cutting tools don't change triangles. Each stroke is one undo step. It is off on pieces with subdivision levels, and works best up to a few hundred thousand triangles.",
     },
     Topic {
+        title: "Lights and shadows",
+        keywords: "lights lighting shadows sun spot lamp viewport shading render",
+        body: "View > Shading > Light the viewport shades the model with lights instead of the material; View > Shading > Lights… sets them up. There are four lights: each can be a Sun (a direction), a Point (a position) or a Spot (a cone aimed at a point), with its own color, brightness and shadows. Follow the view keeps a light in place relative to you, so the model turns under it as you orbit.\n\n\
+While the Lights window is open, numbered dots show the lights in the viewport: drag one to move its light (a sun's dot sets its direction; a spot's diamond sets where it aims). Shadows come from suns and spots; each one redraws the model once more per frame, so turn shadows off for lights that don't need them on very dense meshes.",
+    },
+    Topic {
         title: "Remesh and decimate",
         keywords: "topology voxel rebuild reduce polygons triangles resolution",
         body: "Voxel remesh (Ctrl+R) rebuilds the active piece with even triangles, so stretched areas sculpt well again. Resolution sets how fine the new mesh is.\n\n\

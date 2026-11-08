@@ -157,6 +157,13 @@ struct MoveBindKey {
     center: Vec3,
 }
 
+/// A light marker: the light itself, or where a spot aims.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LightHandle {
+    Light(usize),
+    Aim(usize),
+}
+
 /// Dynamic detail during one stroke.
 pub struct DynStroke {
     piece: u64,
@@ -565,6 +572,8 @@ pub enum Drag {
     CurveHandle {
         index: usize,
     },
+    /// Dragging a light's marker (Lights window open).
+    LightHandle(LightHandle),
     /// Line / Stamp strokes: nothing changes until release.
     Deferred {
         mode: StrokeMode,
@@ -790,6 +799,8 @@ pub struct Editor {
     pub show_theme: bool,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
+    /// The Lights window is open (its markers show in the viewport).
+    pub show_lights: bool,
     /// Preferences / Settings window system (replaces the bloated settings dropdown).
     pub show_settings: bool,
     pub settings_tab: SettingsTab,
@@ -1066,6 +1077,7 @@ impl Default for Editor {
             show_background: false,
             show_theme: false,
             show_wireframe: false,
+            show_lights: false,
             show_settings: false,
             settings_tab: SettingsTab::default(),
             show_welcome: true,
@@ -1393,6 +1405,7 @@ impl Editor {
             stroke_from_empty: self.stroke_from_empty,
             hold_to_curve: self.hold_to_curve,
             hold_to_curve_ask: self.hold_to_curve_ask,
+            lighting: self.view.lighting,
             curve_move_centred: self.curve_move_centred,
             dyntopo: self.dyntopo,
             dyntopo_detail: self.dyntopo_detail,
@@ -1543,6 +1556,7 @@ impl Editor {
         self.stroke_from_empty = s.stroke_from_empty;
         self.hold_to_curve = s.hold_to_curve;
         self.hold_to_curve_ask = s.hold_to_curve_ask;
+        self.view.lighting = s.lighting;
         self.curve_move_centred = s.curve_move_centred;
         self.dyntopo = s.dyntopo;
         self.dyntopo_detail = s.dyntopo_detail;
@@ -1640,6 +1654,10 @@ impl Editor {
         // A new press means "no" to an unanswered curve question.
         self.answer_hold_offer(false);
         if self.curve.is_some() && self.curve_pointer_down(p) {
+            return;
+        }
+        if let Some(h) = self.light_handle_at(p) {
+            self.drag = Drag::LightHandle(h);
             return;
         }
         let (kind, _invert) = self.effective_brush();
@@ -2247,6 +2265,11 @@ impl Editor {
                 if points.last().is_none_or(|l| l.distance(pos) > 2.0) {
                     points.push(pos);
                 }
+                true
+            }
+            Drag::LightHandle(h) => {
+                let h = *h;
+                self.drag_light_handle(h, pos);
                 true
             }
             Drag::CurveHandle { index } => {
@@ -3797,6 +3820,98 @@ impl Editor {
     }
 
     /// The floor grid fitted under the visible pieces.
+    /// The light markers shown while the Lights window is open: which
+    /// handle, and where it is in physical pixels (window coordinates).
+    /// Off-screen markers are pulled to the viewport's edge.
+    pub fn light_handles(&self) -> Vec<(LightHandle, Vec2)> {
+        if !(self.show_lights && self.view.lighting.enabled) {
+            return Vec::new();
+        }
+        let (scene, cam) = self.light_frames();
+        let size = self.canvas_size();
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let margin = 12.0 * self.pixels_per_point.max(0.5);
+        let place = |w: Vec3| {
+            self.camera.project(w, size).map(|s| s.clamp(Vec2::splat(margin), size - Vec2::splat(margin)) + origin)
+        };
+        let mut out = Vec::new();
+        for (i, light) in self.view.lighting.lights.iter().enumerate() {
+            if !light.on {
+                continue;
+            }
+            if let Some(p) = place(light.marker(&scene, &cam)) {
+                out.push((LightHandle::Light(i), p));
+            }
+            if light.kind == oxy_render::lighting::LightKind::Spot
+                && let Some(p) = place(light.world_aim(&scene, &cam))
+            {
+                out.push((LightHandle::Aim(i), p));
+            }
+        }
+        out
+    }
+
+    /// The light marker under `p` (physical pixels), if any.
+    fn light_handle_at(&self, p: Vec2) -> Option<LightHandle> {
+        let reach = 12.0 * self.pixels_per_point.max(0.5);
+        self.light_handles()
+            .into_iter()
+            .filter(|(_, q)| q.distance(p) <= reach)
+            .min_by(|a, b| a.1.distance(p).total_cmp(&b.1.distance(p)))
+            .map(|(h, _)| h)
+    }
+
+    /// Move a light's marker to follow the pointer (physical pixels).
+    fn drag_light_handle(&mut self, handle: LightHandle, pos: Vec2) {
+        use oxy_render::lighting::LightKind;
+        let (scene, cam) = self.light_frames();
+        let (o, d) = self.camera.ray(self.canvas_local(pos), self.canvas_size());
+        let forward = self.camera.forward();
+        // The point under the pointer on the view plane through `at`.
+        let on_plane = |at: Vec3| {
+            let denom = d.dot(forward);
+            if denom.abs() < 1e-6 {
+                return None;
+            }
+            let t = (at - o).dot(forward) / denom;
+            (t > 0.0).then(|| o + d * t)
+        };
+        let (LightHandle::Light(i) | LightHandle::Aim(i)) = handle;
+        let light = &mut self.view.lighting.lights[i];
+        match (handle, light.kind) {
+            (LightHandle::Light(_), LightKind::Sun) => {
+                // The dot moves on a sphere around the scene; the sun shines
+                // from the middle toward it.
+                let r = light.marker(&scene, &cam).distance(scene.center);
+                let oc = o - scene.center;
+                let b = oc.dot(d);
+                let disc = b * b - (oc.length_squared() - r * r);
+                let hit = if disc >= 0.0 { o + d * (-b - disc.sqrt()) } else { o + d * (-b) };
+                light.set_sun_direction((hit - scene.center).normalize_or(Vec3::Y), &cam);
+            }
+            (LightHandle::Light(_), _) => {
+                if let Some(p) = on_plane(light.world_position(&scene, &cam)) {
+                    light.set_world_position(p, &scene, &cam);
+                }
+            }
+            (LightHandle::Aim(_), _) => {
+                if let Some(p) = on_plane(light.world_aim(&scene, &cam)) {
+                    light.set_world_aim(p, &scene, &cam);
+                }
+            }
+        }
+    }
+
+    /// What viewport light positions are relative to: the visible scene,
+    /// and the camera (for lights that follow the view).
+    pub fn light_frames(&self) -> (oxy_render::lighting::SceneFrame, oxy_render::lighting::CameraFrame) {
+        let b = self.scene.bounds();
+        (
+            oxy_render::lighting::SceneFrame::from_bounds(b.min, b.max),
+            oxy_render::lighting::CameraFrame::new(self.camera.forward(), self.camera.up()),
+        )
+    }
+
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
@@ -5222,6 +5337,48 @@ mod tests {
     }
 
     #[test]
+    fn light_markers_drag_lights_without_sculpting() {
+        use oxy_render::lighting::LightKind;
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        // No markers until lighting is on and the Lights window is open.
+        assert!(e.light_handles().is_empty());
+        e.view.lighting.enabled = true;
+        e.show_lights = true;
+        // A point light in front of the model, fixed in the scene.
+        let light = &mut e.view.lighting.lights[2];
+        light.on = true;
+        light.kind = LightKind::Point;
+        light.follow_camera = false;
+        light.position = [0.0, 0.0, 0.6];
+        let handles = e.light_handles();
+        let (_, at) = *handles.iter().find(|(h, _)| *h == LightHandle::Light(2)).expect("marker for light 3");
+        let old = e.view.lighting.lights[2].position;
+        // Press on the marker, drag right: the light moves right, the model doesn't change.
+        e.pointer = Some(at);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::LightHandle(LightHandle::Light(2))));
+        e.pointer_moved(at + Vec2::new(80.0, 0.0));
+        e.pointer_up();
+        let new = e.view.lighting.lights[2].position;
+        assert!(new[0] > old[0] + 0.05, "{old:?} -> {new:?}");
+        assert!((new[2] - old[2]).abs() < 0.05, "stays at its depth: {old:?} -> {new:?}");
+        assert_eq!(e.scene.active().mesh.positions, before, "no stroke");
+        // A sun's marker turns its direction instead.
+        let sun = e.view.lighting.lights[0];
+        let (_, at) = *e.light_handles().iter().find(|(h, _)| *h == LightHandle::Light(0)).unwrap();
+        e.pointer = Some(at);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(at + Vec2::new(-60.0, 40.0));
+        e.pointer_up();
+        let moved = e.view.lighting.lights[0];
+        assert!(moved.azimuth != sun.azimuth || moved.elevation != sun.elevation);
+        // With the window closed, a press there sculpts as usual.
+        e.show_lights = false;
+        assert!(e.light_handles().is_empty());
+    }
+
+    #[test]
     fn stroke_on_model_then_undo() {
         let mut e = editor();
         let before = e.scene.active().mesh.positions.clone();
@@ -6477,6 +6634,7 @@ mod tests {
             curve_move_centred: false,
             dyntopo: true,
             dyntopo_detail: 0.25,
+            lighting: oxy_render::lighting::Lighting { enabled: true, exposure: 0.5, ..Default::default() },
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
