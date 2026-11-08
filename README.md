@@ -94,7 +94,8 @@ Testers are the most useful contribution right now — especially with **pen tab
 
 ## Features
 
-- **24 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Topological Move, Polish, Planar Trim, Noise, Mask, Paint, the volume-preserving Kelvinlet brushes (Kelvin Grab, Kelvin Twist, Kelvin Scale), Insert Primitives, and the screen-line cutting tools (Plane Clip, Line Split, Cut Away). Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **25 brushes:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Grab, Snake Hook, Topological Move, Polish, Planar Trim, Noise, Mask, Paint, the volume-preserving Kelvinlet brushes (Kelvin Grab, Kelvin Twist, Kelvin Scale), Curve Move, Insert Primitives, and the screen-line cutting tools (Plane Clip, Line Split, Cut Away). Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options.
+- **Curve Move:** draw a curve along an arm or a tail, then drag its points; the part bends and stretches to follow, like a simple rig. Masks protect what shouldn't move, and symmetry moves both sides. Preview first, then Accept as one undo step. Design in [RFC 0005](docs/rfcs/0005-curve-move.md).
 - **Regularized Kelvinlet brushes:** volume-preserving elastodynamic Grab, Twist, and Scale brushes based on *de Goes & James (SIGGRAPH 2017)* for organic pulling, non-pinching twisting, and radial expansion.
 - **Floor grid (View > Shading):** a fading grid on the floor under the model. It stays at the bottom of the visible pieces and its spacing follows the model's size, so it moves and rescales as you sculpt.
 - **Real-time wireframe overlay:** hardware-accelerated wireframe rendering (`Shift+W`) over shaded matcaps with depth bias to eliminate Z-fighting, and user-selectable wireframe colors that persist across sessions.

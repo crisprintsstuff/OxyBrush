@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-07 (since v2.5.7-beta: Curve stroke mode (RFC 0004); Dynamic detail, first version (RFC 0006); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-07 (since v2.5.7-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
 
 ## Status at a glance
 
@@ -78,7 +78,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Vertex color painting** | ✅ Paint brush, fills (all / cavities / peaks) respecting the mask, saved in projects. ⏳ Color in exports, color-aware remesh/decimate, materials per region | 3–4 wk |
 | **Sculpt layers** | Detail layers with strength sliders; morph target | 4–6 wk |
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
-| **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ⏳ Bend, twist, taper, inflate; topological masking from a click | 4–6 wk |
+| **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ✅ Curve Move: bend and stretch a part along an editable curve ([RFC 0005](rfcs/0005-curve-move.md)). ⏳ Twist and taper along the curve, saved curves; bend, twist, taper, inflate deformers; topological masking from a click | 4–6 wk |
 | **Transform gizmo** | ✅ Move, rotate and scale pieces and masked regions in the viewport. ⏳ Numeric input, snapping, local axes | 1–2 wk |
 | **Brush presets and editor** | ✅ Presets (see below). ⏳ A brush editor and custom shelves of favorites | 2–3 wk |
 | **Insert-mesh and primitive brushes** | ✅ Insert Primitives brush (v2.0.0-beta): sphere, cube, cylinder, cone, torus and plane, dragged out on the surface, with the existing geometry auto-masked and a new face group per primitive. ⏳ Stamping your own meshes (eyes, bolts, teeth) | — |

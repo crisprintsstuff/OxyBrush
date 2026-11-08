@@ -3221,6 +3221,11 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             tips::check_plain(ui, &mut ed.grab_through, "Whole depth", plain::GRAB_THROUGH);
             ui.end_row();
         }
+        if ed.brush_kind == BrushKind::CurveMove {
+            ui.label("Curve");
+            tips::check_plain(ui, &mut ed.curve_move_centred, "Through the middle", plain::MOVE_CENTRED);
+            ui.end_row();
+        }
         if ed.brush_kind == BrushKind::Noise {
             ui.label("Noise scale");
             tips::hover(ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)), plain::NOISE);
@@ -4158,6 +4163,14 @@ fn draw_curve(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
     let size = ed.canvas_size();
     let project = |q: Vec3| ed.camera.project(q, size).map(|s| to_ui(s + origin));
     let step = (ed.brush_radius_pt * 0.25).max(1.0) * ed.curve_world_per_pt();
+    // Curve Move: where the curve was drawn, faintly, once it has moved.
+    if c.kind == BrushKind::CurveMove && c.rest != c.points {
+        let rest: Vec<egui::Pos2> = crate::editor::curve_points(&c.rest, c.closed, step)
+            .into_iter()
+            .filter_map(|(q, _, _, _)| project(q))
+            .collect();
+        painter.add(egui::Shape::dashed_line(&rest, EStroke::new(1.0, accent.linear_multiply(0.5)), 6.0, 4.0));
+    }
     let line: Vec<egui::Pos2> = crate::editor::curve_points(&c.points, c.closed, step)
         .into_iter()
         .filter_map(|(q, _, _, _)| project(q))
@@ -4222,12 +4235,13 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
     let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
     let mut accept = enter && !ctx.egui_wants_keyboard_input();
     let mut cancel = esc;
-    egui::Window::new("Curve stroke")
+    let moving = ed.curve.as_ref().is_some_and(|c| c.kind == BrushKind::CurveMove);
+    egui::Window::new(if moving { "Curve Move" } else { "Curve stroke" })
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
         .show(ctx, |ui| {
-            ui.label(RichText::new(plain::CURVE_HELP).weak().small());
+            ui.label(RichText::new(if moving { plain::MOVE_HELP } else { plain::CURVE_HELP }).weak().small());
             ui.add_space(4.0);
             let Some(c) = ed.curve.as_mut() else { return };
             let mut dragging = false;
@@ -4240,7 +4254,7 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
                     plain::CURVE_CLOSED,
                 );
                 ui.end_row();
-                if !c.closed {
+                if !c.closed && !moving {
                     ui.label("Fade in");
                     let r = ui.add(egui::Slider::new(&mut c.fade_in, 0.0..=0.5).custom_formatter(pct));
                     dragging |= r.dragged();
@@ -4254,28 +4268,39 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
                 }
                 if let Some(i) = c.selected.filter(|&i| i < c.weights.len()) {
                     let w = &mut c.weights[i];
-                    ui.label("Point size");
+                    ui.label(if moving { "Point reach" } else { "Point size" });
                     let r = ui.add(egui::Slider::new(&mut w.0, 0.1..=3.0).logarithmic(true).custom_formatter(pct));
                     dragging |= r.dragged();
-                    tips::hover(r, plain::CURVE_POINT_SIZE);
+                    tips::hover(r, if moving { plain::MOVE_POINT_REACH } else { plain::CURVE_POINT_SIZE });
                     ui.end_row();
                     ui.label("Point strength");
-                    let r = ui.add(egui::Slider::new(&mut w.1, 0.0..=2.0).custom_formatter(pct));
+                    // The model can't follow more than all the way.
+                    let top = if moving { 1.0 } else { 2.0 };
+                    let r = ui.add(egui::Slider::new(&mut w.1, 0.0..=top).custom_formatter(pct));
                     dragging |= r.dragged();
-                    tips::hover(r, plain::CURVE_POINT_STRENGTH);
+                    tips::hover(r, if moving { plain::MOVE_POINT_STRENGTH } else { plain::CURVE_POINT_STRENGTH });
                     ui.end_row();
                 }
             });
             c.ui_dragging = dragging;
             if c.selected.is_none() {
-                ui.label(RichText::new(plain::CURVE_SELECT).weak().small());
+                ui.label(RichText::new(if moving { plain::MOVE_SELECT } else { plain::CURVE_SELECT }).weak().small());
             }
-            ed.curve_fade_in = c.fade_in;
-            ed.curve_fade_out = c.fade_out;
-            ui.label(RichText::new(plain::CURVE_SIZE).weak().small());
+            if !moving {
+                ed.curve_fade_in = c.fade_in;
+                ed.curve_fade_out = c.fade_out;
+            }
+            ui.label(RichText::new(if moving { plain::MOVE_SIZE } else { plain::CURVE_SIZE }).weak().small());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                accept |= tips::hover(ui.button("Accept"), plain::CURVE_ACCEPT).clicked();
+                let tip = if moving { plain::MOVE_ACCEPT } else { plain::CURVE_ACCEPT };
+                accept |= tips::hover(ui.button("Accept"), tip).clicked();
+                if moving
+                    && tips::hover(ui.add_enabled(c.points != c.rest, egui::Button::new("Reset")), plain::MOVE_RESET)
+                        .clicked()
+                {
+                    c.points = c.rest.clone();
+                }
                 cancel |= tips::hover(ui.button("Cancel"), plain::CURVE_CANCEL).clicked();
             });
         });

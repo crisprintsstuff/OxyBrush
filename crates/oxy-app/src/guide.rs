@@ -137,6 +137,12 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 Masked parts stay put and partly masked parts move partly, so a soft mask edge bends smoothly: mask the body, leave an arm unmasked, and rotate it at the shoulder. The pivot sits on the edge of the mask.",
     },
     Topic {
+        title: "Bending with Curve Move",
+        keywords: "curve move bend pose arm tail limb deform stretch wire",
+        body: "Curve Move bends and stretches a long part (an arm, a tail, a horn) along a curve. Pick it from the brushes, draw a curve along the part, then drag the curve's points: the part follows, bending smoothly. With Through the middle on, the curve runs through the part's core rather than over its skin.\n\n\
+Size sets how far from the curve the model follows: make the circle cover the part's thickness so it moves as a whole. Masked areas never move, and symmetry moves the mirrored side too. Click the curve to add a point, Alt+click to remove one, select a point to change its reach and strength there, and Reset to start over. Enter applies it as one undo step; Esc cancels.",
+    },
+    Topic {
         title: "Subdivision levels",
         keywords: "multires multiresolution detail divide levels",
         body: "Ctrl+D adds a subdivision level: four times the triangles, for finer detail. D and Shift+D move up and down between levels. Make broad changes on a low level and fine detail on a high one; the detail follows when you go back up.\n\n\

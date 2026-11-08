@@ -9,6 +9,7 @@
 pub mod alpha;
 mod falloff;
 pub mod preset;
+pub mod wire;
 
 pub use alpha::{Alpha, BuiltinAlpha};
 pub use falloff::Falloff;
@@ -43,6 +44,9 @@ pub enum BrushKind {
     KelvinGrab,
     KelvinTwist,
     KelvinScale,
+    /// Draw a curve, then drag its points: the mesh around it bends and
+    /// stretches to follow (see [`wire`]). Not a dab brush: the app drives it.
+    CurveMove,
     InsertPrimitive,
     PlaneClip,
     LineSplit,
@@ -131,7 +135,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 24] = [
+    pub const ALL: [BrushKind; 25] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -147,6 +151,7 @@ impl BrushKind {
         BrushKind::KelvinGrab,
         BrushKind::KelvinTwist,
         BrushKind::KelvinScale,
+        BrushKind::CurveMove,
         BrushKind::Polish,
         BrushKind::PlanarTrim,
         BrushKind::Noise,
@@ -196,6 +201,7 @@ impl BrushKind {
             BrushKind::KelvinGrab => "Kelvin Grab",
             BrushKind::KelvinTwist => "Kelvin Twist",
             BrushKind::KelvinScale => "Kelvin Scale",
+            BrushKind::CurveMove => "Curve Move",
             BrushKind::Mask => "Mask",
             BrushKind::Paint => "Paint",
             BrushKind::Polish => "Polish",
@@ -219,6 +225,7 @@ impl BrushKind {
             | BrushKind::KelvinGrab
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
+            | BrushKind::CurveMove
             | BrushKind::InsertPrimitive
             | BrushKind::PlaneClip
             | BrushKind::LineSplit
@@ -1316,6 +1323,7 @@ fn target_positions(
                 | BrushKind::KelvinGrab
                 | BrushKind::KelvinTwist
                 | BrushKind::KelvinScale
+                | BrushKind::CurveMove
                 | BrushKind::Mask
                 | BrushKind::Paint
                 | BrushKind::Layer

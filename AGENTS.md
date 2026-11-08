@@ -53,6 +53,7 @@ Useful extras:
 cargo check --workspace --target x86_64-pc-windows-gnu     # Windows type-check from Linux (rustup target add + mingw-w64 gcc for ring)
 cargo run -p oxy-app -- --demo --screenshot out.png        # headless screenshot (Linux: xvfb-run + mesa-vulkan-drivers)
 cargo run --release -p oxy-sculpt --example dab_timing     # brush performance
+cargo run --release -p oxy-sculpt --example wire_timing    # Curve Move bind/deform performance
 cargo run --release -p oxy-topo --example topo_timing      # remesh/decimate performance
 cargo run --release -p oxy-mesh --example multires_timing  # mesh build / subdivision level performance
 cargo run --release -p oxy-mesh --example dyntopo_timing   # dynamic detail refine cost by mesh size
