@@ -1,6 +1,6 @@
 # RFC 0010: Blender bridge
 
-- **Status:** proposed for the maintainer; design only, nothing implemented yet
+- **Status:** accepted in outline by the maintainer (OBJ first; Send back and close; published on extensions.blender.org); implementation to follow
 - **Requested by:** testers, who want to send a model from Blender to OxyBrush,
   sculpt it, and get it back without exporting and importing by hand.
 
@@ -69,17 +69,26 @@ and would put whole meshes through JSON. Files need nothing switched on,
 work when OxyBrush isn't running yet, and reuse a mechanism that is already
 tested. MCP stays the route for automation and agents.
 
-### Licence and where the add-on lives
+### Licence, where the add-on lives, how it ships
 
-Blender add-ons import Blender's Python API, and Blender's position is that
-add-ons are covered by its GPL. OxyBrush is MIT/Apache-2.0 and never takes
-GPL code. So the add-on lives in a **separate repository**
-(`oxybrush-blender`), licensed **GPL-2.0-or-later**, and is written from
-scratch from Blender's public API documentation. No existing bridge add-on's
-source is read (see [CLEAN_ROOM.md](../CLEAN_ROOM.md)). This repository only
-gains the generalized link, the `--link` flag and documentation of the
-manifest format, all MIT/Apache-2.0. The manifest format is the contract
-between the two, so other apps can use it too.
+Blender add-ons import Blender's Python API, and Blender treats add-ons as
+covered by its GPL; extensions on
+[extensions.blender.org](https://extensions.blender.org/add-ons/) are open
+source under GPL-compatible terms. So:
+
+- The add-on lives **in this repository**, in `integrations/blender/`, with
+  its **own licence file: GPL-3.0-or-later**. It is the only GPL-licensed
+  directory; nothing else in OxyBrush imports or links it, and OxyBrush
+  itself stays MIT OR Apache-2.0. It is written from scratch from Blender's
+  public API documentation; no other bridge add-on's source is read (see
+  [CLEAN_ROOM.md](../CLEAN_ROOM.md)). The rule against copying GPL code is
+  about code from other projects and is unchanged.
+- It is **published on extensions.blender.org** as an extension (with the
+  `blender_manifest.toml` the platform requires), so Blender users install
+  and update it from inside Blender. A zip is also attached to OxyBrush
+  releases.
+- The manifest format is the contract between the two, documented here, so
+  other apps can use it too.
 
 ## Work in OxyBrush
 
@@ -94,10 +103,12 @@ between the two, so other apps can use it too.
 - Tests: a manifest round trip in `oxy-io`/`oxy-app` (names, transforms,
   vertex order kept, new pieces listed, writes refused outside the folder).
 
-## Open questions
+## Decisions
 
-- OBJ or glTF for the exchange? OBJ is simplest and keeps vertex order;
-  glTF would carry vertex colors and UVs. Proposed: OBJ first, glTF later.
-- Should Send back also offer "Send back and close"?
-- Who maintains the add-on repository, and how is it released (Blender
-  extensions platform, or a zip on GitHub releases)?
+- **OBJ first.** It keeps vertex order and is simple; glTF (vertex colors,
+  UVs) may follow.
+- **Send back and close** is offered next to Send back: it sends, then
+  closes the linked document (asking about anything unsaved that isn't part
+  of the link).
+- **Released on extensions.blender.org**, from `integrations/blender/` in
+  this repository (licence above).
