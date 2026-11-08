@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OxyBrush — High-Performance 3D Digital Sculpting in Rust</title>
-  <meta name="description" content="OxyBrush is a lightweight, open-source 3D digital sculpting app written in Rust. Features multiresolution subdivision, 17 brushes, vertex color painting, posing, glTF export, SSAO viewport shading, and background meshing.">
+  <meta name="description" content="OxyBrush is a lightweight, open-source 3D digital sculpting app written in Rust. Features multiresolution subdivision, 19 sculpting brushes, vertex color painting, posing, glTF export, SSAO viewport shading, and background meshing.">
   
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
@@ -147,7 +147,7 @@
           <span>What's new</span>
         </a>
         <a href="#features" class="hover:text-oxy-purple transition-colors">Sculpting System</a>
-        <a href="#brushes" class="hover:text-oxy-blue transition-colors">17 Brushes</a>
+        <a href="#brushes" class="hover:text-oxy-blue transition-colors">Brushes</a>
         <a href="#performance" class="hover:text-white transition-colors">Performance</a>
         <a href="#architecture" class="hover:text-oxy-pink transition-colors">Architecture</a>
         <a href="#changelog" class="hover:text-oxy-purple transition-colors">Changelog</a>
@@ -221,8 +221,8 @@
             <div class="text-xs text-slate-400 uppercase tracking-wide">Level Switch Speed</div>
           </div>
           <div class="glass glass-card p-6 rounded-3xl">
-            <div class="text-3xl font-display font-bold text-oxy-purple mb-1">17 Tools</div>
-            <div class="text-xs text-slate-400 uppercase tracking-wide">Dedicated Brushes</div>
+            <div class="text-3xl font-display font-bold text-oxy-purple mb-1">19 Brushes</div>
+            <div class="text-xs text-slate-400 uppercase tracking-wide">Plus Mask, Paint, Insert &amp; Cut Tools</div>
           </div>
           <div class="glass glass-card p-6 rounded-3xl">
             <div class="text-3xl font-display font-bold text-oxy-blue mb-1">Zero Lag</div>
@@ -386,7 +386,7 @@
       </div>
     </section>
 
-    <!-- The 17 Brushes Showcase -->
+    <!-- Brushes showcase (a selection) -->
     <section id="brushes" class="py-24 border-b border-white/5 relative">
         <div class="absolute inset-0 bg-gradient-to-b from-oxy-blue/5 to-transparent pointer-events-none"></div>
       <div class="max-w-7xl mx-auto px-4 sm:px-6 relative z-10">
@@ -394,8 +394,8 @@
         <div class="flex flex-col md:flex-row md:items-end justify-between mb-12 gap-6">
           <div>
             <div class="text-sm font-bold text-oxy-blue uppercase tracking-widest mb-3">Brush Palette</div>
-            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">17 Purpose-Built Tools</h2>
-            <p class="text-slate-400 mt-3 max-w-xl">Rendered clay ball previews, number-key shortcuts that follow your shelf order, and draggable customization.</p>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">19 Sculpting Brushes</h2>
+            <p class="text-slate-400 mt-3 max-w-xl">A selection below. The same shelf also holds Mask, Paint, Insert Primitives and three cutting tools, with rendered clay previews, number keys that follow your shelf order, and drag-to-reorder.</p>
           </div>
           <div class="text-sm font-medium text-slate-300 glass px-5 py-2.5 rounded-full">
             Hold <span class="text-white font-bold bg-white/10 px-2 py-0.5 rounded">Alt</span> to flip Raise &harr; Carve
