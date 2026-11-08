@@ -163,7 +163,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `[` `]` and `-` `=` | Radius and strength |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
 | `X` | Toggle X symmetry |
-| `F` | Frame scene |
+| `F` / Alt+`F` | Frame the active piece / all pieces |
 | Ctrl+D | Add subdivision level |
 | `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |
