@@ -39,6 +39,13 @@ command palette).
    named "Tube", in one undo step. **Cancel** (or Esc) discards it. Orbit,
    pan and zoom leave it open.
 
+**Tube brush.** The same tool is also a brush in the shelf, **Tube**, next
+to Insert Primitive. With it, Accept adds the tube **into the active
+piece** (one undo step; the tube's triangles get a new face group, and the
+existing surface is unchanged), as other sculpting apps do. The Tube window
+has a checkbox to send it to a new piece instead. While a tube is open,
+pressing the model away from its points with the Tube brush does nothing.
+
 The new piece is a separate shell. **Merge** (Pieces panel) fuses the
 visible pieces into one surface with a voxel remesh; that stays the user's choice,
 since a tube is often wanted as its own piece (to pose, hide or export).

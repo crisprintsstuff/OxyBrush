@@ -18,6 +18,9 @@ const MAX_POINTS: usize = 8;
 
 /// The open tube.
 pub struct TubeEdit {
+    /// The piece Accept adds the tube into (the Tube brush); None makes a
+    /// new piece (Pieces > + Add > Tube).
+    pub into: Option<u64>,
     /// Control points of the centre line, in world space.
     pub points: Vec<Vec3>,
     /// Radius at each control point, blended along the tube.
@@ -109,8 +112,16 @@ impl Editor {
         let Some(tube) = self.tube.take() else { return };
         self.tube_armed = false;
         let mesh = tube.mesh();
-        self.add_piece(Piece::new("Tube", mesh), "Add tube");
-        self.status = "Tube added as a new piece".into();
+        if let Some(i) = tube.into.and_then(|id| self.scene.index_of(id)) {
+            self.scene.set_active(i);
+            let name = self.scene.active().name.clone();
+            let merged = append_with_new_group(&self.scene.active().mesh, &mesh);
+            self.replace_active_mesh("Add tube", merged);
+            self.status = format!("Tube added to {name}, in a face group of its own");
+        } else {
+            self.add_piece(Piece::new("Tube", mesh), "Add tube");
+            self.status = "Tube added as a new piece".into();
+        }
     }
 
     pub fn update_tube(&mut self) {
@@ -173,10 +184,13 @@ impl Editor {
 
     /// Handle a press for the tube tool. True if the tube took it.
     pub(crate) fn tube_pointer_down(&mut self, p: Vec2) -> bool {
+        let brush = self.brush_kind == oxy_sculpt::BrushKind::Tube;
         if self.tube.is_none() {
-            if !self.tube_armed {
+            if !self.tube_armed && !brush {
                 return false;
             }
+            // The Tube brush adds into the active piece; the menu tool makes a new one.
+            self.tube_into = (!self.tube_armed && brush).then(|| self.scene.active().id);
             // Start on the model where it is under the pointer, else on the
             // view plane through the middle of the active piece.
             let anchor = match self.surface_hit_at(p) {
@@ -223,7 +237,9 @@ impl Editor {
             self.drag = Drag::TubePoint { index: i + 1 };
             return true;
         }
-        false
+        // With the Tube brush, a press elsewhere does nothing (there is no
+        // stroke to make); other brushes sculpt as usual.
+        brush
     }
 
     /// Handle pointer movement for a tube drag. True if one is active.
@@ -304,6 +320,7 @@ impl Editor {
             mirror: self.symmetry.x,
             selected: None,
             mirror_x: self.symmetry_center().x,
+            into: self.tube_into,
             built: None,
         };
         tube.update();
@@ -311,4 +328,30 @@ impl Editor {
         self.tube_armed = false;
         self.status = "Tube: drag points to shape it, Shift+drag to change thickness; Enter adds it".into();
     }
+}
+
+/// `base` with `extra` appended as new triangles in a face group of their
+/// own; the existing vertices, triangles and their mask, groups, visibility
+/// and color are unchanged, and the new vertices are unmasked and white.
+pub(crate) fn append_with_new_group(base: &Mesh, extra: &Mesh) -> Mesh {
+    let mut d = base.to_data();
+    let e = extra.to_data();
+    let (nv, nt) = (d.positions.len(), d.triangles.len());
+    let off = nv as u32;
+    let group = d.groups.iter().copied().max().map_or(1, |g| g + 1);
+    d.positions.extend(&e.positions);
+    d.triangles.extend(e.triangles.iter().map(|t| t.map(|v| v + off)));
+    if d.mask.len() == nv {
+        d.mask.extend(std::iter::repeat_n(0.0, e.positions.len()));
+    }
+    if d.groups.len() == nt {
+        d.groups.extend(std::iter::repeat_n(group, e.triangles.len()));
+    }
+    if d.hidden.len() == nt {
+        d.hidden.extend(std::iter::repeat_n(false, e.triangles.len()));
+    }
+    if d.color.len() == nv {
+        d.color.extend(std::iter::repeat_n(Vec3::ONE, e.positions.len()));
+    }
+    Mesh::from_data(d)
 }

@@ -966,6 +966,8 @@ pub struct Editor {
     pub tube: Option<crate::tube::TubeEdit>,
     /// The tube tool is waiting for a path to be drawn.
     pub tube_armed: bool,
+    /// The piece the tube being drawn will be added into (Tube brush).
+    pub tube_into: Option<u64>,
     /// Mask extract in progress: the shell is shown and can be adjusted, and
     /// becomes a piece only when accepted.
     pub extract_preview: Option<ExtractPreview>,
@@ -1206,6 +1208,7 @@ impl Default for Editor {
             insert_preview: None,
             tube: None,
             tube_armed: false,
+            tube_into: None,
             extract_preview: None,
             curve: None,
             curve_fade_in: 0.15,
@@ -4108,7 +4111,7 @@ impl Editor {
 
     /// Replace the active piece's mesh with a new topology. Subdivision
     /// levels no longer apply and are removed (undo restores them).
-    fn replace_active_mesh(&mut self, label: &str, mesh: Mesh) {
+    pub(crate) fn replace_active_mesh(&mut self, label: &str, mesh: Mesh) {
         self.pointer_up();
         let piece = self.scene.active_mut();
         let id = piece.id;
@@ -5474,6 +5477,48 @@ mod tests {
         assert!(topo::boundary_loops(&m.triangles).is_empty(), "still open");
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), open);
+    }
+
+    #[test]
+    fn tube_brush_adds_the_tube_into_the_active_piece() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::Tube;
+        let before = e.scene.active().mesh.clone();
+        let draw = |e: &mut Editor| {
+            let path: Vec<Vec2> = (0..=30).map(|i| Vec2::new(400.0 + i as f32 * 9.0, 300.0 - i as f32 * 3.0)).collect();
+            e.pointer = Some(path[0]);
+            e.pointer_down(PointerButton::Primary);
+            for &p in &path[1..] {
+                e.pointer_moved(p);
+            }
+            e.pointer_up();
+        };
+        draw(&mut e);
+        let into = e.tube.as_ref().expect("the brush draws a tube").into;
+        assert_eq!(into, Some(e.scene.active().id), "aimed at the active piece");
+        // A press away from the tube doesn't sculpt with the Tube brush.
+        e.pointer = Some(Vec2::new(300.0, 420.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(320.0, 430.0));
+        e.pointer_up();
+        assert_eq!(e.scene.active().mesh.positions, before.positions);
+        assert_eq!(e.history.undo_labels().count(), 0);
+
+        e.accept_tube();
+        assert_eq!(e.scene.pieces.len(), 1, "no new piece");
+        let m = &e.scene.active().mesh;
+        assert!(m.triangle_count() > before.triangle_count());
+        let old_group = before.groups()[0];
+        assert!(m.groups().iter().any(|&g| g != old_group), "the tube has its own face group");
+        assert!(e.status.starts_with("Tube added to Sphere"), "{}", e.status);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), before.triangle_count());
+
+        // The window's checkbox can send it to a new piece instead.
+        draw(&mut e);
+        e.tube.as_mut().unwrap().into = None;
+        e.accept_tube();
+        assert_eq!(e.scene.pieces.len(), 2);
     }
 
     #[test]

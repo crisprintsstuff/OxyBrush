@@ -235,6 +235,7 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
         BrushKind::InsertPrimitive => "insert_primitive",
+        BrushKind::Tube => "tube",
         BrushKind::PlaneClip => "plane_clip",
         BrushKind::LineSplit => "line_split",
         BrushKind::CutAway => "cut_away",

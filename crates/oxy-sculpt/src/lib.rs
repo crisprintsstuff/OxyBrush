@@ -48,6 +48,9 @@ pub enum BrushKind {
     /// stretches to follow (see [`wire`]). Not a dab brush: the app drives it.
     CurveMove,
     InsertPrimitive,
+    /// Draw a path to get a tube along it, added into the active piece.
+    /// Not a dab brush: the app drives it (RFC 0009).
+    Tube,
     PlaneClip,
     LineSplit,
     CutAway,
@@ -135,7 +138,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 25] = [
+    pub const ALL: [BrushKind; 26] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -156,6 +159,7 @@ impl BrushKind {
         BrushKind::PlanarTrim,
         BrushKind::Noise,
         BrushKind::InsertPrimitive,
+        BrushKind::Tube,
         BrushKind::PlaneClip,
         BrushKind::LineSplit,
         BrushKind::CutAway,
@@ -209,6 +213,7 @@ impl BrushKind {
             BrushKind::TopoMove => "Topological Move",
             BrushKind::Noise => "Noise",
             BrushKind::InsertPrimitive => "Insert Primitive",
+            BrushKind::Tube => "Tube",
             BrushKind::PlaneClip => "Plane Clip",
             BrushKind::LineSplit => "Line Split",
             BrushKind::CutAway => "Cut Away",
@@ -227,6 +232,7 @@ impl BrushKind {
             | BrushKind::KelvinScale
             | BrushKind::CurveMove
             | BrushKind::InsertPrimitive
+            | BrushKind::Tube
             | BrushKind::PlaneClip
             | BrushKind::LineSplit
             | BrushKind::CutAway => 1.0,
@@ -1376,6 +1382,7 @@ fn target_positions(
                 | BrushKind::Paint
                 | BrushKind::Layer
                 | BrushKind::InsertPrimitive
+                | BrushKind::Tube
                 | BrushKind::PlaneClip
                 | BrushKind::LineSplit
                 | BrushKind::CutAway => p,

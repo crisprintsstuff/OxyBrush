@@ -23,6 +23,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         .pivot(egui::Align2::LEFT_BOTTOM)
         .default_pos(egui::pos2(screen.left() + 150.0, screen.bottom() - 48.0))
         .show(ctx, |ui| {
+            let ed_target_id = ed.tube.as_ref().and_then(|t| t.into).unwrap_or(ed.scene.active().id);
+            let ed_target_name = ed
+                .scene
+                .index_of(ed_target_id)
+                .map_or_else(|| ed.scene.active().name.clone(), |i| ed.scene.pieces[i].name.clone());
             let Some(tube) = &mut ed.tube else {
                 ui.label("Drag a path for the tube, starting on the model or in empty space.");
                 ui.add_space(4.0);
@@ -58,6 +63,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.end_row();
                 ui.label("Mirror");
                 ui.checkbox(&mut tube.mirror, "Also across the X mirror plane");
+                ui.end_row();
+                ui.label("Accept");
+                let mut into = tube.into.is_some();
+                let name = ed_target_name.clone();
+                if ui.checkbox(&mut into, format!("Add to {name} (not a new piece)")).changed() {
+                    tube.into = if into { Some(ed_target_id) } else { None };
+                }
                 ui.end_row();
             });
             if tube.selected.is_some() && ui.small_button("Edit the whole tube's thickness").clicked() {

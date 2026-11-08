@@ -50,6 +50,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
         BrushKind::InsertPrimitive => "Inserts 3D primitives onto the surface with auto-masking.",
+        BrushKind::Tube => {
+            "Drag a path to add a tube along it to this piece (horns, tentacles, cables). Drag its points to reshape it, Shift+drag for thickness, then Accept."
+        }
         BrushKind::PlaneClip => "Clamps geometry to a screen-drawn plane, preserving topology and multires.",
         BrushKind::LineSplit => "Slices the mesh along a screen-drawn plane and creates a distinct polygroup.",
         BrushKind::CutAway => "Trims away geometry on one side of a screen-drawn plane and caps the cut watertight.",
@@ -96,6 +99,8 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         // Paint leaves the shape alone: the same gentle surface, wider.
         BrushKind::Paint => 0.14 * bump(x, 1.1),
         BrushKind::InsertPrimitive => 0.65 * bump(x, 0.35),
+        // A tube rising out of the surface and curling over.
+        BrushKind::Tube => 0.5 * bump(x + 0.2, 0.18) + 0.35 * bump(x - 0.25, 0.22),
         BrushKind::PlaneClip => 0.38 * (x + 0.5).clamp(0.0, 1.0),
         BrushKind::LineSplit => 0.48 * bump(x - 0.2, 0.3) - 0.2 * bump(x + 0.4, 0.25),
         BrushKind::CutAway => {

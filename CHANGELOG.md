@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Tube brush:** the tube tool is also a brush in the shelf, **Tube**, next to Insert Primitive. It draws a tube the same way, but **Accept adds it into the active piece** (one undo step, in a face group of its own) instead of making a new piece. The Tube window has a checkbox to switch between the two.
+
 ### Changed
 - **F frames the active piece**, centred on it, instead of the whole scene; **Alt+F** frames every visible piece. With one piece nothing changes.
 - **Zoom drags follow ZBrush in the Right-drag orbit preset:** Ctrl+right-drag **down** zooms in. Other presets keep drag up = zoom in. Both directions can be flipped in **Settings > Keymap > Zoom direction**: **Invert zoom drag** and **Invert mouse wheel zoom**.
