@@ -739,6 +739,8 @@ pub struct Editor {
     pub brush_radius_pt: f32,
     pub strengths: [f32; BrushKind::ALL.len()],
     pub falloff: Falloff,
+    /// Moves the falloff's middle, -1..=1 (negative firmer, positive softer).
+    pub focal_shift: f32,
     pub spacing: f32,
     pub pressure_strength: bool,
     pub pressure_radius: bool,
@@ -1037,6 +1039,7 @@ impl Default for Editor {
             brush_radius_pt: 50.0,
             strengths,
             falloff: Falloff::Smooth,
+            focal_shift: 0.0,
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
@@ -2005,6 +2008,7 @@ impl Editor {
             radius,
             strength: self.strength(kind),
             falloff: self.falloff,
+            focal_shift: self.focal_shift,
             spacing: self.spacing,
             pressure_strength: self.pressure_strength,
             pressure_radius: self.pressure_radius,
@@ -2083,6 +2087,7 @@ impl Editor {
             radius_pt: self.brush_radius_pt,
             strength: self.strength(k),
             falloff: self.falloff,
+            focal_shift: self.focal_shift,
             spacing: self.spacing,
             pressure_strength: self.pressure_strength,
             pressure_radius: self.pressure_radius,
@@ -2107,6 +2112,7 @@ impl Editor {
         self.brush_radius_pt = p.radius_pt;
         *self.strength_mut(p.kind) = p.strength;
         self.falloff = p.falloff;
+        self.focal_shift = p.focal_shift;
         self.spacing = p.spacing;
         self.pressure_strength = p.pressure_strength;
         self.pressure_radius = p.pressure_radius;
