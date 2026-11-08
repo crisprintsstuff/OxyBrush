@@ -552,13 +552,18 @@ impl App {
         ed.tick_hold(Instant::now());
         ed.update_curve();
         ed.update_tube();
+        ed.update_primitive();
         ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
-        let previewing =
-            ed.insert_preview.is_some() || ed.extract_preview.is_some() || ed.curve.is_some() || ed.tube.is_some();
+        let previewing = ed.insert_preview.is_some()
+            || ed.extract_preview.is_some()
+            || ed.curve.is_some()
+            || ed.tube.is_some()
+            || ed.primitive_edit.is_some();
         // A curve stroke's preview is the whole piece with the stroke
         // applied: draw it in the piece's place, looking like the piece.
-        let curve_piece = ed.curve.as_ref().filter(|_| ed.tube.is_none()).map(|c| c.piece);
+        let curve_piece =
+            ed.curve.as_ref().filter(|_| ed.tube.is_none() && ed.primitive_edit.is_none()).map(|c| c.piece);
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();

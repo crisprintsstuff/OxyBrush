@@ -602,6 +602,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
     crate::tube_ui::window(ui.ctx(), ed);
+    crate::primitive_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
     mesh_diagnostics_dialog(ui.ctx(), ed);
@@ -2660,7 +2661,7 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ("Torus", "torus", Cmd::AddTorus),
         ] {
             if tips::button(ui, label, cmd).clicked() {
-                ed.add_primitive(which);
+                ed.open_primitive(which);
             }
         }
         if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
@@ -3174,7 +3175,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ("Torus", "torus", Cmd::AddTorus),
             ] {
                 if tips::button(ui, label, cmd).clicked() {
-                    ed.add_primitive(which);
+                    ed.open_primitive(which);
                 }
             }
             if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
