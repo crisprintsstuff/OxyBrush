@@ -2544,7 +2544,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-app"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "dirs",
  "egui",
@@ -2576,7 +2576,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-cli"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "oxy-doc",
  "oxy-io",
@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-doc"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "crc32fast",
  "dirs",
@@ -2599,7 +2599,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-history"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "oxy-doc",
@@ -2608,7 +2608,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-io"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2619,7 +2619,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-mcp"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "getrandom 0.3.4",
  "glam",
@@ -2634,7 +2634,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-mesh"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "rayon",
@@ -2642,7 +2642,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-plugin"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "serde_json",
@@ -2651,7 +2651,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-render"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "bytemuck",
  "glam",
@@ -2665,7 +2665,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-sculpt"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "miniz_oxide 0.9.1",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-topo"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-update"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "ed25519-dalek",
  "getrandom 0.3.4",
@@ -2696,7 +2696,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-vdb"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "oxy-mesh",
@@ -2705,7 +2705,7 @@ dependencies = [
 
 [[package]]
 name = "oxy-ztl"
-version = "3.0.1-beta"
+version = "3.0.2-beta"
 dependencies = [
  "glam",
  "log",
