@@ -517,7 +517,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             ShelfPosition::Bottom => {
                 let height = if ed.layout == UiLayout::Touch { 160.0 } else { 104.0 };
                 egui::Panel::bottom(format!("shelf_{key}")).resizable(false).exact_size(height).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_top(|ui| {
                         current_tiles(ui, ed);
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
@@ -1514,7 +1514,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
             (UiLayout::Workstation, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
             (layout, _) => {
-                let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
+                // The same size as the current-brush tile beside the shelf.
+                let size = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
                 let t = widgets::brush_texture(&ctx, k);
                 let tip = tips::brush_tip(k, key);
                 widgets::thumb_sized(ui, Some(&t), k.label(), selected, size, &tip)
@@ -1529,7 +1530,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         r.context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
     };
     if horizontal {
-        ui.horizontal(|ui| {
+        // Top-aligned, so the thumbnails line up with the tiles beside them.
+        ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, k) in order.iter().enumerate() {
                 item(ui, i, *k, ed);
@@ -1888,11 +1890,14 @@ fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
 
 /// Brush, alpha and material previews at the top of the left panel; each
 /// opens a picker with thumbnails.
+/// Size of the current brush / alpha / material tiles.
+const CURRENT_TILE: f32 = 58.0;
+
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     let ctx = ui.ctx().clone();
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let size = 58.0;
+        let size = CURRENT_TILE;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
         let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
@@ -2492,7 +2497,7 @@ fn recent_menu(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn help_menu(ui: &mut Ui, ed: &mut Editor) {
-    use crate::support::{REPO_URL, folder_url};
+    use crate::support::REPO_URL;
     let open = |ui: &Ui, url: String| ui.ctx().open_url(egui::OpenUrl::new_tab(url));
     if tips::button_km(ui, &ed.keymap, "Guide", Cmd::Guide).clicked() {
         ed.guide.open = true;
@@ -2521,7 +2526,7 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     if tips::hover(ui.add_enabled(log_dir.is_some(), egui::Button::new("Open log folder")), plain::OPEN_LOG).clicked()
         && let Some(dir) = log_dir
     {
-        open(ui, folder_url(&dir));
+        crate::support::open_folder(&dir);
     }
     ui.separator();
     if tips::button(ui, "Check for updates…", Cmd::CheckUpdates).clicked() {
@@ -2943,8 +2948,7 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
         ed.begin_extract();
     }
     ui.separator();
-    let blur_label = format!("Blur  ({}+click empty space)", ed.keymap.mask.label());
-    if tips::hover(ui.button(blur_label), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
+    if tips::hover(ui.button("Blur"), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
         ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
     }
     if tips::button(ui, "Sharpen", Cmd::SharpenMask).clicked() {
@@ -3830,7 +3834,7 @@ fn updates_window(ctx: &egui::Context, ed: &mut Editor) {
                         Err(e) => ed.status = format!("Could not start the installer: {e}"),
                     },
                     InstallStep::ShowFile { folder, how } => {
-                        ctx.open_url(egui::OpenUrl::new_tab(crate::support::folder_url(&folder)));
+                        crate::support::open_folder(&folder);
                         ed.status = how.into();
                     }
                 }

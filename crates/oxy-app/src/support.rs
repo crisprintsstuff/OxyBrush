@@ -171,10 +171,27 @@ fn luminance(p: &[u8]) -> u8 {
     (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8
 }
 
-/// `file://` URL for a local folder (opened by the OS file manager).
-pub fn folder_url(path: &std::path::Path) -> String {
-    let p = path.to_string_lossy().replace('\\', "/");
-    if p.starts_with('/') { format!("file://{p}") } else { format!("file:///{p}") }
+/// The program that shows a folder in the system file manager.
+///
+/// Folders are opened with it directly, not as a `file://` link: a link goes
+/// through the URL handler, which on Windows can be the web browser.
+pub fn folder_opener() -> &'static str {
+    if cfg!(target_os = "windows") {
+        "explorer"
+    } else if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        // In the Flatpak this goes through the desktop's file-manager portal.
+        "xdg-open"
+    }
+}
+
+/// Show `path` in the system file manager (creating it if needed).
+pub fn open_folder(path: &std::path::Path) {
+    let _ = std::fs::create_dir_all(path);
+    if let Err(e) = std::process::Command::new(folder_opener()).arg(path).spawn() {
+        log::warn!("could not open {}: {e}", path.display());
+    }
 }
 
 #[cfg(test)]
@@ -229,8 +246,13 @@ mod tests {
     }
 
     #[test]
-    fn folder_urls() {
-        assert_eq!(folder_url(std::path::Path::new("/home/a/logs")), "file:///home/a/logs");
-        assert_eq!(folder_url(std::path::Path::new("C:\\Users\\a\\logs")), "file:///C:/Users/a/logs");
+    fn folders_open_in_the_file_manager_not_the_browser() {
+        let opener = folder_opener();
+        #[cfg(target_os = "windows")]
+        assert_eq!(opener, "explorer");
+        #[cfg(target_os = "macos")]
+        assert_eq!(opener, "open");
+        #[cfg(not(any(target_os = "windows", target_os = "macos")))]
+        assert_eq!(opener, "xdg-open");
     }
 }
