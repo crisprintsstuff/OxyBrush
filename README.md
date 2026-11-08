@@ -149,7 +149,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Alt+LMB on empty space / RMB | Pan |
 | Wheel | Zoom |
 | Shift / Ctrl / Alt (hold) | Smooth / Mask / Invert |
-| Ctrl+drag on empty space | Mask a rectangle or lasso (Ctrl+Alt: unmask; Ctrl+click: blur mask) |
+| Ctrl+drag on empty space | Mask a rectangle or lasso (Ctrl+Alt: unmask; a box around nothing clears the mask; Ctrl+click: invert the mask) |
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
 | `L` | Rectangle / lasso selection |
 | Ctrl+M | Mask the face group under the cursor |

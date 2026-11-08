@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **Ctrl on empty space inverts or clears the mask:** with the default mask gestures, **Ctrl+click on empty space now inverts the mask** (with no mask, that masks everything) instead of blurring it, and a **Ctrl box or lasso drawn around none of the model clears the mask**. A box over the model still masks what it encloses. Blur is in the Mask menu and the command palette.
+
+### Fixed
+- **Open log folder** (and the updater's "show the downloaded file") opened a web browser on Windows instead of the file manager. Folders now open with Explorer, Finder or the desktop's file manager directly.
+- **Tab kept moving through the menus:** after Tab hid the panels, the next Tab moved keyboard focus through the menu bar instead of bringing the panels back. Tab now always shows or hides the panels, except while typing in a text field.
+- **Windows: app icon:** the window and taskbar showed a generic icon. OxyBrush now sets its window and taskbar icons, and the icon file stores the small sizes uncompressed, the way Windows draws them reliably (PNG is kept for the 256 px size only).
+
 ## [3.0.0-beta] - 2026-11-08
 
 ### Added

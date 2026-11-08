@@ -386,7 +386,16 @@ impl App {
         let attrs = Window::default_attributes()
             .with_title("OxyBrush")
             .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 400.0));
+            .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 400.0))
+            // The title bar / window list icon. Without it, Windows shows a
+            // generic icon there even though the exe has one.
+            .with_window_icon(window_icon(include_bytes!("../../../packaging/icons/oxybrush-32.png")));
+        // The taskbar and Alt+Tab use the large icon.
+        #[cfg(target_os = "windows")]
+        let attrs = winit::platform::windows::WindowAttributesExtWindows::with_taskbar_icon(
+            attrs,
+            window_icon(include_bytes!("../../../packaging/icons/oxybrush-256.png")),
+        );
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
@@ -1223,6 +1232,31 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        if self.gfx.is_none() {
+            return;
+        }
+        // Tab is OxyBrush's shortcut (show / hide panels) unless a text field
+        // is being typed in. egui would otherwise use it to move keyboard
+        // focus between controls: that scrolls the panels to the focused
+        // control, and every later Tab goes to egui instead of the shortcut.
+        if let WindowEvent::KeyboardInput { event: key, is_synthetic: false, .. } = &event
+            && key.physical_key == PhysicalKey::Code(KeyCode::Tab)
+            && !self.egui_ctx.text_edit_focused()
+            && self.editor.keymap_capture.is_none()
+        {
+            if let Some(id) = self.egui_ctx.memory(|m| m.focused()) {
+                self.egui_ctx.memory_mut(|m| m.surrender_focus(id));
+            }
+            if key.state == ElementState::Pressed
+                && let Some(a) = self.handle_key(key)
+            {
+                self.run_action(a);
+            }
+            if let Some(g) = &self.gfx {
+                g.window.request_redraw();
+            }
+            return;
+        }
         let Some(g) = &mut self.gfx else { return };
         let response = g.egui_state.on_window_event(&g.window, &event);
         let over_egui = self.egui_ctx.is_pointer_over_egui() || self.egui_ctx.egui_is_using_pointer();
@@ -1460,6 +1494,13 @@ impl ApplicationHandler for App {
     }
 }
 
+/// A window icon from one of the generated PNGs (`None` if it can't be
+/// decoded, which only leaves the platform's default icon).
+fn window_icon(png: &[u8]) -> Option<winit::window::Icon> {
+    let (w, h, rgba) = crate::matcaps::decode_png(png).ok()?;
+    winit::window::Icon::from_rgba(rgba, w, h).ok()
+}
+
 /// The key a keymap chord is built from. Numpad, function and symbol keys use
 /// the physical key so they stay distinct (Numpad 1 is not the number row).
 /// Letters and digits use the character the layout produces.
@@ -1618,5 +1659,18 @@ fn character_key(s: &str) -> Option<KeyId> {
         Some(KeyId::Char(c.to_ascii_lowercase()))
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icons_decode() {
+        for png in [
+            &include_bytes!("../../../packaging/icons/oxybrush-32.png")[..],
+            &include_bytes!("../../../packaging/icons/oxybrush-256.png")[..],
+        ] {
+            assert!(super::window_icon(png).is_some());
+        }
     }
 }

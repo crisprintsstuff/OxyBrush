@@ -166,7 +166,8 @@ impl ModKey {
 /// What the mask key does when the press starts on empty space.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MaskEmpty {
-    /// Drag a box or lasso (the invert key unmasks). A click blurs the mask.
+    /// Drag a box or lasso (the invert key unmasks; a box around none of
+    /// the model clears the mask). A click inverts the mask.
     #[default]
     Box,
     /// A click inverts the mask. A drag clears it.
@@ -1081,7 +1082,11 @@ impl Keymap {
                     format!("{}+drag on empty space", self.mask.label()),
                     format!("Mask a selection ({} unmasks)", self.invert.label()),
                 ));
-                rows.push((format!("{}+click on empty space", self.mask.label()), "Blur the mask".into()));
+                rows.push((format!("{}+click on empty space", self.mask.label()), "Invert the mask".into()));
+                rows.push((
+                    format!("{}+drag around empty space", self.mask.label()),
+                    "Clear the mask (the box holds none of the model)".into(),
+                ));
             }
             MaskEmpty::Clear => {
                 rows.push((format!("{}+drag on the mesh", self.mask.label()), "Mask".into()));

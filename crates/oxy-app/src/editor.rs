@@ -2720,7 +2720,9 @@ impl Editor {
                     self.edit_faces("Isolate group", |mesh| mesh.isolate_group(g))
                 }
                 (SelectAction::ShowOnly | SelectAction::Hide, None) => self.edit_faces("Show all", Mesh::show_all),
-                (SelectAction::Mask | SelectAction::Unmask, _) => self.edit_mesh_mask("Blur mask", |m| m.blur_mask(1)),
+                // A click on empty space inverts the mask (with no mask,
+                // that masks everything).
+                (SelectAction::Mask | SelectAction::Unmask, _) => self.invert_mask(),
             }
             return;
         }
@@ -2736,6 +2738,16 @@ impl Editor {
         let inside = move |p: Vec3| camera.project(p, size).is_some_and(|s| point_in_polygon(s, &poly));
         match action {
             SelectAction::Mask | SelectAction::Unmask => {
+                // A mask box drawn around none of the model clears the mask.
+                let mesh = &self.scene.active().mesh;
+                let any =
+                    (0..mesh.vertex_count()).any(|v| !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]));
+                if !any {
+                    if action == SelectAction::Mask {
+                        self.clear_mask();
+                    }
+                    return;
+                }
                 let value = if action == SelectAction::Mask { 1.0 } else { 0.0 };
                 let label = if action == SelectAction::Mask { "Mask selection" } else { "Unmask selection" };
                 self.edit_mesh_mask(label, |mesh| {
@@ -5271,7 +5283,7 @@ mod tests {
     }
 
     #[test]
-    fn lasso_hides_and_ctrl_click_blurs() {
+    fn lasso_hides_and_ctrl_click_inverts_and_empty_box_clears() {
         let mut e = editor();
         e.selection_lasso = true;
         e.modifiers = Modifiers { ctrl: true, shift: true, alt: true };
@@ -5285,17 +5297,40 @@ mod tests {
         let hidden = e.scene.active().mesh.hidden().iter().filter(|&&h| h).count();
         assert!(hidden > 0 && hidden < e.scene.active().mesh.triangle_count() / 2, "{hidden}");
 
-        // Ctrl+click on empty space blurs the mask.
+        // Ctrl+click on empty space inverts the mask.
         let mut e = editor();
         let top = e.scene.active().mesh.positions.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         let mask: Vec<f32> =
             e.scene.active().mesh.positions.iter().map(|p| if p.y > top * 0.7 { 1.0 } else { 0.0 }).collect();
         e.scene.active_mut().mesh.mask = mask;
         e.modifiers.ctrl = true;
+        let before = e.scene.active().mesh.mask.clone();
         e.pointer = Some(Vec2::new(5.0, 5.0));
         e.pointer_down(PointerButton::Primary);
         e.pointer_up();
-        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0 && m < 1.0));
+        let after = &e.scene.active().mesh.mask;
+        assert!(after.iter().zip(&before).all(|(a, b)| (a - (1.0 - b)).abs() < 1e-6), "inverted");
+        // With no mask, the same click masks everything.
+        e.clear_mask();
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 1.0), "masks all");
+        // A Ctrl box drawn around none of the model clears the mask.
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(60.0, 60.0));
+        e.pointer_up();
+        assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 0.0), "a box around nothing clears");
+        // A box over the model still masks just what it encloses.
+        e.pointer = Some(Vec2::new(5.0, 5.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(400.0, 300.0));
+        e.pointer_up();
+        let masked = e.scene.active().mesh.mask.iter().filter(|&&m| m == 1.0).count();
+        assert!(masked > 0 && masked < e.scene.active().mesh.vertex_count(), "{masked}");
+        // Undo puts the cleared mask back step by step.
+        e.undo();
+        assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 0.0));
     }
 
     #[test]

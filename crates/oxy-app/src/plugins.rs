@@ -68,13 +68,7 @@ pub fn ensure_sdk_extracted() -> Option<PathBuf> {
 
 /// Open the given folder in the system file manager.
 pub fn open_folder(path: &Path) {
-    let _ = std::fs::create_dir_all(path);
-    #[cfg(target_os = "windows")]
-    let _ = Command::new("explorer").arg(path).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = Command::new("open").arg(path).spawn();
-    #[cfg(not(any(target_os = "windows", target_os = "macos")))]
-    let _ = Command::new("xdg-open").arg(path).spawn();
+    crate::support::open_folder(path);
 }
 
 /// Parse metadata from the top lines of a `.py` script.

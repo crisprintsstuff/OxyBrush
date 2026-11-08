@@ -94,10 +94,10 @@ commands! {
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
     InvertVisibility => "Invert visibility", "", "Swap which faces are hidden.";
-    InvertMask => "Invert mask", "Ctrl+Shift+I", "Swap masked and unmasked areas.";
-    ClearMask => "Clear mask", "Alt+M", "Remove the mask so the whole surface can be sculpted.";
+    InvertMask => "Invert mask", "Ctrl+Shift+I", "Swap masked and unmasked areas. Also Ctrl+click on empty space.";
+    ClearMask => "Clear mask", "Alt+M", "Remove the mask so the whole surface can be sculpted. Also Ctrl+drag a box around empty space.";
     ExtractMask => "Extract mask", "", "Create a new piece from the masked area, with optional thickness.";
-    BlurMask => "Blur mask", "Ctrl+click empty space", "Soften the edge of the mask.";
+    BlurMask => "Blur mask", "", "Soften the edge of the mask.";
     SharpenMask => "Sharpen mask", "", "Make the mask edge crisper, more on or off.";
     MaskCavities => "Mask cavities", "", "Mask creases, pores and other concave areas.";
     MaskPeaks => "Mask peaks", "", "Mask ridges, edges and other convex areas.";
