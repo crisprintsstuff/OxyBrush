@@ -517,7 +517,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             ShelfPosition::Bottom => {
                 let height = if ed.layout == UiLayout::Touch { 160.0 } else { 104.0 };
                 egui::Panel::bottom(format!("shelf_{key}")).resizable(false).exact_size(height).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_top(|ui| {
                         current_tiles(ui, ed);
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
@@ -1514,7 +1514,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
             (UiLayout::Workstation, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
             (layout, _) => {
-                let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
+                // The same size as the current-brush tile beside the shelf.
+                let size = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
                 let t = widgets::brush_texture(&ctx, k);
                 let tip = tips::brush_tip(k, key);
                 widgets::thumb_sized(ui, Some(&t), k.label(), selected, size, &tip)
@@ -1529,7 +1530,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         r.context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
     };
     if horizontal {
-        ui.horizontal(|ui| {
+        // Top-aligned, so the thumbnails line up with the tiles beside them.
+        ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, k) in order.iter().enumerate() {
                 item(ui, i, *k, ed);
@@ -1888,11 +1890,14 @@ fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
 
 /// Brush, alpha and material previews at the top of the left panel; each
 /// opens a picker with thumbnails.
+/// Size of the current brush / alpha / material tiles.
+const CURRENT_TILE: f32 = 58.0;
+
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     let ctx = ui.ctx().clone();
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let size = 58.0;
+        let size = CURRENT_TILE;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
         let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
