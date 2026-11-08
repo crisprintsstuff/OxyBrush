@@ -1,0 +1,321 @@
+//! In-app WebAssembly plugins (RFC 0011): loading, running commands as
+//! background jobs, applying their edits through undo, panels and overlays.
+
+use crate::editor::{Editor, JobResult};
+use egui::{Color32, RichText, Stroke, Ui};
+use oxy_plugin::{Line, PieceView, Plugin, RunResult, Snapshot};
+
+/// The example plugin shipped with OxyBrush, installed into the plugins
+/// folder on first use (like the Python examples).
+const SQUASH_JSON: &str = include_str!("../../oxy-plugin/plugins/squash/plugin.json");
+const SQUASH_WAT: &str = include_str!("../../oxy-plugin/plugins/squash/plugin.wat");
+
+/// One loaded plugin and its panel.
+pub struct WasmPlugin {
+    pub name: String,
+    pub description: String,
+    /// None while one of its commands is running on a worker thread.
+    pub plugin: Option<Box<Plugin>>,
+    pub show_panel: bool,
+    /// Lines its overlay drew this frame.
+    pub lines: Vec<Line>,
+}
+
+/// What a finished plugin job hands back.
+pub struct PluginJob {
+    pub slot: usize,
+    pub plugin: Box<Plugin>,
+    pub label: String,
+    /// Piece ids by snapshot index, to find the pieces again.
+    pub pieces: Vec<u64>,
+    pub result: Result<RunResult, String>,
+}
+
+/// Install the example plugin into `dir` if it isn't there.
+pub fn install_examples(dir: &std::path::Path) {
+    let squash = dir.join("squash");
+    if !squash.join("plugin.json").exists() {
+        let _ = std::fs::create_dir_all(&squash);
+        let _ = std::fs::write(squash.join("plugin.json"), SQUASH_JSON);
+        let _ = std::fs::write(squash.join("plugin.wat"), SQUASH_WAT);
+    }
+}
+
+impl Editor {
+    /// (Re)load the WebAssembly plugins from the plugins folder.
+    pub fn load_wasm_plugins(&mut self) {
+        let Some(dir) = crate::plugins::plugins_dir() else { return };
+        install_examples(&dir);
+        self.load_wasm_plugins_from(&dir);
+    }
+
+    pub fn load_wasm_plugins_from(&mut self, dir: &std::path::Path) {
+        if self.wasm_plugins.iter().any(|p| p.plugin.is_none()) {
+            self.status = "Wait for the running plugin to finish before reloading".into();
+            return;
+        }
+        self.wasm_plugins.clear();
+        self.wasm_plugin_errors.clear();
+        for found in oxy_plugin::discover(dir) {
+            match found {
+                Ok(p) => self.wasm_plugins.push(WasmPlugin {
+                    name: p.manifest.name.clone(),
+                    description: p.manifest.description.clone(),
+                    plugin: Some(Box::new(p)),
+                    show_panel: false,
+                    lines: Vec::new(),
+                }),
+                Err(e) => {
+                    log::warn!("plugin not loaded: {e}");
+                    self.wasm_plugin_errors.push(e);
+                }
+            }
+        }
+        self.wasm_loaded = true;
+    }
+
+    /// Run command `command` of plugin `slot` on a worker thread. Its edits
+    /// are applied, each as an undo step, when it finishes.
+    pub fn run_wasm_plugin(&mut self, slot: usize, command: usize) {
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        let Some(mut plugin) = self.wasm_plugins.get_mut(slot).and_then(|p| p.plugin.take()) else { return };
+        let caps = plugin.manifest.capabilities;
+        let label = format!(
+            "Plugin: {} — {}",
+            plugin.manifest.name,
+            plugin.manifest.commands.get(command).map_or("?", |c| c.label.as_str())
+        );
+        let pieces: Vec<u64> = self.scene.pieces.iter().map(|p| p.id).collect();
+        let snap = Snapshot {
+            pieces: if caps.read_mesh {
+                self.scene
+                    .pieces
+                    .iter()
+                    .map(|p| PieceView {
+                        positions: p.mesh.positions.clone(),
+                        triangles: p.mesh.triangles.clone(),
+                        mask: p.mesh.mask.clone(),
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            },
+            vertex_counts: self.scene.pieces.iter().map(|p| p.mesh.vertex_count()).collect(),
+            active: self.scene.active_index(),
+            scene_json: if caps.read_scene {
+                oxy_mcp::state::scene_state(&crate::agent::doc_state(self)).to_string()
+            } else {
+                String::new()
+            },
+        };
+        // Pieces it may edit are locked while it runs.
+        let consumed = if caps.edit_mesh { pieces.clone() } else { Vec::new() };
+        let job_label = label.clone();
+        self.start_job(label.clone(), consumed, move || {
+            let result = plugin.run(command, snap);
+            Ok(JobResult::Plugin(Box::new(PluginJob { slot, plugin, label: job_label, pieces, result })))
+        });
+    }
+
+    /// Apply a finished plugin job: put the plugin back and record its edits.
+    pub(crate) fn finish_plugin_job(&mut self, job: PluginJob, secs: f32) {
+        let PluginJob { slot, plugin, label, pieces, result } = job;
+        if let Some(p) = self.wasm_plugins.get_mut(slot) {
+            p.plugin = Some(plugin);
+        }
+        let result = match result {
+            Ok(r) => r,
+            Err(e) => {
+                self.status = e;
+                return;
+            }
+        };
+        let mut applied = 0;
+        let mut skipped = 0;
+        for (index, positions) in result.edits {
+            let Some(i) = pieces.get(index).and_then(|id| self.scene.index_of(*id)) else {
+                skipped += 1;
+                continue;
+            };
+            let id = pieces[index];
+            let mesh = &mut self.scene.pieces[i].mesh;
+            if mesh.vertex_count() != positions.len() {
+                skipped += 1;
+                continue;
+            }
+            self.history.begin(label.clone(), id, mesh);
+            for c in 0..mesh.chunks.len() as u32 {
+                self.history.touch(mesh, c);
+            }
+            mesh.positions = positions;
+            let all: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
+            mesh.update_after_move(&all);
+            mesh.tighten_bounds();
+            self.history.commit();
+            applied += 1;
+        }
+        let said = result.log.last().cloned();
+        self.status = match (said, applied, skipped) {
+            (_, _, s) if s > 0 => format!("{label}: {s} edit(s) skipped (the piece changed or was deleted)"),
+            (Some(msg), _, _) => format!("{}: {msg}", label.trim_start_matches("Plugin: ")),
+            (None, 0, _) => format!("{label}: done in {secs:.1} s"),
+            (None, n, _) => format!("{label}: changed {n} piece(s) in {secs:.1} s"),
+        };
+        for line in &result.log {
+            log::info!("{label}: {line}");
+        }
+    }
+
+    /// Ask each open panel's plugin for this frame's overlay lines.
+    pub fn update_plugin_overlays(&mut self) {
+        let mut errors = Vec::new();
+        for p in &mut self.wasm_plugins {
+            p.lines.clear();
+            if !p.show_panel {
+                continue;
+            }
+            if let Some(plugin) = p.plugin.as_mut().filter(|pl| pl.has_overlay()) {
+                match plugin.overlay() {
+                    Ok(lines) => p.lines = lines,
+                    Err(e) => {
+                        errors.push(e);
+                        p.show_panel = false;
+                    }
+                }
+            }
+        }
+        if let Some(e) = errors.pop() {
+            self.status = e;
+        }
+    }
+}
+
+/// The in-app plugins section of Settings > Plugins.
+pub fn settings_section(ui: &mut Ui, ed: &mut Editor) {
+    if !ed.wasm_loaded {
+        ed.load_wasm_plugins();
+    }
+    ui.label(RichText::new("In-app plugins (WebAssembly)").strong());
+    ui.label(
+        RichText::new(
+            "Run inside OxyBrush in a sandbox: no files, no network, only what each plugin declares. A folder with plugin.json and plugin.wasm (or .wat) in the plugins folder.",
+        )
+        .weak()
+        .small(),
+    );
+    if ed.wasm_plugins.is_empty() {
+        ui.label("No in-app plugins found.");
+    }
+    let busy = ed.job.is_some();
+    for i in 0..ed.wasm_plugins.len() {
+        let p = &mut ed.wasm_plugins[i];
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.label(RichText::new(&p.name).strong());
+                    if !p.description.is_empty() {
+                        ui.label(RichText::new(&p.description).weak().small());
+                    }
+                    if let Some(pl) = &p.plugin {
+                        ui.label(RichText::new(capability_text(pl)).weak().small());
+                    }
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let label = if p.show_panel { "Hide panel" } else { "Open panel" };
+                    if ui.add_enabled(!busy || p.show_panel, egui::Button::new(label)).clicked() {
+                        p.show_panel = !p.show_panel;
+                    }
+                });
+            });
+        });
+        ui.add_space(4.0);
+    }
+    for e in &ed.wasm_plugin_errors {
+        ui.label(RichText::new(format!("Not loaded: {e}")).small().color(Color32::from_rgb(230, 140, 90)));
+    }
+}
+
+fn capability_text(p: &Plugin) -> String {
+    let c = p.manifest.capabilities;
+    let mut v = Vec::new();
+    if c.read_mesh {
+        v.push("reads meshes");
+    }
+    if c.edit_mesh {
+        v.push("edits meshes");
+    }
+    if c.read_scene {
+        v.push("reads the scene");
+    }
+    if c.overlay {
+        v.push("draws in the viewport");
+    }
+    if v.is_empty() { "No capabilities".into() } else { format!("Can: {}", v.join(", ")) }
+}
+
+/// A floating panel per plugin whose panel is open: its params and commands.
+pub fn panels(ctx: &egui::Context, ed: &mut Editor) {
+    let busy = ed.job.is_some();
+    let mut run = None;
+    for i in 0..ed.wasm_plugins.len() {
+        let p = &mut ed.wasm_plugins[i];
+        if !p.show_panel {
+            continue;
+        }
+        let mut open = true;
+        egui::Window::new(format!("Plugin: {}", p.name)).open(&mut open).resizable(false).show(ctx, |ui| {
+            let Some(plugin) = p.plugin.as_mut() else {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label("Running…");
+                });
+                return;
+            };
+            if !p.description.is_empty() {
+                ui.label(RichText::new(&p.description).weak().small());
+                ui.add_space(4.0);
+            }
+            let params = plugin.manifest.params.clone();
+            if !params.is_empty() {
+                egui::Grid::new(("wasm_params", i)).num_columns(2).show(ui, |ui| {
+                    for (k, param) in params.iter().enumerate() {
+                        ui.label(&param.label);
+                        ui.add(egui::Slider::new(&mut plugin.params[k], param.min..=param.max));
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(4.0);
+            }
+            ui.horizontal_wrapped(|ui| {
+                for (k, c) in plugin.manifest.commands.iter().enumerate() {
+                    if ui.add_enabled(!busy, egui::Button::new(&c.label)).clicked() {
+                        run = Some((i, k));
+                    }
+                }
+            });
+        });
+        if !open {
+            p.show_panel = false;
+        }
+    }
+    if let Some((i, k)) = run {
+        ed.run_wasm_plugin(i, k);
+    }
+}
+
+/// Draw the overlay lines of open plugin panels over the viewport.
+pub fn overlays(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+    let painter = ui.painter_at(canvas);
+    for p in &ed.wasm_plugins {
+        for l in &p.lines {
+            let (Some(a), Some(b)) = (crate::ui::project_point(ed, l.a), crate::ui::project_point(ed, l.b)) else {
+                continue;
+            };
+            let [r, g, bl, al] = l.rgba.to_be_bytes();
+            painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgba_unmultiplied(r, g, bl, al)));
+        }
+    }
+}

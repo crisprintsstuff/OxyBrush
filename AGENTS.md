@@ -27,6 +27,7 @@ crates/
   oxy-ztl      ZBrush format research tools (see "ZBrush rules" below)              (no GPU)
   oxy-update   opt-in update checks: release choice, verification, HTTPS, signing (no GPU)
   oxy-mcp      local MCP server for an on-machine AI agent (stdio and 127.0.0.1 only, no GPU)
+  oxy-plugin   sandboxed in-app WebAssembly plugins: manifest, runtime, host API (no GPU)
   oxy-render   wgpu matcap renderer, camera
   oxy-app      winit + egui desktop app, binary `oxybrush`
 docs/          ROADMAP.md, rfcs/, formats/zbrush/, releases/<tag>.md, images/

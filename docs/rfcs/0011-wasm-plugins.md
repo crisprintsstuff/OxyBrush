@@ -1,0 +1,115 @@
+# RFC 0011: Plugin API, phase 2: in-app WebAssembly plugins
+
+- **Status:** proposed for the maintainer; first version implemented in the same change for review
+- **Follows:** [RFC 0007](0007-plugin-api-read-access.md) (read access over MCP),
+  which named WebAssembly as the in-process route and listed panels,
+  commands and overlays as phase 2.
+
+## Problem
+
+Plugins today are Python scripts talking to OxyBrush over the local MCP
+server ([RFC 0003](0003-mcp.md)). That suits automation and external tools,
+but:
+
+- users must have Python installed and switch the agent server on;
+- a plugin can't add a panel or a command to the app, or draw in the
+  viewport;
+- every call crosses a process boundary as JSON, too slow for anything per
+  frame.
+
+## Decision
+
+OxyBrush runs **WebAssembly plugins inside the app**, sandboxed, with the
+pure-Rust interpreter [wasmi](https://github.com/wasmi-labs/wasmi)
+(MIT/Apache-2.0; no C toolchain, in keeping with the pure-Rust rule).
+
+### A plugin
+
+A folder in the plugins folder holding:
+
+- `plugin.json`: name, version, description, `"api": 1`, the
+  **capabilities** it needs, its **commands** (buttons) and **params**
+  (sliders, with min, max and default);
+- `plugin.wasm`, or `plugin.wat` (WebAssembly text, handy for small
+  plugins and examples). Any language that compiles to WebAssembly works.
+
+OxyBrush ships one example, **Squash** (`crates/oxy-plugin/plugins/squash`),
+written in WebAssembly text, and installs it into the plugins folder.
+
+### What a plugin can do
+
+| Capability | Gives |
+|---|---|
+| *(none)* | `log`, `param`, `piece_count`, `active_piece` |
+| `read_mesh` | vertex and triangle counts, positions, triangles, mask of any piece |
+| `edit_mesh` | `write_positions`: new positions for every vertex of a piece |
+| `read_scene` | `scene_state`: the RFC 0007 scene JSON (pieces, versions, camera) |
+| `overlay` | `draw_line` in world space, from its `overlay()` export, each frame its panel is open |
+
+The full host API (signatures, error codes, memory layout) is documented
+at the top of `crates/oxy-plugin/src/lib.rs`. It uses only numbers and
+offsets into the plugin's memory, so it needs no bindings generator, and
+it is versioned (`"api"`): a plugin built for another version is refused
+with a message, not run.
+
+### In the app
+
+- **Settings > Plugins** lists in-app plugins with what each can do, and
+  any that failed to load and why. **Open panel** shows a plugin's
+  window: its sliders and command buttons.
+- **A command runs on a worker thread** (architecture invariant 5). Pieces it
+  may edit are locked while it runs. Its edits come back as data and are
+  applied as one undo step per piece, labelled `Plugin: <name> — <command>`
+  (invariant 4), just as agent edits are labelled `Agent:`.
+- **Overlays** are drawn over the viewport while the plugin's panel is
+  open.
+
+### Sandbox
+
+- **No access to anything but the host API:** no files, network, clock,
+  environment or WASI. A module importing anything else doesn't load. This
+  keeps the "no network access" rule intact.
+- **Capabilities are checked on every call.** An undeclared one returns
+  an error code. Manifests with unknown capabilities are refused, so a
+  plugin never runs with more, or less, than it asked for.
+- **Fuel:** a command gets about a billion instructions and an overlay
+  frame twenty million. A plugin that runs past that is stopped with a
+  message and stays usable.
+- **Memory** is capped at 512 MB. Pointers are bounds-checked, and
+  non-finite positions are refused.
+- **The plugin never holds a reference into the document.** It gets a
+  snapshot and returns edits, so a crash or a bad write can't corrupt the
+  scene, and Undo always works.
+
+wasmi is used with its portable (loop-based) interpreter, which can't
+overflow the native stack in any build profile.
+
+## Not in this version
+
+- More edit kinds: mask, face groups, vertex color, adding pieces,
+  topology (`from_data`). Positions first, because they cover deformers,
+  generators of shape and cleanup tools.
+- Brushes written as plugins (a per-dab callback): that is on the per-dab
+  path and needs measuring first (`dab_timing`).
+- Command shortcuts and command-palette entries for plugin commands.
+- A Rust SDK crate for plugin authors. It needs `unsafe` FFI declarations
+  for the imports, which this workspace forbids, so it belongs in its own
+  repository.
+- Text, images and widgets other than sliders and buttons in panels.
+
+## Verification
+
+- `oxy-plugin` tests:
+  - manifest parsing and rejection;
+  - the Squash example's edit, mask and overlay;
+  - every capability denied when undeclared;
+  - bad writes refused (count, piece, memory bounds);
+  - a runaway loop stopped and the plugin usable after;
+  - memory cap;
+  - modules missing `run` or `memory`, or importing WASI, refused;
+  - discovery with failures reported.
+- Editor test: the Squash example runs on a worker thread, locks the piece,
+  halves its height, is one `Plugin: Squash — Squash` undo step, undoes
+  exactly, and draws its overlay.
+- In the app (Linux, Xvfb): the Squash panel and the Plugins settings tab,
+  with a run's status message.
