@@ -7,6 +7,7 @@
 
 mod protocol;
 mod session;
+pub mod state;
 mod stroke;
 mod tools;
 mod transport;

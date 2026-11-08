@@ -358,6 +358,92 @@ class Session:
                 return base64.b64decode(item["data"])
         raise OxyBrushError("No image returned from screenshot")
 
+    # ---- structured read access (plugin API phase 1, RFC 0007) ----
+
+    def _json_tool(self, _tool_name: str, **kwargs) -> Dict[str, Any]:
+        res = self.call_tool(_tool_name, **kwargs)
+        return json.loads(res["content"][0]["text"])
+
+    def scene_state(self) -> Dict[str, Any]:
+        """The document, pieces and camera as a dict.
+
+        Each piece has ``topology_version``, ``edit_version`` and
+        ``face_version``: if all three equal what you saw before, the piece
+        hasn't changed. The camera has ``eye``, ``target``, ``up``,
+        ``fov_y_deg``, ``orthographic`` and column-major ``view_matrix`` /
+        ``projection_matrix`` (depth 0..1).
+        """
+        return self._json_tool("scene_state")
+
+    def changes(self, since: Optional[int] = None, timeout_ms: int = 0) -> Dict[str, Any]:
+        """Events after ``since`` (call without it for the starting cursor).
+
+        Returns ``{"cursor": int, "events": [...], "truncated": bool}``.
+        With ``timeout_ms`` (up to 10000) the call waits for the next change.
+        When ``truncated`` is true, some events were dropped: re-read
+        :meth:`scene_state`.
+        """
+        args: Dict[str, Any] = {"timeout_ms": int(timeout_ms)}
+        if since is not None:
+            args["since"] = int(since)
+        return self._json_tool("changes", **args)
+
+    def follow_changes(self, timeout_ms: int = 5000):
+        """Yield events as they happen, forever (stop by breaking the loop).
+
+        Yields ``{"kind": "truncated"}`` when events were dropped.
+        """
+        cursor = self.changes()["cursor"]
+        while True:
+            reply = self.changes(since=cursor, timeout_ms=timeout_ms)
+            cursor = reply["cursor"]
+            if reply.get("truncated"):
+                yield {"kind": "truncated"}
+            for event in reply["events"]:
+                yield event
+
+    def get_geometry(
+        self,
+        id: Optional[int] = None,
+        index: Optional[int] = None,
+        name: Optional[str] = None,
+        fields: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """A piece's arrays, read from the binary file OxyBrush writes.
+
+        ``fields``: any of positions, normals, indices, colors, mask, groups,
+        hidden (default: positions, normals, indices, plus colors if painted).
+        Returns the reply (``path``, ``layout``, versions) with an
+        ``arrays`` dict of flat :class:`array.array` values: positions,
+        normals and colors are x, y, z per vertex; indices three per
+        triangle.
+        """
+        import array
+        import sys
+
+        args: Dict[str, Any] = {}
+        for key, value in (("id", id), ("index", index), ("name", name), ("fields", fields)):
+            if value is not None:
+                args[key] = value
+        reply = self._json_tool("get_geometry", **args)
+        with open(reply["path"], "rb") as f:
+            data = f.read()
+        if data[:4] != b"OXYG":
+            raise OxyBrushError("not an OXYG geometry file")
+        codes = {"f32": "f", "u32": "I", "u8": "B"}
+        arrays = {}
+        for field, sec in reply["layout"]["sections"].items():
+            a = array.array(codes[sec["type"]])
+            count = (reply["layout"]["vertex_count"] if sec["per"] == "vertex" else reply["layout"]["triangle_count"])
+            n = count * sec["components"]
+            start = sec["offset"]
+            a.frombytes(data[start:start + n * a.itemsize])
+            if sys.byteorder != "little" and a.itemsize > 1:
+                a.byteswap()
+            arrays[field] = a
+        reply["arrays"] = arrays
+        return reply
+
 
 def connect(endpoint: Optional[str] = None, token: Optional[str] = None) -> Session:
     """Connect to a running OxyBrush instance."""

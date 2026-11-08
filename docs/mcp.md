@@ -162,10 +162,42 @@ server-sent-events stream; use `--attach` for clients that require one.
 | `undo` / `redo` | The shared history, including your own steps |
 | `set_camera` | `view` (`front`, `back`, `left`, `right`, `top`, `bottom`), angles, or `frame: true` |
 | `screenshot` | PNG of the viewport in the desktop app. Screen points match its pixels |
+| `scene_state` | The document as JSON for programs: pieces with bounds and `topology_version` / `edit_version` / `face_version`, visible bounds, and the camera as data (eye, target, up, field of view, column-major view and projection matrices) |
+| `changes` | Events since a cursor (`piece_added`, `geometry_changed`, `camera_changed`, …). Call without `since` to get a cursor; `timeout_ms` (≤ 10000) waits for the next change |
+| `get_geometry` | Writes a piece's arrays (positions, normals, indices, and on request colors, mask, groups, hidden) to a binary `OXYG` file in a temporary folder and returns its path and layout |
 
 `stroke` points are `[x, y]` in viewport pixels (top-left origin) or
 `[x, y, z]` in world units. Take a screenshot first when working in the
 app: the image is the viewport, and a point in the image is a screen point.
+
+### For plugins: following the document
+
+`scene_state`, `changes` and `get_geometry` are for programs that keep their
+own copy of the scene, such as an external renderer ([RFC 0007](rfcs/0007-plugin-api-read-access.md)).
+
+- **Is a piece different from last time?** Compare its three versions with
+  the ones you saw. They change whenever the triangles, the surface (positions,
+  mask, color) or the face groups and hidden faces do. Compare for equality:
+  undo can bring back an older piece with older numbers.
+- **What changed?** `changes {}` returns `{"cursor": n, "events": []}`. Pass
+  that cursor back with `timeout_ms` and the call returns as soon as
+  something changes. Repeated events of one kind (a camera being dragged) are
+  merged, so you see one `camera_changed`, not one per frame. If `truncated`
+  is true, more than 1024 changes happened since your cursor: read
+  `scene_state` again.
+- **Geometry:** the `OXYG` file is little-endian. A 24-byte header (`OXYG`,
+  format version, vertex count, triangle count, a bit set of the sections,
+  reserved), then each section 4-byte aligned. The reply's `layout` gives
+  every section's offset, element type (`f32`, `u32`, `u8`), components and
+  whether it is per vertex or per triangle, so a client needs no other
+  description. Colors are sRGB 0–1 (white means unpainted). The folder keeps
+  only the newest few files, so read yours right away.
+- In `oxybrush-cli mcp` only your own calls change the document, so
+  `changes` never waits there.
+
+The Python SDK wraps all three: `scene_state()`, `changes()`,
+`follow_changes()` (a generator of events) and `get_geometry()` (which reads
+the file into `array` values).
 
 ## What the agent cannot do
 
