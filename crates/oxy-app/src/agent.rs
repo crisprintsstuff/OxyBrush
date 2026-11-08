@@ -293,7 +293,7 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
 }
 
 /// The document as the structured tools describe it.
-fn doc_state(ed: &Editor) -> oxy_mcp::state::DocState<'_> {
+pub(crate) fn doc_state(ed: &Editor) -> oxy_mcp::state::DocState<'_> {
     let c = &ed.camera;
     let viewport = glam::Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
     oxy_mcp::state::DocState {

@@ -23,6 +23,7 @@ oxy-doc = { path = "crates/oxy-doc" }
 oxy-ztl = { path = "crates/oxy-ztl" }
 oxy-update = { path = "crates/oxy-update", default-features = false }
 oxy-mcp = { path = "crates/oxy-mcp" }
+oxy-plugin = { path = "crates/oxy-plugin" }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"
@@ -41,6 +42,12 @@ crc32fast = "1.5"
 dirs = "7"
 miniz_oxide = "0.9"
 serde_json = "1"
+# In-process plugins (docs/rfcs/0011-wasm-plugins.md): a pure-Rust WebAssembly
+# interpreter. `wat` lets plugins and tests be written as WebAssembly text.
+# `portable-dispatch`: the loop-based interpreter, which cannot overflow the
+# native stack whatever the optimization level or target (the tail-call one
+# overflowed in test builds).
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "wat", "portable-dispatch"] }
 # Opt-in updater (see docs/rfcs/0002-updates.md). ureq/rustls/ring are the
 # documented exception to the pure-Rust rule (ring compiles a little C/asm).
 ureq = { version = "3", default-features = false, features = ["rustls"] }

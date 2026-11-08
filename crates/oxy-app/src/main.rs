@@ -23,6 +23,7 @@ mod tube;
 mod tube_ui;
 mod ui;
 mod updates;
+mod wasm_plugins;
 mod widgets;
 
 use std::path::PathBuf;

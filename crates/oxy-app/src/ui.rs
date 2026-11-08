@@ -600,6 +600,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
+    crate::wasm_plugins::panels(ui.ctx(), ed);
     crate::tube_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
@@ -630,6 +631,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
     crate::lights_ui::markers(ui, ed, canvas);
+    ed.update_plugin_overlays();
+    crate::wasm_plugins::overlays(ui, ed, canvas);
     crate::tube_ui::overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
@@ -999,6 +1002,9 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
             ui.add_space(4.0);
         }
     }
+    ui.add_space(8.0);
+    ui.separator();
+    crate::wasm_plugins::settings_section(ui, ed);
 }
 
 fn settings_keymap_tab(ui: &mut Ui, ed: &mut Editor) {

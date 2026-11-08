@@ -1,0 +1,16 @@
+[package]
+name = "oxy-plugin"
+description = "In-process WebAssembly plugins: manifest, sandboxed runtime and host API (RFC 0011)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde_json.workspace = true
+wasmi.workspace = true
+
+[lints]
+workspace = true

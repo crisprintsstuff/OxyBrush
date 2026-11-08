@@ -1,0 +1,9 @@
+{
+  "name": "Squash",
+  "version": "1.0",
+  "description": "Squashes the active piece toward its middle height. Masked parts stay put. An example of an in-app WebAssembly plugin (RFC 0011).",
+  "api": 1,
+  "capabilities": ["read_mesh", "edit_mesh", "overlay"],
+  "commands": [{ "id": "squash", "label": "Squash" }],
+  "params": [{ "id": "amount", "label": "Amount", "min": 0.0, "max": 1.0, "default": 0.3 }]
+}

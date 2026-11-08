@@ -737,6 +737,8 @@ pub enum JobResult {
     NewPieces(Vec<(String, Mesh)>),
     /// A new primitive piece (Add > Cylinder, Cone), added and made active.
     Primitive(String, Mesh),
+    /// A WebAssembly plugin command finished (RFC 0011).
+    Plugin(Box<crate::wasm_plugins::PluginJob>),
     /// A subdivision level change: the new active-level mesh, the stack,
     /// and the stack as it was before (for undo; None if there were no levels).
     Levels {
@@ -1030,6 +1032,11 @@ pub struct Editor {
     pub request_open_plugins_dir: bool,
     /// Set by the UI to reload discovered plugins.
     pub request_reload_plugins: bool,
+    /// In-app WebAssembly plugins (RFC 0011), loaded on first use.
+    pub wasm_plugins: Vec<crate::wasm_plugins::WasmPlugin>,
+    /// Why plugin folders didn't load.
+    pub wasm_plugin_errors: Vec<String>,
+    pub wasm_loaded: bool,
     /// Files opened, imported or saved this session. Export will not overwrite them.
     pub(crate) agent_sources: Vec<PathBuf>,
     /// Machine details for bug reports (filled in by the app layer).
@@ -1231,6 +1238,9 @@ impl Default for Editor {
             request_run_plugin: None,
             request_open_plugins_dir: false,
             request_reload_plugins: false,
+            wasm_plugins: Vec::new(),
+            wasm_plugin_errors: Vec::new(),
+            wasm_loaded: false,
             agent_sources: Vec::new(),
             quit_now: false,
             system_info: Default::default(),
@@ -1651,6 +1661,7 @@ impl Editor {
     /// Rescan user and workspace plugin directories for Python plugins.
     pub fn reload_plugins(&mut self) {
         self.plugins = crate::plugins::discover_plugins();
+        self.load_wasm_plugins();
     }
 
     pub fn effective_brush(&self) -> (BrushKind, bool) {
@@ -4289,7 +4300,7 @@ impl Editor {
         self.replace_active_mesh("Delete hidden", mesh);
     }
 
-    fn start_job(
+    pub(crate) fn start_job(
         &mut self,
         label: String,
         consumed: Vec<u64>,
@@ -4648,6 +4659,7 @@ impl Editor {
                     None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
                 };
             }
+            Ok(JobResult::Plugin(done)) => self.finish_plugin_job(*done, secs),
             Ok(JobResult::Primitive(name, mesh)) => {
                 let name = self.scene.unique_name(&name);
                 let tris = mesh.triangle_count();
@@ -5362,6 +5374,38 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn wasm_plugin_runs_in_the_background_and_undoes() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-wasm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::wasm_plugins::install_examples(&dir);
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugin_errors.is_empty(), "{:?}", e.wasm_plugin_errors);
+        let slot = e.wasm_plugins.iter().position(|p| p.name == "Squash").expect("example installed");
+        let before = e.scene.active().mesh.positions.clone();
+        let height = |m: &Mesh| m.positions.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        e.wasm_plugins[slot].plugin.as_mut().unwrap().params[0] = 0.5;
+        e.run_wasm_plugin(slot, 0);
+        assert!(e.wasm_plugins[slot].plugin.is_none(), "running on a worker");
+        assert!(e.job_blocks_active(), "the piece is locked while it runs");
+        wait_job(&mut e);
+        assert!(e.wasm_plugins[slot].plugin.is_some(), "handed back");
+        assert!(e.status.contains("Squashed toward the middle"), "{}", e.status);
+        let top = before.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        let after = height(&e.scene.active().mesh);
+        assert!((after - 0.5 * top).abs() < 0.02, "half as tall: {top} -> {after}");
+        assert!(e.history.undo_labels().any(|l| l == "Plugin: Squash — Squash"));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        // Its overlay draws while the panel is open.
+        e.wasm_plugins[slot].show_panel = true;
+        e.update_plugin_overlays();
+        assert_eq!(e.wasm_plugins[slot].lines.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
