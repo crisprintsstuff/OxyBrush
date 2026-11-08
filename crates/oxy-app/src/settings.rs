@@ -270,6 +270,8 @@ pub struct Settings {
     pub hold_to_curve: bool,
     /// Ask before doing so.
     pub hold_to_curve_ask: bool,
+    /// Viewport lights (View > Shading > Lights).
+    pub lighting: oxy_render::lighting::Lighting,
     /// Curve Move draws its curve through the middle of the part.
     pub curve_move_centred: bool,
     /// Dynamic detail on, and how fine (0..=1).
@@ -577,6 +579,7 @@ impl Default for Settings {
             stroke_from_empty: false,
             hold_to_curve: true,
             hold_to_curve_ask: false,
+            lighting: oxy_render::lighting::Lighting::default(),
             curve_move_centred: true,
             dyntopo: false,
             dyntopo_detail: 0.5,
@@ -709,7 +712,7 @@ impl Settings {
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
         ) + &format!(
-            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\ncurve_move_centred = {}\ndyntopo = {}\ndyntopo_detail = {}\n",
+            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\ncurve_move_centred = {}\ndyntopo = {}\ndyntopo_detail = {}\nlighting = {}\n",
             self.pressure_gamma,
             self.pressure_min,
             self.pressure_full,
@@ -722,7 +725,8 @@ impl Settings {
             self.hold_to_curve_ask,
             self.curve_move_centred,
             self.dyntopo,
-            self.dyntopo_detail
+            self.dyntopo_detail,
+            self.lighting.to_line()
         ) + &self
             .recent_files
             .iter()
@@ -805,6 +809,7 @@ impl Settings {
                 "floor_grid" => s.floor_grid = v.parse().unwrap_or(s.floor_grid),
                 "hold_to_curve" => s.hold_to_curve = v.parse().unwrap_or(s.hold_to_curve),
                 "hold_to_curve_ask" => s.hold_to_curve_ask = v.parse().unwrap_or(s.hold_to_curve_ask),
+                "lighting" => s.lighting = oxy_render::lighting::Lighting::from_line(v).unwrap_or(s.lighting),
                 "curve_move_centred" => s.curve_move_centred = v.parse().unwrap_or(s.curve_move_centred),
                 "dyntopo" => s.dyntopo = v.parse().unwrap_or(s.dyntopo),
                 "dyntopo_detail" => {
@@ -1026,6 +1031,7 @@ mod tests {
             stroke_from_empty: true,
             hold_to_curve: false,
             hold_to_curve_ask: true,
+            lighting: oxy_render::lighting::Lighting { enabled: true, exposure: 0.5, ..Default::default() },
             curve_move_centred: false,
             dyntopo: true,
             dyntopo_detail: 0.25,

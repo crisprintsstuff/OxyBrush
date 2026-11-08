@@ -1394,6 +1394,7 @@ impl Editor {
             stroke_from_empty: self.stroke_from_empty,
             hold_to_curve: self.hold_to_curve,
             hold_to_curve_ask: self.hold_to_curve_ask,
+            lighting: self.view.lighting,
             curve_move_centred: self.curve_move_centred,
             dyntopo: self.dyntopo,
             dyntopo_detail: self.dyntopo_detail,
@@ -1544,6 +1545,7 @@ impl Editor {
         self.stroke_from_empty = s.stroke_from_empty;
         self.hold_to_curve = s.hold_to_curve;
         self.hold_to_curve_ask = s.hold_to_curve_ask;
+        self.view.lighting = s.lighting;
         self.curve_move_centred = s.curve_move_centred;
         self.dyntopo = s.dyntopo;
         self.dyntopo_detail = s.dyntopo_detail;
@@ -6316,6 +6318,7 @@ mod tests {
             curve_move_centred: false,
             dyntopo: true,
             dyntopo_detail: 0.25,
+            lighting: oxy_render::lighting::Lighting { enabled: true, exposure: 0.5, ..Default::default() },
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
