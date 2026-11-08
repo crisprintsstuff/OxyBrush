@@ -7,6 +7,7 @@
 //! (hidden triangles are left out of the index buffer).
 
 mod camera;
+pub mod lighting;
 pub mod matcap;
 
 pub use camera::{
