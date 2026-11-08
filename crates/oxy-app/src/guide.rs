@@ -118,7 +118,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         title: "Pieces",
         keywords: "objects parts scene add duplicate merge solo",
         body: "A scene can hold several pieces (separate meshes), listed in the Pieces section. Sculpting affects the active piece; Alt+click another piece to make it active.\n\n\
-- + Add creates a sphere, cube or plane; Duplicate and Mirror duplicate copy the active piece.\n\
+- + Add creates a sphere, cube, plane, cylinder, cone or torus; Duplicate and Mirror duplicate copy the active piece.\n\
 - The eye button hides a piece; Alt+S shows only the active one.\n\
 - Merge fuses the visible pieces into one with a voxel remesh.",
     },
