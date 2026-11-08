@@ -688,6 +688,8 @@ pub enum JobResult {
     Mesh(Mesh),
     /// New pieces to add after the target (e.g. a LOD chain), as (name, mesh).
     NewPieces(Vec<(String, Mesh)>),
+    /// A new primitive piece (Add > Cylinder, Cone), added and made active.
+    Primitive(String, Mesh),
     /// A subdivision level change: the new active-level mesh, the stack,
     /// and the stack as it was before (for undo; None if there were no levels).
     Levels {
@@ -2859,6 +2861,8 @@ impl Editor {
         match which {
             "cube" => ("Cube".into(), primitives::cube(64, 1.6)),
             "plane" => ("Plane".into(), primitives::plane(200, 2.0)),
+            // An even grid already: fine enough to sculpt on directly.
+            "torus" => ("Torus".into(), primitives::torus(256, 96, 0.75, 0.3)),
             _ => ("Sphere".into(), primitives::icosphere(6, 1.0)),
         }
     }
@@ -3174,6 +3178,19 @@ impl Editor {
     }
 
     pub fn add_primitive(&mut self, which: &str) {
+        // Cylinder and cone are remeshed for even triangles, which takes a
+        // moment: build them off the UI thread.
+        let coarse = match which {
+            "cylinder" => Some(("Cylinder", primitives::cylinder(96, 0.7, 1.8))),
+            "cone" => Some(("Cone", primitives::cone(96, 0.8, 1.8))),
+            _ => None,
+        };
+        if let Some((name, coarse)) = coarse {
+            self.start_job(format!("Add {name}"), Vec::new(), move || {
+                Ok(JobResult::Primitive(name.to_string(), sculptable(coarse)))
+            });
+            return;
+        }
         let (name, mesh) = Self::primitive(which);
         let name = self.scene.unique_name(&name);
         self.add_piece(Piece::new(name.clone(), mesh), &format!("Add {name}"));
@@ -4393,6 +4410,56 @@ impl Editor {
         self.status = format!("Split into {count} pieces by {what}");
     }
 
+    /// Move the active piece's hidden faces into a piece of their own
+    /// (shown), leaving the visible faces in the original. One undo step.
+    pub fn split_hidden(&mut self) {
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        self.pointer_up();
+        let index = self.scene.active_index();
+        let piece = &self.scene.pieces[index];
+        let keys: Vec<u32> = piece.mesh.hidden().iter().map(|&h| u32::from(h)).collect();
+        let parts = piece.mesh.split_by(&keys);
+        if parts.len() < 2 {
+            self.status = if keys.contains(&1) {
+                "Nothing to split: every face of this piece is hidden".into()
+            } else {
+                "Nothing to split: this piece has no hidden faces (hide some first)".into()
+            };
+            return;
+        }
+        let base_name = piece.name.clone();
+        let symmetry_center = piece.symmetry_center;
+        let multires = piece.multires.is_some();
+        // Insert both parts after the original, then remove it (see split_active).
+        let mut steps = Vec::new();
+        for (k, (key, mut data)) in parts.into_iter().enumerate() {
+            let name = if key == 1 {
+                // The hidden part comes out shown, as its own piece.
+                data.hidden = vec![false; data.triangles.len()];
+                self.scene.unique_name(&format!("{base_name} hidden"))
+            } else {
+                base_name.clone()
+            };
+            let part = Piece { symmetry_center, ..Piece::new(name, Mesh::from_data(data)) };
+            self.scene.pieces.insert(index + 1 + k, part);
+            steps.push(Step::Inserted { index: index + 1 + k });
+        }
+        let removed = self.scene.pieces.remove(index);
+        steps.push(Step::Removed { index, piece: removed });
+        // Parts come in key order, so the visible part (key 0) now sits where
+        // the original was; it stays active.
+        self.scene.set_active(index);
+        self.history.record_compound("Split hidden", steps);
+        self.status = if multires {
+            "Split the hidden faces into a new piece (subdivision levels were removed; undo restores them)".into()
+        } else {
+            "Split the hidden faces into a new piece".into()
+        };
+    }
+
     /// Apply a finished background job. Call once per frame.
     pub fn poll_job(&mut self) -> bool {
         let Some(job) = &self.job else { return false };
@@ -4419,6 +4486,12 @@ impl Editor {
                     Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
                     None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
                 };
+            }
+            Ok(JobResult::Primitive(name, mesh)) => {
+                let name = self.scene.unique_name(&name);
+                let tris = mesh.triangle_count();
+                self.add_piece(Piece::new(name.clone(), mesh), &format!("Add {name}"));
+                self.status = format!("Added {name} ({tris} triangles)");
             }
             Ok(JobResult::NewPieces(new)) => {
                 let Some(index) = self.scene.index_of(job.target) else {
@@ -5054,6 +5127,14 @@ impl Editor {
 /// on a plane already in the list (a cut drawn exactly on the mirror plane
 /// maps onto itself) are skipped: cutting the same plane from the other side
 /// would remove or flatten both halves.
+/// Even triangles all over (the analytic cylinder and cone have long
+/// slivers and fan-shaped caps, which sculpt badly): a quick voxel remesh.
+/// Edges come out very slightly rounded.
+fn sculptable(coarse: Mesh) -> Mesh {
+    let opts = RemeshOptions { resolution: 110, smooth_passes: 1, ..Default::default() };
+    oxy_topo::voxel_remesh(&[&coarse], opts).unwrap_or(coarse)
+}
+
 /// Give `piece` a symmetry centre from its shape if it has none yet.
 fn ensure_symmetry_center(piece: &mut Piece) {
     if piece.symmetry_center.is_none() {
@@ -5195,6 +5276,64 @@ mod tests {
         let m = &e.scene.active().mesh;
         assert!(m.positions.iter().all(|p| p.is_finite()));
         assert!(m.positions.iter().any(|p| p.length() > 1.01), "the layer was raised");
+    }
+
+    #[test]
+    fn split_hidden_moves_hidden_faces_to_a_new_piece() {
+        let mut e = editor();
+        let tris = e.scene.active().mesh.triangle_count();
+        e.split_hidden();
+        assert_eq!(e.scene.pieces.len(), 1, "nothing hidden: nothing to split");
+        // Hide the top half.
+        let hidden: Vec<bool> = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.0)).collect()
+        };
+        let n_hidden = hidden.iter().filter(|&&h| h).count();
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.split_hidden();
+        assert_eq!(e.scene.pieces.len(), 2);
+        let (kept, split) = (&e.scene.pieces[0], &e.scene.pieces[1]);
+        assert_eq!(kept.name, "Sphere");
+        assert_eq!(split.name, "Sphere hidden");
+        assert_eq!(e.scene.active_index(), 0, "the visible part stays active");
+        assert_eq!(split.mesh.triangle_count(), n_hidden);
+        assert_eq!(kept.mesh.triangle_count(), tris - n_hidden);
+        assert!(split.mesh.hidden().iter().all(|&h| !h), "the new piece is shown");
+        assert!(kept.mesh.hidden().iter().all(|&h| !h));
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+    }
+
+    #[test]
+    fn add_cylinder_cone_and_torus_pieces() {
+        let mut e = editor();
+        e.add_primitive("torus");
+        assert_eq!(e.scene.active().name, "Torus");
+        // Cylinder and cone come from a background job, then are active.
+        for (which, name) in [("cylinder", "Cylinder"), ("cone", "Cone")] {
+            let before = e.scene.pieces.len();
+            e.add_primitive(which);
+            wait_job(&mut e);
+            assert_eq!(e.scene.pieces.len(), before + 1);
+            let m = &e.scene.active().mesh;
+            assert_eq!(e.scene.active().name, name);
+            // Even triangles: no long slivers.
+            let worst = m
+                .triangles
+                .iter()
+                .map(|t| {
+                    let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                    let (l1, l2, l3) = (a.distance(b), b.distance(c), c.distance(a));
+                    l1.max(l2).max(l3) / l1.min(l2).min(l3).max(1e-9)
+                })
+                .fold(0.0f32, f32::max);
+            assert!(worst < 8.0, "{name}: longest/shortest edge {worst}");
+        }
+        // One undo step each.
+        e.undo();
+        assert_eq!(e.scene.active().name, "Cylinder");
     }
 
     #[test]

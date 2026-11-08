@@ -94,6 +94,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::AddSphere, "pieces primitive", |e| e.add_primitive("sphere")),
         cmd(ed, Cmd::AddCube, "pieces primitive", |e| e.add_primitive("cube")),
         cmd(ed, Cmd::AddPlane, "pieces primitive", |e| e.add_primitive("plane")),
+        cmd(ed, Cmd::AddCylinder, "pieces primitive tube", |e| e.add_primitive("cylinder")),
+        cmd(ed, Cmd::AddCone, "pieces primitive", |e| e.add_primitive("cone")),
+        cmd(ed, Cmd::AddTorus, "pieces primitive ring donut", |e| e.add_primitive("torus")),
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
         cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
@@ -110,6 +113,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
         cmd(ed, Cmd::Decimate, "topology reduce polygons triangles", Editor::decimate_active),
         cmd(ed, Cmd::DeleteHidden, "topology visibility", Editor::delete_hidden),
+        cmd(ed, Cmd::SplitHidden, "topology visibility separate piece", Editor::split_hidden),
         cmd(ed, Cmd::GroupVisible, "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
         cmd(ed, Cmd::GroupFromMask, "face groups", |e| {
             e.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask)
