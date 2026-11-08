@@ -711,6 +711,8 @@ pub enum Pending {
     Quit,
     New(&'static str),
     OpenProject(PathBuf),
+    /// Open a link manifest from another app (RFC 0010).
+    OpenLink(PathBuf),
 }
 
 /// Long-running topology work on a background thread.
@@ -905,6 +907,8 @@ pub struct Editor {
     pub path: Option<PathBuf>,
     /// The document came from OxyCharacter (see [`Link`]).
     pub link: Option<Link>,
+    /// A document linked to another app through a link manifest (RFC 0010).
+    pub bridge: Option<crate::bridge::Bridge>,
     /// A short message shown over the viewport for a few seconds.
     pub toast: Option<Toast>,
     /// History revision at the last save (or load).
@@ -1166,6 +1170,7 @@ impl Default for Editor {
             status: "Welcome to OxyBrush. Drag on the model to sculpt, drag on empty space to orbit. Press F1 for shortcuts.".into(),
             path: None,
             link: None,
+            bridge: None,
             toast: None,
             saved_revision: 0,
             autosaver: autosave::Autosaver::new(None, Duration::from_secs(120)),
@@ -2958,10 +2963,11 @@ impl Editor {
                 self.status = format!("New document ({which})");
             }
             Pending::OpenProject(path) => self.open_project_now(&path),
+            Pending::OpenLink(path) => self.open_link_now(&path),
         }
     }
 
-    fn replace_document(&mut self, scene: Scene, path: Option<PathBuf>) {
+    pub(crate) fn replace_document(&mut self, scene: Scene, path: Option<PathBuf>) {
         self.pointer_up();
         self.job = None;
         self.scene = scene;
@@ -2973,6 +2979,7 @@ impl Editor {
         self.autosaved_revision = self.saved_revision;
         self.path = path;
         self.link = None;
+        self.bridge = None;
         self.camera.frame(self.scene.bounds());
     }
 
@@ -2994,7 +3001,9 @@ impl Editor {
     /// Open a project (`.oxb`) or import a mesh file as a new piece.
     pub fn open(&mut self, path: &Path) {
         let is_project = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(format::EXTENSION));
-        if is_project {
+        if crate::bridge::is_manifest(path) {
+            self.request(Pending::OpenLink(path.to_path_buf()));
+        } else if is_project {
             self.request(Pending::OpenProject(path.to_path_buf()));
         } else {
             self.import(path);

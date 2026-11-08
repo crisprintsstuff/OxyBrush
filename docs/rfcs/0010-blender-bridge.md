@@ -1,6 +1,6 @@
 # RFC 0010: Blender bridge
 
-- **Status:** accepted in outline by the maintainer (OBJ first; Send back and close; published on extensions.blender.org); implementation to follow
+- **Status:** accepted in outline by the maintainer (OBJ first; Send back and close; published on extensions.blender.org); first version implemented in the same change (OxyBrush side tested; the add-on not yet run inside Blender)
 - **Requested by:** testers, who want to send a model from Blender to OxyBrush,
   sculpt it, and get it back without exporting and importing by hand.
 
