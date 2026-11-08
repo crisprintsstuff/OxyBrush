@@ -1017,21 +1017,7 @@ impl Stroke {
             let verts = acc
                 .into_iter()
                 .map(|(index, e)| {
-                    // C1 polynomial smooth maximum between overlapping symmetry influences:
-                    // eliminates the sharp V-crease / cutoff line along the mirror plane.
-                    let w_eff = if e.top_w[1] > 1e-6 {
-                        let eps = 0.25_f32;
-                        let m = 0.5 * (e.top_w[0] + e.top_w[1]);
-                        let d = 0.5 * (e.top_w[0] - e.top_w[1]);
-                        if d < eps {
-                            let ratio = d / eps;
-                            m + (d * d / (2.0 * eps)) * (3.0 - ratio * ratio)
-                        } else {
-                            e.top_w[0]
-                        }
-                    } else {
-                        e.top_w[0]
-                    };
+                    let w_eff = overlap_weight(e.top_w[0], e.top_w[1]);
                     let scale = if e.sum_omega > 1e-8 { w_eff / e.sum_omega } else { 0.0 };
                     BlendedGrab { index, orig: e.orig, blend: e.sum_m * scale, along: e.sum_n * scale }
                 })
@@ -1114,6 +1100,31 @@ fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: 
     }
 }
 
+/// How far a vertex moves when two symmetry copies of a grab reach it, from
+/// the stronger weight `a` and the weaker `b` (`a >= b >= 0`).
+///
+/// Away from the mirror plane the stronger copy wins (`a`). Where the two
+/// are close, a C1 polynomial smooth maximum takes over, so there is no
+/// V-crease along the plane; on the plane itself (`a == b`) it is exactly
+/// `a`, one drag times the falloff rather than two.
+///
+/// INVARIANT: continuous in `b` down to zero. The blend zone is never wider
+/// than `b`, so it shrinks to nothing where the weaker copy's reach ends. It
+/// used to be a fixed 0.25 wide, which dropped a vertex the second copy
+/// barely touched below its neighbour's weight: a step along the edge of the
+/// mirrored brush that showed as jagged seams, worst when pulling along the
+/// normal.
+fn overlap_weight(a: f32, b: f32) -> f32 {
+    let eps = 0.25_f32.min(b);
+    let d = 0.5 * (a - b);
+    if eps <= 0.0 || d >= eps {
+        return a;
+    }
+    let m = 0.5 * (a + b);
+    let ratio = d / eps;
+    m + (d * d / (2.0 * eps)) * (3.0 - ratio * ratio)
+}
+
 /// Grab-through capture: every visible vertex whose distance from the
 /// line through the dab centre along the view direction is within the
 /// radius, front to back, with the brush falloff and the mask applied.
@@ -1175,9 +1186,15 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
     if d2 > r * r {
         return None;
     }
-    if settings.front_faces_only && mesh.normals[v as usize].dot(dab.normal) < 0.0 {
-        return None;
-    }
+    let facing = if settings.front_faces_only {
+        let c = mesh.normals[v as usize].dot(dab.normal);
+        if c <= 0.0 {
+            return None;
+        }
+        front_fade(c)
+    } else {
+        1.0
+    };
     let f = if settings.kind.is_kelvin() {
         (1.0 - (d2 / (dab.radius * dab.radius)).min(1.0)).powi(3)
     } else if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
@@ -1197,8 +1214,29 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         None => f,
     };
     let mask = if settings.kind == BrushKind::Mask { 0.0 } else { mesh.mask[v as usize] };
-    let w = f * (1.0 - mask);
+    let w = f * facing * (1.0 - mask);
     (w > 0.0).then_some(w)
+}
+
+/// Below this cosine between a vertex normal and the brush normal, "front
+/// faces only" starts fading the brush out (about 73° from facing the brush).
+const FRONT_FADE: f32 = 0.3;
+
+/// How much of the brush a vertex gets under "front faces only", from the
+/// cosine `c` between its normal and the brush normal: full when it faces
+/// the brush, easing to zero as it turns sideways, nothing facing away.
+///
+/// INVARIANT: continuous in `c`. A hard cut at 90° moved a vertex fully
+/// while its neighbour just past the cut stayed put, which tore steep walls
+/// (the sides of a pulled-out bulge, the valley between mirrored bulges)
+/// into jagged seams, worst with Grab.
+#[inline]
+fn front_fade(c: f32) -> f32 {
+    if c >= FRONT_FADE {
+        return 1.0;
+    }
+    let t = (c / FRONT_FADE).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Chunks in range of a dab, and the weighted vertices inside them.
@@ -2186,6 +2224,66 @@ mod tests {
         assert!(max_edge_stretch(&before, &mesh) < 2.5);
         assert_closed_seam(&before, &mesh);
         assert!(max_image_gap(&mesh, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-4);
+    }
+
+    #[test]
+    fn front_faces_only_fades_instead_of_cutting() {
+        assert_eq!(front_fade(1.0), 1.0);
+        assert_eq!(front_fade(FRONT_FADE), 1.0);
+        assert_eq!(front_fade(0.0), 0.0);
+        let mut last = 0.0;
+        for i in 1..=100 {
+            let w = front_fade(i as f32 / 100.0);
+            assert!(w >= last && w - last < 0.06, "jump at {}", i as f32 / 100.0);
+            last = w;
+        }
+        // Grab near the silhouette with the brush facing the viewer: the
+        // surface inside the brush turns past sideways. The hard cut moved
+        // one vertex fully and left the next (about 5× an edge length);
+        // the fade keeps neighbours together.
+        let mut mesh = primitives::icosphere(5, 1.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        assert!(settings.front_faces_only);
+        let p0 = Vec3::new(0.97, 0.0, (1.0 - 0.97f32 * 0.97).sqrt());
+        let mut s = Stroke::new(settings, Symmetry::default(), false).with_view(-Vec3::Z);
+        s.add_sample(&mut mesh, StrokeSample { position: p0, normal: Vec3::Z, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: p0 - Vec3::Y * 0.3, normal: Vec3::Z, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        let d = |v: usize| mesh.positions[v] - before.positions[v];
+        let mut worst = 0.0f32;
+        for t in &before.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i] as usize, t[(i + 1) % 3] as usize);
+                let l = before.positions[a].distance(before.positions[b]).max(1e-6);
+                worst = worst.max((d(a) - d(b)).length() / l);
+            }
+        }
+        assert!(worst < 2.5, "displacement jumps {worst:.2}× an edge across one edge");
+    }
+
+    #[test]
+    fn grab_overlap_weight_has_no_step_where_the_mirror_copy_starts() {
+        for i in 0..=100 {
+            let a = i as f32 / 100.0;
+            // Only one copy: its own weight.
+            assert_eq!(overlap_weight(a, 0.0), a);
+            // A second copy that barely reaches changes (almost) nothing.
+            assert!((overlap_weight(a, 1e-4) - a).abs() < 1e-3, "step at a = {a}");
+            // On the plane both agree: one drag, not two.
+            assert!((overlap_weight(a, a) - a).abs() < 1e-6);
+            // Continuous as the second copy grows, and never above the stronger copy.
+            let mut last = overlap_weight(a, 0.0);
+            for j in 1..=i {
+                let w = overlap_weight(a, j as f32 / 100.0);
+                assert!(w <= a + 1e-6);
+                assert!((w - last).abs() < 0.02, "jump at a = {a}, b = {}", j as f32 / 100.0);
+                last = w;
+            }
+        }
     }
 
     #[test]
