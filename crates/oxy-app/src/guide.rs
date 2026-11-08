@@ -113,7 +113,8 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from what's visible (Ctrl+W), from the mask, or from loose parts (Groups menu).\n\n\
 - Ctrl+Shift+click a group to show only it; Ctrl+Shift+click empty space to show everything.\n\
 - Ctrl+Shift+drag shows only what's inside the selection; add Alt to hide it instead.\n\
-- Hidden faces are not sculpted or exported. Mesh > Delete hidden removes them for good.",
+- Hidden faces are not sculpted or exported. Mesh > Delete hidden removes them for good, and Mesh > Split hidden moves them into a piece of their own.\n\
+- Mesh > Close holes fills every opening in the piece (after deleting faces, a cut, or an import with gaps) with a smooth patch in a new face group, so the piece is closed again, as 3D printing needs.",
     },
     Topic {
         title: "Pieces",
