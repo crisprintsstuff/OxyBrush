@@ -2548,9 +2548,14 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
 
 fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     tips::menu(ui, "Add", plain::ADD, |ui| {
-        for (label, which, cmd) in
-            [("Sphere", "sphere", Cmd::AddSphere), ("Cube", "cube", Cmd::AddCube), ("Plane", "plane", Cmd::AddPlane)]
-        {
+        for (label, which, cmd) in [
+            ("Sphere", "sphere", Cmd::AddSphere),
+            ("Cube", "cube", Cmd::AddCube),
+            ("Plane", "plane", Cmd::AddPlane),
+            ("Cylinder", "cylinder", Cmd::AddCylinder),
+            ("Cone", "cone", Cmd::AddCone),
+            ("Torus", "torus", Cmd::AddTorus),
+        ] {
             if tips::button(ui, label, cmd).clicked() {
                 ed.add_primitive(which);
             }
@@ -2659,6 +2664,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
+    }
+    if tips::button(ui, "Split hidden", Cmd::SplitHidden).clicked() {
+        ed.split_hidden();
     }
     ui.separator();
     tips::menu(ui, "Vertex color", plain::VERTEX_COLOR, |ui| {
@@ -3052,6 +3060,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ("Sphere", "sphere", Cmd::AddSphere),
                 ("Cube", "cube", Cmd::AddCube),
                 ("Plane", "plane", Cmd::AddPlane),
+                ("Cylinder", "cylinder", Cmd::AddCylinder),
+                ("Cone", "cone", Cmd::AddCone),
+                ("Torus", "torus", Cmd::AddTorus),
             ] {
                 if tips::button(ui, label, cmd).clicked() {
                     ed.add_primitive(which);
@@ -3582,12 +3593,29 @@ fn history_section(ui: &mut Ui, ed: &mut Editor) {
     if undo.is_empty() && redo.is_empty() {
         ui.label(RichText::new("No history yet").weak());
     }
-    for l in undo.iter().rev().take(12).rev() {
-        ui.label(l);
+    for l in history_rows(&undo, &redo) {
+        match l {
+            HistoryRow::Undone(l) => ui.label(RichText::new(l).weak().italics()),
+            HistoryRow::Done(l) => ui.label(l),
+        };
     }
-    for l in redo.iter().take(6) {
-        ui.label(RichText::new(l).weak().italics());
-    }
+}
+
+/// One line of the history list.
+#[derive(Debug, PartialEq)]
+enum HistoryRow<'a> {
+    /// A step that can be redone (it was undone).
+    Undone(&'a str),
+    Done(&'a str),
+}
+
+/// The history list, newest first: undone steps (the most recent ones,
+/// greyed, the next redo just above the current state), then the done
+/// steps from newest to oldest.
+fn history_rows<'a>(undo: &'a [String], redo: &'a [String]) -> Vec<HistoryRow<'a>> {
+    let mut rows: Vec<HistoryRow> = redo.iter().take(6).rev().map(|l| HistoryRow::Undone(l)).collect();
+    rows.extend(undo.iter().rev().take(12).map(|l| HistoryRow::Done(l)));
+    rows
 }
 
 fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
@@ -4979,6 +5007,28 @@ mod tests {
 
         ed.hide_cursor_during_stroke = false;
         assert!(!ed.hide_cursor_during_stroke);
+    }
+
+    #[test]
+    fn history_lists_newest_first() {
+        let undo: Vec<String> = ["Draw", "Clay", "Smooth"].map(String::from).to_vec();
+        // Two steps undone: the next redo is "Inflate", then "Pinch".
+        let redo: Vec<String> = ["Inflate", "Pinch"].map(String::from).to_vec();
+        assert_eq!(
+            history_rows(&undo, &redo),
+            [
+                HistoryRow::Undone("Pinch"),
+                HistoryRow::Undone("Inflate"),
+                HistoryRow::Done("Smooth"),
+                HistoryRow::Done("Clay"),
+                HistoryRow::Done("Draw"),
+            ]
+        );
+        // Only the latest 12 done steps.
+        let many: Vec<String> = (0..20).map(|i| i.to_string()).collect();
+        let rows = history_rows(&many, &[]);
+        assert_eq!(rows.len(), 12);
+        assert_eq!(rows[0], HistoryRow::Done("19"));
     }
 
     #[test]

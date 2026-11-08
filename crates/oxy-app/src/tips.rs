@@ -73,6 +73,9 @@ commands! {
     AddSphere => "Add sphere piece", "", "Add a sphere as a new piece.";
     AddCube => "Add cube piece", "", "Add a cube as a new piece.";
     AddPlane => "Add plane piece", "", "Add a flat plane as a new piece.";
+    AddCylinder => "Add cylinder piece", "", "Add a cylinder as a new piece, with even triangles ready to sculpt.";
+    AddCone => "Add cone piece", "", "Add a cone as a new piece, with even triangles ready to sculpt.";
+    AddTorus => "Add torus piece", "", "Add a torus (ring) as a new piece.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
@@ -89,6 +92,7 @@ commands! {
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
+    SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
     GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
