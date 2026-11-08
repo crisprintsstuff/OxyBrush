@@ -443,13 +443,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
-                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, wireframe and face group colors", |ui| {
+                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, lights, wireframe and face group colors", |ui| {
                     tips::hover(
                         ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
                         plain::AO,
                     );
                     tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                    tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
+                    if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
+                        ed.show_lights = true;
+                    }
                     tips::check(ui, &mut ed.floor_grid, "Floor grid", Cmd::FloorGrid);
                     tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
                     if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
@@ -517,7 +521,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             ShelfPosition::Bottom => {
                 let height = if ed.layout == UiLayout::Touch { 160.0 } else { 104.0 };
                 egui::Panel::bottom(format!("shelf_{key}")).resizable(false).exact_size(height).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_top(|ui| {
                         current_tiles(ui, ed);
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
@@ -587,6 +591,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     background_window(ui.ctx(), ed);
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
+    crate::lights_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
     mesh_diagnostics_dialog(ui.ctx(), ed);
@@ -614,6 +619,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_curve(ui, ed, canvas);
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
+    crate::lights_ui::markers(ui.ctx(), ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -1514,7 +1520,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
             (UiLayout::Workstation, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
             (layout, _) => {
-                let size = if layout == UiLayout::Touch { 66.0 } else { 52.0 };
+                // The same size as the current-brush tile beside the shelf.
+                let size = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
                 let t = widgets::brush_texture(&ctx, k);
                 let tip = tips::brush_tip(k, key);
                 widgets::thumb_sized(ui, Some(&t), k.label(), selected, size, &tip)
@@ -1529,7 +1536,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         r.context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
     };
     if horizontal {
-        ui.horizontal(|ui| {
+        // Top-aligned, so the thumbnails line up with the tiles beside them.
+        ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, k) in order.iter().enumerate() {
                 item(ui, i, *k, ed);
@@ -1888,11 +1896,14 @@ fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
 
 /// Brush, alpha and material previews at the top of the left panel; each
 /// opens a picker with thumbnails.
+/// Size of the current brush / alpha / material tiles.
+const CURRENT_TILE: f32 = 58.0;
+
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     let ctx = ui.ctx().clone();
-    ui.horizontal(|ui| {
+    ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
-        let size = 58.0;
+        let size = CURRENT_TILE;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
         let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
@@ -3990,7 +4001,7 @@ fn surface_square(center: Vec3, normal: Vec3, half: f32, up_hint: Vec3) -> Vec<V
     vec![center + (-t - b) * half, center + (t - b) * half, center + (t + b) * half, center + (-t + b) * half]
 }
 
-fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
+pub(crate) fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
     let vp = Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
     let s = ed.camera.project(p, vp)?;
     let w = s + Vec2::new(ed.canvas[0], ed.canvas[1]);

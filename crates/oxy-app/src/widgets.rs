@@ -568,10 +568,17 @@ pub fn keycap(ui: &mut Ui, text: &str) {
         });
 }
 
+/// Brush list row height and icon size (Standard layout, side shelf).
+pub const BRUSH_ROW_HEIGHT: f32 = 46.0;
+pub const BRUSH_ROW_ICON: f32 = 42.0;
+
 /// One row of the brush shelf: icon, name and shortcut key.
 pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -> Response {
     // Click to pick; drag to rearrange the shelf.
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), Sense::click_and_drag());
+    // Tall enough for an icon that reads at a glance and lines up with the
+    // current-brush tile above the list (same centre line).
+    let (rect, response) =
+        ui.allocate_exact_size(vec2(ui.available_width(), BRUSH_ROW_HEIGHT), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
@@ -584,7 +591,8 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -
             (Color32::TRANSPARENT, Stroke::NONE)
         };
         ui.painter().rect(rect, 6.0, bg, stroke, egui::StrokeKind::Inside);
-        let icon = Rect::from_min_size(rect.left_top() + vec2(4.0, 3.0), Vec2::splat(30.0));
+        // Centred where the 58 px tile's picture is centred (29 px in).
+        let icon = Rect::from_center_size(pos2(rect.left() + 29.0, rect.center().y), Vec2::splat(BRUSH_ROW_ICON));
         let tex = brush_texture(ui.ctx(), k);
         ui.painter().image(tex.id(), icon, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
         let text_color = if selected { Color32::WHITE } else { v.text_color() };

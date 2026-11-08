@@ -788,6 +788,8 @@ pub struct Editor {
     pub show_theme: bool,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
+    /// The Lights window is open (its markers show in the viewport).
+    pub show_lights: bool,
     /// Preferences / Settings window system (replaces the bloated settings dropdown).
     pub show_settings: bool,
     pub settings_tab: SettingsTab,
@@ -1064,6 +1066,7 @@ impl Default for Editor {
             show_background: false,
             show_theme: false,
             show_wireframe: false,
+            show_lights: false,
             show_settings: false,
             settings_tab: SettingsTab::default(),
             show_welcome: true,
@@ -3768,6 +3771,16 @@ impl Editor {
     }
 
     /// The floor grid fitted under the visible pieces.
+    /// What viewport light positions are relative to: the visible scene,
+    /// and the camera (for lights that follow the view).
+    pub fn light_frames(&self) -> (oxy_render::lighting::SceneFrame, oxy_render::lighting::CameraFrame) {
+        let b = self.scene.bounds();
+        (
+            oxy_render::lighting::SceneFrame::from_bounds(b.min, b.max),
+            oxy_render::lighting::CameraFrame::new(self.camera.forward(), self.camera.up()),
+        )
+    }
+
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())

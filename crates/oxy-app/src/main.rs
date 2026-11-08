@@ -8,6 +8,7 @@ mod app;
 mod editor;
 mod guide;
 mod keymap;
+mod lights_ui;
 mod matcaps;
 mod palette;
 mod plugins;

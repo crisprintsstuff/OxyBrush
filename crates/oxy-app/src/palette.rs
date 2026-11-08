@@ -176,6 +176,10 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::DynDetail, "dynamic detail topology dyntopo adaptive triangles refine", |e| {
             e.dyntopo = !e.dyntopo
         }),
+        cmd(ed, Cmd::LightViewport, "lights lighting shadows sun lamp viewport shading", |e| {
+            e.view.lighting.enabled = !e.view.lighting.enabled
+        }),
+        cmd(ed, Cmd::LightsWindow, "lights lighting shadows sun spot lamp setup", |e| e.show_lights = true),
         cmd(ed, Cmd::FloorGrid, "view floor ground grid plane orientation", |e| e.floor_grid = !e.floor_grid),
         cmd(ed, Cmd::Wireframe, "view polygon edges lines mesh overlay", |e| e.view.wireframe = !e.view.wireframe),
         cmd(ed, Cmd::WireframeWindow, "view polygon edges lines mesh overlay color opacity settings", |e| {
