@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 - **In-app plugins (WebAssembly)** ([RFC 0011](docs/rfcs/0011-wasm-plugins.md)): plugins that run inside OxyBrush in a sandbox, with no Python and nothing to switch on. A plugin is a folder with `plugin.json` and `plugin.wasm` (or `.wat`) in the plugins folder; **Settings > Plugins** lists them, and each gets a panel with its sliders and command buttons. They can read meshes and the scene, change vertex positions (each change is an undo step named after the plugin) and draw lines in the viewport, but only what their manifest declares, and nothing else: no files, no network. Commands run in the background; a runaway plugin is stopped. Comes with an example, **Squash**.
+- **Close holes** (Mesh menu and command palette): fills every opening in the active piece with a smooth patch of new faces, sized like the faces around it, in a face group of its own. Handy after Delete hidden, a cut or an import with gaps, and before 3D printing. One undo step.
 
 ## [3.0.1-beta] - 2026-11-08
 

@@ -322,3 +322,203 @@ mod tests {
         assert_eq!(tris, 0);
     }
 }
+
+/// The open boundaries of a mesh: each a closed loop of vertices, in the
+/// order a filling triangle must run along it (opposite to the existing
+/// triangles beside it), so a fill faces the same way as its neighbours.
+///
+/// Edges used by more than two triangles are not boundaries and are left
+/// alone. A vertex where two holes touch is walked once per hole.
+pub fn boundary_loops(triangles: &[[u32; 3]]) -> Vec<Vec<u32>> {
+    let mut count: HashMap<(u32, u32), u32> = HashMap::with_capacity(triangles.len() * 3 / 2);
+    for t in triangles {
+        for i in 0..3 {
+            let (a, b) = (t[i], t[(i + 1) % 3]);
+            *count.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    // Hole edges run b → a for a triangle edge a → b on the boundary.
+    let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+    let mut edges = 0usize;
+    for t in triangles {
+        for i in 0..3 {
+            let (a, b) = (t[i], t[(i + 1) % 3]);
+            if count[&(a.min(b), a.max(b))] == 1 {
+                next.entry(b).or_default().push(a);
+                edges += 1;
+            }
+        }
+    }
+    let mut loops = Vec::new();
+    let mut starts: Vec<u32> = next.keys().copied().collect();
+    starts.sort_unstable();
+    let mut used = 0usize;
+    for s in starts {
+        while next.get(&s).is_some_and(|v| !v.is_empty()) && used < edges {
+            let mut lp = vec![s];
+            let mut v = s;
+            while let Some(n) = next.get_mut(&v).and_then(|out| out.pop()) {
+                used += 1;
+                if n == s {
+                    break;
+                }
+                lp.push(n);
+                v = n;
+                if lp.len() > edges {
+                    break;
+                }
+            }
+            if lp.len() >= 3 {
+                loops.push(lp);
+            }
+        }
+    }
+    loops
+}
+
+/// Close every hole in `data` with a patch of new triangles, and return how
+/// many holes were closed.
+///
+/// Each hole is filled from its edge inward: rings of vertices stepping
+/// toward the hole's centre, as many as the hole is wide in boundary edge
+/// lengths, so the patch's triangles are about the size of the mesh's
+/// around it. The new vertices are then relaxed (Laplacian smoothing with
+/// the boundary fixed) so the patch sits smoothly in the gap. New triangles
+/// get a new face group each, so a patch is easy to find, mask or hide;
+/// new vertices are unmasked and keep the boundary's color.
+///
+/// INVARIANT: existing vertices and triangles are unchanged; only vertices
+/// and triangles are appended.
+pub fn close_holes(data: &mut crate::MeshData) -> usize {
+    let loops = boundary_loops(&data.triangles);
+    let first_group = data.groups.iter().copied().max().map_or(1, |g| g + 1);
+    let has_color = !data.color.is_empty();
+    for (group, lp) in (first_group..).zip(&loops) {
+        let n = lp.len();
+        let pts: Vec<Vec3> = lp.iter().map(|&v| data.positions[v as usize]).collect();
+        let center = pts.iter().copied().sum::<Vec3>() / n as f32;
+        let edge = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(a, b)| a.distance(*b)).sum::<f32>() / n as f32;
+        let radius = pts.iter().map(|p| p.distance(center)).sum::<f32>() / n as f32;
+        let rings = ((radius / edge.max(1e-9)).round() as usize).clamp(1, 64);
+        let color =
+            if has_color { lp.iter().map(|&v| data.color[v as usize]).sum::<Vec3>() / n as f32 } else { Vec3::ONE };
+        let first_new = data.positions.len() as u32;
+        let push = |data: &mut crate::MeshData, p: Vec3| {
+            data.positions.push(p);
+            data.mask.push(0.0);
+            if has_color {
+                data.color.push(color);
+            }
+            data.positions.len() as u32 - 1
+        };
+        // Ring 0 is the boundary; rings 1..rings step inward; then the centre.
+        let mut outer: Vec<u32> = lp.clone();
+        let mut new_tris: Vec<[u32; 3]> = Vec::new();
+        for r in 1..rings {
+            let t = r as f32 / rings as f32;
+            let inner: Vec<u32> = pts.iter().map(|&p| push(data, p.lerp(center, t))).collect();
+            for i in 0..n {
+                let j = (i + 1) % n;
+                new_tris.push([outer[i], outer[j], inner[j]]);
+                new_tris.push([outer[i], inner[j], inner[i]]);
+            }
+            outer = inner;
+        }
+        let c = push(data, center);
+        for i in 0..n {
+            new_tris.push([outer[i], outer[(i + 1) % n], c]);
+        }
+        // Relax the new vertices so the patch is smooth, the boundary fixed.
+        let last_new = data.positions.len() as u32;
+        let mut neighbors: HashMap<u32, Vec<u32>> = HashMap::new();
+        for t in &new_tris {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                if a >= first_new {
+                    neighbors.entry(a).or_default().push(b);
+                }
+                if b >= first_new {
+                    neighbors.entry(b).or_default().push(a);
+                }
+            }
+        }
+        for _ in 0..(rings * 4).min(80) {
+            let moved: Vec<(u32, Vec3)> = (first_new..last_new)
+                .filter_map(|v| {
+                    let ns = neighbors.get(&v)?;
+                    let avg = ns.iter().map(|&u| data.positions[u as usize]).sum::<Vec3>() / ns.len() as f32;
+                    Some((v, avg))
+                })
+                .collect();
+            for (v, p) in moved {
+                data.positions[v as usize] = p;
+            }
+        }
+        data.groups.extend(std::iter::repeat_n(group, new_tris.len()));
+        if !data.hidden.is_empty() {
+            data.hidden.extend(std::iter::repeat_n(false, new_tris.len()));
+        }
+        data.triangles.extend(new_tris);
+    }
+    loops.len()
+}
+
+#[cfg(test)]
+mod hole_tests {
+    use super::*;
+    use crate::{MeshData, primitives};
+
+    fn open_edges(tris: &[[u32; 3]]) -> usize {
+        let mut count: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in tris {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                *count.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        count.values().filter(|&&c| c == 1).count()
+    }
+
+    fn signed_volume(d: &MeshData) -> f32 {
+        d.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| d.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn closes_two_holes_watertight_facing_out() {
+        // A sphere with two caps cut off: two holes.
+        let mut d = primitives::icosphere(4, 1.0).to_data();
+        let keep: Vec<bool> =
+            d.triangles.iter().map(|t| t.iter().all(|&v| d.positions[v as usize].y.abs() < 0.8)).collect();
+        let mut k = keep.iter();
+        d.triangles.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        d.groups.retain(|_| *k.next().unwrap());
+        let mut k = keep.iter();
+        if !d.hidden.is_empty() {
+            d.hidden.retain(|_| *k.next().unwrap());
+        }
+        assert_eq!(boundary_loops(&d.triangles).len(), 2);
+        let before_tris = d.triangles.clone();
+        let before_pos = d.positions.clone();
+        let closed = close_holes(&mut d);
+        assert_eq!(closed, 2);
+        assert_eq!(open_edges(&d.triangles), 0, "still open");
+        assert!(signed_volume(&d) > 3.0, "patches face out (volume {})", signed_volume(&d));
+        // Existing geometry untouched; attributes stay in step.
+        assert_eq!(&d.triangles[..before_tris.len()], &before_tris[..]);
+        assert_eq!(&d.positions[..before_pos.len()], &before_pos[..]);
+        assert_eq!(d.groups.len(), d.triangles.len());
+        assert_eq!(d.mask.len(), d.positions.len());
+        // The patch stays inside the cut: no new vertex pokes far out.
+        assert!(d.positions[before_pos.len()..].iter().all(|p| p.y.abs() <= 0.8 + 1e-3 && p.length() < 1.0));
+        // A closed mesh has nothing to close.
+        let mut whole = primitives::icosphere(3, 1.0).to_data();
+        assert_eq!(close_holes(&mut whole), 0);
+    }
+}
