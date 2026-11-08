@@ -310,7 +310,7 @@ fn move_samples_per_segment(rest: &[(Vec3, Vec3)], radius: f32) -> usize {
 
 /// Simplify a drawn screen path to a few control points (Ramer-Douglas-
 /// Peucker with tolerance `tol` px), keeping at most `max` points.
-fn simplify_path(path: &[Vec2], tol: f32, max: usize) -> Vec<Vec2> {
+pub(crate) fn simplify_path(path: &[Vec2], tol: f32, max: usize) -> Vec<Vec2> {
     if path.len() <= 2 {
         return path.to_vec();
     }
@@ -544,6 +544,21 @@ pub enum SelectAction {
 
 pub enum Drag {
     None,
+    /// Drawing a tube's path (screen points), from `anchor` in the world.
+    TubeDraw {
+        points: Vec<Vec2>,
+        anchor: Vec3,
+    },
+    /// Moving one of the open tube's control points.
+    TubePoint {
+        index: usize,
+    },
+    /// Shift+drag on a tube point: changing its thickness.
+    TubeRadius {
+        index: usize,
+        start_y: f32,
+        start: f32,
+    },
     Orbit,
     /// Pressed on empty space with "strokes from empty space" on: the
     /// stroke starts once the pointer reaches the model.
@@ -939,6 +954,10 @@ pub struct Editor {
     /// The primitive being dragged out with the Insert Primitive brush,
     /// drawn solid so you can see it grow before it is inserted.
     pub insert_preview: Option<oxy_mesh::Mesh>,
+    /// The tube being shaped (RFC 0009), shown in the preview slot.
+    pub tube: Option<crate::tube::TubeEdit>,
+    /// The tube tool is waiting for a path to be drawn.
+    pub tube_armed: bool,
     /// Mask extract in progress: the shell is shown and can be adjusted, and
     /// becomes a piece only when accepted.
     pub extract_preview: Option<ExtractPreview>,
@@ -1170,6 +1189,8 @@ impl Default for Editor {
             floor_grid: true,
             hide_cursor_during_stroke: true,
             insert_preview: None,
+            tube: None,
+            tube_armed: false,
             extract_preview: None,
             curve: None,
             curve_fade_in: 0.15,
@@ -1694,6 +1715,9 @@ impl Editor {
         }
         if let Some(h) = self.light_handle_at(p) {
             self.drag = Drag::LightHandle(h);
+            return;
+        }
+        if self.tube_pointer_down(p) {
             return;
         }
         let (kind, _invert) = self.effective_brush();
@@ -2240,6 +2264,9 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
+        if self.tube_pointer_moved(pos) {
+            return true;
+        }
         if let Drag::Stroke { hold: Some(h), .. } = &mut self.drag {
             if h.path.last().is_none_or(|l| l.distance(pos) > 2.0) {
                 h.path.push(pos);
@@ -2253,6 +2280,8 @@ impl Editor {
         let size = self.canvas_size();
         match &mut self.drag {
             Drag::None => false,
+            // Handled by `tube_pointer_moved` above.
+            Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. } => true,
             Drag::Orbit => {
                 // The snap key (Shift, unless the keymap says otherwise) steps the view by 45°.
                 if self.snap_modifier_held() {
@@ -2528,6 +2557,9 @@ impl Editor {
 
     pub fn pointer_up(&mut self) {
         self.flush_drag();
+        if self.tube_pointer_up() {
+            return;
+        }
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
             && p0.distance(p) < 5.0 * self.pixels_per_point
         {
@@ -3207,7 +3239,7 @@ impl Editor {
 
     // ---- pieces ----
 
-    fn add_piece(&mut self, mut piece: Piece, label: &str) {
+    pub(crate) fn add_piece(&mut self, mut piece: Piece, label: &str) {
         self.pointer_up();
         ensure_symmetry_center(&mut piece);
         let index = self.scene.pieces.len();
@@ -3850,6 +3882,9 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        if let Some(t) = &mut self.tube {
+            return Some(&mut t.preview);
+        }
         match (&mut self.insert_preview, &mut self.extract_preview, &mut self.curve) {
             (Some(m), _, _) => Some(m),
             (None, Some(p), _) => Some(&mut p.mesh),
@@ -5240,6 +5275,101 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn tube_tool_draws_shapes_and_adds_one_piece() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        e.start_tube();
+        // Drag from the middle of the sphere out to the right and down.
+        let path: Vec<Vec2> =
+            (0..=40).map(|i| Vec2::new(400.0 + i as f32 * 8.0, 300.0 + (i * i) as f32 * 0.12)).collect();
+        e.pointer = Some(path[0]);
+        e.pointer_down(PointerButton::Primary);
+        for &p in &path[1..] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        assert_eq!(e.scene.active().mesh.positions, before, "drawing a tube doesn't sculpt");
+        assert_eq!(e.scene.pieces.len(), 1, "nothing is added until Accept");
+        let tube = e.tube.as_ref().expect("a tube is open");
+        let n = tube.points.len();
+        assert!((2..=8).contains(&n), "{n} points");
+        // It starts on the model.
+        assert!((tube.points[0].length() - 1.0).abs() < 0.05, "first point {}", tube.points[0]);
+        assert!(!tube.preview.triangles.is_empty());
+
+        // Drag the last point up: it moves, and the preview follows.
+        let last = n - 1;
+        let at = e.tube_screen(e.tube.as_ref().unwrap().points[last]).unwrap();
+        let old = e.tube.as_ref().unwrap().points[last];
+        e.pointer = Some(at);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(at - Vec2::new(0.0, 60.0));
+        e.pointer_up();
+        e.update_tube();
+        let moved = e.tube.as_ref().unwrap().points[last];
+        assert!(moved.y > old.y + 0.05, "{old} -> {moved}");
+        assert!(e.tube.as_ref().unwrap().preview.positions.iter().any(|p| p.y > old.y + 0.05));
+
+        // Shift+drag up on a point makes it thicker there.
+        let r0 = e.tube.as_ref().unwrap().radii[last];
+        let at = e.tube_screen(moved).unwrap();
+        e.pointer = Some(at);
+        e.modifiers.shift = true;
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(at - Vec2::new(0.0, 120.0));
+        e.pointer_up();
+        e.modifiers.shift = false;
+        let r1 = e.tube.as_ref().unwrap().radii[last];
+        assert!((r1 / r0 - 2.0).abs() < 0.05, "radius {r0} -> {r1}");
+
+        // Click the line between the first two points: a point is added.
+        let t = e.tube.as_ref().unwrap();
+        let (a, b) = (e.tube_screen(t.points[0]).unwrap(), e.tube_screen(t.points[1]).unwrap());
+        let count = t.points.len();
+        e.pointer = Some(a.lerp(b, 0.5));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert_eq!(e.tube.as_ref().unwrap().points.len(), count + 1);
+        // Alt+click it again: removed.
+        let at = e.tube_screen(e.tube.as_ref().unwrap().points[1]).unwrap();
+        e.pointer = Some(at);
+        e.modifiers.alt = true;
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        e.modifiers.alt = false;
+        assert_eq!(e.tube.as_ref().unwrap().points.len(), count);
+
+        // Mirror makes a copy on the other side of the X plane.
+        e.tube.as_mut().unwrap().mirror = true;
+        e.update_tube();
+        let m = &e.tube.as_ref().unwrap().preview;
+        let (lo, hi) = m.positions.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.x), hi.max(p.x)));
+        assert!((lo + hi).abs() < 1e-3, "mirrored about x = 0: {lo}..{hi}");
+
+        // Accept: one new piece, one undo step.
+        e.accept_tube();
+        assert!(e.tube.is_none());
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.active().name, "Tube");
+        assert_eq!(e.scene.pieces[0].mesh.positions, before);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // Cancel leaves nothing behind.
+        e.start_tube();
+        e.pointer = Some(path[0]);
+        e.pointer_down(PointerButton::Primary);
+        for &p in &path[1..] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        assert!(e.tube.is_some());
+        e.cancel_tube();
+        assert!(e.tube.is_none() && !e.tube_armed);
+        assert_eq!(e.scene.pieces.len(), 1);
     }
 
     fn wait_job(e: &mut Editor) {

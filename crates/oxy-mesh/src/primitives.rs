@@ -331,3 +331,206 @@ mod tests {
         }
     }
 }
+
+/// Points along a smooth curve through `points` (uniform Catmull-Rom with
+/// clamped ends), each with its radius
+/// blended from `radii`, about `spacing` apart along the curve.
+///
+/// PRECONDITION: `points.len() == radii.len() >= 2`.
+/// RETURNS: at least two (position, radius) pairs, first and last exactly at
+/// the end points.
+pub fn tube_path(points: &[Vec3], radii: &[f32], spacing: f32) -> Vec<(Vec3, f32)> {
+    assert!(points.len() >= 2 && points.len() == radii.len());
+    let n = points.len();
+    let at = |i: isize| points[i.clamp(0, n as isize - 1) as usize];
+    // Dense samples per segment, then resampled evenly by arc length.
+    let mut dense: Vec<(Vec3, f32)> = Vec::new();
+    for s in 0..n - 1 {
+        let (p0, p1, p2, p3) = (at(s as isize - 1), at(s as isize), at(s as isize + 1), at(s as isize + 2));
+        let steps = 24;
+        for k in 0..steps {
+            let t = k as f32 / steps as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let p = 0.5
+                * ((2.0 * p1)
+                    + (p2 - p0) * t
+                    + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                    + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3);
+            // Smoothstep between the two radii, so a thick end eases in.
+            let e = t * t * (3.0 - 2.0 * t);
+            dense.push((p, radii[s] + (radii[s + 1] - radii[s]) * e));
+        }
+    }
+    dense.push((points[n - 1], radii[n - 1]));
+    let mut length = vec![0.0f32];
+    for w in dense.windows(2) {
+        length.push(length.last().unwrap() + w[0].0.distance(w[1].0));
+    }
+    let total = *length.last().unwrap();
+    let count = ((total / spacing.max(1e-5)).ceil() as usize).clamp(1, 2000);
+    let mut out = Vec::with_capacity(count + 1);
+    let mut j = 0;
+    for i in 0..=count {
+        let s = total * i as f32 / count as f32;
+        while j + 1 < length.len() - 1 && length[j + 1] < s {
+            j += 1;
+        }
+        let span = (length[j + 1] - length[j]).max(1e-9);
+        let f = ((s - length[j]) / span).clamp(0.0, 1.0);
+        let (a, b) = (dense[j], dense[j + 1]);
+        out.push((a.0.lerp(b.0, f), a.1 + (b.1 - a.1) * f));
+    }
+    out
+}
+
+/// A tube swept along a smooth curve through `points`, `radii[i]` thick at
+/// point `i`, with `sides` vertices around. Rings follow the curve with
+/// parallel-transported frames, so the tube doesn't twist. With `caps`, each
+/// end is closed with a rounded dome, so the result is a closed surface.
+///
+/// PRECONDITION: `points.len() == radii.len() >= 2`, radii > 0.
+pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
+    let sides = sides.max(3) as usize;
+    let min_r = radii.iter().copied().fold(f32::INFINITY, f32::min).max(1e-4);
+    let max_r = radii.iter().copied().fold(0.0, f32::max).max(min_r);
+    // Ring spacing close to the spacing around the ring, so quads are square-ish.
+    let around = std::f32::consts::TAU * (0.5 * (min_r + max_r)) / sides as f32;
+    let path = tube_path(points, radii, around.max(min_r * 0.25));
+    let rings = path.len();
+    let tangent = |i: usize| {
+        let a = path[i.saturating_sub(1)].0;
+        let b = path[(i + 1).min(rings - 1)].0;
+        (b - a).normalize_or(Vec3::Y)
+    };
+    // Parallel transport: carry the first frame along, rotating it only as
+    // much as the tangent turns.
+    let t0 = tangent(0);
+    let mut normal = if t0.x.abs() < 0.9 { t0.cross(Vec3::X) } else { t0.cross(Vec3::Y) }.normalize();
+    let mut prev_t = t0;
+    let mut positions = Vec::with_capacity(rings * sides + 2 + if caps { 2 * sides * 3 } else { 0 });
+    let mut frames = Vec::with_capacity(rings);
+    for (i, &(c, r)) in path.iter().enumerate() {
+        let t = tangent(i);
+        let axis = prev_t.cross(t);
+        if axis.length_squared() > 1e-12 {
+            let angle = prev_t.dot(t).clamp(-1.0, 1.0).acos();
+            normal = glam::Quat::from_axis_angle(axis.normalize(), angle) * normal;
+        }
+        normal = (normal - t * normal.dot(t)).normalize_or(normal);
+        let binormal = t.cross(normal);
+        prev_t = t;
+        frames.push((c, r, t, normal, binormal));
+        for k in 0..sides {
+            let a = std::f32::consts::TAU * k as f32 / sides as f32;
+            positions.push(c + (normal * a.cos() + binormal * a.sin()) * r);
+        }
+    }
+    let mut tris = Vec::with_capacity(rings * sides * 2 + if caps { 8 * sides } else { 0 });
+    let ring = |i: usize, k: usize| (i * sides + k % sides) as u32;
+    for i in 0..rings - 1 {
+        for k in 0..sides {
+            let (a, b, c, d) = (ring(i, k), ring(i, k + 1), ring(i + 1, k), ring(i + 1, k + 1));
+            // Outward facing: k → k+1 turns counter-clockwise seen from
+            // ahead (normal × binormal = tangent).
+            tris.push([a, b, c]);
+            tris.push([b, d, c]);
+        }
+    }
+    if caps {
+        // A dome of a few shrinking rings and a tip at each end.
+        let domes = [(0usize, -1.0f32), (rings - 1, 1.0)];
+        for (end, dir) in domes {
+            let (c, r, t, n, b) = frames[end];
+            let steps = 3;
+            let mut last: Vec<u32> = (0..sides).map(|k| ring(end, k)).collect();
+            for s in 1..=steps {
+                let phi = std::f32::consts::FRAC_PI_2 * s as f32 / (steps + 1) as f32;
+                let (rr, off) = (r * phi.cos(), r * phi.sin() * dir);
+                let start = positions.len() as u32;
+                for k in 0..sides {
+                    let a = std::f32::consts::TAU * k as f32 / sides as f32;
+                    positions.push(c + t * off + (n * a.cos() + b * a.sin()) * rr);
+                }
+                let next: Vec<u32> = (0..sides as u32).map(|k| start + k).collect();
+                for k in 0..sides {
+                    let (a0, a1, b0, b1) = (last[k], last[(k + 1) % sides], next[k], next[(k + 1) % sides]);
+                    if dir > 0.0 {
+                        tris.push([a0, a1, b0]);
+                        tris.push([a1, b1, b0]);
+                    } else {
+                        tris.push([a0, b0, a1]);
+                        tris.push([a1, b0, b1]);
+                    }
+                }
+                last = next;
+            }
+            let tip = positions.len() as u32;
+            positions.push(c + t * r * dir);
+            for k in 0..sides {
+                let (a0, a1) = (last[k], last[(k + 1) % sides]);
+                if dir > 0.0 {
+                    tris.push([a0, a1, tip]);
+                } else {
+                    tris.push([a0, tip, a1]);
+                }
+            }
+        }
+    }
+    Mesh::new(positions, tris)
+}
+
+#[cfg(test)]
+mod tube_tests {
+    use super::*;
+
+    fn signed_volume(m: &Mesh) -> f32 {
+        m.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn capped_tube_is_closed_outward_and_the_right_size() {
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, 2.0, 0.0)];
+        let m = tube(&pts, &[0.2, 0.2, 0.2], 32, true);
+        // Every edge shared by exactly two triangles: watertight.
+        let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in &m.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        assert!(edges.values().all(|&n| n == 2), "open or non-manifold edges");
+        // Cylinder of length 2 plus two half-spheres (a little less: faceted).
+        let expected = std::f32::consts::PI * 0.04 * 2.0 + 4.0 / 3.0 * std::f32::consts::PI * 0.008;
+        let v = signed_volume(&m);
+        assert!(v > 0.0, "faces point inward");
+        assert!((v - expected).abs() < expected * 0.06, "volume {v}, expected about {expected}");
+        // The surface stays the radius away from the axis along the straight part.
+        for p in &m.positions {
+            if p.y > 0.1 && p.y < 1.9 {
+                let r = (p.x * p.x + p.z * p.z).sqrt();
+                assert!((r - 0.2).abs() < 1e-3, "radius {r} at {p}");
+            }
+        }
+    }
+
+    #[test]
+    fn tube_follows_bends_and_blends_radius() {
+        let pts = [Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0)];
+        let path = tube_path(&pts, &[0.1, 0.1, 0.3], 0.05);
+        assert_eq!(path.first().unwrap().0, Vec3::ZERO);
+        assert!(path.last().unwrap().0.distance(pts[2]) < 1e-5);
+        assert!((path.last().unwrap().1 - 0.3).abs() < 1e-5);
+        // Passes through the middle point, radius growing monotonically on the last segment.
+        assert!(path.iter().any(|(p, _)| p.distance(pts[1]) < 0.03));
+        let open = tube(&pts, &[0.1, 0.1, 0.3], 16, false);
+        assert!(signed_volume(&open).is_finite());
+        assert!(open.positions.iter().all(|p| p.is_finite()));
+    }
+}

@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Tube tool** ([RFC 0009](docs/rfcs/0009-tube-tool.md)): **Pieces > + Add > Tube (draw)…** — drag a path from the model or empty space and get a smooth tube along it. Drag its points to reshape it, **Shift+drag** a point to make the tube thicker or thinner there, click the line to add a point and **Alt+click** to remove one. The Tube window sets thickness, sides, rounded ends and a mirror copy across X. **Accept** adds it as a new piece in one undo step. For horns, tentacles, tails, limbs and cables.
 - **More shapes under Add piece:** **Cylinder**, **Cone** and **Torus**, alongside sphere, cube and plane (Pieces > + Add, the Pieces menu and the command palette). Cylinder and cone are built with even triangles, ready to sculpt (in the background, so the window doesn't pause).
 - **Split hidden** (Mesh menu and command palette): moves the active piece's hidden faces into a new piece of their own, shown, and keeps the visible faces in the original. One undo step.
 - **Focal shift** (brush settings and the quick menu): moves the middle of the falloff curve, from firmer (more of the brush at full strength) to softer. The cursor's inner ring follows it, and it is saved in brush presets. At 0 the brush is exactly as before.

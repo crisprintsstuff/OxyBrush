@@ -18,6 +18,8 @@ mod settings;
 mod snapshot;
 mod support;
 mod tips;
+mod tube;
+mod tube_ui;
 mod ui;
 mod updates;
 mod widgets;
