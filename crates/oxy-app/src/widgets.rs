@@ -44,6 +44,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::KelvinGrab => "Deforms like real elastic rubber with volume preservation. Alt moves along normal.",
         BrushKind::KelvinTwist => "Twists the surface elastically around the contact normal. Alt reverses spin.",
         BrushKind::KelvinScale => "Scales or pinches the volume radially with elastodynamic decay. Alt inverts.",
+        BrushKind::CurveMove => {
+            "Draw a curve along a part (an arm, a tail), then drag its points: the mesh around it bends and stretches to follow. Masked areas stay put."
+        }
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
         BrushKind::InsertPrimitive => "Inserts 3D primitives onto the surface with auto-masking.",
@@ -83,6 +86,7 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::KelvinGrab => 0.52 * bump(x - 0.25, 0.35) - 0.14 * bump(x + 0.42, 0.25),
         BrushKind::KelvinTwist => 0.38 * (x * 3.8).sin() * bump(x, 0.62),
         BrushKind::KelvinScale => 0.46 * bump(x, 0.28) - 0.18 * bump(a - 0.55, 0.22),
+        BrushKind::CurveMove => 0.5 * bump(x - 0.35, 0.3) + 0.22 * bump(x + 0.15, 0.45),
         BrushKind::Polish => 0.32 * bump(x, 0.6),
         BrushKind::Noise => {
             (0.1 * ((x * 13.0).sin() + 0.6 * (x * 29.0 + 1.0).sin() + 0.4 * (x * 47.0 + 2.0).sin()) + 0.08)
@@ -219,6 +223,15 @@ pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
         }
         BrushKind::CutAway => {
             p.line_segment([at(-0.8, -0.2), at(0.8, 0.6)], Stroke::new(1.4, Color32::from_rgb(240, 100, 100)));
+        }
+        BrushKind::CurveMove => {
+            // The curve through the part, with its control points.
+            let pts: Vec<Pos2> =
+                (0..=12).map(|i| i as f32 / 12.0).map(|t| at(-0.7 + 1.2 * t, 0.15 + 0.6 * t * t)).collect();
+            p.add(Shape::line(pts, Stroke::new(1.4, ACCENT)));
+            for t in [0.0f32, 0.5, 1.0] {
+                p.circle_filled(at(-0.7 + 1.2 * t, 0.15 + 0.6 * t * t), 2.2, Color32::WHITE);
+            }
         }
         _ => {}
     }

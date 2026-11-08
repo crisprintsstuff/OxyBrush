@@ -101,6 +101,10 @@ pub struct CurveEdit {
     pub invert: bool,
     /// Control points on the surface: (position, normal).
     pub points: Vec<(Vec3, Vec3)>,
+    /// Curve Move only: the control points as first drawn, which the mesh
+    /// is tied to; `points` are where they have been dragged since. Empty
+    /// for brush curves.
+    pub rest: Vec<(Vec3, Vec3)>,
     /// Fraction of the curve's length over which the stroke fades in and
     /// out (0 = full strength from end to end).
     pub fade_in: f32,
@@ -135,12 +139,29 @@ pub struct CurveEdit {
     built: Option<CurveKey>,
     /// Samples with their (size, strength) modulation.
     samples: Vec<(StrokeSample, f32, f32)>,
+    /// Curve Move: the mesh tied to the rest curve, and what it was tied
+    /// with.
+    binding: Option<(MoveBindKey, oxy_sculpt::wire::Binding, Vec<oxy_sculpt::wire::WireCurve>)>,
+}
+
+/// What a Curve Move binding depends on.
+#[derive(Clone, PartialEq)]
+struct MoveBindKey {
+    rest: Vec<(Vec3, Vec3)>,
+    weights: Vec<(f32, f32)>,
+    closed: bool,
+    radius: f32,
+    strength: f32,
+    falloff: Falloff,
+    symmetry: Symmetry,
+    center: Vec3,
 }
 
 /// What the user edits on an open curve, and what curve undo restores.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurveShape {
     points: Vec<(Vec3, Vec3)>,
+    rest: Vec<(Vec3, Vec3)>,
     weights: Vec<(f32, f32)>,
     closed: bool,
     fades: (f32, f32),
@@ -150,6 +171,7 @@ impl CurveEdit {
     fn shape(&self) -> CurveShape {
         CurveShape {
             points: self.points.clone(),
+            rest: self.rest.clone(),
             weights: self.weights.clone(),
             closed: self.closed,
             fades: (self.fade_in, self.fade_out),
@@ -158,6 +180,7 @@ impl CurveEdit {
 
     fn set_shape(&mut self, s: CurveShape) {
         self.points = s.points;
+        self.rest = s.rest;
         self.weights = s.weights;
         self.closed = s.closed;
         (self.fade_in, self.fade_out) = s.fades;
@@ -225,6 +248,38 @@ pub fn curve_points(points: &[(Vec3, Vec3)], closed: bool, step: f32) -> Vec<(Ve
     }
     let total = acc.last().copied().unwrap_or(0.0).max(1e-9);
     out.into_iter().zip(acc).map(|((p, nrm, u), a)| (p, nrm, a / total, u)).collect()
+}
+
+/// The point at curve parameter `u` (segment index + fraction) on the
+/// Catmull-Rom curve through `points`, with its normal blended between the
+/// two control points.
+fn curve_point_at(points: &[(Vec3, Vec3)], closed: bool, u: f32) -> (Vec3, Vec3) {
+    let n = points.len();
+    if n == 0 {
+        return (Vec3::ZERO, Vec3::Y);
+    }
+    let closed = closed && n >= 3;
+    let segments = if closed { n } else { n - 1 };
+    let seg = (u.floor().max(0.0) as usize).min(segments.saturating_sub(1));
+    let t = (u - seg as f32).clamp(0.0, 1.0);
+    let at = |i: isize| {
+        if closed { points[i.rem_euclid(n as isize) as usize] } else { points[i.clamp(0, n as isize - 1) as usize] }
+    };
+    let (p0, p1, p2, p3) = (at(seg as isize - 1), at(seg as isize), at(seg as isize + 1), at(seg as isize + 2));
+    let (t2, t3) = (t * t, t * t * t);
+    let pos = 0.5
+        * ((2.0 * p1.0)
+            + (-p0.0 + p2.0) * t
+            + (2.0 * p0.0 - 5.0 * p1.0 + 4.0 * p2.0 - p3.0) * t2
+            + (-p0.0 + 3.0 * p1.0 - 3.0 * p2.0 + p3.0) * t3);
+    (pos, p1.1.lerp(p2.1, t).normalize_or(p1.1))
+}
+
+/// Samples per curve segment for Curve Move: enough that the curve is
+/// smooth at the scale of its reach, without making binding slow.
+fn move_samples_per_segment(rest: &[(Vec3, Vec3)], radius: f32) -> usize {
+    let longest = rest.windows(2).map(|w| w[0].0.distance(w[1].0)).fold(0.0f32, f32::max);
+    ((longest / (radius * 0.15).max(1e-6)).ceil() as usize).clamp(4, 48)
 }
 
 /// Simplify a drawn screen path to a few control points (Ramer-Douglas-
@@ -818,6 +873,9 @@ pub struct Editor {
     /// Fade in / out for new curve strokes (fraction of the length).
     pub curve_fade_in: f32,
     pub curve_fade_out: f32,
+    /// Curve Move: put the curve through the middle of the part under it
+    /// (an arm's core) instead of on its surface.
+    pub curve_move_centred: bool,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
@@ -1037,6 +1095,7 @@ impl Default for Editor {
             curve: None,
             curve_fade_in: 0.15,
             curve_fade_out: 0.15,
+            curve_move_centred: true,
             cursor_smooth: None,
             snap_orbit: None,
             custom_matcaps: Vec::new(),
@@ -1303,6 +1362,7 @@ impl Editor {
             stroke_from_empty: self.stroke_from_empty,
             hold_to_curve: self.hold_to_curve,
             hold_to_curve_ask: self.hold_to_curve_ask,
+            curve_move_centred: self.curve_move_centred,
             pressure_gamma: self.pressure_gamma,
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
@@ -1450,6 +1510,7 @@ impl Editor {
         self.stroke_from_empty = s.stroke_from_empty;
         self.hold_to_curve = s.hold_to_curve;
         self.hold_to_curve_ask = s.hold_to_curve_ask;
+        self.curve_move_centred = s.curve_move_centred;
         self.pressure_gamma = s.pressure_gamma;
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
@@ -1665,7 +1726,9 @@ impl Editor {
             };
             return;
         }
-        let mode = if kind.is_grab_like()
+        let mode = if kind == BrushKind::CurveMove {
+            StrokeMode::Curve
+        } else if kind.is_grab_like()
             || kind == BrushKind::SnakeHook
             || kind == BrushKind::Smooth
             || self.brush_roles().ctrl
@@ -2045,7 +2108,21 @@ impl Editor {
             Drag::CurveHandle { index } => {
                 let index = *index;
                 let (o, d) = self.camera.ray(self.canvas_local(pos), size);
+                let forward = self.camera.forward();
                 if let Some(c) = &mut self.curve
+                    && c.kind == BrushKind::CurveMove
+                    && let Some(p) = c.points.get_mut(index)
+                {
+                    // Curve Move points move freely, in the view plane
+                    // through where they are.
+                    let denom = d.dot(forward);
+                    if denom.abs() > 1e-6 {
+                        let t = (p.0 - o).dot(forward) / denom;
+                        if t > 0.0 {
+                            p.0 = o + d * t;
+                        }
+                    }
+                } else if let Some(c) = &mut self.curve
                     && let Some(hit) = self.scene.active().mesh.raycast(o, d)
                     && let Some(p) = c.points.get_mut(index)
                 {
@@ -2966,6 +3043,26 @@ impl Editor {
             self.status = "Draw the curve on the model".into();
             return;
         }
+        let moving = kind == BrushKind::CurveMove;
+        let points = if moving && self.curve_move_centred {
+            // Through the middle of the part: halfway between where the view
+            // ray enters the surface and where it leaves it again.
+            screen
+                .iter()
+                .zip(&points)
+                .map(|(&p, &(q, n))| {
+                    let (_, d) = self.camera.ray(self.canvas_local(p), size);
+                    let eps = mesh.bounds().extent().max_element() * 1e-4;
+                    match mesh.raycast(q + d * eps, d) {
+                        Some(exit) => ((q + exit.point) * 0.5, n),
+                        None => (q, n),
+                    }
+                })
+                .collect()
+        } else {
+            points
+        };
+        let rest = if moving { points.clone() } else { Vec::new() };
         let piece = self.scene.active();
         let mut preview = piece.mesh.clone();
         preview.mark_all_dirty();
@@ -2987,19 +3084,24 @@ impl Editor {
             redo: Vec::new(),
             settled: CurveShape {
                 points: points.clone(),
+                rest: rest.clone(),
                 weights: vec![(1.0, 1.0); points.len()],
                 closed: false,
                 fades: (self.curve_fade_in, self.curve_fade_out),
             },
             points,
+            rest,
             preview,
             touched: Vec::new(),
             built: None,
             samples: Vec::new(),
+            binding: None,
         });
-        self.status =
-            "Drag the points to adjust the curve, click it to add one, Alt+click to remove one; Enter applies it"
-                .into();
+        self.status = if moving {
+            "Drag the points to move the model with the curve, click it to add one, Alt+click to remove one; Enter applies it".into()
+        } else {
+            "Drag the points to adjust the curve, click it to add one, Alt+click to remove one; Enter applies it".into()
+        };
     }
 
     /// A primary press while a curve is open: grab a control point, add
@@ -3024,6 +3126,9 @@ impl Editor {
                 let c = self.curve.as_mut().expect("open");
                 if c.points.len() > min {
                     c.points.remove(i);
+                    if i < c.rest.len() {
+                        c.rest.remove(i);
+                    }
                     c.weights.remove(i);
                     c.selected = match c.selected {
                         Some(s) if s == i => None,
@@ -3050,6 +3155,25 @@ impl Editor {
             .filter_map(|(q, _, _, u)| self.camera.project(*q, size).map(|s| (s.distance(local), *u)))
             .filter(|(d, _)| *d <= reach * 0.8)
             .min_by(|a, b| a.0.total_cmp(&b.0));
+        if let Some((_, u)) = near
+            && c.kind == BrushKind::CurveMove
+        {
+            // Split the curve where it was clicked: the new point sits on
+            // both the moved curve and the rest curve, so nothing jumps.
+            let c = self.curve.as_mut().expect("open");
+            let n = c.points.len();
+            let seg = u.floor().max(0.0) as usize;
+            let at = if c.closed { (seg + 1).min(n) } else { (seg + 1).min(n - 1) };
+            let w = c.weight_at(u);
+            let now = curve_point_at(&c.points, c.closed, u);
+            let then = curve_point_at(&c.rest, c.closed, u);
+            c.points.insert(at, now);
+            c.rest.insert(at, then);
+            c.weights.insert(at, w);
+            c.selected = Some(at);
+            self.drag = Drag::CurveHandle { index: at };
+            return true;
+        }
         if let Some((_, u)) = near {
             let (o, d) = self.camera.ray(local, size);
             if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
@@ -3160,6 +3284,10 @@ impl Editor {
             c.undo.push(std::mem::replace(&mut c.settled, shape.clone()));
             c.redo.clear();
         }
+        if c.kind == BrushKind::CurveMove {
+            self.update_curve_move();
+            return;
+        }
         let key = CurveKey { shape, settings };
         if c.built.as_ref() == Some(&key) {
             return;
@@ -3207,9 +3335,98 @@ impl Editor {
         c.built = Some(key);
     }
 
+    /// Curve Move: tie the mesh to the rest curve (again, if the curve's
+    /// reach or shape at rest changed), then move it with the curve.
+    fn update_curve_move(&mut self) {
+        use oxy_sculpt::wire::{BindSettings, Binding, WireCurve, sample_curve};
+        let center = self.symmetry_center();
+        let symmetry = self.symmetry;
+        let falloff = self.falloff;
+        let strength = self.strength(BrushKind::CurveMove);
+        let radius = self.brush_radius_pt * self.curve_world_per_pt();
+        let Some(c) = self.curve.as_mut() else { return };
+        let Some(piece) = self.scene.pieces.iter().find(|p| p.id == c.piece) else { return };
+        let real = &piece.mesh;
+        let closed = c.closed && c.points.len() >= 3;
+        let per = move_samples_per_segment(&c.rest, radius);
+        let transforms = symmetry.transforms();
+        let mirror = |m: &glam::Mat3, p: Vec3| center + *m * (p - center);
+        let key = MoveBindKey {
+            rest: c.rest.clone(),
+            weights: c.weights.clone(),
+            closed,
+            radius,
+            strength,
+            falloff,
+            symmetry,
+            center,
+        };
+        if c.binding.as_ref().is_none_or(|(k, _, _)| *k != key) {
+            let rest_pts: Vec<Vec3> = c.rest.iter().map(|p| p.0).collect();
+            let samples = sample_curve(&rest_pts, closed, per);
+            let up = c.rest.first().map_or(Vec3::Y, |p| p.1);
+            let rests: Vec<WireCurve> = transforms
+                .iter()
+                .map(|m| WireCurve::rest(samples.iter().map(|p| mirror(m, *p)).collect(), *m * up))
+                .collect();
+            let (radii, strengths): (Vec<f32>, Vec<f32>) = (0..samples.len())
+                .map(|i| {
+                    let (size, st) = c.weight_at(i as f32 / per as f32);
+                    (radius * size, strength * st)
+                })
+                .unzip();
+            let binding = Binding::bind(real, &rests, &radii, &strengths, BindSettings { falloff, use_mask: true });
+            c.binding = Some((key, binding, rests));
+            c.built = None;
+        }
+        let built = CurveKey {
+            shape: c.shape(),
+            settings: BrushSettings { kind: BrushKind::CurveMove, radius, strength, falloff, ..Default::default() },
+        };
+        if c.built.as_ref() == Some(&built) {
+            return;
+        }
+        let (_, binding, rests) = c.binding.as_ref().expect("bound above");
+        let now: Vec<Vec3> = c.points.iter().map(|p| p.0).collect();
+        let samples = sample_curve(&now, closed, per);
+        let moved: Vec<WireCurve> = transforms
+            .iter()
+            .zip(rests)
+            .map(|(m, rest)| WireCurve::moved(samples.iter().map(|p| mirror(m, *p)).collect(), rest))
+            .collect();
+        // An unmoved curve leaves the piece exactly as it is (the frame
+        // arithmetic would otherwise add rounding noise).
+        let positions = if c.points == c.rest {
+            binding.vertices.iter().map(|&v| real.positions[v as usize]).collect()
+        } else {
+            binding.deform(&real.positions, &moved)
+        };
+        // Back to the untouched piece where the last preview moved it, then
+        // the new positions.
+        for &chunk in &c.touched {
+            let r = real.chunks[chunk as usize].vertices.clone();
+            let r = r.start as usize..r.end as usize;
+            c.preview.positions[r.clone()].copy_from_slice(&real.positions[r]);
+        }
+        for (&v, p) in binding.vertices.iter().zip(positions) {
+            c.preview.positions[v as usize] = p;
+        }
+        let mut chunks = std::mem::take(&mut c.touched);
+        chunks.extend_from_slice(&binding.chunks);
+        chunks.sort_unstable();
+        chunks.dedup();
+        c.preview.update_chunks(&chunks);
+        c.touched = binding.chunks.clone();
+        c.built = Some(built);
+    }
+
     /// Apply the curve stroke to the piece, as one undo step.
     pub fn accept_curve(&mut self) {
         self.update_curve();
+        if self.curve.as_ref().is_some_and(|c| c.kind == BrushKind::CurveMove) {
+            self.accept_curve_move();
+            return;
+        }
         let Some(c) = self.curve.take() else { return };
         let radius = self.brush_radius_pt * c.world_per_pt;
         let mut stroke = self.new_stroke(c.kind, c.invert, radius, 0.0);
@@ -3223,6 +3440,28 @@ impl Editor {
         }
         self.history.commit();
         self.status = format!("Applied curve stroke ({})", c.kind.label());
+    }
+
+    /// Apply a Curve Move: the piece takes the previewed positions, as one
+    /// undo step.
+    fn accept_curve_move(&mut self) {
+        let Some(c) = self.curve.take() else { return };
+        let Some((_, binding, _)) = &c.binding else { return };
+        if c.points == c.rest || binding.is_empty() {
+            self.status = "Curve Move: nothing moved".into();
+            return;
+        }
+        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
+        self.history.begin_with(BrushKind::CurveMove.label(), piece.id, &piece.mesh, false);
+        for &chunk in &binding.chunks {
+            self.history.touch(&piece.mesh, chunk);
+        }
+        for &v in &binding.vertices {
+            piece.mesh.positions[v as usize] = c.preview.positions[v as usize];
+        }
+        piece.mesh.update_after_move(&binding.vertices);
+        self.history.commit();
+        self.status = "Applied Curve Move".into();
     }
 
     /// World units per logical point of the open curve (1 when none).
@@ -4881,6 +5120,125 @@ mod tests {
         assert_eq!(e.scene.active().mesh.positions, before);
     }
 
+    /// A rod lying along X in front of the camera, to bend.
+    fn rod_editor() -> Editor {
+        let mut d = primitives::icosphere(5, 1.0).to_data();
+        for p in &mut d.positions {
+            *p = Vec3::new(p.x * 1.6, p.y * 0.3, p.z * 0.3);
+        }
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Rod", Mesh::from_data(d))), None);
+        e.symmetry = Symmetry::default();
+        e.brush_kind = BrushKind::CurveMove;
+        e.brush_radius_pt = 80.0;
+        e
+    }
+
+    fn draw_along_rod(e: &mut Editor) {
+        let size = e.canvas_size();
+        // (Just off y = 0, where rays would run exactly along mesh edges.)
+        let a = e.camera.project(Vec3::new(-1.45, 0.01, 0.0), size).unwrap();
+        let b = e.camera.project(Vec3::new(1.45, 0.01, 0.0), size).unwrap();
+        e.pointer = Some(a);
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=30 {
+            e.pointer_moved(a.lerp(b, i as f32 / 30.0));
+        }
+        e.pointer_up();
+    }
+
+    #[test]
+    fn curve_move_bends_the_model_and_undoes_in_one_step() {
+        let mut e = rod_editor();
+        let before = e.scene.active().mesh.positions.clone();
+        draw_along_rod(&mut e);
+        let c = e.curve.as_ref().expect("Curve Move opens a curve");
+        assert_eq!(c.kind, BrushKind::CurveMove);
+        assert_eq!(c.points, c.rest);
+        assert_eq!(c.points.len(), 3, "both ends and a middle point");
+        // Drawn through the middle of the rod, not on its surface.
+        assert!(c.points.iter().all(|p| p.0.z.abs() < 0.1), "{:?}", c.points);
+        e.update_curve();
+        assert_eq!(e.curve.as_ref().unwrap().preview.positions, before, "nothing moves until a point does");
+
+        // Drag the right end upward: the right end of the rod follows, the
+        // left end stays.
+        let last = e.curve.as_ref().unwrap().points.len() - 1;
+        let size = e.canvas_size();
+        let end = e.camera.project(e.curve.as_ref().unwrap().points[last].0, size).unwrap();
+        let end_before = e.curve.as_ref().unwrap().points[last].0;
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::CurveHandle { index } if index == last));
+        e.pointer_moved(end + Vec2::new(0.0, -120.0));
+        e.pointer_up();
+        let lift = e.curve.as_ref().unwrap().points[last].0.y - end_before.y;
+        assert!(lift > 0.2, "the handle rose in the view plane: {lift}");
+        e.update_curve();
+        let preview = e.curve.as_ref().unwrap().preview.positions.clone();
+        assert_eq!(e.scene.active().mesh.positions, before, "the piece waits for Accept");
+        let (right, left) = (
+            (0..before.len()).max_by(|&a, &b| before[a].x.total_cmp(&before[b].x)).unwrap(),
+            (0..before.len()).min_by(|&a, &b| before[a].x.total_cmp(&before[b].x)).unwrap(),
+        );
+        assert!(preview[right].y > before[right].y + 0.5 * lift, "tip raised: {} -> {}", before[right], preview[right]);
+        assert!((preview[left] - before[left]).length() < 0.05, "base stays");
+
+        e.accept_curve();
+        assert!(e.curve.is_none());
+        assert_eq!(e.scene.active().mesh.positions, preview, "result matches the preview");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn curve_move_respects_the_mask_and_mirrors() {
+        let mut e = rod_editor();
+        // Mask the right half.
+        let mask: Vec<f32> =
+            e.scene.active().mesh.positions.iter().map(|p| if p.x > 0.4 { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+        let before = e.scene.active().mesh.positions.clone();
+        draw_along_rod(&mut e);
+        let c = e.curve.as_mut().unwrap();
+        for p in &mut c.points {
+            p.0.y += 0.4;
+        }
+        e.update_curve();
+        let preview = &e.curve.as_ref().unwrap().preview.positions;
+        for (i, p) in before.iter().enumerate() {
+            if p.x > 0.4 {
+                assert_eq!(preview[i], *p, "masked vertices stay");
+            }
+        }
+        assert!(preview.iter().zip(&before).any(|(a, b)| a.y > b.y + 0.2), "the rest moved");
+        e.cancel_curve();
+        assert_eq!(e.scene.active().mesh.positions, before, "cancel leaves the piece alone");
+
+        // With X symmetry, a curve on the right half also moves the left half.
+        let mut e = rod_editor();
+        e.symmetry = Symmetry { x: true, ..Default::default() };
+        let before = e.scene.active().mesh.positions.clone();
+        let size = e.canvas_size();
+        let a = e.camera.project(Vec3::new(0.4, 0.0, 0.3), size).unwrap();
+        let b = e.camera.project(Vec3::new(1.4, 0.0, 0.3), size).unwrap();
+        e.pointer = Some(a);
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=20 {
+            e.pointer_moved(a.lerp(b, i as f32 / 20.0));
+        }
+        e.pointer_up();
+        for p in &mut e.curve.as_mut().unwrap().points {
+            p.0.y += 0.3;
+        }
+        e.update_curve();
+        let preview = &e.curve.as_ref().unwrap().preview.positions;
+        let lifted = |left: bool| {
+            before.iter().zip(preview.iter()).any(|(b, a)| (b.x < -1.0) == left && b.x.abs() > 1.0 && a.y > b.y + 0.15)
+        };
+        assert!(lifted(false) && lifted(true), "both ends lifted");
+    }
+
     #[test]
     fn curve_points_can_be_moved_added_and_removed() {
         let mut e = editor();
@@ -5705,6 +6063,7 @@ mod tests {
             stroke_from_empty: true,
             hold_to_curve: false,
             hold_to_curve_ask: true,
+            curve_move_centred: false,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,
