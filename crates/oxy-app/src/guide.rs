@@ -32,7 +32,7 @@ pub const TOPICS: &[Topic] = &[
 - F frames the whole scene.\n\
 - Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others.\n\
 - Hold Shift while orbiting to snap the view to 45° steps.\n\
-- O switches between perspective and orthographic.\n\
+- O switches between perspective and orthographic (P in the Single-key tools scheme).\n\
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
 - Tab hides the panels to give the model the whole window.\n\n\
 Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.\n\n\
@@ -43,6 +43,7 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
         keywords: "start first stroke clay brush size strength radius",
         body: "Drag on the model to sculpt with the current brush. Raise adds material and Carve removes it; hold Alt to flip for one stroke.\n\n\
 - [ and ] make the brush smaller and larger; - and = change its strength. The size/strength bar does the same with the mouse, and so does the quick menu: right-click the model or hold Q.\n\
+- S, U and I open a slider right under the pointer for size, strength and Paint strength; Shift+O opens one for focal shift (O in the Single-key tools scheme). Press the key again, Esc, or click outside to close it.\n\
 - Hold Shift to smooth with any brush, Ctrl to mask.\n\
 - With a pen, pressure sets the strength (and the radius, if you turn that on in the brush settings).\n\
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it.",
@@ -60,7 +61,7 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
     Topic {
         title: "Brush cursor",
         keywords: "ring circle orientation surface normal tangent align screen",
-        body: "The ring under the pointer is the brush cursor. It shows the brush size, and the inner ring is where the falloff is about halfway.\n\n\
+        body: "The ring under the pointer is the brush cursor. It shows the brush size, and the inner ring is where the falloff is about halfway. Focal shift (in the brush settings, or Shift+O) moves the inner ring out for a firmer brush and in for a softer one.\n\n\
 By default the ring lies flat on the screen, so it stays a circle at any viewing angle. View > Align cursor to surface (the same checkbox is in Settings, and the command palette finds it too) lays the ring on the clay instead: a circle the size of the brush, flat against the surface, with a short line showing which way the surface faces.\n\n\
 That direction is an average of the surface around the pointer, eased as you move, so on a dense mesh it stays steady instead of twitching from one triangle to the next. Move the pointer off the model and the ring goes back to lying flat on the screen. The choice is remembered.",
     },

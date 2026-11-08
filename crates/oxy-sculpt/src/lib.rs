@@ -12,7 +12,7 @@ pub mod preset;
 pub mod wire;
 
 pub use alpha::{Alpha, BuiltinAlpha};
-pub use falloff::Falloff;
+pub use falloff::{Falloff, shift_exponent};
 pub use preset::BrushPreset;
 
 use glam::{Mat3, Vec2, Vec3};
@@ -1189,10 +1189,16 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         let side = dab.normal.cross(dab.direction);
         let along = offset.dot(dab.direction).abs() / dab.radius;
         let across = offset.dot(side).abs() / dab.radius;
-        if along > 1.0 || across > 1.0 { 0.0 } else { settings.falloff.eval_shifted(across, settings.focal_shift).max(0.0) * (1.0 - along.powi(8)) }
+        if along > 1.0 || across > 1.0 {
+            0.0
+        } else {
+            settings.falloff.eval_shifted(across, settings.focal_shift).max(0.0) * (1.0 - along.powi(8))
+        }
     } else if alpha.is_some() {
         // With an alpha the image defines the footprint; falloff still softens it.
-        settings.falloff.eval_shifted((d2.sqrt() / (dab.radius * std::f32::consts::SQRT_2)).min(1.0), settings.focal_shift)
+        settings
+            .falloff
+            .eval_shifted((d2.sqrt() / (dab.radius * std::f32::consts::SQRT_2)).min(1.0), settings.focal_shift)
     } else {
         settings.falloff.eval_shifted(d2.sqrt() / dab.radius, settings.focal_shift)
     };
