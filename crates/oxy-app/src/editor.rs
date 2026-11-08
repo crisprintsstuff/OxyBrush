@@ -962,6 +962,8 @@ pub struct Editor {
     /// The primitive being dragged out with the Insert Primitive brush,
     /// drawn solid so you can see it grow before it is inserted.
     pub insert_preview: Option<oxy_mesh::Mesh>,
+    /// A parametric primitive being set up (Pieces > + Add), shown in the preview slot.
+    pub primitive_edit: Option<crate::primitive_ui::PrimitiveEdit>,
     /// The tube being shaped (RFC 0009), shown in the preview slot.
     pub tube: Option<crate::tube::TubeEdit>,
     /// The tube tool is waiting for a path to be drawn.
@@ -1208,6 +1210,7 @@ impl Default for Editor {
             floor_grid: true,
             hide_cursor_during_stroke: true,
             insert_preview: None,
+            primitive_edit: None,
             tube: None,
             tube_armed: false,
             tube_into: None,
@@ -4009,6 +4012,9 @@ impl Editor {
         if let Some(t) = &mut self.tube {
             return Some(&mut t.preview);
         }
+        if let Some(p) = &mut self.primitive_edit {
+            return Some(&mut p.preview);
+        }
         match (&mut self.insert_preview, &mut self.extract_preview, &mut self.curve) {
             (Some(m), _, _) => Some(m),
             (None, Some(p), _) => Some(&mut p.mesh),
@@ -5384,7 +5390,12 @@ impl Editor {
 /// slivers and fan-shaped caps, which sculpt badly): a quick voxel remesh.
 /// Edges come out very slightly rounded.
 fn sculptable(coarse: Mesh) -> Mesh {
-    let opts = RemeshOptions { resolution: 110, smooth_passes: 1, ..Default::default() };
+    sculptable_at(coarse, 110)
+}
+
+/// [`sculptable`] at a chosen remesh resolution.
+pub(crate) fn sculptable_at(coarse: Mesh, resolution: u32) -> Mesh {
+    let opts = RemeshOptions { resolution: resolution.clamp(8, 320), smooth_passes: 1, ..Default::default() };
     oxy_topo::voxel_remesh(&[&coarse], opts).unwrap_or(coarse)
 }
 
@@ -5872,6 +5883,45 @@ mod tests {
         e.undo();
         assert_eq!(e.scene.pieces.len(), 1);
         assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+    }
+
+    #[test]
+    fn parametric_primitives_are_low_poly_unless_remeshed() {
+        let mut e = editor();
+        // The Add menu opens a window with a low-poly preview; nothing is added yet.
+        e.open_primitive("cylinder");
+        let p = e.primitive_edit.as_ref().unwrap();
+        assert_eq!(p.preview.vertex_count(), 24 * 2 + 2, "24 segments, 1 row, capped");
+        assert_eq!(e.scene.pieces.len(), 1);
+        // Changing a parameter rebuilds the preview.
+        let edit = e.primitive_edit.as_mut().unwrap();
+        edit.params.segments = 8;
+        edit.params.rows = 3;
+        e.update_primitive();
+        assert_eq!(e.primitive_edit.as_ref().unwrap().preview.vertex_count(), 8 * 4 + 2);
+        e.accept_primitive();
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.active().name, "Cylinder");
+        assert_eq!(e.scene.active().mesh.vertex_count(), 8 * 4 + 2, "kept exactly as set");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // A low-poly cube is 8 vertices; with remesh it is many, on a worker thread.
+        e.open_primitive("cube");
+        e.accept_primitive();
+        assert_eq!(e.scene.active().mesh.vertex_count(), 8);
+        e.open_primitive("cube");
+        e.primitive_edit.as_mut().unwrap().params.remesh = true;
+        e.primitive_edit.as_mut().unwrap().params.resolution = 32;
+        e.accept_primitive();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.scene.active().mesh.vertex_count() > 500, "remeshed for sculpting");
+        // Cancel adds nothing.
+        e.open_primitive("torus");
+        e.cancel_primitive();
+        assert!(e.primitive_edit.is_none());
+        assert_eq!(e.scene.pieces.len(), 3);
     }
 
     #[test]

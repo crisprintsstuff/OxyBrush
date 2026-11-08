@@ -534,3 +534,131 @@ mod tube_tests {
         assert!(open.positions.iter().all(|p| p.is_finite()));
     }
 }
+
+/// A surface of revolution about the Y axis: `profile` is a list of
+/// (radius, height) points from bottom to top, revolved with `segments`
+/// vertices around. A point with radius 0 becomes a single pole vertex.
+/// With `cap_bottom` / `cap_top`, an open end (radius > 0) is closed with
+/// a flat fan. Faces point outward when the profile runs bottom to top.
+///
+/// PRECONDITION: at least two profile points.
+pub fn lathe(profile: &[(f32, f32)], segments: u32, cap_bottom: bool, cap_top: bool) -> Mesh {
+    let n = segments.max(3) as usize;
+    let mut positions = Vec::new();
+    // Per profile point: Some(first vertex of its ring) or None for a pole (its vertex index in .1).
+    let mut rows: Vec<(bool, u32)> = Vec::with_capacity(profile.len());
+    for &(r, y) in profile {
+        let start = positions.len() as u32;
+        if r <= 1e-7 {
+            positions.push(Vec3::new(0.0, y, 0.0));
+            rows.push((false, start));
+        } else {
+            for k in 0..n {
+                let a = std::f32::consts::TAU * k as f32 / n as f32;
+                positions.push(Vec3::new(r * a.cos(), y, -r * a.sin()));
+            }
+            rows.push((true, start));
+        }
+    }
+    let at = |row: (bool, u32), k: usize| if row.0 { row.1 + (k % n) as u32 } else { row.1 };
+    let mut tris = Vec::new();
+    for w in rows.windows(2) {
+        let (lo, hi) = (w[0], w[1]);
+        for k in 0..n {
+            let (a, b, c, d) = (at(lo, k), at(lo, k + 1), at(hi, k), at(hi, k + 1));
+            match (lo.0, hi.0) {
+                (true, true) => {
+                    tris.push([a, b, d]);
+                    tris.push([a, d, c]);
+                }
+                (true, false) => tris.push([a, b, c]),
+                (false, true) => tris.push([a, d, c]),
+                (false, false) => {}
+            }
+        }
+    }
+    let mut cap = |row: (bool, u32), y: f32, top: bool| {
+        if !row.0 {
+            return;
+        }
+        let centre = positions.len() as u32;
+        positions.push(Vec3::new(0.0, y, 0.0));
+        for k in 0..n {
+            let (a, b) = (at(row, k), at(row, k + 1));
+            tris.push(if top { [centre, a, b] } else { [centre, b, a] });
+        }
+    };
+    if cap_bottom {
+        cap(rows[0], profile[0].1, false);
+    }
+    if cap_top {
+        cap(*rows.last().unwrap(), profile.last().unwrap().1, true);
+    }
+    Mesh::new(positions, tris)
+}
+
+/// Cylinder along Y, centred at the origin, with `height_segments` rows of
+/// quads up its side and optional flat caps.
+pub fn cylinder_with(segments: u32, height_segments: u32, radius: f32, height: f32, caps: bool) -> Mesh {
+    let rows = height_segments.max(1);
+    let profile: Vec<(f32, f32)> =
+        (0..=rows).map(|i| (radius, -height * 0.5 + height * i as f32 / rows as f32)).collect();
+    lathe(&profile, segments, caps, caps)
+}
+
+/// Cone along Y, centred at the origin, apex up, with `height_segments`
+/// rows up its side and an optional flat base.
+pub fn cone_with(segments: u32, height_segments: u32, radius: f32, height: f32, cap: bool) -> Mesh {
+    let rows = height_segments.max(1);
+    let profile: Vec<(f32, f32)> = (0..=rows)
+        .map(|i| {
+            let t = i as f32 / rows as f32;
+            (radius * (1.0 - t), -height * 0.5 + height * t)
+        })
+        .collect();
+    lathe(&profile, segments, cap, false)
+}
+
+#[cfg(test)]
+mod lathe_tests {
+    use super::*;
+
+    fn closed_and_volume(m: &Mesh) -> (bool, f32) {
+        let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in &m.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        let v: f32 = m
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum();
+        (edges.values().all(|&n| n == 2), v)
+    }
+
+    #[test]
+    fn low_poly_cylinder_and_cone_are_closed_and_face_outward() {
+        let c = cylinder_with(8, 1, 1.0, 2.0, true);
+        assert_eq!(c.vertex_count(), 8 * 2 + 2);
+        assert_eq!(c.triangle_count(), 8 * 2 + 8 * 2);
+        let (closed, v) = closed_and_volume(&c);
+        // An octagonal prism: area of the octagon (2√2) times 2.
+        assert!(closed && (v - 2.0 * 2.0 * 2f32.sqrt()).abs() < 1e-3, "{closed} {v}");
+        let c = cylinder_with(24, 5, 0.5, 1.0, true);
+        assert_eq!(c.vertex_count(), 24 * 6 + 2);
+        assert!(closed_and_volume(&c).0);
+        let k = cone_with(16, 3, 1.0, 1.5, true);
+        let (closed, v) = closed_and_volume(&k);
+        assert!(closed && v > 0.0 && v < std::f32::consts::PI * 1.5 / 3.0, "{closed} {v}");
+        // Without caps it is open, and still facing out.
+        let open = cylinder_with(12, 2, 1.0, 1.0, false);
+        assert!(!closed_and_volume(&open).0);
+        assert!(open.positions.iter().all(|p| p.is_finite()));
+    }
+}

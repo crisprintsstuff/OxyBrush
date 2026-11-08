@@ -15,6 +15,7 @@ mod palette;
 mod plugins;
 mod pose;
 mod presets;
+mod primitive_ui;
 mod settings;
 mod snapshot;
 mod support;
