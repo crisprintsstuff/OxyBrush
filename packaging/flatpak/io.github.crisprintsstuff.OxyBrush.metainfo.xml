@@ -53,6 +53,17 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.1-beta" date="2026-11-08" type="development">
+      <description>
+        <p>A Tube tool draws a smooth tube along a path you can reshape, for
+        horns, tentacles, tails and cables. The viewport can be lit with up to
+        four lights with soft shadows. Focal shift makes brushes firmer or
+        softer, and S, U, I and O open a slider under the pointer. Cylinder,
+        cone and torus pieces, Split hidden, and a floor grid button were
+        added. Grab no longer leaves jagged seams, and the Windows icon, the
+        log folder, Tab and the brush shelf were fixed.</p>
+      </description>
+    </release>
     <release version="3.0.0-beta" date="2026-11-08" type="development">
       <description>
         <p>Dynamic detail adds triangles where you sculpt, so you can build a
