@@ -12,6 +12,7 @@ use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
 
+pub mod bridge;
 mod gltf;
 mod ply;
 mod scene;
