@@ -65,7 +65,7 @@ impl Preset {
                  and left-drag on empty space still orbits."
             }
             Preset::RightDrag => {
-                "Right-drag orbits (similar to ZBrush), Alt+Right-drag pans, Ctrl+Right-drag zooms, \
+                "Right-drag orbits (similar to ZBrush), Alt+Right-drag pans, Ctrl+Right-drag zooms (drag down to zoom in), \
                  Middle-drag pans. Left-drag on canvas orbits, Alt+Left-drag pans. Shift while orbiting snaps to 90°."
             }
         }
@@ -419,6 +419,7 @@ pub enum CommandId {
     GizmoScale,
     DrawMode,
     Frame,
+    FrameAll,
     ViewFront,
     ViewBack,
     ViewLeft,
@@ -541,7 +542,8 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::GizmoRotate, name: "Transform: rotate", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::GizmoScale, name: "Transform: scale", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::DrawMode, name: "Draw / sculpt mode", group: "Brushes", defaults: &[] },
-    CommandMeta { id: CommandId::Frame, name: "Frame scene", group: "View", defaults: &["f"] },
+    CommandMeta { id: CommandId::Frame, name: "Frame the active piece", group: "View", defaults: &["f"] },
+    CommandMeta { id: CommandId::FrameAll, name: "Frame all pieces", group: "View", defaults: &["alt+f"] },
     CommandMeta { id: CommandId::ViewFront, name: "Front view", group: "View", defaults: &["numpad1"] },
     CommandMeta { id: CommandId::ViewBack, name: "Back view", group: "View", defaults: &[] },
     CommandMeta { id: CommandId::ViewLeft, name: "Left view", group: "View", defaults: &[] },
@@ -861,6 +863,11 @@ pub struct Keymap {
     commands: Vec<(CommandId, Vec<Chord>)>,
     pub nav: Vec<NavRule>,
     pub wheel_zoom: bool,
+    /// A zoom drag (e.g. Ctrl+right-drag) zooms in when dragged down, as in
+    /// ZBrush; otherwise dragging up zooms in.
+    pub zoom_drag_down_in: bool,
+    /// The mouse wheel zooms the other way.
+    pub invert_wheel_zoom: bool,
     /// Held while an orbit drag is active to snap the view to 45° steps.
     pub snap: Option<ModKey>,
     /// Keyboard key that selects the Smooth brush while held.
@@ -901,6 +908,8 @@ impl Keymap {
             commands: COMMANDS.iter().map(|c| (c.id, parse_chords(command_defaults(c.id, shortcuts)))).collect(),
             nav: navigation_for(preset),
             wheel_zoom: true,
+            zoom_drag_down_in: preset == Preset::RightDrag,
+            invert_wheel_zoom: false,
             snap,
             smooth: ModKey::Shift,
             mask: ModKey::Ctrl,
@@ -931,6 +940,7 @@ impl Keymap {
         self.nav = fresh.nav;
         self.snap = fresh.snap;
         self.wheel_zoom = fresh.wheel_zoom;
+        self.zoom_drag_down_in = fresh.zoom_drag_down_in;
     }
 
     /// Restore every binding, including commands and sculpt modifiers, to the current preset.
@@ -1091,7 +1101,10 @@ impl Keymap {
     /// True when mouse rules, the wheel and the snap key still match the preset.
     pub fn navigation_is_builtin(&self) -> bool {
         let fresh = Self::builtin(self.preset);
-        self.nav == fresh.nav && self.snap == fresh.snap && self.wheel_zoom == fresh.wheel_zoom
+        self.nav == fresh.nav
+            && self.snap == fresh.snap
+            && self.wheel_zoom == fresh.wheel_zoom
+            && self.zoom_drag_down_in == fresh.zoom_drag_down_in
     }
 
     /// Rows for the shortcut window: mouse and modifiers first, then every bound command.
@@ -1155,7 +1168,7 @@ impl Keymap {
             "# OxyBrush keymap {VERSION}. Delete this file to restore the defaults.\n\
              # Unknown lines are kept. A missing command keeps the preset's binding.\n\
              version = {}\npreset = {}\nshortcuts = {}\nsmooth = {}\nmask = {}\ninvert = {}\nsnap = {}\n\
-             wheel_zoom = {}\nmask_empty = {}\n",
+             wheel_zoom = {}\nzoom_drag_down_in = {}\ninvert_wheel_zoom = {}\nmask_empty = {}\n",
             self.version,
             self.preset.key(),
             self.shortcuts.key(),
@@ -1164,6 +1177,8 @@ impl Keymap {
             self.invert.token(),
             self.snap.map(ModKey::token).unwrap_or("off"),
             self.wheel_zoom,
+            self.zoom_drag_down_in,
+            self.invert_wheel_zoom,
             self.mask_empty.token(),
         );
         for rule in &self.nav {
@@ -1268,6 +1283,28 @@ impl Keymap {
                     }
                     _ => false,
                 },
+                "invert_wheel_zoom" => match v {
+                    "true" => {
+                        map.invert_wheel_zoom = true;
+                        true
+                    }
+                    "false" => {
+                        map.invert_wheel_zoom = false;
+                        true
+                    }
+                    _ => false,
+                },
+                "zoom_drag_down_in" => match v {
+                    "true" => {
+                        map.zoom_drag_down_in = true;
+                        true
+                    }
+                    "false" => {
+                        map.zoom_drag_down_in = false;
+                        true
+                    }
+                    _ => false,
+                },
                 "mask_empty" => MaskEmpty::from_token(v).is_some_and(|m| {
                     map.mask_empty = m;
                     true
@@ -1305,7 +1342,17 @@ impl Keymap {
             let key = k.trim();
             matches!(
                 key,
-                "version" | "preset" | "smooth" | "mask" | "invert" | "snap" | "wheel_zoom" | "mask_empty" | "nav"
+                "version"
+                    | "preset"
+                    | "smooth"
+                    | "mask"
+                    | "invert"
+                    | "snap"
+                    | "wheel_zoom"
+                    | "zoom_drag_down_in"
+                    | "invert_wheel_zoom"
+                    | "mask_empty"
+                    | "nav"
             ) || key.starts_with("bind.")
         });
         if known { Ok(Self::from_text(text)) } else { Err("That file isn't an OxyBrush keymap") }
@@ -1385,6 +1432,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::GizmoRotate => "gizmo_rotate",
         CommandId::DrawMode => "draw_mode",
         CommandId::Frame => "frame",
+        CommandId::FrameAll => "frame_all",
         CommandId::ViewFront => "view_front",
         CommandId::ViewBack => "view_back",
         CommandId::ViewLeft => "view_left",
@@ -1555,6 +1603,12 @@ fn navigation_section(ui: &mut egui::Ui, ed: &mut Editor) {
         ed.keymap.nav.push(rule(NavButton::Middle, ModMatch::No, ModMatch::No, ModMatch::No, NavAction::Orbit));
     }
     ui.checkbox(&mut ed.keymap.wheel_zoom, "Mouse wheel zooms");
+    ui.label(egui::RichText::new("Zoom direction").strong());
+    ui.checkbox(&mut ed.keymap.zoom_drag_down_in, "Invert zoom drag: drag down to zoom in (as in ZBrush)");
+    ui.add_enabled(
+        ed.keymap.wheel_zoom,
+        egui::Checkbox::new(&mut ed.keymap.invert_wheel_zoom, "Invert mouse wheel zoom"),
+    );
     ui.horizontal(|ui| {
         ui.label("Snap orbit to 45° while holding");
         let label = ed.keymap.snap.map(ModKey::label).unwrap_or("Off");
