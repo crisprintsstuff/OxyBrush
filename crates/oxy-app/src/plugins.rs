@@ -127,12 +127,22 @@ fn format_fallback_name(stem: &str) -> String {
 
 /// Discover all `.py` plugin files from the default user directory and workspace examples.
 pub fn discover_plugins() -> Vec<PluginInfo> {
+    let mut dirs = Vec::new();
+    if let Some(dir) = plugins_dir() {
+        ensure_plugins_dir_initialized(&dir);
+        dirs.push(dir);
+    }
+    discover_plugins_in(&dirs)
+}
+
+/// Python plugins in `dirs` (loose `.py` scripts and Python add-on
+/// folders), plus the workspace examples when run from the source tree.
+pub fn discover_plugins_in(dirs: &[PathBuf]) -> Vec<PluginInfo> {
     let mut plugins = Vec::new();
 
     // 1. User plugins directory
-    if let Some(dir) = plugins_dir() {
-        ensure_plugins_dir_initialized(&dir);
-        scan_dir(&dir, &mut plugins);
+    for dir in dirs {
+        scan_dir(dir, &mut plugins);
     }
 
     // 2. Examples plugins directory if running in workspace or development
@@ -190,6 +200,23 @@ fn scan_dir(dir: &Path, out: &mut Vec<PluginInfo>) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
         let path = entry.path();
+        // A Python add-on: a folder whose plugin.json says "kind": "python".
+        if path.is_dir()
+            && let Ok(text) = std::fs::read_to_string(path.join("plugin.json"))
+            && let Ok((oxy_plugin::addon::AddonKind::Python, Some(entry))) = oxy_plugin::addon::manifest_kind(&text)
+        {
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+            let s = |k: &str| v.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
+            let script = path.join(entry);
+            if script.is_file() && !out.iter().any(|p| p.path == script) {
+                out.push(PluginInfo {
+                    name: if s("name").is_empty() { format_fallback_name(&s("id")) } else { s("name") },
+                    description: s("description"),
+                    path: script,
+                });
+            }
+            continue;
+        }
         if path.is_file()
             && path.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("py")) == Some(true)
         {

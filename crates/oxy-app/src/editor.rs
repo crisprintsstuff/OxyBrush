@@ -1028,6 +1028,8 @@ pub struct Editor {
     pub plugins: Vec<crate::plugins::PluginInfo>,
     /// Set by the UI to ask the platform layer for a Python script file dialog.
     pub request_run_script: bool,
+    /// Set by the UI to ask for an `.oxyaddon` file to install.
+    pub request_install_addon: bool,
     /// Set by the UI to run a specific discovered plugin script.
     pub request_run_plugin: Option<PathBuf>,
     /// Set by the UI to open the user's plugins folder.
@@ -1238,6 +1240,7 @@ impl Default for Editor {
             agent_disconnect: false,
             plugins: crate::plugins::discover_plugins(),
             request_run_script: false,
+            request_install_addon: false,
             request_run_plugin: None,
             request_open_plugins_dir: false,
             request_reload_plugins: false,
@@ -1659,6 +1662,34 @@ impl Editor {
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
+    }
+
+    /// Install an `.oxyaddon` into the plugins folder and reload plugins.
+    pub fn install_addon(&mut self, path: &Path) {
+        let Some(dir) = crate::plugins::plugins_dir() else {
+            self.status = "No plugins folder on this system".into();
+            return;
+        };
+        self.install_addon_into(path, &dir);
+    }
+
+    pub(crate) fn install_addon_into(&mut self, path: &Path, dir: &Path) {
+        let result = std::fs::read(path)
+            .map_err(|e| format!("{}: {e}", path.display()))
+            .and_then(|bytes| oxy_plugin::addon::install(&bytes, dir));
+        match result {
+            Ok((info, _)) => {
+                self.plugins = crate::plugins::discover_plugins_in(&[dir.to_path_buf()]);
+                self.load_wasm_plugins_from(dir);
+                let kind = match info.kind {
+                    oxy_plugin::addon::AddonKind::Wasm => "in-app plugin",
+                    oxy_plugin::addon::AddonKind::Python => "Python plugin",
+                };
+                self.status = format!("Installed {} {} ({kind}); see Settings > Plugins", info.name, info.version)
+                    .replace("  ", " ");
+            }
+            Err(e) => self.status = format!("Could not install the add-on: {e}"),
+        }
     }
 
     /// Rescan user and workspace plugin directories for Python plugins.
@@ -3082,7 +3113,10 @@ impl Editor {
     /// Open a project (`.oxb`) or import a mesh file as a new piece.
     pub fn open(&mut self, path: &Path) {
         let is_project = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(format::EXTENSION));
-        if crate::bridge::is_manifest(path) {
+        let is_addon = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(oxy_plugin::addon::EXTENSION));
+        if is_addon {
+            self.install_addon(path);
+        } else if crate::bridge::is_manifest(path) {
             self.request(Pending::OpenLink(path.to_path_buf()));
         } else if is_project {
             self.request(Pending::OpenProject(path.to_path_buf()));
@@ -5397,6 +5431,104 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    #[test]
+    fn wasm_plugin_api2_masks_paints_adds_pieces_and_undoes() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-wasm2-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("tint")).unwrap();
+        std::fs::write(
+            dir.join("tint/plugin.json"),
+            r#"{"name":"Tint","api":2,"capabilities":["read_mesh","edit_mesh","add_pieces"],
+                "commands":[{"id":"go","label":"Tint and tag"}]}"#,
+        )
+        .unwrap();
+        // Masks every vertex 0.5, paints it red, and adds a one-triangle piece.
+        std::fs::write(
+            dir.join("tint/plugin.wat"),
+            r#"(module
+              (import "oxybrush" "active_piece" (func $active (result i32)))
+              (import "oxybrush" "vertex_count" (func $vc (param i32) (result i32)))
+              (import "oxybrush" "write_mask" (func $wm (param i32 i32 i32) (result i32)))
+              (import "oxybrush" "write_colors" (func $wc (param i32 i32 i32) (result i32)))
+              (import "oxybrush" "add_piece" (func $ap (param i32 i32 i32 i32 i32 i32) (result i32)))
+              (memory (export "memory") 64)
+              (data (i32.const 0) "Tag")
+              (data (i32.const 16) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00")
+              (data (i32.const 64) "\00\00\00\00\01\00\00\00\02\00\00\00")
+              (func (export "run") (param i32)
+                (local $p i32) (local $n i32) (local $i i32)
+                (local.set $p (call $active))
+                (local.set $n (call $vc (local.get $p)))
+                (block $d (loop $l
+                  (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+                  (f32.store (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))) (f32.const 0.5))
+                  (f32.store (i32.add (i32.const 2000000) (i32.mul (local.get $i) (i32.const 12))) (f32.const 1))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $l)))
+                (drop (call $wm (local.get $p) (i32.const 1024) (local.get $n)))
+                (drop (call $wc (local.get $p) (i32.const 2000000) (local.get $n)))
+                (drop (call $ap (i32.const 0) (i32.const 3) (i32.const 16) (i32.const 3) (i32.const 64) (i32.const 1)))))"#,
+        )
+        .unwrap();
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugin_errors.is_empty(), "{:?}", e.wasm_plugin_errors);
+        // Its command is in the command palette.
+        let entries = crate::palette::entries(&e, crate::palette::PaletteMode::Everything);
+        assert!(entries.iter().any(|x| x.label == "Plugin: Tint — Tint and tag"));
+        e.run_wasm_plugin(0, 0);
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 2, "{}", e.status);
+        assert_eq!(e.scene.active().name, "Tag");
+        let sphere = &e.scene.pieces[0].mesh;
+        assert!(sphere.mask.iter().all(|&m| (m - 0.5).abs() < 1e-6));
+        assert!(sphere.color.iter().all(|c| c.distance(Vec3::X) < 1e-6));
+        // Two undo steps: the new piece, then the mask and paint together.
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        e.undo();
+        let sphere = &e.scene.pieces[0].mesh;
+        assert!(sphere.mask.iter().all(|&m| m == 0.0));
+        assert!(!sphere.is_painted());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn oxyaddon_files_install_wasm_and_python_plugins() {
+        let root = std::env::temp_dir().join(format!("oxy-app-addon-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (plugins, src) = (root.join("plugins"), root.join("src"));
+        std::fs::create_dir_all(&plugins).unwrap();
+        std::fs::create_dir_all(&src).unwrap();
+        // A Python add-on, packed and installed by opening it.
+        std::fs::write(
+            src.join("plugin.json"),
+            r#"{"name":"Stats","kind":"python","entry":"stats.py","version":"1.2"}"#,
+        )
+        .unwrap();
+        std::fs::write(src.join("stats.py"), "print('hi')\n").unwrap();
+        let file = root.join("stats.oxyaddon");
+        std::fs::write(&file, oxy_plugin::addon::pack(&src).unwrap()).unwrap();
+        let mut e = editor();
+        e.install_addon_into(&file, &plugins);
+        assert!(e.status.starts_with("Installed Stats 1.2 (Python plugin)"), "{}", e.status);
+        let py = e.plugins.iter().find(|p| p.name == "Stats").expect("listed with the Python plugins");
+        assert_eq!(py.path, plugins.join("stats").join("stats.py"));
+        // A WebAssembly add-on shows up as an in-app plugin.
+        crate::wasm_plugins::install_examples(&root.join("wasm"));
+        let wasm_file = root.join("squash.oxyaddon");
+        std::fs::write(&wasm_file, oxy_plugin::addon::pack(&root.join("wasm/squash")).unwrap()).unwrap();
+        e.install_addon_into(&wasm_file, &plugins);
+        assert!(e.status.contains("(in-app plugin)"), "{}", e.status);
+        assert!(e.wasm_plugins.iter().any(|p| p.name == "Squash"));
+        assert!(!e.wasm_plugins.iter().any(|p| p.name == "Stats"), "Python add-ons aren't loaded as WebAssembly");
+        // A broken file says why and installs nothing.
+        std::fs::write(root.join("bad.oxyaddon"), b"nope").unwrap();
+        e.install_addon_into(&root.join("bad.oxyaddon"), &plugins);
+        assert!(e.status.starts_with("Could not install the add-on"), "{}", e.status);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

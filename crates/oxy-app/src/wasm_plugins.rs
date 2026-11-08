@@ -98,6 +98,8 @@ impl Editor {
                         positions: p.mesh.positions.clone(),
                         triangles: p.mesh.triangles.clone(),
                         mask: p.mesh.mask.clone(),
+                        normals: p.mesh.normals.clone(),
+                        colors: p.mesh.color.clone(),
                     })
                     .collect()
             } else {
@@ -133,29 +135,79 @@ impl Editor {
                 return;
             }
         };
+        // Gather each piece's edits (last one of each kind wins) so a
+        // piece changed in several ways is still one undo step.
+        type PieceEdit = (Option<Vec<glam::Vec3>>, Option<Vec<f32>>, Option<Vec<glam::Vec3>>);
+        let mut per_piece: Vec<(usize, PieceEdit)> = Vec::new();
+        fn entry(per_piece: &mut Vec<(usize, PieceEdit)>, index: usize) -> &mut PieceEdit {
+            let k = match per_piece.iter().position(|(i, _)| *i == index) {
+                Some(k) => k,
+                None => {
+                    per_piece.push((index, (None, None, None)));
+                    per_piece.len() - 1
+                }
+            };
+            &mut per_piece[k].1
+        }
+        for (index, v) in result.edits {
+            entry(&mut per_piece, index).0 = Some(v);
+        }
+        for (index, v) in result.masks {
+            entry(&mut per_piece, index).1 = Some(v);
+        }
+        for (index, v) in result.colors {
+            entry(&mut per_piece, index).2 = Some(v);
+        }
         let mut applied = 0;
         let mut skipped = 0;
-        for (index, positions) in result.edits {
+        for (index, (positions, mask, color)) in per_piece {
             let Some(i) = pieces.get(index).and_then(|id| self.scene.index_of(*id)) else {
                 skipped += 1;
                 continue;
             };
             let id = pieces[index];
             let mesh = &mut self.scene.pieces[i].mesh;
-            if mesh.vertex_count() != positions.len() {
+            let n = mesh.vertex_count();
+            if positions.as_ref().is_some_and(|v| v.len() != n)
+                || mask.as_ref().is_some_and(|v| v.len() != n)
+                || color.as_ref().is_some_and(|v| v.len() != n)
+            {
                 skipped += 1;
                 continue;
             }
-            self.history.begin(label.clone(), id, mesh);
-            for c in 0..mesh.chunks.len() as u32 {
+            self.history.begin_with(label.clone(), id, mesh, color.is_some() || mesh.is_painted());
+            let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
+            for &c in &chunks {
                 self.history.touch(mesh, c);
             }
-            mesh.positions = positions;
-            let all: Vec<u32> = (0..mesh.vertex_count() as u32).collect();
-            mesh.update_after_move(&all);
+            if let Some(p) = positions {
+                mesh.positions = p;
+            }
+            if let Some(m) = mask {
+                mesh.mask = m;
+            }
+            if let Some(c) = color {
+                mesh.color = c;
+            }
+            mesh.update_chunks(&chunks);
             mesh.tighten_bounds();
             self.history.commit();
             applied += 1;
+        }
+        // New pieces: one undo step for all of them.
+        let added = result.new_pieces.len();
+        if added > 0 {
+            let mut steps = Vec::with_capacity(added);
+            for np in result.new_pieces {
+                let mesh = oxy_mesh::Mesh::new(np.positions, np.triangles);
+                let name = self.scene.unique_name(&np.name);
+                let index = self.scene.pieces.len();
+                self.scene.pieces.push(oxy_doc::Piece::new(name, mesh));
+                steps.push(oxy_history::Step::Inserted { index });
+            }
+            self.scene.set_active(self.scene.pieces.len() - 1);
+            self.history.record_compound(format!("{label} (new pieces)"), steps);
+            applied += added;
         }
         let said = result.log.last().cloned();
         self.status = match (said, applied, skipped) {
@@ -252,6 +304,9 @@ fn capability_text(p: &Plugin) -> String {
     }
     if c.overlay {
         v.push("draws in the viewport");
+    }
+    if c.add_pieces {
+        v.push("adds pieces");
     }
     if v.is_empty() { "No capabilities".into() } else { format!("Can: {}", v.join(", ")) }
 }
