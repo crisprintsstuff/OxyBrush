@@ -53,6 +53,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.2-beta" date="2026-11-08" type="development">
+      <description>
+        <p>A Blender bridge sends meshes from Blender to OxyBrush and back,
+        keeping the same Blender objects when their vertices are unchanged.
+        Plugins can run inside OxyBrush in a sandbox, with their own panels.
+        Close holes fills openings in a piece, and an alpha can be captured
+        from the view.</p>
+      </description>
+    </release>
     <release version="3.0.1-beta" date="2026-11-08" type="development">
       <description>
         <p>A Tube tool draws a smooth tube along a path you can reshape, for
