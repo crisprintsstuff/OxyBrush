@@ -2971,7 +2971,7 @@ impl Editor {
 
     pub fn scroll(&mut self, steps: f32) {
         if self.keymap.wheel_zoom {
-            self.camera.zoom(steps);
+            self.camera.zoom(if self.keymap.invert_wheel_zoom { -steps } else { steps });
         }
     }
 
@@ -7775,6 +7775,17 @@ mod tests {
         let text = e.keymap.to_text();
         assert!(text.contains("zoom_drag_down_in = true"));
         assert!(crate::keymap::Keymap::from_text(&text).zoom_drag_down_in);
+
+        // The wheel can be inverted too, and that is saved.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        let d1 = e.camera.distance;
+        e.scroll(1.0);
+        let normal_in = e.camera.distance < d1;
+        e.keymap.invert_wheel_zoom = true;
+        let d2 = e.camera.distance;
+        e.scroll(1.0);
+        assert_eq!(e.camera.distance < d2, !normal_in, "inverted wheel zooms the other way");
+        assert!(crate::keymap::Keymap::from_text(&e.keymap.to_text()).invert_wheel_zoom);
 
         // F frames the active piece: a small second piece far away fills the view.
         e.add_primitive("cube");

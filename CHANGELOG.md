@@ -6,7 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **F frames the active piece**, centred on it, instead of the whole scene; **Alt+F** frames every visible piece. With one piece nothing changes.
-- **Zoom drags follow ZBrush in the Right-drag orbit preset:** Ctrl+right-drag **down** zooms in. Other presets keep drag up = zoom in. The direction is a setting in Settings > Keymap (**Drag down to zoom in**).
+- **Zoom drags follow ZBrush in the Right-drag orbit preset:** Ctrl+right-drag **down** zooms in. Other presets keep drag up = zoom in. Both directions can be flipped in **Settings > Keymap > Zoom direction**: **Invert zoom drag** and **Invert mouse wheel zoom**.
 
 ## [3.0.2-beta] - 2026-11-08
 

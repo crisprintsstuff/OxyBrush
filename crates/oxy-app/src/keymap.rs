@@ -866,6 +866,8 @@ pub struct Keymap {
     /// A zoom drag (e.g. Ctrl+right-drag) zooms in when dragged down, as in
     /// ZBrush; otherwise dragging up zooms in.
     pub zoom_drag_down_in: bool,
+    /// The mouse wheel zooms the other way.
+    pub invert_wheel_zoom: bool,
     /// Held while an orbit drag is active to snap the view to 45° steps.
     pub snap: Option<ModKey>,
     /// Keyboard key that selects the Smooth brush while held.
@@ -907,6 +909,7 @@ impl Keymap {
             nav: navigation_for(preset),
             wheel_zoom: true,
             zoom_drag_down_in: preset == Preset::RightDrag,
+            invert_wheel_zoom: false,
             snap,
             smooth: ModKey::Shift,
             mask: ModKey::Ctrl,
@@ -1165,7 +1168,7 @@ impl Keymap {
             "# OxyBrush keymap {VERSION}. Delete this file to restore the defaults.\n\
              # Unknown lines are kept. A missing command keeps the preset's binding.\n\
              version = {}\npreset = {}\nshortcuts = {}\nsmooth = {}\nmask = {}\ninvert = {}\nsnap = {}\n\
-             wheel_zoom = {}\nzoom_drag_down_in = {}\nmask_empty = {}\n",
+             wheel_zoom = {}\nzoom_drag_down_in = {}\ninvert_wheel_zoom = {}\nmask_empty = {}\n",
             self.version,
             self.preset.key(),
             self.shortcuts.key(),
@@ -1175,6 +1178,7 @@ impl Keymap {
             self.snap.map(ModKey::token).unwrap_or("off"),
             self.wheel_zoom,
             self.zoom_drag_down_in,
+            self.invert_wheel_zoom,
             self.mask_empty.token(),
         );
         for rule in &self.nav {
@@ -1279,6 +1283,17 @@ impl Keymap {
                     }
                     _ => false,
                 },
+                "invert_wheel_zoom" => match v {
+                    "true" => {
+                        map.invert_wheel_zoom = true;
+                        true
+                    }
+                    "false" => {
+                        map.invert_wheel_zoom = false;
+                        true
+                    }
+                    _ => false,
+                },
                 "zoom_drag_down_in" => match v {
                     "true" => {
                         map.zoom_drag_down_in = true;
@@ -1335,6 +1350,7 @@ impl Keymap {
                     | "snap"
                     | "wheel_zoom"
                     | "zoom_drag_down_in"
+                    | "invert_wheel_zoom"
                     | "mask_empty"
                     | "nav"
             ) || key.starts_with("bind.")
@@ -1587,7 +1603,12 @@ fn navigation_section(ui: &mut egui::Ui, ed: &mut Editor) {
         ed.keymap.nav.push(rule(NavButton::Middle, ModMatch::No, ModMatch::No, ModMatch::No, NavAction::Orbit));
     }
     ui.checkbox(&mut ed.keymap.wheel_zoom, "Mouse wheel zooms");
-    ui.checkbox(&mut ed.keymap.zoom_drag_down_in, "Drag down to zoom in (zoom drags, as in ZBrush)");
+    ui.label(egui::RichText::new("Zoom direction").strong());
+    ui.checkbox(&mut ed.keymap.zoom_drag_down_in, "Invert zoom drag: drag down to zoom in (as in ZBrush)");
+    ui.add_enabled(
+        ed.keymap.wheel_zoom,
+        egui::Checkbox::new(&mut ed.keymap.invert_wheel_zoom, "Invert mouse wheel zoom"),
+    );
     ui.horizontal(|ui| {
         ui.label("Snap orbit to 45° while holding");
         let label = ed.keymap.snap.map(ModKey::label).unwrap_or("Off");
