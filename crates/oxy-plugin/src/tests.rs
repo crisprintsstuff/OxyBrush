@@ -6,7 +6,13 @@ const SQUASH_WAT: &str = include_str!("../plugins/squash/plugin.wat");
 fn snapshot() -> Snapshot {
     let positions = vec![Vec3::new(0.0, -1.0, 0.0), Vec3::new(1.0, 1.0, 0.0), Vec3::new(0.0, 0.0, 1.0)];
     Snapshot {
-        pieces: vec![PieceView { positions: positions.clone(), triangles: vec![[0, 1, 2]], mask: vec![0.0, 1.0, 0.0] }],
+        pieces: vec![PieceView {
+            positions: positions.clone(),
+            triangles: vec![[0, 1, 2]],
+            mask: vec![0.0, 1.0, 0.0],
+            normals: vec![Vec3::Z; 3],
+            colors: vec![Vec3::ONE; 3],
+        }],
         vertex_counts: vec![3],
         active: 0,
         scene_json: "{\"pieces\":1}".into(),
@@ -27,7 +33,9 @@ fn manifest_parses_and_rejects_bad_ones() {
     assert!(!m.capabilities.read_scene);
     assert_eq!(m.commands[0].label, "Squash");
     assert_eq!(m.params[0].default, 0.3);
-    assert!(Manifest::parse(r#"{"name":"X","api":2}"#).unwrap_err().contains("API 2"));
+    assert!(Manifest::parse(r#"{"name":"X","api":3}"#).unwrap_err().contains("API 3"));
+    assert!(Manifest::parse(r#"{"name":"X","api":0}"#).is_err());
+    assert!(Manifest::parse(r#"{"name":"X","api":2,"capabilities":["add_pieces"]}"#).unwrap().capabilities.add_pieces);
     assert!(Manifest::parse(r#"{"name":"X","api":1,"capabilities":["network"]}"#).unwrap_err().contains("unknown"));
     assert!(Manifest::parse(r#"{"api":1}"#).is_err());
     assert!(Manifest::parse(r#"{"name":"X","api":1,"params":[{"id":"a","min":1,"max":0}]}"#).is_err());
@@ -154,4 +162,52 @@ fn discover_loads_folders_and_reports_failures() {
     assert!(found[0].as_ref().is_err_and(|e| e.contains("no plugin.wasm")));
     assert_eq!(found[1].as_ref().unwrap().manifest.name, "Squash");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+const V2_WAT: &str = r#"(module
+    (import "oxybrush" "write_mask" (func $wm (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_colors" (func $wc (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "read_normals" (func $rn (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "add_piece" (func $ap (param i32 i32 i32 i32 i32 i32) (result i32)))
+    (import "oxybrush" "log" (func $log (param i32 i32)))
+    (memory (export "memory") 1)
+    ;; mask: 0.25, 0.5, 2.0 (clamped to 1)
+    (data (i32.const 0) "\00\00\80\3e\00\00\00\3f\00\00\00\40")
+    ;; colors: red, green, blue
+    (data (i32.const 16) "\00\00\80\3f\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f")
+    ;; new piece: 3 vertices (0,0,0) (1,0,0) (0,1,0), one triangle 0 1 2, name "Tri"
+    (data (i32.const 64) "\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00\00\00\00\00\00\00\00\00\00\00\80\3f\00\00\00\00")
+    (data (i32.const 112) "\00\00\00\00\01\00\00\00\02\00\00\00")
+    (data (i32.const 128) "Tri")
+    (func $report (param $v i32)
+      (i32.store8 (i32.const 200) (i32.add (i32.const 48) (local.get $v)))
+      (call $log (i32.const 200) (i32.const 1)))
+    (func (export "run") (param i32)
+      (call $report (call $wm (i32.const 0) (i32.const 0) (i32.const 3)))
+      (call $report (call $wc (i32.const 0) (i32.const 16) (i32.const 3)))
+      (call $report (call $rn (i32.const 0) (i32.const 300) (i32.const 3)))
+      (call $report (call $ap (i32.const 128) (i32.const 3) (i32.const 64) (i32.const 3) (i32.const 112) (i32.const 1)))))"#;
+
+#[test]
+fn api2_mask_color_and_new_pieces() {
+    let manifest =
+        r#"{"name":"V2","api":2,"capabilities":["read_mesh","edit_mesh","add_pieces"],"commands":[{"id":"go"}]}"#;
+    let mut p = plugin(manifest, V2_WAT).unwrap();
+    let r = p.run(0, snapshot()).unwrap();
+    // write_mask ok, write_colors ok, 3 normals read, first new piece is index 0.
+    assert_eq!(r.log, vec!["0", "0", "3", "0"]);
+    assert_eq!(r.masks, vec![(0, vec![0.25, 0.5, 1.0])]);
+    assert_eq!(r.colors, vec![(0, vec![Vec3::X, Vec3::Y, Vec3::Z])]);
+    assert_eq!(r.new_pieces.len(), 1);
+    let np = &r.new_pieces[0];
+    assert_eq!(np.name, "Tri");
+    assert_eq!(np.positions, vec![Vec3::ZERO, Vec3::X, Vec3::Y]);
+    assert_eq!(np.triangles, vec![[0, 1, 2]]);
+
+    // Without the capabilities every one of them is refused (-1 -> '/').
+    let bare = r#"{"name":"V2","api":2,"capabilities":[],"commands":[{"id":"go"}]}"#;
+    let mut p = plugin(bare, V2_WAT).unwrap();
+    let r = p.run(0, snapshot()).unwrap();
+    assert_eq!(r.log, vec!["/", "/", "/", "/"]);
+    assert!(r.masks.is_empty() && r.colors.is_empty() && r.new_pieces.is_empty());
 }

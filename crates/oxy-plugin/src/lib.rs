@@ -12,7 +12,10 @@
 //! edits it wants as data ([`RunResult`]); the app applies them through
 //! its normal undo history. Overlays return lines to draw.
 //!
-//! # Host API, version 1 (module `oxybrush`)
+//! # Host API, version 2 (module `oxybrush`)
+//!
+//! Version 2 adds the rows marked *(2)*; plugins written for version 1
+//! (`"api": 1`) keep working unchanged.
 //!
 //! All values are `i32` or `f32`; pointers and lengths are byte offsets
 //! and counts in the plugin's exported `memory`. Negative results are
@@ -33,10 +36,20 @@
 //! | `write_positions(piece, ptr, count) -> i32` | `edit_mesh` | new positions for every vertex (`count` must be the vertex count) |
 //! | `scene_state(ptr, cap) -> i32` | `read_scene` | the RFC 0007 scene JSON; writes up to `cap` bytes, returns the full length |
 //! | `draw_line(x1, y1, z1, x2, y2, z2, rgba)` | `overlay` | during `overlay()` only: a world-space line, color `0xRRGGBBAA` |
+//! | `read_normals(piece, ptr, max) -> i32` *(2)* | `read_mesh` | up to `max` vertex normals as `f32` x, y, z |
+//! | `read_colors(piece, ptr, max) -> i32` *(2)* | `read_mesh` | up to `max` vertex colors as `f32` r, g, b (sRGB 0..=1; white when unpainted) |
+//! | `write_mask(piece, ptr, count) -> i32` *(2)* | `edit_mesh` | `f32` mask for every vertex (clamped to 0..=1) |
+//! | `write_colors(piece, ptr, count) -> i32` *(2)* | `edit_mesh` | `f32` r, g, b for every vertex (clamped to 0..=1) |
+//! | `add_piece(name_ptr, name_len, pos_ptr, vcount, tri_ptr, tcount) -> i32` *(2)* | `add_pieces` | a new piece from `vcount` `f32` x, y, z and `tcount` `u32` triangles; returns its index among this call's new pieces |
+//!
+//! All of one command's edits to a piece (positions, mask, colors) become
+//! one undo step; the new pieces of a command become one more.
 //!
 //! Exports: `memory`; `run(command: i32)`, called with the index of a
 //! manifest command; optionally `overlay()`, called each frame while the
 //! plugin's panel is open.
+
+pub mod addon;
 
 use glam::Vec3;
 use std::path::{Path, PathBuf};
@@ -45,7 +58,9 @@ use wasmi::{
 };
 
 /// Host API version this build implements (`"api"` in the manifest).
-pub const API_VERSION: u32 = 1;
+pub const API_VERSION: u32 = 2;
+/// Oldest host API version this build still runs.
+pub const API_MIN: u32 = 1;
 /// The capability is not in the manifest.
 pub const ERR_DENIED: i32 = -1;
 /// No piece with that index.
@@ -74,6 +89,8 @@ pub struct Capabilities {
     pub edit_mesh: bool,
     pub read_scene: bool,
     pub overlay: bool,
+    /// API 2: create new pieces (`add_piece`).
+    pub add_pieces: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -112,8 +129,8 @@ impl Manifest {
         let s = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_owned);
         let name = s("name").filter(|n| !n.trim().is_empty()).ok_or("plugin.json: missing \"name\"")?;
         let api = v.get("api").and_then(|x| x.as_u64()).ok_or("plugin.json: missing \"api\"")?;
-        if api != API_VERSION as u64 {
-            return Err(format!("{name}: needs plugin API {api}, this OxyBrush has {API_VERSION}"));
+        if !(API_MIN as u64..=API_VERSION as u64).contains(&api) {
+            return Err(format!("{name}: needs plugin API {api}, this OxyBrush runs {API_MIN} to {API_VERSION}"));
         }
         let mut caps = Capabilities::default();
         for c in v.get("capabilities").and_then(|x| x.as_array()).into_iter().flatten() {
@@ -122,6 +139,7 @@ impl Manifest {
                 Some("edit_mesh") => caps.edit_mesh = true,
                 Some("read_scene") => caps.read_scene = true,
                 Some("overlay") => caps.overlay = true,
+                Some("add_pieces") => caps.add_pieces = true,
                 other => return Err(format!("{name}: unknown capability {other:?}")),
             }
         }
@@ -174,6 +192,10 @@ pub struct PieceView {
     pub positions: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
     pub mask: Vec<f32>,
+    /// API 2. Per-vertex normals.
+    pub normals: Vec<Vec3>,
+    /// API 2. Per-vertex color (sRGB 0..=1; white when unpainted).
+    pub colors: Vec<Vec3>,
 }
 
 /// The scene as handed to a command. Pieces are empty when the plugin
@@ -192,8 +214,25 @@ pub struct Snapshot {
 pub struct RunResult {
     /// New positions for whole pieces, by piece index, in call order.
     pub edits: Vec<(usize, Vec<Vec3>)>,
+    /// API 2. New mask values (0..=1) for whole pieces.
+    pub masks: Vec<(usize, Vec<f32>)>,
+    /// API 2. New vertex colors (sRGB 0..=1) for whole pieces.
+    pub colors: Vec<(usize, Vec<Vec3>)>,
+    /// API 2. New pieces: name, positions, triangles.
+    pub new_pieces: Vec<NewPiece>,
     pub log: Vec<String>,
 }
+
+/// A piece a plugin asked to create.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewPiece {
+    pub name: String,
+    pub positions: Vec<Vec3>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// Most vertices or triangles one `add_piece` may create.
+pub const MAX_NEW_ELEMENTS: usize = 4_000_000;
 
 /// A world-space overlay line.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -257,6 +296,29 @@ fn piece_ok(caller: &Caller<'_, CallState>, piece: i32) -> Result<usize, i32> {
         return Err(ERR_DENIED);
     }
     usize::try_from(piece).ok().filter(|&p| p < st.snap.pieces.len()).ok_or(ERR_PIECE)
+}
+
+/// Checks for a whole-piece edit (`write_mask`, `write_colors`): not in an
+/// overlay, `edit_mesh` declared, a real piece, and `count` its vertex count.
+fn edit_target(caller: &Caller<'_, CallState>, piece: i32, count: i32) -> Result<usize, i32> {
+    let st = caller.data();
+    if st.in_overlay {
+        return Err(ERR_CONTEXT);
+    }
+    if !st.caps.edit_mesh {
+        return Err(ERR_DENIED);
+    }
+    let p = usize::try_from(piece).ok().filter(|&p| p < st.snap.vertex_counts.len()).ok_or(ERR_PIECE)?;
+    let n = st.snap.vertex_counts[p];
+    if count < 0 || count as usize != n {
+        return Err(ERR_COUNT);
+    }
+    Ok(n)
+}
+
+fn read_f32s(caller: &Caller<'_, CallState>, ptr: i32, count: usize) -> Option<Vec<f32>> {
+    let bytes = read_bytes(caller, ptr, count.checked_mul(4)?)?;
+    Some(bytes.as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect())
 }
 
 fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
@@ -381,6 +443,117 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
         }
         json.len() as i32
     })
+    .map_err(e)?;
+    // ---- API 2 ----
+    l.func_wrap(
+        "oxybrush",
+        "read_normals",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, max: i32| -> i32 {
+            let p = match piece_ok(&caller, piece) {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            let src = &caller.data().snap.pieces[p].normals;
+            let n = src.len().min(max.max(0) as usize);
+            let bytes: Vec<u8> = src[..n].iter().flat_map(|v| v.to_array()).flat_map(f32::to_le_bytes).collect();
+            if write_bytes(&mut caller, ptr, &bytes) { n as i32 } else { ERR_MEMORY }
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "read_colors",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, max: i32| -> i32 {
+            let p = match piece_ok(&caller, piece) {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            let src = &caller.data().snap.pieces[p].colors;
+            let n = src.len().min(max.max(0) as usize);
+            let bytes: Vec<u8> = src[..n].iter().flat_map(|v| v.to_array()).flat_map(f32::to_le_bytes).collect();
+            if write_bytes(&mut caller, ptr, &bytes) { n as i32 } else { ERR_MEMORY }
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "write_mask",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, count: i32| -> i32 {
+            let n = match edit_target(&caller, piece, count) {
+                Ok(n) => n,
+                Err(code) => return code,
+            };
+            let Some(v) = read_f32s(&caller, ptr, n) else { return ERR_MEMORY };
+            if v.iter().any(|x| !x.is_finite()) {
+                return ERR_COUNT;
+            }
+            let mask: Vec<f32> = v.into_iter().map(|x| x.clamp(0.0, 1.0)).collect();
+            caller.data_mut().result.masks.push((piece as usize, mask));
+            0
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "write_colors",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, count: i32| -> i32 {
+            let n = match edit_target(&caller, piece, count) {
+                Ok(n) => n,
+                Err(code) => return code,
+            };
+            let Some(v) = read_f32s(&caller, ptr, n * 3) else { return ERR_MEMORY };
+            if v.iter().any(|x| !x.is_finite()) {
+                return ERR_COUNT;
+            }
+            let colors: Vec<Vec3> =
+                v.as_chunks::<3>().0.iter().map(|c| Vec3::from_array(*c).clamp(Vec3::ZERO, Vec3::ONE)).collect();
+            caller.data_mut().result.colors.push((piece as usize, colors));
+            0
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "add_piece",
+        |mut caller: Caller<'_, CallState>,
+         name_ptr: i32,
+         name_len: i32,
+         pos_ptr: i32,
+         vcount: i32,
+         tri_ptr: i32,
+         tcount: i32|
+         -> i32 {
+            let st = caller.data();
+            if st.in_overlay {
+                return ERR_CONTEXT;
+            }
+            if !st.caps.add_pieces {
+                return ERR_DENIED;
+            }
+            let (Ok(nv), Ok(nt)) = (usize::try_from(vcount), usize::try_from(tcount)) else { return ERR_COUNT };
+            if nv < 3 || nt < 1 || nv > MAX_NEW_ELEMENTS || nt > MAX_NEW_ELEMENTS {
+                return ERR_COUNT;
+            }
+            let name_len = (name_len.max(0) as usize).min(256);
+            let Some(name) = read_bytes(&caller, name_ptr, name_len) else { return ERR_MEMORY };
+            let Some(p) = read_f32s(&caller, pos_ptr, nv * 3) else { return ERR_MEMORY };
+            let Some(t) = read_bytes(&caller, tri_ptr, nt * 12) else { return ERR_MEMORY };
+            if p.iter().any(|x| !x.is_finite()) {
+                return ERR_COUNT;
+            }
+            let positions: Vec<Vec3> = p.as_chunks::<3>().0.iter().map(|c| Vec3::from_array(*c)).collect();
+            let idx: Vec<u32> = t.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+            if idx.iter().any(|&i| i as usize >= nv) {
+                return ERR_COUNT;
+            }
+            let triangles: Vec<[u32; 3]> = idx.as_chunks::<3>().0.to_vec();
+            let name = String::from_utf8_lossy(&name).trim().to_owned();
+            let name = if name.is_empty() { "Plugin piece".to_owned() } else { name };
+            let out = &mut caller.data_mut().result.new_pieces;
+            out.push(NewPiece { name, positions, triangles });
+            out.len() as i32 - 1
+        },
+    )
     .map_err(e)?;
     l.func_wrap(
         "oxybrush",
@@ -517,6 +690,13 @@ pub fn discover(dir: &Path) -> Vec<Result<Plugin, String>> {
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.join("plugin.json").is_file())
+        // Python add-ons live here too; the app runs those as scripts.
+        .filter(|p| {
+            std::fs::read_to_string(p.join("plugin.json"))
+                .ok()
+                .and_then(|t| addon::manifest_kind(&t).ok())
+                .is_none_or(|(k, _)| k == addon::AddonKind::Wasm)
+        })
         .collect();
     dirs.sort();
     dirs.iter().map(|d| Plugin::load(d)).collect()

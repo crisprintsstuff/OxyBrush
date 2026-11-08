@@ -107,6 +107,7 @@ enum DialogReply {
     ExportKeymap(Option<PathBuf>),
     Export(Option<PathBuf>),
     RunScript(Option<PathBuf>),
+    InstallAddon(Option<PathBuf>),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -930,6 +931,16 @@ impl App {
                 }
                 self.spawn_dialog(dialog.pick_file(), DialogReply::RunScript);
             }
+            UiAction::InstallAddon => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new().add_filter("OxyBrush add-on", &["oxyaddon"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.pick_file(), DialogReply::InstallAddon);
+            }
         }
         if let Some(g) = &self.gfx {
             g.window.request_redraw();
@@ -1030,6 +1041,9 @@ impl App {
                 }
                 DialogReply::RunScript(Some(p)) => {
                     self.run_python_script(&p);
+                }
+                DialogReply::InstallAddon(Some(p)) => {
+                    self.editor.install_addon(&p);
                 }
                 _ => {}
             }

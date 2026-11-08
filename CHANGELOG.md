@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Add-on packages (`.oxyaddon`)**: one file that installs a plugin, either an in-app (WebAssembly) plugin or a **Python** plugin. **Settings > Plugins > Install add-on…** (or opening the file) puts it in the plugins folder, replacing an older version; it then appears with the other plugins. Make one with `oxybrush-cli addon pack <folder> <file.oxyaddon>`. Archives can't write outside their folder and are size-limited.
+- **Plugin API 2** ([RFC 0011](docs/rfcs/0011-wasm-plugins.md)): in-app plugins can also read normals and vertex colors, set the **mask** and **vertex colors** of a piece, and **add new pieces** (new `add_pieces` capability). A command's changes to one piece are one undo step. Plugin commands now appear in the **command palette**. Plugins written for API 1 work unchanged.
+
 ### Changed
 - **Parametric primitives:** **Pieces > + Add** (and the command palette) now opens a small window for the shape instead of adding it at once: radius or size, height, segments around, rows up the side, closed caps, tube radius and so on, with a live preview and its triangle count. Shapes are **low-poly by default** (a cube is 8 vertices, a cylinder 50). **Even triangles (voxel remesh)** is a checkbox, with its resolution, for when you want a sculpt-ready mesh; cylinders and cones are no longer remeshed unless you ask. Accept (Enter) adds the piece, Cancel (Esc) discards it.
 

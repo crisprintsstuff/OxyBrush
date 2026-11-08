@@ -36,6 +36,7 @@ pub enum UiAction {
     ExportKeymap,
     /// Pick and run a Python script file.
     RunScript,
+    InstallAddon,
 }
 
 /// Sizes that differ between the interface layouts.
@@ -595,6 +596,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     if std::mem::take(&mut ed.request_run_script) {
         action = Some(UiAction::RunScript);
     }
+    if std::mem::take(&mut ed.request_install_addon) {
+        action = Some(UiAction::InstallAddon);
+    }
     dialogs(ui, ed, &mut action);
     background_window(ui.ctx(), ed);
     theme_appearance_window(ui.ctx(), ed);
@@ -969,6 +973,13 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
         }
         if tips::hover(ui.button("Reload plugins"), plain::RELOAD_PLUGINS).clicked() {
             ed.request_reload_plugins = true;
+        }
+        if ui
+            .button("Install add-on…")
+            .on_hover_text("Install an .oxyaddon file: an in-app (WebAssembly) or Python plugin in one file.")
+            .clicked()
+        {
+            ed.request_install_addon = true;
         }
     });
     ui.add_space(8.0);

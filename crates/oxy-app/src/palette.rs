@@ -44,6 +44,8 @@ pub enum Act {
     Brush(BrushKind),
     Recent(PathBuf),
     Guide(usize),
+    /// Run command `.1` of in-app plugin `.0` (RFC 0011).
+    Plugin(usize, usize),
 }
 
 #[derive(Clone)]
@@ -421,6 +423,22 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
                 tooltip: crate::tips::recent_tip(p),
                 act: Act::Recent(p.clone()),
             }));
+            for (i, p) in ed.wasm_plugins.iter().enumerate() {
+                let Some(plugin) = &p.plugin else { continue };
+                for (k, c) in plugin.manifest.commands.iter().enumerate() {
+                    v.push(Entry {
+                        label: format!("Plugin: {} — {}", p.name, c.label),
+                        detail: String::new(),
+                        keywords: "plugin wasm",
+                        tooltip: if p.description.is_empty() {
+                            format!("Run the {} plugin's {} command.", p.name, c.label)
+                        } else {
+                            p.description.clone()
+                        },
+                        act: Act::Plugin(i, k),
+                    });
+                }
+            }
             v.extend(crate::guide::TOPICS.iter().enumerate().map(|(i, t)| Entry {
                 label: format!("Guide: {}", t.title),
                 detail: String::new(),
@@ -505,6 +523,7 @@ pub fn run(ed: &mut Editor, act: Act) -> Option<UiAction> {
     match act {
         Act::Ui(a) => return Some(a),
         Act::Run(f) => f(ed),
+        Act::Plugin(i, k) => ed.run_wasm_plugin(i, k),
         Act::Brush(k) => {
             ed.brush_kind = k;
             ed.status = format!("{} brush", k.label());
@@ -736,7 +755,7 @@ mod tests {
                         );
                     }
                 }
-                Act::Recent(_) | Act::Guide(_) => {}
+                Act::Recent(_) | Act::Guide(_) | Act::Plugin(..) => {}
             }
         }
         let brushes = entries(&ed, PaletteMode::Brushes);
