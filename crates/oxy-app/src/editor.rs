@@ -2375,8 +2375,10 @@ impl Editor {
                 true
             }
             Drag::Zoom => {
-                // Drag up zooms in, the same direction as the view strip.
-                self.camera.zoom(-delta.y / self.pixels_per_point.max(0.1) * 0.05);
+                // Drag up zooms in (the same direction as the view strip),
+                // unless the keymap says drag down, as in ZBrush.
+                let sign = if self.keymap.zoom_drag_down_in { 1.0 } else { -1.0 };
+                self.camera.zoom(sign * delta.y / self.pixels_per_point.max(0.1) * 0.05);
                 true
             }
             Drag::MaskGesture { .. } => true,
@@ -2969,7 +2971,7 @@ impl Editor {
 
     pub fn scroll(&mut self, steps: f32) {
         if self.keymap.wheel_zoom {
-            self.camera.zoom(steps);
+            self.camera.zoom(if self.keymap.invert_wheel_zoom { -steps } else { steps });
         }
     }
 
@@ -5053,8 +5055,22 @@ impl Editor {
         self.edit_mask("Clear mask", |_| 0.0);
     }
 
+    /// Frame every visible piece.
     pub fn frame(&mut self) {
         self.camera.frame(self.scene.bounds());
+    }
+
+    /// Centre and frame the active piece (F), or every visible piece when
+    /// the active one is hidden.
+    pub fn frame_active(&mut self) {
+        let piece = self.scene.active();
+        if piece.visible && piece.mesh.triangle_count() > 0 {
+            self.camera.frame(piece.mesh.bounds());
+            self.status = format!("Framed {}", piece.name);
+        } else {
+            self.frame();
+            self.status = "Framed all visible pieces".into();
+        }
     }
 
     pub fn adjust_radius(&mut self, factor: f32) {
@@ -5206,6 +5222,10 @@ impl Editor {
                 E::None
             }
             C::Frame => {
+                self.frame_active();
+                E::None
+            }
+            C::FrameAll => {
                 self.frame();
                 E::None
             }
@@ -7729,6 +7749,57 @@ mod tests {
         assert!((e.focal_mm - 200.0).abs() < 1e-3);
         e.set_focal_mm(f32::NAN);
         assert!((e.focal_mm - oxy_render::default_focal_mm()).abs() < 1e-6);
+    }
+
+    #[test]
+    fn right_drag_preset_zooms_in_when_dragged_down_and_f_frames_the_active_piece() {
+        let mut e = editor();
+        e.keymap.apply_navigation_preset(crate::keymap::Preset::RightDrag);
+        assert!(e.keymap.zoom_drag_down_in);
+        let zoom_drag = |e: &mut Editor, dy: f32| {
+            e.modifiers.ctrl = true;
+            e.pointer = Some(Vec2::new(400.0, 300.0));
+            e.pointer_down(PointerButton::Secondary);
+            assert!(matches!(e.drag, Drag::Zoom));
+            e.pointer_moved(Vec2::new(400.0, 300.0 + dy));
+            e.pointer_up();
+            e.modifiers.ctrl = false;
+        };
+        let d0 = e.camera.distance;
+        zoom_drag(&mut e, 80.0);
+        assert!(e.camera.distance < d0, "dragging down zooms in, as in ZBrush");
+        // The other presets keep drag up = zoom in; the setting is saved.
+        let mut e2 = editor();
+        e2.keymap.apply_navigation_preset(crate::keymap::Preset::MmbOrbit);
+        assert!(!e2.keymap.zoom_drag_down_in);
+        let text = e.keymap.to_text();
+        assert!(text.contains("zoom_drag_down_in = true"));
+        assert!(crate::keymap::Keymap::from_text(&text).zoom_drag_down_in);
+
+        // The wheel can be inverted too, and that is saved.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        let d1 = e.camera.distance;
+        e.scroll(1.0);
+        let normal_in = e.camera.distance < d1;
+        e.keymap.invert_wheel_zoom = true;
+        let d2 = e.camera.distance;
+        e.scroll(1.0);
+        assert_eq!(e.camera.distance < d2, !normal_in, "inverted wheel zooms the other way");
+        assert!(crate::keymap::Keymap::from_text(&e.keymap.to_text()).invert_wheel_zoom);
+
+        // F frames the active piece: a small second piece far away fills the view.
+        e.add_primitive("cube");
+        let piece = e.scene.active_mut();
+        let mut data = piece.mesh.to_data();
+        data.positions.iter_mut().for_each(|p| *p = *p * 0.1 + Vec3::new(6.0, 0.0, 0.0));
+        piece.mesh = Mesh::from_data(data);
+        let small = e.scene.active().mesh.bounds();
+        e.perform_command(CommandId::Frame);
+        assert!(e.camera.target.distance(small.center()) < 1e-4, "centred on the active piece");
+        let framed = e.camera.distance;
+        e.perform_command(CommandId::FrameAll);
+        assert!(e.camera.distance > framed * 5.0, "Alt+F frames everything");
+        assert!(e.keymap.command_for(crate::keymap::Chord::parse("alt+f").unwrap()) == Some(CommandId::FrameAll));
     }
 
     #[test]
