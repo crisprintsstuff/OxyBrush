@@ -161,6 +161,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | Ctrl+M | Mask the face group under the cursor |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
 | `[` `]` and `-` `=` | Radius and strength |
+| `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
 | `X` | Toggle X symmetry |
 | `F` | Frame scene |
 | Ctrl+D | Add subdivision level |

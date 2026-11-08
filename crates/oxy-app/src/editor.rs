@@ -652,6 +652,36 @@ pub struct QuickMenu {
     pub held: bool,
 }
 
+/// Which brush setting a pointer slider (S, U, I, O) changes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SliderKind {
+    Size,
+    Strength,
+    PaintStrength,
+    FocalShift,
+}
+
+impl SliderKind {
+    pub fn command(self) -> CommandId {
+        match self {
+            SliderKind::Size => CommandId::SizeSlider,
+            SliderKind::Strength => CommandId::StrengthSlider,
+            SliderKind::PaintStrength => CommandId::PaintSlider,
+            SliderKind::FocalShift => CommandId::FocalSlider,
+        }
+    }
+}
+
+/// A single slider shown under the pointer, so a brush setting changes
+/// without moving to the side panel. Esc, a click outside it, or its key
+/// again closes it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PointerSlider {
+    pub kind: SliderKind,
+    /// Screen position in physical pixels, like `pointer`.
+    pub pos: Vec2,
+}
+
 /// State of a gizmo drag: the mesh as it was, and how each vertex follows.
 pub struct GizmoDrag {
     handle: Handle,
@@ -756,6 +786,8 @@ pub struct Editor {
     pub brush_radius_pt: f32,
     pub strengths: [f32; BrushKind::ALL.len()],
     pub falloff: Falloff,
+    /// Moves the falloff's middle, -1..=1 (negative firmer, positive softer).
+    pub focal_shift: f32,
     pub spacing: f32,
     pub pressure_strength: bool,
     pub pressure_radius: bool,
@@ -891,6 +923,8 @@ pub struct Editor {
     pub quick_menu: Option<QuickMenu>,
     /// Key that opened a held quick menu. Releasing that key closes it.
     pub quick_menu_key: Option<keymap::KeyId>,
+    /// The S/U/I/O slider under the pointer, if one is open.
+    pub pointer_slider: Option<PointerSlider>,
     /// Where the right button went down, to tell a click from a pan.
     rmb_press: Option<Vec2>,
     /// Let a drag on empty space start a stroke when it reaches the model
@@ -1058,6 +1092,7 @@ impl Default for Editor {
             brush_radius_pt: 50.0,
             strengths,
             falloff: Falloff::Smooth,
+            focal_shift: 0.0,
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
@@ -1142,6 +1177,7 @@ impl Default for Editor {
             grab_through: false,
             quick_menu: None,
             quick_menu_key: None,
+            pointer_slider: None,
             rmb_press: None,
             stroke_from_empty: false,
             dyntopo: false,
@@ -2031,6 +2067,7 @@ impl Editor {
             radius,
             strength: self.strength(kind),
             falloff: self.falloff,
+            focal_shift: self.focal_shift,
             spacing: self.spacing,
             pressure_strength: self.pressure_strength,
             pressure_radius: self.pressure_radius,
@@ -2109,6 +2146,7 @@ impl Editor {
             radius_pt: self.brush_radius_pt,
             strength: self.strength(k),
             falloff: self.falloff,
+            focal_shift: self.focal_shift,
             spacing: self.spacing,
             pressure_strength: self.pressure_strength,
             pressure_radius: self.pressure_radius,
@@ -2133,6 +2171,7 @@ impl Editor {
         self.brush_radius_pt = p.radius_pt;
         *self.strength_mut(p.kind) = p.strength;
         self.falloff = p.falloff;
+        self.focal_shift = p.focal_shift;
         self.spacing = p.spacing;
         self.pressure_strength = p.pressure_strength;
         self.pressure_radius = p.pressure_radius;
@@ -4923,6 +4962,25 @@ impl Editor {
         self.brush_radius_pt = (self.brush_radius_pt * factor).clamp(2.0, 1000.0);
     }
 
+    /// Open the slider for `kind` under the pointer, or close it if it is
+    /// already open (pressing the key again).
+    pub fn toggle_pointer_slider(&mut self, kind: SliderKind) -> CommandEffect {
+        if self.pointer_slider.is_some_and(|s| s.kind == kind) {
+            self.pointer_slider = None;
+        } else if let Some(pos) = self.pointer {
+            self.quick_menu = None;
+            self.pointer_slider = Some(PointerSlider { kind, pos });
+        }
+        CommandEffect::None
+    }
+
+    /// Where the brush cursor's inner ring goes, as a fraction of the
+    /// radius: about where the falloff is at half strength. Focal shift
+    /// moves it out (firmer) or in (softer).
+    pub fn focal_ring(&self) -> f32 {
+        0.5f32.powf(1.0 / oxy_sculpt::shift_exponent(self.focal_shift))
+    }
+
     pub fn adjust_strength(&mut self, delta: f32) {
         let k = self.brush_kind;
         let s = self.strength_mut(k);
@@ -5004,6 +5062,10 @@ impl Editor {
                 self.adjust_strength(0.05);
                 E::None
             }
+            C::SizeSlider => self.toggle_pointer_slider(SliderKind::Size),
+            C::StrengthSlider => self.toggle_pointer_slider(SliderKind::Strength),
+            C::PaintSlider => self.toggle_pointer_slider(SliderKind::PaintStrength),
+            C::FocalSlider => self.toggle_pointer_slider(SliderKind::FocalShift),
             C::SymmetryX => {
                 self.symmetry.x = !self.symmetry.x;
                 self.status = format!("X symmetry {}", if self.symmetry.x { "on" } else { "off" });

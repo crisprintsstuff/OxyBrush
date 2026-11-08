@@ -29,14 +29,15 @@ fn main() {
     }
     println!("chunks_in_sphere: {:.3} ms", t.elapsed().as_secs_f64() * 1e3 / 20.0);
     let alpha = Arc::new(BuiltinAlpha::Noise.generate(256));
-    for (kind, radius, with_alpha) in [
-        (BrushKind::Draw, 0.1, false),
-        (BrushKind::Draw, 0.3, false),
-        (BrushKind::Draw, 0.3, true),
-        (BrushKind::Smooth, 0.3, false),
-        (BrushKind::Clay, 0.3, false),
+    for (kind, radius, with_alpha, focal_shift) in [
+        (BrushKind::Draw, 0.1, false, 0.0),
+        (BrushKind::Draw, 0.3, false, 0.0),
+        (BrushKind::Draw, 0.3, false, -0.5),
+        (BrushKind::Draw, 0.3, true, 0.0),
+        (BrushKind::Smooth, 0.3, false, 0.0),
+        (BrushKind::Clay, 0.3, false, 0.0),
     ] {
-        let settings = BrushSettings { kind, radius, spacing: 0.1, ..Default::default() };
+        let settings = BrushSettings { kind, radius, spacing: 0.1, focal_shift, ..Default::default() };
         let stamp =
             with_alpha.then(|| AlphaStamp { alpha: alpha.clone(), rotation: 0.0, follow_stroke: true, up: Vec3::Y });
         let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(stamp);
@@ -51,9 +52,10 @@ fn main() {
         // Spherical cap fraction ≈ r²/4 of the unit sphere's vertices.
         let verts = (radius * radius / 4.0) * mesh.vertex_count() as f32;
         println!(
-            "{:?}{} r={radius}: {} dabs, {:.2} ms/dab (~{}k verts in radius)",
+            "{:?}{}{} r={radius}: {} dabs, {:.2} ms/dab (~{}k verts in radius)",
             kind,
             if with_alpha { "+alpha" } else { "" },
+            if focal_shift != 0.0 { format!(" focal {focal_shift}") } else { String::new() },
             stroke.dab_count(),
             ms / stroke.dab_count() as f64,
             (verts / 1000.0) as u32

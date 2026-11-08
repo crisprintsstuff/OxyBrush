@@ -731,6 +731,7 @@ pub mod plain {
     pub const PALETTE_SEARCH: &str = "Type part of a command, brush, file or topic. Enter runs it.";
     pub const UPDATE_BUTTON: &str = "Open the update details.";
     pub const FALLOFF: &str = "How the effect fades from the center of the brush to its edge.";
+    pub const FOCAL_SHIFT: &str = "Moves the middle of the falloff. Left keeps more of the brush at full strength (firmer); right fades sooner (softer). The inner ring of the cursor follows it.";
     pub const STROKE_MODE: &str = "Freehand follows the pointer. Line draws straight. Stamp drags out one dab.";
     pub const ALPHA_MENU: &str = "Pick an alpha image, or none for a plain circle.";
     pub const AGENT_ENABLED: &str =
@@ -861,6 +862,7 @@ pub mod plain {
         PALETTE_SEARCH,
         UPDATE_BUTTON,
         FALLOFF,
+        FOCAL_SHIFT,
         STROKE_MODE,
         ALPHA_MENU,
     ];
