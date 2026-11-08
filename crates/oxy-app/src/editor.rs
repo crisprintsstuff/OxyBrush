@@ -157,6 +157,25 @@ struct MoveBindKey {
     center: Vec3,
 }
 
+/// Dynamic detail during one stroke.
+pub struct DynStroke {
+    piece: u64,
+    label: String,
+    /// The piece's mesh before the stroke, for undo once the topology has
+    /// changed.
+    before: Mesh,
+    changed: bool,
+    /// Where the brush is about to go (centre, world radius), not yet
+    /// refined.
+    spheres: Vec<(Vec3, f32)>,
+    /// The last sample, to cover the path from it to the next one.
+    last_pos: Option<Vec3>,
+    last: Instant,
+    /// How long the last refine took, to space them out on dense meshes.
+    cost: Duration,
+    capped: bool,
+}
+
 /// What the user edits on an open curve, and what curve undo restores.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurveShape {
@@ -533,6 +552,8 @@ pub enum Drag {
         /// Freehand strokes that may turn into a curve when the pointer is
         /// held still (see [`Editor::tick_hold`]).
         hold: Option<Box<HoldWatch>>,
+        /// Dynamic detail for this stroke, when on.
+        dyn_topo: Option<Box<DynStroke>>,
     },
     /// Drawing a curve stroke: the pointer path in physical px.
     CurveDraw {
@@ -847,6 +868,12 @@ pub struct Editor {
     /// Let a drag on empty space start a stroke when it reaches the model
     /// (orbit with the middle mouse button instead).
     pub stroke_from_empty: bool,
+    /// Dynamic detail: sculpting brushes add triangles where they need
+    /// them and remove ones that have become too small.
+    pub dyntopo: bool,
+    /// How fine dynamic detail makes the mesh, 0..=1 (coarse to fine),
+    /// relative to the brush size.
+    pub dyntopo_detail: f32,
     /// Holding the pointer still during a freehand stroke turns it into an
     /// editable curve.
     pub hold_to_curve: bool,
@@ -1084,6 +1111,8 @@ impl Default for Editor {
             quick_menu_key: None,
             rmb_press: None,
             stroke_from_empty: false,
+            dyntopo: false,
+            dyntopo_detail: 0.5,
             hold_to_curve: true,
             hold_to_curve_ask: false,
             hold_offer: None,
@@ -1363,6 +1392,8 @@ impl Editor {
             hold_to_curve: self.hold_to_curve,
             hold_to_curve_ask: self.hold_to_curve_ask,
             curve_move_centred: self.curve_move_centred,
+            dyntopo: self.dyntopo,
+            dyntopo_detail: self.dyntopo_detail,
             pressure_gamma: self.pressure_gamma,
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
@@ -1511,6 +1542,8 @@ impl Editor {
         self.hold_to_curve = s.hold_to_curve;
         self.hold_to_curve_ask = s.hold_to_curve_ask;
         self.curve_move_centred = s.curve_move_centred;
+        self.dyntopo = s.dyntopo;
+        self.dyntopo_detail = s.dyntopo_detail;
         self.pressure_gamma = s.pressure_gamma;
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
@@ -1747,29 +1780,138 @@ impl Editor {
             return;
         }
         let radius = self.world_radius(hit.point, self.brush_radius_pt);
-        let mut stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
+        let stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
         let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
-        let piece = self.scene.active_mut();
-        self.history.begin_with(
-            kind.label(),
-            piece.id,
-            &piece.mesh,
-            kind == BrushKind::Paint || piece.mesh.is_painted(),
-        );
-        let history = &mut self.history;
-        stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        let dyn_topo = self.dyntopo_for(kind).then(|| {
+            let piece = self.scene.active();
+            Box::new(DynStroke {
+                piece: piece.id,
+                label: kind.label().to_string(),
+                before: piece.mesh.clone(),
+                changed: false,
+                spheres: Vec::new(),
+                last_pos: None,
+                last: Instant::now(),
+                cost: Duration::ZERO,
+                capped: false,
+            })
+        });
         let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
         // Brushes that could be drawn as a curve may turn into one if the
-        // pointer is held still.
+        // pointer is held still. (Not with dynamic detail: the stroke can't
+        // be taken back once the mesh has been rebuilt under it.)
         let curve_capable = self.stroke_mode == StrokeMode::Freehand
             && !(kind.is_grab_like()
                 || kind == BrushKind::SnakeHook
                 || kind == BrushKind::Smooth
                 || self.brush_roles().ctrl);
-        let hold = (self.hold_to_curve && curve_capable).then(|| {
+        let hold = (self.hold_to_curve && curve_capable && dyn_topo.is_none()).then(|| {
             Box::new(HoldWatch { kind, invert, path: vec![p], still_at: p, still_since: std::time::Instant::now() })
         });
-        self.drag = Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None, hold };
+        self.drag =
+            Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None, hold, dyn_topo };
+        // Detail first, then the dab, so the dab shapes the new triangles.
+        self.dyntopo_step(Some(sample.position), true);
+        let changed = matches!(&self.drag, Drag::Stroke { dyn_topo: Some(d), .. } if d.changed);
+        let piece = self.scene.active_mut();
+        if !changed {
+            self.history.begin_with(
+                kind.label(),
+                piece.id,
+                &piece.mesh,
+                kind == BrushKind::Paint || piece.mesh.is_painted(),
+            );
+        }
+        let history = &mut self.history;
+        if let Drag::Stroke { stroke, .. } = &mut self.drag {
+            stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        }
+    }
+
+    /// Whether a stroke with `kind` refines the mesh as it goes.
+    fn dyntopo_for(&mut self, kind: BrushKind) -> bool {
+        if !self.dyntopo {
+            return false;
+        }
+        let sculpts = !(kind.is_grab_like()
+            || kind.is_curve_cut()
+            || matches!(kind, BrushKind::Mask | BrushKind::Paint | BrushKind::InsertPrimitive | BrushKind::CurveMove));
+        if !sculpts {
+            return false;
+        }
+        if self.scene.active().multires.is_some() {
+            self.status = "Dynamic detail is off on pieces with subdivision levels (it would remove them)".into();
+            return false;
+        }
+        true
+    }
+
+    /// Target edge length for dynamic detail with a brush of world `radius`:
+    /// detail 0 makes edges half the brush radius, 1 a twentieth.
+    pub fn dyntopo_edge(&self, radius: f32) -> f32 {
+        radius * 0.5 * (0.1f32).powf(self.dyntopo_detail.clamp(0.0, 1.0))
+    }
+
+    /// Refine the mesh where the brush is about to go: along the path from
+    /// the last sample to `ahead`. Call before applying the dab there, so
+    /// the dab shapes the new triangles. Throttled by how long refining
+    /// takes, so a dense mesh still gets dabs in between; `force` refines
+    /// now.
+    fn dyntopo_step(&mut self, ahead: Option<Vec3>, force: bool) {
+        let center = self.symmetry_center();
+        let transforms = self.symmetry.transforms();
+        let max_triangles = self.max_triangles;
+        let Drag::Stroke { stroke, dyn_topo: Some(_), .. } = &self.drag else { return };
+        let edge = self.dyntopo_edge(stroke.settings().radius);
+        let Drag::Stroke { stroke, dyn_topo: Some(d), .. } = &mut self.drag else { return };
+        if let Some(to) = ahead {
+            // A little wider than the brush, every half radius along the way.
+            let r = stroke.settings().radius;
+            let from = d.last_pos.unwrap_or(to);
+            let steps = (from.distance(to) / (r * 0.5).max(1e-6)).ceil().clamp(1.0, 64.0) as usize;
+            d.spheres.extend((0..=steps).map(|k| (from.lerp(to, k as f32 / steps as f32), r * 1.15)));
+            d.last_pos = Some(to);
+        }
+        if d.spheres.is_empty() {
+            return;
+        }
+        if !force && d.last.elapsed() < d.cost.mul_f32(1.5) {
+            return;
+        }
+        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == d.piece) else { return };
+        let t0 = Instant::now();
+        let spheres: Vec<(Vec3, f32)> = d
+            .spheres
+            .drain(..)
+            .flat_map(|(c, r)| transforms.iter().map(move |m| (center + *m * (c - center), r)))
+            .collect();
+        let detail = oxy_mesh::dyntopo::Detail { edge, max_triangles, collapse: true };
+        if let Some(r) = oxy_mesh::dyntopo::refine(&piece.mesh, &spheres, detail) {
+            if !d.changed {
+                // From here on the stroke is one topology step (the mesh
+                // before it is in `before`), not chunk snapshots.
+                self.history.cancel();
+                d.changed = true;
+            }
+            let old = piece.mesh.vertex_count();
+            stroke.remap_vertices(r.mesh.source_vertices(), old);
+            piece.mesh = r.mesh;
+            if r.capped && !d.capped {
+                d.capped = true;
+                self.status = format!("Dynamic detail stopped at the triangle limit ({max_triangles})");
+            }
+        }
+        d.cost = t0.elapsed();
+        d.last = Instant::now();
+    }
+
+    /// End a stroke: one undo step, either the usual chunk snapshots or,
+    /// when dynamic detail changed the mesh, the whole mesh before it.
+    fn finish_stroke(&mut self, dyn_topo: Option<Box<DynStroke>>) {
+        match dyn_topo {
+            Some(d) if d.changed => self.history.record_topology(d.label, d.piece, d.before, None),
+            _ => self.history.commit(),
+        }
     }
 
     /// A pen is drawing right now, so its pressure is live.
@@ -2237,8 +2379,13 @@ impl Editor {
                 None => return false,
             }
         };
+        // Detail first, then the dab, so the dab shapes the new triangles.
+        self.dyntopo_step(Some(sample.position), false);
+        let piece = self.scene.active_mut();
         let history = &mut self.history;
-        stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        if let Drag::Stroke { stroke, .. } = &mut self.drag {
+            stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
+        }
         true
     }
 
@@ -2323,8 +2470,9 @@ impl Editor {
             self.quick_menu = Some(QuickMenu { pos: p0, held: false });
         }
         self.snap_orbit = None;
+        self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { .. } => self.history.commit(),
+            Drag::Stroke { dyn_topo, .. } => self.finish_stroke(dyn_topo),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -2397,7 +2545,7 @@ impl Editor {
     pub fn cancel_drag(&mut self) {
         self.insert_preview = None;
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { .. } => self.history.commit(),
+            Drag::Stroke { dyn_topo, .. } => self.finish_stroke(dyn_topo),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -4833,6 +4981,95 @@ mod tests {
         assert!(e.job.is_none(), "job did not finish");
     }
 
+    fn dyntopo_editor() -> Editor {
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
+        e.dyntopo = true;
+        e.dyntopo_detail = 0.8;
+        e.brush_kind = BrushKind::Draw;
+        e.symmetry = Symmetry::default();
+        e
+    }
+
+    fn short_stroke(e: &mut Editor) {
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=12 {
+            e.pointer_moved(Vec2::new(400.0 + i as f32 * 4.0, 300.0));
+        }
+        e.pointer_up();
+    }
+
+    #[test]
+    fn dynamic_detail_adds_triangles_under_the_brush_and_undoes_in_one_step() {
+        let mut e = dyntopo_editor();
+        let before_tris = e.scene.active().mesh.triangle_count();
+        let before = e.scene.active().mesh.positions.clone();
+        let revision = e.history.revision();
+        short_stroke(&mut e);
+        let after = e.scene.active().mesh.triangle_count();
+        assert!(after > before_tris * 2, "detail added: {before_tris} -> {after}");
+        assert!(e.history.revision() > revision);
+        // Only near the stroke: the back of the ball keeps its coarse
+        // triangles.
+        let back = |m: &Mesh| m.positions.iter().filter(|p| p.z < -0.5).count();
+        assert_eq!(back(&e.scene.active().mesh), before.iter().filter(|p| p.z < -0.5).count());
+        // One undo restores the ball exactly.
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), before_tris);
+        assert_eq!(e.scene.active().mesh.positions, before);
+        e.redo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), after);
+    }
+
+    #[test]
+    fn dynamic_detail_follows_symmetry_and_skips_masking_and_levels() {
+        // X symmetry: the mirrored side is refined too.
+        let mut e = dyntopo_editor();
+        e.symmetry = Symmetry { x: true, ..Default::default() };
+        e.pointer = Some(Vec2::new(470.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=8 {
+            e.pointer_moved(Vec2::new(470.0, 300.0 + i as f32 * 4.0));
+        }
+        e.pointer_up();
+        let m = &e.scene.active().mesh;
+        let (right, left) = (
+            m.positions.iter().filter(|p| p.x > 0.2 && p.z > 0.0).count(),
+            m.positions.iter().filter(|p| p.x < -0.2 && p.z > 0.0).count(),
+        );
+        assert!(right > 60 && left > 60 && right.abs_diff(left) * 5 < right, "both sides: {right} / {left}");
+
+        // The Mask brush never changes topology.
+        let mut e = dyntopo_editor();
+        e.brush_kind = BrushKind::Mask;
+        let tris = e.scene.active().mesh.triangle_count();
+        short_stroke(&mut e);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+
+        // Nor do pieces with subdivision levels (it would discard them).
+        let mut e = dyntopo_editor();
+        e.add_level();
+        wait_job(&mut e);
+        let tris = e.scene.active().mesh.triangle_count();
+        short_stroke(&mut e);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+        assert!(e.scene.active().multires.is_some());
+    }
+
+    #[test]
+    fn layer_brush_state_survives_a_rebuild() {
+        // Layer keeps per-vertex state for the whole stroke; after the mesh is
+        // rebuilt mid-stroke it must still point at the right vertices, or
+        // the plateau would come out uneven or panic on stale indices.
+        let mut e = dyntopo_editor();
+        e.brush_kind = BrushKind::Layer;
+        short_stroke(&mut e);
+        let m = &e.scene.active().mesh;
+        assert!(m.positions.iter().all(|p| p.is_finite()));
+        assert!(m.positions.iter().any(|p| p.length() > 1.01), "the layer was raised");
+    }
+
     #[test]
     fn stroke_on_model_then_undo() {
         let mut e = editor();
@@ -6064,6 +6301,8 @@ mod tests {
             hold_to_curve: false,
             hold_to_curve_ask: true,
             curve_move_centred: false,
+            dyntopo: true,
+            dyntopo_detail: 0.25,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pressure_full: 1.0,

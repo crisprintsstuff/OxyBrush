@@ -741,6 +741,32 @@ impl Stroke {
         self.dab_count
     }
 
+    /// The mesh was rebuilt mid-stroke (dynamic topology): `source[v]` is
+    /// the old index of each new vertex `v` (see
+    /// `oxy_mesh::Mesh::source_vertices`), with indices at or past
+    /// `old_count` for vertices that didn't exist before. Per-vertex stroke
+    /// state follows its vertices; state of removed vertices is dropped.
+    pub fn remap_vertices(&mut self, source: &[u32], old_count: usize) {
+        let mut new_of_old = vec![u32::MAX; old_count];
+        for (new, &old) in source.iter().enumerate() {
+            if (old as usize) < old_count {
+                new_of_old[old as usize] = new as u32;
+            }
+        }
+        let map = |v: u32| new_of_old.get(v as usize).copied().filter(|&n| n != u32::MAX);
+        self.layer.vertices =
+            std::mem::take(&mut self.layer.vertices).into_iter().filter_map(|(v, s)| Some((map(v)?, s))).collect();
+        if let Some(g) = &mut self.grab {
+            g.verts.retain_mut(|b| match map(b.index) {
+                Some(n) => {
+                    b.index = n;
+                    true
+                }
+                None => false,
+            });
+        }
+    }
+
     /// Feed a pointer sample. `touch(mesh, chunk)` is called once per chunk
     /// before it is first modified by this call.
     pub fn add_sample(&mut self, mesh: &mut Mesh, sample: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {

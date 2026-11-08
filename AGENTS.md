@@ -56,6 +56,7 @@ cargo run --release -p oxy-sculpt --example dab_timing     # brush performance
 cargo run --release -p oxy-sculpt --example wire_timing    # Curve Move bind/deform performance
 cargo run --release -p oxy-topo --example topo_timing      # remesh/decimate performance
 cargo run --release -p oxy-mesh --example multires_timing  # mesh build / subdivision level performance
+cargo run --release -p oxy-mesh --example dyntopo_timing   # dynamic detail refine cost by mesh size
 cargo run --release -p oxy-render --example shading_timing # viewport passes on your GPU
 cargo build --profile dist -p oxy-app                      # stripped release binary as shipped
 ```

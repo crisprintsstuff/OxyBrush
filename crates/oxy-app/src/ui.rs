@@ -3453,6 +3453,27 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    ui.label(RichText::new("Dynamic detail").small().weak());
+    ui.horizontal(|ui| {
+        tips::check_plain(ui, &mut ed.dyntopo, "Add detail as you sculpt", &Cmd::DynDetail.tip_in(&ed.keymap));
+    });
+    if ed.dyntopo {
+        let levels = ed.scene.active().multires.is_some();
+        ui.add_enabled_ui(!levels, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Detail");
+                let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
+                tips::hover(
+                    ui.add(egui::Slider::new(&mut ed.dyntopo_detail, 0.0..=1.0).custom_formatter(pct)),
+                    plain::DYN_DETAIL,
+                );
+            });
+        });
+        if levels {
+            ui.label(RichText::new(plain::DYN_LEVELS).weak().small());
+        }
+    }
+    ui.add_space(4.0);
     ui.label(RichText::new("Subdivision levels").small().weak());
     ui.horizontal(|ui| {
         match ed.multires_level() {

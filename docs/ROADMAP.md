@@ -6,7 +6,7 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-07 (since v2.5.7-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-07 (since v2.5.7-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
 
 ## Status at a glance
 
@@ -74,7 +74,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 | Feature | Details | Effort |
 |---|---|---|
-| **Dynamic topology** | Brush adds/removes triangles locally, so you can sketch from a sphere without remeshing | 4–6 wk |
+| **Dynamic topology** | ✅ First version, **Dynamic detail** ([RFC 0006](rfcs/0006-dynamic-detail.md)): sculpting brushes split and collapse edges under the brush, detail relative to brush size, symmetry, masks, one undo step per stroke; smooth up to a few hundred thousand triangles. ⏳ Incremental chunk-local edits (no full rebuild) for large meshes, edge flips and relaxation, constant detail and detail flood fill | 3–5 wk left |
 | **Vertex color painting** | ✅ Paint brush, fills (all / cavities / peaks) respecting the mask, saved in projects. ⏳ Color in exports, color-aware remesh/decimate, materials per region | 3–4 wk |
 | **Sculpt layers** | Detail layers with strength sliders; morph target | 4–6 wk |
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
