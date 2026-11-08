@@ -155,6 +155,16 @@ Remesh and decimate rebuild the mesh, so they remove the levels (undo brings the
 How fine it gets depends on the Detail slider and the brush size: a smaller brush gives smaller triangles. Mask, Paint, the Grab-like brushes and the cutting tools don't change triangles. Each stroke is one undo step. It is off on pieces with subdivision levels, and works best up to a few hundred thousand triangles.",
     },
     Topic {
+        title: "Tubes",
+        keywords: "tube pipe horn tentacle tail limb cable path curve sweep draw",
+        body: "Pieces > + Add > Tube (draw)… (or the command palette) draws a tube along a path. Drag from the model, where the tube starts on its surface, or from empty space. The path lies flat to the view; orbit afterwards to move points in depth.\n\n\
+- Drag a point to move it.\n\
+- Shift+drag a point up or down to make the tube thicker or thinner there. Thickness blends smoothly between points.\n\
+- Click the line between two points to add one; Alt+click a point to remove it.\n\
+- The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\n\
+Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To fuse it with the model, use Merge in the Pieces panel, which joins the visible pieces into one surface with a voxel remesh.",
+    },
+    Topic {
         title: "Lights and shadows",
         keywords: "lights lighting shadows sun spot lamp viewport shading render",
         body: "View > Shading > Light the viewport shades the model with lights instead of the material; View > Shading > Lights… sets them up. There are four lights: each can be a Sun (a direction), a Point (a position) or a Spot (a cone aimed at a point), with its own color, brightness and shadows. Follow the view keeps a light in place relative to you, so the model turns under it as you orbit.\n\n\

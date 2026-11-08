@@ -592,6 +592,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     theme_appearance_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
+    crate::tube_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
     mesh_diagnostics_dialog(ui.ctx(), ed);
@@ -620,6 +621,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
     crate::lights_ui::markers(ui, ed, canvas);
+    crate::tube_ui::overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -2570,6 +2572,9 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ed.add_primitive(which);
             }
         }
+        if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
+            ed.start_tube();
+        }
     });
     if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
         ed.duplicate_active(false);
@@ -3077,6 +3082,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 if tips::button(ui, label, cmd).clicked() {
                     ed.add_primitive(which);
                 }
+            }
+            if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
+                ed.start_tube();
             }
         });
         if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {

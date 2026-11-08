@@ -76,6 +76,7 @@ commands! {
     AddCylinder => "Add cylinder piece", "", "Add a cylinder as a new piece, with even triangles ready to sculpt.";
     AddCone => "Add cone piece", "", "Add a cone as a new piece, with even triangles ready to sculpt.";
     AddTorus => "Add torus piece", "", "Add a torus (ring) as a new piece.";
+    AddTube => "Draw a tube", "", "Drag a path from the model or empty space to get a tube along it. Drag its points to shape it, Shift+drag a point to change its thickness, then Accept to add it as a new piece.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
