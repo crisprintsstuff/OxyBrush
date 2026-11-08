@@ -624,6 +624,8 @@ pub mod plain {
     pub const STABILIZER: &str =
         "The brush trails the pointer on a short string, for smoother lines. Zero turns it off.";
     pub const SPRAY: &str = "Scatter each dab's position, rotation and strength.";
+    pub const LINK_SEND: &str = "These objects came from another app. Click to send them back: it updates the same objects (keeping their UVs and modifiers when you didn't change the topology), and adds pieces you made here as new objects.";
+    pub const LINK_SEND_CLOSE: &str = "Send everything back to the other app, then close this document.";
     pub const LINK_BADGE: &str = "This document came from OxyCharacter. Click to send it back (File > Send back to OxyCharacter); OxyCharacter picks up the changes.";
     pub const HOLD_TO_CURVE: &str = "While drawing a Freehand stroke, hold the pen or mouse still for a moment: the stroke becomes an editable curve. Keep moving to extend it, then drag its points, and press Enter (or start the next stroke) to apply it.";
     pub const HOLD_TO_CURVE_ASK: &str =

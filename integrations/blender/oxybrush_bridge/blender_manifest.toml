@@ -1,0 +1,17 @@
+schema_version = "1.0.0"
+
+id = "oxybrush_bridge"
+version = "0.1.0"
+name = "OxyBrush Bridge"
+tagline = "Send meshes to OxyBrush to sculpt, and get them back"
+maintainer = "OxyBrush contributors"
+type = "add-on"
+website = "https://github.com/crisprintsstuff/OxyBrush"
+tags = ["Sculpt", "Import-Export"]
+
+blender_version_min = "4.2.0"
+
+license = ["SPDX:GPL-3.0-or-later"]
+
+[permissions]
+files = "Write the selected meshes to a temporary folder for OxyBrush, and read them back"

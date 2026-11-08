@@ -377,6 +377,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
                     ed.send_back();
                 }
+                if let Some(app) = ed.bridge.as_ref().map(|b| b.app().to_owned()) {
+                    if ui.button(format!("Send back to {app}")).on_hover_text(plain::LINK_SEND).clicked() {
+                        ed.send_back_link(false);
+                    }
+                    if ui.button(format!("Send back to {app} and close")).on_hover_text(plain::LINK_SEND_CLOSE).clicked() {
+                        ed.send_back_link(true);
+                    }
+                }
                 if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
@@ -1483,6 +1491,14 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
                     ed.show_shortcuts = !ed.show_shortcuts;
                 }
                 ui.separator();
+                if let Some(app) = ed.bridge.as_ref().map(|b| b.app().to_owned()) {
+                    let badge = egui::Button::new(RichText::new(format!("Linked to {app}")).small())
+                        .fill(ui.visuals().selection.bg_fill.linear_multiply(0.35));
+                    if tips::hover(ui.add(badge), plain::LINK_SEND).clicked() {
+                        ed.send_back_link(false);
+                    }
+                    ui.separator();
+                }
                 if ed.send_back_available() {
                     let badge = egui::Button::new(RichText::new("Linked to OxyCharacter").small())
                         .fill(ui.visuals().selection.bg_fill.linear_multiply(0.35));
@@ -3805,6 +3821,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             Pending::Quit => "quitting",
             Pending::New(_) => "starting a new document",
             Pending::OpenProject(_) => "opening another project",
+            Pending::OpenLink(_) => "opening the objects sent from another app",
         };
         egui::Modal::new(egui::Id::unique("unsaved")).show(&ctx, |ui| {
             ui.heading("Unsaved changes");
