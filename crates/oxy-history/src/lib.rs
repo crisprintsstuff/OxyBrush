@@ -16,6 +16,7 @@ use glam::Vec3;
 use oxy_doc::{Piece, Scene};
 use oxy_mesh::Mesh;
 use oxy_mesh::multires::Multires;
+use oxy_mesh::retopo::Cage;
 use std::collections::VecDeque;
 
 struct ChunkSnapshot {
@@ -47,6 +48,12 @@ enum Change {
         index: usize,
         piece: Option<Box<Piece>>,
     },
+    /// A retopology edit: the piece's mesh and cage are exchanged together.
+    Cage {
+        piece: u64,
+        mesh: Box<Mesh>,
+        cage: Option<Box<Cage>>,
+    },
     /// Several changes applied as one; order alternates on each swap.
     Compound(Vec<Change>),
 }
@@ -59,6 +66,8 @@ pub enum Step {
     Inserted { index: usize },
     /// `piece` was removed from `index`.
     Removed { index: usize, piece: Piece },
+    /// The piece's mesh and retopology cage were replaced; these are the old ones.
+    Cage { piece: u64, previous: Mesh, previous_cage: Option<Cage> },
 }
 
 impl From<Step> for Change {
@@ -69,6 +78,9 @@ impl From<Step> for Change {
             }
             Step::Inserted { index } => Change::Piece { index, piece: None },
             Step::Removed { index, piece } => Change::Piece { index, piece: Some(Box::new(piece)) },
+            Step::Cage { piece, previous, previous_cage } => {
+                Change::Cage { piece, mesh: Box::new(previous), cage: previous_cage.map(Box::new) }
+            }
         }
     }
 }
@@ -85,6 +97,9 @@ impl Change {
             }
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
+            Change::Cage { mesh, cage, .. } => {
+                mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
+            }
             Change::Compound(c) => c.iter().map(Change::bytes).sum(),
         }
     }
@@ -142,6 +157,14 @@ impl Change {
                     None
                 }
             },
+            Change::Cage { piece, mesh, cage } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.mesh, mesh);
+                let current = p.cage.take().map(Box::new);
+                p.cage = std::mem::replace(cage, current).map(|b| *b);
+                p.mesh.mark_all_dirty();
+                Some(*piece)
+            }
             Change::Compound(changes) => {
                 let mut last = None;
                 for c in changes.iter_mut() {
@@ -283,6 +306,14 @@ impl History {
         self.push(label.into(), change);
     }
 
+    /// Record a retopology edit: `previous` and `previous_cage` are the
+    /// piece's mesh and cage before it.
+    pub fn record_cage(&mut self, label: impl Into<String>, piece: u64, previous: Mesh, previous_cage: Option<Cage>) {
+        self.commit();
+        let change = Change::Cage { piece, mesh: Box::new(previous), cage: previous_cage.map(Box::new) };
+        self.push(label.into(), change);
+    }
+
     /// Record a face group / visibility edit with the previous values.
     pub fn record_faces(&mut self, label: impl Into<String>, piece: u64, groups: Vec<u32>, hidden: Vec<bool>) {
         self.commit();
@@ -382,6 +413,41 @@ mod tests {
 
     fn scene() -> Scene {
         Scene::new(Piece::new("Sphere", primitives::icosphere(5, 1.0)))
+    }
+
+    #[test]
+    fn cage_edits_swap_mesh_and_cage_together() {
+        use oxy_mesh::retopo::Cage;
+        let mut cage = Cage::default();
+        for p in [Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0), Vec3::Y] {
+            cage.add_vertex(p);
+        }
+        cage.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
+        let mut piece = Piece::new("Retopo", cage.build_mesh().unwrap());
+        piece.cage = Some(cage);
+        let id = piece.id;
+        let mut s = Scene::new(piece);
+        let mut h = History::default();
+        // Add a second quad.
+        let before_mesh = s.active().mesh.clone();
+        let before_cage = s.active().cage.clone();
+        let p = s.get_mut(id).unwrap();
+        let c = p.cage.as_mut().unwrap();
+        let a = c.add_vertex(Vec3::new(2.0, 0.0, 0.0));
+        let b = c.add_vertex(Vec3::new(2.0, 1.0, 0.0));
+        c.add_face(&[1, a, b, 2], Vec3::Z).unwrap();
+        p.mesh = c.build_mesh().unwrap();
+        h.record_cage("Add quad", id, before_mesh, before_cage);
+        assert_eq!(s.active().cage.as_ref().unwrap().quad_count(), 2);
+        h.undo(&mut s);
+        let p = s.active();
+        assert_eq!(p.cage.as_ref().unwrap().quad_count(), 1);
+        assert_eq!(p.mesh.triangle_count(), 2);
+        assert!(p.cage.as_ref().unwrap().is_linked_to(&p.mesh), "the old cage still matches the old mesh");
+        h.redo(&mut s);
+        let p = s.active();
+        assert_eq!(p.cage.as_ref().unwrap().quad_count(), 2);
+        assert!(p.cage.as_ref().unwrap().is_linked_to(&p.mesh));
     }
 
     #[test]

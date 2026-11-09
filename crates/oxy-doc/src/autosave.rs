@@ -150,6 +150,7 @@ mod tests {
                 multires: None,
                 vertex_map: None,
                 symmetry_center: None,
+                cage: None,
             }],
             active: 0,
         };
