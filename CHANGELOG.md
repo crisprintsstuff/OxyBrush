@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.4-beta] - 2026-11-09
+
 ### Added
 - **Transform gizmo operators:**
   - **Plane handles:** small squares between two axes move or scale along both at once. The centre handle in Scale still scales evenly.
