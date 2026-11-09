@@ -2371,6 +2371,10 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ui.label(RichText::new("Masked parts stay put").weak().small()),
                             plain::GIZMO_MASKED,
                         );
+                        ui.separator();
+                        tips::hover(ui.toggle_value(&mut ed.gizmo_snap, "Snap"), plain::GIZMO_SNAP);
+                        gizmo_pivot_menu(ui, ed);
+                        gizmo_ops_menu(ui, ed);
                         if (ed.custom_gizmo_pivot.is_some() || ed.custom_gizmo_rotation.is_some())
                             && tips::hover(
                                 ui.button("Reset Pivot"),
@@ -2384,6 +2388,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ed.gizmo = None;
                         }
                     });
+                    gizmo_numeric_row(ui, ed, mode);
                 },
             );
         });
@@ -2424,6 +2429,16 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
             }
         }
     }
+    // Plane squares: the colour of the axis they are at right angles to.
+    for (i, at) in layout.planes.iter().enumerate() {
+        let Some(at) = at else { continue };
+        let hot = hover == Some(Handle::Plane(i));
+        let [r, g, b, _] = AXIS_COLORS[i].to_array();
+        let fill = if hot { Color32::WHITE } else { Color32::from_rgba_unmultiplied(r, g, b, 150) };
+        let rect = egui::Rect::from_center_size(to_pt(*at), egui::vec2(12.0, 12.0));
+        painter.rect_filled(rect, 1.5, fill);
+        painter.rect_stroke(rect, 1.5, EStroke::new(1.0, AXIS_COLORS[i]), egui::StrokeKind::Inside);
+    }
     let hot = hover == Some(Handle::Center);
     painter.circle_filled(c, if hot { 8.0 } else { 6.5 }, if hot { Color32::WHITE } else { Color32::from_gray(225) });
     painter.circle_stroke(c, 9.0, EStroke::new(1.5, Color32::from_black_alpha(140)));
@@ -2433,8 +2448,131 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         let at = match handle {
             Handle::Center => c,
             Handle::Axis(i) => layout.axes[i].map(to_pt).unwrap_or(c),
+            Handle::Plane(i) => layout.planes[i].map(to_pt).unwrap_or(c),
         };
         tips::show_at(ctx, at, tips::gizmo_handle_tip(mode, handle));
+    }
+}
+
+/// Pivot and orientation choices for the transform gizmo.
+fn gizmo_pivot_menu(ui: &mut Ui, ed: &mut Editor) {
+    use crate::gizmo_ops::{Orientation, PivotChoice};
+    ui.menu_button("Pivot", |ui| {
+        ui.label(RichText::new("Pivot").strong());
+        for c in PivotChoice::ALL {
+            if ui.button(c.label()).clicked() {
+                ed.set_gizmo_pivot(c);
+                ui.close();
+            }
+        }
+        ui.label(RichText::new("Ctrl+click the model: pivot on the surface, axes along its normal").weak().small());
+        ui.label(RichText::new("Alt+drag a handle: move the pivot only").weak().small());
+        ui.separator();
+        ui.label(RichText::new("Axes").strong());
+        if ui.button("World").clicked() {
+            ed.set_gizmo_orientation(Orientation::World);
+            ui.close();
+        }
+        if ui.button("Align to view").clicked() {
+            ed.set_gizmo_orientation(Orientation::View);
+            ui.close();
+        }
+        ui.separator();
+        ui.label(RichText::new("Snap steps (Snap on, or hold Shift while dragging)").strong());
+        egui::Grid::new("gizmo_snap_steps").num_columns(2).show(ui, |ui| {
+            let s = &mut ed.gizmo_snap_steps;
+            ui.label("Move");
+            ui.add(egui::DragValue::new(&mut s.step).speed(0.01).range(0.001..=100.0).suffix(" units"));
+            ui.end_row();
+            ui.label("Rotate");
+            let mut deg = s.angle.to_degrees();
+            if ui.add(egui::DragValue::new(&mut deg).speed(0.5).range(0.5..=180.0).suffix("°")).changed() {
+                s.angle = deg.to_radians();
+            }
+            ui.end_row();
+            ui.label("Scale");
+            let mut pct = s.scale * 100.0;
+            if ui.add(egui::DragValue::new(&mut pct).speed(0.5).range(1.0..=100.0).suffix(" %")).changed() {
+                s.scale = pct / 100.0;
+            }
+            ui.end_row();
+        });
+    });
+}
+
+/// One-click transform operators.
+fn gizmo_ops_menu(ui: &mut Ui, ed: &mut Editor) {
+    ui.menu_button("Operators", |ui| {
+        for (axis, cmd) in [(0, Cmd::GizmoMirrorX), (1, Cmd::GizmoMirrorY), (2, Cmd::GizmoMirrorZ)] {
+            if tips::hover(ui.button(cmd.label()), cmd.what()).clicked() {
+                ed.mirror_gizmo(axis);
+                ui.close();
+            }
+        }
+        ui.separator();
+        if tips::hover(ui.button(Cmd::GizmoGround.label()), Cmd::GizmoGround.what()).clicked() {
+            ed.put_on_ground();
+            ui.close();
+        }
+        if tips::hover(ui.button(Cmd::GizmoCenter.label()), Cmd::GizmoCenter.what()).clicked() {
+            ed.center_at_origin();
+            ui.close();
+        }
+        ui.separator();
+        ui.label(RichText::new("Ctrl+drag a handle: duplicate what moves, then transform the copy").weak().small());
+    });
+}
+
+/// Typed values for the current gizmo mode, applied with Apply (or Enter).
+fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
+    let mut apply = false;
+    ui.horizontal(|ui| {
+        let n = &mut ed.gizmo_numeric;
+        let mut field = |ui: &mut Ui, v: &mut f32, speed: f64, suffix: &str, label: &str, color: Color32| {
+            ui.label(RichText::new(label).color(color).strong());
+            let r = ui.add(egui::DragValue::new(v).speed(speed).max_decimals(3).suffix(suffix));
+            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                apply = true;
+            }
+            r.changed()
+        };
+        let names = ["X", "Y", "Z"];
+        match mode {
+            GizmoMode::Move => {
+                ui.label(RichText::new("Move by").weak());
+                for a in 0..3 {
+                    field(ui, &mut n.offset[a], 0.01, "", names[a], AXIS_COLORS[a]);
+                }
+            }
+            GizmoMode::Rotate => {
+                ui.label(RichText::new("Turn by").weak());
+                for a in 0..3 {
+                    field(ui, &mut n.degrees[a], 0.5, "°", names[a], AXIS_COLORS[a]);
+                }
+            }
+            GizmoMode::Scale => {
+                ui.label(RichText::new("Scale by").weak());
+                if n.uniform {
+                    let mut v = n.scale.x;
+                    if field(ui, &mut v, 0.01, "×", "XYZ", Color32::from_gray(220)) {
+                        n.scale = glam::Vec3::splat(v);
+                    }
+                } else {
+                    for a in 0..3 {
+                        field(ui, &mut n.scale[a], 0.01, "×", names[a], AXIS_COLORS[a]);
+                    }
+                }
+                if ui.checkbox(&mut n.uniform, "Even").changed() && n.uniform {
+                    n.scale = glam::Vec3::splat(n.scale.x);
+                }
+            }
+        }
+        if tips::hover(ui.button("Apply"), plain::GIZMO_APPLY).clicked() {
+            apply = true;
+        }
+    });
+    if apply {
+        ed.apply_gizmo_numeric();
     }
 }
 

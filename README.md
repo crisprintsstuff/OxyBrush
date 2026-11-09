@@ -113,7 +113,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Alphas:** grayscale images shape each dab; seven built-in procedural alphas plus your own grayscale PNGs, with rotation and follow-stroke.
 - **Masking and selection:** box or lasso mask/unmask and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
 - **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks that respect the mask. Saved in projects and carried through subdivision levels.
-- **Transform gizmo (T):** move, rotate or scale a piece in the viewport. With a mask, only the unmasked part moves, and a soft mask edge bends smoothly, which makes it a quick posing tool (mask the body, rotate an arm at the shoulder).
+- **Transform gizmo (T):** move, rotate or scale a piece in the viewport. With a mask, only the unmasked part moves, and a soft mask edge bends smoothly, which makes it a quick posing tool (mask the body, rotate an arm at the shoulder). Squares between the axes move or scale along two axes; **Shift** snaps to steps; the gizmo bar takes typed values, has pivot choices (bounding box, ground, origin, align to view) and operators: mirror, put on the ground, centre at origin.
 - **Symmetry:** X/Y/Z mirroring with $C^2$ cubic directional weighting ($\omega_i = w_i^3$) preventing midline creasing and circular boundary tearing, plus radial symmetry (up to 64 copies around any axis). Each piece mirrors about its own centre, picked from its shape when it's imported or opened (models built around the origin keep the origin), with **Recentre** and **World origin** buttons to change it.
 - **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active.
 - **Dynamic detail:** turn it on in the Topology section and sculpting brushes add triangles where they need more detail (and remove ones that have become too small), so you can build a shape from a plain sphere without remeshing. The Detail slider and the brush size set how fine it gets; symmetry and masks are respected, and each stroke is one undo step. Works best up to a few hundred thousand triangles. Design in [RFC 0006](docs/rfcs/0006-dynamic-detail.md).
@@ -172,6 +172,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `G` | Face group colors |
 | Shift+drag on empty space | Orbit in 45° steps |
 | `T` | Transform gizmo: move → rotate → scale → off |
+| `Shift`+drag a gizmo handle | Snap to steps (0.1, 15°, 10 %) |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Right click / hold `Q` | Quick menu at the cursor (size, strength, Raise/Carve) |

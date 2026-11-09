@@ -112,6 +112,11 @@ commands! {
     GizmoMove => "Transform: move", "T", "Move the active piece. Masked parts stay put. T cycles the gizmo.";
     GizmoRotate => "Transform: rotate", "", "Rotate the active piece. Masked parts stay put. T cycles the gizmo.";
     GizmoScale => "Transform: scale", "", "Scale the active piece. Masked parts stay put. T cycles the gizmo.";
+    GizmoMirrorX => "Mirror X", "", "Flip the active piece across the gizmo's X plane, through the pivot. Works on the whole piece (no mask).";
+    GizmoMirrorY => "Mirror Y", "", "Flip the active piece across the gizmo's Y plane, through the pivot. Works on the whole piece (no mask).";
+    GizmoMirrorZ => "Mirror Z", "", "Flip the active piece across the gizmo's Z plane, through the pivot. Works on the whole piece (no mask).";
+    GizmoGround => "Put on the ground", "", "Move the active piece (its unmasked part) straight up or down so its lowest point is at Y = 0.";
+    GizmoCenter => "Centre at origin", "", "Move the active piece (its unmasked part) so its bounding box is centred on the world origin.";
     FillColor => "Fill color", "", "Paint the current color onto everything that is not masked.";
     FillCavities => "Fill cavities with color", "", "Paint creases and pores, more where they are deeper.";
     FillPeaks => "Fill peaks with color", "", "Paint ridges and edges, for example for worn highlights.";
@@ -495,6 +500,9 @@ pub fn gizmo_handle_tip(mode: GizmoMode, handle: Handle) -> &'static str {
         (GizmoMode::Scale, Handle::Axis(1)) => "Drag to scale up and down. Masked parts stay put.",
         (GizmoMode::Scale, Handle::Axis(2)) => "Drag to scale forward and back. Masked parts stay put.",
         (GizmoMode::Scale, Handle::Center) => "Drag to scale evenly. Masked parts stay put.",
+        (GizmoMode::Move, Handle::Plane(_)) => "Drag to move in this plane (along both of its axes). Shift snaps.",
+        (GizmoMode::Scale, Handle::Plane(_)) => "Drag to scale along both axes of this plane. Shift snaps.",
+        (GizmoMode::Rotate, Handle::Plane(_)) => "Drag to spin around the view direction.",
         (_, Handle::Axis(_)) => "Drag this handle. Masked parts stay put.",
     }
 }
@@ -597,6 +605,10 @@ pub mod plain {
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
     pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side.";
     pub const GIZMO_DONE: &str = "Hide the transform gizmo.";
+    pub const GIZMO_SNAP: &str =
+        "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
+    pub const GIZMO_APPLY: &str =
+        "Apply the typed values about the pivot, along the gizmo's axes, as one undo step (Enter in a field too).";
     pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
     pub const GIZMO_MASKED: &str = "Masked parts stay put. A soft mask edge bends instead of tearing.";
     pub const PIECE_HIDE: &str = "Hide this piece. Hidden pieces are not sculpted or exported.";
@@ -786,6 +798,8 @@ pub mod plain {
         ZOOM,
         AXIS_GIZMO,
         GIZMO_DONE,
+        GIZMO_SNAP,
+        GIZMO_APPLY,
         PLUGINS_MENU,
         GIZMO_MASKED,
         PIECE_HIDE,

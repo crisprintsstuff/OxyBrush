@@ -145,6 +145,11 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::GizmoMove, "gizmo pose translate", |e| e.toggle_gizmo(crate::pose::GizmoMode::Move)),
         cmd(ed, Cmd::GizmoRotate, "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
         cmd(ed, Cmd::GizmoScale, "gizmo pose resize", |e| e.toggle_gizmo(crate::pose::GizmoMode::Scale)),
+        cmd(ed, Cmd::GizmoMirrorX, "transform flip symmetry", |e| e.mirror_gizmo(0)),
+        cmd(ed, Cmd::GizmoMirrorY, "transform flip upside down", |e| e.mirror_gizmo(1)),
+        cmd(ed, Cmd::GizmoMirrorZ, "transform flip", |e| e.mirror_gizmo(2)),
+        cmd(ed, Cmd::GizmoGround, "transform floor drop y zero rest", Editor::put_on_ground),
+        cmd(ed, Cmd::GizmoCenter, "transform center middle origin zero", Editor::center_at_origin),
         cmd(ed, Cmd::FillColor, "paint vertex color", |e| {
             let c = e.paint_color;
             e.edit_color("Fill color", |m| m.fill_color(c, 1.0))
