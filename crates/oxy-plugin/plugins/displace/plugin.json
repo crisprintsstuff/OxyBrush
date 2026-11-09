@@ -1,0 +1,16 @@
+{
+  "name": "Displace",
+  "version": "1.0",
+  "description": "Pushes the surface of the active piece out or in along its normals, or roughens it with noise. Masked parts stay put.",
+  "api": 2,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "inflate", "label": "Inflate" },
+    { "id": "deflate", "label": "Deflate" },
+    { "id": "roughen", "label": "Roughen" }
+  ],
+  "params": [
+    { "id": "amount", "label": "Amount (% of size)", "min": 0.0, "max": 10.0, "default": 1.0 },
+    { "id": "seed", "label": "Noise seed", "min": 0.0, "max": 1000.0, "default": 1.0 }
+  ]
+}

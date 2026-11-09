@@ -1038,6 +1038,8 @@ pub struct Editor {
     pub request_run_script: bool,
     /// Set by the UI to ask for an `.oxyaddon` file to install.
     pub request_install_addon: bool,
+    /// A plugin whose Remove was clicked once (click again to confirm).
+    pub confirm_remove_plugin: Option<PathBuf>,
     /// Set by the UI to run a specific discovered plugin script.
     pub request_run_plugin: Option<PathBuf>,
     /// Set by the UI to open the user's plugins folder.
@@ -1253,6 +1255,7 @@ impl Default for Editor {
             plugins: crate::plugins::discover_plugins(),
             request_run_script: false,
             request_install_addon: false,
+            confirm_remove_plugin: None,
             request_run_plugin: None,
             request_open_plugins_dir: false,
             request_reload_plugins: false,
@@ -5623,6 +5626,75 @@ mod tests {
         e.wasm_plugins[slot].show_panel = true;
         e.update_plugin_overlays();
         assert_eq!(e.wasm_plugins[slot].lines.len(), 2);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bundled_plugins_install_load_and_run_and_user_plugins_can_be_removed() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-bundled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::wasm_plugins::install_examples(&dir);
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugin_errors.is_empty(), "{:?}", e.wasm_plugin_errors);
+        assert_eq!(e.wasm_plugins.len(), oxy_plugin::BUNDLED.len());
+        // Every command of every bundled plugin runs and leaves an undoable scene.
+        for slot in 0..e.wasm_plugins.len() {
+            let commands = e.wasm_plugins[slot].plugin.as_ref().unwrap().manifest.commands.len();
+            for k in 0..commands {
+                let pieces = e.scene.pieces.len();
+                let labels = e.history.undo_labels().count();
+                e.run_wasm_plugin(slot, k);
+                wait_job(&mut e);
+                let name = e.wasm_plugins[slot].name.clone();
+                assert!(!e.status.contains("stopped") && !e.status.contains("skipped"), "{name}: {}", e.status);
+                if e.history.undo_labels().count() > labels {
+                    e.undo();
+                }
+                assert_eq!(e.scene.pieces.len(), pieces, "{name} undone");
+            }
+        }
+        // Mask by Height leaves the lower half masked.
+        let slot = e.wasm_plugins.iter().position(|p| p.name == "Mask by Height").unwrap();
+        e.run_wasm_plugin(slot, 0);
+        wait_job(&mut e);
+        let m = &e.scene.active().mesh;
+        let below = (0..m.vertex_count()).filter(|&v| m.positions[v].y < -0.2).all(|v| m.mask[v] == 1.0);
+        let above = (0..m.vertex_count()).filter(|&v| m.positions[v].y > 0.2).all(|v| m.mask[v] == 0.0);
+        assert!(below && above);
+        // Array adds pieces as one undo step.
+        let slot = e.wasm_plugins.iter().position(|p| p.name == "Array").unwrap();
+        e.run_wasm_plugin(slot, 0);
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 4, "{}", e.status);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // A plugin you installed can be removed; bundled ones can't (they come back).
+        std::fs::create_dir_all(dir.join("mine")).unwrap();
+        std::fs::write(dir.join("mine/plugin.json"), r#"{"name":"Mine","api":1,"commands":[{"id":"go"}]}"#).unwrap();
+        std::fs::write(
+            dir.join("mine/plugin.wat"),
+            r#"(module (memory (export "memory") 1) (func (export "run") (param i32)))"#,
+        )
+        .unwrap();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugins.iter().any(|p| p.name == "Mine"));
+        assert!(Editor::removable_target(&dir.join("squash"), &dir).is_none());
+        assert!(!e.remove_plugin_in(&dir.join("squash"), &dir));
+        assert!(dir.join("squash").exists());
+        assert!(Editor::removable_target(&dir.join("../etc"), &dir).is_none(), "nothing outside the folder");
+        assert!(e.remove_plugin_in(&dir.join("mine"), &dir), "{}", e.status);
+        assert!(!dir.join("mine").exists());
+        assert!(!e.wasm_plugins.iter().any(|p| p.name == "Mine"));
+        // A loose Python script, and a Python add-on (its folder goes).
+        std::fs::write(dir.join("tool.py"), "# Name: Tool\n").unwrap();
+        std::fs::create_dir_all(dir.join("addon")).unwrap();
+        std::fs::write(dir.join("addon/main.py"), "# Name: Addon\n").unwrap();
+        assert!(e.remove_plugin_in(&dir.join("tool.py"), &dir));
+        assert!(e.remove_plugin_in(&dir.join("addon/main.py"), &dir));
+        assert!(!dir.join("tool.py").exists() && !dir.join("addon").exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

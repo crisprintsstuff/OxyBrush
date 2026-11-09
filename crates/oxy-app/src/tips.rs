@@ -609,6 +609,7 @@ pub mod plain {
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
     pub const GIZMO_APPLY: &str =
         "Apply the typed values about the pivot, along the gizmo's axes, as one undo step (Enter in a field too).";
+    pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
     pub const GIZMO_MASKED: &str = "Masked parts stay put. A soft mask edge bends instead of tearing.";
     pub const PIECE_HIDE: &str = "Hide this piece. Hidden pieces are not sculpted or exported.";
     pub const PIECE_SHOW: &str = "Show this piece again.";
@@ -799,6 +800,7 @@ pub mod plain {
         GIZMO_DONE,
         GIZMO_SNAP,
         GIZMO_APPLY,
+        PLUGINS_MENU,
         GIZMO_MASKED,
         PIECE_HIDE,
         PIECE_SHOW,

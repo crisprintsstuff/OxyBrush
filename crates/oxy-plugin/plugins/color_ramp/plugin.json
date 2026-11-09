@@ -1,0 +1,14 @@
+{
+  "name": "Color Ramp",
+  "version": "1.0",
+  "description": "Paints the active piece with vertex color: a ramp from bottom to top, or a color for each direction the surface faces. Masked parts keep their color.",
+  "api": 2,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "height", "label": "Color by height" },
+    { "id": "direction", "label": "Color by direction" }
+  ],
+  "params": [
+    { "id": "strength", "label": "Strength", "min": 0.0, "max": 1.0, "default": 1.0 }
+  ]
+}

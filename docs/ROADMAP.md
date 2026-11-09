@@ -6,13 +6,13 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-09 (unreleased: transform gizmo operators. v3.0.3-beta: parametric low-poly primitives; Tube brush; .oxyaddon packages and plugin API 2; F frames the active piece; zoom direction options. v3.0.2-beta: Blender bridge (RFC 0010); in-app WebAssembly plugins (RFC 0011); Close holes; capture alpha from view. v3.0.1-beta: viewport lights and shadows (RFC 0008); floor grid button on the view strip; cylinder, cone and torus pieces; Split hidden; history newest first; focal shift and S/U/I/O pointer sliders; tube tool (RFC 0009). v3.0.0-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); plugin API read access (RFC 0007); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-09 (v3.0.4-beta: transform gizmo operators (plane handles, snapping, typed values, pivot choices, mirror); Plugins menu, built-in in-app plugins, Remove. v3.0.3-beta: parametric low-poly primitives; Tube brush; .oxyaddon packages and plugin API 2; F frames the active piece; zoom direction options. v3.0.2-beta: Blender bridge (RFC 0010); in-app WebAssembly plugins (RFC 0011); Close holes; capture alpha from view. v3.0.1-beta: viewport lights and shadows (RFC 0008); floor grid button on the view strip; cylinder, cone and torus pieces; Split hidden; history newest first; focal shift and S/U/I/O pointer sliders; tube tool (RFC 0009). v3.0.0-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); plugin API read access (RFC 0007); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | v3.0.3-beta (2026-11-08): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Latest release** | v3.0.4-beta (2026-11-09): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), performance passes (3.6: stroke coalescing, dab budgeting, Rayon GPU & geometry acceleration), interface pass, Phase 4 items (Python plugin system, local MCP agent, keymap editor & presets, vertex color, transform gizmo & posing, Kelvinlet brushes, mask extract, themes & appearance, wireframe overlay, viewport background, focal length, autosave control), pipeline basics (glTF/GLB, PLY, LOD chains, CLI), OxyCharacter round trip (linked documents, Send back, `VMAP` exact vertex mapping), and native ZBrush (.ztl, .zpr) multi-subtool import |
 | **Next** | Phase 3 leftovers — rebuild lower levels from a dense mesh (3.5), stencils (3.3), SIMD kernels and culling for 10M triangles (3.6), iPad (3.8–3.10). Phase 4 — dynamic topology, sculpt layers, symmetry repair, vertex color in exports |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
@@ -70,7 +70,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - **Decision pending (before 3.8):** calling iOS APIs from Rust needs `unsafe`, which AGENTS.md currently forbids workspace-wide. The proposal is to allow it only in one small, reviewed platform crate.
 - **Bonus of the Apple account:** the same membership allows notarizing the macOS app, removing the "Open Anyway" step for Mac users.
 
-## Phase 4 — Workflow and experience 🚧 (items shipped from v0.4.0-alpha to v3.0.3-beta)
+## Phase 4 — Workflow and experience 🚧 (items shipped from v0.4.0-alpha to v3.0.4-beta)
 
 | Feature | Details | Effort |
 |---|---|---|
@@ -86,7 +86,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **More masking** | Mask by normal angle or topology; one mask per face group | 1–2 wk |
 | **Viewport & lighting** | Screen-space ambient occlusion and cavity shading ✅, user-imported matcaps ✅, flat shading ✅, 45° view snapping ✅, gradient or flat background with colors ✅, focal length (15–200 mm, remembered) ✅, surface-aligned brush cursor (optional, off by default) ✅. ⏳ Dynamic studio lights (directional, point, spot), atmospheric distance/depth fog, shadows, wireframe overlay, floor grid, reference image planes, turntable/still image export, material per piece | 3–5 wk |
 | **Path tracer renderer** | Progressive hardware-accelerated / compute path tracer for photorealistic render previews, realistic contact shadows and ambient lighting | 4–6 wk |
-| **Python plugin system** | ✅ Pure-Python SDK and a Plugins menu that talk to the app over the local MCP server (v0.5.0-alpha), with example plugins. ✅ In-app WebAssembly plugins with panels, commands, mesh edits through undo, and viewport overlays, sandboxed ([RFC 0011](rfcs/0011-wasm-plugins.md)). ✅ Read access for plugins (structured scene and camera, change events, binary geometry; [RFC 0007](rfcs/0007-plugin-api-read-access.md)). ⏳ Plugin panels, commands and viewport overlays (RFC 0007 phase 2); procedural brushes and import/export filters as plugins | — |
+| **Python plugin system** | ✅ Pure-Python SDK and a Plugins menu that talk to the app over the local MCP server (v0.5.0-alpha), with example plugins. ✅ In-app WebAssembly plugins with panels, commands, mesh edits through undo, and viewport overlays, sandboxed ([RFC 0011](rfcs/0011-wasm-plugins.md)). ✅ Read access for plugins (structured scene and camera, change events, binary geometry; [RFC 0007](rfcs/0007-plugin-api-read-access.md)). ✅ API 2 (mask, vertex color, new pieces), `.oxyaddon` packages, a Plugins menu, built-in plugins (Displace, Mask by Height, Color Ramp, Array, Measure, Squash) and Remove. ⏳ procedural brushes and import/export filters as plugins | — |
 | **Blender bridge** | ✅ First version ([RFC 0010](rfcs/0010-blender-bridge.md)): Send to OxyBrush from Blender, Send back (and close), OBJ exchange, objects kept when vertices are unchanged; the add-on in `integrations/blender/` (GPL-3.0-or-later). ⏳ Testing inside Blender, publishing on extensions.blender.org, glTF exchange | 1–2 wk |
 | **Brush presets** | ✅ Save, apply, share as codes and files; starter presets. ⏳ Custom shelves of favourite presets | — |
 | **Interface** | ✅ First friendliness pass (welcome window, brush/alpha/material previews with thumbnail pickers, brush icons and tooltips, toolbar with Raise/Carve, view strip and axis gizmo, gradient background, collapsible sections, status-bar hints). Layouts (Standard, Compact, Touch, Workstation), arrangeable panels (shelf left/bottom/right, panel side, centered size/strength bar), drag-to-reorder brushes and remembered interface settings ✅. Command palette (Ctrl+K), type-to-pick brush finder (Space), recent files and a built-in searchable guide ✅. Quick menu at the cursor (right click / hold Q), middle-drag panel scrolling ✅. Keymap editor, mouse-navigation presets (OxyBrush and MMB orbit) and optional Ctrl-carve / Alt-mask gestures ✅. A tooltip on every control (what it does, plus the shortcut from one shared list), and the same text on a long-press in the Touch layout ✅. ⏳ Custom shelves (subsets/favorites), remembering brush settings | 3–4 wk |
@@ -127,7 +127,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v3.0.3-beta)
+## Known limitations (v3.0.4-beta)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Decimation takes a few seconds on dense meshes (runs in the background)
@@ -141,7 +141,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - Curve Move: changing its reach with a curve open is slow on dense meshes (100–200 ms at 1.3M triangles); curves aren't saved with the project
 - Tube tool: points move on the view plane (no surface snapping); the tube stays a separate piece until merged; it can't be edited after Accept
 - Blender bridge: the add-on is not yet tested inside Blender; OBJ only; a second send opens a second OxyBrush window
-- In-app plugins: can change vertex positions only; their commands are not in the command palette
+- In-app plugins: can't change topology or face groups of existing pieces; add-ons are not signed
 
 ---
 
