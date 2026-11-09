@@ -4,6 +4,15 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Transform gizmo operators:**
+  - **Plane handles:** small squares between two axes move or scale along both at once. The centre handle in Scale still scales evenly.
+  - **Snapping:** hold **Shift** while dragging a handle (or turn on **Snap** in the gizmo bar) to move in steps of 0.1, turn in 15° steps and scale in 10 % steps. Steps are set under **Pivot**.
+  - **Typed values:** the gizmo bar has fields for the current mode (Move by X/Y/Z, Turn by X/Y/Z degrees, Scale by, even or per axis) and **Apply** (or Enter). They work along the gizmo's axes, about its pivot, as one undo step.
+  - **Pivot menu:** put the pivot on the mask edge or centre (default), the bounding box centre or bottom, or the world origin; set the axes to the world or align them to the view. A pivot you place travels with the piece.
+  - **Operators menu:** **Mirror X / Y / Z** through the pivot (whole piece; faces stay facing out), **Put on the ground** (lowest point at Y = 0) and **Centre at origin**. Also in the command palette.
+  - Masked parts stay put for all of them, as with dragging.
+
 ## [3.0.3-beta] - 2026-11-08
 
 ### Added
