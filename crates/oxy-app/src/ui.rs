@@ -607,6 +607,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
     crate::tube_ui::window(ui.ctx(), ed);
+    crate::retopo_ui::window(ui.ctx(), ed);
     crate::primitive_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
@@ -640,6 +641,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     ed.update_plugin_overlays();
     crate::wasm_plugins::overlays(ui, ed, canvas);
     crate::tube_ui::overlay(ui, ed, canvas);
+    crate::retopo_ui::overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -2631,6 +2633,17 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
+    if ed.retopo.is_some() {
+        let m = ed.active_modifiers();
+        return match (m.ctrl, m.shift) {
+            (true, true) => "Retopology: click a point or face to delete it",
+            (true, false) => "Retopology: click an edge to insert an edge loop",
+            (false, true) => "Retopology: click to make the quad shown · drag to relax",
+            _ if ed.tab_held => "Retopology: drag a border edge to pull out a quad",
+            _ => "Retopology: click to place a point · drag to move · drag empty space: orbit",
+        }
+        .into();
+    }
     let m = ed.brush_roles();
     let clear = ed.keymap.mask_empty == keymap::MaskEmpty::Clear;
     match (m.ctrl, m.shift, m.alt) {
@@ -2883,6 +2896,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
+    }
+    if tips::button(ui, "Retopology (draw quads)…", Cmd::Retopology).clicked() {
+        ed.start_retopo();
     }
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
@@ -4632,7 +4648,7 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
 }
 
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
-    if !ed.pointer_in_canvas() {
+    if !ed.pointer_in_canvas() || ed.retopo.is_some() {
         return;
     }
     let Some(p) = ed.pointer else { return };

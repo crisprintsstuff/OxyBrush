@@ -4,6 +4,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Retopology tool** ([RFC 0012](docs/rfcs/0012-retopology.md)): **Mesh > Retopology (draw quads)…** rebuilds a sculpt as a clean, low-polygon mesh of quads that you draw by hand on its surface.
+  - **Click** places a point on the surface; **drag** a point, edge or face to slide it along the surface; drop a point on another to **weld** them.
+  - Hold **Shift** to preview the quad (green) or triangle (purple) the nearest points make; **Shift+click** makes it. **Shift+drag** relaxes the points under the cursor.
+  - **Tab+drag** a border edge pulls out a new quad; **Ctrl+click** an edge inserts an edge loop; **Ctrl+Shift+click** deletes a point or face.
+  - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
+
 ## [3.0.4-beta] - 2026-11-09
 
 ### Added

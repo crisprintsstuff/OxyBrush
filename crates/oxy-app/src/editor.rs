@@ -598,6 +598,8 @@ pub enum Drag {
     },
     /// Dragging a transform gizmo handle.
     Gizmo(Box<GizmoDrag>),
+    /// A drag in the retopology tool (RFC 0012).
+    Retopo(Box<crate::retopo::RetopoDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -971,6 +973,12 @@ pub struct Editor {
     pub tube_armed: bool,
     /// The piece the tube being drawn will be added into (Tube brush).
     pub tube_into: Option<u64>,
+    /// The retopology tool, while its window is open (RFC 0012).
+    pub retopo: Option<crate::retopo::Retopo>,
+    /// The last (surface, retopology piece) pair, to continue it.
+    pub retopo_last: Option<(u64, u64)>,
+    /// Tab is held (retopology: Tab+drag extends a border edge).
+    pub tab_held: bool,
     /// Mask extract in progress: the shell is shown and can be adjusted, and
     /// becomes a piece only when accepted.
     pub extract_preview: Option<ExtractPreview>,
@@ -1222,6 +1230,9 @@ impl Default for Editor {
             tube: None,
             tube_armed: false,
             tube_into: None,
+            retopo: None,
+            retopo_last: None,
+            tab_held: false,
             extract_preview: None,
             curve: None,
             curve_fade_in: 0.15,
@@ -1771,6 +1782,9 @@ impl Editor {
             self.rmb_press = (button == PointerButton::Secondary).then_some(p);
             let nav_button = if button == PointerButton::Middle { NavButton::Middle } else { NavButton::Right };
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
+            return;
+        }
+        if self.retopo_pointer_down(p) {
             return;
         }
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
@@ -2394,7 +2408,7 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
-        if self.tube_pointer_moved(pos) {
+        if self.tube_pointer_moved(pos) || self.retopo_pointer_moved(pos) {
             return true;
         }
         if let Drag::Stroke { hold: Some(h), .. } = &mut self.drag {
@@ -2410,8 +2424,8 @@ impl Editor {
         let size = self.canvas_size();
         match &mut self.drag {
             Drag::None => false,
-            // Handled by `tube_pointer_moved` above.
-            Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. } => true,
+            // Handled by `tube_pointer_moved` / `retopo_pointer_moved` above.
+            Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. } | Drag::Retopo(_) => true,
             Drag::Orbit => {
                 // The snap key (Shift, unless the keymap says otherwise) steps the view by 45°.
                 if self.snap_modifier_held() {
@@ -2692,7 +2706,7 @@ impl Editor {
 
     pub fn pointer_up(&mut self) {
         self.flush_drag();
-        if self.tube_pointer_up() {
+        if self.tube_pointer_up() || self.retopo_pointer_up() {
             return;
         }
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
@@ -2775,6 +2789,10 @@ impl Editor {
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
         self.insert_preview = None;
+        if matches!(self.drag, Drag::Retopo(_)) {
+            self.retopo_cancel_drag();
+            return;
+        }
         match std::mem::replace(&mut self.drag, Drag::None) {
             Drag::Stroke { dyn_topo, .. } => self.finish_stroke(dyn_topo),
             Drag::Gizmo(g) => {
@@ -3032,6 +3050,11 @@ impl Editor {
         self.answer_hold_offer(false);
         // While a curve is open, undo steps through its edits.
         if self.curve_undo() {
+            return;
+        }
+        // Loose retopology points placed before the first face aren't in
+        // the scene yet: undo takes them back one by one.
+        if self.retopo_undo_draft_point() {
             return;
         }
         self.pointer_up();
@@ -5377,7 +5400,10 @@ impl Editor {
                 E::None
             }
             C::TogglePanels => {
-                self.show_panels = !self.show_panels;
+                // Tab is held to extend edges in the retopology tool.
+                if self.retopo.is_none() {
+                    self.show_panels = !self.show_panels;
+                }
                 E::None
             }
             C::Shortcuts => {

@@ -10,6 +10,7 @@ pub mod format;
 
 use glam::Vec3;
 use oxy_mesh::multires::Multires;
+use oxy_mesh::retopo::Cage;
 use oxy_mesh::{Aabb, Mesh, MeshData};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -36,6 +37,10 @@ pub struct Piece {
     /// The point symmetry mirrors and rotates about for this piece; `None`
     /// is the world origin (pieces from projects saved before 2.5.8).
     pub symmetry_center: Option<Vec3>,
+    /// The retopology cage this piece's mesh was built from, if it was
+    /// drawn with the retopology tool (RFC 0012). Valid while
+    /// [`Cage::is_linked_to`] the mesh; written as the `CAGE` section.
+    pub cage: Option<Cage>,
 }
 
 /// For each vertex of a loaded piece, its index in the vertex array of the
@@ -58,6 +63,7 @@ impl Piece {
             multires: None,
             origin: None,
             symmetry_center: None,
+            cage: None,
         }
     }
 
@@ -69,6 +75,13 @@ impl Piece {
             && o.topology_version == self.mesh.topology_version()
             && o.map.len() == self.mesh.vertex_count())
         .then_some(o.map.as_slice())
+    }
+
+    /// The cage with the mesh's current vertex positions, if it still
+    /// describes the mesh (its vertex `i` is the mesh's vertex `i`).
+    pub fn current_cage(&self) -> Option<Cage> {
+        let mut c = self.cage.clone()?;
+        (self.multires.is_none() && c.sync_from(&self.mesh)).then_some(c)
     }
 
     pub fn to_data(&self) -> PieceData {
@@ -85,6 +98,7 @@ impl Piece {
                     multires: Some(mr),
                     vertex_map: None,
                     symmetry_center: self.symmetry_center,
+                    cage: None,
                 }
             }
             None => PieceData {
@@ -94,6 +108,7 @@ impl Piece {
                 multires: None,
                 vertex_map: self.current_origin().map(<[u32]>::to_vec),
                 symmetry_center: self.symmetry_center,
+                cage: self.current_cage(),
             },
         }
     }
@@ -111,6 +126,9 @@ pub struct PieceData {
     pub vertex_map: Option<Vec<u32>>,
     /// The `SYMC` section: the piece's symmetry centre.
     pub symmetry_center: Option<Vec3>,
+    /// The `CAGE` section: the retopology cage, indexed like `mesh` (its
+    /// vertices used by faces come first, in the mesh's order).
+    pub cage: Option<Cage>,
 }
 
 impl PieceData {
@@ -132,6 +150,13 @@ impl PieceData {
             };
             map.map(|map| VertexOrigin { topology_version: mesh.topology_version(), map })
         });
+        let cage = self.cage.and_then(|mut c| {
+            let ok = multires.is_none() && c.relink(&mesh);
+            if !ok {
+                log::warn!("ignoring a retopology cage that doesn't match piece {:?}", self.name);
+            }
+            ok.then_some(c)
+        });
         Piece {
             id: new_piece_id(),
             name: self.name,
@@ -140,6 +165,7 @@ impl PieceData {
             multires,
             origin: origin.flatten(),
             symmetry_center: self.symmetry_center,
+            cage,
         }
     }
 }

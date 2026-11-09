@@ -82,6 +82,8 @@ Your layout, arrangement, brush order, interface scale, theme, material, autosav
 
 **Working with an AI agent** (off unless you turn it on): Edit > Preferences > AI Agent lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
 
+**Retopology:** **Mesh > Retopology (draw quads)…** lets you draw a clean, low-polygon quad mesh over a sculpt: click to place points on the surface, Shift+click between them to make quads, Tab+drag a border edge to extend, Ctrl+click an edge to add a loop, Shift+drag to relax. The result is a new piece that exports as quads ([RFC 0012](docs/rfcs/0012-retopology.md)).
+
 **Plugins menu:** every installed plugin's commands are one click away in the **Plugins** menu. OxyBrush comes with in-app plugins that need nothing installed: **Displace** (inflate, deflate, roughen), **Mask by Height**, **Color Ramp** (color by height or direction), **Array** (copies in a row), **Measure** (size, volume and bounding box) and **Squash**. **Plugins > Install add-on…** adds an `.oxyaddon`; **Manage plugins…** lists them, with Remove for ones you installed.
 
 **Python plugins & scripting:** Write Python scripts or install custom plugins in your local plugins folder using the zero-dependency pure-Python SDK (`python/oxybrush`). Manage plugins in **Edit > Preferences > Plugins** (`Ctrl+,`) or run `.py` scripts via file dialog and reload plugins on the fly. Example plugins are in `examples/plugins/`.
