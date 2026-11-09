@@ -4,6 +4,21 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Plugins menu** in the menu bar. Every installed in-app plugin has a submenu with its commands (they run at once, with the panel's current settings) and **Panel (settings)…** for its sliders and viewport drawing. Python scripts are listed too, and the menu has **Install add-on…**, **Run Python script…**, **Open plugins folder**, **Reload plugins** and **Manage plugins…**. Until now plugins were only reachable from Settings > Plugins.
+- **Built-in in-app plugins**, installed into the plugins folder on first use:
+  - **Displace:** Inflate, Deflate or Roughen the surface along its normals, by a percentage of the piece's size;
+  - **Mask by Height:** mask below or above a height, with a soft edge, and the level drawn as a ring;
+  - **Color Ramp:** vertex color by height (blue to orange to pale yellow) or by the direction the surface faces;
+  - **Array:** copies of the active piece in a row along X, Y or Z, with a gap, as new pieces;
+  - **Measure:** width × height × depth and volume of the active piece, with its bounding box drawn in the viewport.
+
+  They are written in WebAssembly text, so they double as examples for plugin authors. Masked parts are left alone, and each is one undo step.
+- **Remove** for plugins you installed (Settings > Plugins), with a confirmation click. Built-in plugins have none, since they would come back.
+
+### Fixed
+- The same Python script was listed twice when OxyBrush ran from the source tree.
+
 ## [3.0.3-beta] - 2026-11-08
 
 ### Added

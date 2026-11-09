@@ -211,3 +211,148 @@ fn api2_mask_color_and_new_pieces() {
     assert_eq!(r.log, vec!["/", "/", "/", "/"]);
     assert!(r.masks.is_empty() && r.colors.is_empty() && r.new_pieces.is_empty());
 }
+
+/// A unit cube from (0, 0, 0) to (1, 1, 1), faces pointing out.
+fn cube() -> PieceView {
+    let positions: Vec<Vec3> =
+        (0..8).map(|i| Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32)).collect();
+    let triangles = vec![
+        [0, 2, 3],
+        [0, 3, 1], // z = 0
+        [4, 5, 7],
+        [4, 7, 6], // z = 1
+        [0, 1, 5],
+        [0, 5, 4], // y = 0
+        [2, 6, 7],
+        [2, 7, 3], // y = 1
+        [0, 4, 6],
+        [0, 6, 2], // x = 0
+        [1, 3, 7],
+        [1, 7, 5], // x = 1
+    ];
+    let normals = positions.iter().map(|p| (*p - Vec3::splat(0.5)).normalize()).collect();
+    PieceView { positions, triangles, mask: vec![0.0; 8], normals, colors: vec![Vec3::ONE; 8] }
+}
+
+fn cube_snapshot() -> Snapshot {
+    Snapshot { pieces: vec![cube()], vertex_counts: vec![8], active: 0, scene_json: String::new() }
+}
+
+fn bundled(name: &str) -> Plugin {
+    let (_, json, wat) = BUNDLED.iter().find(|(n, _, _)| *n == name).expect("bundled plugin");
+    plugin(json, wat).unwrap_or_else(|e| panic!("{name}: {e}"))
+}
+
+#[test]
+fn every_bundled_plugin_loads() {
+    for (name, json, wat) in BUNDLED {
+        let p = plugin(json, wat).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert!(!p.manifest.commands.is_empty(), "{name}");
+        assert!(!p.manifest.description.is_empty(), "{name}");
+    }
+}
+
+#[test]
+#[allow(clippy::needless_range_loop)]
+fn displace_moves_along_normals_except_where_masked() {
+    let mut p = bundled("displace");
+    p.params[0] = 10.0; // 10 % of the size (1): 0.1
+    let mut snap = cube_snapshot();
+    snap.pieces[0].mask[7] = 1.0;
+    let r = p.run(0, snap.clone()).unwrap();
+    assert_eq!(r.log, vec!["Inflated".to_string()]);
+    let after = &r.edits[0].1;
+    let c = cube();
+    for v in 0..7 {
+        let moved = after[v] - c.positions[v];
+        assert!((moved - c.normals[v] * 0.1).length() < 1e-5, "{v}: {moved}");
+    }
+    assert_eq!(after[7], c.positions[7], "masked vertex stays");
+    // Deflate goes the other way.
+    let r = p.run(1, snap.clone()).unwrap();
+    assert!((r.edits[0].1[0] - c.positions[0] + c.normals[0] * 0.1).length() < 1e-5);
+    // Roughen: along the normal, no further than the amount, not all the same,
+    // and the same again for the same seed.
+    let a = p.run(2, snap.clone()).unwrap().edits[0].1.clone();
+    let b = p.run(2, snap).unwrap().edits[0].1.clone();
+    assert_eq!(a, b);
+    let d: Vec<f32> = (0..7).map(|v| (a[v] - c.positions[v]).dot(c.normals[v])).collect();
+    assert!(d.iter().all(|x| x.abs() <= 0.1 + 1e-6), "{d:?}");
+    assert!(d.iter().any(|x| (x - d[0]).abs() > 1e-4), "{d:?}");
+}
+
+#[test]
+#[allow(clippy::needless_range_loop)]
+fn mask_by_height_masks_below_and_above_and_draws_the_level() {
+    let mut p = bundled("mask_height");
+    assert!(p.overlay().unwrap().is_empty(), "nothing to draw before a run");
+    p.params[0] = 50.0;
+    p.params[1] = 0.0;
+    let r = p.run(0, cube_snapshot()).unwrap();
+    let (piece, mask) = &r.masks[0];
+    assert_eq!(*piece, 0);
+    let c = cube();
+    for v in 0..8 {
+        let want = if c.positions[v].y < 0.5 { 1.0 } else { 0.0 };
+        assert_eq!(mask[v], want, "{v}");
+    }
+    let r = p.run(1, cube_snapshot()).unwrap();
+    assert!((0..8).all(|v| r.masks[0].1[v] == if c.positions[v].y > 0.5 { 1.0 } else { 0.0 }));
+    assert!(r.edits.is_empty() && r.colors.is_empty());
+    let lines = p.overlay().unwrap();
+    assert_eq!(lines.len(), 4);
+    assert!(lines.iter().all(|l| l.a.y == 0.5 && l.b.y == 0.5));
+}
+
+#[test]
+fn color_ramp_paints_by_height_and_direction_and_respects_the_mask() {
+    let mut p = bundled("color_ramp");
+    let mut snap = cube_snapshot();
+    snap.pieces[0].mask[0] = 1.0;
+    let r = p.run(0, snap.clone()).unwrap();
+    let colors = &r.colors[0].1;
+    assert_eq!(colors[0], Vec3::ONE, "masked vertex keeps its color");
+    // Bottom is blue-ish, top is pale yellow.
+    assert!(colors[1].z > colors[1].x, "{}", colors[1]);
+    assert!((colors[2] - Vec3::new(1.0, 0.93, 0.70)).length() < 1e-5, "{}", colors[2]);
+    // By direction: the normal as a color.
+    let r = p.run(1, snap.clone()).unwrap();
+    let n = cube().normals[7];
+    assert!((r.colors[0].1[7] - (n * 0.5 + Vec3::splat(0.5))).length() < 1e-5);
+    // Half strength: halfway from white.
+    p.params[0] = 0.5;
+    let r = p.run(1, snap).unwrap();
+    let want = Vec3::ONE.lerp(n * 0.5 + Vec3::splat(0.5), 0.5);
+    assert!((r.colors[0].1[7] - want).length() < 1e-5);
+}
+
+#[test]
+fn array_adds_moved_copies() {
+    let mut p = bundled("array");
+    p.params[0] = 3.0;
+    p.params[1] = 50.0;
+    let r = p.run(1, cube_snapshot()).unwrap();
+    assert_eq!(r.new_pieces.len(), 3);
+    for (k, np) in r.new_pieces.iter().enumerate() {
+        assert_eq!(np.name, "Copy");
+        assert_eq!(np.triangles, cube().triangles);
+        let shift = 1.5 * (k + 1) as f32;
+        for (a, b) in np.positions.iter().zip(&cube().positions) {
+            assert!((*a - *b - Vec3::new(0.0, shift, 0.0)).length() < 1e-5);
+        }
+    }
+    assert!(r.edits.is_empty());
+}
+
+#[test]
+fn measure_reports_size_and_volume_and_draws_the_box() {
+    let mut p = bundled("measure");
+    let mut snap = cube_snapshot();
+    for v in &mut snap.pieces[0].positions {
+        *v *= Vec3::new(2.0, 1.0, 0.5);
+    }
+    let r = p.run(0, snap).unwrap();
+    assert_eq!(r.log, vec!["Size 2.000 × 1.000 × 0.500, volume 1.000".to_string()]);
+    let lines = p.overlay().unwrap();
+    assert_eq!(lines.len(), 12);
+}

@@ -51,6 +51,21 @@
 
 pub mod addon;
 
+/// Plugins that ship with OxyBrush, as (folder name, `plugin.json`,
+/// `plugin.wat`). The app installs them into the plugins folder.
+pub const BUNDLED: &[(&str, &str, &str)] = &[
+    ("squash", include_str!("../plugins/squash/plugin.json"), include_str!("../plugins/squash/plugin.wat")),
+    ("displace", include_str!("../plugins/displace/plugin.json"), include_str!("../plugins/displace/plugin.wat")),
+    (
+        "mask_height",
+        include_str!("../plugins/mask_height/plugin.json"),
+        include_str!("../plugins/mask_height/plugin.wat"),
+    ),
+    ("color_ramp", include_str!("../plugins/color_ramp/plugin.json"), include_str!("../plugins/color_ramp/plugin.wat")),
+    ("array", include_str!("../plugins/array/plugin.json"), include_str!("../plugins/array/plugin.wat")),
+    ("measure", include_str!("../plugins/measure/plugin.json"), include_str!("../plugins/measure/plugin.wat")),
+];
+
 use glam::Vec3;
 use std::path::{Path, PathBuf};
 use wasmi::{

@@ -511,6 +511,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
             });
+            tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
         });
     });
@@ -956,6 +957,7 @@ fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
+    let mut remove = None;
     ui.heading("Plugins & Scripting");
     ui.label(RichText::new("Extend OxyBrush with custom Python scripts and add-ons.").weak().small());
     ui.add_space(6.0);
@@ -994,7 +996,7 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
                 .small(),
         );
     } else {
-        for plugin in &ed.plugins {
+        for plugin in &ed.plugins.clone() {
             egui::Frame::group(ui.style()).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
@@ -1005,6 +1007,13 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
                         ui.label(RichText::new(plugin.path.display().to_string()).weak().small().monospace());
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        crate::wasm_plugins::remove_button(
+                            ui,
+                            &mut ed.confirm_remove_plugin,
+                            &mut remove,
+                            &plugin.path,
+                            false,
+                        );
                         if ui.button("Run").clicked() {
                             ed.request_run_plugin = Some(plugin.path.clone());
                         }
@@ -1013,6 +1022,9 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
             });
             ui.add_space(4.0);
         }
+    }
+    if let Some(path) = remove {
+        ed.remove_plugin(&path);
     }
     ui.add_space(8.0);
     ui.separator();

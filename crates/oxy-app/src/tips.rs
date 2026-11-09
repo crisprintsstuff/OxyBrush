@@ -597,6 +597,7 @@ pub mod plain {
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
     pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side.";
     pub const GIZMO_DONE: &str = "Hide the transform gizmo.";
+    pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
     pub const GIZMO_MASKED: &str = "Masked parts stay put. A soft mask edge bends instead of tearing.";
     pub const PIECE_HIDE: &str = "Hide this piece. Hidden pieces are not sculpted or exported.";
     pub const PIECE_SHOW: &str = "Show this piece again.";
@@ -785,6 +786,7 @@ pub mod plain {
         ZOOM,
         AXIS_GIZMO,
         GIZMO_DONE,
+        PLUGINS_MENU,
         GIZMO_MASKED,
         PIECE_HIDE,
         PIECE_SHOW,

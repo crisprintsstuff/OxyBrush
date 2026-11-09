@@ -1,0 +1,9 @@
+{
+  "name": "Measure",
+  "version": "1.0",
+  "description": "Shows the size (width × height × depth) and volume of the active piece, and draws its bounding box while this panel is open.",
+  "api": 2,
+  "capabilities": ["read_mesh", "overlay"],
+  "commands": [{ "id": "measure", "label": "Measure" }],
+  "params": []
+}
