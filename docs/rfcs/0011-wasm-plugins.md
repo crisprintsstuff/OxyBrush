@@ -33,8 +33,11 @@ A folder in the plugins folder holding:
 - `plugin.wasm`, or `plugin.wat` (WebAssembly text, handy for small
   plugins and examples). Any language that compiles to WebAssembly works.
 
-OxyBrush ships one example, **Squash** (`crates/oxy-plugin/plugins/squash`),
-written in WebAssembly text, and installs it into the plugins folder.
+OxyBrush ships plugins written in WebAssembly text in
+`crates/oxy-plugin/plugins/` (listed in `oxy_plugin::BUNDLED`) and installs
+any that are missing into the plugins folder: **Squash**, **Displace**,
+**Mask by Height**, **Color Ramp**, **Array** and **Measure**. They are
+useful tools and examples for plugin authors at the same time.
 
 ### What a plugin can do
 
@@ -54,6 +57,9 @@ with a message, not run.
 
 ### In the app
 
+- The **Plugins** menu in the menu bar lists every plugin: a submenu per
+  in-app plugin with its commands and its panel, the Python scripts, and
+  Install add-on, Open plugins folder, Reload and Manage.
 - **Settings > Plugins** lists in-app plugins with what each can do, and
   any that failed to load and why. **Open panel** shows a plugin's
   window: its sliders and command buttons.
@@ -119,6 +125,9 @@ One file to share and install a plugin, of either kind:
   nothing. A WebAssembly add-on is loaded once before installing, so a
   broken one is refused with its error. Installing does not run anything;
   Python add-ons run only when you click Run, as before.
+- **Remove** (Settings > Plugins, confirmed with a second click) deletes a
+  plugin you installed: its folder, or a loose Python script. Only entries
+  directly inside the plugins folder qualify, and not the built-in ones.
 
 ## Not in this version
 

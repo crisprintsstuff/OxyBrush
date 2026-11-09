@@ -1,0 +1,15 @@
+{
+  "name": "Mask by Height",
+  "version": "1.0",
+  "description": "Masks the active piece below or above a height, with a soft edge. Handy before posing a limb or sculpting one half. The panel shows the height as a ring.",
+  "api": 2,
+  "capabilities": ["read_mesh", "edit_mesh", "overlay"],
+  "commands": [
+    { "id": "below", "label": "Mask below" },
+    { "id": "above", "label": "Mask above" }
+  ],
+  "params": [
+    { "id": "height", "label": "Height (% from the bottom)", "min": 0.0, "max": 100.0, "default": 50.0 },
+    { "id": "softness", "label": "Soft edge (% of height)", "min": 0.0, "max": 50.0, "default": 5.0 }
+  ]
+}

@@ -153,6 +153,10 @@ pub fn discover_plugins_in(dirs: &[PathBuf]) -> Vec<PluginInfo> {
         }
     }
 
+    // The same script in the plugins folder and the source tree's examples
+    // shows once (the plugins folder's copy, found first).
+    let mut seen = std::collections::HashSet::new();
+    plugins.retain(|p| seen.insert(p.name.to_lowercase()));
     plugins.sort_by_key(|a| a.name.to_lowercase());
     plugins
 }

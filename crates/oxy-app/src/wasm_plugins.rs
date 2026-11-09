@@ -4,11 +4,7 @@
 use crate::editor::{Editor, JobResult};
 use egui::{Color32, RichText, Stroke, Ui};
 use oxy_plugin::{Line, PieceView, Plugin, RunResult, Snapshot};
-
-/// The example plugin shipped with OxyBrush, installed into the plugins
-/// folder on first use (like the Python examples).
-const SQUASH_JSON: &str = include_str!("../../oxy-plugin/plugins/squash/plugin.json");
-const SQUASH_WAT: &str = include_str!("../../oxy-plugin/plugins/squash/plugin.wat");
+use std::path::{Path, PathBuf};
 
 /// One loaded plugin and its panel.
 pub struct WasmPlugin {
@@ -31,14 +27,27 @@ pub struct PluginJob {
     pub result: Result<RunResult, String>,
 }
 
-/// Install the example plugin into `dir` if it isn't there.
-pub fn install_examples(dir: &std::path::Path) {
-    let squash = dir.join("squash");
-    if !squash.join("plugin.json").exists() {
-        let _ = std::fs::create_dir_all(&squash);
-        let _ = std::fs::write(squash.join("plugin.json"), SQUASH_JSON);
-        let _ = std::fs::write(squash.join("plugin.wat"), SQUASH_WAT);
+/// Install the plugins that ship with OxyBrush into `dir`, each one that
+/// isn't there (like the Python examples). A plugin you changed is kept.
+pub fn install_examples(dir: &Path) {
+    for (name, json, wat) in oxy_plugin::BUNDLED {
+        let folder = dir.join(name);
+        if !folder.join("plugin.json").exists() {
+            let _ = std::fs::create_dir_all(&folder);
+            let _ = std::fs::write(folder.join("plugin.json"), json);
+            let _ = std::fs::write(folder.join("plugin.wat"), wat);
+        }
     }
+}
+
+/// Python examples that ship with OxyBrush (put back when missing).
+const BUNDLED_SCRIPTS: [&str; 3] = ["mesh_stats.py", "mesh_stats_reporter.py", "spiral_generator.py"];
+
+/// Whether `path` (a plugin folder or script) ships with OxyBrush, so
+/// removing it would only bring it back next time.
+pub fn is_bundled(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return false };
+    oxy_plugin::BUNDLED.iter().any(|(b, _, _)| *b == name) || BUNDLED_SCRIPTS.contains(&name)
 }
 
 impl Editor {
@@ -221,6 +230,49 @@ impl Editor {
         }
     }
 
+    /// The folder or script to delete to remove the plugin at `path` (an
+    /// in-app plugin's folder, a Python script, or the script of a Python
+    /// add-on), if it is directly inside `root`.
+    pub fn removable_target(path: &Path, root: &Path) -> Option<PathBuf> {
+        let root = root.canonicalize().ok()?;
+        let path = path.canonicalize().ok()?;
+        // A Python add-on's script sits in its own folder.
+        let target = if path.parent() == Some(root.as_path()) { path } else { path.parent()?.to_path_buf() };
+        (target.parent() == Some(root.as_path()) && !is_bundled(&target)).then_some(target)
+    }
+
+    /// Delete an installed plugin from the plugins folder `root` and reload.
+    pub fn remove_plugin_in(&mut self, path: &Path, root: &Path) -> bool {
+        if self.wasm_plugins.iter().any(|p| p.plugin.is_none()) {
+            self.status = "Wait for the running plugin to finish first".into();
+            return false;
+        }
+        let Some(target) = Self::removable_target(path, root) else {
+            self.status = "Only plugins you installed into the plugins folder can be removed here".into();
+            return false;
+        };
+        let result = if target.is_dir() { std::fs::remove_dir_all(&target) } else { std::fs::remove_file(&target) };
+        match result {
+            Ok(()) => {
+                let name = target.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.plugins = crate::plugins::discover_plugins_in(&[root.to_path_buf()]);
+                self.load_wasm_plugins_from(root);
+                self.status = format!("Removed plugin {name}");
+                true
+            }
+            Err(e) => {
+                self.status = format!("Could not remove {}: {e}", target.display());
+                false
+            }
+        }
+    }
+
+    pub fn remove_plugin(&mut self, path: &Path) {
+        if let Some(root) = crate::plugins::plugins_dir() {
+            self.remove_plugin_in(path, &root);
+        }
+    }
+
     /// Ask each open panel's plugin for this frame's overlay lines.
     pub fn update_plugin_overlays(&mut self) {
         let mut errors = Vec::new();
@@ -262,10 +314,12 @@ pub fn settings_section(ui: &mut Ui, ed: &mut Editor) {
         ui.label("No in-app plugins found.");
     }
     let busy = ed.job.is_some();
+    let mut remove = None;
     for i in 0..ed.wasm_plugins.len() {
-        let p = &mut ed.wasm_plugins[i];
+        let dir = ed.wasm_plugins[i].plugin.as_ref().map(|pl| pl.dir.clone());
         egui::Frame::group(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
+                let p = &ed.wasm_plugins[i];
                 ui.vertical(|ui| {
                     ui.label(RichText::new(&p.name).strong());
                     if !p.description.is_empty() {
@@ -276,6 +330,10 @@ pub fn settings_section(ui: &mut Ui, ed: &mut Editor) {
                     }
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if let Some(dir) = &dir {
+                        remove_button(ui, &mut ed.confirm_remove_plugin, &mut remove, dir, busy);
+                    }
+                    let p = &mut ed.wasm_plugins[i];
                     let label = if p.show_panel { "Hide panel" } else { "Open panel" };
                     if ui.add_enabled(!busy || p.show_panel, egui::Button::new(label)).clicked() {
                         p.show_panel = !p.show_panel;
@@ -287,6 +345,139 @@ pub fn settings_section(ui: &mut Ui, ed: &mut Editor) {
     }
     for e in &ed.wasm_plugin_errors {
         ui.label(RichText::new(format!("Not loaded: {e}")).small().color(Color32::from_rgb(230, 140, 90)));
+    }
+    if let Some(path) = remove {
+        ed.remove_plugin(&path);
+    }
+}
+
+/// "Remove", then "Remove for good?" on a second click. Plugins that ship
+/// with OxyBrush have none (they would come back).
+pub fn remove_button(
+    ui: &mut Ui,
+    confirm: &mut Option<PathBuf>,
+    remove: &mut Option<PathBuf>,
+    path: &Path,
+    busy: bool,
+) {
+    let Some(root) = crate::plugins::plugins_dir() else { return };
+    if Editor::removable_target(path, &root).is_none() {
+        return;
+    }
+    if confirm.as_deref() == Some(path) {
+        if ui
+            .add_enabled(
+                !busy,
+                egui::Button::new(RichText::new("Remove for good?").color(Color32::from_rgb(230, 110, 90))),
+            )
+            .clicked()
+        {
+            *remove = Some(path.to_path_buf());
+            *confirm = None;
+        }
+        if ui.small_button("Keep").clicked() {
+            *confirm = None;
+        }
+    } else if ui
+        .add_enabled(!busy, egui::Button::new("Remove"))
+        .on_hover_text("Delete this plugin from the plugins folder")
+        .clicked()
+    {
+        *confirm = Some(path.to_path_buf());
+    }
+}
+
+/// The Plugins menu in the menu bar: every installed plugin's commands,
+/// one click away, and the plugin tools.
+pub fn plugins_menu(ui: &mut Ui, ed: &mut Editor) {
+    if !ed.wasm_loaded {
+        ed.load_wasm_plugins();
+    }
+    let busy = ed.job.is_some();
+    let mut run = None;
+    if ed.wasm_plugins.is_empty() {
+        ui.label(RichText::new("No in-app plugins").weak());
+    }
+    for i in 0..ed.wasm_plugins.len() {
+        let p = &mut ed.wasm_plugins[i];
+        let name = p.name.clone();
+        let description = p.description.clone();
+        let r = ui.menu_button(&name, |ui| {
+            ui.set_max_width(320.0);
+            if !description.is_empty() {
+                ui.label(RichText::new(&description).weak().small());
+                ui.separator();
+            }
+            match &p.plugin {
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.spinner();
+                        ui.label("Running…");
+                    });
+                }
+                Some(pl) => {
+                    for (k, c) in pl.manifest.commands.iter().enumerate() {
+                        if ui.add_enabled(!busy, egui::Button::new(&c.label)).clicked() {
+                            run = Some((i, k));
+                            ui.close();
+                        }
+                    }
+                    if !pl.manifest.params.is_empty() || pl.has_overlay() {
+                        ui.separator();
+                        let label = if p.show_panel { "Hide panel" } else { "Panel (settings)…" };
+                        if ui.button(label).clicked() {
+                            p.show_panel = !p.show_panel;
+                            ui.close();
+                        }
+                    }
+                }
+            }
+        });
+        r.response.on_hover_text(description);
+    }
+    if !ed.plugins.is_empty() {
+        ui.separator();
+        ui.label(RichText::new("Python scripts").weak().small());
+        for plugin in &ed.plugins {
+            let r = ui.button(format!("{}…", plugin.name));
+            if r.clicked() {
+                ed.request_run_plugin = Some(plugin.path.clone());
+                ui.close();
+            }
+            r.on_hover_text(if plugin.description.is_empty() {
+                "Run this Python script (needs Python 3)".to_owned()
+            } else {
+                format!("{} (runs with Python 3)", plugin.description)
+            });
+        }
+    }
+    ui.separator();
+    if ui
+        .button("Install add-on…")
+        .on_hover_text("Install an .oxyaddon file: an in-app or Python plugin in one file")
+        .clicked()
+    {
+        ed.request_install_addon = true;
+        ui.close();
+    }
+    if ui.button("Run Python script…").clicked() {
+        ed.request_run_script = true;
+        ui.close();
+    }
+    if ui.button("Open plugins folder").clicked() {
+        ed.request_open_plugins_dir = true;
+        ui.close();
+    }
+    if ui.button("Reload plugins").clicked() {
+        ed.request_reload_plugins = true;
+        ui.close();
+    }
+    if ui.button("Manage plugins…").clicked() {
+        ed.open_settings(crate::editor::SettingsTab::Plugins);
+        ui.close();
+    }
+    if let Some((i, k)) = run {
+        ed.run_wasm_plugin(i, k);
     }
 }
 
