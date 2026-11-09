@@ -697,6 +697,7 @@ pub struct GizmoDrag {
     has_soft_weights: bool,
     weights: Vec<f32>,
     screen_axis: Option<Vec2>,
+    screen_plane: Option<(Vec2, Vec2)>,
     length: f32,
     world_per_px: f32,
     /// Transform applied so far.
@@ -1000,7 +1001,12 @@ pub struct Editor {
     /// Transform gizmo mode; None hides the gizmo.
     pub gizmo: Option<GizmoMode>,
     /// Cached gizmo pivot, keyed by (piece id, history revision, vertex count).
-    gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
+    pub(crate) gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
+    /// Snap gizmo drags to steps (also while Shift is held).
+    pub gizmo_snap: bool,
+    pub gizmo_snap_steps: pose::Snap,
+    /// Values typed into the gizmo bar's Numeric section.
+    pub gizmo_numeric: crate::gizmo_ops::Numeric,
     /// User-customized gizmo pivot point (repositioned via Alt-drag or Ctrl-click snap).
     pub custom_gizmo_pivot: Option<Vec3>,
     /// User-customized gizmo rotation / orientation basis.
@@ -1229,6 +1235,9 @@ impl Default for Editor {
             paint_color: Vec3::new(0.75, 0.22, 0.18),
             gizmo: None,
             gizmo_pivot: None,
+            gizmo_snap: false,
+            gizmo_snap_steps: pose::Snap::DEFAULT,
+            gizmo_numeric: crate::gizmo_ops::Numeric::default(),
             custom_gizmo_pivot: None,
             custom_gizmo_rotation: None,
             palette: None,
@@ -2604,6 +2613,7 @@ impl Editor {
 
     /// Apply pointer position to the active gizmo drag.
     pub fn gizmo_to(&mut self, pos: Vec2) -> bool {
+        let snap = (self.gizmo_snap || self.modifiers.shift).then_some(self.gizmo_snap_steps);
         let (mode, right, up, forward) = match &self.drag {
             Drag::Gizmo(_) => (
                 self.gizmo.unwrap_or(GizmoMode::Move),
@@ -2620,12 +2630,14 @@ impl Editor {
                     handle: g.handle,
                     delta: pos - g.start,
                     screen_axis: g.screen_axis,
+                    screen_plane: g.screen_plane,
                     axis_dirs: g.axis_dirs,
                     length: g.length,
                     right,
                     up,
                     forward,
                     world_per_px: g.world_per_px,
+                    snap,
                 };
                 let t = pose::drag_transform(&input);
                 g.current = t;
@@ -4773,6 +4785,19 @@ impl Editor {
         self.edit_mesh_mask(label, |mesh| mesh.mask.iter_mut().for_each(|m| *m = f(*m)));
     }
 
+    /// An editor with one sphere in an 800×600 view, for tests elsewhere in the crate.
+    #[cfg(test)]
+    pub(crate) fn for_tests() -> Editor {
+        let mut e = Editor {
+            scene: Scene::new(Piece::new("Sphere", oxy_mesh::primitives::icosphere(4, 1.0))),
+            ..Default::default()
+        };
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.camera = Camera::default();
+        e.camera.frame(e.scene.bounds());
+        e
+    }
+
     /// Reset custom gizmo pivot and orientation to the unmasked geometry centre.
     pub fn reset_gizmo_pivot(&mut self) {
         self.custom_gizmo_pivot = None;
@@ -4910,21 +4935,8 @@ impl Editor {
     /// Where the transform gizmo is drawn (canvas-local physical px), or
     /// None when it is off or there is nothing to move.
     pub fn gizmo_layout(&mut self) -> Option<pose::Layout> {
-        self.gizmo?;
-        let base_pivot = if let Some(p) = self.custom_gizmo_pivot {
-            p
-        } else {
-            let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
-            match self.gizmo_pivot {
-                Some((k, p)) if k == key => p,
-                _ => {
-                    let mesh = &self.scene.active().mesh;
-                    let p = pose::pivot(mesh, &pose::weights(mesh));
-                    self.gizmo_pivot = Some((key, p));
-                    p
-                }
-            }?
-        };
+        let mode = self.gizmo?;
+        let base_pivot = self.gizmo_base_pivot()?;
         // While dragging, the gizmo follows the transformed pivot.
         let (pivot, rot) = match &self.drag {
             Drag::Gizmo(g) => {
@@ -4940,10 +4952,39 @@ impl Editor {
         let center = self.camera.project(pivot, size)?;
         let length = pose::HANDLE_PT * self.pixels_per_point * self.camera.world_per_pixel(pivot, size.y);
         let axis_dirs = [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z];
-        let axes = axis_dirs.map(|a| {
-            self.camera.project(pivot + a * length, size).filter(|e| e.distance(center) > 12.0 * self.pixels_per_point)
+        let ends = axis_dirs.map(|a| self.camera.project(pivot + a * length, size));
+        let axes = ends.map(|e| e.filter(|e| e.distance(center) > 12.0 * self.pixels_per_point));
+        // Plane squares for Move and Scale, hidden when seen edge-on.
+        let planes: [Option<Vec2>; 3] = std::array::from_fn(|a| {
+            if mode == GizmoMode::Rotate {
+                return None;
+            }
+            let (b, c) = pose::plane_axes(a);
+            let (u, v) = (ends[b]? - center, ends[c]? - center);
+            let area = (u.x * v.y - u.y * v.x).abs();
+            (area > 0.2 * u.length() * v.length() && u.length() > 1.0 && v.length() > 1.0)
+                .then(|| self.camera.project(pivot + (axis_dirs[b] + axis_dirs[c]) * length * pose::PLANE_AT, size))
+                .flatten()
         });
-        Some(pose::Layout { pivot, center, axes, axis_dirs, length })
+        Some(pose::Layout { pivot, center, axes, planes, axis_dirs, length })
+    }
+
+    /// The gizmo pivot when not dragging: the one you placed, or the mask
+    /// edge / centre of what moves (cached per edit).
+    pub(crate) fn gizmo_base_pivot(&mut self) -> Option<Vec3> {
+        if let Some(p) = self.custom_gizmo_pivot {
+            return Some(p);
+        }
+        let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
+        match self.gizmo_pivot {
+            Some((k, p)) if k == key => p,
+            _ => {
+                let mesh = &self.scene.active().mesh;
+                let p = pose::pivot(mesh, &pose::weights(mesh));
+                self.gizmo_pivot = Some((key, p));
+                p
+            }
+        }
     }
 
     /// Start dragging a gizmo handle under `p` (window physical px).
@@ -4981,8 +5022,18 @@ impl Editor {
         let weights = pose::weights(&piece.mesh);
         let screen_axis = match handle {
             Handle::Axis(a) => layout.axes[a].map(|e| e - layout.center),
-            Handle::Center => None,
+            Handle::Plane(_) | Handle::Center => None,
         };
+        let screen_plane = match handle {
+            Handle::Plane(a) => {
+                let (b, c) = pose::plane_axes(a);
+                let size = self.canvas_size();
+                let end = |i: usize| self.camera.project(layout.pivot + layout.axis_dirs[i] * layout.length, size);
+                end(b).zip(end(c)).map(|(u, v)| (u - layout.center, v - layout.center))
+            }
+            _ => None,
+        };
+        let piece = self.scene.active_mut();
         let mut affected_chunk_flags = vec![false; piece.mesh.chunks.len()];
         let mut has_soft_weights = false;
         for (v, &w) in weights.iter().enumerate() {
@@ -5012,6 +5063,7 @@ impl Editor {
             has_soft_weights,
             weights,
             screen_axis,
+            screen_plane,
             length: layout.length,
             world_per_px,
             current: pose::Transform::IDENTITY,

@@ -7,6 +7,7 @@ mod agent;
 mod app;
 mod bridge;
 mod editor;
+mod gizmo_ops;
 mod guide;
 mod keymap;
 mod lights_ui;
