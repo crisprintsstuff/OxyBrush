@@ -330,7 +330,8 @@ pub struct Settings {
     /// Each brush's strength (brushes keep their own).
     pub brush_strengths: Vec<(BrushKind, f32)>,
     /// Save `brush` and `brush_strengths` on exit and restore them at
-    /// start. Off starts every session with the default brushes.
+    /// start. Off (the default) starts every session with the default
+    /// brushes.
     pub remember_brushes: bool,
 }
 
@@ -616,7 +617,7 @@ impl Default for Settings {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             brush: None,
             brush_strengths: Vec::new(),
-            remember_brushes: true,
+            remember_brushes: false,
         }
     }
 }

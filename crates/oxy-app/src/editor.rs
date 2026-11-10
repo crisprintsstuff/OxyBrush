@@ -1164,7 +1164,7 @@ impl Default for Editor {
             remesh_area: None,
             remesh_adaptivity: 0.0,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
-            remember_brushes: true,
+            remember_brushes: false,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             show_panels: true,
@@ -5917,6 +5917,7 @@ mod tests {
     #[test]
     fn brush_settings_are_remembered_between_sessions() {
         let mut e = editor();
+        e.remember_brushes = true;
         e.brush_kind = BrushKind::ClayStrips;
         e.brush_radius_pt = 77.0;
         e.focal_shift = 0.4;
@@ -5973,8 +5974,9 @@ mod tests {
         let mut later = editor();
         later.apply_settings(&crate::settings::Settings::from_text(&on));
         assert_eq!(later.brush_kind, defaults.brush_kind);
-        // Files from before the option have it on.
-        assert!(crate::settings::Settings::from_text("ui_scale = 1.0\n").remember_brushes);
+        // Off by default, also for files without the line.
+        assert!(!Editor::default().remember_brushes);
+        assert!(!crate::settings::Settings::from_text("ui_scale = 1.0\n").remember_brushes);
     }
 
     #[test]
