@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.5-beta" date="2026-11-10" type="development">
+      <description>
+        <p>A retopology tool rebuilds a sculpt as a clean quad mesh you
+        draw on its surface, with X mirroring. Voxel remesh is up to 17
+        times faster and shows how many triangles it will make; decimate
+        is about five times faster. Vertex color, mask and face groups now
+        survive remesh, merge, booleans and decimate. The rotate gizmo uses
+        rings.</p>
+      </description>
+    </release>
     <release version="3.0.4-beta" date="2026-11-09" type="development">
       <description>
         <p>The transform gizmo gains plane handles, snapping with Shift,
