@@ -87,6 +87,19 @@ All of it is in `oxy-sculpt` (GPU-free, unit-tested). The app shows the
 result on a preview copy of the piece, exactly like a curve stroke; the
 piece and the history change only on Accept.
 
+## Saving an open curve (since 3.0.6)
+
+Saving (or autosaving) while a Curve Move curve is open writes it as a
+`CURV` section after its piece: the control points where they are and
+where they were drawn, the per-point reach and strength, whether it is a
+loop, and the brush size, world scale, strength, falloff and pressure it
+bends with. The piece itself is saved unbent. Opening the project reopens
+the curve with those brush settings, so it bends exactly as before (a test
+checks the preview to 1e-5). If the piece's vertex or triangle count no
+longer matches, the curve is dropped with a log message. Older versions
+skip the section and open the unbent piece, as before. Curve stroke
+curves (other brushes) are still not saved.
+
 ## Performance
 
 `cargo run --release -p oxy-sculpt --example wire_timing`, a 1.3M-triangle
@@ -107,8 +120,9 @@ the UI thread if that is a problem in practice.
 - **Twist** around the curve (rotating a point's frame) and per-point
   **scale** of the part (fatter or thinner): the frames are there, the
   controls are not.
-- **Saving** a curve with the project, or keeping several curves as a rig.
-  A curve lives until it is applied or cancelled.
+- Keeping several curves as a rig, or editing a curve again after it is
+  applied. A curve lives until it is applied or cancelled (and, since
+  3.0.6, across saving and reopening the project, below).
 - **Moving the curve with the gizmo** (all points at once); dragging points
   one at a time is the only way for now.
 - An agent (MCP) tool for it.

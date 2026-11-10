@@ -8,6 +8,19 @@
 //! Approach to Multiresolution Modeling" (SGP 2004), which keep edge lengths
 //! close to the target without oscillating between splits and collapses.
 //!
+//! After splitting and collapsing, edges are flipped where that brings their
+//! four vertices closer to six neighbours each, and the vertices near the
+//! brush are relaxed along the surface (moved toward the middle of their
+//! neighbours, without leaving the tangent plane): the remaining two steps
+//! of the same paper, which turn the split triangles into even ones. New
+//! vertices are placed on the curve through the edge's ends that follows
+//! their normals (the midpoint of a cubic Hermite curve), not on the
+//! straight chord, so refining a curved surface keeps it curved.
+//!
+//! Only edges near the spheres change: an edge is split only if one of its
+//! ends lies in a sphere, so refining stays where the brush is instead of
+//! spreading outward round by round.
+//!
 //! The edits work on a copy of the mesh data, and the result is rebuilt with
 //! [`Mesh::from_data`], so the chunk layout and every other mesh invariant
 //! come out exactly as for any other topology change. The rebuilt mesh's
@@ -39,6 +52,8 @@ pub struct Refined {
     /// Edges split and collapsed.
     pub split: usize,
     pub collapsed: usize,
+    /// Edges flipped to even out the triangles.
+    pub flipped: usize,
     /// Splitting stopped at [`Detail::max_triangles`].
     pub capped: bool,
 }
@@ -48,6 +63,15 @@ const MAX_NEW_VERTICES: usize = 60_000;
 /// Rounds of splitting (each can halve edges once more).
 const SPLIT_ROUNDS: usize = 6;
 const COLLAPSE_ROUNDS: usize = 2;
+const FLIP_ROUNDS: usize = 2;
+const RELAX_ROUNDS: usize = 2;
+/// How far each relax round moves a vertex toward the middle of its
+/// neighbours.
+const RELAX: f32 = 0.5;
+/// Edges between triangles bent more than this (cosine of the angle between
+/// their normals) aren't flipped, so creases and sculpted ridges keep their
+/// edges.
+const FLIP_MAX_BEND: f32 = 0.94;
 
 /// Refine `mesh` within `spheres` (centre, radius) toward `detail`.
 /// `None` when nothing needed to change.
@@ -61,7 +85,7 @@ pub fn refine(mesh: &Mesh, spheres: &[(Vec3, f32)], detail: Detail) -> Option<Re
     let mut split = 0;
     let mut capped = false;
     'rounds: for _ in 0..SPLIT_ROUNDS {
-        let mut edges = w.region_edges(|w, a, b| (w.inside[a as usize] || w.inside[b as usize]) && w.len(a, b) > hi);
+        let mut edges = w.region_edges(|w, a, b| (w.near[a as usize] || w.near[b as usize]) && w.len(a, b) > hi);
         if edges.is_empty() {
             break;
         }
@@ -88,7 +112,7 @@ pub fn refine(mesh: &Mesh, spheres: &[(Vec3, f32)], detail: Detail) -> Option<Re
     let mut collapsed = 0;
     if detail.collapse {
         for _ in 0..COLLAPSE_ROUNDS {
-            let mut edges = w.region_edges(|w, a, b| w.inside[a as usize] && w.inside[b as usize] && w.len(a, b) < lo);
+            let mut edges = w.region_edges(|w, a, b| w.near[a as usize] && w.near[b as usize] && w.len(a, b) < lo);
             if edges.is_empty() {
                 break;
             }
@@ -111,7 +135,18 @@ pub fn refine(mesh: &Mesh, spheres: &[(Vec3, f32)], detail: Detail) -> Option<Re
     if split == 0 && collapsed == 0 {
         return None;
     }
-    Some(Refined { mesh: w.finish(), split, collapsed, capped })
+    let mut flipped = 0;
+    for _ in 0..FLIP_ROUNDS {
+        let n = w.flip_pass(hi);
+        flipped += n;
+        if n == 0 {
+            break;
+        }
+    }
+    for _ in 0..RELAX_ROUNDS {
+        w.relax_pass();
+    }
+    Some(Refined { mesh: w.finish(), split, collapsed, flipped, capped })
 }
 
 struct Work {
@@ -128,6 +163,12 @@ struct Work {
     inside: Vec<bool>,
     /// Vertices removed by a collapse.
     dead: Vec<bool>,
+    /// Vertices in a sphere: the ones whose edges may be split, collapsed,
+    /// flipped and relaxed.
+    near: Vec<bool>,
+    /// Vertex normals (of the mesh before; averaged for new vertices).
+    normals: Vec<Vec3>,
+    spheres: Vec<(Vec3, f32)>,
     /// Triangles around each vertex of the region (complete for `inside`
     /// vertices; may hold dead triangles, filtered on use).
     vt: HashMap<u32, Vec<u32>>,
@@ -180,8 +221,11 @@ impl Work {
             groups,
             hidden,
             alive: vec![true; tcount],
+            near: inside.clone(),
             inside,
             dead: vec![false; n],
+            normals: mesh.normals.clone(),
+            spheres: spheres.to_vec(),
             vt,
             region,
             old_vertices: n,
@@ -243,6 +287,10 @@ impl Work {
         ts
     }
 
+    fn in_spheres(&self, p: Vec3) -> bool {
+        self.spheres.iter().any(|&(c, r)| p.distance_squared(c) <= r * r)
+    }
+
     fn protected(&self, v: u32) -> bool {
         self.mask[v as usize] >= 0.999
     }
@@ -259,7 +307,21 @@ impl Work {
             return false;
         }
         let m = self.pos.len() as u32;
-        self.pos.push((self.pos[a as usize] + self.pos[b as usize]) * 0.5);
+        let (pa, pb) = (self.pos[a as usize], self.pos[b as usize]);
+        let (na, nb) = (self.normals[a as usize], self.normals[b as usize]);
+        // The midpoint of the cubic Hermite curve from a to b whose
+        // tangents lie in each end's tangent plane: (a + b) / 2 plus a
+        // bulge of ((d·nb) nb − (d·na) na) / 8. On a sphere it lands within
+        // θ⁴/4 of the surface, where the chord's midpoint is θ²/2 inside.
+        let d = pb - pa;
+        let mut mid = (pa + pb) * 0.5;
+        if na.is_finite() && nb.is_finite() && na.dot(nb) > 0.0 {
+            let bulge = (nb * d.dot(nb) - na * d.dot(na)) * 0.125;
+            mid += bulge.clamp_length_max(d.length() * 0.25);
+        }
+        self.pos.push(mid);
+        self.normals.push((na + nb).normalize_or(na));
+        self.near.push(self.in_spheres(mid));
         self.mask.push((self.mask[a as usize] + self.mask[b as usize]) * 0.5);
         if !self.color.is_empty() {
             self.color.push((self.color[a as usize] + self.color[b as usize]) * 0.5);
@@ -356,6 +418,8 @@ impl Work {
             }
         }
         self.pos[a as usize] = m;
+        let (na, nb) = (self.normals[a as usize], self.normals[b as usize]);
+        self.normals[a as usize] = (na + nb).normalize_or(na);
         self.mask[a as usize] = (self.mask[a as usize] + self.mask[b as usize]) * 0.5;
         if !self.color.is_empty() {
             self.color[a as usize] = (self.color[a as usize] + self.color[b as usize]) * 0.5;
@@ -377,8 +441,170 @@ impl Work {
         }
         self.dead[b as usize] = true;
         self.inside[b as usize] = false;
+        self.near[b as usize] = false;
         self.vt.remove(&b);
         true
+    }
+
+    /// The distinct neighbours of `v` (complete for `inside` vertices).
+    fn neighbours(&self, v: u32) -> Vec<u32> {
+        let mut out: Vec<u32> =
+            self.live_tris(v).iter().flat_map(|&t| self.tris[t as usize]).filter(|&u| u != v).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    fn face_normal(&self, t: [u32; 3]) -> Vec3 {
+        let [p0, p1, p2] = t.map(|v| self.pos[v as usize]);
+        (p1 - p0).cross(p2 - p0)
+    }
+
+    /// Flip edges near the brush where that brings the four vertices
+    /// involved closer to six neighbours each. Returns how many flipped.
+    fn flip_pass(&mut self, hi: f32) -> usize {
+        let edges = self.region_edges(|w, a, b| w.near[a as usize] && w.near[b as usize]);
+        let mut flipped = 0;
+        // Neighbour counts, counted once and then kept up to date.
+        let mut valence: HashMap<u32, i32> = HashMap::new();
+        let count = |valence: &mut HashMap<u32, i32>, w: &Self, v: u32| {
+            *valence.entry(v).or_insert_with(|| w.neighbours(v).len() as i32)
+        };
+        for (a, b) in edges {
+            if self.dead[a as usize] || self.dead[b as usize] {
+                continue;
+            }
+            let ts = self.edge_tris(a, b);
+            if ts.len() != 2 || ts.iter().any(|&t| self.hidden[t as usize]) {
+                continue;
+            }
+            let (t1, t2) = (ts[0], ts[1]);
+            if self.groups[t1 as usize] != self.groups[t2 as usize] {
+                continue;
+            }
+            // t1 = (p, q, x) with p -> q the edge in its winding; t2 then
+            // runs q -> p, with y opposite.
+            let tri = self.tris[t1 as usize];
+            let i = (0..3).find(|&i| {
+                let (u, v) = (tri[i], tri[(i + 1) % 3]);
+                (u == a && v == b) || (u == b && v == a)
+            });
+            let Some(i) = i else { continue };
+            let (p, q, x) = (tri[i], tri[(i + 1) % 3], tri[(i + 2) % 3]);
+            let Some(&y) = self.tris[t2 as usize].iter().find(|&&u| u != p && u != q) else { continue };
+            if x == y || ![p, q, x, y].iter().all(|&v| self.inside[v as usize] && !self.protected(v)) {
+                continue;
+            }
+            let (vp, vq, vx, vy) = (
+                count(&mut valence, self, p),
+                count(&mut valence, self, q),
+                count(&mut valence, self, x),
+                count(&mut valence, self, y),
+            );
+            let dev = |n: i32| (n - 6) * (n - 6);
+            let before = dev(vp) + dev(vq) + dev(vx) + dev(vy);
+            let after = dev(vp - 1) + dev(vq - 1) + dev(vx + 1) + dev(vy + 1);
+            if after >= before || vp <= 3 || vq <= 3 || self.len(x, y) > hi {
+                continue;
+            }
+            // Only nearly flat pairs, and the new triangles must face the
+            // same way.
+            let (n1, n2) = (self.face_normal([p, q, x]), self.face_normal([q, p, y]));
+            let (u1, u2) = (n1.normalize_or_zero(), n2.normalize_or_zero());
+            if u1.dot(u2) < FLIP_MAX_BEND {
+                continue;
+            }
+            let (new1, new2) = ([x, p, y], [y, q, x]);
+            let up = (u1 + u2).normalize_or_zero();
+            let (m1, m2) = (self.face_normal(new1), self.face_normal(new2));
+            let area = (n1.length() + n2.length()) * 1e-4;
+            if m1.dot(up) <= 0.0 || m2.dot(up) <= 0.0 || m1.length() < area || m2.length() < area {
+                continue;
+            }
+            // x and y already joined elsewhere: flipping would duplicate the edge.
+            if self.neighbours(x).contains(&y) {
+                continue;
+            }
+            self.tris[t1 as usize] = new1;
+            self.tris[t2 as usize] = new2;
+            // t1 lost q and gained y; t2 lost p and gained x.
+            if let Some(l) = self.vt.get_mut(&q) {
+                l.retain(|&t| t != t1);
+            }
+            if let Some(l) = self.vt.get_mut(&p) {
+                l.retain(|&t| t != t2);
+            }
+            self.vt.entry(y).or_default().push(t1);
+            self.vt.entry(x).or_default().push(t2);
+            for (v, d) in [(p, -1), (q, -1), (x, 1), (y, 1)] {
+                *valence.get_mut(&v).expect("counted above") += d;
+            }
+            flipped += 1;
+        }
+        flipped
+    }
+
+    /// Move each vertex near the brush part of the way toward the middle
+    /// of its neighbours, within its tangent plane, unless that would fold
+    /// a triangle around it. Rims, masked and hidden areas stay.
+    fn relax_pass(&mut self) {
+        let verts: Vec<u32> =
+            (0..self.pos.len() as u32).filter(|&v| self.near[v as usize] && self.inside[v as usize]).collect();
+        for v in verts {
+            let free = 1.0 - self.mask[v as usize].clamp(0.0, 1.0);
+            if free <= 0.0 || self.dead[v as usize] {
+                continue;
+            }
+            let ts = self.live_tris(v);
+            if ts.is_empty() || ts.iter().any(|&t| self.hidden[t as usize]) {
+                continue;
+            }
+            // Every edge around v interior (two triangles), or v is on a rim.
+            let mut count: HashMap<u32, u32> = HashMap::new();
+            for &t in &ts {
+                for &u in &self.tris[t as usize] {
+                    if u != v {
+                        *count.entry(u).or_default() += 1;
+                    }
+                }
+            }
+            if count.values().any(|&c| c != 2) {
+                continue;
+            }
+            let normal = ts.iter().map(|&t| self.face_normal(self.tris[t as usize])).sum::<Vec3>().normalize_or_zero();
+            if normal == Vec3::ZERO {
+                continue;
+            }
+            let p = self.pos[v as usize];
+            let centre = count.keys().map(|&u| self.pos[u as usize]).sum::<Vec3>() / count.len() as f32;
+            let mut step = centre - p;
+            step -= normal * step.dot(normal);
+            let step = step * (RELAX * free);
+            // A move in the tangent plane leaves a curved surface (inward on
+            // a bump). Follow the surface instead: fit h = k·t² to the
+            // neighbours' heights h over that plane at distance t, and drop
+            // by k·|step|².
+            let (mut hs, mut t2s) = (0.0f32, 0.0f32);
+            for &u in count.keys() {
+                let o = self.pos[u as usize] - p;
+                let h = o.dot(normal);
+                hs += h;
+                t2s += (o - normal * h).length_squared();
+            }
+            let k = if t2s > 0.0 { hs / t2s } else { 0.0 };
+            let to = p + step + normal * (k * step.length_squared());
+            let ok = ts.iter().all(|&t| {
+                let tri = self.tris[t as usize];
+                let before = self.face_normal(tri);
+                let [q0, q1, q2] = tri.map(|u| if u == v { to } else { self.pos[u as usize] });
+                let after = (q1 - q0).cross(q2 - q0);
+                after.dot(before) > 0.0 && after.length_squared() > before.length_squared() * 1e-4
+            });
+            if ok {
+                self.pos[v as usize] = to;
+                self.normals[v as usize] = normal;
+            }
+        }
     }
 
     fn finish(self) -> Mesh {
@@ -437,8 +663,52 @@ mod tests {
         // Far side untouched.
         let far = |m: &Mesh| m.positions.iter().filter(|p| p.y < -0.5).count();
         assert_eq!(far(&r.mesh), far(&mesh));
-        // New vertices lie on the old surface (midpoints: inside the sphere).
-        assert!(r.mesh.positions.iter().all(|p| p.length() <= 1.0 + 1e-5));
+        // New vertices follow the curved surface instead of cutting
+        // across it on chords, which would leave flat facets.
+        // (The straight chord's midpoint of an edge this long is 1e-2 inside;
+        // the curve's is limited by how radial the coarse mesh's vertex
+        // normals are.)
+        let worst = r.mesh.positions.iter().map(|p| (p.length() - 1.0).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 4e-3, "{worst} off the sphere");
+    }
+
+    #[test]
+    fn refining_stays_at_the_brush_and_makes_even_triangles() {
+        let mesh = primitives::icosphere(3, 1.0);
+        let coarse =
+            mesh.positions[mesh.triangles[0][0] as usize].distance(mesh.positions[mesh.triangles[0][1] as usize]);
+        let (c, radius) = (Vec3::Z, 0.3);
+        let r = refine(&mesh, &[(c, radius)], Detail { edge: 0.03, max_triangles: 1_000_000, collapse: true }).unwrap();
+        assert!(r.flipped > 0);
+        assert!(closed_and_manifold(&r.mesh));
+        // New vertices only on edges that start in the brush: at most half
+        // a coarse edge past it (an earlier version spread a ring further
+        // out with every split round).
+        let n = mesh.vertex_count() as u32;
+        let far = r
+            .mesh
+            .source_vertices()
+            .iter()
+            .zip(&r.mesh.positions)
+            .filter(|(s, _)| **s >= n)
+            .map(|(_, p)| p.distance(c))
+            .fold(0.0f32, f32::max);
+        assert!(far <= radius + 0.55 * coarse, "new vertex {far} from the brush centre (radius {radius})");
+        // Under the brush, no slivers, and well shaped on average (one call;
+        // a stroke refines the same place many times and evens it out more,
+        // see the dyntopo_quality example).
+        let mut mins = Vec::new();
+        for t in &r.mesh.triangles {
+            let p = t.map(|v| r.mesh.positions[v as usize]);
+            if ((p[0] + p[1] + p[2]) / 3.0).distance(c) > radius * 0.7 {
+                continue;
+            }
+            let ang = |a: Vec3, b: Vec3, c: Vec3| (b - a).angle_between(c - a).to_degrees();
+            mins.push(ang(p[0], p[1], p[2]).min(ang(p[1], p[2], p[0])).min(ang(p[2], p[0], p[1])));
+        }
+        let thin = mins.iter().filter(|&&a| a < 20.0).count() as f32 / mins.len() as f32;
+        let mean = mins.iter().sum::<f32>() / mins.len() as f32;
+        assert!(thin < 0.02 && mean > 38.0, "{:.1}% thin, mean smallest angle {mean:.1}°", thin * 100.0);
     }
 
     #[test]
@@ -465,7 +735,11 @@ mod tests {
         let n = mesh.vertex_count() as u32;
         for (v, &s) in src.iter().enumerate() {
             if s < n {
-                assert_eq!(r.mesh.positions[v], mesh.positions[s as usize]);
+                // Old vertices stay where they were, apart from the
+                // relaxation near the brush, which only slides them a little.
+                let (now, was) = (r.mesh.positions[v], mesh.positions[s as usize]);
+                let limit = if was.distance(Vec3::Y) > 0.4 { 0.0 } else { 0.1 };
+                assert!(now.distance(was) <= limit, "{was} -> {now}");
             }
         }
         assert!(src.iter().any(|&s| s >= n), "new vertices map past the old count");

@@ -47,9 +47,18 @@ small. Detail is added only where you sculpt.
 
 1. The **region** is every triangle touching a vertex inside a sphere.
 2. **Split** (up to six rounds, longest edges first): edges longer than 4/3
-   of the target with an end inside the region are split at their
-   midpoint; both triangles on the edge are split, so there are no
-   T-junctions. Mask and color are interpolated; face groups are inherited.
+   of the target with an end inside a sphere are split; both triangles on
+   the edge are split, so there are no T-junctions. Mask and color are
+   interpolated; face groups are inherited.
+   - The new vertex is the midpoint of the cubic Hermite curve between the
+     ends whose tangents lie in each end's tangent plane:
+     `(a + b)/2 + ((d·n_b) n_b − (d·n_a) n_a)/8`, with `d = b − a`. The
+     straight chord's midpoint lies θ²/2 inside a sphere; this one lies
+     within θ⁴/4, so refining keeps curved surfaces curved.
+   - (Since 3.0.6) An edge is split only if an end lies *inside a sphere*.
+     The first version allowed any edge with a new vertex at one end, so
+     every round spread one ring of triangles further out (a tester's video
+     showed refinement in zigzag spikes well past the brush).
 3. **Collapse** (two rounds, shortest first): edges shorter than 4/5 of the
    target with both ends inside are collapsed to their midpoint, unless
    that would break the surface. It's refused when:
@@ -62,7 +71,35 @@ small. Detail is added only where you sculpt.
 
    The 4/3 and 4/5 thresholds are from Botsch and Kobbelt, "A Remeshing
    Approach to Multiresolution Modeling" (SGP 2004).
-4. The result is rebuilt with `Mesh::from_data`. Every chunk, adjacency and
+4. **Flip** (since 3.0.6; two rounds): an edge with both ends inside a
+   sphere is flipped when that brings its four vertices closer to six
+   neighbours each, the third step of the same paper. It isn't flipped
+   when:
+   - its two triangles are bent more than about 20° apart (so sculpted
+     ridges and creases keep their edges), or are in different face groups;
+   - the new edge would be longer than 4/3 of the target, or already exists;
+   - a new triangle would face the other way or be degenerate.
+5. **Relax** (since 3.0.6; two rounds): each vertex inside a sphere moves
+   half way toward the middle of its neighbours, within its tangent plane
+   (the paper's fourth step). Rims, masked (in proportion) and hidden areas
+   stay, and a move that would fold a triangle is skipped. A move in the
+   tangent plane leaves a curved surface, so the vertex also drops by the
+   curvature of a fit `h = k·t²` to its neighbours' heights over that plane.
+
+   Measured on a Draw-like stroke over a coarse sphere at Detail 62%
+   (`cargo run --release -p oxy-mesh --example dyntopo_quality`):
+
+   | | First version | Since 3.0.6 |
+   |---|---|---|
+   | Thin triangles (smallest angle under 20°) | 8.9% | 0.0% |
+   | Mean smallest angle (60° is equilateral) | 36.5° | 52.7° |
+   | Vertices with six neighbours | 23% | 61% |
+   | Mean angle between neighbouring faces | 4.08° | 2.66° |
+   | New vertices past the brush, at most | 0.119 | 0.052 |
+   | Vertices added | 2,709 | 1,492 |
+
+   ![The same stroke before and after these changes](../images/dyntopo-before-after.png)
+6. The result is rebuilt with `Mesh::from_data`. Every chunk, adjacency and
    version invariant therefore holds exactly as for any other topology
    change (AGENTS.md invariants 2 and 3). The rebuilt mesh maps each vertex
    to its index before the edit, so the stroke's per-vertex state (the
@@ -89,6 +126,11 @@ test machine, CPU only):
 | 330k triangles | 75 ms | 33 ms |
 | 1.3M triangles | 330 ms | 137 ms |
 
+Since 3.0.6, flips and relaxation add to that. In the benchmark's large
+first pass the 1.3M-triangle refine takes about 450 ms. A second dab at the
+same place spends about 23 ms of its 220 ms in them; on 330k triangles,
+about 10 ms. The rebuild is still the larger cost.
+
 Refines are spaced by their own cost (the next one waits 1.5× as long as
 the last took), so on a dense mesh dabs keep coming in between. They then
 land on unrefined triangles until the next refine. In practice:
@@ -110,8 +152,9 @@ when it ends.
   only the chunks that changed would be re-indexed and re-uploaded. That
   removes the O(n) cost, and is what makes dynamic detail practical on
   large meshes. It is the bulk of the remaining roadmap estimate.
-- **Edge flips toward valence 6** and a light tangential relaxation of new
-  vertices, for more even triangles.
+- Grading the transition: where fine triangles meet the untouched coarse
+  ones at the brush's edge, one row of triangles is still thinner, because
+  the coarse side is outside the brush and isn't flipped or relaxed.
 - **Constant detail** (a fixed edge length in world units, independent of
   the brush), and a **detail flood fill** over the whole piece.
 - Line, Stamp and Curve strokes, and the agent (MCP) tools, don't refine
