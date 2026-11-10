@@ -164,7 +164,7 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
 - Shift+drag a point up or down to make the tube thicker or thinner there. Thickness blends smoothly between points.\n\
 - Click the line between two points to add one; Alt+click a point to remove it.\n\
 - The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\n\
-Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To fuse it with the model, use Merge in the Pieces panel, which joins the visible pieces into one surface with a voxel remesh.",
+Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge in the Pieces panel, which joins the visible pieces into one surface with a voxel remesh.",
     },
     Topic {
         title: "Retopology",

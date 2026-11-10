@@ -64,21 +64,31 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label("Mirror");
                 ui.checkbox(&mut tube.mirror, "Also across the X mirror plane");
                 ui.end_row();
-                ui.label("Accept");
-                let mut into = tube.into.is_some();
-                let name = ed_target_name.clone();
-                if ui.checkbox(&mut into, format!("Add to {name} (not a new piece)")).changed() {
-                    tube.into = if into { Some(ed_target_id) } else { None };
+                if tube.replace.is_none() {
+                    ui.label("Accept");
+                    let mut into = tube.into.is_some();
+                    let name = ed_target_name.clone();
+                    if ui.checkbox(&mut into, format!("Add to {name} (not a new piece)")).changed() {
+                        tube.into = if into { Some(ed_target_id) } else { None };
+                    }
+                    ui.end_row();
                 }
-                ui.end_row();
             });
             if tube.selected.is_some() && ui.small_button("Edit the whole tube's thickness").clicked() {
                 tube.selected = None;
             }
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                accept |= ui.button("Accept").on_hover_text("Add the tube as a new piece (Enter)").clicked();
-                cancel |= ui.button("Cancel").on_hover_text("Discard the tube (Esc)").clicked();
+                if tube.replace.is_some() {
+                    accept |=
+                        ui.button("Update tube").on_hover_text("Replace the tube with this one (Enter)").clicked();
+                    cancel |= ui.button("Cancel").on_hover_text("Keep the tube as it was (Esc)").clicked();
+                } else {
+                    let what =
+                        if tube.into.is_some() { "Add the tube to the piece" } else { "Add the tube as a new piece" };
+                    accept |= ui.button("Accept").on_hover_text(format!("{what} (Enter)")).clicked();
+                    cancel |= ui.button("Cancel").on_hover_text("Discard the tube (Esc)").clicked();
+                }
             });
         });
     if cancel {

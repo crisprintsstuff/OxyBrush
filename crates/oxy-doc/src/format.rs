@@ -38,6 +38,19 @@
 //!   order; any after them are loose points not yet used by a face. Written
 //!   only while the piece's mesh is still the one built from the cage.
 //!   Older readers skip it and load the piece as an ordinary mesh.
+//! - `TUBE` (optional, since 3.0.6): how the tubes in the **preceding**
+//!   `PIEC` were made (RFC 0009), so they can be edited again:
+//!   `count:u32` then per tube `n:u32 points:f32*3n radii:f32*n sides:u32
+//!   caps:u8 mirror:u8 mirror_x:f32 group:u32 triangles:u32
+//!   fingerprint:f32*3`. Older readers skip it; the tubes stay ordinary
+//!   triangles.
+//! - `CURV` (optional, since 3.0.6): a Curve Move curve (RFC 0005) that was
+//!   open on the **preceding** `PIEC` when it was saved; the piece itself is
+//!   saved without the curve's bend. `n:u32` then `points:f32*6n` (position
+//!   and normal), `rest:f32*6n`, `weights:f32*2n` (reach, strength), then
+//!   `closed:u8 radius_pt:f32 world_per_pt:f32 strength:f32 falloff:u8
+//!   pressure:f32 vertices:u32 triangles:u32`. Older readers skip it, and
+//!   the open curve is lost, as it always was.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -115,6 +128,12 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(cage) = &p.cage {
             sections.push((*b"CAGE", encode_cage(cage)));
+        }
+        if !p.tubes.is_empty() {
+            sections.push((*b"TUBE", encode_tubes(&p.tubes)));
+        }
+        if let Some(c) = &p.curve {
+            sections.push((*b"CURV", encode_curve(c)));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -294,6 +313,20 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring vertex map that doesn't match piece {:?}", piece.name);
                 }
             }
+            b"TUBE" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("TUBE before any piece".into()))?;
+                match decode_tubes(&raw) {
+                    Ok(t) => piece.tubes = t,
+                    Err(e) => log::warn!("ignoring damaged tube recipes on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"CURV" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("CURV before any piece".into()))?;
+                match decode_curve(&raw) {
+                    Ok(c) => piece.curve = Some(Box::new(c)),
+                    Err(e) => log::warn!("ignoring a damaged Curve Move curve on piece {:?}: {e}", piece.name),
+                }
+            }
             b"CAGE" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("CAGE before any piece".into()))?;
                 match decode_cage(&raw) {
@@ -309,6 +342,134 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
         return Err(Error::Corrupt("no pieces".into()));
     }
     Ok(scene)
+}
+
+fn encode_curve(c: &crate::SavedCurve) -> Vec<u8> {
+    let mut b = Vec::new();
+    let f = |b: &mut Vec<u8>, x: f32| b.extend_from_slice(&x.to_le_bytes());
+    let u = |b: &mut Vec<u8>, x: u32| b.extend_from_slice(&x.to_le_bytes());
+    u(&mut b, c.points.len() as u32);
+    for list in [&c.points, &c.rest] {
+        for (p, n) in list {
+            for x in p.to_array().into_iter().chain(n.to_array()) {
+                f(&mut b, x);
+            }
+        }
+    }
+    for &(r, s) in &c.weights {
+        f(&mut b, r);
+        f(&mut b, s);
+    }
+    b.push(c.closed as u8);
+    f(&mut b, c.radius_pt);
+    f(&mut b, c.world_per_pt);
+    f(&mut b, c.strength);
+    b.push(c.falloff);
+    f(&mut b, c.pressure);
+    u(&mut b, c.vertices);
+    u(&mut b, c.triangles);
+    b
+}
+
+fn decode_curve(raw: &[u8]) -> Result<crate::SavedCurve> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let n = r.u32()? as usize;
+    r.check(n, 56)?;
+    let pairs = |r: &mut Reader| -> Result<Vec<(Vec3, Vec3)>> {
+        (0..n)
+            .map(|_| {
+                let p = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+                let q = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+                Ok((p, q))
+            })
+            .collect()
+    };
+    let points = pairs(&mut r)?;
+    let rest = pairs(&mut r)?;
+    let weights: Vec<(f32, f32)> = (0..n).map(|_| Ok((r.f32()?, r.f32()?))).collect::<Result<_>>()?;
+    let c = crate::SavedCurve {
+        points,
+        rest,
+        weights,
+        closed: r.u8()? != 0,
+        radius_pt: r.f32()?,
+        world_per_pt: r.f32()?,
+        strength: r.f32()?,
+        falloff: r.u8()?,
+        pressure: r.f32()?,
+        vertices: r.u32()?,
+        triangles: r.u32()?,
+    };
+    let finite = |v: &[(Vec3, Vec3)]| v.iter().all(|(p, q)| p.is_finite() && q.is_finite());
+    let ok = n >= 2
+        && finite(&c.points)
+        && finite(&c.rest)
+        && c.weights.iter().all(|(a, b)| a.is_finite() && b.is_finite())
+        && [c.radius_pt, c.world_per_pt, c.strength, c.pressure].iter().all(|x| x.is_finite() && *x >= 0.0)
+        && c.radius_pt > 0.0
+        && c.world_per_pt > 0.0;
+    if !ok {
+        return Err(Error::Corrupt("bad Curve Move curve".into()));
+    }
+    Ok(c)
+}
+
+fn encode_tubes(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
+    let mut b = Vec::new();
+    let f = |b: &mut Vec<u8>, x: f32| b.extend_from_slice(&x.to_le_bytes());
+    let u = |b: &mut Vec<u8>, x: u32| b.extend_from_slice(&x.to_le_bytes());
+    u(&mut b, tubes.len() as u32);
+    for t in tubes {
+        u(&mut b, t.points.len() as u32);
+        for p in &t.points {
+            for x in p.to_array() {
+                f(&mut b, x);
+            }
+        }
+        for &r in &t.radii {
+            f(&mut b, r);
+        }
+        u(&mut b, t.sides);
+        b.push(t.caps as u8);
+        b.push(t.mirror as u8);
+        f(&mut b, t.mirror_x);
+        u(&mut b, t.group);
+        u(&mut b, t.triangles);
+        for x in t.fingerprint.to_array() {
+            f(&mut b, x);
+        }
+    }
+    b
+}
+
+fn decode_tubes(raw: &[u8]) -> Result<Vec<crate::TubeRecipe>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, 30)?;
+    let mut out = Vec::with_capacity(count);
+    for _ in 0..count {
+        let n = r.u32()? as usize;
+        r.check(n, 16)?;
+        let points: Vec<Vec3> = (0..n).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect::<Result<_>>()?;
+        let radii: Vec<f32> = (0..n).map(|_| r.f32()).collect::<Result<_>>()?;
+        let sides = r.u32()?;
+        let caps = r.u8()? != 0;
+        let mirror = r.u8()? != 0;
+        let mirror_x = r.f32()?;
+        let group = r.u32()?;
+        let triangles = r.u32()?;
+        let fingerprint = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let ok = n >= 2
+            && (3..=256).contains(&sides)
+            && points.iter().all(|p| p.is_finite())
+            && radii.iter().all(|x| x.is_finite() && *x > 0.0)
+            && mirror_x.is_finite();
+        if !ok {
+            return Err(Error::Corrupt("invalid tube recipe".into()));
+        }
+        out.push(crate::TubeRecipe { points, radii, sides, caps, mirror, mirror_x, group, triangles, fingerprint });
+    }
+    Ok(out)
 }
 
 fn encode_cage(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
@@ -376,7 +537,17 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
     m.mask = (0..v).map(|_| r.f32()).collect::<Result<_>>()?;
     m.groups = (0..t).map(|_| r.u32()).collect::<Result<_>>()?;
     m.hidden = (0..t).map(|_| r.u8().map(|b| b != 0)).collect::<Result<_>>()?;
-    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None, symmetry_center: None, cage: None })
+    Ok(PieceData {
+        name,
+        visible,
+        mesh: m,
+        multires: None,
+        vertex_map: None,
+        symmetry_center: None,
+        cage: None,
+        tubes: Vec::new(),
+        curve: None,
+    })
 }
 
 fn encode_multires(mr: &Multires) -> Vec<u8> {
@@ -464,6 +635,8 @@ mod tests {
                     vertex_map: None,
                     symmetry_center: None,
                     cage: None,
+                    tubes: Vec::new(),
+                    curve: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -473,6 +646,8 @@ mod tests {
                     vertex_map: None,
                     symmetry_center: None,
                     cage: None,
+                    tubes: Vec::new(),
+                    curve: None,
                 },
             ],
             active: 1,
@@ -536,6 +711,75 @@ mod tests {
         let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
         assert!(plain.cage.is_none());
         assert_eq!(plain.mesh.triangle_count(), 4);
+    }
+
+    #[test]
+    fn tube_recipes_roundtrip_and_older_readers_skip_them() {
+        use crate::{Piece, TubeRecipe, group_fingerprint};
+        let points = vec![Vec3::ZERO, Vec3::new(0.5, 1.0, 0.0), Vec3::new(1.0, 2.0, 0.5)];
+        let radii = vec![0.2, 0.1, 0.05];
+        let mesh = primitives::tube(&points, &radii, 12, true);
+        let (triangles, fingerprint) = group_fingerprint(&mesh, 0);
+        let mut piece = Piece::new("Tube", mesh);
+        let recipe = TubeRecipe {
+            points,
+            radii,
+            sides: 12,
+            caps: true,
+            mirror: true,
+            mirror_x: 0.25,
+            group: 0,
+            triangles,
+            fingerprint,
+        };
+        piece.tubes.push(recipe.clone());
+        assert_eq!(piece.tube_recipe(), Some(&recipe));
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0 });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"TUBE").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(loaded.tubes, vec![recipe]);
+        assert!(loaded.tube_recipe().is_some(), "still matches the loaded mesh");
+        // Moving a vertex (a brush) makes it an ordinary mesh again.
+        let mut sculpted = loaded;
+        sculpted.mesh.positions[3].x += 0.1;
+        assert!(sculpted.tube_recipe().is_none());
+        // An older reader skips TUBE like any unknown section.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"TUBE").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        assert!(decode(&old).unwrap().pieces[0].tubes.is_empty());
+    }
+
+    #[test]
+    fn open_curve_roundtrips_and_older_readers_skip_it() {
+        use crate::SavedCurve;
+        let mut s = sample();
+        let mesh = &s.pieces[1].mesh;
+        let curve = SavedCurve {
+            points: vec![(Vec3::ZERO, Vec3::Y), (Vec3::new(1.0, 0.5, 0.0), Vec3::Z)],
+            rest: vec![(Vec3::ZERO, Vec3::Y), (Vec3::X, Vec3::Z)],
+            weights: vec![(1.0, 1.0), (1.5, 0.5)],
+            closed: false,
+            radius_pt: 60.0,
+            world_per_pt: 0.004,
+            strength: 1.0,
+            falloff: 2,
+            pressure: 1.0,
+            vertices: mesh.positions.len() as u32,
+            triangles: mesh.triangles.len() as u32,
+        };
+        s.pieces[1].curve = Some(Box::new(curve.clone()));
+        let bytes = encode(&s);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"CURV").count(), 1);
+        let d = decode(&bytes).unwrap();
+        assert_eq!(d.pieces[0].curve, None);
+        assert_eq!(d.pieces[1].curve.as_deref(), Some(&curve));
+        let piece = d.pieces.into_iter().nth(1).unwrap().into_piece();
+        assert!(piece.curve.as_ref().unwrap().fits(&piece.mesh));
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"CURV").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        assert!(decode(&old).unwrap().pieces.iter().all(|p| p.curve.is_none()));
     }
 
     #[test]
@@ -644,6 +888,8 @@ mod tests {
                 vertex_map: None,
                 symmetry_center: None,
                 cage: None,
+                tubes: Vec::new(),
+                curve: None,
             }],
             active: 0,
         };
