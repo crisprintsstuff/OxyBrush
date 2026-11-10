@@ -3842,6 +3842,14 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         };
         tips::hover(ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=max_res)), plain::REMESH_RES);
     });
+    let estimate = ed.remesh_estimate();
+    let text = format!("Makes about {} triangles", fmt_count(estimate));
+    let text = if estimate > 8_000_000 {
+        RichText::new(format!("{text}: slow, and heavy to sculpt")).small().color(ui.visuals().warn_fg_color)
+    } else {
+        RichText::new(text).small().weak()
+    };
+    ui.label(text);
     if ed.remesh_engine == oxy_topo::RemeshEngine::Vdb {
         ui.horizontal(|ui| {
             ui.label("Adaptivity");

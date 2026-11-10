@@ -234,7 +234,11 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
         Action::Mask { op } => Apply::Done(mask(ed, op)),
         Action::Remesh { resolution } => background(ed, |ed| {
             if let Some(resolution) = resolution {
-                ed.remesh_resolution = resolution.clamp(8, oxy_topo::MAX_RESOLUTION);
+                let max = match ed.remesh_engine {
+                    oxy_topo::RemeshEngine::Vdb => 1024,
+                    oxy_topo::RemeshEngine::RegularGrid => oxy_topo::MAX_RESOLUTION,
+                };
+                ed.remesh_resolution = resolution.clamp(8, max);
             }
             ed.remesh_active();
         }),

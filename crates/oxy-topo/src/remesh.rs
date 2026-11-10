@@ -106,8 +106,10 @@ impl Grid {
 
 /// Remesh the union of `meshes`. Hidden triangles are included; masks and
 /// face groups are reset.
+/// Vertex color, mask and face groups carry over from `meshes` (see
+/// [`crate::transfer_attributes`]).
 pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, RemeshError> {
-    match opts.engine {
+    let mut out = match opts.engine {
         RemeshEngine::Vdb => vdb_remesh(
             meshes,
             VdbRemeshOptions {
@@ -119,7 +121,9 @@ pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, Remes
             },
         ),
         RemeshEngine::RegularGrid => regular_grid_remesh(meshes, opts),
-    }
+    }?;
+    crate::transfer_attributes(meshes, &mut out);
+    Ok(out)
 }
 
 /// Sparse OpenVDB-style hierarchical voxel remeshing.
@@ -203,12 +207,12 @@ pub fn boolean_mesh(
 
     oxy_vdb::csg_operation(&mut target_grid, &tool_grid, op);
 
-    let mesh = oxy_vdb::volume_to_mesh(
+    let mut mesh = oxy_vdb::volume_to_mesh(
         &target_grid,
         oxy_vdb::VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 1 },
     )
     .ok_or(RemeshError::NoSurface)?;
-
+    crate::transfer_attributes(&[target, tool], &mut mesh);
     Ok(mesh)
 }
 
