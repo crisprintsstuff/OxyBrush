@@ -41,6 +41,98 @@ pub struct Piece {
     /// drawn with the retopology tool (RFC 0012). Valid while
     /// [`Cage::is_linked_to`] the mesh; written as the `CAGE` section.
     pub cage: Option<Cage>,
+    /// How the tubes in this piece were made, newest last, so they can be
+    /// edited again (RFC 0009); written as the `TUBE` section.
+    pub tubes: Vec<TubeRecipe>,
+    /// A Curve Move curve that was open on this piece when the project was
+    /// saved (RFC 0005), written as the `CURV` section. Set only by loading;
+    /// the app takes it and reopens the curve.
+    pub curve: Option<Box<SavedCurve>>,
+}
+
+/// An open Curve Move curve (RFC 0005), as saved with the project: the
+/// piece itself is saved unbent, and the curve with what it needs to bend
+/// it the same way again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedCurve {
+    /// Control points (position, normal) where they have been dragged, and
+    /// where they were drawn (what the mesh is tied to).
+    pub points: Vec<(Vec3, Vec3)>,
+    pub rest: Vec<(Vec3, Vec3)>,
+    /// Per control point: (reach, strength) multipliers.
+    pub weights: Vec<(f32, f32)>,
+    pub closed: bool,
+    /// Brush size in logical points, and world units per point, which
+    /// together give the reach.
+    pub radius_pt: f32,
+    pub world_per_pt: f32,
+    pub strength: f32,
+    /// Index into the app's falloff list.
+    pub falloff: u8,
+    pub pressure: f32,
+    /// The piece's vertex and triangle count, to check it is still the
+    /// mesh the curve was drawn on.
+    pub vertices: u32,
+    pub triangles: u32,
+}
+
+impl SavedCurve {
+    /// Whether `mesh` can still be the mesh this curve was drawn on.
+    pub fn fits(&self, mesh: &Mesh) -> bool {
+        mesh.vertex_count() == self.vertices as usize && mesh.triangle_count() == self.triangles as usize
+    }
+}
+
+/// How a tube was made (RFC 0009): its centre line and shape, and where it
+/// is in the piece. Valid while the piece still has those triangles,
+/// unchanged ([`TubeRecipe::matches`]).
+#[derive(Debug, Clone, PartialEq)]
+pub struct TubeRecipe {
+    pub points: Vec<Vec3>,
+    pub radii: Vec<f32>,
+    pub sides: u32,
+    pub caps: bool,
+    pub mirror: bool,
+    pub mirror_x: f32,
+    /// The face group holding the tube's triangles.
+    pub group: u32,
+    /// The tube's triangle count and [`group_fingerprint`] when it was made.
+    pub triangles: u32,
+    pub fingerprint: Vec3,
+}
+
+/// The number of triangles in face group `group` of `mesh`, and a
+/// fingerprint of their vertices' positions: the sum, over each vertex once,
+/// of three waves of its position. Any move of a vertex by more than about
+/// 1e-4 changes it, even moves that keep the centre (a smooth stroke), and
+/// it doesn't depend on the order of the vertices.
+pub fn group_fingerprint(mesh: &Mesh, group: u32) -> (u32, Vec3) {
+    const K: [[f64; 3]; 3] = [[61.7, 23.3, 37.9], [29.1, 53.9, 17.3], [19.7, 41.3, 67.1]];
+    let mut seen = vec![false; mesh.vertex_count()];
+    let (mut n, mut sum) = (0u32, glam::DVec3::ZERO);
+    for (t, tri) in mesh.triangles.iter().enumerate() {
+        if mesh.groups()[t] != group {
+            continue;
+        }
+        n += 1;
+        for &v in tri {
+            if !std::mem::replace(&mut seen[v as usize], true) {
+                let p = mesh.positions[v as usize].as_dvec3();
+                let wave = |k: [f64; 3]| (k[0] * p.x + k[1] * p.y + k[2] * p.z + 0.7).sin();
+                sum += glam::DVec3::new(wave(K[0]), wave(K[1]), wave(K[2]));
+            }
+        }
+    }
+    (n, sum.as_vec3())
+}
+
+impl TubeRecipe {
+    /// Whether `mesh` still has this tube, as it was made.
+    pub fn matches(&self, mesh: &Mesh) -> bool {
+        let (n, sum) = group_fingerprint(mesh, self.group);
+        // Each vertex adds at most 1 per component; allow for rounding.
+        n == self.triangles && n > 0 && sum.distance(self.fingerprint) <= 1e-3 + n as f32 * 1e-6
+    }
 }
 
 /// For each vertex of a loaded piece, its index in the vertex array of the
@@ -64,6 +156,8 @@ impl Piece {
             origin: None,
             symmetry_center: None,
             cage: None,
+            tubes: Vec::new(),
+            curve: None,
         }
     }
 
@@ -75,6 +169,11 @@ impl Piece {
             && o.topology_version == self.mesh.topology_version()
             && o.map.len() == self.mesh.vertex_count())
         .then_some(o.map.as_slice())
+    }
+
+    /// The most recent tube in this piece that is still there unchanged.
+    pub fn tube_recipe(&self) -> Option<&TubeRecipe> {
+        self.tubes.iter().rev().find(|r| r.matches(&self.mesh))
     }
 
     /// The cage with the mesh's current vertex positions, if it still
@@ -99,6 +198,8 @@ impl Piece {
                     vertex_map: None,
                     symmetry_center: self.symmetry_center,
                     cage: None,
+                    tubes: Vec::new(),
+                    curve: None,
                 }
             }
             None => PieceData {
@@ -109,6 +210,8 @@ impl Piece {
                 vertex_map: self.current_origin().map(<[u32]>::to_vec),
                 symmetry_center: self.symmetry_center,
                 cage: self.current_cage(),
+                tubes: self.tubes.clone(),
+                curve: self.curve.clone(),
             },
         }
     }
@@ -129,6 +232,10 @@ pub struct PieceData {
     /// The `CAGE` section: the retopology cage, indexed like `mesh` (its
     /// vertices used by faces come first, in the mesh's order).
     pub cage: Option<Cage>,
+    /// The `TUBE` section: how its tubes were made.
+    pub tubes: Vec<TubeRecipe>,
+    /// The `CURV` section: a Curve Move curve open when it was saved.
+    pub curve: Option<Box<SavedCurve>>,
 }
 
 impl PieceData {
@@ -166,6 +273,8 @@ impl PieceData {
             origin: origin.flatten(),
             symmetry_center: self.symmetry_center,
             cage,
+            tubes: self.tubes,
+            curve: self.curve,
         }
     }
 }
