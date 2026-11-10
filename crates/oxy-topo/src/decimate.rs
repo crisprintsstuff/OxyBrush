@@ -147,6 +147,8 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     let data = mesh.to_data();
     let mut pos: Vec<DVec3> = data.positions.iter().map(|p| p.as_dvec3()).collect();
     let mut mask = data.mask.clone();
+    // Vertex color (empty when unpainted): each surviving vertex keeps its own.
+    let color = data.color.clone();
     let mut tris = data.triangles.clone();
     let groups = data.groups.clone();
     let hidden = data.hidden.clone();
@@ -328,8 +330,12 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         }
     }
 
-    let mut out =
-        MeshData { positions: pos.iter().map(|p| p.as_vec3()).collect::<Vec<Vec3>>(), mask, ..Default::default() };
+    let mut out = MeshData {
+        positions: pos.iter().map(|p| p.as_vec3()).collect::<Vec<Vec3>>(),
+        mask,
+        color,
+        ..Default::default()
+    };
     for (t, tri) in tris.iter().enumerate() {
         if alive[t] {
             out.triangles.push(*tri);
@@ -401,6 +407,24 @@ mod tests {
         let b = d.bounds();
         assert!((b.max.x - 1.0).abs() < 1e-5 && (b.min.z + 1.0).abs() < 1e-5);
         assert!(d.triangle_count() < p.triangle_count());
+    }
+
+    #[test]
+    fn vertex_color_survives() {
+        let mut s = primitives::icosphere(4, 1.0);
+        for v in 0..s.vertex_count() {
+            if s.positions[v].y > 0.0 {
+                s.color[v] = Vec3::new(1.0, 0.0, 0.0);
+            }
+        }
+        let d = decimate(&s, 800);
+        assert!(d.is_painted());
+        for v in 0..d.vertex_count() {
+            let y = d.positions[v].y;
+            if y.abs() > 0.1 {
+                assert_eq!(d.color[v].y < 0.5, y > 0.0, "at y {y}");
+            }
+        }
     }
 
     #[test]

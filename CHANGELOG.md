@@ -11,6 +11,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **Tab+drag** a border edge pulls out a new quad; **Ctrl+click** an edge inserts an edge loop; **Ctrl+Shift+click** deletes a point or face.
   - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
 
+### Changed
+- **Remesh, Merge, booleans and Decimate keep vertex color, mask and face groups.** Remesh and booleans take them from the closest point of the original surface; Decimate keeps them on the vertices it leaves. Merge keeps each piece in a face group of its own, so they can still be picked out.
+
 ## [3.0.4-beta] - 2026-11-09
 
 ### Added
