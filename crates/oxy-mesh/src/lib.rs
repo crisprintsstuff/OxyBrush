@@ -12,6 +12,7 @@ pub mod dyntopo;
 pub mod multires;
 
 pub mod primitives;
+pub mod retopo;
 pub mod topo;
 
 pub use aabb::Aabb;
@@ -1214,6 +1215,14 @@ impl Mesh {
 
     pub fn triangle_count(&self) -> usize {
         self.triangles.len()
+    }
+
+    /// Say exactly which triangle pairs are quads (their shared diagonals),
+    /// instead of guessing from the shape. Used for meshes built from
+    /// explicit quads (a retopology cage), so quad counts and quad OBJ
+    /// export are exact. No effect once the quads were already worked out.
+    pub fn set_quad_diagonals(&self, diagonals: std::collections::HashSet<[u32; 2]>) {
+        let _ = self.quad_cache.set((diagonals.len(), std::sync::Arc::new(diagonals)));
     }
 
     fn get_quad_cache(&self) -> &(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>) {

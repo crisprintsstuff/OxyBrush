@@ -17,6 +17,8 @@ mod plugins;
 mod pose;
 mod presets;
 mod primitive_ui;
+mod retopo;
+mod retopo_ui;
 mod settings;
 mod snapshot;
 mod support;

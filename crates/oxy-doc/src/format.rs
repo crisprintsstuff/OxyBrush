@@ -31,6 +31,13 @@
 //! - `SYMC` (optional, since 2.5.8): symmetry centre of the **preceding**
 //!   `PIEC`: `x:f32 y:f32 z:f32`, the point mirror and radial symmetry act
 //!   about. Without it (and in older readers) symmetry uses the world origin.
+//! - `CAGE` (optional, since 3.0.5): retopology cage of the **preceding**
+//!   `PIEC` (RFC 0012): `vcount:u32 positions:f32*3v fcount:u32
+//!   faces:u32*4f`. Faces are quads, or triangles with `0xFFFFFFFF` as the
+//!   fourth corner. Its first vertices are the `PIEC`'s vertices in the same
+//!   order; any after them are loose points not yet used by a face. Written
+//!   only while the piece's mesh is still the one built from the cage.
+//!   Older readers skip it and load the piece as an ordinary mesh.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -105,6 +112,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
                 b.extend_from_slice(&i.to_le_bytes());
             }
             sections.push((*b"VMAP", b));
+        }
+        if let Some(cage) = &p.cage {
+            sections.push((*b"CAGE", encode_cage(cage)));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -284,6 +294,14 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring vertex map that doesn't match piece {:?}", piece.name);
                 }
             }
+            b"CAGE" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("CAGE before any piece".into()))?;
+                match decode_cage(&raw) {
+                    Ok(c) if piece.multires.is_none() => piece.cage = Some(c),
+                    Ok(_) => log::warn!("ignoring a retopology cage on a piece with subdivision levels"),
+                    Err(e) => log::warn!("ignoring a damaged retopology cage on piece {:?}: {e}", piece.name),
+                }
+            }
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
@@ -291,6 +309,46 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
         return Err(Error::Corrupt("no pieces".into()));
     }
     Ok(scene)
+}
+
+fn encode_cage(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
+    let mut b = Vec::with_capacity(8 + c.positions.len() * 12 + c.faces.len() * 16);
+    b.extend_from_slice(&(c.positions.len() as u32).to_le_bytes());
+    for p in &c.positions {
+        for x in p.to_array() {
+            b.extend_from_slice(&x.to_le_bytes());
+        }
+    }
+    b.extend_from_slice(&(c.faces.len() as u32).to_le_bytes());
+    for f in &c.faces {
+        for i in f {
+            b.extend_from_slice(&i.to_le_bytes());
+        }
+    }
+    b
+}
+
+fn decode_cage(raw: &[u8]) -> Result<oxy_mesh::retopo::Cage> {
+    use oxy_mesh::retopo::NONE;
+    let mut r = Reader { data: raw, pos: 0 };
+    let n = r.u32()? as usize;
+    r.check(n, 12)?;
+    let positions: Vec<Vec3> = (0..n).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect::<Result<_>>()?;
+    let f = r.u32()? as usize;
+    r.check(f, 16)?;
+    let mut faces = Vec::with_capacity(f);
+    for _ in 0..f {
+        let face = [r.u32()?, r.u32()?, r.u32()?, r.u32()?];
+        let ok = face[..3].iter().all(|&i| (i as usize) < n) && (face[3] == NONE || (face[3] as usize) < n);
+        if !ok {
+            return Err(Error::Corrupt("cage face refers to a missing vertex".into()));
+        }
+        faces.push(face);
+    }
+    if !positions.iter().all(|p| p.is_finite()) {
+        return Err(Error::Corrupt("cage has non-finite positions".into()));
+    }
+    Ok(oxy_mesh::retopo::Cage { positions, faces, linked: None })
 }
 
 fn decode_piece(raw: &[u8]) -> Result<PieceData> {
@@ -318,7 +376,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
     m.mask = (0..v).map(|_| r.f32()).collect::<Result<_>>()?;
     m.groups = (0..t).map(|_| r.u32()).collect::<Result<_>>()?;
     m.hidden = (0..t).map(|_| r.u8().map(|b| b != 0)).collect::<Result<_>>()?;
-    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None, symmetry_center: None })
+    Ok(PieceData { name, visible, mesh: m, multires: None, vertex_map: None, symmetry_center: None, cage: None })
 }
 
 fn encode_multires(mr: &Multires) -> Vec<u8> {
@@ -405,6 +463,7 @@ mod tests {
                     multires: None,
                     vertex_map: None,
                     symmetry_center: None,
+                    cage: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -413,6 +472,7 @@ mod tests {
                     multires: None,
                     vertex_map: None,
                     symmetry_center: None,
+                    cage: None,
                 },
             ],
             active: 1,
@@ -431,6 +491,51 @@ mod tests {
         let back = decode(&encode(&bad)).unwrap();
         assert!(back.pieces[0].mesh.color.is_empty());
         assert_eq!(back.pieces[0].mesh.positions, s.pieces[0].mesh.positions);
+    }
+
+    #[test]
+    fn retopology_cage_roundtrips_and_older_readers_skip_it() {
+        use crate::Piece;
+        use oxy_mesh::retopo::Cage;
+        // A 2-quad strip and a loose point.
+        let mut cage = Cage::default();
+        for y in 0..2 {
+            for x in 0..3 {
+                cage.add_vertex(Vec3::new(x as f32, y as f32, 0.0));
+            }
+        }
+        cage.add_face(&[0, 1, 4, 3], Vec3::Z).unwrap();
+        cage.add_face(&[1, 2, 5, 4], Vec3::Z).unwrap();
+        cage.add_vertex(Vec3::new(7.0, 7.0, 7.0));
+        let mesh = cage.build_mesh().unwrap();
+        let mut piece = Piece::new("Retopo", mesh);
+        piece.cage = Some(cage);
+        // A brush moved a vertex after the last cage edit: the saved cage has it.
+        piece.mesh.positions[0].z = 0.25;
+        let data = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let bytes = encode(&data);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"CAGE").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        let c = loaded.cage.as_ref().expect("cage loaded and linked");
+        assert!(c.is_linked_to(&loaded.mesh));
+        assert_eq!(loaded.mesh.quad_count(), 2);
+        assert_eq!(c.quad_count(), 2);
+        assert_eq!(c.dot_count(), 1);
+        assert!(loaded.mesh.positions.iter().any(|p| p.z == 0.25));
+        for i in 0..loaded.mesh.vertex_count() {
+            assert_eq!(c.positions[i], loaded.mesh.positions[i]);
+        }
+        // A piece whose topology changed since (e.g. remeshed) saves no cage.
+        let mut changed = loaded;
+        changed.mesh = primitives::cube(1, 1.0);
+        assert!(changed.to_data().cage.is_none());
+        // An older reader skips CAGE like any unknown section.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"CAGE").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert!(plain.cage.is_none());
+        assert_eq!(plain.mesh.triangle_count(), 4);
     }
 
     #[test]
@@ -538,6 +643,7 @@ mod tests {
                 multires: None,
                 vertex_map: None,
                 symmetry_center: None,
+                cage: None,
             }],
             active: 0,
         };

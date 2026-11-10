@@ -167,6 +167,15 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
 Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To fuse it with the model, use Merge in the Pieces panel, which joins the visible pieces into one surface with a voxel remesh.",
     },
     Topic {
+        title: "Retopology",
+        keywords: "retopology retopo quads low poly topology draw game animation edge loop relax",
+        body: "Mesh > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
+- Click to place a point. Drag a point, edge or face to slide it along the surface; drop a point on another to weld them.\n\
+- Hold Shift: the quad the nearest points make shows in green (a triangle in purple). Shift+click makes it. Shift+drag relaxes the points under the cursor.\n\
+- Tab+drag a border edge to pull out a new quad. Ctrl+click an edge to insert an edge loop across it. Ctrl+Shift+click deletes a point or face.\n\n\
+The first face makes a new piece, Retopo. Each action is one undo step, it is saved with the project, and its quads export as quads (OBJ). Done (or Esc) closes the tool; open it again with the sculpt or the Retopo piece active to carry on.",
+    },
+    Topic {
         title: "Blender bridge",
         keywords: "blender bridge send back link round trip addon export import",
         body: "The OxyBrush Bridge add-on for Blender (in the integrations/blender folder of OxyBrush's source) sends meshes here and takes them back. In Blender, set the OxyBrush program in the add-on's preferences, select mesh objects and choose Object > Send to OxyBrush. They open here as pieces, placed as they were, and the top bar shows Linked to Blender.\n\n\

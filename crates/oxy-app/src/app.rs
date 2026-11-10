@@ -568,9 +568,11 @@ impl App {
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();
+        // The retopology tool draws its piece as an overlay, on top of the surface.
+        let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece);
         for p in ed.scene.pieces.iter_mut() {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
-            if p.visible && Some(p.id) != curve_piece {
+            if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false });
             }
         }
@@ -1328,6 +1330,7 @@ impl ApplicationHandler for App {
                 if !*focused {
                     self.editor.modifiers = Modifiers::default();
                     self.editor.space_held = false;
+                    self.editor.tab_held = false;
                     if self.editor.is_stroking() {
                         self.editor.pointer_up();
                     }
@@ -1504,6 +1507,9 @@ impl ApplicationHandler for App {
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
                 if let PhysicalKey::Code(KeyCode::Space) = event.physical_key {
                     self.editor.space_held = event.state == ElementState::Pressed;
+                }
+                if let PhysicalKey::Code(KeyCode::Tab) = event.physical_key {
+                    self.editor.tab_held = event.state == ElementState::Pressed;
                 }
                 let capture_or_quick = self.editor.keymap_capture.is_some()
                     || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held));
