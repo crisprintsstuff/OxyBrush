@@ -5021,7 +5021,45 @@ impl Editor {
                 .then(|| self.camera.project(pivot + (axis_dirs[b] + axis_dirs[c]) * length * pose::PLANE_AT, size))
                 .flatten()
         });
-        Some(pose::Layout { pivot, center, axes, planes, axis_dirs, length })
+        // Rotate: rings around each axis, and an outer ring for the view axis.
+        let rings = (mode == GizmoMode::Rotate).then(|| {
+            let toward = if self.camera.orthographic {
+                -self.camera.forward()
+            } else {
+                (self.camera.eye() - pivot).normalize_or(-self.camera.forward())
+            };
+            let step = std::f32::consts::TAU / pose::RING_SAMPLES as f32;
+            let ring = |a: usize| {
+                let (b, c) = pose::plane_axes(a);
+                let (u, v) = (axis_dirs[b], axis_dirs[c]);
+                let at = |t: f32| pivot + (u * t.cos() + v * t.sin()) * length;
+                let points: Vec<(Vec2, bool)> = (0..pose::RING_SAMPLES)
+                    .map(|k| {
+                        let w = at(k as f32 * step);
+                        let s = self.camera.project(w, size).unwrap_or(center);
+                        (s, (w - pivot).dot(toward) >= -0.05 * length)
+                    })
+                    .collect();
+                let tangents: Vec<Vec2> = (0..pose::RING_SAMPLES)
+                    .map(|k| {
+                        let t = k as f32 * step;
+                        let h = 0.01;
+                        match (self.camera.project(at(t + h), size), self.camera.project(at(t - h), size)) {
+                            (Some(p1), Some(p0)) => (p1 - p0) / (2.0 * h),
+                            _ => Vec2::ZERO,
+                        }
+                    })
+                    .collect();
+                (points, tangents)
+            };
+            let (p0, t0) = ring(0);
+            let (p1, t1) = ring(1);
+            let (p2, t2) = ring(2);
+            let length_px = pose::HANDLE_PT * self.pixels_per_point;
+            pose::Rings { points: [p0, p1, p2], tangents: [t0, t1, t2], view_radius: length_px * 1.25 }
+        });
+        let (axes, planes) = if rings.is_some() { ([None; 3], [None; 3]) } else { (axes, planes) };
+        Some(pose::Layout { pivot, center, axes, planes, axis_dirs, length, rings })
     }
 
     /// The gizmo pivot when not dragging: the one you placed, or the mask
@@ -5075,9 +5113,13 @@ impl Editor {
         }
 
         let weights = pose::weights(&piece.mesh);
-        let screen_axis = match handle {
-            Handle::Axis(a) => layout.axes[a].map(|e| e - layout.center),
-            Handle::Plane(_) | Handle::Center => None,
+        let screen_axis = match (&layout.rings, handle) {
+            // Rotate: the ring's tangent where it was grabbed, or (outer
+            // ring) where it was grabbed relative to the pivot.
+            (Some(r), Handle::Axis(a)) => r.tangent_at(a, local),
+            (Some(_), Handle::Center) => Some(local - layout.center),
+            (None, Handle::Axis(a)) => layout.axes[a].map(|e| e - layout.center),
+            _ => None,
         };
         let screen_plane = match handle {
             Handle::Plane(a) => {
@@ -7629,7 +7671,8 @@ mod tests {
         // Rotate, then cancel with Esc: nothing changes and nothing is recorded.
         e.toggle_gizmo(GizmoMode::Rotate);
         let layout = e.gizmo_layout().unwrap();
-        let end = layout.axes[2].or(layout.axes[1]).unwrap();
+        // A point on the blue (Z) ring, away from the other two.
+        let end = layout.rings.as_ref().unwrap().points[2][9].0;
         e.pointer = Some(end);
         e.pointer_down(PointerButton::Primary);
         e.pointer_moved(end + Vec2::new(0.0, 80.0));
@@ -7644,6 +7687,71 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         assert!(e.is_stroking() || matches!(e.drag, Drag::Gizmo(_)));
         e.pointer_up();
+    }
+
+    /// The transform of the gizmo drag in progress.
+    fn gizmo_current(e: &Editor) -> pose::Transform {
+        match &e.drag {
+            Drag::Gizmo(g) => g.current,
+            _ => panic!("no gizmo drag"),
+        }
+    }
+
+    #[test]
+    fn rotate_rings_follow_the_pointer() {
+        let mut e = editor();
+        // Look from an angle so all three rings are open ellipses.
+        e.camera.yaw = 0.6;
+        e.camera.pitch = 0.4;
+        e.toggle_gizmo(GizmoMode::Rotate);
+        let layout = e.gizmo_layout().unwrap();
+        let rings = layout.rings.clone().expect("rings in Rotate mode");
+        assert!(layout.axes.iter().all(Option::is_none), "no axis handles in Rotate mode");
+        let size = e.canvas_size();
+        let step = std::f32::consts::TAU / pose::RING_SAMPLES as f32;
+        for axis in 0..3 {
+            // Grab the ring where it faces the viewer most.
+            let k = (0..pose::RING_SAMPLES)
+                .filter(|&k| rings.points[axis][k].1)
+                .max_by(|&a, &b| rings.tangents[axis][a].length().total_cmp(&rings.tangents[axis][b].length()));
+            let k = k.expect("a near half");
+            let grab = rings.points[axis][k].0;
+            assert_eq!(layout.pick(grab, 6.0), Some(Handle::Axis(axis)), "axis {axis}");
+            // Drag 25 px along the ring.
+            let t = rings.tangents[axis][k].normalize();
+            e.pointer = Some(grab);
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_moved(grab + t * 25.0);
+            let tr = gizmo_current(&e);
+            // The grabbed point of the ring lands under the pointer.
+            let (b, c) = pose::plane_axes(axis);
+            let (u, v) = (layout.axis_dirs[b], layout.axis_dirs[c]);
+            let theta = k as f32 * step;
+            let world = layout.pivot + (u * theta.cos() + v * theta.sin()) * layout.length;
+            let moved = e.camera.project(tr.apply(layout.pivot, world), size).unwrap();
+            assert!(moved.distance(grab + t * 25.0) < 3.0, "axis {axis}: {moved} vs {}", grab + t * 25.0);
+            e.cancel_drag();
+        }
+        // The outer ring: a quarter turn clockwise on screen turns things
+        // clockwise on screen, around the view direction.
+        let c = layout.center;
+        let r = rings.view_radius;
+        let start = c + Vec2::new(r, 0.0);
+        assert_eq!(layout.pick(start, 6.0), Some(Handle::Center));
+        e.pointer = Some(start);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(c + Vec2::new(0.0, r));
+        let tr = gizmo_current(&e);
+        let right = e.camera.forward().cross(e.camera.up()).normalize();
+        let probe = layout.pivot + right * layout.length;
+        let before = e.camera.project(probe, size).unwrap() - c;
+        let after = e.camera.project(tr.apply(layout.pivot, probe), size).unwrap() - c;
+        let swept = before.perp_dot(after).atan2(before.dot(after));
+        assert!((swept - std::f32::consts::FRAC_PI_2).abs() < 0.05, "swept {swept}");
+        e.cancel_drag();
+        // The rotation axis is the view direction: the pivot's view ray stays put.
+        let fwd = e.camera.forward();
+        assert!((tr.linear * fwd - fwd).length() < 1e-4);
     }
 
     #[test]

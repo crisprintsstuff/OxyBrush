@@ -57,7 +57,7 @@ pub const HANDLE_PT: f32 = 80.0;
 pub const PICK_PT: f32 = 14.0;
 
 /// Where the gizmo is drawn: canvas-local physical pixels.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
     pub pivot: Vec3,
     pub center: Vec2,
@@ -71,12 +71,66 @@ pub struct Layout {
     pub axis_dirs: [Vec3; 3],
     /// World length of an axis handle.
     pub length: f32,
+    /// Rotate mode: the three axis rings and the outer view ring.
+    pub rings: Option<Rings>,
+}
+
+/// Samples around each axis ring, from angle 0 in steps of `2π / RING_SAMPLES`.
+pub const RING_SAMPLES: usize = 72;
+
+/// The rotate gizmo's rings, on screen (canvas-local physical px).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Rings {
+    /// For each axis: the ring's points, and whether each faces the viewer.
+    pub points: [Vec<(Vec2, bool)>; 3],
+    /// For each axis and sample: how far the ring moves on screen per
+    /// radian of turn there (px per radian), in the direction of turning.
+    pub tangents: [Vec<Vec2>; 3],
+    /// Radius of the outer ring (turn around the view direction).
+    pub view_radius: f32,
+}
+
+/// Distance from `p` to segment `a`–`b`.
+fn segment_distance(p: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let ab = b - a;
+    let t = ((p - a).dot(ab) / ab.length_squared().max(1e-6)).clamp(0.0, 1.0);
+    (a + ab * t).distance(p)
+}
+
+impl Rings {
+    /// The screen tangent (px per radian) of ring `axis` at the sample nearest `p`.
+    pub fn tangent_at(&self, axis: usize, p: Vec2) -> Option<Vec2> {
+        let pts = &self.points[axis];
+        let k = (0..pts.len()).min_by(|&i, &j| pts[i].0.distance(p).total_cmp(&pts[j].0.distance(p)))?;
+        Some(self.tangents[axis][k])
+    }
 }
 
 impl Layout {
     /// The handle under `p` (canvas-local physical px), if any.
     pub fn pick(&self, p: Vec2, pick_px: f32) -> Option<Handle> {
         let mut best: Option<(f32, Handle)> = None;
+        if let Some(r) = &self.rings {
+            // Rotate: the near half of each axis ring, then the outer ring.
+            for (a, pts) in r.points.iter().enumerate() {
+                for i in 0..pts.len() {
+                    let (p0, f0) = pts[i];
+                    let (p1, f1) = pts[(i + 1) % pts.len()];
+                    if !(f0 && f1) {
+                        continue;
+                    }
+                    let d = segment_distance(p, p0, p1);
+                    if d < pick_px && best.is_none_or(|(bd, _)| d < bd) {
+                        best = Some((d, Handle::Axis(a)));
+                    }
+                }
+            }
+            let dv = (self.center.distance(p) - r.view_radius).abs();
+            if dv < pick_px && best.is_none_or(|(bd, _)| dv < bd) {
+                best = Some((dv, Handle::Center));
+            }
+            return best.map(|(_, h)| h);
+        }
         for (i, end) in self.axes.iter().enumerate() {
             if let Some(e) = end {
                 let d = e.distance(p);
@@ -248,17 +302,29 @@ pub fn drag_transform(i: &DragInput) -> Transform {
             Transform { translate: snap_move(t), ..Transform::IDENTITY }
         }
         (GizmoMode::Rotate, Handle::Axis(a)) => {
-            // Drag across the handle to turn around its axis.
-            let across = i.screen_axis.map_or(i.delta.x, |s| {
-                let n = s.normalize_or_zero();
-                i.delta.dot(Vec2::new(-n.y, n.x))
-            });
-            let q = Quat::from_axis_angle(i.axis_dirs[a], snap_angle(across * RADIANS_PER_PX));
+            // Drag along the ring: `screen_axis` is the ring's tangent where
+            // it was grabbed, in px per radian, so the grabbed point follows
+            // the pointer.
+            let angle = match i.screen_axis {
+                Some(t) if t.length_squared() > 1e-6 => i.delta.dot(t) / t.length_squared(),
+                _ => i.delta.x * RADIANS_PER_PX,
+            };
+            let q = Quat::from_axis_angle(i.axis_dirs[a], snap_angle(angle));
             Transform { linear: Mat3::from_quat(q), ..Transform::IDENTITY }
         }
         (GizmoMode::Rotate, Handle::Center | Handle::Plane(_)) => {
-            // Turn around the view direction, like spinning a dial.
-            let q = Quat::from_axis_angle(-i.forward, snap_angle(-i.delta.x * RADIANS_PER_PX));
+            // The outer ring: turn by the angle swept around the pivot on
+            // screen (`screen_axis` is where it was grabbed, from the pivot).
+            // Screen y grows downward, so a positive sweep is clockwise on
+            // screen: a turn around the view direction (away from the viewer).
+            let angle = match i.screen_axis {
+                Some(from) if from.length_squared() > 1.0 => {
+                    let to = from + i.delta;
+                    from.perp_dot(to).atan2(from.dot(to))
+                }
+                _ => i.delta.x * RADIANS_PER_PX,
+            };
+            let q = Quat::from_axis_angle(i.forward, snap_angle(angle));
             Transform { linear: Mat3::from_quat(q), ..Transform::IDENTITY }
         }
         (GizmoMode::Scale, Handle::Axis(a)) => {
@@ -417,6 +483,8 @@ mod tests {
         i.snap = Some(Snap { step: 0.25, ..Snap::DEFAULT });
         assert!((drag_transform(&i).translate.x - 0.25).abs() < 1e-6);
         let mut i = input(GizmoMode::Rotate, Handle::Axis(2), Vec2::new(0.0, 50.0));
+        // The ring moves 100 px per radian, downward, where it was grabbed.
+        i.screen_axis = Some(Vec2::new(0.0, 100.0));
         i.snap = Some(Snap::DEFAULT);
         // 0.5 rad rounds to 30°.
         let v = drag_transform(&i).linear * Vec3::X;
@@ -448,9 +516,21 @@ mod tests {
         assert!((t.translate - Vec3::new(0.1, 0.2, 0.0)).length() < 1e-5);
         let t = drag_transform(&input(GizmoMode::Scale, Handle::Axis(1), Vec2::new(100.0, 0.0)));
         assert!((t.linear * Vec3::ONE - Vec3::new(1.0, 2.0, 1.0)).length() < 1e-5);
-        let t = drag_transform(&input(GizmoMode::Rotate, Handle::Axis(2), Vec2::new(0.0, 157.08)));
-        // A quarter turn around Z.
-        assert!((t.linear * Vec3::X - Vec3::Y).length() < 1e-3 || (t.linear * Vec3::X + Vec3::Y).length() < 1e-3);
+        // Along a ring that moves 100 px per radian: 157 px is a quarter turn around Z.
+        let mut i = input(GizmoMode::Rotate, Handle::Axis(2), Vec2::new(0.0, 157.08));
+        i.screen_axis = Some(Vec2::new(0.0, 100.0));
+        let t = drag_transform(&i);
+        assert!((t.linear * Vec3::X - Vec3::Y).length() < 1e-3);
+        // Dragging the other way turns the other way.
+        i.delta = -i.delta;
+        assert!((drag_transform(&i).linear * Vec3::X + Vec3::Y).length() < 1e-3);
+        // The outer ring: a quarter sweep clockwise on screen, from the
+        // right to below the pivot. Looking along -Z (screen right is +X,
+        // screen down is -Y), +X turns to -Y.
+        let mut i = input(GizmoMode::Rotate, Handle::Center, Vec2::new(-100.0, 100.0));
+        i.screen_axis = Some(Vec2::new(100.0, 0.0));
+        let t = drag_transform(&i);
+        assert!((t.linear * Vec3::X + Vec3::Y).length() < 1e-3, "{}", t.linear * Vec3::X);
         assert_eq!(drag_transform(&input(GizmoMode::Rotate, Handle::Axis(0), Vec2::ZERO)), Transform::IDENTITY);
     }
 
@@ -497,6 +577,7 @@ mod tests {
             planes: [None, None, Some(Vec2::new(130.0, 70.0))],
             axis_dirs: AXES,
             length: 1.0,
+            rings: None,
         };
         assert_eq!(l.pick(Vec2::new(178.0, 102.0), 14.0), Some(Handle::Axis(0)));
         assert_eq!(l.pick(Vec2::new(103.0, 98.0), 14.0), Some(Handle::Center));
