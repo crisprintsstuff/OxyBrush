@@ -75,7 +75,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | Feature | Details | Effort |
 |---|---|---|
 | **Dynamic topology** | ✅ First version, **Dynamic detail** ([RFC 0006](rfcs/0006-dynamic-detail.md)): sculpting brushes split and collapse edges under the brush, detail relative to brush size, symmetry, masks, one undo step per stroke; smooth up to a few hundred thousand triangles. ⏳ Incremental chunk-local edits (no full rebuild) for large meshes, edge flips and relaxation, constant detail and detail flood fill | 3–5 wk left |
-| **Vertex color painting** | ✅ Paint brush, fills (all / cavities / peaks) respecting the mask, saved in projects. ⏳ Color in exports, color-aware remesh/decimate, materials per region | 3–4 wk |
+| **Vertex color painting** | ✅ Paint brush, fills (all / cavities / peaks) respecting the mask, saved in projects. ✅ Kept through remesh, merge, booleans and decimate. ⏳ Color in exports, materials per region | 3–4 wk |
 | **Sculpt layers** | Detail layers with strength sliders; morph target | 4–6 wk |
 | **Symmetry repair and projection** | Symmetrize, mirror-and-weld, project detail between meshes | 2–3 wk |
 | **Deformers and posing** | ✅ Mask-driven posing with the transform gizmo (pivot on the mask edge, soft falloff). ✅ Curve Move: bend and stretch a part along an editable curve ([RFC 0005](rfcs/0005-curve-move.md)). ⏳ Twist and taper along the curve, saved curves; bend, twist, taper, inflate deformers; topological masking from a click | 4–6 wk |
@@ -132,10 +132,10 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Decimation takes about a second for a million triangles (runs in the background)
-- Remesh resets mask and face groups; open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
+- Open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
 - Only interface settings are remembered between sessions (save brushes as presets to keep them)
-- Vertex color isn't exported yet, and remesh, decimate and merge drop it
+- Vertex color isn't exported yet
 - Touch gestures (pinch, two-finger orbit and undo) and pen pressure are implemented but untested on real touchscreens and tablets
 - Windows installer is not code-signed (SmartScreen warning)
 - Dynamic detail rebuilds the whole piece on each refine: smooth up to a few hundred thousand triangles, behind the brush around a million; Freehand strokes only

@@ -275,6 +275,9 @@ fn decimate_with(mesh: &Mesh, target_triangles: usize, allow_parallel: bool) -> 
     let mut out = MeshData {
         positions: w.pos.iter().map(|p| p.as_vec3()).collect::<Vec<Vec3>>(),
         mask: w.mask,
+        // Each surviving vertex keeps its own color (vertices keep their
+        // numbering through the parts and the last pass).
+        color: data.color.clone(),
         ..Default::default()
     };
     for (t, tri) in w.tris.iter().enumerate() {
@@ -575,6 +578,28 @@ mod tests {
         let b = d.bounds();
         assert!((b.max.x - 1.0).abs() < 1e-5 && (b.min.z + 1.0).abs() < 1e-5);
         assert!(d.triangle_count() < p.triangle_count());
+    }
+
+    #[test]
+    fn vertex_color_survives() {
+        // A small mesh, and one big enough for the parallel parts.
+        for (subdivisions, target) in [(4, 800), (7, 20_000)] {
+            let mut s = primitives::icosphere(subdivisions, 1.0);
+            assert_eq!(subdivisions == 7, s.triangle_count() > PARALLEL_ABOVE);
+            for v in 0..s.vertex_count() {
+                if s.positions[v].y > 0.0 {
+                    s.color[v] = Vec3::new(1.0, 0.0, 0.0);
+                }
+            }
+            let d = decimate(&s, target);
+            assert!(d.is_painted());
+            for v in 0..d.vertex_count() {
+                let y = d.positions[v].y;
+                if y.abs() > 0.1 {
+                    assert_eq!(d.color[v].y < 0.5, y > 0.0, "at y {y}");
+                }
+            }
+        }
     }
 
     #[test]
