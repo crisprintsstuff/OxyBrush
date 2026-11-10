@@ -41,6 +41,8 @@ pub struct Retopo {
     /// Relax brush: how much each move relaxes (0..=1), and its radius (points).
     pub relax_strength: f32,
     pub relax_radius_pt: f32,
+    /// Mirror every action across the X symmetry plane of the surface.
+    pub mirror: bool,
     /// Where each cage vertex is on screen (window px), None when hidden
     /// behind the surface or off screen. Recomputed when the view or the
     /// cage changes.
@@ -66,7 +68,7 @@ struct ViewKey {
 /// A drag in the retopology tool.
 pub enum RetopoDrag {
     /// Moving points; `origin` are their positions at the press.
-    Move { verts: Vec<u32>, start: Vec2, origin: Vec<Vec3>, before: Snapshot, moved: bool },
+    Move { verts: Vec<u32>, start: Vec2, origin: Vec<Vec3>, before: Snapshot, moved: bool, partners: Vec<Option<u32>> },
     /// Shift held at the press: a click makes the previewed face, a drag relaxes.
     Shift { start: Vec2, before: Snapshot, relaxing: bool },
     /// Tab+drag on a border edge: the new quad follows the pointer.
@@ -88,7 +90,83 @@ pub enum Hit {
     Face(usize),
 }
 
+/// The X mirror plane of the retopology tool: points at exactly mirrored
+/// positions are each other's partners; points on the plane are their own.
+#[derive(Debug, Clone, Copy)]
+pub struct Mirror {
+    pub cx: f32,
+    /// How close (world units) counts as the same position.
+    pub tol: f32,
+}
+
+impl Mirror {
+    pub fn reflect(&self, p: Vec3) -> Vec3 {
+        Vec3::new(2.0 * self.cx - p.x, p.y, p.z)
+    }
+
+    pub fn reflect_dir(&self, d: Vec3) -> Vec3 {
+        Vec3::new(-d.x, d.y, d.z)
+    }
+
+    pub fn on_plane(&self, p: Vec3) -> bool {
+        (p.x - self.cx).abs() <= self.tol
+    }
+
+    /// The vertex at `p` mirrored, if any (`p` itself when on the plane).
+    pub fn find(&self, c: &Cage, p: Vec3) -> Option<u32> {
+        let q = if self.on_plane(p) { p } else { self.reflect(p) };
+        c.positions
+            .iter()
+            .enumerate()
+            .map(|(i, x)| (i, x.distance(q)))
+            .filter(|&(_, d)| d <= self.tol)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i as u32)
+    }
+
+    /// The partner of vertex `v` (itself when it is on the plane).
+    pub fn partner(&self, c: &Cage, v: u32) -> Option<u32> {
+        self.find(c, *c.positions.get(v as usize)?)
+    }
+
+    /// Weld together vertices at the same position as each of `ps` (a quad
+    /// and its mirror image share the vertices on the plane).
+    pub fn weld_coincident(&self, c: &mut Cage, ps: &[Vec3]) {
+        for &p in ps {
+            let near: Vec<u32> = c
+                .positions
+                .iter()
+                .enumerate()
+                .filter(|(_, x)| x.distance(p) <= self.tol)
+                .map(|(i, _)| i as u32)
+                .collect();
+            if near.len() >= 2 {
+                c.weld(near[0].min(near[1]), near[0].max(near[1]));
+            }
+        }
+    }
+}
+
+/// A face's vertices as a sorted set.
+fn face_key(c: &[u32]) -> Vec<u32> {
+    let mut k = c.to_vec();
+    k.sort_unstable();
+    k
+}
+
 impl Editor {
+    /// The mirror plane, while mirroring is on.
+    pub fn retopo_mirror(&self) -> Option<Mirror> {
+        let r = self.retopo.as_ref()?;
+        if !r.mirror {
+            return None;
+        }
+        let s = self.surface_piece()?;
+        let cx = s.symmetry_center.map_or(0.0, |c| c.x);
+        let tol = (s.mesh.bounds().extent().length() * 1e-4).max(1e-6);
+        Some(Mirror { cx, tol })
+    }
+
     /// Open the retopology tool. With a retopology piece active, continue
     /// it over the piece it was drawn on; otherwise draw over the active piece.
     pub fn start_retopo(&mut self) {
@@ -134,6 +212,7 @@ impl Editor {
             draft: Cage::default(),
             relax_strength: 0.5,
             relax_radius_pt: 40.0,
+            mirror: self.symmetry.x,
             screen: Vec::new(),
             view_key: None,
             occluded: Vec::new(),
@@ -506,7 +585,20 @@ impl Editor {
         let Some(verts) = self.retopo_face_preview(p) else { return false };
         let outward = self.retopo_outward(&verts);
         let label = if verts.len() == 4 { "Retopo: add quad" } else { "Retopo: add triangle" };
-        self.retopo_edit(label, |_, c| c.add_face(&verts, outward).is_some())
+        let mirror = self.retopo_mirror();
+        self.retopo_edit(label, |_, c| {
+            // The mirror image's points, found before the face is added.
+            let partners: Option<Vec<u32>> = mirror.and_then(|m| verts.iter().map(|&v| m.partner(c, v)).collect());
+            if c.add_face(&verts, outward).is_none() {
+                return false;
+            }
+            if let (Some(m), Some(mv)) = (mirror, partners)
+                && face_key(&mv) != face_key(&verts)
+            {
+                c.add_face(&mv, m.reflect_dir(outward));
+            }
+            true
+        })
     }
 
     /// The direction a new face should face: the surface's normal there,
@@ -523,32 +615,75 @@ impl Editor {
 
     /// Insert an edge loop through edge `(a, b)` at `t`; new points snap to the surface.
     pub fn retopo_insert_loop(&mut self, a: u32, b: u32, t: f32) -> bool {
+        let mirror = self.retopo_mirror();
         self.retopo_edit("Retopo: insert loop", |ed, c| {
-            let new = c.insert_loop(a, b, t);
-            for v in &new {
-                let p = c.positions[*v as usize];
-                c.positions[*v as usize] = ed.snap_along(p, vertex_normal(c, *v));
+            let mirrored = mirror.and_then(|m| Some((m.partner(c, a)?, m.partner(c, b)?)));
+            let mut new = c.insert_loop(a, b, t);
+            if new.is_empty() {
+                return false;
             }
-            !new.is_empty()
+            // The mirror image's loop, unless the first one already crossed it.
+            if let Some((ma, mb)) = mirrored
+                && [ma.min(mb), ma.max(mb)] != [a.min(b), a.max(b)]
+                && c.edges().contains(&[ma.min(mb), ma.max(mb)])
+            {
+                new.extend(c.insert_loop(ma, mb, t));
+            }
+            let before: Vec<Vec3> = new.iter().map(|&v| c.positions[v as usize]).collect();
+            for &v in &new {
+                let p = c.positions[v as usize];
+                c.positions[v as usize] = ed.snap_along(p, vertex_normal(c, v));
+            }
+            // Keep the two sides exact mirror images after snapping.
+            if let Some(m) = mirror {
+                symmetrize(c, &new, &before, m);
+            }
+            true
         })
     }
 
     /// Delete what is under window pixel `p`: a point (and its faces), or a face.
     pub fn retopo_delete_at(&mut self, p: Vec2) -> bool {
+        let mirror = self.retopo_mirror();
         match self.retopo_hit(p) {
             Some(Hit::Vertex(v)) => self.retopo_edit("Retopo: delete point", |_, c| {
-                c.remove_vertex(v);
+                let mv = mirror.and_then(|m| m.partner(c, v)).filter(|&w| w != v);
+                // The higher index first: removing a vertex renumbers the last one.
+                let mut gone = vec![v];
+                gone.extend(mv);
+                gone.sort_unstable_by(|x, y| y.cmp(x));
+                for g in gone {
+                    c.remove_vertex(g);
+                }
                 true
             }),
             Some(Hit::Face(f)) => self.retopo_edit("Retopo: delete face", |_, c| {
-                c.remove_face(f);
+                let key = face_key(corners(&c.faces[f]));
+                let mirrored: Option<Vec<u32>> =
+                    mirror.and_then(|m| corners(&c.faces[f]).iter().map(|&v| m.partner(c, v)).collect());
+                let mut gone = vec![f];
+                if let Some(mk) = mirrored.map(|v| face_key(&v)).filter(|mk| *mk != key)
+                    && let Some(g) = c.faces.iter().position(|x| face_key(corners(x)) == mk)
+                {
+                    gone.push(g);
+                }
+                gone.sort_unstable_by(|x, y| y.cmp(x));
+                for g in gone {
+                    c.remove_face(g);
+                }
                 true
             }),
             Some(Hit::Edge(a, b, _)) => self.retopo_edit("Retopo: delete faces", |_, c| {
+                let mut edges = vec![(a, b)];
+                if let Some(m) = mirror
+                    && let (Some(ma), Some(mb)) = (m.partner(c, a), m.partner(c, b))
+                {
+                    edges.push((ma, mb));
+                }
                 let before = c.faces.len();
                 c.faces.retain(|f| {
                     let k = corners(f);
-                    !(k.contains(&a) && k.contains(&b))
+                    !edges.iter().any(|&(x, y)| k.contains(&x) && k.contains(&y))
                 });
                 c.faces.len() != before
             }),
@@ -610,17 +745,32 @@ impl Editor {
             let c = self.retopo_cage().unwrap();
             verts.iter().map(|&v| c.positions[v as usize]).collect()
         };
+        let partners: Vec<Option<u32>> = match (self.retopo_mirror(), self.retopo_cage()) {
+            (Some(m), Some(c)) => verts.iter().map(|&v| m.partner(c, v)).collect(),
+            _ => vec![None; verts.len()],
+        };
         // A new point's press already changed the cage: take the snapshot
         // from before it, so placing and moving it is one undo step.
-        self.drag = Drag::Retopo(Box::new(RetopoDrag::Move { verts, start: p, origin, before, moved: false }));
+        self.drag =
+            Drag::Retopo(Box::new(RetopoDrag::Move { verts, start: p, origin, before, moved: false, partners }));
         true
     }
 
     /// Add a point without an undo step (it is part of the drag that follows).
     fn retopo_add_point_live(&mut self, p: Vec2) -> Option<u32> {
-        let (at, _) = self.retopo_surface_at(p)?;
+        let (mut at, _) = self.retopo_surface_at(p)?;
+        let mirror = self.retopo_mirror();
+        // Close to the mirror plane: onto it (one point, shared by both sides).
+        let near_plane = 6.0 * self.pixels_per_point.max(0.5) * self.camera.world_per_pixel(at, self.canvas_size().y);
+        let on_plane = mirror.is_some_and(|m| (at.x - m.cx).abs() <= near_plane);
+        if let (true, Some(m)) = (on_plane, mirror) {
+            at.x = m.cx;
+        }
         let c = self.retopo_cage_mut()?;
         let v = c.add_vertex(at);
+        if let (false, Some(m)) = (on_plane, mirror) {
+            c.add_vertex(m.reflect(at));
+        }
         self.bump_generation();
         self.retopo_refresh_view();
         Some(v)
@@ -660,22 +810,28 @@ impl Editor {
         let Drag::Retopo(d) = &mut self.drag else { return false };
         let click = CLICK_PT * self.pixels_per_point.max(0.5);
         match d.as_mut() {
-            RetopoDrag::Move { verts, start, origin, moved, .. } => {
+            RetopoDrag::Move { verts, start, origin, moved, partners, .. } => {
                 if !*moved && pos.distance(*start) < click {
                     return true;
                 }
                 *moved = true;
                 let delta = pos - *start;
-                let (verts, origin) = (verts.clone(), origin.clone());
+                let (verts, origin, partners) = (verts.clone(), origin.clone(), partners.clone());
+                let mirror = self.retopo_mirror();
                 // Each point follows the pointer on screen and lands on the surface.
-                let moves: Vec<(u32, Vec3)> = verts
-                    .iter()
-                    .zip(&origin)
-                    .filter_map(|(&v, &o)| {
-                        let s = self.retopo_project(o)? + delta;
-                        self.retopo_surface_at(s).map(|(p, _)| (v, p))
-                    })
-                    .collect();
+                let mut moves: Vec<(u32, Vec3)> = Vec::new();
+                for ((&v, &o), &partner) in verts.iter().zip(&origin).zip(&partners) {
+                    let Some(s) = self.retopo_project(o) else { continue };
+                    let Some((mut p, _)) = self.retopo_surface_at(s + delta) else { continue };
+                    match (mirror, partner) {
+                        // On the plane: slides along it.
+                        (Some(m), Some(w)) if w == v => p.x = m.cx,
+                        // Its mirror image follows (unless it is being dragged too).
+                        (Some(m), Some(w)) if !verts.contains(&w) => moves.push((w, m.reflect(p))),
+                        _ => {}
+                    }
+                    moves.push((v, p));
+                }
                 self.retopo_set_points(&moves);
                 true
             }
@@ -704,9 +860,25 @@ impl Editor {
             .filter_map(|(v, s)| s.filter(|s| s.distance(pos) <= radius).map(|_| v as u32))
             .collect();
         let Some(mut cage) = self.retopo_cage().cloned() else { return };
+        let mirror = self.retopo_mirror();
+        let partners: Vec<Option<u32>> = match mirror {
+            Some(m) => under.iter().map(|&v| m.partner(&cage, v)).collect(),
+            None => Vec::new(),
+        };
         let moved = cage.relax(&under, strength);
-        let moves: Vec<(u32, Vec3)> =
-            moved.iter().map(|&v| (v, self.snap_along(cage.positions[v as usize], vertex_normal(&cage, v)))).collect();
+        let mut moves: Vec<(u32, Vec3)> = Vec::new();
+        for &v in &moved {
+            let mut p = self.snap_along(cage.positions[v as usize], vertex_normal(&cage, v));
+            if let Some(m) = mirror {
+                let partner = under.iter().position(|&u| u == v).and_then(|i| partners[i]);
+                match partner {
+                    Some(w) if w == v => p.x = m.cx,
+                    Some(w) if !under.contains(&w) => moves.push((w, m.reflect(p))),
+                    _ => {}
+                }
+            }
+            moves.push((v, p));
+        }
         self.retopo_set_points(&moves);
     }
 
@@ -786,7 +958,17 @@ impl Editor {
                             .map(|(w, _)| w as u32)
                     });
                     if let Some(w) = target {
+                        // The mirror images, by position, before renumbering.
+                        let mirror = self.retopo_mirror();
+                        let mirrored = mirror
+                            .map(|m| (m.reflect(cage.positions[v as usize]), m.reflect(cage.positions[w as usize]), m));
                         cage.weld(w, v);
+                        if let Some((pv, pw, m)) = mirrored
+                            && let (Some(mv), Some(mw)) = (m.find(&cage, m.reflect(pv)), m.find(&cage, m.reflect(pw)))
+                            && mv != mw
+                        {
+                            cage.weld(mw, mv);
+                        }
                         label = "Retopo: weld";
                     }
                 }
@@ -808,12 +990,57 @@ impl Editor {
                     && p.distance(start) >= CLICK_PT * self.pixels_per_point.max(0.5)
                     && let Some((pa, pb)) = self.retopo_extend_points(a, b, start, p)
                 {
-                    self.retopo_edit("Retopo: extend", |_, c| c.extend(a, b, pa, pb).is_some());
+                    let mirror = self.retopo_mirror();
+                    self.retopo_edit("Retopo: extend", |_, c| {
+                        let (mut pa, mut pb) = (pa, pb);
+                        let mirrored = mirror.and_then(|m| Some((m.partner(c, a)?, m.partner(c, b)?, m)));
+                        // A corner on the plane extends along the plane.
+                        if let Some((ma, mb, m)) = mirrored {
+                            if ma == a {
+                                pa.x = m.cx;
+                            }
+                            if mb == b {
+                                pb.x = m.cx;
+                            }
+                        }
+                        if c.extend(a, b, pa, pb).is_none() {
+                            return false;
+                        }
+                        if let Some((ma, mb, m)) = mirrored
+                            && [ma.min(mb), ma.max(mb)] != [a.min(b), a.max(b)]
+                            && c.border_edges().contains(&[ma.min(mb), ma.max(mb)])
+                        {
+                            c.extend(ma, mb, m.reflect(pa), m.reflect(pb));
+                            // New points on the plane are shared by both quads.
+                            m.weld_coincident(c, &[pa, pb]);
+                        }
+                        true
+                    });
                 }
             }
         }
         self.bump_generation();
         true
+    }
+}
+
+/// After snapping the new vertices `new` (whose positions before snapping
+/// were `before`), make mirror pairs exact again: the one on the +X side
+/// keeps its snapped position and its partner takes the reflection; ones
+/// that were on the plane stay on it.
+fn symmetrize(c: &mut Cage, new: &[u32], before: &[Vec3], m: Mirror) {
+    for (i, &v) in new.iter().enumerate() {
+        if m.on_plane(before[i]) {
+            c.positions[v as usize].x = m.cx;
+            continue;
+        }
+        if before[i].x < m.cx {
+            continue;
+        }
+        let want = m.reflect(before[i]);
+        if let Some(j) = before.iter().position(|b| b.distance(want) <= m.tol) {
+            c.positions[new[j] as usize] = m.reflect(c.positions[v as usize]);
+        }
     }
 }
 
@@ -885,10 +1112,12 @@ mod tests {
     use super::*;
     use crate::editor::PointerButton;
 
+    /// The tool open on a sphere, without mirroring (tests that want it turn it on).
     fn editor() -> Editor {
         let mut e = Editor::for_tests();
         e.start_retopo();
-        assert!(e.retopo.is_some());
+        let r = e.retopo.as_mut().expect("tool open");
+        r.mirror = false;
         e
     }
 
@@ -1105,6 +1334,83 @@ mod tests {
         e.retopo_refresh_view();
         e.retopo_refresh_view();
         assert_eq!(shown(&e), 4);
+    }
+
+    /// Every vertex has a partner at its mirrored position (or is on the plane).
+    fn assert_symmetric(e: &Editor) {
+        let m = e.retopo_mirror().expect("mirror on");
+        let c = cage(e);
+        for (v, p) in c.positions.iter().enumerate() {
+            assert!(m.partner(c, v as u32).is_some(), "vertex {v} at {p} has no mirror image");
+        }
+        // And every face has its mirror image.
+        let keys: Vec<Vec<u32>> = c.faces.iter().map(|f| face_key(corners(f))).collect();
+        for f in &c.faces {
+            let mk: Vec<u32> = corners(f).iter().map(|&v| m.partner(c, v).unwrap()).collect();
+            assert!(keys.contains(&face_key(&mk)), "face {f:?} has no mirror image");
+        }
+    }
+
+    #[test]
+    fn mirror_mirrors_points_faces_moves_loops_and_deletes() {
+        let mut e = editor();
+        e.retopo.as_mut().unwrap().mirror = true;
+        // Four points right of the centre: four more appear on the left.
+        for p in [(440.0, 260.0), (480.0, 260.0), (480.0, 300.0), (440.0, 300.0)] {
+            click(&mut e, Vec2::new(p.0, p.1));
+        }
+        assert_eq!(cage(&e).positions.len(), 8);
+        assert_symmetric(&e);
+        // Points near the plane snap onto it and aren't doubled.
+        click(&mut e, Vec2::new(402.0, 260.0));
+        click(&mut e, Vec2::new(398.0, 300.0));
+        assert_eq!(cage(&e).positions.len(), 10);
+        let m = e.retopo_mirror().unwrap();
+        assert!(m.on_plane(cage(&e).positions[8]) && m.on_plane(cage(&e).positions[9]));
+        // A quad on one side makes its mirror image, facing out too.
+        with_keys(&mut e, true, false, |e| click(e, Vec2::new(460.0, 280.0)));
+        assert_eq!(cage(&e).quad_count(), 2, "{}", e.status);
+        // A quad touching the plane: its mirror image shares the plane's points.
+        with_keys(&mut e, true, false, |e| click(e, Vec2::new(420.0, 280.0)));
+        assert_eq!(cage(&e).quad_count(), 4, "{}", e.status);
+        assert_symmetric(&e);
+        let c = cage(&e);
+        for f in 0..c.faces.len() {
+            let pts: Vec<Vec3> = corners(&c.faces[f]).iter().map(|&v| c.positions[v as usize]).collect();
+            let centre = pts.iter().sum::<Vec3>() / 4.0;
+            assert!(oxy_mesh::retopo::polygon_normal(&pts).dot(centre) > 0.0, "face {f} faces in");
+        }
+        assert!(c.edge_faces().values().all(|f| f.len() <= 2));
+        // One strip of four quads across the plane: a loop through it stays symmetric.
+        e.retopo_refresh_view();
+        with_keys(&mut e, false, true, |e| click(e, Vec2::new(480.0, 280.0)));
+        assert_eq!(cage(&e).quad_count(), 8, "{}", e.status);
+        assert_symmetric(&e);
+        // Moving a corner moves its mirror image; a plane point slides on the plane.
+        e.retopo_refresh_view();
+        let corner = Vec2::new(480.0, 260.0);
+        let Some(Hit::Vertex(v)) = e.retopo_hit(corner) else { panic!("corner") };
+        drag(&mut e, corner, corner + Vec2::new(12.0, -10.0));
+        assert_symmetric(&e);
+        let _ = v;
+        e.retopo_refresh_view();
+        let plane_pt = Vec2::new(400.0, 260.0);
+        if let Some(Hit::Vertex(_)) = e.retopo_hit(plane_pt) {
+            drag(&mut e, plane_pt, plane_pt + Vec2::new(15.0, -8.0));
+            assert_symmetric(&e);
+        }
+        // Deleting a face deletes its mirror image.
+        e.retopo_refresh_view();
+        let faces = cage(&e).faces.len();
+        with_keys(&mut e, true, true, |e| click(e, Vec2::new(462.0, 270.0)));
+        assert_eq!(cage(&e).faces.len(), faces - 2, "{}", e.status);
+        assert_symmetric(&e);
+        // All of it undoes.
+        while e.history.can_undo() {
+            e.undo();
+        }
+        e.retopo_sync();
+        assert!(e.scene.pieces.len() == 1 || cage(&e).faces.is_empty());
     }
 
     #[test]

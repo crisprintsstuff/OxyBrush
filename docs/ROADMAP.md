@@ -110,7 +110,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 ## After 1.0 (1.x / 2.x)
 
-- ✅ Manual retopology: draw quads on a sculpt ([RFC 0012](rfcs/0012-retopology.md)); ⏳ symmetry, strips, projecting detail
+- ✅ Manual retopology: draw quads on a sculpt ([RFC 0012](rfcs/0012-retopology.md)), with X symmetry; ⏳ strips, projecting detail
 - Automatic quad retopology (algorithms from the Instant Meshes / QuadriFlow research)
 - Live (non-destructive) booleans
 - Armature spheres for base meshes; curve/tube and insert-mesh brushes
