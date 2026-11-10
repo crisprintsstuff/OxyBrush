@@ -329,6 +329,10 @@ pub struct Settings {
     pub brush: Option<oxy_sculpt::BrushPreset>,
     /// Each brush's strength (brushes keep their own).
     pub brush_strengths: Vec<(BrushKind, f32)>,
+    /// Save `brush` and `brush_strengths` on exit and restore them at
+    /// start. Off (the default) starts every session with the default
+    /// brushes.
+    pub remember_brushes: bool,
 }
 
 /// Overall visual theme preset.
@@ -613,6 +617,7 @@ impl Default for Settings {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             brush: None,
             brush_strengths: Vec::new(),
+            remember_brushes: false,
         }
     }
 }
@@ -735,7 +740,8 @@ impl Settings {
             self.dyntopo,
             self.dyntopo_detail,
             self.lighting.to_line()
-        ) + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
+        ) + &format!("remember_brushes = {}\n", self.remember_brushes)
+            + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
             } else {
@@ -924,6 +930,7 @@ impl Settings {
                         s.extract_smooth = n;
                     }
                 }
+                "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "brush" => s.brush = oxy_sculpt::BrushPreset::from_code(v).ok(),
                 "brush_strengths" => {
                     s.brush_strengths = v
@@ -1096,6 +1103,7 @@ mod tests {
                 ..oxy_sculpt::BrushPreset::new("Last brush", BrushKind::ClayStrips)
             }),
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
+            remember_brushes: false,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.
