@@ -841,6 +841,8 @@ pub struct Editor {
     pub view: ViewSettings,
     pub matcap: MatcapPreset,
     pub remesh_resolution: u32,
+    /// Surface area of the active piece, cached by (piece, history revision).
+    remesh_area: Option<((u64, u64), f32)>,
     pub remesh_adaptivity: f32,
     pub remesh_engine: oxy_topo::RemeshEngine,
     pub decimate_percent: f32,
@@ -1157,6 +1159,7 @@ impl Default for Editor {
             view: ViewSettings::default(),
             matcap: MatcapPreset::Terracotta,
             remesh_resolution: 128,
+            remesh_area: None,
             remesh_adaptivity: 0.0,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             decimate_percent: 25.0,
@@ -4407,6 +4410,32 @@ impl Editor {
     }
 
     /// Voxel-remesh the active piece.
+    /// About how many triangles a voxel remesh of the active piece at the
+    /// current resolution makes: dual contouring gives close to three
+    /// triangles per voxel-sized patch of surface.
+    pub fn remesh_estimate(&mut self) -> usize {
+        let p = self.scene.active();
+        let key = (p.id, self.history.revision());
+        let area = match self.remesh_area {
+            Some((k, a)) if k == key => a,
+            _ => {
+                let m = &p.mesh;
+                let a: f32 = m
+                    .triangles
+                    .iter()
+                    .map(|t| {
+                        let [a, b, c] = t.map(|i| m.positions[i as usize]);
+                        (b - a).cross(c - a).length() * 0.5
+                    })
+                    .sum();
+                self.remesh_area = Some((key, a));
+                a
+            }
+        };
+        let h = self.scene.active().mesh.bounds().extent().max_element() / self.remesh_resolution.max(1) as f32;
+        if h <= 0.0 { 0 } else { (3.0 * area / (h * h)) as usize }
+    }
+
     pub fn remesh_active(&mut self) {
         let mesh = self.scene.active().mesh.clone();
         let opts = RemeshOptions {
@@ -5722,6 +5751,18 @@ mod tests {
         assert!(e.remove_plugin_in(&dir.join("addon/main.py"), &dir));
         assert!(!dir.join("tool.py").exists() && !dir.join("addon").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn remesh_estimate_is_close_to_the_result() {
+        let mut e = editor();
+        for res in [64, 128] {
+            e.remesh_resolution = res;
+            let estimate = e.remesh_estimate() as f32;
+            let opts = RemeshOptions { resolution: res, smooth_passes: 1, ..Default::default() };
+            let real = oxy_topo::voxel_remesh(&[&e.scene.active().mesh], opts).unwrap().triangle_count() as f32;
+            assert!((estimate / real - 1.0).abs() < 0.15, "res {res}: estimate {estimate}, real {real}");
+        }
     }
 
     #[test]

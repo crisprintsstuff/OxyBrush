@@ -27,6 +27,88 @@ mod tests {
     use glam::Vec3;
     use oxy_mesh::primitives;
 
+    /// Every active voxel of the narrow band against a brute-force distance
+    /// to all triangles: exact within a voxel of the surface, within a small
+    /// fraction of a voxel further out, and with the right sign.
+    fn check_band(mesh: &oxy_mesh::Mesh, voxel_size: f32, inside: impl Fn(Vec3) -> bool) {
+        let grid =
+            mesh_to_level_set(&mesh.positions, &mesh.triangles, MeshToVolumeOptions { voxel_size, half_width: 3.5 });
+        let tris: Vec<[Vec3; 3]> = mesh.triangles.iter().map(|t| t.map(|i| mesh.positions[i as usize])).collect();
+        let band = 3.5 * voxel_size;
+        let (mut worst_near, mut worst_far, mut checked) = (0.0f32, 0.0f32, 0);
+        for leaf in grid.leaves.values() {
+            for off in 0..tree::LEAF_VOXELS {
+                if !leaf.mask.is_set(off) {
+                    continue;
+                }
+                let v = leaf.values[off];
+                if v.abs() >= band {
+                    continue;
+                }
+                let p = grid.transform.index_to_world(leaf.coord_of(off));
+                let exact = tris
+                    .iter()
+                    .map(|t| p.distance(mesh_to_volume::closest_point_on_triangle(p, t[0], t[1], t[2])))
+                    .fold(f32::MAX, f32::min);
+                let err = (v.abs() - exact).abs() / voxel_size;
+                if exact <= voxel_size {
+                    worst_near = worst_near.max(err);
+                } else {
+                    worst_far = worst_far.max(err);
+                }
+                if exact > 0.5 * voxel_size {
+                    assert_eq!(v < 0.0, inside(p), "sign at {p} (distance {exact})");
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked > 1000, "{checked}");
+        assert!(worst_near < 1e-4, "near the surface the distance is exact: off by {worst_near} voxels");
+        assert!(worst_far < 0.1, "further out it is close: off by {worst_far} voxels");
+    }
+
+    #[test]
+    fn voxels_beyond_the_band_keep_their_side() {
+        // Leaves reach past the narrow band; their voxels deep inside must
+        // read as inside (CSG and the 3D-print tools rely on it).
+        let sphere = primitives::icosphere(4, 1.0);
+        let h = 2.0 / 40.0;
+        let grid = mesh_to_level_set(
+            &sphere.positions,
+            &sphere.triangles,
+            MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
+        );
+        let mut deep = 0;
+        for leaf in grid.leaves.values() {
+            for off in 0..tree::LEAF_VOXELS {
+                let p = grid.transform.index_to_world(leaf.coord_of(off));
+                let r = p.length();
+                if r < 1.0 - 4.0 * h {
+                    assert!(leaf.values[off] < 0.0 && leaf.mask.is_set(off), "inside at {p}");
+                    deep += 1;
+                } else if r > 1.0 + 4.0 * h {
+                    assert!(leaf.values[off] > 0.0, "outside at {p}");
+                }
+            }
+        }
+        assert!(deep > 0);
+    }
+
+    #[test]
+    fn narrow_band_distances_match_brute_force() {
+        // A dense sphere: triangles much smaller than voxels.
+        let sphere = primitives::icosphere(4, 1.0);
+        check_band(&sphere, 2.0 / 40.0, |p| p.length() < 1.0);
+        // The same sphere with voxels smaller than its triangles.
+        check_band(&primitives::icosphere(2, 1.0), 2.0 / 64.0, |p| p.length() < 0.99);
+        // A torus: concave, with a hole.
+        let torus = primitives::torus(48, 24, 1.0, 0.35);
+        check_band(&torus, 2.7 / 64.0, |p| {
+            let ring = Vec3::new(p.x, 0.0, p.z).normalize_or_zero();
+            p.distance(ring) < 0.35
+        });
+    }
+
     #[test]
     fn test_sphere_vdb_roundtrip() {
         let sphere = primitives::icosphere(3, 1.0);

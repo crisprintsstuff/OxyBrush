@@ -8,7 +8,7 @@
 use crate::tree::{LEAF_DIM, LEAF_VOXELS, LeafNode, Transform, VdbFloatGrid};
 use glam::{IVec3, Vec3};
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// Closest point on triangle (Ericson, Real-Time Collision Detection 5.1.5),
 /// returning both the closest point and the barycentric coordinates (u, v, w) on the triangle.
@@ -89,52 +89,66 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
     let transform = Transform::new(voxel_size, Vec3::ZERO);
     grid.transform = transform;
 
-    // 1. Identify which 8x8x8 leaf nodes intersect the narrow band of any triangle.
-    let leaf_tris: HashMap<IVec3, Vec<usize>> = {
-        let tri_leaf_pairs: Vec<(IVec3, usize)> = triangles
-            .par_iter()
-            .enumerate()
-            .flat_map(|(ti, tri)| {
-                let p0 = positions[tri[0] as usize];
-                let p1 = positions[tri[1] as usize];
-                let p2 = positions[tri[2] as usize];
-
-                let min_p = p0.min(p1).min(p2) - Vec3::splat(band_dist);
-                let max_p = p0.max(p1).max(p2) + Vec3::splat(band_dist);
-
-                let min_idx = transform.world_to_index(min_p);
-                let max_idx = transform.world_to_index(max_p);
-
-                let min_leaf = VdbFloatGrid::leaf_origin(min_idx);
-                let max_leaf = VdbFloatGrid::leaf_origin(max_idx);
-
-                let mut leaves = Vec::new();
-                let mut lz = min_leaf.z;
-                while lz <= max_leaf.z {
-                    let mut ly = min_leaf.y;
-                    while ly <= max_leaf.y {
-                        let mut lx = min_leaf.x;
-                        while lx <= max_leaf.x {
-                            leaves.push((IVec3::new(lx, ly, lz), ti));
-                            lx += LEAF_DIM;
-                        }
-                        ly += LEAF_DIM;
-                    }
-                    lz += LEAF_DIM;
-                }
-                leaves
-            })
-            .collect();
-
-        let mut map: HashMap<IVec3, Vec<usize>> = HashMap::new();
-        for (leaf_orig, ti) in tri_leaf_pairs {
-            map.entry(leaf_orig).or_default().push(ti);
-        }
-        map
+    // 1. The 8×8×8 leaves each triangle touches (with a voxel to spare),
+    //    grouped by a parallel sort, plus the leaves around them: the band
+    //    (half_width voxels, under one leaf) never reaches further.
+    let margin = voxel_size * 2.0;
+    let pack = |l: IVec3| -> u64 {
+        let k = (l / LEAF_DIM) + IVec3::splat(1 << 20);
+        ((k.x as u64) << 42) | ((k.y as u64) << 21) | (k.z as u64)
     };
-
-    if leaf_tris.is_empty() {
+    let unpack = |k: u64| -> IVec3 {
+        (IVec3::new((k >> 42) as i32, ((k >> 21) & 0x1F_FFFF) as i32, (k & 0x1F_FFFF) as i32) - IVec3::splat(1 << 20))
+            * LEAF_DIM
+    };
+    let mut pairs: Vec<(u64, u32)> = triangles
+        .par_iter()
+        .enumerate()
+        .flat_map_iter(|(ti, tri)| {
+            let (p0, p1, p2) = (positions[tri[0] as usize], positions[tri[1] as usize], positions[tri[2] as usize]);
+            let lo = VdbFloatGrid::leaf_origin(transform.world_to_index(p0.min(p1).min(p2) - Vec3::splat(margin)));
+            let hi = VdbFloatGrid::leaf_origin(transform.world_to_index(p0.max(p1).max(p2) + Vec3::splat(margin)));
+            let mut out = Vec::new();
+            let mut z = lo.z;
+            while z <= hi.z {
+                let mut y = lo.y;
+                while y <= hi.y {
+                    let mut x = lo.x;
+                    while x <= hi.x {
+                        out.push((pack(IVec3::new(x, y, z)), ti as u32));
+                        x += LEAF_DIM;
+                    }
+                    y += LEAF_DIM;
+                }
+                z += LEAF_DIM;
+            }
+            out
+        })
+        .collect();
+    if pairs.is_empty() {
         return grid;
+    }
+    pairs.par_sort_unstable();
+    let mut leaves_vec: Vec<(IVec3, Vec<usize>)> = Vec::new();
+    for (k, t) in pairs {
+        match leaves_vec.last_mut() {
+            Some((o, v)) if pack(*o) == k => v.push(t as usize),
+            _ => leaves_vec.push((unpack(k), vec![t as usize])),
+        }
+    }
+    {
+        let present: HashSet<IVec3> = leaves_vec.iter().map(|(o, _)| *o).collect();
+        let mut extra: Vec<IVec3> = present
+            .par_iter()
+            .flat_map_iter(|o| {
+                let o = *o;
+                (0..27).map(move |k| o + IVec3::new(k % 3 - 1, (k / 3) % 3 - 1, k / 9 - 1) * LEAF_DIM)
+            })
+            .filter(|n| !present.contains(n))
+            .collect();
+        extra.par_sort_unstable_by_key(|v| (v.x, v.y, v.z));
+        extra.dedup();
+        leaves_vec.extend(extra.into_iter().map(|o| (o, Vec::new())));
     }
 
     // Precompute angle-weighted vertex pseudonormals for exact watertight inside/outside classification.
@@ -164,196 +178,334 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
         v_norms
     };
 
-    // 2. Compute narrow-band signed distance values per leaf node in parallel.
-    struct LeafResult {
-        origin: IVec3,
-        distances: [f32; LEAF_VOXELS],
-        normals: [Vec3; LEAF_VOXELS],
-        closest_pts: [Vec3; LEAF_VOXELS],
-        has_active: bool,
-    }
+    // 2. Narrow-band distances, in two stages (the usual narrow-band
+    //    approach, e.g. Museth 2013 §5, "mesh to volume"):
+    //    a. each triangle writes its exact distance into the voxels within
+    //       about one voxel of it (a small box around the triangle, so a
+    //       dense mesh costs a few voxels per triangle, not a whole leaf);
+    //    b. the band grows outward a layer at a time: a voxel tests only the
+    //       nearest triangles its 26 neighbours found. Distances out to one
+    //       voxel are exact; further out they are the distance to one of the
+    //       neighbours' triangles, which is how narrow-band methods work.
+    //    Testing every triangle near a leaf against all 512 of its voxels
+    //    (what this did before) cost 5 s for a 330k-triangle sculpt at any
+    //    resolution.
 
-    let leaves_vec: Vec<(IVec3, Vec<usize>)> = leaf_tris.into_iter().collect();
+    const NO_TRI: u32 = u32::MAX;
+    let leaf_index: HashMap<IVec3, usize> = leaves_vec.iter().enumerate().map(|(i, (o, _))| (*o, i)).collect();
+    // The 27 leaves around each leaf (itself included), by offset.
+    let neighbours: Vec<[usize; 27]> = leaves_vec
+        .iter()
+        .map(|(o, _)| {
+            let mut n = [usize::MAX; 27];
+            for (k, slot) in n.iter_mut().enumerate() {
+                let d = IVec3::new(k as i32 % 3 - 1, (k as i32 / 3) % 3 - 1, k as i32 / 9 - 1) * LEAF_DIM;
+                if let Some(&i) = leaf_index.get(&(*o + d)) {
+                    *slot = i;
+                }
+            }
+            n
+        })
+        .collect();
+    let n_leaves = leaves_vec.len();
+    let mut dist = vec![f32::MAX; n_leaves * LEAF_VOXELS];
+    let mut tri_of = vec![NO_TRI; n_leaves * LEAF_VOXELS];
+    let exact = voxel_size * 1.0;
 
-    let processed_leaves: Vec<LeafResult> = leaves_vec
-        .into_par_iter()
-        .map(|(origin, mut tis)| {
-            tis.sort_unstable();
-            tis.dedup();
-
-            let mut distances = [bg; LEAF_VOXELS];
-            let mut normals = [Vec3::ZERO; LEAF_VOXELS];
-            let mut closest_pts = [Vec3::ZERO; LEAF_VOXELS];
-            let mut has_active = false;
-
-            for offset in 0..LEAF_VOXELS {
-                let x = (offset & 7) as i32;
-                let y = ((offset >> 3) & 7) as i32;
-                let z = ((offset >> 6) & 7) as i32;
-                let coord = origin + IVec3::new(x, y, z);
-                let p = transform.index_to_world(coord);
-
-                let mut best_dist = f32::MAX;
-                let mut best_normal = Vec3::ZERO;
-                let mut best_c = p;
-
-                for &ti in &tis {
-                    let tri = &triangles[ti];
-                    let i0 = tri[0] as usize;
-                    let i1 = tri[1] as usize;
-                    let i2 = tri[2] as usize;
-                    let v0 = positions[i0];
-                    let v1 = positions[i1];
-                    let v2 = positions[i2];
-
-                    let (c, bary) = closest_point_and_barycentric(p, v0, v1, v2);
-                    let d = p.distance(c);
-                    if d < best_dist {
-                        best_dist = d;
-                        best_c = c;
-                        let n = bary.x * vert_normals[i0] + bary.y * vert_normals[i1] + bary.z * vert_normals[i2];
-                        let len = n.length();
-                        best_normal = if len > 1e-6 { n / len } else { Vec3::Y };
+    // a. Exact distances near each triangle.
+    dist.par_chunks_mut(LEAF_VOXELS).zip(tri_of.par_chunks_mut(LEAF_VOXELS)).zip(leaves_vec.par_iter()).for_each(
+        |((dist, tri_of), (origin, tis))| {
+            let leaf_max = *origin + IVec3::splat(LEAF_DIM - 1);
+            for &ti in tis {
+                let tri = &triangles[ti];
+                let (v0, v1, v2) = (positions[tri[0] as usize], positions[tri[1] as usize], positions[tri[2] as usize]);
+                // `world_to_index` rounds, so this covers every voxel within `exact`.
+                let lo = transform.world_to_index(v0.min(v1).min(v2) - Vec3::splat(exact)).max(*origin);
+                let hi = transform.world_to_index(v0.max(v1).max(v2) + Vec3::splat(exact)).min(leaf_max);
+                for z in lo.z..=hi.z {
+                    for y in lo.y..=hi.y {
+                        for x in lo.x..=hi.x {
+                            let local = IVec3::new(x, y, z) - *origin;
+                            let off = (local.x | (local.y << 3) | (local.z << 6)) as usize;
+                            let p = transform.index_to_world(IVec3::new(x, y, z));
+                            let d = p.distance(closest_point_on_triangle(p, v0, v1, v2));
+                            if d < dist[off] {
+                                dist[off] = d;
+                                tri_of[off] = ti as u32;
+                            }
+                        }
                     }
                 }
+            }
+        },
+    );
 
-                distances[offset] = best_dist.min(bg);
-                normals[offset] = best_normal;
-                closest_pts[offset] = best_c;
-                if best_dist < bg {
-                    has_active = true;
+    // b. Grow the band from neighbours' nearest triangles. Each pass looks
+    //    only at leaves next to a leaf that changed in the pass before, and
+    //    reads its neighbourhood from a padded 10×10×10 copy.
+    const PAD: usize = LEAF_DIM as usize + 2;
+    let passes = 2 * (half_width.ceil() as usize) + 2;
+    let mut changed_leaf: Vec<bool> = tri_of.par_chunks(LEAF_VOXELS).map(|c| c.iter().any(|&t| t != NO_TRI)).collect();
+    // Voxels whose nearest triangle changed in the last pass: only their
+    // triangles are new to their neighbours.
+    let mut fresh: Vec<bool> = tri_of.par_iter().map(|&t| t != NO_TRI).collect();
+    for _ in 0..passes {
+        // A voxel's triangle as its neighbours see it: only if it is new.
+        let snapshot: Vec<u32> =
+            tri_of.par_iter().zip(fresh.par_iter()).map(|(&t, &f)| if f { t } else { NO_TRI }).collect();
+        fresh.par_iter_mut().for_each(|f| *f = false);
+        let active: Vec<bool> =
+            neighbours.par_iter().map(|around| around.iter().any(|&n| n != usize::MAX && changed_leaf[n])).collect();
+        changed_leaf = dist
+            .par_chunks_mut(LEAF_VOXELS)
+            .zip(tri_of.par_chunks_mut(LEAF_VOXELS))
+            .zip(fresh.par_chunks_mut(LEAF_VOXELS))
+            .enumerate()
+            .map(|(li, ((dist, tri_of), fresh))| {
+                if !active[li] {
+                    return false;
                 }
-            }
-
-            LeafResult { origin, distances, normals, closest_pts, has_active }
-        })
-        .filter(|res| res.has_active)
-        .collect();
-
-    // 3. Assemble leaves and assign signs.
-    for res in processed_leaves {
-        let mut leaf = LeafNode::new(res.origin, bg);
-        for offset in 0..LEAF_VOXELS {
-            let d = res.distances[offset];
-            let coord = leaf.coord_of(offset);
-            let p = transform.index_to_world(coord);
-            let c = res.closest_pts[offset];
-            let n = res.normals[offset];
-
-            let diff = p - c;
-            let outside = if diff.length_squared() > 1e-10 { diff.dot(n) >= 0.0 } else { true };
-
-            let signed_d = if outside { d } else { -d };
-            if d < bg || !outside {
-                leaf.set(offset, signed_d.clamp(-bg, bg));
-            } else {
-                leaf.values[offset] = signed_d;
-            }
+                let origin = leaves_vec[li].0;
+                let around = &neighbours[li];
+                // The leaf's voxels and a one-voxel border from its neighbours.
+                let mut tile = [NO_TRI; PAD * PAD * PAD];
+                for z in 0..PAD as i32 {
+                    for y in 0..PAD as i32 {
+                        for x in 0..PAD as i32 {
+                            let q = IVec3::new(x - 1, y - 1, z - 1);
+                            let l = IVec3::new(
+                                q.x.div_euclid(LEAF_DIM),
+                                q.y.div_euclid(LEAF_DIM),
+                                q.z.div_euclid(LEAF_DIM),
+                            );
+                            let leaf = around[((l.x + 1) + (l.y + 1) * 3 + (l.z + 1) * 9) as usize];
+                            if leaf != usize::MAX {
+                                let r = q - l * LEAF_DIM;
+                                tile[x as usize + PAD * (y as usize + PAD * z as usize)] =
+                                    snapshot[leaf * LEAF_VOXELS + (r.x | (r.y << 3) | (r.z << 6)) as usize];
+                            }
+                        }
+                    }
+                }
+                let mut changed = false;
+                for off in 0..LEAF_VOXELS {
+                    if dist[off] <= exact {
+                        continue;
+                    }
+                    let (x, y, z) = (off & 7, (off >> 3) & 7, (off >> 6) & 7);
+                    // The voxel and its six face neighbours (in the padded tile).
+                    let c = (x + 1) + PAD * ((y + 1) + PAD * (z + 1));
+                    let mut candidates = [NO_TRI; 7];
+                    let mut count = 0;
+                    for i in [c, c - 1, c + 1, c - PAD, c + PAD, c - PAD * PAD, c + PAD * PAD] {
+                        let t = tile[i];
+                        if t != NO_TRI && !candidates[..count].contains(&t) {
+                            candidates[count] = t;
+                            count += 1;
+                        }
+                    }
+                    if count == 0 {
+                        continue;
+                    }
+                    let p = transform.index_to_world(origin + IVec3::new(x as i32, y as i32, z as i32));
+                    for &t in &candidates[..count] {
+                        if t == tri_of[off] {
+                            continue;
+                        }
+                        let tri = &triangles[t as usize];
+                        let (v0, v1, v2) =
+                            (positions[tri[0] as usize], positions[tri[1] as usize], positions[tri[2] as usize]);
+                        let d = p.distance(closest_point_on_triangle(p, v0, v1, v2));
+                        // Beyond the band nothing is needed.
+                        if d < dist[off] && d < bg {
+                            dist[off] = d;
+                            tri_of[off] = t;
+                            fresh[off] = true;
+                            changed = true;
+                        }
+                    }
+                }
+                changed
+            })
+            .collect();
+        if !changed_leaf.iter().any(|c| *c) {
+            break;
         }
-        grid.leaves.insert(res.origin, leaf);
     }
 
-    // 4. Identify and fill enclosed interior leaves for solid closed meshes.
+    // Signed distance of each band voxel: the side of its nearest
+    // triangle, by the pseudonormal at the closest point. NaN beyond the band.
+    let mut signed: Vec<f32> = vec![f32::NAN; n_leaves * LEAF_VOXELS];
+    signed.par_chunks_mut(LEAF_VOXELS).enumerate().for_each(|(li, out)| {
+        let origin = leaves_vec[li].0;
+        for (off, o) in out.iter_mut().enumerate() {
+            let t = tri_of[li * LEAF_VOXELS + off];
+            if t == NO_TRI {
+                continue;
+            }
+            let local = IVec3::new((off & 7) as i32, ((off >> 3) & 7) as i32, ((off >> 6) & 7) as i32);
+            let p = transform.index_to_world(origin + local);
+            let tri = &triangles[t as usize];
+            let (i0, i1, i2) = (tri[0] as usize, tri[1] as usize, tri[2] as usize);
+            let (c, bary) = closest_point_and_barycentric(p, positions[i0], positions[i1], positions[i2]);
+            let n = bary.x * vert_normals[i0] + bary.y * vert_normals[i1] + bary.z * vert_normals[i2];
+            let diff = p - c;
+            let outside = diff.length_squared() <= 1e-10 || diff.dot(n) >= 0.0;
+            let d = dist[li * LEAF_VOXELS + off].min(bg);
+            *o = if outside { d } else { -d };
+        }
+    });
+
+    // Voxels beyond the band take the side of a neighbour (the surface is
+    // inside the band, so the side can't change out there). Only leaves that
+    // reach the band are kept, and every part of such a leaf beyond the band
+    // touches a band voxel of the same leaf, so this can stay within each leaf.
+    signed.par_chunks_mut(LEAF_VOXELS).for_each(|out| {
+        if !out.iter().any(|v| !v.is_nan()) {
+            return;
+        }
+        loop {
+            let mut changed = false;
+            for off in 0..LEAF_VOXELS {
+                if !out[off].is_nan() {
+                    continue;
+                }
+                let (x, y, z) = (off & 7, (off >> 3) & 7, (off >> 6) & 7);
+                let near = [
+                    (x > 0).then(|| off - 1),
+                    (x < 7).then(|| off + 1),
+                    (y > 0).then(|| off - 8),
+                    (y < 7).then(|| off + 8),
+                    (z > 0).then(|| off - 64),
+                    (z < 7).then(|| off + 64),
+                ];
+                if let Some(v) = near.into_iter().flatten().map(|n| out[n]).find(|v| !v.is_nan()) {
+                    out[off] = if v < 0.0 { -bg } else { bg };
+                    changed = true;
+                }
+            }
+            if !changed {
+                break;
+            }
+        }
+    });
+
+    // 3. Assemble the leaves that reach the band. Inside voxels are active
+    //    (beyond the band at -background); outside ones beyond the band are not.
+    for (li, (origin, _)) in leaves_vec.iter().enumerate() {
+        let values = &signed[li * LEAF_VOXELS..(li + 1) * LEAF_VOXELS];
+        if !values.iter().any(|v| v.abs() < bg) {
+            continue;
+        }
+        let mut leaf = LeafNode::new(*origin, bg);
+        for (offset, &v) in values.iter().enumerate() {
+            let v = if v.is_nan() { bg } else { v };
+            if v.abs() < bg || v < 0.0 {
+                leaf.set(offset, v.clamp(-bg, bg));
+            } else {
+                leaf.values[offset] = v;
+            }
+        }
+        grid.leaves.insert(*origin, leaf);
+    }
+
+    // 4. Fill enclosed interior leaves for solid closed meshes: flood the
+    //    outside from the border of a box of leaves (a flat array, one byte
+    //    per leaf), and every leaf it can't reach that isn't a band leaf is
+    //    inside.
     let mut min_l = IVec3::splat(i32::MAX);
     let mut max_l = IVec3::splat(i32::MIN);
     for &orig in grid.leaves.keys() {
         min_l = min_l.min(orig);
         max_l = max_l.max(orig);
     }
-
     if min_l.x <= max_l.x {
-        let pad = LEAF_DIM;
-        let box_min = min_l - IVec3::splat(pad);
-        let box_max = max_l + IVec3::splat(pad);
-
-        let mut leaf_set: std::collections::HashSet<IVec3> = std::collections::HashSet::new();
-        let mut lz = box_min.z;
-        while lz <= box_max.z {
-            let mut ly = box_min.y;
-            while ly <= box_max.y {
-                let mut lx = box_min.x;
-                while lx <= box_max.x {
-                    leaf_set.insert(IVec3::new(lx, ly, lz));
-                    lx += LEAF_DIM;
-                }
-                ly += LEAF_DIM;
-            }
-            lz += LEAF_DIM;
+        let box_min = min_l - IVec3::splat(LEAF_DIM);
+        let box_max = max_l + IVec3::splat(LEAF_DIM);
+        let dims = (box_max - box_min) / LEAF_DIM + IVec3::ONE;
+        let (dx, dy, dz) = (dims.x as usize, dims.y as usize, dims.z as usize);
+        let index = |l: IVec3| -> usize {
+            let c = (l - box_min) / LEAF_DIM;
+            c.x as usize + dx * (c.y as usize + dy * c.z as usize)
+        };
+        const FREE: u8 = 0;
+        const BAND: u8 = 1;
+        const OUTSIDE: u8 = 2;
+        let mut state = vec![FREE; dx * dy * dz];
+        for &l in grid.leaves.keys() {
+            state[index(l)] = BAND;
         }
-
-        // Leaves that intersect the surface boundary
-        let blocking: std::collections::HashSet<IVec3> = grid.leaves.keys().copied().collect();
-
-        let mut outside_leaves: std::collections::HashSet<IVec3> = std::collections::HashSet::new();
-        let mut queue: Vec<IVec3> = Vec::new();
-
-        for &l in &leaf_set {
-            let is_border = l.x == box_min.x
-                || l.x == box_max.x
-                || l.y == box_min.y
-                || l.y == box_max.y
-                || l.z == box_min.z
-                || l.z == box_max.z;
-            if is_border && !blocking.contains(&l) {
-                outside_leaves.insert(l);
-                queue.push(l);
-            }
-        }
-
-        const NEIGHBORS: [IVec3; 6] = [
-            IVec3::new(LEAF_DIM, 0, 0),
-            IVec3::new(-LEAF_DIM, 0, 0),
-            IVec3::new(0, LEAF_DIM, 0),
-            IVec3::new(0, -LEAF_DIM, 0),
-            IVec3::new(0, 0, LEAF_DIM),
-            IVec3::new(0, 0, -LEAF_DIM),
-        ];
-
-        while let Some(curr) = queue.pop() {
-            for &n in &NEIGHBORS {
-                let neighbor = curr + n;
-                if leaf_set.contains(&neighbor) && !blocking.contains(&neighbor) && outside_leaves.insert(neighbor) {
-                    queue.push(neighbor);
+        // Start from the box's border (it is all outside: the box has a
+        // leaf of padding).
+        let mut queue: Vec<(usize, usize, usize)> = Vec::new();
+        for z in 0..dz {
+            for y in 0..dy {
+                for x in 0..dx {
+                    if x == 0 || y == 0 || z == 0 || x == dx - 1 || y == dy - 1 || z == dz - 1 {
+                        let i = x + dx * (y + dy * z);
+                        if state[i] == FREE {
+                            state[i] = OUTSIDE;
+                            queue.push((x, y, z));
+                        }
+                    }
                 }
             }
         }
-
-        let mut interior_leaves = Vec::new();
-        for &l in &leaf_set {
-            if !outside_leaves.contains(&l) && !grid.leaves.contains_key(&l) {
-                interior_leaves.push(l);
+        while let Some((x, y, z)) = queue.pop() {
+            let mut visit = |x: usize, y: usize, z: usize| {
+                let i = x + dx * (y + dy * z);
+                if state[i] == FREE {
+                    state[i] = OUTSIDE;
+                    queue.push((x, y, z));
+                }
+            };
+            if x > 0 {
+                visit(x - 1, y, z);
+            }
+            if x + 1 < dx {
+                visit(x + 1, y, z);
+            }
+            if y > 0 {
+                visit(x, y - 1, z);
+            }
+            if y + 1 < dy {
+                visit(x, y + 1, z);
+            }
+            if z > 0 {
+                visit(x, y, z - 1);
+            }
+            if z + 1 < dz {
+                visit(x, y, z + 1);
             }
         }
-
-        if !interior_leaves.is_empty() {
-            for l_orig in interior_leaves {
-                let mut leaf = LeafNode::new(l_orig, -bg);
+        let interior: Vec<LeafNode> = state
+            .par_iter()
+            .enumerate()
+            .filter(|(_, s)| **s == FREE)
+            .map(|(i, _)| {
+                let c = IVec3::new((i % dx) as i32, ((i / dx) % dy) as i32, (i / (dx * dy)) as i32);
+                let mut leaf = LeafNode::new(box_min + c * LEAF_DIM, -bg);
                 for offset in 0..LEAF_VOXELS {
                     leaf.values[offset] = -bg;
                     leaf.mask.set_on(offset);
                 }
-                grid.leaves.insert(l_orig, leaf);
-            }
+                leaf
+            })
+            .collect();
+        grid.leaves.reserve(interior.len());
+        for leaf in interior {
+            grid.leaves.insert(leaf.origin, leaf);
         }
     }
 
     // Check if the mesh is an open sheet (all voxels marked one side, or non-manifold)
     // If open sheet, ensure a solid thin shell is formed.
-    let mut neg_count = 0;
-    let mut pos_count = 0;
-    for leaf in grid.leaves.values() {
-        for offset in 0..LEAF_VOXELS {
-            if leaf.mask.is_set(offset) {
-                if leaf.values[offset] < 0.0 {
-                    neg_count += 1;
-                } else {
-                    pos_count += 1;
-                }
-            }
-        }
-    }
-
-    if neg_count == 0 && pos_count > 0 {
+    let any_active = |inside: bool| {
+        grid.leaves
+            .par_iter()
+            .any(|(_, leaf)| (0..LEAF_VOXELS).any(|o| leaf.mask.is_set(o) && (leaf.values[o] < 0.0) == inside))
+    };
+    if !any_active(true) && any_active(false) {
         // Open mesh: convert unsigned distance into a thin solid shell
         let shell_radius = 0.75 * voxel_size;
         for leaf in grid.leaves.values_mut() {
