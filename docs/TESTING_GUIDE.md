@@ -21,7 +21,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-3.0.4-beta-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-3.0.5-beta-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -52,6 +52,7 @@ Each of these is something we couldn't check without you:
 - **Crash recovery:** sculpt something, wait 2 minutes, then force-close OxyBrush (Task Manager / `kill`). Does it offer to recover your work on the next start?
 - **Installers:** do the Start-menu entry, uninstaller and `.oxb` double-click work on Windows? Does the Flatpak show up in your app menu with its icon? On macOS, does the app start after "Open Anyway", and does it run natively (Activity Monitor > Kind: "Apple" on Apple Silicon)?
 - **macOS is brand new:** any report from a real Mac (which model, which macOS version, does the GPU work, does a tablet work) is especially valuable.
+- **New in 3.0.5:** try **Mesh > Retopology (draw quads)…** on a real sculpt (a head is ideal): does drawing quads feel right, and what do you miss? How long does a voxel remesh take on your machine at the resolution you normally use, and does a painted or masked model keep its color and mask?
 - **Anything confusing:** if you had to guess how something works, that's a bug in the interface.
 
 ## 4. Reporting
@@ -71,7 +72,7 @@ Log locations if the app won't start:
 
 ## 5. Known limitations
 
-See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, very dense meshes decimate slowly, remesh resets masks and face groups, and brush settings aren't remembered between sessions yet (interface settings are).
+See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, retopology is new and tried only on simple shapes, and brush settings aren't remembered between sessions yet (interface settings are).
 
 ## Uninstalling
 
