@@ -27,6 +27,7 @@ oxy-plugin = { path = "crates/oxy-plugin" }
 
 glam = { version = "0.34", features = ["bytemuck"] }
 rayon = "1.12"
+rustc-hash = "2.1"
 bytemuck = { version = "1.25", features = ["derive"] }
 tobj = "4"
 wgpu = "30"

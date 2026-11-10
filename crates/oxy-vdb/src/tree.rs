@@ -8,7 +8,7 @@
 
 use glam::{IVec3, Vec3};
 use oxy_mesh::Aabb;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub const LEAF_LOG2DIM: usize = 3;
 pub const LEAF_DIM: i32 = 1 << LEAF_LOG2DIM; // 8
@@ -143,7 +143,9 @@ pub struct VdbFloatGrid {
     pub name: String,
     pub transform: Transform,
     pub background: f32,
-    pub leaves: HashMap<IVec3, LeafNode>,
+    /// Leaves by origin. A fast non-cryptographic hash: every voxel read
+    /// looks a leaf up here.
+    pub leaves: FxHashMap<IVec3, LeafNode>,
 }
 
 impl VdbFloatGrid {
@@ -152,7 +154,7 @@ impl VdbFloatGrid {
             name: name.into(),
             transform: Transform::new(voxel_size, Vec3::ZERO),
             background,
-            leaves: HashMap::new(),
+            leaves: FxHashMap::default(),
         }
     }
 
