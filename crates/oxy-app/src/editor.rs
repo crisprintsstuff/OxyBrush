@@ -847,6 +847,12 @@ pub struct Editor {
     pub remesh_engine: oxy_topo::RemeshEngine,
     pub decimate_percent: f32,
     pub ui_scale: f32,
+    /// The interface scale before it was last changed, until the
+    /// Preferences window has been moved back to the same screen position.
+    pub ui_scale_from: Option<f32>,
+    /// Why the last save failed, shown in a dialog until dismissed (a line
+    /// in the status bar was easy to miss, issue #117).
+    pub save_error: Option<String>,
     pub show_panels: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
@@ -1164,6 +1170,8 @@ impl Default for Editor {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             decimate_percent: 25.0,
             ui_scale: 1.0,
+            ui_scale_from: None,
+            save_error: None,
             show_panels: true,
             show_shortcuts: false,
             show_about: false,
@@ -3382,7 +3390,9 @@ impl Editor {
                 true
             }
             Err(e) => {
+                log::error!("saving {} failed: {e}", path.display());
                 self.status = format!("Save failed: {e}");
+                self.save_error = Some(format!("{} could not be saved.\n\n{e}", path.display()));
                 false
             }
         }
@@ -3421,7 +3431,11 @@ impl Editor {
                 self.status = format!("Sent to OxyCharacter ({})", target.display());
                 self.show_toast("Sent to OxyCharacter: changes appear there");
             }
-            Err(e) => self.status = format!("Send back failed: {e}"),
+            Err(e) => {
+                log::error!("sending back to {} failed: {e}", target.display());
+                self.status = format!("Send back failed: {e}");
+                self.save_error = Some(format!("{} could not be saved.\n\n{e}", target.display()));
+            }
         }
     }
 
@@ -7723,6 +7737,26 @@ mod tests {
         assert!(turned.dot(Vec3::X) > 0.9, "a real move should follow: {turned}");
         let flipped = ease_cursor_normal(Vec3::Y, Vec3::ZERO, -Vec3::Y, Vec3::ZERO, 1.0);
         assert!(flipped.dot(-Vec3::Y) > 0.99, "the other side of a thin part snaps: {flipped}");
+    }
+
+    #[test]
+    fn a_failed_save_says_so_and_keeps_the_work_unsaved() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        // A folder that doesn't exist stands in for a share that refuses the file.
+        let bad = std::env::temp_dir().join(format!("oxy-no-such-dir-{}", std::process::id())).join("head.oxb");
+        assert!(!e.save(&bad));
+        let message = e.save_error.clone().expect("a dialog explains the failure");
+        assert!(message.contains("head.oxb"), "{message}");
+        assert!(e.is_modified(), "still unsaved, so quitting still asks");
+        assert_eq!(e.path, None, "the document isn't now pointing at the failed location");
+        // A save that works clears nothing it shouldn't and marks it saved.
+        e.save_error = None;
+        let good = std::env::temp_dir().join(format!("oxy-save-ok-{}.oxb", std::process::id()));
+        assert!(e.save(&good));
+        assert!(e.save_error.is_none() && !e.is_modified());
+        let _ = std::fs::remove_file(&good);
     }
 
     #[test]

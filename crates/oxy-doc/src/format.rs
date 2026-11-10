@@ -593,20 +593,93 @@ fn decode_multires(raw: &[u8]) -> Result<Multires> {
 
 /// Write atomically: temp file in the same directory, flush, then rename.
 pub fn save(scene: &SceneData, path: &Path) -> Result<()> {
-    let bytes = encode(scene);
+    write_atomic(&RealFs, path, &encode(scene)).map_err(Error::Io)
+}
+
+/// The file operations [`write_atomic`] uses, so tests can make them fail
+/// the way network drives do.
+trait SaveFs {
+    fn create(&self, path: &Path) -> io::Result<std::fs::File> {
+        std::fs::File::create(path)
+    }
+    fn sync(&self, f: &std::fs::File) -> io::Result<()> {
+        f.sync_all()
+    }
+    fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+        std::fs::rename(from, to)
+    }
+}
+
+struct RealFs;
+impl SaveFs for RealFs {}
+
+/// Write `bytes` to `path` without ever leaving it half-written: write a
+/// temporary file next to it, then rename it over `path` (architecture
+/// invariant 6).
+///
+/// Network drives (SMB in particular, issue #117) refuse some of the steps
+/// a local disk allows, so each has a fallback that keeps the guarantee:
+/// - a hidden (dot) temporary file may be refused: use a visible name;
+/// - the full flush to disk (`F_FULLFSYNC` on macOS) may be unsupported:
+///   log it and go on, since the data is written and closing the file
+///   hands it to the server;
+/// - renaming over an existing file may be refused: move the old file
+///   aside first and put it back if the new one can't take its place.
+///
+/// Afterwards the file must exist with the right size, or it's an error.
+fn write_atomic(fs: &impl SaveFs, path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(Path::new("."));
     let file_name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "project".into());
-    let tmp = dir.join(format!(".{file_name}.{}.tmp", std::process::id()));
-    {
-        let mut f = std::fs::File::create(&tmp)?;
-        f.write_all(&bytes)?;
-        f.sync_all()?;
-    }
-    // On Windows, `rename` replaces an existing file as well.
-    std::fs::rename(&tmp, path).inspect_err(|_| {
+    let pid = std::process::id();
+    let context = |what: String| move |e: io::Error| io::Error::new(e.kind(), format!("{what}: {e}"));
+    let hidden = dir.join(format!(".{file_name}.{pid}.tmp"));
+    let visible = dir.join(format!("{file_name}.{pid}.tmp"));
+    let (tmp, mut f) = match fs.create(&hidden) {
+        Ok(f) => (hidden, f),
+        Err(first) => {
+            log::warn!("could not create {} ({first}); trying a visible temporary file", hidden.display());
+            let f = fs.create(&visible).map_err(context(format!("could not create a file in {}", dir.display())))?;
+            (visible, f)
+        }
+    };
+    let cleanup = |e: io::Error| {
         let _ = std::fs::remove_file(&tmp);
-    })?;
-    Ok(())
+        e
+    };
+    f.write_all(bytes).map_err(context(format!("could not write {}", tmp.display()))).map_err(cleanup)?;
+    if let Err(e) = fs.sync(&f) {
+        // Not a reason to fail: the bytes are written; this drive just
+        // can't promise they're on its disk yet.
+        log::warn!("the drive holding {} doesn't support a full flush ({e}); saving without it", dir.display());
+    }
+    drop(f);
+    // On Windows, `rename` replaces an existing file as well.
+    if let Err(e) = fs.rename(&tmp, path) {
+        if !path.exists() {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(context(format!("could not move the saved file into place as {}", path.display()))(e));
+        }
+        log::warn!("could not replace {} directly ({e}); moving the old file aside first", path.display());
+        let aside = dir.join(format!("{file_name}.{pid}.old"));
+        fs.rename(path, &aside).map_err(context(format!("could not replace {}", path.display()))).map_err(cleanup)?;
+        if let Err(e) = fs.rename(&tmp, path) {
+            // Put the old file back; it was never modified.
+            let _ = fs.rename(&aside, path);
+            let _ = std::fs::remove_file(&tmp);
+            return Err(context(format!("could not replace {}", path.display()))(e));
+        }
+        let _ = std::fs::remove_file(&aside);
+    }
+    match std::fs::metadata(path) {
+        Ok(m) if m.len() == bytes.len() as u64 => Ok(()),
+        Ok(m) => Err(io::Error::other(format!(
+            "{} has {} bytes after saving, not {}; the drive didn't keep the file",
+            path.display(),
+            m.len(),
+            bytes.len()
+        ))),
+        Err(e) => Err(context(format!("{} isn't there after saving", path.display()))(e)),
+    }
 }
 
 pub fn load(path: &Path) -> Result<SceneData> {
@@ -711,6 +784,92 @@ mod tests {
         let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
         assert!(plain.cage.is_none());
         assert_eq!(plain.mesh.triangle_count(), 4);
+    }
+
+    /// A drive that refuses some operations, like the SMB share in issue #117.
+    #[derive(Default)]
+    struct Picky {
+        no_hidden_files: bool,
+        no_full_flush: bool,
+        /// Renaming onto an existing file fails.
+        no_replace: bool,
+        /// Every rename fails.
+        no_rename: bool,
+    }
+
+    impl SaveFs for Picky {
+        fn create(&self, path: &Path) -> io::Result<std::fs::File> {
+            let hidden = path.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'));
+            if self.no_hidden_files && hidden {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "vetoed"));
+            }
+            std::fs::File::create(path)
+        }
+        fn sync(&self, f: &std::fs::File) -> io::Result<()> {
+            if self.no_full_flush {
+                return Err(io::Error::new(io::ErrorKind::Unsupported, "F_FULLFSYNC not supported"));
+            }
+            f.sync_all()
+        }
+        fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            if self.no_rename || (self.no_replace && to.exists()) {
+                return Err(io::Error::new(io::ErrorKind::PermissionDenied, "refused"));
+            }
+            std::fs::rename(from, to)
+        }
+    }
+
+    fn scratch_dir(name: &str) -> std::path::PathBuf {
+        let d = std::env::temp_dir().join(format!("oxy-save-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    fn files_in(d: &Path) -> Vec<String> {
+        let mut v: Vec<String> =
+            std::fs::read_dir(d).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        v.sort();
+        v
+    }
+
+    #[test]
+    fn saving_works_on_drives_that_refuse_some_steps() {
+        let cases = [
+            ("hidden", Picky { no_hidden_files: true, ..Default::default() }),
+            ("flush", Picky { no_full_flush: true, ..Default::default() }),
+            ("replace", Picky { no_replace: true, ..Default::default() }),
+            ("all", Picky { no_hidden_files: true, no_full_flush: true, no_replace: true, no_rename: false }),
+        ];
+        for (name, fs) in cases {
+            let d = scratch_dir(name);
+            let path = d.join("head.oxb");
+            // A new file, then replacing it.
+            write_atomic(&fs, &path, b"first version").unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(std::fs::read(&path).unwrap(), b"first version");
+            write_atomic(&fs, &path, b"second, longer version").unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(std::fs::read(&path).unwrap(), b"second, longer version");
+            assert_eq!(files_in(&d), vec!["head.oxb".to_string()], "{name}: nothing left behind");
+            let _ = std::fs::remove_dir_all(&d);
+        }
+    }
+
+    #[test]
+    fn a_failed_save_reports_an_error_and_keeps_the_old_file() {
+        let d = scratch_dir("fail");
+        let path = d.join("head.oxb");
+        std::fs::write(&path, b"what was saved before").unwrap();
+        let fs = Picky { no_rename: true, ..Default::default() };
+        let e = write_atomic(&fs, &path, b"new").unwrap_err();
+        assert!(e.to_string().contains("head.oxb"), "the message names the file: {e}");
+        assert_eq!(std::fs::read(&path).unwrap(), b"what was saved before", "old file untouched");
+        assert_eq!(files_in(&d), vec!["head.oxb".to_string()], "no temporary file left");
+        // Saving somewhere new that can't be finished: an error, no stray file.
+        let fresh = d.join("new.oxb");
+        assert!(write_atomic(&fs, &fresh, b"new").is_err());
+        assert!(!fresh.exists());
+        assert_eq!(files_in(&d), vec!["head.oxb".to_string()]);
+        let _ = std::fs::remove_dir_all(&d);
     }
 
     #[test]
