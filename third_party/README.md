@@ -6,7 +6,7 @@ A copy of [winit](https://github.com/rust-windowing/winit) 0.30.13 from crates.i
 (examples, tests and docs removed), used through `[patch.crates-io]` in the root
 `Cargo.toml`. Its license is in `winit/LICENSE`.
 
-There are three changes, each marked `OxyBrush patch`.
+There are four changes, each marked `OxyBrush patch`.
 
 **Windows pen side button** (`src/platform_impl/windows/event_loop.rs`): with Windows Ink, winit turns pen input into touch events
 and drops the pen's button flags, so a pen touching down with its barrel (side)
@@ -34,5 +34,17 @@ and handles `tabletPoint:` events. Only mouse and tablet-point events are
 inspected (asking another kind of event for its subtype raises an
 Objective-C exception).
 
+**macOS open files** (`src/platform_impl/macos/app_state.rs`, plus the
+`NSURL` feature of `objc2-foundation` in `Cargo.toml`): macOS hands documents
+to an application (a double-click in Finder, Open With, a file dropped on the
+Dock icon) through the delegate's `application:openURLs:`, not the command
+line, and winit 0.30 has no event for it, so OxyBrush started but never saw
+the file ([#135](https://github.com/crisprintsstuff/OxyBrush/issues/135)). The
+patch implements that method and reports each file as a `DroppedFile` on the
+first window. Files that arrive at launch, before there is a window, wait
+until the next `cleared` (before the event loop waits) finds one. The app's
+`Info.plist` declares the document types so Finder offers OxyBrush.
+
 Drop this copy when OxyBrush moves to a winit release that reports pen buttons
-itself (winit 0.31 has pen input) and lets the application veto Quit on macOS.
+itself (winit 0.31 has pen input), lets the application veto Quit on macOS
+and reports files the system opens with the application.
