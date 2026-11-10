@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Retopology: Subdivide and project.** In the Retopology window, **Subdivide and project** gives the retopology mesh 1–5 subdivision levels, each moved onto the sculpt, in the background. The top level carries the sculpt's detail and level 1 stays exactly the quads you drew, so you can step between them like any subdivision levels, and keep sculpting. One undo step.
+
+### Fixed
+- **Switching subdivision levels without editing no longer nudges the lower levels.** Each switch re-applied the last edit's spread to the levels below, so the base moved a little every time.
+
 ## [3.0.5-beta] - 2026-11-10
 
 ### Added

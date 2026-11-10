@@ -110,7 +110,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 ## After 1.0 (1.x / 2.x)
 
-- ✅ Manual retopology: draw quads on a sculpt ([RFC 0012](rfcs/0012-retopology.md)), with X symmetry; ⏳ strips, projecting detail
+- ✅ Manual retopology: draw quads on a sculpt ([RFC 0012](rfcs/0012-retopology.md)), with X symmetry and Subdivide and project; ⏳ strips, edge slide
 - Automatic quad retopology (algorithms from the Instant Meshes / QuadriFlow research)
 - Live (non-destructive) booleans
 - Armature spheres for base meshes; curve/tube and insert-mesh brushes
@@ -143,7 +143,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - Tube tool: points move on the view plane (no surface snapping); the tube stays a separate piece until merged; it can't be edited after Accept
 - Blender bridge: the add-on is not yet tested inside Blender; OBJ only; a second send opens a second OxyBrush window
 - In-app plugins: can't change topology or face groups of existing pieces; add-ons are not signed
-- Retopology: one quad per Tab+drag (no strips), no edge sliding, no projection of sculpt detail onto the result yet; tried only on simple shapes so far
+- Retopology: one quad per Tab+drag (no strips), no edge sliding; tried only on simple shapes so far
 
 ---
 
