@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Vertex color in exports:** painted pieces export their color in **glTF/GLB** (`COLOR_0`), **PLY** (8-bit red, green, blue) and **OBJ** (`v x y z r g b`, read by Blender, MeshLab and ZBrush). Unpainted pieces export as before.
+
+### Fixed
+- **OBJ export uses each mesh's own quads** (for example a retopology mesh) instead of guessing them from the shape, so strongly bent quads no longer come out as two triangles.
+
 ## [3.0.5-beta] - 2026-11-10
 
 ### Added
