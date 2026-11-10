@@ -17,4 +17,4 @@ pub use remesh::{
     MAX_RESOLUTION, RemeshEngine, RemeshError, RemeshOptions, VdbRemeshOptions, boolean_difference,
     boolean_intersection, boolean_mesh, boolean_union, regular_grid_remesh, vdb_remesh, voxel_remesh,
 };
-pub use transfer::transfer_attributes;
+pub use transfer::{SurfaceProjector, transfer_attributes};
