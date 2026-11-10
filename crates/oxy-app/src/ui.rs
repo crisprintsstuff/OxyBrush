@@ -901,6 +901,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.separator();
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
+    tips::check_plain(
+        ui,
+        &mut ed.remember_brushes,
+        "Remember brush settings between sessions",
+        "On: the brush you were using, with its size, falloff, stroke and alpha, and every brush's strength, come back the next time OxyBrush starts. Off: every session starts with the default brushes. Saved brush presets are kept either way.",
+    );
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(

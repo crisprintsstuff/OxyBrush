@@ -845,6 +845,8 @@ pub struct Editor {
     remesh_area: Option<((u64, u64), f32)>,
     pub remesh_adaptivity: f32,
     pub remesh_engine: oxy_topo::RemeshEngine,
+    /// Keep the brush and its settings for the next session (Preferences).
+    pub remember_brushes: bool,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     pub show_panels: bool,
@@ -1162,6 +1164,7 @@ impl Default for Editor {
             remesh_area: None,
             remesh_adaptivity: 0.0,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            remember_brushes: true,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             show_panels: true,
@@ -1544,8 +1547,13 @@ impl Editor {
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
             remesh_engine: self.remesh_engine,
-            brush: Some(self.capture_preset("Last brush")),
-            brush_strengths: BrushKind::ALL.iter().map(|&k| (k, self.strength(k))).collect(),
+            brush: self.remember_brushes.then(|| self.capture_preset("Last brush")),
+            brush_strengths: if self.remember_brushes {
+                BrushKind::ALL.iter().map(|&k| (k, self.strength(k))).collect()
+            } else {
+                Vec::new()
+            },
+            remember_brushes: self.remember_brushes,
         }
     }
 
@@ -1693,6 +1701,10 @@ impl Editor {
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
+        self.remember_brushes = s.remember_brushes;
+        if !s.remember_brushes {
+            return;
+        }
         // The brush last used, as it was. Its pressure curve is the one above
         // (the preset carries one too), and restoring it says nothing.
         if let Some(b) = &s.brush {
@@ -5937,6 +5949,35 @@ mod tests {
     }
 
     #[test]
+    fn remembering_brush_settings_can_be_turned_off() {
+        let defaults = editor();
+        let mut e = editor();
+        e.brush_kind = BrushKind::ClayStrips;
+        e.brush_radius_pt = 77.0;
+        *e.strength_mut(BrushKind::Smooth) = 0.12;
+        e.remember_brushes = false;
+        // Off: nothing about the brushes is written...
+        let text = e.settings().to_text();
+        assert!(text.contains("remember_brushes = false"));
+        assert!(!text.lines().any(|l| l.starts_with("brush =") || l.starts_with("brush_strengths")), "{text}");
+        // ...and the next session starts with the defaults, still off.
+        let mut next = editor();
+        next.apply_settings(&crate::settings::Settings::from_text(&text));
+        assert!(!next.remember_brushes);
+        assert_eq!((next.brush_kind, next.brush_radius_pt), (defaults.brush_kind, defaults.brush_radius_pt));
+        assert_eq!(next.strength(BrushKind::Smooth), defaults.strength(BrushKind::Smooth));
+        // A settings file saved while it was on, read with it now off (the
+        // line edited by hand): the stored brush isn't applied either.
+        e.remember_brushes = true;
+        let on = e.settings().to_text().replace("remember_brushes = true", "remember_brushes = false");
+        let mut later = editor();
+        later.apply_settings(&crate::settings::Settings::from_text(&on));
+        assert_eq!(later.brush_kind, defaults.brush_kind);
+        // Files from before the option have it on.
+        assert!(crate::settings::Settings::from_text("ui_scale = 1.0\n").remember_brushes);
+    }
+
+    #[test]
     fn remesh_estimate_is_close_to_the_result() {
         let mut e = editor();
         for res in [64, 128] {
@@ -7779,6 +7820,7 @@ mod tests {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             brush: None,
             brush_strengths: Vec::new(),
+            remember_brushes: true,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
