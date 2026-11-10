@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.6-beta] - 2026-11-10
+
 ### Added
 - **Retopology: Subdivide and project.** In the Retopology window, **Subdivide and project** gives the retopology mesh 1–5 subdivision levels, each moved onto the sculpt, in the background. The top level carries the sculpt's detail and level 1 stays exactly the quads you drew, so you can step between them like any subdivision levels, and keep sculpting. One undo step.
 - **Vertex color in exports:** painted pieces export their color in **glTF/GLB** (`COLOR_0`), **PLY** (8-bit red, green, blue) and **OBJ** (`v x y z r g b`, read by Blender, MeshLab and ZBrush). Unpainted pieces export as before.
