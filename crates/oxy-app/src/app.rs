@@ -1334,6 +1334,13 @@ impl ApplicationHandler for App {
                     redraw = true;
                 }
             }
+            // A file dropped on the window, or (macOS) one the system asked
+            // OxyBrush to open: a double-click in Finder, Open With, the Dock.
+            WindowEvent::DroppedFile(path) => {
+                log::info!("opening {} (dropped or opened by the system)", path.display());
+                self.editor.open(path);
+                redraw = true;
+            }
             WindowEvent::Resized(size) => {
                 g.config.width = size.width.max(1);
                 g.config.height = size.height.max(1);
