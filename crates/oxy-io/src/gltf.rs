@@ -1,5 +1,5 @@
 //! glTF 2.0 export (Khronos specification): one mesh and node per piece,
-//! with POSITION, NORMAL and u32 indices. `.glb` is the binary container
+//! with POSITION, NORMAL, COLOR_0 (painted pieces, linear) and u32 indices. `.glb` is the binary container
 //! (JSON chunk + BIN chunk); `.gltf` is a single JSON file with the buffer
 //! embedded as a base64 data URI.
 
@@ -33,6 +33,12 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>) -> (Value, Vec<u8>) {
         let nv = view(&mut bin, &floats(&g.normals), ARRAY_BUFFER);
         let idx: Vec<u8> = g.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect();
         let iv = view(&mut bin, &idx, ELEMENT_ARRAY_BUFFER);
+        // COLOR_0 is linear in glTF; vertex color is kept as sRGB.
+        let cv = g.colors.as_ref().map(|c| {
+            let linear: Vec<glam::Vec3> =
+                c.iter().map(|c| c.clamp(glam::Vec3::ZERO, glam::Vec3::ONE).map(srgb_to_linear)).collect();
+            view(&mut bin, &floats(&linear), ARRAY_BUFFER)
+        });
         let base = accessors.len();
         accessors.push(json!({"bufferView": pv, "componentType": FLOAT, "count": g.positions.len(), "type": "VEC3",
                               "min": min.to_array(), "max": max.to_array()}));
@@ -40,8 +46,14 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>) -> (Value, Vec<u8>) {
         accessors.push(
             json!({"bufferView": iv, "componentType": UNSIGNED_INT, "count": g.triangles.len() * 3, "type": "SCALAR"}),
         );
+        let mut attributes = json!({"POSITION": base, "NORMAL": base + 1});
+        if let Some(cv) = cv {
+            accessors
+                .push(json!({"bufferView": cv, "componentType": FLOAT, "count": g.positions.len(), "type": "VEC3"}));
+            attributes["COLOR_0"] = json!(base + 3);
+        }
         meshes.push(json!({"name": g.name, "primitives": [{
-            "attributes": {"POSITION": base, "NORMAL": base + 1}, "indices": base + 2, "mode": 4}]}));
+            "attributes": attributes, "indices": base + 2, "mode": 4}]}));
         nodes.push(json!({"name": g.name, "mesh": i}));
     }
     let mut buffer = json!({"byteLength": bin.len()});
@@ -89,6 +101,11 @@ pub(crate) fn write_glb(geoms: &[Geometry]) -> Vec<u8> {
 pub(crate) fn write_gltf_embedded(geoms: &[Geometry]) -> String {
     let (doc, _) = build(geoms, Some("data:application/octet-stream;base64,".into()));
     serde_json::to_string_pretty(&doc).expect("serializable")
+}
+
+/// sRGB transfer function, decoded (IEC 61966-2-1).
+fn srgb_to_linear(c: f32) -> f32 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
 }
 
 /// Standard base64 with padding (RFC 4648 §4).

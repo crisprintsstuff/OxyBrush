@@ -26,13 +26,25 @@ pub(crate) struct Geometry {
     pub positions: Vec<Vec3>,
     pub normals: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
+    /// Vertex color (sRGB 0..=1), when the piece is painted.
+    pub colors: Option<Vec<Vec3>>,
+    /// The quads' shared diagonals, in this geometry's vertex numbers
+    /// (exact for meshes that know their quads, such as retopology).
+    pub diagonals: std::collections::HashSet<[u32; 2]>,
 }
 
 pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
     let m = piece.mesh;
+    let painted = m.is_painted();
     let mut remap = vec![u32::MAX; m.positions.len()];
-    let mut g =
-        Geometry { name: piece.name.to_owned(), positions: Vec::new(), normals: Vec::new(), triangles: Vec::new() };
+    let mut g = Geometry {
+        name: piece.name.to_owned(),
+        positions: Vec::new(),
+        normals: Vec::new(),
+        triangles: Vec::new(),
+        colors: painted.then(Vec::new),
+        diagonals: Default::default(),
+    };
     for (t, tri) in m.triangles.iter().enumerate() {
         if m.hidden()[t] {
             continue;
@@ -43,10 +55,21 @@ pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
                 *r = g.positions.len() as u32;
                 g.positions.push(m.positions[v as usize]);
                 g.normals.push(m.normals[v as usize]);
+                if let Some(c) = &mut g.colors {
+                    c.push(m.color[v as usize]);
+                }
             }
             *r
         }));
     }
+    g.diagonals = m
+        .quad_diagonals_ref()
+        .iter()
+        .filter_map(|&[a, b]| {
+            let (ra, rb) = (remap[a as usize], remap[b as usize]);
+            (ra != u32::MAX && rb != u32::MAX).then(|| [ra.min(rb), ra.max(rb)])
+        })
+        .collect();
     g
 }
 
@@ -91,10 +114,17 @@ pub fn export_pieces(pieces: &[ExportPiece], path: &Path) -> Result<ExportStats>
 
 fn merge(geoms: &[Geometry]) -> Mesh {
     let mut data = oxy_mesh::MeshData::default();
+    let painted = geoms.iter().any(|g| g.colors.is_some());
     for g in geoms {
         let base = data.positions.len() as u32;
         data.positions.extend_from_slice(&g.positions);
         data.triangles.extend(g.triangles.iter().map(|t| t.map(|v| v + base)));
+        if painted {
+            match &g.colors {
+                Some(c) => data.color.extend_from_slice(c),
+                None => data.color.extend(std::iter::repeat_n(oxy_mesh::WHITE, g.positions.len())),
+            }
+        }
     }
     Mesh::from_data(data)
 }
@@ -104,13 +134,25 @@ fn write_obj_objects(geoms: &[Geometry], w: &mut impl Write) -> io::Result<()> {
     let mut base = 1u32;
     for g in geoms {
         writeln!(w, "o {}", g.name.replace(['\n', '\r'], " "))?;
-        for p in &g.positions {
-            writeln!(w, "v {} {} {}", p.x, p.y, p.z)?;
+        match &g.colors {
+            // The widely read "v x y z r g b" form (sRGB 0..=1).
+            Some(c) => {
+                for (p, c) in g.positions.iter().zip(c) {
+                    writeln!(w, "v {} {} {} {} {} {}", p.x, p.y, p.z, c.x, c.y, c.z)?;
+                }
+            }
+            None => {
+                for p in &g.positions {
+                    writeln!(w, "v {} {} {}", p.x, p.y, p.z)?;
+                }
+            }
         }
         for n in &g.normals {
             writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
         }
-        crate::write_obj_faces(&g.positions, &g.triangles, base, w)?;
+        // The mesh's own quads when it knows them; otherwise they are guessed.
+        let diagonals = (!g.diagonals.is_empty()).then_some(&g.diagonals);
+        crate::write_obj_faces_with_diagonals(&g.positions, &g.triangles, base, diagonals, w)?;
         base += g.positions.len() as u32;
     }
     Ok(())
@@ -134,6 +176,67 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn obj_and_gltf_carry_vertex_color() {
+        let mut m = oxy_mesh::primitives::icosphere(2, 1.0);
+        m.color[0] = Vec3::new(1.0, 0.0, 0.0);
+        let plain = oxy_mesh::primitives::cube(1, 1.0);
+        let dir = std::env::temp_dir().join(format!("oxy-io-color-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pieces = [ExportPiece { name: "Painted", mesh: &m }, ExportPiece { name: "Plain", mesh: &plain }];
+        // OBJ: "v x y z r g b" for the painted piece, plain "v x y z" for the other.
+        let obj = dir.join("c.obj");
+        export_pieces(&pieces, &obj).unwrap();
+        let text = std::fs::read_to_string(&obj).unwrap();
+        let mut objects = text.split("\no ").skip(1);
+        let painted = objects.next().unwrap();
+        let plain_obj = objects.next().unwrap();
+        assert!(painted.lines().filter(|l| l.starts_with("v ")).all(|l| l.split_whitespace().count() == 7));
+        assert!(painted.lines().any(|l| l.starts_with("v ") && l.ends_with(" 1 0 0")));
+        assert!(plain_obj.lines().filter(|l| l.starts_with("v ")).all(|l| l.split_whitespace().count() == 4));
+        // glTF: COLOR_0 on the painted mesh only, linear (red stays 1, 0, 0).
+        let gltf = dir.join("c.gltf");
+        export_pieces(&pieces, &gltf).unwrap();
+        let doc: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&gltf).unwrap()).unwrap();
+        let attrs0 = &doc["meshes"][0]["primitives"][0]["attributes"];
+        let attrs1 = &doc["meshes"][1]["primitives"][0]["attributes"];
+        assert!(attrs0["COLOR_0"].is_u64());
+        assert!(attrs1.get("COLOR_0").is_none());
+        let acc = &doc["accessors"][attrs0["COLOR_0"].as_u64().unwrap() as usize];
+        assert_eq!(acc["type"], "VEC3");
+        assert_eq!(acc["count"].as_u64().unwrap() as usize, m.vertex_count());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn exact_quads_export_as_quads_even_when_bent() {
+        // Two quads folded 60 degrees along their shared edge, the first one
+        // also twisted hard out of plane: guessing from the shape alone
+        // splits it into triangles; the mesh's own quads keep it whole.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(1.5, 0.0, 0.87),
+            Vec3::new(1.5, 1.0, 0.87),
+        ];
+        let mut cage = oxy_mesh::retopo::Cage { positions, faces: Vec::new(), linked: None };
+        cage.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
+        cage.add_face(&[1, 4, 5, 2], Vec3::Z).unwrap();
+        cage.positions[3].z = 1.5; // twist the first quad hard: the guess makes this two triangles
+        let mesh = cage.build_mesh().unwrap();
+        let dir = std::env::temp_dir().join(format!("oxy-io-quads-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let obj = dir.join("q.obj");
+        export_pieces(&[ExportPiece { name: "Retopo", mesh: &mesh }], &obj).unwrap();
+        let text = std::fs::read_to_string(&obj).unwrap();
+        let faces: Vec<usize> =
+            text.lines().filter(|l| l.starts_with("f ")).map(|l| l.split_whitespace().count() - 1).collect();
+        assert_eq!(faces, vec![4, 4]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     use oxy_mesh::primitives;
 
     #[test]
