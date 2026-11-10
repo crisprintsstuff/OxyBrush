@@ -53,6 +53,18 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.6-beta" date="2026-11-10" type="development">
+      <description>
+        <p>Dynamic detail now makes even triangles that stay under the
+        brush. Saving to network drives works around what they refuse and
+        explains a failed save; the interface scale slider no longer runs
+        away. The retopology tool can subdivide its mesh and project the
+        sculpt's detail onto it. Vertex color is exported in glTF, PLY and
+        OBJ. Tubes can be edited again after Accept, an open Curve Move
+        curve is saved with the project, and brush settings can be
+        remembered between sessions.</p>
+      </description>
+    </release>
     <release version="3.0.5-beta" date="2026-11-10" type="development">
       <description>
         <p>A retopology tool rebuilds a sculpt as a clean quad mesh you

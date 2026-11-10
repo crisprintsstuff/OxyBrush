@@ -6,13 +6,13 @@
 > Effort is part-time weeks for one experienced contributor and is an
 > estimate, not a promise.
 >
-> **Last updated:** 2026-11-10 (unreleased: plugin API 3 (RFC 0013) with topology and face-group edits, live preview, richer panels, remembered settings, progress and Stop, plus a plugin guide and API reference; edit a tube again after Accept; open Curve Move curves saved with the project; dynamic detail makes even triangles and stays at the brush. v3.0.5-beta: retopology tool, draw quads on a sculpt with X mirroring (RFC 0012); voxel remesh up to 17× faster with a triangle estimate; decimate 5× faster; color, mask and face groups kept through remesh, merge, booleans and decimate; ring-style rotate gizmo. v3.0.4-beta: transform gizmo operators (plane handles, snapping, typed values, pivot choices, mirror); Plugins menu, built-in in-app plugins, Remove. v3.0.3-beta: parametric low-poly primitives; Tube brush; .oxyaddon packages and plugin API 2; F frames the active piece; zoom direction options. v3.0.2-beta: Blender bridge (RFC 0010); in-app WebAssembly plugins (RFC 0011); Close holes; capture alpha from view. v3.0.1-beta: viewport lights and shadows (RFC 0008); floor grid button on the view strip; cylinder, cone and torus pieces; Split hidden; history newest first; focal shift and S/U/I/O pointer sliders; tube tool (RFC 0009). v3.0.0-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); plugin API read access (RFC 0007); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
+> **Last updated:** 2026-11-10 (unreleased: plugin API 3 (RFC 0013) with topology and face-group edits, live preview, richer panels, remembered settings, progress and Stop, plus a plugin guide and API reference. v3.0.6-beta: retopology Subdivide and project; vertex color in glTF, PLY and OBJ exports; edit a tube again after Accept; open Curve Move curves saved with the project; option to remember brush settings; dynamic detail makes even triangles and stays at the brush; interface scale slider and network-drive saving fixed. v3.0.5-beta: retopology tool, draw quads on a sculpt with X mirroring (RFC 0012); voxel remesh up to 17× faster with a triangle estimate; decimate 5× faster; color, mask and face groups kept through remesh, merge, booleans and decimate; ring-style rotate gizmo. v3.0.4-beta: transform gizmo operators (plane handles, snapping, typed values, pivot choices, mirror); Plugins menu, built-in in-app plugins, Remove. v3.0.3-beta: parametric low-poly primitives; Tube brush; .oxyaddon packages and plugin API 2; F frames the active piece; zoom direction options. v3.0.2-beta: Blender bridge (RFC 0010); in-app WebAssembly plugins (RFC 0011); Close holes; capture alpha from view. v3.0.1-beta: viewport lights and shadows (RFC 0008); floor grid button on the view strip; cylinder, cone and torus pieces; Split hidden; history newest first; focal shift and S/U/I/O pointer sliders; tube tool (RFC 0009). v3.0.0-beta: Curve stroke mode (RFC 0004); Curve Move brush (RFC 0005); Dynamic detail, first version (RFC 0006); plugin API read access (RFC 0007); per-piece symmetry centre (`SYMC` section) so off-centre models mirror; OxyCharacter round trip — open `.oxb` from the command line, "Linked to OxyCharacter" badge, Send back, sidecar kept on Save As, topology hint, `VMAP` section. v2.5.7-beta: mask extract with live preview and Accept, floor grid that follows the model, Pen & tablet pressure settings, macOS Quit asks to save. v2.5.6-beta: Midnight theme and Pill corner style, docs refresh. v2.5.5-beta: insert preview, visible cut line and symmetric cuts, gizmo pivot fix, Windows Ink pen side button, generic names for branded options, Matte theme contrast, menus that fit on screen)
 
 ## Status at a glance
 
 | | |
 |---|---|
-| **Latest release** | v3.0.5-beta (2026-11-10): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
+| **Latest release** | v3.0.6-beta (2026-11-10): Windows installer + portable zip, Linux Flatpak + tarball, macOS universal DMG |
 | **Done** | Phases 0, 1 and 2 (first pass), release packaging, Phase 3 items 3.1–3.4, subdivision levels (3.5, first part), touch layout (3.7, first part), performance passes (3.6: stroke coalescing, dab budgeting, Rayon GPU & geometry acceleration), interface pass, Phase 4 items (Python plugin system, local MCP agent, keymap editor & presets, vertex color, transform gizmo & posing, Kelvinlet brushes, mask extract, themes & appearance, wireframe overlay, viewport background, focal length, autosave control), pipeline basics (glTF/GLB, PLY, LOD chains, CLI), OxyCharacter round trip (linked documents, Send back, `VMAP` exact vertex mapping), and native ZBrush (.ztl, .zpr) multi-subtool import |
 | **Next** | Phase 3 leftovers — rebuild lower levels from a dense mesh (3.5), stencils (3.3), SIMD kernels and culling for 10M triangles (3.6), iPad (3.8–3.10). Phase 4 — dynamic topology, sculpt layers, symmetry repair, vertex color in exports |
 | **Open from earlier phases** | Pen pressure verification on Windows Ink and Linux tablets |
@@ -70,7 +70,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - **Decision pending (before 3.8):** calling iOS APIs from Rust needs `unsafe`, which AGENTS.md currently forbids workspace-wide. The proposal is to allow it only in one small, reviewed platform crate.
 - **Bonus of the Apple account:** the same membership allows notarizing the macOS app, removing the "Open Anyway" step for Mac users.
 
-## Phase 4 — Workflow and experience 🚧 (items shipped from v0.4.0-alpha to v3.0.5-beta)
+## Phase 4 — Workflow and experience 🚧 (items shipped from v0.4.0-alpha to v3.0.6-beta)
 
 | Feature | Details | Effort |
 |---|---|---|
@@ -128,17 +128,18 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - A 2.5D "pixel with depth" canvas: a legacy approach modern sculpting tools don't need.
 - Bundled AI generation in the core (plugins only, opt-in).
 
-## Known limitations (v3.0.5-beta)
+## Known limitations (v3.0.6-beta)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
 - Decimation takes about a second for a million triangles (runs in the background)
 - Open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
+- Saving to network drives: the fallbacks were tested only with simulated failures, not on a real SMB share
 - Touch gestures (pinch, two-finger orbit and undo) and pen pressure are implemented but untested on real touchscreens and tablets
 - Windows installer is not code-signed (SmartScreen warning)
-- Dynamic detail rebuilds the whole piece on each refine: smooth up to a few hundred thousand triangles, behind the brush around a million; Freehand strokes only
+- Dynamic detail rebuilds the whole piece on each refine: smooth up to a few hundred thousand triangles, behind the brush around a million; Freehand strokes only; one row of thinner triangles where fine detail meets the untouched mesh
 - Curve Move: changing its reach with a curve open is slow on dense meshes (100–200 ms at 1.3M triangles); only one curve at a time, and an applied curve can't be edited again
-- Tube tool: points move on the view plane (no surface snapping); the tube stays a separate piece until merged; it can't be edited after Accept
+- Tube tool: points move on the view plane (no surface snapping); the tube stays a separate piece until merged; only a piece's latest tube can be edited again, and not once it's sculpted
 - Blender bridge: the add-on is not yet tested inside Blender; OBJ only; a second send opens a second OxyBrush window
 - In-app plugins: writes replace a whole piece's attribute (slow on very large meshes); a preview shows only the active piece; add-ons are not signed
 - Retopology: one quad per Tab+drag (no strips), no edge sliding; tried only on simple shapes so far
