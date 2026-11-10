@@ -7,7 +7,7 @@ use crate::tree::{LEAF_VOXELS, VdbFloatGrid};
 use glam::{IVec3, Vec3};
 use oxy_mesh::Mesh;
 use rayon::prelude::*;
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 #[derive(Debug, Clone, Copy)]
 pub struct VolumeToMeshOptions {
@@ -129,7 +129,7 @@ pub fn volume_to_mesh(grid: &VdbFloatGrid, opts: VolumeToMeshOptions) -> Option<
     }
 
     let mut positions = Vec::with_capacity(cell_vertices.len());
-    let mut key_to_idx: HashMap<u64, u32> = HashMap::with_capacity(cell_vertices.len());
+    let mut key_to_idx: HashMap<u64, u32> = HashMap::with_capacity_and_hasher(cell_vertices.len(), Default::default());
     let mut active_coords = Vec::with_capacity(cell_vertices.len());
 
     for (key, coord, p) in cell_vertices {
@@ -145,71 +145,74 @@ pub fn volume_to_mesh(grid: &VdbFloatGrid, opts: VolumeToMeshOptions) -> Option<
     // 2. Generate quads/triangles for each sign-changing grid edge.
     let cell_fn = |coord: IVec3| -> Option<u32> { key_to_idx.get(&cell_key(coord)).copied() };
 
-    let mut triangles = Vec::new();
+    let triangles: Vec<[u32; 3]> = active_coords
+        .par_iter()
+        .flat_map_iter(|&base| {
+            let mut triangles: Vec<[u32; 3]> = Vec::new();
+            let v0 = grid.get_value(base) - isoval;
 
-    for &base in &active_coords {
-        let v0 = grid.get_value(base) - isoval;
+            // Check 3 outgoing edges from base: X (+1,0,0), Y (0,+1,0), Z (0,0,+1)
+            for axis in 0..3 {
+                let neighbor_coord = match axis {
+                    0 => base + IVec3::new(1, 0, 0),
+                    1 => base + IVec3::new(0, 1, 0),
+                    _ => base + IVec3::new(0, 0, 1),
+                };
 
-        // Check 3 outgoing edges from base: X (+1,0,0), Y (0,+1,0), Z (0,0,+1)
-        for axis in 0..3 {
-            let neighbor_coord = match axis {
-                0 => base + IVec3::new(1, 0, 0),
-                1 => base + IVec3::new(0, 1, 0),
-                _ => base + IVec3::new(0, 0, 1),
-            };
+                let v1 = grid.get_value(neighbor_coord) - isoval;
+                if (v0 < 0.0) == (v1 < 0.0) {
+                    continue;
+                }
+                if !grid.is_active(base) || !grid.is_active(neighbor_coord) {
+                    continue;
+                }
 
-            let v1 = grid.get_value(neighbor_coord) - isoval;
-            if (v0 < 0.0) == (v1 < 0.0) {
-                continue;
+                // The 4 cells sharing this edge
+                let quad = match axis {
+                    0 => [
+                        cell_fn(base + IVec3::new(0, -1, -1)),
+                        cell_fn(base + IVec3::new(0, 0, -1)),
+                        cell_fn(base),
+                        cell_fn(base + IVec3::new(0, -1, 0)),
+                    ],
+                    1 => [
+                        cell_fn(base + IVec3::new(-1, 0, -1)),
+                        cell_fn(base + IVec3::new(-1, 0, 0)),
+                        cell_fn(base),
+                        cell_fn(base + IVec3::new(0, 0, -1)),
+                    ],
+                    _ => [
+                        cell_fn(base + IVec3::new(-1, -1, 0)),
+                        cell_fn(base + IVec3::new(0, -1, 0)),
+                        cell_fn(base),
+                        cell_fn(base + IVec3::new(-1, 0, 0)),
+                    ],
+                };
+
+                let [Some(a), Some(b), Some(c), Some(d)] = quad else {
+                    continue;
+                };
+
+                // Orient consistently (outward facing normal from negative to positive)
+                let (a, b, c, d) = if v0 < 0.0 { (a, b, c, d) } else { (a, d, c, b) };
+
+                // Split along shorter diagonal
+                let pa = positions[a as usize];
+                let pb = positions[b as usize];
+                let pc = positions[c as usize];
+                let pd = positions[d as usize];
+
+                if pa.distance_squared(pc) <= pb.distance_squared(pd) {
+                    triangles.push([a, b, c]);
+                    triangles.push([a, c, d]);
+                } else {
+                    triangles.push([a, b, d]);
+                    triangles.push([b, c, d]);
+                }
             }
-            if !grid.is_active(base) || !grid.is_active(neighbor_coord) {
-                continue;
-            }
-
-            // The 4 cells sharing this edge
-            let quad = match axis {
-                0 => [
-                    cell_fn(base + IVec3::new(0, -1, -1)),
-                    cell_fn(base + IVec3::new(0, 0, -1)),
-                    cell_fn(base),
-                    cell_fn(base + IVec3::new(0, -1, 0)),
-                ],
-                1 => [
-                    cell_fn(base + IVec3::new(-1, 0, -1)),
-                    cell_fn(base + IVec3::new(-1, 0, 0)),
-                    cell_fn(base),
-                    cell_fn(base + IVec3::new(0, 0, -1)),
-                ],
-                _ => [
-                    cell_fn(base + IVec3::new(-1, -1, 0)),
-                    cell_fn(base + IVec3::new(0, -1, 0)),
-                    cell_fn(base),
-                    cell_fn(base + IVec3::new(-1, 0, 0)),
-                ],
-            };
-
-            let [Some(a), Some(b), Some(c), Some(d)] = quad else {
-                continue;
-            };
-
-            // Orient consistently (outward facing normal from negative to positive)
-            let (a, b, c, d) = if v0 < 0.0 { (a, b, c, d) } else { (a, d, c, b) };
-
-            // Split along shorter diagonal
-            let pa = positions[a as usize];
-            let pb = positions[b as usize];
-            let pc = positions[c as usize];
-            let pd = positions[d as usize];
-
-            if pa.distance_squared(pc) <= pb.distance_squared(pd) {
-                triangles.push([a, b, c]);
-                triangles.push([a, c, d]);
-            } else {
-                triangles.push([a, b, d]);
-                triangles.push([b, c, d]);
-            }
-        }
-    }
+            triangles
+        })
+        .collect();
 
     if triangles.is_empty() {
         return None;

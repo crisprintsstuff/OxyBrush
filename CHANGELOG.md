@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **Voxel remesh is much faster:**
+  - On a 330k-triangle sculpt (4-core machine), remesh at resolution 128 takes 0.42 s instead of 5.4 s, and at 256 1.2 s instead of 6.8 s. Merge and booleans use the same code and speed up too.
+  - Triangles now write distances only into the voxels near them, and the narrow band grows outward from there, instead of every voxel testing every triangle near it. Lookups also use a faster hash, and polygonizing runs in parallel.
+  - The result is the same mesh: distances near the surface are exact, and further out they are within 0.03 of a voxel.
+
 ## [3.0.4-beta] - 2026-11-09
 
 ### Added
