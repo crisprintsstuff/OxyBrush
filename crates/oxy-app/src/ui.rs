@@ -2869,6 +2869,9 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.start_tube();
         }
     });
+    if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
+        ed.edit_tube();
+    }
     if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
         ed.duplicate_active(false);
     }
@@ -3386,6 +3389,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ed.start_tube();
             }
         });
+        if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
+            ed.edit_tube();
+        }
         if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
             ed.duplicate_active(false);
         }

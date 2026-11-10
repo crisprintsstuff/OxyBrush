@@ -7,7 +7,7 @@
 
 use crate::editor::{Drag, Editor};
 use glam::{Vec2, Vec3};
-use oxy_doc::Piece;
+use oxy_doc::{Piece, TubeRecipe};
 use oxy_mesh::{Mesh, MeshData, primitives};
 
 /// Screen distance (logical points) within which a press picks a control
@@ -15,6 +15,8 @@ use oxy_mesh::{Mesh, MeshData, primitives};
 const PICK_PT: f32 = 10.0;
 /// At most this many control points from a drawn path.
 const MAX_POINTS: usize = 8;
+/// A piece remembers at most this many tubes.
+const MAX_RECIPES: usize = 16;
 
 /// The open tube.
 pub struct TubeEdit {
@@ -33,6 +35,10 @@ pub struct TubeEdit {
     pub mirror: bool,
     /// The point whose radius the window edits; None edits all of them.
     pub selected: Option<usize>,
+    /// Editing a tube already in the piece `into`: the face group holding
+    /// it, which Accept replaces, and the piece's hidden faces before the
+    /// old tube was hidden for the edit.
+    pub replace: Option<(u32, Vec<bool>)>,
     /// Where the mirror plane is (its X), fixed when the tube was drawn.
     mirror_x: f32,
     /// The tube (and its mirror copy) as drawn in the viewport.
@@ -97,7 +103,9 @@ impl Editor {
 
     pub fn cancel_tube(&mut self) {
         let was = self.tube.is_some() || self.tube_armed;
-        self.tube = None;
+        if let Some(t) = self.tube.take() {
+            self.restore_tube_hidden(&t);
+        }
         self.tube_armed = false;
         if matches!(self.drag, Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. }) {
             self.drag = Drag::None;
@@ -107,20 +115,107 @@ impl Editor {
         }
     }
 
-    /// Add the open tube to the scene as a new piece (one undo step).
+    /// Add the open tube to the scene as a new piece, or into its piece, or
+    /// in place of the tube it edits (one undo step). The piece remembers
+    /// how the tube was made, so it can be edited again.
     pub fn accept_tube(&mut self) {
         let Some(tube) = self.tube.take() else { return };
         self.tube_armed = false;
+        self.restore_tube_hidden(&tube);
         let mesh = tube.mesh();
-        if let Some(i) = tube.into.and_then(|id| self.scene.index_of(id)) {
+        let group = if let Some(i) = tube.into.and_then(|id| self.scene.index_of(id)) {
             self.scene.set_active(i);
             let name = self.scene.active().name.clone();
-            let merged = append_with_new_group(&self.scene.active().mesh, &mesh);
-            self.replace_active_mesh("Add tube", merged);
-            self.status = format!("Tube added to {name}, in a face group of its own");
+            let base = &self.scene.active().mesh;
+            match &tube.replace {
+                Some((group, _)) => {
+                    let merged = replace_group(base, *group, &mesh);
+                    self.replace_active_mesh("Edit tube", merged);
+                    self.status = format!("Tube in {name} updated");
+                    *group
+                }
+                None => {
+                    let merged = append_with_new_group(base, &mesh);
+                    let group = merged.groups().last().copied().unwrap_or(0);
+                    self.replace_active_mesh("Add tube", merged);
+                    self.status = format!("Tube added to {name}, in a face group of its own");
+                    group
+                }
+            }
         } else {
             self.add_piece(Piece::new("Tube", mesh), "Add tube");
             self.status = "Tube added as a new piece".into();
+            0
+        };
+        let piece = self.scene.active_mut();
+        let (triangles, fingerprint) = oxy_doc::group_fingerprint(&piece.mesh, group);
+        // Older recipes stay: undo brings back the tube they describe.
+        piece.tubes.push(TubeRecipe {
+            points: tube.points,
+            radii: tube.radii,
+            sides: tube.sides,
+            caps: tube.caps,
+            mirror: tube.mirror,
+            mirror_x: tube.mirror_x,
+            group,
+            triangles,
+            fingerprint,
+        });
+        if piece.tubes.len() > MAX_RECIPES {
+            piece.tubes.remove(0);
+        }
+    }
+
+    /// Whether the active piece has a tube that can be edited again: one
+    /// made with the tube tool and not changed since (sculpting, remeshing
+    /// or regrouping it makes it an ordinary part of the mesh).
+    pub fn can_edit_tube(&self) -> bool {
+        self.scene.active().tube_recipe().is_some()
+    }
+
+    /// Reopen the active piece's most recent tube for editing. Its
+    /// triangles are hidden while it is open; Accept replaces them.
+    pub fn edit_tube(&mut self) {
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish".into();
+            return;
+        }
+        self.cancel_tube();
+        let piece = self.scene.active();
+        let Some(r) = piece.tube_recipe().cloned() else {
+            self.status = "This piece has no tube to edit (sculpted or remeshed tubes can't be)".into();
+            return;
+        };
+        let id = piece.id;
+        let before = piece.mesh.hidden().to_vec();
+        let hidden: Vec<bool> = piece.mesh.groups().iter().zip(&before).map(|(&g, &h)| h || g == r.group).collect();
+        self.scene.active_mut().mesh.set_hidden(hidden);
+        let mut tube = TubeEdit {
+            preview: primitives::tube(&r.points, &r.radii, r.sides, r.caps),
+            points: r.points,
+            radii: r.radii,
+            sides: r.sides,
+            caps: r.caps,
+            mirror: r.mirror,
+            selected: None,
+            replace: Some((r.group, before)),
+            mirror_x: r.mirror_x,
+            into: Some(id),
+            built: None,
+        };
+        tube.update();
+        self.tube = Some(tube);
+        self.status = "Editing the tube: drag points to shape it; Enter updates it, Esc keeps it as it was".into();
+    }
+
+    /// Show again the faces of the tube being edited (see `edit_tube`).
+    fn restore_tube_hidden(&mut self, tube: &TubeEdit) {
+        let (Some((_, before)), Some(i)) = (&tube.replace, tube.into.and_then(|id| self.scene.index_of(id))) else {
+            return;
+        };
+        let mesh = &mut self.scene.pieces[i].mesh;
+        if mesh.triangle_count() == before.len() && mesh.hidden() != before.as_slice() {
+            mesh.set_hidden(before.clone());
         }
     }
 
@@ -319,6 +414,7 @@ impl Editor {
             caps: true,
             mirror: self.symmetry.x,
             selected: None,
+            replace: None,
             mirror_x: self.symmetry_center().x,
             into: self.tube_into,
             built: None,
@@ -354,4 +450,52 @@ pub(crate) fn append_with_new_group(base: &Mesh, extra: &Mesh) -> Mesh {
         d.color.extend(std::iter::repeat_n(Vec3::ONE, e.positions.len()));
     }
     Mesh::from_data(d)
+}
+
+/// `base` with the triangles of face group `group` replaced by `extra`, in
+/// that group. Vertices only the old triangles used are dropped; everything
+/// else keeps its mask, groups, visibility and color.
+pub(crate) fn replace_group(base: &Mesh, group: u32, extra: &Mesh) -> Mesh {
+    let d = base.to_data();
+    let nv = d.positions.len();
+    let nt = d.triangles.len();
+    let keep: Vec<bool> = (0..nt).map(|t| d.groups.get(t).is_none_or(|&g| g != group)).collect();
+    let mut remap = vec![u32::MAX; nv];
+    let mut out = MeshData::default();
+    let (has_mask, has_color) = (d.mask.len() == nv, d.color.len() == nv);
+    for (t, tri) in d.triangles.iter().enumerate() {
+        if !keep[t] {
+            continue;
+        }
+        let tri = tri.map(|v| {
+            let v = v as usize;
+            if remap[v] == u32::MAX {
+                remap[v] = out.positions.len() as u32;
+                out.positions.push(d.positions[v]);
+                if has_mask {
+                    out.mask.push(d.mask[v]);
+                }
+                if has_color {
+                    out.color.push(d.color[v]);
+                }
+            }
+            remap[v]
+        });
+        out.triangles.push(tri);
+        out.groups.push(d.groups.get(t).copied().unwrap_or(0));
+        out.hidden.push(d.hidden.get(t).copied().unwrap_or(false));
+    }
+    let e = extra.to_data();
+    let off = out.positions.len() as u32;
+    out.positions.extend(&e.positions);
+    out.triangles.extend(e.triangles.iter().map(|t| t.map(|v| v + off)));
+    out.groups.extend(std::iter::repeat_n(group, e.triangles.len()));
+    out.hidden.extend(std::iter::repeat_n(false, e.triangles.len()));
+    if has_mask {
+        out.mask.extend(std::iter::repeat_n(0.0, e.positions.len()));
+    }
+    if has_color {
+        out.color.extend(std::iter::repeat_n(Vec3::ONE, e.positions.len()));
+    }
+    Mesh::from_data(out)
 }

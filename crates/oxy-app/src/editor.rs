@@ -3055,6 +3055,10 @@ impl Editor {
         if self.curve_undo() {
             return;
         }
+        // A tube being edited hides its old faces; put them back first.
+        if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
+            self.cancel_tube();
+        }
         // Loose retopology points placed before the first face aren't in
         // the scene yet: undo takes them back one by one.
         if self.retopo_undo_draft_point() {
@@ -3075,6 +3079,9 @@ impl Editor {
         self.answer_hold_offer(false);
         if self.curve_redo() {
             return;
+        }
+        if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
+            self.cancel_tube();
         }
         self.pointer_up();
         if self.job.is_some() {
@@ -5895,6 +5902,85 @@ mod tests {
         e.tube.as_mut().unwrap().into = None;
         e.accept_tube();
         assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn a_tube_can_be_edited_again_after_accept() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::Tube;
+        let sphere = e.scene.active().mesh.clone();
+        assert!(!e.can_edit_tube());
+        let path: Vec<Vec2> = (0..=30).map(|i| Vec2::new(400.0 + i as f32 * 9.0, 300.0 - i as f32 * 3.0)).collect();
+        e.pointer = Some(path[0]);
+        e.pointer_down(PointerButton::Primary);
+        for &p in &path[1..] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        e.tube.as_mut().unwrap().mirror = false;
+        e.update_tube();
+        let drawn = e.tube.as_ref().unwrap().points.clone();
+        e.accept_tube();
+        let added = e.scene.active().mesh.clone();
+        let group = *added.groups().last().unwrap();
+        assert!(e.can_edit_tube());
+
+        // Reopen it: same path, its old faces hidden while it's open.
+        e.edit_tube();
+        let t = e.tube.as_ref().expect("the tube is open again");
+        assert_eq!(t.points, drawn);
+        assert!(t.replace.is_some());
+        let m = &e.scene.active().mesh;
+        assert!(m.groups().iter().zip(m.hidden()).all(|(&g, &h)| h == (g == group)));
+        // Cancel shows it again, unchanged.
+        e.cancel_tube();
+        assert!(e.scene.active().mesh.hidden().iter().all(|&h| !h));
+        assert_eq!(e.history.undo_labels().count(), 1);
+
+        // Edit: thinner and with fewer sides. Update replaces only the tube.
+        e.edit_tube();
+        let t = e.tube.as_mut().unwrap();
+        t.radii.iter_mut().for_each(|r| *r *= 0.5);
+        t.sides = 8;
+        e.update_tube();
+        e.accept_tube();
+        assert!(e.tube.is_none());
+        let m = e.scene.active().mesh.clone();
+        assert!(m.hidden().iter().all(|&h| !h));
+        assert_eq!(e.history.undo_labels().last(), Some("Edit tube"));
+        let sphere_group = sphere.groups()[0];
+        let print = |m: &Mesh, g| oxy_doc::group_fingerprint(m, g);
+        let (now, was) = (print(&m, sphere_group), print(&sphere, sphere_group));
+        assert!(now.0 == was.0 && now.1.distance(was.1) < 1e-3, "the sphere is untouched: {now:?} {was:?}");
+        assert_eq!(
+            m.groups().iter().filter(|&&g| g == group).count() + sphere.triangle_count(),
+            m.triangle_count(),
+            "the new tube is in the same face group"
+        );
+        assert!(m.triangle_count() < added.triangle_count(), "fewer sides");
+        // It can be edited yet again, with the new shape.
+        assert_eq!(e.scene.active().tube_recipe().unwrap().sides, 8);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), added.triangle_count());
+        assert_eq!(e.scene.active().tube_recipe().unwrap().sides, 24, "undo brings back the old tube's recipe");
+        e.redo();
+        assert_eq!(e.scene.active().tube_recipe().unwrap().sides, 8);
+
+        // Undo while editing closes the edit first, with the faces shown.
+        e.edit_tube();
+        e.undo();
+        assert!(e.tube.is_none());
+        assert!(e.scene.active().mesh.hidden().iter().all(|&h| !h));
+        e.redo();
+
+        // Sculpting the tube makes it ordinary mesh: no longer editable.
+        let piece = e.scene.active_mut();
+        let t = piece.mesh.groups().iter().position(|&g| g == group).unwrap();
+        let v = piece.mesh.triangles[t][0] as usize;
+        piece.mesh.positions[v] += Vec3::splat(0.01);
+        assert!(!e.can_edit_tube());
+        e.edit_tube();
+        assert!(e.tube.is_none());
     }
 
     #[test]

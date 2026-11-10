@@ -151,6 +151,7 @@ mod tests {
                 vertex_map: None,
                 symmetry_center: None,
                 cage: None,
+                tubes: Vec::new(),
             }],
             active: 0,
         };

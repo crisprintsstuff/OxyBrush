@@ -64,6 +64,19 @@ since a tube is often wanted as its own piece (to pose, hide or export).
   and history are unchanged until Accept, which goes through the normal
   add-piece step (architecture invariant 4). Nothing is written to `.oxb`
   while it is open.
+- **Editing again after Accept** (since 3.0.6). Accept stores how the
+  tube was made (points, thickness, sides, caps, mirror) on the piece, with
+  the face group holding it and a fingerprint of its triangles: their count
+  and a sum of sine waves of their vertex positions, which any move of a
+  vertex changes (`oxy_doc::TubeRecipe`, the `TUBE` section, which older
+  versions skip). **Pieces > Edit tube…** (or the command palette) reopens
+  the piece's most recent tube that still matches: its old triangles are
+  hidden while it is open, and **Update tube** replaces that face group, as
+  one undo step ("Edit tube"); Cancel, or undo while it is open, shows the
+  old one again. A tube that was sculpted, remeshed or regrouped no longer
+  matches and is ordinary mesh. Recipes are not part of the undo history:
+  older ones stay on the piece (up to 16), so undoing an edit makes the
+  previous recipe match again.
 - **Cost.** The tube is rebuilt only when it changes (points, thickness,
   sides, caps or mirror). A typical tube is a few thousand triangles; the
   per-dab and per-frame paths are untouched.
@@ -73,5 +86,4 @@ since a tube is often wanted as its own piece (to pose, hide or export).
 - Points snapping onto the model while dragged (they move on the view plane).
 - Joining the tube into the model automatically (use Merge).
 - A profile other than a circle, twisting, or a spiral.
-- Editing a tube again after Accept: it is an ordinary piece from then on.
 - Radial symmetry copies (only the X mirror).
