@@ -333,6 +333,9 @@ pub struct Settings {
     /// start. Off (the default) starts every session with the default
     /// brushes.
     pub remember_brushes: bool,
+    /// In-app plugins' panel settings, by `<plugin folder>/<param id>`: one
+    /// value, or three for a color (RFC 0013).
+    pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
 }
 
 /// Overall visual theme preset.
@@ -618,6 +621,7 @@ impl Default for Settings {
             brush: None,
             brush_strengths: Vec::new(),
             remember_brushes: false,
+            plugin_params: Default::default(),
         }
     }
 }
@@ -741,6 +745,14 @@ impl Settings {
             self.dyntopo_detail,
             self.lighting.to_line()
         ) + &format!("remember_brushes = {}\n", self.remember_brushes)
+            + &self
+                .plugin_params
+                .iter()
+                .map(|(k, v)| {
+                    let v: Vec<String> = v.iter().map(f32::to_string).collect();
+                    format!("plugin_param = {k}: {}\n", v.join(", "))
+                })
+                .collect::<String>()
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -931,6 +943,18 @@ impl Settings {
                     }
                 }
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
+                "plugin_param" => {
+                    // `<plugin folder>/<param id>: v[, v, v]`; bad lines are skipped.
+                    if let Some((key, vals)) = v.rsplit_once(':') {
+                        let vals: Option<Vec<f32>> =
+                            vals.split(',').map(|x| x.trim().parse::<f32>().ok().filter(|f| f.is_finite())).collect();
+                        if let Some(vals) = vals.filter(|v| v.len() == 1 || v.len() == 3)
+                            && key.contains('/')
+                        {
+                            s.plugin_params.insert(key.trim().to_owned(), vals);
+                        }
+                    }
+                }
                 "brush" => s.brush = oxy_sculpt::BrushPreset::from_code(v).ok(),
                 "brush_strengths" => {
                     s.brush_strengths = v
@@ -1104,6 +1128,12 @@ mod tests {
             }),
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
             remember_brushes: false,
+            plugin_params: [
+                ("displace/amount".to_string(), vec![2.5]),
+                ("tint/color".to_string(), vec![0.25, 0.5, 1.0]),
+            ]
+            .into_iter()
+            .collect(),
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

@@ -320,6 +320,21 @@ impl History {
         self.push(label.into(), Change::Faces { piece, groups, hidden });
     }
 
+    /// Finish the pending chunk edit together with a face group /
+    /// visibility edit of the same piece, as one undo step. `groups` and
+    /// `hidden` are the values before the edit. Without pending chunks it
+    /// is an ordinary face step.
+    pub fn commit_with_faces(&mut self, groups: Vec<u32>, hidden: Vec<bool>) {
+        let Some(p) = self.pending.take() else { return };
+        let faces = Change::Faces { piece: p.piece, groups, hidden };
+        if p.snapshots.is_empty() {
+            self.push(p.label, faces);
+        } else {
+            let chunks = Change::Chunks { piece: p.piece, snaps: p.snapshots };
+            self.push(p.label, Change::Compound(vec![chunks, faces]));
+        }
+    }
+
     pub fn record(&mut self, label: impl Into<String>, step: Step) {
         self.commit();
         self.push(label.into(), step.into());
@@ -448,6 +463,43 @@ mod tests {
         let p = s.active();
         assert_eq!(p.cage.as_ref().unwrap().quad_count(), 2);
         assert!(p.cage.as_ref().unwrap().is_linked_to(&p.mesh));
+    }
+
+    #[test]
+    fn vertex_and_face_edits_undo_together_as_one_step() {
+        let mut s = scene();
+        let id = s.active().id;
+        let mut h = History::default();
+        let before = s.active().mesh.clone();
+        // Move every vertex and regroup every face, as a plugin command would.
+        let mesh = &mut s.get_mut(id).unwrap().mesh;
+        h.begin("Plugin: test", id, mesh);
+        let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
+        for &c in &chunks {
+            h.touch(mesh, c);
+        }
+        mesh.positions.iter_mut().for_each(|p| *p *= 2.0);
+        mesh.update_chunks(&chunks);
+        let (groups, hidden) = (mesh.groups().to_vec(), mesh.hidden().to_vec());
+        mesh.set_groups(vec![5; mesh.triangle_count()]);
+        h.commit_with_faces(groups, hidden);
+        assert_eq!(h.undo_labels().count(), 1, "one step");
+        h.undo(&mut s);
+        let m = &s.active().mesh;
+        assert_eq!(m.positions, before.positions);
+        assert_eq!(m.groups(), before.groups());
+        h.redo(&mut s);
+        let m = &s.active().mesh;
+        assert!(m.groups().iter().all(|&g| g == 5));
+        assert_eq!(m.positions[0], before.positions[0] * 2.0);
+        // Face edits alone are an ordinary face step.
+        let mesh = &mut s.get_mut(id).unwrap().mesh;
+        h.begin("Plugin: faces", id, mesh);
+        let (groups, hidden) = (mesh.groups().to_vec(), mesh.hidden().to_vec());
+        mesh.set_groups(vec![1; mesh.triangle_count()]);
+        h.commit_with_faces(groups, hidden);
+        h.undo(&mut s);
+        assert!(s.active().mesh.groups().iter().all(|&g| g == 5));
     }
 
     #[test]

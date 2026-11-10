@@ -131,9 +131,10 @@ One file to share and install a plugin, of either kind:
 
 ## Not in this version
 
-- More edit kinds: face groups and topology changes of existing pieces
-  (`from_data`). (Mask, vertex color and adding pieces arrived in API 2,
-  below.)
+- More edit kinds: face groups and topology changes of existing pieces.
+  (Mask, vertex color and adding pieces arrived in API 2, below; face
+  groups, hidden faces and topology in API 3,
+  [RFC 0013](0013-plugin-api-3.md).)
 - Brushes written as plugins (a per-dab callback): that is on the per-dab
   path and needs measuring first (`dab_timing`).
 - Command shortcuts for plugin commands. (They are in the command palette
@@ -142,6 +143,7 @@ One file to share and install a plugin, of either kind:
   for the imports, which this workspace forbids, so it belongs in its own
   repository.
 - Text, images and widgets other than sliders and buttons in panels.
+  (Toggles, choices, colors and text arrived in API 3; images haven't.)
 
 ## Verification
 

@@ -4,6 +4,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Plugin API 3** ([RFC 0013](docs/rfcs/0013-plugin-api-3.md)): in-app plugins can now:
+  - change face groups and hidden faces, and replace a piece's triangles (new `edit_topology` capability);
+  - show their result live before you **Accept** it;
+  - offer toggles, choices, colors, text and whole-number sliders in their panels, with tooltips;
+  - report progress, with a **Stop** button that discards a stopped command's edits.
+
+  Panel settings are remembered between sessions (**Reset** restores the defaults). A command's edits to a piece are still one undo step. Plugins written for API 1 and 2 keep working. Two new bundled plugins, **Group by Height** and **Flip Faces**, and **Displace** now previews.
+- **Plugin guide and API reference** in [docs/plugins](docs/plugins/README.md), with a WebAssembly-text and a Rust example.
+
 ## [3.0.6-beta] - 2026-11-10
 
 ### Added

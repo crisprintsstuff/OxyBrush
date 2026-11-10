@@ -12,8 +12,11 @@ fn snapshot() -> Snapshot {
             mask: vec![0.0, 1.0, 0.0],
             normals: vec![Vec3::Z; 3],
             colors: vec![Vec3::ONE; 3],
+            groups: vec![7],
+            hidden: vec![false],
         }],
         vertex_counts: vec![3],
+        triangle_counts: vec![1],
         active: 0,
         scene_json: "{\"pieces\":1}".into(),
     }
@@ -33,7 +36,7 @@ fn manifest_parses_and_rejects_bad_ones() {
     assert!(!m.capabilities.read_scene);
     assert_eq!(m.commands[0].label, "Squash");
     assert_eq!(m.params[0].default, 0.3);
-    assert!(Manifest::parse(r#"{"name":"X","api":3}"#).unwrap_err().contains("API 3"));
+    assert!(Manifest::parse(r#"{"name":"X","api":4}"#).unwrap_err().contains("API 4"));
     assert!(Manifest::parse(r#"{"name":"X","api":0}"#).is_err());
     assert!(Manifest::parse(r#"{"name":"X","api":2,"capabilities":["add_pieces"]}"#).unwrap().capabilities.add_pieces);
     assert!(Manifest::parse(r#"{"name":"X","api":1,"capabilities":["network"]}"#).unwrap_err().contains("unknown"));
@@ -231,11 +234,25 @@ fn cube() -> PieceView {
         [1, 7, 5], // x = 1
     ];
     let normals = positions.iter().map(|p| (*p - Vec3::splat(0.5)).normalize()).collect();
-    PieceView { positions, triangles, mask: vec![0.0; 8], normals, colors: vec![Vec3::ONE; 8] }
+    PieceView {
+        positions,
+        triangles,
+        mask: vec![0.0; 8],
+        normals,
+        colors: vec![Vec3::ONE; 8],
+        groups: vec![0; 12],
+        hidden: vec![false; 12],
+    }
 }
 
 fn cube_snapshot() -> Snapshot {
-    Snapshot { pieces: vec![cube()], vertex_counts: vec![8], active: 0, scene_json: String::new() }
+    Snapshot {
+        pieces: vec![cube()],
+        vertex_counts: vec![8],
+        triangle_counts: vec![12],
+        active: 0,
+        scene_json: String::new(),
+    }
 }
 
 fn bundled(name: &str) -> Plugin {
@@ -355,4 +372,216 @@ fn measure_reports_size_and_volume_and_draws_the_box() {
     assert_eq!(r.log, vec!["Size 2.000 × 1.000 × 0.500, volume 1.000".to_string()]);
     let lines = p.overlay().unwrap();
     assert_eq!(lines.len(), 12);
+}
+
+// ---- API 3 ----
+
+#[test]
+fn api3_param_types_parse_and_bad_ones_are_refused() {
+    let m = Manifest::parse(
+        r#"{"name":"P","api":3,"capabilities":["edit_topology"],
+            "commands":[{"id":"a","preview":true},{"id":"b"}],
+            "params":[
+              {"id":"n","min":0,"max":10,"step":1,"default":3.4,"help":"how many"},
+              {"id":"t","type":"toggle","default":true},
+              {"id":"c","type":"choice","options":["X","Y","Z"],"default":2},
+              {"id":"col","type":"color","default":[1,0.5,0]},
+              {"id":"l","type":"label","text":"Hello"}
+            ]}"#,
+    )
+    .unwrap();
+    assert!(m.capabilities.edit_topology);
+    assert!(m.commands[0].preview && !m.commands[1].preview);
+    let p = &m.params;
+    assert_eq!(p[0].kind, ParamKind::Slider { step: Some(1.0) });
+    assert_eq!(p[0].help, "how many");
+    assert_eq!((p[1].kind.clone(), p[1].default), (ParamKind::Toggle, 1.0));
+    assert_eq!(p[2].default, 2.0);
+    assert_eq!(p[3].default_color(), Vec3::new(1.0, 0.5, 0.0));
+    assert_eq!(p[4].kind, ParamKind::Label("Hello".into()));
+    // Values are made valid: whole steps, 0/1, an option index; labels have none.
+    assert_eq!(p[0].sanitize(3.6), Some(4.0));
+    assert_eq!(p[0].sanitize(99.0), Some(10.0));
+    assert_eq!(p[1].sanitize(0.7), Some(1.0));
+    assert_eq!(p[2].sanitize(5.0), Some(2.0));
+    assert_eq!(p[0].sanitize(f32::NAN), None);
+    assert_eq!(p[4].sanitize(1.0), None);
+    for bad in [
+        r#"{"id":"x","type":"knob"}"#,
+        r#"{"id":"x","type":"choice","options":[]}"#,
+        r#"{"id":"x","type":"color","default":[1,2]}"#,
+        r#"{"id":"x","step":0}"#,
+    ] {
+        let json = format!(r#"{{"name":"P","api":3,"params":[{bad}]}}"#);
+        assert!(Manifest::parse(&json).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn group_by_height_makes_bands_along_the_chosen_axis() {
+    let mut p = bundled("group_height");
+    assert!(p.manifest.commands[0].preview);
+    p.params[0] = 1.0; // Y
+    p.params[1] = 2.0; // two bands
+    let r = p.run(0, cube_snapshot()).unwrap();
+    let (piece, groups) = &r.groups[0];
+    assert_eq!((*piece, groups.len()), (0, 12));
+    let cube = cube();
+    for (t, tri) in cube.triangles.iter().enumerate() {
+        let y = tri.iter().map(|&v| cube.positions[v as usize].y).sum::<f32>() / 3.0;
+        let want = if y < 0.5 { 1 } else { 2 };
+        assert_eq!(groups[t], want, "triangle {t} at height {y}");
+    }
+    assert_eq!(r.log, vec!["Grouped into bands"]);
+    assert_eq!(p.progress().fraction(), Some(1.0), "it reported progress");
+}
+
+#[test]
+fn flip_faces_rewrites_the_mesh_and_keeps_its_attributes() {
+    let mut p = bundled("flip_faces");
+    let mut snap = cube_snapshot();
+    snap.pieces[0].mask[3] = 0.75;
+    snap.pieces[0].groups[5] = 9;
+    let r = p.run(0, snap).unwrap();
+    let (piece, mesh) = &r.meshes[0];
+    assert_eq!(*piece, 0);
+    let cube = cube();
+    assert_eq!(mesh.positions, cube.positions);
+    for (a, b) in mesh.triangles.iter().zip(&cube.triangles) {
+        assert_eq!(*a, [b[0], b[2], b[1]], "corners swapped");
+    }
+    assert_eq!(r.masks[0].1[3], 0.75, "mask written back for the new mesh");
+    assert_eq!(r.groups[0].1[5], 9);
+    assert_eq!(r.colors[0].1.len(), 8);
+}
+
+/// A plugin whose `run` calls `body` and logs every i32 result left on
+/// its stack via $r (one log line each, as a decimal number).
+fn probe(caps: &str, imports: &str, body: &str) -> Plugin {
+    let json = format!(r#"{{"name":"Probe","api":3,"capabilities":[{caps}],"commands":[{{"id":"go"}}]}}"#);
+    let wat = format!(
+        r#"(module
+        (import "oxybrush" "log" (func $log (param i32 i32)))
+        {imports}
+        (memory (export "memory") 2)
+        ;; Log v as text: '-' and a digit for errors, '0' for ok, 'n' for counts > 9.
+        (func $r (param $v i32)
+          (if (i32.lt_s (local.get $v) (i32.const 0))
+            (then (i32.store8 (i32.const 0) (i32.const 45))
+                  (i32.store8 (i32.const 1) (i32.sub (i32.const 48) (local.get $v)))
+                  (call $log (i32.const 0) (i32.const 2)))
+            (else (if (i32.gt_s (local.get $v) (i32.const 9))
+              (then (i32.store8 (i32.const 0) (i32.const 110)))
+              (else (i32.store8 (i32.const 0) (i32.add (i32.const 48) (local.get $v)))))
+                  (call $log (i32.const 0) (i32.const 1)))))
+        (func (export "run") (param i32) {body}))"#
+    );
+    plugin(&json, &wat).unwrap()
+}
+
+const FACE_IMPORTS: &str = r#"
+    (import "oxybrush" "read_groups" (func $rg (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "read_hidden" (func $rh (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_groups" (func $wg (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_hidden" (func $wh (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_mesh" (func $wm (param i32 i32 i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_positions" (func $wp (param i32 i32 i32) (result i32)))
+    (import "oxybrush" "write_mask" (func $wk (param i32 i32 i32) (result i32)))"#;
+
+#[test]
+fn face_and_topology_writes_need_their_capabilities() {
+    let body = r#"
+        (call $r (call $rg (i32.const 0) (i32.const 4096) (i32.const 1)))
+        (call $r (call $rh (i32.const 0) (i32.const 4096) (i32.const 1)))
+        (call $r (call $wg (i32.const 0) (i32.const 4096) (i32.const 1)))
+        (call $r (call $wh (i32.const 0) (i32.const 4096) (i32.const 1)))
+        (call $r (call $wm (i32.const 0) (i32.const 4096) (i32.const 3) (i32.const 8192) (i32.const 1)))"#;
+    let denied = format!("-{}", -ERR_DENIED);
+    let r = probe("", FACE_IMPORTS, body).run(0, snapshot()).unwrap();
+    assert_eq!(r.log, vec![denied.clone(); 5]);
+    // read_mesh + edit_mesh: everything but write_mesh.
+    let r = probe(r#""read_mesh","edit_mesh""#, FACE_IMPORTS, body).run(0, snapshot()).unwrap();
+    assert_eq!(r.log, vec!["1", "1", "0", "0", denied.as_str()]);
+    assert_eq!(r.groups, vec![(0, vec![0])], "zeroed memory: group 0");
+    assert_eq!(r.hidden, vec![(0, vec![false])]);
+    assert!(r.meshes.is_empty());
+}
+
+#[test]
+fn after_write_mesh_counts_follow_the_new_mesh() {
+    // A new mesh of 4 vertices and 2 triangles (indices 0..3) for piece 0,
+    // which had 3 vertices and 1 triangle.
+    let body = r#"
+        (i32.store (i32.const 8196) (i32.const 1)) (i32.store (i32.const 8200) (i32.const 2))
+        (i32.store (i32.const 8204) (i32.const 0)) (i32.store (i32.const 8208) (i32.const 3))
+        (i32.store (i32.const 8212) (i32.const 2))
+        (call $r (call $wk (i32.const 0) (i32.const 4096) (i32.const 3)))
+        (call $r (call $wm (i32.const 0) (i32.const 4096) (i32.const 4) (i32.const 8192) (i32.const 2)))
+        (call $r (call $wp (i32.const 0) (i32.const 4096) (i32.const 4)))
+        (call $r (call $wk (i32.const 0) (i32.const 4096) (i32.const 3)))
+        (call $r (call $wk (i32.const 0) (i32.const 4096) (i32.const 4)))
+        (call $r (call $wg (i32.const 0) (i32.const 4096) (i32.const 1)))
+        (call $r (call $wg (i32.const 0) (i32.const 4096) (i32.const 2)))
+        ;; Indices out of range are refused.
+        (i32.store (i32.const 8192) (i32.const 9))
+        (call $r (call $wm (i32.const 0) (i32.const 4096) (i32.const 4) (i32.const 8192) (i32.const 2)))"#;
+    let caps = r#""read_mesh","edit_mesh","edit_topology""#;
+    let r = probe(caps, FACE_IMPORTS, body).run(0, snapshot()).unwrap();
+    let count = format!("-{}", -ERR_COUNT);
+    let context = format!("-{}", -ERR_CONTEXT);
+    assert_eq!(r.log, vec!["0", "0", &context, &count, "0", &count, "0", &count]);
+    let (piece, mesh) = &r.meshes[0];
+    assert_eq!((*piece, mesh.positions.len(), mesh.triangles.len()), (0, 4, 2));
+    assert_eq!(mesh.triangles, vec![[0, 1, 2], [0, 3, 2]]);
+    // The mask written before write_mesh was for the old mesh: dropped.
+    assert_eq!(r.masks.len(), 1);
+    assert_eq!(r.masks[0].1.len(), 4);
+    assert_eq!(r.groups[0].1.len(), 2);
+}
+
+#[test]
+fn param_color_and_a_stopped_command() {
+    let json = r#"{"name":"C","api":3,"capabilities":["edit_mesh"],"commands":[{"id":"go"}],
+        "params":[{"id":"s"},{"id":"tint","type":"color","default":[0.25,0.5,1]}]}"#;
+    let wat = r#"(module
+        (import "oxybrush" "param_color" (func $pc (param i32 i32) (result i32)))
+        (import "oxybrush" "progress" (func $pr (param f32) (result i32)))
+        (import "oxybrush" "write_positions" (func $wp (param i32 i32 i32) (result i32)))
+        (memory (export "memory") 1)
+        (func (export "run") (param $c i32)
+          (if (i32.eqz (local.get $c)) (then
+            ;; Write the tint as the first vertex's position, to read it back.
+            (drop (call $pc (i32.const 1) (i32.const 0)))
+            (drop (call $wp (i32.const 0) (i32.const 0) (i32.const 3)))
+            ;; Then wait until asked to stop.
+            (block $stop (loop $wait
+              (br_if $stop (call $pr (f32.const 0.5)))
+              (br $wait)))))))"#;
+    let mut p = Plugin::from_parts(json, wat.as_bytes(), Path::new(".")).unwrap();
+    p.param_colors[1] = Vec3::new(0.25, 0.5, 1.0);
+    let progress = p.progress();
+    let stopper = std::thread::spawn(move || {
+        while progress.fraction().is_none() {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        progress.cancel();
+    });
+    let r = p.run(0, snapshot()).unwrap();
+    stopper.join().unwrap();
+    assert!(r.cancelled, "stopped on request");
+    assert!(r.edits.is_empty(), "a stopped command's edits are dropped");
+    // Run again without stopping: the plugin loops until fuel runs out, so
+    // check param_color with a fresh, simpler plugin instead.
+    let wat2 = r#"(module
+        (import "oxybrush" "param_color" (func $pc (param i32 i32) (result i32)))
+        (import "oxybrush" "write_positions" (func $wp (param i32 i32 i32) (result i32)))
+        (memory (export "memory") 1)
+        (func (export "run") (param i32)
+          (drop (call $pc (i32.const 1) (i32.const 0)))
+          (drop (call $wp (i32.const 0) (i32.const 0) (i32.const 3)))))"#;
+    let mut p = Plugin::from_parts(json, wat2.as_bytes(), Path::new(".")).unwrap();
+    assert_eq!(p.param_colors[1], Vec3::new(0.25, 0.5, 1.0), "defaults from the manifest");
+    let r = p.run(0, snapshot()).unwrap();
+    assert!(!r.cancelled);
+    assert_eq!(r.edits[0].1[0], Vec3::new(0.25, 0.5, 1.0));
 }

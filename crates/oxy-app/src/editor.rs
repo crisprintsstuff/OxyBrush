@@ -847,6 +847,8 @@ pub struct Editor {
     pub remesh_engine: oxy_topo::RemeshEngine,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
+    /// In-app plugins' remembered panel settings (see `Settings`).
+    pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     /// The interface scale before it was last changed, until the
@@ -1171,6 +1173,7 @@ impl Default for Editor {
             remesh_adaptivity: 0.0,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
+            plugin_params: Default::default(),
             decimate_percent: 25.0,
             ui_scale: 1.0,
             ui_scale_from: None,
@@ -1562,6 +1565,7 @@ impl Editor {
                 Vec::new()
             },
             remember_brushes: self.remember_brushes,
+            plugin_params: self.plugin_params.clone(),
         }
     }
 
@@ -1710,6 +1714,7 @@ impl Editor {
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
         self.remember_brushes = s.remember_brushes;
+        self.plugin_params = s.plugin_params.clone();
         if !s.remember_brushes {
             return;
         }
@@ -4183,6 +4188,14 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        let others = self.tube.is_some()
+            || self.primitive_edit.is_some()
+            || self.insert_preview.is_some()
+            || self.extract_preview.is_some()
+            || self.curve.is_some();
+        if !others {
+            return self.plugin_preview_mut().map(|(_, m)| m);
+        }
         if let Some(t) = &mut self.tube {
             return Some(&mut t.preview);
         }
@@ -4195,6 +4208,21 @@ impl Editor {
             (None, None, Some(c)) => Some(&mut c.preview),
             (None, None, None) => None,
         }
+    }
+
+    /// The piece a preview is drawn in place of (an open curve stroke, or
+    /// a plugin's live preview), when the preview looks like the piece.
+    pub fn preview_in_place(&self) -> Option<u64> {
+        if self.tube.is_some() || self.primitive_edit.is_some() {
+            return None;
+        }
+        if let Some(c) = &self.curve {
+            return Some(c.piece);
+        }
+        if self.insert_preview.is_some() || self.extract_preview.is_some() {
+            return None;
+        }
+        self.wasm_plugins.iter().find_map(|p| p.preview.as_ref().filter(|pv| pv.mesh.is_some()).map(|pv| pv.piece))
     }
 
     /// The floor grid fitted under the visible pieces.
@@ -5727,6 +5755,190 @@ mod tests {
 
     fn center(e: &mut Editor) {
         e.pointer = Some(Vec2::new(400.0, 300.0));
+    }
+
+    /// An editor with the bundled in-app plugins loaded from a temporary
+    /// folder named `tag`, and the slot of plugin `name`.
+    fn with_bundled_plugins(tag: &str, name: &str) -> (Editor, usize, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("oxy-app-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::wasm_plugins::install_examples(&dir);
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        assert!(e.wasm_plugin_errors.is_empty(), "{:?}", e.wasm_plugin_errors);
+        let slot = e.wasm_plugins.iter().position(|p| p.name == name).expect("bundled plugin");
+        (e, slot, dir)
+    }
+
+    #[test]
+    fn plugin_preview_shows_the_result_and_accept_applies_it_once() {
+        let (mut e, slot, dir) = with_bundled_plugins("preview", "Group by Height");
+        let before = e.scene.active().mesh.clone();
+        let revision = e.history.revision();
+        // A preview command opens the panel and runs without touching the piece.
+        e.run_wasm_plugin(slot, 0);
+        assert!(e.wasm_plugins[slot].show_panel);
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.groups(), before.groups(), "nothing applied yet");
+        assert_eq!(e.history.revision(), revision);
+        let shown = e.preview_mesh_mut().expect("the preview is drawn").groups().to_vec();
+        assert_eq!(e.preview_in_place(), Some(e.scene.active().id), "in place of the piece");
+        let bands = |g: &[u32]| g.iter().copied().collect::<std::collections::BTreeSet<_>>().len();
+        assert_eq!(bands(&shown), 4, "four bands by default");
+        // Changing a setting runs it again with the new value.
+        e.wasm_plugins[slot].plugin.as_mut().unwrap().params[1] = 6.0;
+        e.update_plugin_previews();
+        wait_job(&mut e);
+        let shown = e.preview_mesh_mut().unwrap().groups().to_vec();
+        assert_eq!(bands(&shown), 6);
+        // Accept applies exactly that, as one undo step; the preview goes.
+        e.accept_plugin_preview(slot);
+        assert!(e.wasm_plugins[slot].preview.is_none());
+        assert_eq!(bands(e.scene.active().mesh.groups()), 6);
+        assert_eq!(e.history.undo_labels().last(), Some("Plugin: Group by Height — Group in bands"));
+        assert_eq!(e.history.undo_labels().count(), 1);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), before.groups());
+        // Cancel leaves the piece as it was.
+        e.run_wasm_plugin(slot, 0);
+        wait_job(&mut e);
+        e.cancel_plugin_preview(slot);
+        assert!(e.preview_mesh_mut().is_none());
+        assert_eq!(e.scene.active().mesh.groups(), before.groups());
+        // Editing the piece some other way drops the preview.
+        e.run_wasm_plugin(slot, 0);
+        wait_job(&mut e);
+        e.add_primitive("cube");
+        e.update_plugin_previews();
+        assert!(e.wasm_plugins[slot].preview.is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plugin_topology_edits_undo_to_the_old_mesh_and_levels() {
+        let (mut e, slot, dir) = with_bundled_plugins("topo", "Flip Faces");
+        e.add_level();
+        wait_job(&mut e);
+        let levels = e.multires_level().expect("a subdivision level");
+        let before = e.scene.active().mesh.clone();
+        e.scene.active_mut().mesh.mask[0] = 0.75;
+        e.run_wasm_plugin(slot, 0);
+        wait_job(&mut e);
+        let m = &e.scene.active().mesh;
+        assert_eq!(m.triangle_count(), before.triangle_count());
+        // Every face points the other way.
+        let n = |m: &Mesh, t: usize| {
+            let [a, b, c] = m.triangles[t].map(|v| m.positions[v as usize]);
+            (b - a).cross(c - a).normalize()
+        };
+        let centre = |m: &Mesh, t: usize| m.triangles[t].iter().map(|&v| m.positions[v as usize]).sum::<Vec3>() / 3.0;
+        assert!(n(m, 0).dot(centre(m, 0)) < 0.0, "faces inward now");
+        assert!(m.mask.contains(&0.75), "the mask was kept");
+        assert_eq!(e.multires_level(), None, "a topology change drops the levels");
+        e.undo();
+        assert_eq!(e.multires_level(), Some(levels), "undo brings them back");
+        let m = &e.scene.active().mesh;
+        assert!(n(m, 0).dot(centre(m, 0)) > 0.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plugin_vertex_and_face_edits_are_one_undo_step() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-wasm3-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("both")).unwrap();
+        std::fs::write(
+            dir.join("both/plugin.json"),
+            r#"{"name":"Both","api":3,"capabilities":["read_mesh","edit_mesh"],"commands":[{"id":"go"}]}"#,
+        )
+        .unwrap();
+        // Masks every vertex fully and puts every triangle in group 3.
+        std::fs::write(
+            dir.join("both/plugin.wat"),
+            r#"(module
+              (import "oxybrush" "active_piece" (func $active (result i32)))
+              (import "oxybrush" "vertex_count" (func $vc (param i32) (result i32)))
+              (import "oxybrush" "triangle_count" (func $tc (param i32) (result i32)))
+              (import "oxybrush" "write_mask" (func $wm (param i32 i32 i32) (result i32)))
+              (import "oxybrush" "write_groups" (func $wg (param i32 i32 i32) (result i32)))
+              (memory (export "memory") 64)
+              (func (export "run") (param i32)
+                (local $p i32) (local $n i32) (local $t i32) (local $i i32)
+                (local.set $p (call $active))
+                (local.set $n (call $vc (local.get $p)))
+                (local.set $t (call $tc (local.get $p)))
+                (block $d (loop $l
+                  (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+                  (f32.store (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))) (f32.const 1))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $l)))
+                (local.set $i (i32.const 0))
+                (block $d (loop $l
+                  (br_if $d (i32.ge_u (local.get $i) (local.get $t)))
+                  (i32.store (i32.add (i32.const 2000000) (i32.mul (local.get $i) (i32.const 4))) (i32.const 3))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $l)))
+                (drop (call $wm (local.get $p) (i32.const 1024) (local.get $n)))
+                (drop (call $wg (local.get $p) (i32.const 2000000) (local.get $t)))))"#,
+        )
+        .unwrap();
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        let before = e.scene.active().mesh.clone();
+        e.run_wasm_plugin(0, 0);
+        wait_job(&mut e);
+        let m = &e.scene.active().mesh;
+        assert!(m.mask.iter().all(|&v| v == 1.0) && m.groups().iter().all(|&g| g == 3), "{}", e.status);
+        assert_eq!(e.history.undo_labels().count(), 1, "one step");
+        e.undo();
+        let m = &e.scene.active().mesh;
+        assert_eq!(m.mask, before.mask);
+        assert_eq!(m.groups(), before.groups());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plugin_settings_are_remembered_and_a_stopped_command_changes_nothing() {
+        let (mut e, slot, dir) = with_bundled_plugins("params", "Group by Height");
+        e.wasm_plugins[slot].plugin.as_mut().unwrap().params[1] = 7.0;
+        e.remember_plugin_params(slot);
+        let text = e.settings().to_text();
+        assert!(text.contains("plugin_param = group_height/bands: 7"), "{text}");
+        // Next session: restored on load; a value out of range is clamped,
+        // garbage is ignored.
+        let mut s = crate::settings::Settings::from_text(&text);
+        s.plugin_params.insert("group_height/axis".into(), vec![99.0]);
+        s.plugin_params.insert("group_height/bands".into(), vec![7.0]);
+        let mut next = editor();
+        next.apply_settings(&s);
+        next.load_wasm_plugins_from(&dir);
+        let pl = next.wasm_plugins[slot].plugin.as_ref().unwrap();
+        assert_eq!(pl.params[1], 7.0);
+        assert_eq!(pl.params[0], 2.0, "clamped to the last option");
+        let text = text + "plugin_param = group_height/bands: not a number\n";
+        assert_eq!(
+            crate::settings::Settings::from_text(&text).plugin_params.get("group_height/bands"),
+            Some(&vec![7.0])
+        );
+        // A command that was stopped: its edits are discarded.
+        let before = e.scene.active().mesh.groups().to_vec();
+        let plugin = e.wasm_plugins[slot].plugin.take().unwrap();
+        let mut result = oxy_plugin::RunResult { cancelled: true, ..Default::default() };
+        result.groups.push((0, vec![9; before.len()]));
+        let job = crate::wasm_plugins::PluginJob {
+            slot,
+            plugin,
+            label: "Plugin: Group by Height — Group in bands".into(),
+            pieces: vec![e.scene.active().id],
+            result: Ok(result),
+            preview: None,
+        };
+        e.finish_plugin_job(job, 0.1);
+        assert_eq!(e.scene.active().mesh.groups(), before.as_slice());
+        assert!(e.status.contains("stopped"), "{}", e.status);
+        assert!(e.wasm_plugins[slot].plugin.is_some(), "the plugin is back");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -7857,6 +8069,7 @@ mod tests {
             brush: None,
             brush_strengths: Vec::new(),
             remember_brushes: true,
+            plugin_params: [("squash/amount".to_string(), vec![0.5])].into_iter().collect(),
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
