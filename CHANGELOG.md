@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Brush settings are remembered between sessions:** the brush you were using, with its size, falloff, focal shift, stroke mode, alpha and the rest, comes back the next time OxyBrush starts, and every brush keeps its own strength. Settings files from older versions keep the defaults.
+
 ## [3.0.5-beta] - 2026-11-10
 
 ### Added
