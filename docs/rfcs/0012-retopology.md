@@ -96,12 +96,21 @@ so nothing extra is stored or saved. A point placed within a few pixels of
 the plane goes onto it and is shared by both sides; points on the plane
 slide along it.
 
+## Projecting detail
+
+**Subdivide and project** (in the window, 1–5 levels) gives the retopology
+piece subdivision levels in a background job: each new level is Loop
+subdivided from the one below and every vertex moved to the closest point
+of the surface (the attribute-transfer grid: nearest surface vertex, then
+its triangles). Its detail is stored against the level below without
+touching the lower levels (`Multires::set_active_positions`,
+`prepare_attributes`), so level 1 stays exactly the drawn quads. One undo
+step (a topology change); the quads can be edited again after undoing.
+
 ## Not in this version
 
 - Dragging out a strip of several quads at once, sliding an edge loop, edge
   extrude by the loop, or a "quad patch" fill of a hole.
 - Snapping loose points onto edges while dragging, and auto-welding nearby
   points.
-- Projecting the sculpt's detail onto the new mesh (that is subdivision plus
-  a projection step, a separate feature).
 - Automatic retopology (still on the roadmap as its own item).

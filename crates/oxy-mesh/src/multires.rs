@@ -140,12 +140,22 @@ impl Multires {
         let k = self.active;
         {
             let lvl = &mut self.levels[k];
+            let mut changed = false;
             if self.identity {
+                changed = lvl.positions != mesh.positions;
                 lvl.positions.copy_from_slice(&mesh.positions);
             } else {
                 for (v, &src) in mesh.source_vertices().iter().enumerate() {
-                    lvl.positions[src as usize] = mesh.positions[v];
+                    let p = &mut lvl.positions[src as usize];
+                    changed |= *p != mesh.positions[v];
+                    *p = mesh.positions[v];
                 }
+            }
+            // Nothing edited since the last sync: the other levels are
+            // already right. (Spreading again would nudge the lower levels
+            // on every level switch, and move a projected retopology base.)
+            if !changed {
+                return;
             }
         }
         // Propagate deformations downward to coarse levels so lower levels
@@ -170,6 +180,37 @@ impl Multires {
         }
     }
 
+    /// Take the active level's positions from `mesh` and work out its detail
+    /// against the level below, leaving every lower level exactly as it is
+    /// (unlike [`Self::sync_from`], which spreads a change downward). For
+    /// shaping a new level from outside, e.g. projecting it onto a sculpt.
+    ///
+    /// PRECONDITION: `self.is_bound_to(mesh)`.
+    pub fn set_active_positions(&mut self, mesh: &Mesh) {
+        assert!(self.is_bound_to(mesh), "multires stack is not bound to this mesh");
+        let k = self.active;
+        {
+            let lvl = &mut self.levels[k];
+            if self.identity {
+                lvl.positions.copy_from_slice(&mesh.positions);
+            } else {
+                for (v, &src) in mesh.source_vertices().iter().enumerate() {
+                    lvl.positions[src as usize] = mesh.positions[v];
+                }
+            }
+        }
+        if k > 0 {
+            let smooth = self.loop_from(k);
+            let lvl = &mut self.levels[k];
+            lvl.details = lvl.positions.iter().zip(&smooth).map(|(p, s)| *p - *s).collect();
+        }
+    }
+
+    /// The base level's positions (in base order).
+    pub fn base_positions(&self) -> &[Vec3] {
+        &self.levels[0].positions
+    }
+
     /// Loop-subdivided positions of level `k − 1`, in level `k` order.
     fn loop_from(&self, k: usize) -> Vec<Vec3> {
         let r = self.levels[k].refinement.as_ref().expect("levels above 0 have a refinement");
@@ -189,6 +230,13 @@ impl Multires {
     /// then run on another thread without the mesh.
     pub fn prepare(&mut self, mesh: &Mesh) -> Prepared {
         self.sync_from(mesh);
+        Prepared(self.attributes_from(mesh))
+    }
+
+    /// Like [`Self::prepare`] but without syncing positions from `mesh`:
+    /// for when the active level was set with [`Self::set_active_positions`]
+    /// and the levels below must stay as they are.
+    pub fn prepare_attributes(&self, mesh: &Mesh) -> Prepared {
         Prepared(self.attributes_from(mesh))
     }
 
@@ -778,5 +826,38 @@ mod tests {
             m2_back.positions[top2_back].y,
             bumped_y
         );
+    }
+}
+
+#[cfg(test)]
+mod level_switch_tests {
+    use super::*;
+    use crate::primitives;
+
+    #[test]
+    fn switching_levels_without_edits_changes_nothing() {
+        let base = primitives::icosphere(2, 1.0);
+        let mut mr = Multires::new(&base);
+        let mut mesh = Mesh::from_data(mr.add_level(&base));
+        mr.bind(&mesh);
+        // Sculpt the top level: push every vertex out a little.
+        for p in &mut mesh.positions {
+            *p *= 1.05;
+        }
+        // The first switch carries the edit down to the base (by design)...
+        let down = Mesh::from_data(mr.set_level(&mesh, 0));
+        mr.bind(&down);
+        let after_edit = mr.base_positions().to_vec();
+        assert_ne!(after_edit, base.to_data().positions);
+        // ...and switching back and forth without edits leaves it alone.
+        let mut cur = down;
+        for _ in 0..4 {
+            let up = Mesh::from_data(mr.set_level(&cur, 1));
+            mr.bind(&up);
+            let down = Mesh::from_data(mr.set_level(&up, 0));
+            mr.bind(&down);
+            cur = down;
+            assert_eq!(mr.base_positions(), &after_edit[..]);
+        }
     }
 }

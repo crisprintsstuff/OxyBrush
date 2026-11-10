@@ -101,6 +101,33 @@ impl<'a> Grid<'a> {
     }
 }
 
+/// Closest points on a set of surfaces, for projecting one mesh onto another.
+pub struct SurfaceProjector<'a> {
+    grid: Grid<'a>,
+}
+
+impl<'a> SurfaceProjector<'a> {
+    pub fn new(sources: &'a [&'a Mesh]) -> Self {
+        SurfaceProjector { grid: Grid::new(sources) }
+    }
+
+    /// The closest point of the surfaces to `p` (among the triangles around
+    /// the nearest surface vertex).
+    pub fn closest_point(&self, p: Vec3) -> Option<Vec3> {
+        let (mi, ti, bary) = self.grid.closest(p)?;
+        let m = self.grid.sources[mi];
+        let t = m.triangles[ti];
+        Some(t.iter().zip(bary.to_array()).map(|(&v, w)| m.positions[v as usize] * w).sum())
+    }
+
+    /// Move every vertex of `mesh` onto the surfaces.
+    pub fn project(&self, mesh: &mut Mesh) {
+        let moved: Vec<Vec3> = mesh.positions.par_iter().map(|&p| self.closest_point(p).unwrap_or(p)).collect();
+        mesh.positions = moved;
+        mesh.refresh_all();
+    }
+}
+
 /// Give `target` the vertex color, mask and face groups of `sources`
 /// (where any of them have some). Face groups of different sources are
 /// kept apart, so merged pieces stay separate groups. Does nothing for a

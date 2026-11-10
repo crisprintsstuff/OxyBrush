@@ -65,6 +65,24 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 });
             }
             ui.add_space(4.0);
+            ui.separator();
+            ui.label(RichText::new("Detail").strong());
+            ui.horizontal(|ui| {
+                let can = counts.is_some_and(|c| c.0 + c.1 > 0) && ed.job.is_none();
+                let mut levels = ed.retopo.as_ref().map_or(3, |r| r.project_levels);
+                ui.add(egui::Slider::new(&mut levels, 1..=5).text("levels"));
+                if let Some(r) = ed.retopo.as_mut() {
+                    r.project_levels = levels;
+                }
+                if ui
+                    .add_enabled(can, egui::Button::new("Subdivide and project"))
+                    .on_hover_text("Add subdivision levels to the retopology mesh, each moved onto the sculpt, so the top level carries its detail and level 1 stays your quads. One undo step.")
+                    .clicked()
+                {
+                    ed.retopo_project_detail(levels);
+                }
+            });
+            ui.add_space(4.0);
             done |= ui.button("Done").on_hover_text("Close the tool; the new mesh stays as a piece (Esc)").clicked();
         });
     if done {

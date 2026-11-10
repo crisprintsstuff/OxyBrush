@@ -43,6 +43,8 @@ pub struct Retopo {
     pub relax_radius_pt: f32,
     /// Mirror every action across the X symmetry plane of the surface.
     pub mirror: bool,
+    /// Subdivision levels for "Subdivide and project".
+    pub project_levels: u32,
     /// Where each cage vertex is on screen (window px), None when hidden
     /// behind the surface or off screen. Recomputed when the view or the
     /// cage changes.
@@ -213,6 +215,7 @@ impl Editor {
             relax_strength: 0.5,
             relax_radius_pt: 40.0,
             mirror: self.symmetry.x,
+            project_levels: 3,
             screen: Vec::new(),
             view_key: None,
             occluded: Vec::new(),
@@ -892,6 +895,58 @@ impl Editor {
         Some((self.retopo_surface_at(pa)?.0, self.retopo_surface_at(pb)?.0))
     }
 
+    /// Give the retopology piece `levels` subdivision levels, each projected
+    /// onto the surface, in the background: level 1 stays the drawn quad
+    /// mesh, the top level carries the sculpt's detail. One undo step.
+    pub fn retopo_project_detail(&mut self, levels: u32) {
+        self.retopo_sync();
+        let Some(r) = self.retopo.as_ref() else { return };
+        let (Some(cage_id), surface_id) = (r.cage_piece, r.surface) else {
+            self.status = "Draw some quads first, then project the detail onto them".into();
+            return;
+        };
+        let (Some(ci), Some(si)) = (self.scene.index_of(cage_id), self.scene.index_of(surface_id)) else { return };
+        if self.scene.pieces[ci].multires.is_some() {
+            self.status =
+                "This retopology mesh already has subdivision levels: undo, or delete them, to project again".into();
+            return;
+        }
+        let levels = levels.clamp(1, 5);
+        let tris = self.scene.pieces[ci].mesh.triangle_count() * 4usize.pow(levels);
+        if self.max_triangles > 0 && tris > self.max_triangles {
+            self.status =
+                format!("{levels} levels would make {tris} triangles (limit {}): try fewer", self.max_triangles);
+            return;
+        }
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        self.pointer_up();
+        // The job's result goes to the active piece.
+        self.scene.set_active(ci);
+        let base = self.scene.pieces[ci].mesh.clone();
+        let surface = self.scene.pieces[si].mesh.clone();
+        self.start_job(format!("Project detail ({levels} levels)"), Vec::new(), move || {
+            use oxy_mesh::multires::Multires;
+            let sources = [&surface];
+            let projector = oxy_topo::SurfaceProjector::new(&sources);
+            let mut mesh = base;
+            let mut mr = Multires::new(&mesh);
+            for _ in 0..levels {
+                // Not `add_level`, which would first spread this level's
+                // projection down into the drawn quads.
+                let prepared = mr.prepare_attributes(&mesh);
+                mesh = Mesh::from_data(mr.add_level_prepared(prepared));
+                mr.bind(&mesh);
+                projector.project(&mut mesh);
+                mr.set_active_positions(&mesh);
+            }
+            Ok(crate::editor::JobResult::Levels { mesh, multires: Some(mr), previous: None })
+        });
+        self.status = format!("Projecting the sculpt onto the retopology mesh ({levels} levels, {tris} triangles)…");
+    }
+
     /// Undo the last loose point placed before the first face. True if there was one.
     pub(crate) fn retopo_undo_draft_point(&mut self) -> bool {
         let Some(r) = self.retopo.as_mut() else { return false };
@@ -1411,6 +1466,56 @@ mod tests {
         }
         e.retopo_sync();
         assert!(e.scene.pieces.len() == 1 || cage(&e).faces.is_empty());
+    }
+
+    #[test]
+    fn subdivide_and_project_puts_the_sculpt_on_the_top_level() {
+        let mut e = editor();
+        first_quad(&mut e);
+        // Two more quads to the right.
+        e.retopo_refresh_view();
+        e.tab_held = true;
+        drag(&mut e, Vec2::new(440.0, 300.0), Vec2::new(500.0, 300.0));
+        e.tab_held = false;
+        let id = e.retopo.as_ref().unwrap().cage_piece.unwrap();
+        let drawn = cage(&e).positions.clone();
+        e.retopo_project_detail(2);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while e.job.is_some() && std::time::Instant::now() < deadline {
+            e.poll_job();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(e.job.is_none(), "{}", e.status);
+        let p = &e.scene.pieces[e.scene.index_of(id).unwrap()];
+        let mr = p.multires.as_ref().expect("levels");
+        assert_eq!(mr.level_count(), 3);
+        assert_eq!(p.mesh.triangle_count(), 4 * 16, "two levels of a 4-triangle mesh");
+        // The top level lies on the sphere, not on the flat quads under it.
+        for v in &p.mesh.positions {
+            assert!((v.length() - 1.0).abs() < 0.01, "{}", v.length());
+        }
+        // The base level is still exactly the quads that were drawn.
+        let mut base = mr.base_positions().to_vec();
+        let mut want = drawn[..base.len()].to_vec();
+        base.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        want.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        assert_eq!(base, want);
+        // Stepping down to level 1 shows the drawn quads.
+        e.scene.set_active(e.scene.index_of(id).unwrap());
+        e.step_level(-2);
+        let p = &e.scene.pieces[e.scene.index_of(id).unwrap()];
+        let mut shown = p.mesh.positions.clone();
+        shown.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+        let worst = shown.iter().zip(&want).map(|(a, b)| a.distance(*b)).fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "level 1 moved off the drawn quads by {worst}");
+        e.step_level(2);
+        e.undo();
+        e.undo();
+        // One undo step back to the editable quads.
+        e.undo();
+        e.retopo_sync();
+        assert!(e.scene.pieces[e.scene.index_of(id).unwrap()].multires.is_none());
+        assert_eq!(cage(&e).quad_count(), 2);
     }
 
     #[test]
