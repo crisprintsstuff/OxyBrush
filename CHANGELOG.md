@@ -11,6 +11,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **Tab+drag** a border edge pulls out a new quad; **Ctrl+click** an edge inserts an edge loop; **Ctrl+Shift+click** deletes a point or face.
   - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
 
+### Changed
+- **Decimate is about 5× faster on large meshes:** 1.3M → 131k triangles takes 0.7 s instead of 3.8 s on a 4-core machine. Large meshes are decimated in spatially compact parts in parallel, with the vertices between parts left alone, then finished in one pass over the whole mesh. The result is just as close to the original (on a test sphere, slightly closer) and stays watertight.
+
 ## [3.0.4-beta] - 2026-11-09
 
 ### Added
