@@ -975,6 +975,9 @@ fn mkdid(w: xinput::DeviceId) -> crate::event::DeviceId {
 pub struct Device {
     _name: String,
     scroll_axes: Vec<(i32, ScrollAxis)>,
+    /// OxyBrush patch: the valuator labelled "Abs Pressure" (a pen's
+    /// pressure) and its range, as (number, min, max).
+    pressure_axis: Option<(i32, f64, f64)>,
     // For master devices, this is the paired device (pointer <-> keyboard).
     // For slave devices, this is the master.
     attachment: c_int,
@@ -994,14 +997,24 @@ enum ScrollOrientation {
 }
 
 impl Device {
-    fn new(info: &ffi::XIDeviceInfo) -> Self {
+    /// `pressure_atom` is the "Abs Pressure" atom, if the server has it.
+    fn new(info: &ffi::XIDeviceInfo, pressure_atom: Option<u32>) -> Self {
         let name = unsafe { CStr::from_ptr(info.name).to_string_lossy() };
         let mut scroll_axes = Vec::new();
+        let mut pressure_axis = None;
 
         if Device::physical_device(info) {
             // Identify scroll axes
             for &class_ptr in Device::classes(info) {
                 let ty = unsafe { (*class_ptr)._type };
+                // OxyBrush patch: find the pen pressure axis (see
+                // `Device::pressure_axis`).
+                if ty == ffi::XIValuatorClass {
+                    let info = unsafe { &*(class_ptr as *const ffi::XIValuatorClassInfo) };
+                    if pressure_atom.is_some_and(|a| info.label as u64 == a as u64) && info.max > info.min {
+                        pressure_axis = Some((info.number, info.min, info.max));
+                    }
+                }
                 if ty == ffi::XIScrollClass {
                     let info = unsafe { &*(class_ptr as *const ffi::XIScrollClassInfo) };
                     scroll_axes.push((info.number, ScrollAxis {
@@ -1017,8 +1030,12 @@ impl Device {
             }
         }
 
-        let mut device =
-            Device { _name: name.into_owned(), scroll_axes, attachment: info.attachment };
+        let mut device = Device {
+            _name: name.into_owned(),
+            scroll_axes,
+            pressure_axis,
+            attachment: info.attachment,
+        };
         device.reset_scroll_position(info);
         device
     }

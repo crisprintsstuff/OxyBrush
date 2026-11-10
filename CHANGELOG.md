@@ -14,6 +14,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   Panel settings are remembered between sessions (**Reset** restores the defaults). A command's edits to a piece are still one undo step. Plugins written for API 1 and 2 keep working. Two new bundled plugins, **Group by Height** and **Flip Faces**, and **Displace** now previews.
 - **Plugin guide and API reference** in [docs/plugins](docs/plugins/README.md), with a WebAssembly-text and a Rust example.
 
+### Fixed
+- **Pen pressure on Linux** (X11 and XWayland, including the Flatpak; [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)). Tablets report pressure as a raw reading, from 0 up to 2047, 8191 or 65535 depending on the model, and OxyBrush only understood values between 0 and 1, so on most tablets pressure had no effect. The pen's pressure axis is now found by name and scaled properly. Other pen axes, such as tilt, can no longer be mistaken for pressure. The log notes when pressure first arrives, to help with tablet reports.
+
 ## [3.0.6-beta] - 2026-11-10
 
 ### Added
