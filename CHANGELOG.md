@@ -12,6 +12,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
 
 ### Changed
+- **Voxel remesh is much faster:**
+  - On a 330k-triangle sculpt (4-core machine), remesh at resolution 128 takes 0.32 s instead of 5.4 s, at 256 0.71 s instead of 6.8 s, and at 512 2.4 s instead of about 13 s. Merge and booleans use the same code and speed up too.
+  - Triangles now write distances only into the voxels near them, and the narrow band grows outward from there, instead of every voxel testing every triangle near it. Lookups also use a faster hash, and polygonizing runs in parallel.
+  - The result is the same mesh: distances near the surface are exact, and further out they are within 0.06 of a voxel.
+- **Remesh shows how many triangles it will make** under the Resolution slider (a warning above 8 million), so the higher resolutions the faster remesh allows don't come as a surprise. The local AI agent can now ask for resolutions above 320 with the default engine, like the slider.
 - **Decimate is about 5× faster on large meshes:** 1.3M → 131k triangles takes 0.7 s instead of 3.8 s on a 4-core machine. Large meshes are decimated in spatially compact parts in parallel, with the vertices between parts left alone, then finished in one pass over the whole mesh. The result is just as close to the original (on a test sphere, slightly closer) and stays watertight.
 
 ## [3.0.4-beta] - 2026-11-09
