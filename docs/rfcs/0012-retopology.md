@@ -85,9 +85,19 @@ quads.
   retopo_view_timing -- --ignored --nocapture`.
 - **Nothing on the per-dab path changes;** the tool only runs while open.
 
+## Symmetry
+
+**Mirror across X** (in the window; on when X symmetry is on) applies every
+action to its mirror image across the surface piece's X symmetry plane:
+points, faces, moves, relax, extend, loops, welds and deletes. Mirror
+pairs are found by position (mirrored points are placed at exactly
+mirrored positions, and snapped points are made exact again afterwards),
+so nothing extra is stored or saved. A point placed within a few pixels of
+the plane goes onto it and is shared by both sides; points on the plane
+slide along it.
+
 ## Not in this version
 
-- Symmetry (drawing on one side and mirroring across X).
 - Dragging out a strip of several quads at once, sliding an edge loop, edge
   extrude by the loop, or a "quad patch" fill of a hole.
 - Snapping loose points onto edges while dragging, and auto-welding nearby

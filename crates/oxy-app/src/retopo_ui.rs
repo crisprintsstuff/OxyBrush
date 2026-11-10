@@ -57,6 +57,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.label("Relax radius");
                     ui.add(egui::Slider::new(&mut r.relax_radius_pt, 10.0..=200.0).suffix(" pt"));
                     ui.end_row();
+                    ui.label("Symmetry");
+                    ui.checkbox(&mut r.mirror, "Mirror across X").on_hover_text(
+                        "Every point, face, loop, move and delete is mirrored across the piece's X symmetry plane. Points near the plane snap onto it and are shared by both sides.",
+                    );
+                    ui.end_row();
                 });
             }
             ui.add_space(4.0);

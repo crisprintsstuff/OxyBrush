@@ -10,6 +10,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - Hold **Shift** to preview the quad (green) or triangle (purple) the nearest points make; **Shift+click** makes it. **Shift+drag** relaxes the points under the cursor.
   - **Tab+drag** a border edge pulls out a new quad; **Ctrl+click** an edge inserts an edge loop; **Ctrl+Shift+click** deletes a point or face.
   - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
+  - **Mirror across X** (on when X symmetry is): every point, face, loop, move, relax, extend and delete is mirrored across the piece's X symmetry plane. Points placed near the plane snap onto it and are shared by both sides.
 
 ## [3.0.4-beta] - 2026-11-09
 
