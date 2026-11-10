@@ -2441,15 +2441,42 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         painter.rect_filled(rect, 1.5, fill);
         painter.rect_stroke(rect, 1.5, EStroke::new(1.0, AXIS_COLORS[i]), egui::StrokeKind::Inside);
     }
-    let hot = hover == Some(Handle::Center);
-    painter.circle_filled(c, if hot { 8.0 } else { 6.5 }, if hot { Color32::WHITE } else { Color32::from_gray(225) });
-    painter.circle_stroke(c, 9.0, EStroke::new(1.5, Color32::from_black_alpha(140)));
+    if let Some(r) = &layout.rings {
+        // Rotate: the outer view ring, then each axis ring: the near half
+        // solid, the far half faint.
+        let hot = hover == Some(Handle::Center);
+        let view = if hot { Color32::WHITE } else { Color32::from_gray(215) };
+        painter.circle_stroke(c, r.view_radius / ppp, EStroke::new(if hot { 3.0 } else { 2.0 }, view));
+        for (a, pts) in r.points.iter().enumerate() {
+            let hot = hover == Some(Handle::Axis(a));
+            let col = if hot { Color32::WHITE } else { AXIS_COLORS[a] };
+            for i in 0..pts.len() {
+                let (p0, f0) = pts[i];
+                let (p1, f1) = pts[(i + 1) % pts.len()];
+                let stroke = if f0 && f1 {
+                    EStroke::new(if hot { 3.5 } else { 2.5 }, col)
+                } else {
+                    EStroke::new(1.2, col.gamma_multiply(0.3))
+                };
+                painter.line_segment([to_pt(p0), to_pt(p1)], stroke);
+            }
+        }
+        painter.circle_filled(c, 3.0, Color32::from_gray(230));
+    } else {
+        let hot = hover == Some(Handle::Center);
+        painter.circle_filled(
+            c,
+            if hot { 8.0 } else { 6.5 },
+            if hot { Color32::WHITE } else { Color32::from_gray(225) },
+        );
+        painter.circle_stroke(c, 9.0, EStroke::new(1.5, Color32::from_black_alpha(140)));
+    }
     // Handles are drawn, not widgets. The same sentence shows while the pointer
     // rests on one (a finger held still on a touch screen, or a mouse hover).
     if let Some(handle) = hover {
         let at = match handle {
             Handle::Center => c,
-            Handle::Axis(i) => layout.axes[i].map(to_pt).unwrap_or(c),
+            Handle::Axis(i) => layout.axes[i].map(to_pt).or_else(|| ed.pointer.map(|p| to_pt(p - origin))).unwrap_or(c),
             Handle::Plane(i) => layout.planes[i].map(to_pt).unwrap_or(c),
         };
         tips::show_at(ctx, at, tips::gizmo_handle_tip(mode, handle));

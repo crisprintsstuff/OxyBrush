@@ -493,10 +493,12 @@ pub fn gizmo_handle_tip(mode: GizmoMode, handle: Handle) -> &'static str {
         (GizmoMode::Move, Handle::Axis(1)) => "Drag to move up and down. Masked parts stay put.",
         (GizmoMode::Move, Handle::Axis(2)) => "Drag to move forward and back. Masked parts stay put.",
         (GizmoMode::Move, Handle::Center) => "Drag to move in the screen plane. Masked parts stay put.",
-        (GizmoMode::Rotate, Handle::Axis(0)) => "Drag to turn around the left-right axis. Masked parts stay put.",
-        (GizmoMode::Rotate, Handle::Axis(1)) => "Drag to turn around the up-down axis. Masked parts stay put.",
-        (GizmoMode::Rotate, Handle::Axis(2)) => "Drag to turn around the front-back axis. Masked parts stay put.",
-        (GizmoMode::Rotate, Handle::Center) => "Drag to spin around the view direction. Masked parts stay put.",
+        (GizmoMode::Rotate, Handle::Axis(0)) => "Drag along the red ring to turn around the X axis. Shift snaps.",
+        (GizmoMode::Rotate, Handle::Axis(1)) => "Drag along the green ring to turn around the Y axis. Shift snaps.",
+        (GizmoMode::Rotate, Handle::Axis(2)) => "Drag along the blue ring to turn around the Z axis. Shift snaps.",
+        (GizmoMode::Rotate, Handle::Center) => {
+            "Drag along the outer ring to turn around the view direction. Shift snaps."
+        }
         (GizmoMode::Scale, Handle::Axis(0)) => "Drag to scale left and right. Masked parts stay put.",
         (GizmoMode::Scale, Handle::Axis(1)) => "Drag to scale up and down. Masked parts stay put.",
         (GizmoMode::Scale, Handle::Axis(2)) => "Drag to scale forward and back. Masked parts stay put.",
