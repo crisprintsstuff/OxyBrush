@@ -12,6 +12,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Curve Move curves are saved with the project:** saving while a Curve Move curve is open keeps it (a new `CURV` section, which older versions skip), and opening the project brings it back with the brush size, strength and falloff it was bending with. The piece itself is saved unbent until you apply the curve.
 
 ### Fixed
+- **Dynamic detail makes even triangles and stays at the brush.** Refinement used to spread past the brush in zigzag spikes and leave thin, stretched triangles that made the surface look crumpled. Now edges are split only under the brush, new points follow the curve of the surface instead of cutting across it, and edges are flipped and points relaxed along the surface, as in standard remeshing. On a test stroke, thin triangles went from 9% to none and the surface is visibly smoother. Refining a very large mesh takes about 10% longer.
 - **Switching subdivision levels without editing no longer nudges the lower levels.** Each switch re-applied the last edit's spread to the levels below, so the base moved a little every time.
 - **OBJ export uses each mesh's own quads** (for example a retopology mesh) instead of guessing them from the shape, so strongly bent quads no longer come out as two triangles.
 
