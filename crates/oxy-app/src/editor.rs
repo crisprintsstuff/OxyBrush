@@ -7670,9 +7670,9 @@ mod tests {
         let step = std::f32::consts::TAU / pose::RING_SAMPLES as f32;
         for axis in 0..3 {
             // Grab the ring where it faces the viewer most.
-            let k = (0..pose::RING_SAMPLES).filter(|&k| rings.points[axis][k].1).max_by(|&a, &b| {
-                rings.tangents[axis][a].length().total_cmp(&rings.tangents[axis][b].length())
-            });
+            let k = (0..pose::RING_SAMPLES)
+                .filter(|&k| rings.points[axis][k].1)
+                .max_by(|&a, &b| rings.tangents[axis][a].length().total_cmp(&rings.tangents[axis][b].length()));
             let k = k.expect("a near half");
             let grab = rings.points[axis][k].0;
             assert_eq!(layout.pick(grab, 6.0), Some(Handle::Axis(axis)), "axis {axis}");

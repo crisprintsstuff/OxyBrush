@@ -11,6 +11,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **Tab+drag** a border edge pulls out a new quad; **Ctrl+click** an edge inserts an edge loop; **Ctrl+Shift+click** deletes a point or face.
   - The result is a new piece, **Retopo**, with one undo step per action. It is saved with the project (new `CAGE` section, skipped by older versions), and its quads export as quads. Reopening the tool continues it.
 
+### Changed
+- **Rotate gizmo with rings:** Rotate mode now shows a ring around each axis (red X, green Y, blue Z; the far half faint) and a white outer ring for turning around the view direction, like most 3D apps. Drag along a ring and the point you grabbed follows the pointer; Shift still snaps, and typed values, pivot choices and Alt/Ctrl still work.
+
 ## [3.0.4-beta] - 2026-11-09
 
 ### Added
