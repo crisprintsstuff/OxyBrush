@@ -10,6 +10,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Brush settings are remembered between sessions:** the brush you were using, with its size, falloff, focal shift, stroke mode, alpha and the rest, comes back the next time OxyBrush starts, and every brush keeps its own strength. Settings files from older versions keep the defaults.
 
 ### Fixed
+- **The Interface scale slider no longer runs away** ([#116](https://github.com/crisprintsstuff/OxyBrush/issues/116)). It changed the scale while you dragged it, which moved the slider under the pointer and sent the scale jumping to 300%. Now the number follows the drag and the scale changes when you let go, in 5% steps, and the Preferences window stays where it is on screen.
+- **Saving to network drives** ([#117](https://github.com/crisprintsstuff/OxyBrush/issues/117)). Saving to an SMB share could fail without a visible message, so the file was missing and quitting kept asking to save. Saving now works around what such drives refuse (hidden temporary files, a full flush to disk, replacing a file by renaming) without risking the existing file, checks the file is there afterwards, and shows a **Couldn't save** dialog with the reason and a **Save As…** button when it still fails. The reason is also written to the log.
 - **Switching subdivision levels without editing no longer nudges the lower levels.** Each switch re-applied the last edit's spread to the levels below, so the base moved a little every time.
 - **OBJ export uses each mesh's own quads** (for example a retopology mesh) instead of guessing them from the shape, so strongly bent quads no longer come out as two triangles.
 

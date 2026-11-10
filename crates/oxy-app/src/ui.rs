@@ -651,7 +651,17 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Preferences")
+    let window_id = egui::Id::unique("oxy_preferences");
+    let mut window = egui::Window::new("Preferences").id(window_id);
+    // After the interface scale changed, keep the window where it was on
+    // the screen: its position is stored in points, which just changed size.
+    if let Some(from) = ed.ui_scale_from.take()
+        && let Some(rect) = ctx.memory(|m| m.area_rect(window_id))
+        && ed.ui_scale > 0.0
+    {
+        window = window.current_pos(rect.min * (from / ed.ui_scale));
+    }
+    window
         .open(&mut open)
         .resizable(true)
         .collapsible(false)
@@ -931,6 +941,31 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     subdivision_limit_menu(ui, ed);
 }
 
+/// The interface scale slider. While it is dragged only the number moves;
+/// `scale` changes when it is released (or set from the keyboard). Applying
+/// it during the drag (as before, issue #116) rescaled the slider under the
+/// pointer, so the same pointer position meant a larger value every frame
+/// and the scale ran away to 300%.
+pub(crate) fn scale_slider(ui: &mut Ui, scale: &mut f32) -> egui::Response {
+    let id = ui.scope_id().with("ui_scale_draft");
+    let mut value = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(*scale);
+    let r = ui.add(
+        egui::Slider::new(&mut value, 0.75..=3.0)
+            .step_by(0.05)
+            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+            .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
+    );
+    if r.dragged() || r.is_pointer_button_down_on() {
+        ui.data_mut(|d| d.insert_temp(id, value));
+    } else {
+        ui.data_mut(|d| d.remove::<f32>(id));
+        if r.changed() || r.drag_stopped() || (value - *scale).abs() > 1e-4 {
+            *scale = (value / 0.05).round() * 0.05;
+        }
+    }
+    r
+}
+
 fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.heading("Appearance & Themes");
     ui.label(
@@ -942,9 +977,13 @@ fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
 
     ui.label(RichText::new("Interface scale").strong());
     ui.horizontal(|ui| {
-        tips::hover(ui.add(egui::Slider::new(&mut ed.ui_scale, 0.75..=3.0).step_by(0.05)), plain::UI_SCALE);
+        let before = ed.ui_scale;
+        tips::hover(scale_slider(ui, &mut ed.ui_scale), plain::UI_SCALE);
         if ui.button("Reset (100%)").clicked() {
             ed.ui_scale = 1.0;
+        }
+        if ed.ui_scale != before {
+            ed.ui_scale_from = Some(before);
         }
     });
     ui.add_space(4.0);
@@ -4029,7 +4068,30 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         welcome(&ctx, ed, action);
     }
 
-    if let Some(pending) = ed.pending.clone() {
+    if let Some(message) = ed.save_error.clone() {
+        egui::Modal::new(egui::Id::unique("save_error")).show(&ctx, |ui| {
+            ui.set_max_width(460.0);
+            ui.heading("Couldn't save");
+            ui.label(message);
+            ui.add_space(4.0);
+            ui.label(
+                RichText::new(
+                    "Your work is still open. Try Save As… to save it somewhere else, such as a local folder.",
+                )
+                .weak(),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Save As…").clicked() {
+                    ed.save_error = None;
+                    *action = Some(UiAction::SaveAs);
+                }
+                if ui.button("OK").clicked() {
+                    ed.save_error = None;
+                }
+            });
+        });
+    } else if let Some(pending) = ed.pending.clone() {
         let what = match &pending {
             Pending::Quit => "quitting",
             Pending::New(_) => "starting a new document",
@@ -4895,6 +4957,49 @@ mod tests {
             ui_scale,
             layout,
         );
+    }
+
+    #[test]
+    fn interface_scale_changes_on_release_not_while_dragging() {
+        let ctx = egui::Context::default();
+        let mut scale = 1.0f32;
+        let mut track = (0.0f32, 0.0f32, 0.0f32);
+        let frame = |events: Vec<egui::Event>, scale: &mut f32, track: &mut (f32, f32, f32)| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                let width = ui.spacing().slider_width;
+                let r = scale_slider(ui, scale);
+                *track = (r.rect.min.x, width, r.rect.center().y);
+            });
+            out.textures_delta.clear();
+        };
+        frame(vec![], &mut scale, &mut track);
+        let t = track;
+        let at = |f: f32| egui::pos2(t.0 + t.1 * f, t.2);
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        // Press near the left end and drag most of the way right.
+        frame(vec![egui::Event::PointerMoved(at(0.05)), button(at(0.05), true)], &mut scale, &mut track);
+        for f in [0.2, 0.4, 0.55, 0.6] {
+            frame(vec![egui::Event::PointerMoved(at(f))], &mut scale, &mut track);
+            assert_eq!(scale, 1.0, "nothing is applied while dragging");
+        }
+        frame(vec![button(at(0.6), false)], &mut scale, &mut track);
+        frame(vec![], &mut scale, &mut track);
+        // 60% along 75%..300% is about 210%, on a 5% step.
+        assert!((scale - 2.1).abs() < 0.08, "applied on release: {scale}");
+        assert!(((scale / 0.05).round() * 0.05 - scale).abs() < 1e-5, "{scale} is on a 5% step");
+        // And it stays there.
+        frame(vec![], &mut scale, &mut track);
+        assert!((scale - 2.1).abs() < 0.08);
     }
 
     /// Run a few headless frames of the whole interface.
