@@ -1,0 +1,10 @@
+{
+  "name": "Flip Faces",
+  "version": "1.0",
+  "description": "Turns the active piece inside out (or back): every face points the other way. Fixes imported meshes that look dark or hollow. Keeps the mask, color and face groups.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh", "edit_topology"],
+  "commands": [
+    { "id": "flip", "label": "Flip faces" }
+  ]
+}

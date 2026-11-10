@@ -12,10 +12,11 @@
 //! edits it wants as data ([`RunResult`]); the app applies them through
 //! its normal undo history. Overlays return lines to draw.
 //!
-//! # Host API, version 2 (module `oxybrush`)
+//! # Host API, version 3 (module `oxybrush`)
 //!
-//! Version 2 adds the rows marked *(2)*; plugins written for version 1
-//! (`"api": 1`) keep working unchanged.
+//! Versions 2 and 3 add the rows marked *(2)* and *(3)* (RFC 0013);
+//! plugins written for an earlier version (`"api": 1` or `2`) keep working
+//! unchanged. The full guide is in `docs/plugins/`.
 //!
 //! All values are `i32` or `f32`; pointers and lengths are byte offsets
 //! and counts in the plugin's exported `memory`. Negative results are
@@ -42,8 +43,23 @@
 //! | `write_colors(piece, ptr, count) -> i32` *(2)* | `edit_mesh` | `f32` r, g, b for every vertex (clamped to 0..=1) |
 //! | `add_piece(name_ptr, name_len, pos_ptr, vcount, tri_ptr, tcount) -> i32` *(2)* | `add_pieces` | a new piece from `vcount` `f32` x, y, z and `tcount` `u32` triangles; returns its index among this call's new pieces |
 //!
-//! All of one command's edits to a piece (positions, mask, colors) become
-//! one undo step; the new pieces of a command become one more.
+//! | `read_groups(piece, ptr, max) -> i32` *(3)* | `read_mesh` | up to `max` face groups as `u32`, one per triangle |
+//! | `read_hidden(piece, ptr, max) -> i32` *(3)* | `read_mesh` | up to `max` `u8`, one per triangle, 1 = hidden |
+//! | `write_groups(piece, ptr, count) -> i32` *(3)* | `edit_mesh` | a `u32` face group for every triangle |
+//! | `write_hidden(piece, ptr, count) -> i32` *(3)* | `edit_mesh` | a `u8` for every triangle, nonzero = hidden |
+//! | `write_mesh(piece, pos_ptr, vcount, tri_ptr, tcount) -> i32` *(3)* | `edit_topology` | new vertices and triangles for the piece; later writes to it in the same command use the new counts, and `write_positions` is refused |
+//! | `param_color(index, ptr) -> i32` *(3)* | — | a color param's value as three `f32` (sRGB 0..=1) |
+//! | `progress(fraction: f32) -> i32` *(3)* | — | report 0..=1 progress; returns 1 once the user asked to stop (the command's edits are then dropped) |
+//!
+//! All of one command's edits to a piece (positions, mask, colors, face
+//! groups, visibility, a new mesh) become one undo step; the new pieces of
+//! a command become one more.
+//!
+//! Manifest additions in version 3: a command's `"preview": true` (run live
+//! while the panel is open, applied on Accept), and param `"type"`s
+//! `slider` (with an optional `"step"`), `toggle`, `choice` (`"options"`),
+//! `color` (`"default": [r, g, b]`) and `label` (`"text"`), each with an
+//! optional `"help"` tooltip.
 //!
 //! Exports: `memory`; `run(command: i32)`, called with the index of a
 //! manifest command; optionally `overlay()`, called each frame while the
@@ -64,16 +80,25 @@ pub const BUNDLED: &[(&str, &str, &str)] = &[
     ("color_ramp", include_str!("../plugins/color_ramp/plugin.json"), include_str!("../plugins/color_ramp/plugin.wat")),
     ("array", include_str!("../plugins/array/plugin.json"), include_str!("../plugins/array/plugin.wat")),
     ("measure", include_str!("../plugins/measure/plugin.json"), include_str!("../plugins/measure/plugin.wat")),
+    (
+        "group_height",
+        include_str!("../plugins/group_height/plugin.json"),
+        include_str!("../plugins/group_height/plugin.wat"),
+    ),
+    ("flip_faces", include_str!("../plugins/flip_faces/plugin.json"), include_str!("../plugins/flip_faces/plugin.wat")),
 ];
 
 use glam::Vec3;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use wasmi::{
     Caller, Config, Engine, Extern, Instance, Linker, Module, Store, StoreLimits, StoreLimitsBuilder, TypedFunc,
 };
 
 /// Host API version this build implements (`"api"` in the manifest).
-pub const API_VERSION: u32 = 2;
+pub const API_VERSION: u32 = 3;
 /// Oldest host API version this build still runs.
 pub const API_MIN: u32 = 1;
 /// The capability is not in the manifest.
@@ -82,10 +107,11 @@ pub const ERR_DENIED: i32 = -1;
 pub const ERR_PIECE: i32 = -2;
 /// A pointer or length outside the plugin's memory.
 pub const ERR_MEMORY: i32 = -3;
-/// `write_positions` with a count other than the piece's vertex count.
+/// A count that doesn't match the piece (its vertex or triangle count), or
+/// values that aren't allowed (non-finite, indices out of range).
 pub const ERR_COUNT: i32 = -4;
 /// Called where it isn't allowed (`draw_line` outside `overlay`, mesh
-/// functions during `overlay`).
+/// functions during `overlay`, `write_positions` after `write_mesh`).
 pub const ERR_CONTEXT: i32 = -5;
 
 /// Fuel for one command: roughly a few seconds of interpreted code.
@@ -106,16 +132,21 @@ pub struct Capabilities {
     pub overlay: bool,
     /// API 2: create new pieces (`add_piece`).
     pub add_pieces: bool,
+    /// API 3: replace a piece's vertices and triangles (`write_mesh`).
+    pub edit_topology: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Command {
     pub id: String,
     pub label: String,
+    /// API 3: run live while the panel is open, showing the result before
+    /// it's applied.
+    pub preview: bool,
 }
 
-/// A number the user sets in the plugin's panel; the plugin reads it with
-/// `param(index)`.
+/// A setting in the plugin's panel; the plugin reads it with
+/// `param(index)` (and `param_color` for colors).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
     pub id: String,
@@ -123,6 +154,59 @@ pub struct Param {
     pub min: f32,
     pub max: f32,
     pub default: f32,
+    /// API 3: what the panel shows for it.
+    pub kind: ParamKind,
+    /// API 3: a tooltip.
+    pub help: String,
+}
+
+impl Param {
+    /// A color param's default; white for the others.
+    pub fn default_color(&self) -> Vec3 {
+        match self.kind {
+            ParamKind::Color(c) => c,
+            _ => Vec3::ONE,
+        }
+    }
+
+    /// `v` made valid for this param (in range, a whole step or option),
+    /// or None if it can't be (not finite, or a label).
+    pub fn sanitize(&self, v: f32) -> Option<f32> {
+        if !v.is_finite() || !self.kind.has_value() {
+            return None;
+        }
+        let v = v.clamp(self.min, self.max);
+        Some(match &self.kind {
+            ParamKind::Slider { step: Some(s) } => {
+                (self.min + ((v - self.min) / s).round() * s).clamp(self.min, self.max)
+            }
+            ParamKind::Toggle => (v >= 0.5) as u8 as f32,
+            ParamKind::Choice(o) => v.round().clamp(0.0, (o.len() - 1) as f32),
+            _ => v,
+        })
+    }
+}
+
+/// How a param is shown (API 3; API 1 and 2 have sliders only).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamKind {
+    /// A slider; `step` 1 makes whole numbers.
+    Slider { step: Option<f32> },
+    /// A checkbox: 0 or 1.
+    Toggle,
+    /// A drop-down: the index of the chosen option.
+    Choice(Vec<String>),
+    /// A color (sRGB 0..=1), read with `param_color`.
+    Color(Vec3),
+    /// Text in the panel; no value.
+    Label(String),
+}
+
+impl ParamKind {
+    /// Whether it holds a value the user sets (everything but labels).
+    pub fn has_value(&self) -> bool {
+        !matches!(self, ParamKind::Label(_))
+    }
 }
 
 /// `plugin.json`.
@@ -155,6 +239,7 @@ impl Manifest {
                 Some("read_scene") => caps.read_scene = true,
                 Some("overlay") => caps.overlay = true,
                 Some("add_pieces") => caps.add_pieces = true,
+                Some("edit_topology") => caps.edit_topology = true,
                 other => return Err(format!("{name}: unknown capability {other:?}")),
             }
         }
@@ -166,7 +251,8 @@ impl Manifest {
             .map(|c| {
                 let id = c.get("id").and_then(|x| x.as_str()).ok_or(format!("{name}: a command has no \"id\""))?;
                 let label = c.get("label").and_then(|x| x.as_str()).unwrap_or(id);
-                Ok(Command { id: id.to_owned(), label: label.to_owned() })
+                let preview = c.get("preview").and_then(|x| x.as_bool()).unwrap_or(false);
+                Ok(Command { id: id.to_owned(), label: label.to_owned(), preview })
             })
             .collect::<Result<_, String>>()?;
         let params: Vec<Param> = v
@@ -177,17 +263,70 @@ impl Manifest {
             .map(|p| {
                 let id = p.get("id").and_then(|x| x.as_str()).ok_or(format!("{name}: a param has no \"id\""))?;
                 let f = |k: &str, d: f64| p.get(k).and_then(|x| x.as_f64()).unwrap_or(d) as f32;
-                let (min, max) = (f("min", 0.0), f("max", 1.0));
-                if !min.is_finite() || !max.is_finite() || min >= max {
-                    return Err(format!("{name}: param {id} needs min < max"));
-                }
-                Ok(Param {
-                    id: id.to_owned(),
-                    label: p.get("label").and_then(|x| x.as_str()).unwrap_or(id).to_owned(),
-                    min,
-                    max,
-                    default: f("default", min as f64).clamp(min, max),
-                })
+                let text = |k: &str| p.get(k).and_then(|x| x.as_str()).unwrap_or("").to_owned();
+                let label = p.get("label").and_then(|x| x.as_str()).unwrap_or(id).to_owned();
+                let kind = match p.get("type").and_then(|x| x.as_str()).unwrap_or("slider") {
+                    "slider" => {
+                        let step = p.get("step").and_then(|x| x.as_f64()).map(|x| x as f32);
+                        if step.is_some_and(|s| !(s.is_finite() && s > 0.0)) {
+                            return Err(format!("{name}: param {id} needs a step above 0"));
+                        }
+                        ParamKind::Slider { step }
+                    }
+                    "toggle" => ParamKind::Toggle,
+                    "choice" => {
+                        let options: Vec<String> = p
+                            .get("options")
+                            .and_then(|x| x.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|o| o.as_str().map(str::to_owned))
+                            .collect();
+                        if options.is_empty() {
+                            return Err(format!("{name}: choice param {id} needs \"options\""));
+                        }
+                        ParamKind::Choice(options)
+                    }
+                    "color" => {
+                        let c: Vec<f32> = p
+                            .get("default")
+                            .and_then(|x| x.as_array())
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|x| x.as_f64().map(|v| v as f32))
+                            .collect();
+                        let c = match c.as_slice() {
+                            [] => Vec3::ONE,
+                            [r, g, b] if [r, g, b].iter().all(|v| v.is_finite()) => {
+                                Vec3::new(*r, *g, *b).clamp(Vec3::ZERO, Vec3::ONE)
+                            }
+                            _ => return Err(format!("{name}: color param {id} needs \"default\": [r, g, b]")),
+                        };
+                        ParamKind::Color(c)
+                    }
+                    "label" => ParamKind::Label(text("text")),
+                    other => return Err(format!("{name}: param {id} has unknown type {other:?}")),
+                };
+                // Toggles, choices, colors and labels have fixed ranges.
+                let (min, max, default) = match &kind {
+                    ParamKind::Slider { .. } => {
+                        let (min, max) = (f("min", 0.0), f("max", 1.0));
+                        if !min.is_finite() || !max.is_finite() || min >= max {
+                            return Err(format!("{name}: param {id} needs min < max"));
+                        }
+                        (min, max, f("default", min as f64).clamp(min, max))
+                    }
+                    ParamKind::Toggle => {
+                        let on = p.get("default").and_then(|x| x.as_bool().or_else(|| x.as_f64().map(|v| v != 0.0)));
+                        (0.0, 1.0, if on.unwrap_or(false) { 1.0 } else { 0.0 })
+                    }
+                    ParamKind::Choice(options) => {
+                        let last = (options.len() - 1) as f32;
+                        (0.0, last.max(1.0), f("default", 0.0).round().clamp(0.0, last))
+                    }
+                    ParamKind::Color(_) | ParamKind::Label(_) => (0.0, 1.0, 0.0),
+                };
+                Ok(Param { id: id.to_owned(), label, min, max, default, kind, help: text("help") })
             })
             .collect::<Result<_, String>>()?;
         Ok(Manifest {
@@ -211,6 +350,10 @@ pub struct PieceView {
     pub normals: Vec<Vec3>,
     /// API 2. Per-vertex color (sRGB 0..=1; white when unpainted).
     pub colors: Vec<Vec3>,
+    /// API 3. Per-triangle face group.
+    pub groups: Vec<u32>,
+    /// API 3. Per-triangle visibility (true = hidden).
+    pub hidden: Vec<bool>,
 }
 
 /// The scene as handed to a command. Pieces are empty when the plugin
@@ -219,6 +362,8 @@ pub struct PieceView {
 pub struct Snapshot {
     pub pieces: Vec<PieceView>,
     pub vertex_counts: Vec<usize>,
+    /// API 3. Triangle counts (for `write_groups` / `write_hidden`).
+    pub triangle_counts: Vec<usize>,
     pub active: usize,
     /// RFC 0007 `scene_state` JSON (empty without `read_scene`).
     pub scene_json: String,
@@ -235,7 +380,51 @@ pub struct RunResult {
     pub colors: Vec<(usize, Vec<Vec3>)>,
     /// API 2. New pieces: name, positions, triangles.
     pub new_pieces: Vec<NewPiece>,
+    /// API 3. New face groups for whole pieces (per triangle, of the new
+    /// mesh if the piece also has a `meshes` entry).
+    pub groups: Vec<(usize, Vec<u32>)>,
+    /// API 3. New visibility for whole pieces (per triangle; true = hidden).
+    pub hidden: Vec<(usize, Vec<bool>)>,
+    /// API 3. New vertices and triangles for pieces (`write_mesh`).
+    pub meshes: Vec<(usize, NewMesh)>,
+    /// API 3. The user asked the command to stop: apply nothing.
+    pub cancelled: bool,
     pub log: Vec<String>,
+}
+
+/// A piece's new vertices and triangles (`write_mesh`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMesh {
+    pub positions: Vec<Vec3>,
+    pub triangles: Vec<[u32; 3]>,
+}
+
+/// A running command's progress and stop request, shared between the
+/// worker thread and the app.
+#[derive(Debug, Default)]
+pub struct Progress {
+    /// 0..=1 as `f32` bits; `u32::MAX` until the plugin reports.
+    fraction: AtomicU32,
+    cancel: AtomicBool,
+}
+
+impl Progress {
+    /// The last fraction the plugin reported, if any.
+    pub fn fraction(&self) -> Option<f32> {
+        let bits = self.fraction.load(Ordering::Relaxed);
+        (bits != u32::MAX).then(|| f32::from_bits(bits))
+    }
+    /// Ask the running command to stop; its edits will be discarded.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Relaxed);
+    }
+    pub fn cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Relaxed)
+    }
+    fn reset(&self) {
+        self.fraction.store(u32::MAX, Ordering::Relaxed);
+        self.cancel.store(false, Ordering::Relaxed);
+    }
 }
 
 /// A piece a plugin asked to create.
@@ -262,6 +451,11 @@ pub struct Line {
 struct CallState {
     caps: Capabilities,
     params: Vec<f32>,
+    /// API 3. Color params' values (by param index; unused for others).
+    param_colors: Vec<Vec3>,
+    /// API 3. Pieces given a new mesh in this call: (vertices, triangles).
+    reshaped: HashMap<usize, (usize, usize)>,
+    progress: Arc<Progress>,
     snap: Snapshot,
     in_overlay: bool,
     result: RunResult,
@@ -275,6 +469,9 @@ pub struct Plugin {
     pub dir: PathBuf,
     /// Current param values (the panel's sliders).
     pub params: Vec<f32>,
+    /// API 3. Current color param values, by param index.
+    pub param_colors: Vec<Vec3>,
+    progress: Arc<Progress>,
     store: Store<CallState>,
     run: TypedFunc<i32, ()>,
     overlay: Option<TypedFunc<(), ()>>,
@@ -324,11 +521,55 @@ fn edit_target(caller: &Caller<'_, CallState>, piece: i32, count: i32) -> Result
         return Err(ERR_DENIED);
     }
     let p = usize::try_from(piece).ok().filter(|&p| p < st.snap.vertex_counts.len()).ok_or(ERR_PIECE)?;
-    let n = st.snap.vertex_counts[p];
+    let n = st.reshaped.get(&p).map_or(st.snap.vertex_counts[p], |r| r.0);
     if count < 0 || count as usize != n {
         return Err(ERR_COUNT);
     }
     Ok(n)
+}
+
+/// Like [`edit_target`] for per-triangle edits (`write_groups`,
+/// `write_hidden`): `count` must be the triangle count.
+fn face_target(caller: &Caller<'_, CallState>, piece: i32, count: i32) -> Result<usize, i32> {
+    let st = caller.data();
+    if st.in_overlay {
+        return Err(ERR_CONTEXT);
+    }
+    if !st.caps.edit_mesh {
+        return Err(ERR_DENIED);
+    }
+    let p = usize::try_from(piece).ok().filter(|&p| p < st.snap.triangle_counts.len()).ok_or(ERR_PIECE)?;
+    let n = st.reshaped.get(&p).map_or(st.snap.triangle_counts[p], |r| r.1);
+    if count < 0 || count as usize != n {
+        return Err(ERR_COUNT);
+    }
+    Ok(n)
+}
+
+/// Read `nv` positions and `nt` triangles from plugin memory, checked as
+/// for a new piece: finite positions, indices in range, within limits.
+fn read_mesh_args(
+    caller: &Caller<'_, CallState>,
+    pos_ptr: i32,
+    vcount: i32,
+    tri_ptr: i32,
+    tcount: i32,
+) -> Result<(Vec<Vec3>, Vec<[u32; 3]>), i32> {
+    let (Ok(nv), Ok(nt)) = (usize::try_from(vcount), usize::try_from(tcount)) else { return Err(ERR_COUNT) };
+    if nv < 3 || nt < 1 || nv > MAX_NEW_ELEMENTS || nt > MAX_NEW_ELEMENTS {
+        return Err(ERR_COUNT);
+    }
+    let p = read_f32s(caller, pos_ptr, nv * 3).ok_or(ERR_MEMORY)?;
+    let t = read_bytes(caller, tri_ptr, nt * 12).ok_or(ERR_MEMORY)?;
+    if p.iter().any(|x| !x.is_finite()) {
+        return Err(ERR_COUNT);
+    }
+    let positions: Vec<Vec3> = p.as_chunks::<3>().0.iter().map(|c| Vec3::from_array(*c)).collect();
+    let idx: Vec<u32> = t.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
+    if idx.iter().any(|&i| i as usize >= nv) {
+        return Err(ERR_COUNT);
+    }
+    Ok((positions, idx.as_chunks::<3>().0.to_vec()))
 }
 
 fn read_f32s(caller: &Caller<'_, CallState>, ptr: i32, count: usize) -> Option<Vec<f32>> {
@@ -428,6 +669,10 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
             let Some(p) = usize::try_from(piece).ok().filter(|&p| p < st.snap.vertex_counts.len()) else {
                 return ERR_PIECE;
             };
+            if st.reshaped.contains_key(&p) {
+                // write_mesh gave this piece its positions already.
+                return ERR_CONTEXT;
+            }
             let n = st.snap.vertex_counts[p];
             if count < 0 || count as usize != n {
                 return ERR_COUNT;
@@ -545,23 +790,12 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
             if !st.caps.add_pieces {
                 return ERR_DENIED;
             }
-            let (Ok(nv), Ok(nt)) = (usize::try_from(vcount), usize::try_from(tcount)) else { return ERR_COUNT };
-            if nv < 3 || nt < 1 || nv > MAX_NEW_ELEMENTS || nt > MAX_NEW_ELEMENTS {
-                return ERR_COUNT;
-            }
+            let (positions, triangles) = match read_mesh_args(&caller, pos_ptr, vcount, tri_ptr, tcount) {
+                Ok(m) => m,
+                Err(code) => return code,
+            };
             let name_len = (name_len.max(0) as usize).min(256);
             let Some(name) = read_bytes(&caller, name_ptr, name_len) else { return ERR_MEMORY };
-            let Some(p) = read_f32s(&caller, pos_ptr, nv * 3) else { return ERR_MEMORY };
-            let Some(t) = read_bytes(&caller, tri_ptr, nt * 12) else { return ERR_MEMORY };
-            if p.iter().any(|x| !x.is_finite()) {
-                return ERR_COUNT;
-            }
-            let positions: Vec<Vec3> = p.as_chunks::<3>().0.iter().map(|c| Vec3::from_array(*c)).collect();
-            let idx: Vec<u32> = t.as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)).collect();
-            if idx.iter().any(|&i| i as usize >= nv) {
-                return ERR_COUNT;
-            }
-            let triangles: Vec<[u32; 3]> = idx.as_chunks::<3>().0.to_vec();
             let name = String::from_utf8_lossy(&name).trim().to_owned();
             let name = if name.is_empty() { "Plugin piece".to_owned() } else { name };
             let out = &mut caller.data_mut().result.new_pieces;
@@ -569,6 +803,114 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
             out.len() as i32 - 1
         },
     )
+    .map_err(e)?;
+    // ---- API 3 ----
+    l.func_wrap(
+        "oxybrush",
+        "read_groups",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, max: i32| -> i32 {
+            let p = match piece_ok(&caller, piece) {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            let src = &caller.data().snap.pieces[p].groups;
+            let n = src.len().min(max.max(0) as usize);
+            let bytes: Vec<u8> = src[..n].iter().flat_map(|v| v.to_le_bytes()).collect();
+            if write_bytes(&mut caller, ptr, &bytes) { n as i32 } else { ERR_MEMORY }
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "read_hidden",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, max: i32| -> i32 {
+            let p = match piece_ok(&caller, piece) {
+                Ok(p) => p,
+                Err(code) => return code,
+            };
+            let src = &caller.data().snap.pieces[p].hidden;
+            let n = src.len().min(max.max(0) as usize);
+            let bytes: Vec<u8> = src[..n].iter().map(|&h| h as u8).collect();
+            if write_bytes(&mut caller, ptr, &bytes) { n as i32 } else { ERR_MEMORY }
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "write_groups",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, count: i32| -> i32 {
+            let n = match face_target(&caller, piece, count) {
+                Ok(n) => n,
+                Err(code) => return code,
+            };
+            let Some(b) = read_bytes(&caller, ptr, n * 4) else { return ERR_MEMORY };
+            let groups: Vec<u32> = b.as_chunks::<4>().0.iter().map(|x| u32::from_le_bytes(*x)).collect();
+            caller.data_mut().result.groups.push((piece as usize, groups));
+            0
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "write_hidden",
+        |mut caller: Caller<'_, CallState>, piece: i32, ptr: i32, count: i32| -> i32 {
+            let n = match face_target(&caller, piece, count) {
+                Ok(n) => n,
+                Err(code) => return code,
+            };
+            let Some(b) = read_bytes(&caller, ptr, n) else { return ERR_MEMORY };
+            caller.data_mut().result.hidden.push((piece as usize, b.into_iter().map(|x| x != 0).collect()));
+            0
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap(
+        "oxybrush",
+        "write_mesh",
+        |mut caller: Caller<'_, CallState>, piece: i32, pos_ptr: i32, vcount: i32, tri_ptr: i32, tcount: i32| -> i32 {
+            let st = caller.data();
+            if st.in_overlay {
+                return ERR_CONTEXT;
+            }
+            if !st.caps.edit_topology {
+                return ERR_DENIED;
+            }
+            let Some(p) = usize::try_from(piece).ok().filter(|&p| p < st.snap.vertex_counts.len()) else {
+                return ERR_PIECE;
+            };
+            let (positions, triangles) = match read_mesh_args(&caller, pos_ptr, vcount, tri_ptr, tcount) {
+                Ok(m) => m,
+                Err(code) => return code,
+            };
+            let st = caller.data_mut();
+            st.reshaped.insert(p, (positions.len(), triangles.len()));
+            // Writes made before for the old mesh no longer fit.
+            st.result.edits.retain(|(i, _)| *i != p);
+            st.result.masks.retain(|(i, _)| *i != p);
+            st.result.colors.retain(|(i, _)| *i != p);
+            st.result.groups.retain(|(i, _)| *i != p);
+            st.result.hidden.retain(|(i, _)| *i != p);
+            st.result.meshes.retain(|(i, _)| *i != p);
+            st.result.meshes.push((p, NewMesh { positions, triangles }));
+            0
+        },
+    )
+    .map_err(e)?;
+    l.func_wrap("oxybrush", "param_color", |mut caller: Caller<'_, CallState>, i: i32, ptr: i32| -> i32 {
+        let Some(c) = usize::try_from(i).ok().and_then(|i| caller.data().param_colors.get(i).copied()) else {
+            return ERR_COUNT;
+        };
+        let bytes: Vec<u8> = c.to_array().iter().flat_map(|v| v.to_le_bytes()).collect();
+        if write_bytes(&mut caller, ptr, &bytes) { 0 } else { ERR_MEMORY }
+    })
+    .map_err(e)?;
+    l.func_wrap("oxybrush", "progress", |caller: Caller<'_, CallState>, fraction: f32| -> i32 {
+        let st = caller.data();
+        if fraction.is_finite() {
+            st.progress.fraction.store(fraction.clamp(0.0, 1.0).to_bits(), Ordering::Relaxed);
+        }
+        st.progress.cancelled() as i32
+    })
     .map_err(e)?;
     l.func_wrap(
         "oxybrush",
@@ -625,6 +967,9 @@ impl Plugin {
         let state = CallState {
             caps: manifest.capabilities,
             params: manifest.params.iter().map(|p| p.default).collect(),
+            param_colors: Vec::new(),
+            reshaped: HashMap::new(),
+            progress: Arc::new(Progress::default()),
             snap: Snapshot::default(),
             in_overlay: false,
             result: RunResult::default(),
@@ -642,8 +987,11 @@ impl Plugin {
             .get_typed_func::<i32, ()>(&store, "run")
             .map_err(|_| format!("{name}: the module must export run(command: i32)"))?;
         let overlay = instance.get_typed_func::<(), ()>(&store, "overlay").ok();
+        let progress = store.data().progress.clone();
         Ok(Plugin {
             params: manifest.params.iter().map(|p| p.default).collect(),
+            param_colors: manifest.params.iter().map(Param::default_color).collect(),
+            progress,
             manifest,
             dir: dir.to_path_buf(),
             store,
@@ -651,6 +999,18 @@ impl Plugin {
             overlay,
             _instance: instance,
         })
+    }
+
+    /// The running command's progress and stop request. Clone it before
+    /// moving the plugin to a worker thread.
+    pub fn progress(&self) -> Arc<Progress> {
+        self.progress.clone()
+    }
+
+    /// Put every param back to its manifest default.
+    pub fn reset_params(&mut self) {
+        self.params = self.manifest.params.iter().map(|p| p.default).collect();
+        self.param_colors = self.manifest.params.iter().map(Param::default_color).collect();
     }
 
     pub fn has_overlay(&self) -> bool {
@@ -666,15 +1026,24 @@ impl Plugin {
         }
         let st = self.store.data_mut();
         st.params = self.params.clone();
+        st.param_colors = self.param_colors.clone();
         st.snap = snap;
         st.in_overlay = false;
+        st.reshaped.clear();
         st.result = RunResult::default();
+        self.progress.reset();
         self.store.set_fuel(RUN_FUEL).map_err(|e| e.to_string())?;
         let out = self.run.call(&mut self.store, command as i32);
         let st = self.store.data_mut();
         st.snap = Snapshot::default();
-        let result = std::mem::take(&mut st.result);
+        st.reshaped.clear();
+        let mut result = std::mem::take(&mut st.result);
+        if self.progress.cancelled() {
+            // Stopped: whatever it did is dropped, even if it then failed.
+            return Ok(RunResult { cancelled: true, log: result.log, ..Default::default() });
+        }
         out.map_err(|e| describe(&name, e))?;
+        result.cancelled = false;
         Ok(result)
     }
 

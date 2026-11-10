@@ -639,6 +639,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_brush_cursor(ui, ed, canvas);
     crate::lights_ui::markers(ui, ed, canvas);
     ed.update_plugin_overlays();
+    ed.update_plugin_previews();
     crate::wasm_plugins::overlays(ui, ed, canvas);
     crate::tube_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
@@ -5012,6 +5013,49 @@ mod tests {
         // And it stays there.
         frame(vec![], &mut scale, &mut track);
         assert!((scale - 2.1).abs() < 0.08);
+    }
+
+    #[test]
+    fn plugin_panels_draw_every_param_type_and_a_preview() {
+        let dir = std::env::temp_dir().join(format!("oxy-ui-panels-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("all")).unwrap();
+        crate::wasm_plugins::install_examples(&dir);
+        std::fs::write(
+            dir.join("all/plugin.json"),
+            r#"{"name":"All widgets","api":3,"commands":[{"id":"go"}],"params":[
+                {"id":"s","label":"Slider","min":0,"max":4,"step":1,"help":"a tip"},
+                {"id":"t","label":"Toggle","type":"toggle","default":true},
+                {"id":"c","label":"Choice","type":"choice","options":["A","B"]},
+                {"id":"k","label":"Color","type":"color","default":[1,0,0]},
+                {"id":"l","type":"label","text":"Some text"}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("all/plugin.wat"),
+            r#"(module (memory (export "memory") 1) (func (export "run") (param i32)))"#,
+        )
+        .unwrap();
+        let mut ed = Editor::default();
+        ed.load_wasm_plugins_from(&dir);
+        assert!(ed.wasm_plugin_errors.is_empty(), "{:?}", ed.wasm_plugin_errors);
+        for p in &mut ed.wasm_plugins {
+            p.show_panel = true;
+        }
+        // A live preview being shown (and updated) while the panels draw.
+        let slot = ed.wasm_plugins.iter().position(|p| p.name == "Group by Height").unwrap();
+        ed.run_wasm_plugin(slot, 0);
+        run_frames(&mut ed, 3);
+        for _ in 0..500 {
+            if ed.job.is_none() {
+                break;
+            }
+            ed.poll_job();
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        run_frames(&mut ed, 3);
+        assert!(ed.wasm_plugins[slot].preview.as_ref().is_some_and(|p| p.mesh.is_some()), "{}", ed.status);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Run a few headless frames of the whole interface.

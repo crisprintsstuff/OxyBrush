@@ -560,11 +560,11 @@ impl App {
             || ed.extract_preview.is_some()
             || ed.curve.is_some()
             || ed.tube.is_some()
-            || ed.primitive_edit.is_some();
+            || ed.primitive_edit.is_some()
+            || ed.preview_in_place().is_some();
         // A curve stroke's preview is the whole piece with the stroke
         // applied: draw it in the piece's place, looking like the piece.
-        let curve_piece =
-            ed.curve.as_ref().filter(|_| ed.tube.is_none() && ed.primitive_edit.is_none()).map(|c| c.piece);
+        let curve_piece = ed.preview_in_place();
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
         let mut items = Vec::new();

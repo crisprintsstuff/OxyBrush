@@ -1,0 +1,15 @@
+{
+  "name": "Group by Height",
+  "version": "1.0",
+  "description": "Splits the active piece into bands of face groups along an axis, for masking, hiding or recoloring a part at a time. Shows the result before you accept it.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "group", "label": "Group in bands", "preview": true }
+  ],
+  "params": [
+    { "id": "axis", "label": "Along", "type": "choice", "options": ["X (side to side)", "Y (up)", "Z (front to back)"], "default": 1 },
+    { "id": "bands", "label": "Bands", "min": 2, "max": 32, "step": 1, "default": 4, "help": "How many face groups to make" },
+    { "id": "note", "type": "label", "text": "Each band becomes a face group: Ctrl+Shift+click one to isolate it." }
+  ]
+}
