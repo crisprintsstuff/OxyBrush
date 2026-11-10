@@ -73,12 +73,22 @@ pub fn volume_to_mesh(grid: &VdbFloatGrid, opts: VolumeToMeshOptions) -> Option<
     // 1. Find all cells in the active leaves containing an isosurface sign change.
     let leaves_vec: Vec<_> = grid.leaves.values().collect();
 
+    // A voxel a whole band-width from the surface (the background value,
+    // e.g. the filled inside of a solid) can't be the corner of a cell the
+    // surface crosses: a cell is under two voxels across, and the band is
+    // wider. Leaves made only of such voxels are skipped outright.
+    let deep = grid.background.abs() * 0.999;
+    let skip_deep = isoval.abs() < 1e-6 && deep > 0.0;
     let cell_vertices: Vec<(u64, IVec3, Vec3)> = leaves_vec
         .into_par_iter()
-        .flat_map(|leaf| {
+        .filter(|leaf| !(skip_deep && leaf.values.iter().all(|v| v.abs() >= deep)))
+        .flat_map_iter(|leaf| {
             let mut out = Vec::new();
             for offset in 0..LEAF_VOXELS {
                 if !leaf.mask.is_set(offset) {
+                    continue;
+                }
+                if skip_deep && leaf.values[offset].abs() >= deep {
                     continue;
                 }
                 let base = leaf.coord_of(offset);

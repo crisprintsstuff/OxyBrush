@@ -244,7 +244,7 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
     //    only at leaves next to a leaf that changed in the pass before, and
     //    reads its neighbourhood from a padded 10×10×10 copy.
     const PAD: usize = LEAF_DIM as usize + 2;
-    let passes = (half_width.ceil() as usize) + 2;
+    let passes = 2 * (half_width.ceil() as usize) + 2;
     let mut changed_leaf: Vec<bool> = tri_of.par_chunks(LEAF_VOXELS).map(|c| c.iter().any(|&t| t != NO_TRI)).collect();
     // Voxels whose nearest triangle changed in the last pass: only their
     // triangles are new to their neighbours.
@@ -293,18 +293,15 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
                         continue;
                     }
                     let (x, y, z) = (off & 7, (off >> 3) & 7, (off >> 6) & 7);
-                    let mut candidates = [NO_TRI; 27];
+                    // The voxel and its six face neighbours (in the padded tile).
+                    let c = (x + 1) + PAD * ((y + 1) + PAD * (z + 1));
+                    let mut candidates = [NO_TRI; 7];
                     let mut count = 0;
-                    for dz in 0..3 {
-                        for dy in 0..3 {
-                            let row = PAD * ((y + dy) + PAD * (z + dz));
-                            for dx in 0..3 {
-                                let t = tile[row + x + dx];
-                                if t != NO_TRI && !candidates[..count].contains(&t) {
-                                    candidates[count] = t;
-                                    count += 1;
-                                }
-                            }
+                    for i in [c, c - 1, c + 1, c - PAD, c + PAD, c - PAD * PAD, c + PAD * PAD] {
+                        let t = tile[i];
+                        if t != NO_TRI && !candidates[..count].contains(&t) {
+                            candidates[count] = t;
+                            count += 1;
                         }
                     }
                     if count == 0 {
@@ -412,107 +409,103 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
         grid.leaves.insert(*origin, leaf);
     }
 
-    // 4. Identify and fill enclosed interior leaves for solid closed meshes.
+    // 4. Fill enclosed interior leaves for solid closed meshes: flood the
+    //    outside from the border of a box of leaves (a flat array, one byte
+    //    per leaf), and every leaf it can't reach that isn't a band leaf is
+    //    inside.
     let mut min_l = IVec3::splat(i32::MAX);
     let mut max_l = IVec3::splat(i32::MIN);
     for &orig in grid.leaves.keys() {
         min_l = min_l.min(orig);
         max_l = max_l.max(orig);
     }
-
     if min_l.x <= max_l.x {
-        let pad = LEAF_DIM;
-        let box_min = min_l - IVec3::splat(pad);
-        let box_max = max_l + IVec3::splat(pad);
-
-        let mut leaf_set: HashSet<IVec3> = HashSet::default();
-        let mut lz = box_min.z;
-        while lz <= box_max.z {
-            let mut ly = box_min.y;
-            while ly <= box_max.y {
-                let mut lx = box_min.x;
-                while lx <= box_max.x {
-                    leaf_set.insert(IVec3::new(lx, ly, lz));
-                    lx += LEAF_DIM;
-                }
-                ly += LEAF_DIM;
-            }
-            lz += LEAF_DIM;
+        let box_min = min_l - IVec3::splat(LEAF_DIM);
+        let box_max = max_l + IVec3::splat(LEAF_DIM);
+        let dims = (box_max - box_min) / LEAF_DIM + IVec3::ONE;
+        let (dx, dy, dz) = (dims.x as usize, dims.y as usize, dims.z as usize);
+        let index = |l: IVec3| -> usize {
+            let c = (l - box_min) / LEAF_DIM;
+            c.x as usize + dx * (c.y as usize + dy * c.z as usize)
+        };
+        const FREE: u8 = 0;
+        const BAND: u8 = 1;
+        const OUTSIDE: u8 = 2;
+        let mut state = vec![FREE; dx * dy * dz];
+        for &l in grid.leaves.keys() {
+            state[index(l)] = BAND;
         }
-
-        // Leaves that intersect the surface boundary
-        let blocking: HashSet<IVec3> = grid.leaves.keys().copied().collect();
-
-        let mut outside_leaves: HashSet<IVec3> = HashSet::default();
-        let mut queue: Vec<IVec3> = Vec::new();
-
-        for &l in &leaf_set {
-            let is_border = l.x == box_min.x
-                || l.x == box_max.x
-                || l.y == box_min.y
-                || l.y == box_max.y
-                || l.z == box_min.z
-                || l.z == box_max.z;
-            if is_border && !blocking.contains(&l) {
-                outside_leaves.insert(l);
-                queue.push(l);
-            }
-        }
-
-        const NEIGHBORS: [IVec3; 6] = [
-            IVec3::new(LEAF_DIM, 0, 0),
-            IVec3::new(-LEAF_DIM, 0, 0),
-            IVec3::new(0, LEAF_DIM, 0),
-            IVec3::new(0, -LEAF_DIM, 0),
-            IVec3::new(0, 0, LEAF_DIM),
-            IVec3::new(0, 0, -LEAF_DIM),
-        ];
-
-        while let Some(curr) = queue.pop() {
-            for &n in &NEIGHBORS {
-                let neighbor = curr + n;
-                if leaf_set.contains(&neighbor) && !blocking.contains(&neighbor) && outside_leaves.insert(neighbor) {
-                    queue.push(neighbor);
+        // Start from the box's border (it is all outside: the box has a
+        // leaf of padding).
+        let mut queue: Vec<(usize, usize, usize)> = Vec::new();
+        for z in 0..dz {
+            for y in 0..dy {
+                for x in 0..dx {
+                    if x == 0 || y == 0 || z == 0 || x == dx - 1 || y == dy - 1 || z == dz - 1 {
+                        let i = x + dx * (y + dy * z);
+                        if state[i] == FREE {
+                            state[i] = OUTSIDE;
+                            queue.push((x, y, z));
+                        }
+                    }
                 }
             }
         }
-
-        let mut interior_leaves = Vec::new();
-        for &l in &leaf_set {
-            if !outside_leaves.contains(&l) && !grid.leaves.contains_key(&l) {
-                interior_leaves.push(l);
+        while let Some((x, y, z)) = queue.pop() {
+            let mut visit = |x: usize, y: usize, z: usize| {
+                let i = x + dx * (y + dy * z);
+                if state[i] == FREE {
+                    state[i] = OUTSIDE;
+                    queue.push((x, y, z));
+                }
+            };
+            if x > 0 {
+                visit(x - 1, y, z);
+            }
+            if x + 1 < dx {
+                visit(x + 1, y, z);
+            }
+            if y > 0 {
+                visit(x, y - 1, z);
+            }
+            if y + 1 < dy {
+                visit(x, y + 1, z);
+            }
+            if z > 0 {
+                visit(x, y, z - 1);
+            }
+            if z + 1 < dz {
+                visit(x, y, z + 1);
             }
         }
-
-        if !interior_leaves.is_empty() {
-            for l_orig in interior_leaves {
-                let mut leaf = LeafNode::new(l_orig, -bg);
+        let interior: Vec<LeafNode> = state
+            .par_iter()
+            .enumerate()
+            .filter(|(_, s)| **s == FREE)
+            .map(|(i, _)| {
+                let c = IVec3::new((i % dx) as i32, ((i / dx) % dy) as i32, (i / (dx * dy)) as i32);
+                let mut leaf = LeafNode::new(box_min + c * LEAF_DIM, -bg);
                 for offset in 0..LEAF_VOXELS {
                     leaf.values[offset] = -bg;
                     leaf.mask.set_on(offset);
                 }
-                grid.leaves.insert(l_orig, leaf);
-            }
+                leaf
+            })
+            .collect();
+        grid.leaves.reserve(interior.len());
+        for leaf in interior {
+            grid.leaves.insert(leaf.origin, leaf);
         }
     }
 
     // Check if the mesh is an open sheet (all voxels marked one side, or non-manifold)
     // If open sheet, ensure a solid thin shell is formed.
-    let mut neg_count = 0;
-    let mut pos_count = 0;
-    for leaf in grid.leaves.values() {
-        for offset in 0..LEAF_VOXELS {
-            if leaf.mask.is_set(offset) {
-                if leaf.values[offset] < 0.0 {
-                    neg_count += 1;
-                } else {
-                    pos_count += 1;
-                }
-            }
-        }
-    }
-
-    if neg_count == 0 && pos_count > 0 {
+    let any_active = |inside: bool| {
+        grid.leaves
+            .par_iter()
+            .any(|(_, leaf)| (0..LEAF_VOXELS).any(|o| leaf.mask.is_set(o) && (leaf.values[o] < 0.0) == inside))
+    };
+    if !any_active(true) && any_active(false) {
         // Open mesh: convert unsigned distance into a thin solid shell
         let shell_radius = 0.75 * voxel_size;
         for leaf in grid.leaves.values_mut() {
