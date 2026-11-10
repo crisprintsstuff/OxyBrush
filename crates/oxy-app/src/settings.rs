@@ -324,6 +324,11 @@ pub struct Settings {
     pub extract_smooth: usize,
     /// Preferred volumetric remeshing engine (OpenVDB sparse or Regular Grid).
     pub remesh_engine: oxy_topo::RemeshEngine,
+    /// The brush in use and its settings when OxyBrush last closed (a
+    /// brush-preset code line); None keeps the defaults.
+    pub brush: Option<oxy_sculpt::BrushPreset>,
+    /// Each brush's strength (brushes keep their own).
+    pub brush_strengths: Vec<(BrushKind, f32)>,
 }
 
 /// Overall visual theme preset.
@@ -606,6 +611,8 @@ impl Default for Settings {
             extract_thickness: 0.02,
             extract_smooth: 2,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            brush: None,
+            brush_strengths: Vec::new(),
         }
     }
 }
@@ -728,13 +735,26 @@ impl Settings {
             self.dyntopo,
             self.dyntopo_detail,
             self.lighting.to_line()
-        ) + &self
-            .recent_files
-            .iter()
-            .filter_map(|p| p.to_str())
-            .filter(|p| !p.contains(['\n', '\r']))
-            .map(|p| format!("recent = {p}\n"))
-            .collect::<String>()
+        ) + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
+            + &if self.brush_strengths.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "brush_strengths = {}\n",
+                    self.brush_strengths
+                        .iter()
+                        .map(|(k, v)| format!("{}:{v}", brush_key(*k)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
+            + &self
+                .recent_files
+                .iter()
+                .filter_map(|p| p.to_str())
+                .filter(|p| !p.contains(['\n', '\r']))
+                .map(|p| format!("recent = {p}\n"))
+                .collect::<String>()
     }
 
     /// Parse; anything missing, unknown or invalid keeps its default.
@@ -904,6 +924,19 @@ impl Settings {
                         s.extract_smooth = n;
                     }
                 }
+                "brush" => s.brush = oxy_sculpt::BrushPreset::from_code(v).ok(),
+                "brush_strengths" => {
+                    s.brush_strengths = v
+                        .split(',')
+                        .filter_map(|e| {
+                            let (k, x) = e.trim().split_once(':')?;
+                            let k = oxy_sculpt::preset::legacy_kind_key(k.trim());
+                            let kind = BrushKind::ALL.into_iter().find(|b| brush_key(*b) == k)?;
+                            let x: f32 = x.trim().parse().ok()?;
+                            (x.is_finite() && (0.0..=4.0).contains(&x)).then_some((kind, x))
+                        })
+                        .collect();
+                }
                 "remesh_engine" => {
                     s.remesh_engine = match v {
                         "regular_grid" => oxy_topo::RemeshEngine::RegularGrid,
@@ -1058,6 +1091,11 @@ mod tests {
             extract_thickness: 0.035,
             extract_smooth: 3,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            brush: Some(oxy_sculpt::BrushPreset {
+                radius_pt: 72.5,
+                ..oxy_sculpt::BrushPreset::new("Last brush", BrushKind::ClayStrips)
+            }),
+            brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

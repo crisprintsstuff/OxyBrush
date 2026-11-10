@@ -6,11 +6,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 - **Retopology: Subdivide and project.** In the Retopology window, **Subdivide and project** gives the retopology mesh 1–5 subdivision levels, each moved onto the sculpt, in the background. The top level carries the sculpt's detail and level 1 stays exactly the quads you drew, so you can step between them like any subdivision levels, and keep sculpting. One undo step.
+- **Vertex color in exports:** painted pieces export their color in **glTF/GLB** (`COLOR_0`), **PLY** (8-bit red, green, blue) and **OBJ** (`v x y z r g b`, read by Blender, MeshLab and ZBrush). Unpainted pieces export as before.
+- **Brush settings are remembered between sessions:** the brush you were using, with its size, falloff, focal shift, stroke mode, alpha and the rest, comes back the next time OxyBrush starts, and every brush keeps its own strength. Settings files from older versions keep the defaults.
 - **Edit a tube after Accept:** **Pieces > Edit tube…** reopens the active piece's last tube with its path, thickness, sides and caps, and **Update tube** replaces it, as one undo step. Tubes stay editable after saving and reopening the project (a new `TUBE` section, which older versions skip), until they're sculpted, remeshed or regrouped.
 - **Curve Move curves are saved with the project:** saving while a Curve Move curve is open keeps it (a new `CURV` section, which older versions skip), and opening the project brings it back with the brush size, strength and falloff it was bending with. The piece itself is saved unbent until you apply the curve.
 
 ### Fixed
 - **Switching subdivision levels without editing no longer nudges the lower levels.** Each switch re-applied the last edit's spread to the levels below, so the base moved a little every time.
+- **OBJ export uses each mesh's own quads** (for example a retopology mesh) instead of guessing them from the shape, so strongly bent quads no longer come out as two triangles.
 
 ## [3.0.5-beta] - 2026-11-10
 

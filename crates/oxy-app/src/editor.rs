@@ -1544,6 +1544,8 @@ impl Editor {
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
             remesh_engine: self.remesh_engine,
+            brush: Some(self.capture_preset("Last brush")),
+            brush_strengths: BrushKind::ALL.iter().map(|&k| (k, self.strength(k))).collect(),
         }
     }
 
@@ -1691,6 +1693,17 @@ impl Editor {
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
+        // The brush last used, as it was. Its pressure curve is the one above
+        // (the preset carries one too), and restoring it says nothing.
+        if let Some(b) = &s.brush {
+            let (status, gamma) = (std::mem::take(&mut self.status), self.pressure_gamma);
+            self.apply_preset(b);
+            self.status = status;
+            self.pressure_gamma = gamma;
+        }
+        for &(k, v) in &s.brush_strengths {
+            *self.strength_mut(k) = v;
+        }
     }
 
     /// Install an `.oxyaddon` into the plugins folder and reload plugins.
@@ -5890,6 +5903,40 @@ mod tests {
     }
 
     #[test]
+    fn brush_settings_are_remembered_between_sessions() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::ClayStrips;
+        e.brush_radius_pt = 77.0;
+        e.focal_shift = 0.4;
+        e.stroke_mode = StrokeMode::Line;
+        *e.strength_mut(BrushKind::ClayStrips) = 0.66;
+        *e.strength_mut(BrushKind::Smooth) = 0.12;
+        e.pressure_gamma = 1.7;
+        // Saved to the settings file and read back at the next start.
+        let text = e.settings().to_text();
+        let mut next = editor();
+        next.apply_settings(&crate::settings::Settings::from_text(&text));
+        assert_eq!(next.brush_kind, BrushKind::ClayStrips);
+        assert_eq!(next.brush_radius_pt, 77.0);
+        assert_eq!(next.focal_shift, 0.4);
+        assert_eq!(next.stroke_mode, StrokeMode::Line);
+        assert_eq!(next.strength(BrushKind::ClayStrips), 0.66);
+        assert_eq!(next.strength(BrushKind::Smooth), 0.12, "each brush keeps its own strength");
+        assert_eq!(next.pressure_gamma, 1.7);
+        assert!(!next.status.contains("preset"), "restoring says nothing: {}", next.status);
+        // An older settings file (no brush lines) keeps the defaults.
+        let mut old = editor();
+        let before = (old.brush_kind, old.brush_radius_pt);
+        let stripped: String = text
+            .lines()
+            .filter(|l| !l.starts_with("brush =") && !l.starts_with("brush_strengths"))
+            .map(|l| format!("{l}\n"))
+            .collect();
+        old.apply_settings(&crate::settings::Settings::from_text(&stripped));
+        assert_eq!((old.brush_kind, old.brush_radius_pt), before);
+    }
+
+    #[test]
     fn remesh_estimate_is_close_to_the_result() {
         let mut e = editor();
         for res in [64, 128] {
@@ -7681,7 +7728,7 @@ mod tests {
     #[test]
     fn settings_round_trip_through_the_editor() {
         use crate::settings::{Settings, UiLayout};
-        let s = Settings {
+        let mut s = Settings {
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,
@@ -7730,7 +7777,19 @@ mod tests {
             extract_thickness: 0.035,
             extract_smooth: 3,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            brush: None,
+            brush_strengths: Vec::new(),
         };
+        // The brush as the editor captures it: a bigger Clay brush.
+        let base = Editor::default();
+        let mut b = base.capture_preset("Last brush");
+        b.kind = BrushKind::Clay;
+        b.radius_pt = 61.0;
+        b.strength = 0.33;
+        b.pressure_gamma = s.pressure_gamma;
+        s.brush_strengths =
+            BrushKind::ALL.iter().map(|&k| (k, if k == b.kind { b.strength } else { base.strength(k) })).collect();
+        s.brush = Some(b);
         let mut e = Editor::default();
         assert_ne!(e.settings(), s);
         e.apply_settings(&s);

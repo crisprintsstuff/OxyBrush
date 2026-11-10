@@ -72,7 +72,7 @@ Log locations if the app won't start:
 
 ## 5. Known limitations
 
-See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, retopology is new and tried only on simple shapes, and brush settings aren't remembered between sessions yet (interface settings are).
+See the [changelog](../CHANGELOG.md) and [roadmap](ROADMAP.md). Highlights: macOS is untested on real Macs, tablet pressure is unverified, and retopology is new and tried only on simple shapes.
 
 ## Uninstalling
 

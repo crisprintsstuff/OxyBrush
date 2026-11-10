@@ -211,22 +211,19 @@ fn parse_ascii_stl(bytes: &[u8]) -> Result<Vec<Vec3>> {
 
 pub fn write_obj(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
     writeln!(w, "# Exported by OxyBrush {}", env!("CARGO_PKG_VERSION"))?;
-    for p in &mesh.positions {
-        writeln!(w, "v {} {} {}", p.x, p.y, p.z)?;
+    let painted = mesh.is_painted();
+    for (v, p) in mesh.positions.iter().enumerate() {
+        if painted {
+            let c = mesh.color[v];
+            writeln!(w, "v {} {} {} {} {} {}", p.x, p.y, p.z, c.x, c.y, c.z)?;
+        } else {
+            writeln!(w, "v {} {} {}", p.x, p.y, p.z)?;
+        }
     }
     for n in &mesh.normals {
         writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
     }
     write_obj_faces_with_diagonals(&mesh.positions, &mesh.triangles, 1, Some(mesh.quad_diagonals_ref()), w)
-}
-
-pub(crate) fn write_obj_faces(
-    positions: &[glam::Vec3],
-    triangles: &[[u32; 3]],
-    base: u32,
-    w: &mut impl Write,
-) -> io::Result<()> {
-    write_obj_faces_with_diagonals(positions, triangles, base, None, w)
 }
 
 pub(crate) fn write_obj_faces_with_diagonals(
