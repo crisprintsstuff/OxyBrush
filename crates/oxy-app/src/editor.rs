@@ -5754,6 +5754,18 @@ mod tests {
     }
 
     #[test]
+    fn remesh_estimate_is_close_to_the_result() {
+        let mut e = editor();
+        for res in [64, 128] {
+            e.remesh_resolution = res;
+            let estimate = e.remesh_estimate() as f32;
+            let opts = RemeshOptions { resolution: res, smooth_passes: 1, ..Default::default() };
+            let real = oxy_topo::voxel_remesh(&[&e.scene.active().mesh], opts).unwrap().triangle_count() as f32;
+            assert!((estimate / real - 1.0).abs() < 0.15, "res {res}: estimate {estimate}, real {real}");
+        }
+    }
+
+    #[test]
     fn capture_alpha_makes_a_depth_image_of_the_view() {
         let mut e = editor();
         let count = e.alphas.len();
