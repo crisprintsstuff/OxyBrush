@@ -44,6 +44,43 @@ pub struct Piece {
     /// How the tubes in this piece were made, newest last, so they can be
     /// edited again (RFC 0009); written as the `TUBE` section.
     pub tubes: Vec<TubeRecipe>,
+    /// A Curve Move curve that was open on this piece when the project was
+    /// saved (RFC 0005), written as the `CURV` section. Set only by loading;
+    /// the app takes it and reopens the curve.
+    pub curve: Option<Box<SavedCurve>>,
+}
+
+/// An open Curve Move curve (RFC 0005), as saved with the project: the
+/// piece itself is saved unbent, and the curve with what it needs to bend
+/// it the same way again.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedCurve {
+    /// Control points (position, normal) where they have been dragged, and
+    /// where they were drawn (what the mesh is tied to).
+    pub points: Vec<(Vec3, Vec3)>,
+    pub rest: Vec<(Vec3, Vec3)>,
+    /// Per control point: (reach, strength) multipliers.
+    pub weights: Vec<(f32, f32)>,
+    pub closed: bool,
+    /// Brush size in logical points, and world units per point, which
+    /// together give the reach.
+    pub radius_pt: f32,
+    pub world_per_pt: f32,
+    pub strength: f32,
+    /// Index into the app's falloff list.
+    pub falloff: u8,
+    pub pressure: f32,
+    /// The piece's vertex and triangle count, to check it is still the
+    /// mesh the curve was drawn on.
+    pub vertices: u32,
+    pub triangles: u32,
+}
+
+impl SavedCurve {
+    /// Whether `mesh` can still be the mesh this curve was drawn on.
+    pub fn fits(&self, mesh: &Mesh) -> bool {
+        mesh.vertex_count() == self.vertices as usize && mesh.triangle_count() == self.triangles as usize
+    }
 }
 
 /// How a tube was made (RFC 0009): its centre line and shape, and where it
@@ -120,6 +157,7 @@ impl Piece {
             symmetry_center: None,
             cage: None,
             tubes: Vec::new(),
+            curve: None,
         }
     }
 
@@ -161,6 +199,7 @@ impl Piece {
                     symmetry_center: self.symmetry_center,
                     cage: None,
                     tubes: Vec::new(),
+                    curve: None,
                 }
             }
             None => PieceData {
@@ -172,6 +211,7 @@ impl Piece {
                 symmetry_center: self.symmetry_center,
                 cage: self.current_cage(),
                 tubes: self.tubes.clone(),
+                curve: self.curve.clone(),
             },
         }
     }
@@ -194,6 +234,8 @@ pub struct PieceData {
     pub cage: Option<Cage>,
     /// The `TUBE` section: how its tubes were made.
     pub tubes: Vec<TubeRecipe>,
+    /// The `CURV` section: a Curve Move curve open when it was saved.
+    pub curve: Option<Box<SavedCurve>>,
 }
 
 impl PieceData {
@@ -232,6 +274,7 @@ impl PieceData {
             symmetry_center: self.symmetry_center,
             cage,
             tubes: self.tubes,
+            curve: self.curve,
         }
     }
 }

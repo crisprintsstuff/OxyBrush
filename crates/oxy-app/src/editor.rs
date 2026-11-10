@@ -3144,6 +3144,93 @@ impl Editor {
         self.link = None;
         self.bridge = None;
         self.camera.frame(self.scene.bounds());
+        self.reopen_saved_curve();
+    }
+
+    /// The document as saved: the scene, plus the Curve Move curve that is
+    /// open, if any, on its piece (the `CURV` section), so it isn't lost.
+    pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
+        let mut data = self.scene.to_data();
+        if let Some(c) = self.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
+            && let Some(i) = self.scene.index_of(c.piece)
+        {
+            let mesh = &self.scene.pieces[i].mesh;
+            data.pieces[i].curve = Some(Box::new(oxy_doc::SavedCurve {
+                points: c.points.clone(),
+                rest: c.rest.clone(),
+                weights: c.weights.clone(),
+                closed: c.closed,
+                radius_pt: self.brush_radius_pt,
+                world_per_pt: c.world_per_pt,
+                strength: self.strength(BrushKind::CurveMove),
+                falloff: Falloff::ALL.iter().position(|&f| f == self.falloff).unwrap_or(0) as u8,
+                pressure: c.pressure,
+                vertices: mesh.vertex_count() as u32,
+                triangles: mesh.triangle_count() as u32,
+            }));
+        }
+        data
+    }
+
+    /// Reopen a Curve Move curve saved with the project (see `scene_data`),
+    /// with the brush size, strength and falloff it was bending with.
+    fn reopen_saved_curve(&mut self) {
+        let mut found = None;
+        for (i, p) in self.scene.pieces.iter_mut().enumerate() {
+            if let Some(c) = p.curve.take()
+                && found.is_none()
+            {
+                if c.fits(&p.mesh) && c.points.len() == c.rest.len() && c.points.len() == c.weights.len() {
+                    found = Some((i, c));
+                } else {
+                    log::warn!("not reopening a saved Curve Move curve: piece {:?} has changed", p.name);
+                }
+            }
+        }
+        let Some((i, c)) = found else { return };
+        let c = *c;
+        self.curve = None;
+        self.scene.set_active(i);
+        self.brush_kind = BrushKind::CurveMove;
+        self.brush_radius_pt = c.radius_pt;
+        *self.strength_mut(BrushKind::CurveMove) = c.strength;
+        self.falloff = Falloff::ALL.get(c.falloff as usize).copied().unwrap_or_default();
+        let piece = self.scene.active();
+        let mut preview = piece.mesh.clone();
+        preview.mark_all_dirty();
+        let shape = CurveShape {
+            points: c.points.clone(),
+            rest: c.rest.clone(),
+            weights: c.weights.clone(),
+            closed: c.closed,
+            fades: (self.curve_fade_in, self.curve_fade_out),
+        };
+        self.curve = Some(CurveEdit {
+            piece: piece.id,
+            kind: BrushKind::CurveMove,
+            invert: false,
+            fade_in: self.curve_fade_in,
+            fade_out: self.curve_fade_out,
+            world_per_pt: c.world_per_pt,
+            pressure: c.pressure,
+            revision: self.history.revision(),
+            topology: piece.mesh.topology_version(),
+            weights: c.weights,
+            closed: c.closed,
+            selected: None,
+            ui_dragging: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            settled: shape,
+            points: c.points,
+            rest: c.rest,
+            preview,
+            touched: Vec::new(),
+            built: None,
+            samples: Vec::new(),
+            binding: None,
+        });
+        self.status = "The Curve Move curve that was open is back: drag its points, or Enter to apply it".into();
     }
 
     fn open_project_now(&mut self, path: &Path) {
@@ -3265,7 +3352,7 @@ impl Editor {
             return false;
         }
         let path = if path.extension().is_none() { path.with_extension(format::EXTENSION) } else { path.to_path_buf() };
-        match format::save(&self.scene.to_data(), &path) {
+        match format::save(&self.scene_data(), &path) {
             Ok(()) => {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
@@ -3312,7 +3399,7 @@ impl Editor {
             return;
         }
         self.pointer_up();
-        match format::save(&self.scene.to_data(), &target) {
+        match format::save(&self.scene_data(), &target) {
             Ok(()) => {
                 if self.path.as_ref().is_some_and(|p| same_path(p, &target)) {
                     self.saved_revision = self.history.revision();
@@ -3378,7 +3465,7 @@ impl Editor {
         let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
         if !self.is_stroking() && !levels_out && self.autosaver.due(changed) {
             self.autosaved_revision = self.history.revision();
-            self.autosaver.start(self.scene.to_data());
+            self.autosaver.start(self.scene_data());
         }
     }
 
@@ -3388,7 +3475,7 @@ impl Editor {
         let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
         if !self.is_stroking() && !levels_out && changed && self.autosaver.enabled {
             self.autosaved_revision = self.history.revision();
-            self.autosaver.start(self.scene.to_data());
+            self.autosaver.start(self.scene_data());
         }
     }
 
@@ -6694,6 +6781,55 @@ mod tests {
         assert_eq!(e.scene.active().mesh.positions, preview, "result matches the preview");
         e.undo();
         assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn an_open_curve_move_curve_is_saved_with_the_project() {
+        let mut e = rod_editor();
+        let before = e.scene.active().mesh.positions.clone();
+        draw_along_rod(&mut e);
+        let last = e.curve.as_ref().unwrap().points.len() - 1;
+        let end = e.camera.project(e.curve.as_ref().unwrap().points[last].0, e.canvas_size()).unwrap();
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + Vec2::new(0.0, -120.0));
+        e.pointer_up();
+        e.update_curve();
+        let preview = e.curve.as_ref().unwrap().preview.positions.clone();
+        let points = e.curve.as_ref().unwrap().points.clone();
+        let radius = e.brush_radius_pt;
+
+        let path = std::env::temp_dir().join(format!("oxy-app-curve-{}.oxb", std::process::id()));
+        assert!(e.save(&path));
+        // The piece is saved unbent; the curve is saved beside it.
+        let data = format::load(&path).unwrap();
+        assert_eq!(data.pieces[0].mesh.positions.len(), before.len());
+        assert!(data.pieces[0].curve.is_some());
+
+        // Another session, with other brush settings, opens it.
+        let mut f = rod_editor();
+        f.brush_kind = BrushKind::Draw;
+        f.brush_radius_pt = radius * 2.5;
+        f.replace_document(Scene::from_data(data).unwrap(), Some(path.clone()));
+        let _ = std::fs::remove_file(&path);
+        assert!(f.scene.active().curve.is_none(), "the app took it");
+        let c = f.curve.as_ref().expect("the curve is open again");
+        assert_eq!(c.points, points);
+        assert_eq!(f.brush_kind, BrushKind::CurveMove);
+        assert_eq!(f.brush_radius_pt, radius);
+        f.update_curve();
+        let again = &f.curve.as_ref().unwrap().preview.positions;
+        let worst = again.iter().zip(&preview).map(|(a, b)| a.distance(*b)).fold(0.0f32, f32::max);
+        assert!(worst < 1e-5, "bends the same way: {worst}");
+        f.accept_curve();
+        assert_eq!(f.history.undo_labels().count(), 1);
+
+        // A curve whose piece changed since (here: another mesh) is dropped.
+        let mut data = e.scene_data();
+        data.pieces[0].mesh = primitives::icosphere(2, 1.0).to_data();
+        let mut g = rod_editor();
+        g.replace_document(Scene::from_data(data).unwrap(), None);
+        assert!(g.curve.is_none());
     }
 
     #[test]
