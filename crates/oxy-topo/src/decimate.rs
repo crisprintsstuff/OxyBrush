@@ -142,17 +142,165 @@ impl Queue {
     }
 }
 
+/// The mesh being decimated (or one part of it).
+struct Work {
+    pos: Vec<DVec3>,
+    mask: Vec<f32>,
+    tris: Vec<[u32; 3]>,
+    groups: Vec<u32>,
+}
+
+/// What a part hands back: its triangles (in the whole mesh's vertex
+/// numbers), their groups and hidden flags, and its own vertices' new
+/// positions and mask.
+type PartResult = (Vec<[u32; 3]>, Vec<u32>, Vec<bool>, Vec<(u32, DVec3, f32)>);
+
+/// Meshes larger than this are decimated in parallel parts first.
+const PARALLEL_ABOVE: usize = 200_000;
+
 /// Reduce `mesh` to about `target_triangles` triangles.
+///
+/// Large meshes are cut into spatially compact parts (runs of the mesh's
+/// chunks, which are ordered along a space-filling curve) that are
+/// decimated in parallel with the vertices they share locked, so no
+/// cracks open; a last pass over the whole mesh, with nothing extra
+/// locked, then reaches the target, mostly along the part borders.
 pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
+    decimate_with(mesh, target_triangles, true)
+}
+
+fn decimate_with(mesh: &Mesh, target_triangles: usize, allow_parallel: bool) -> Mesh {
     let data = mesh.to_data();
-    let mut pos: Vec<DVec3> = data.positions.iter().map(|p| p.as_dvec3()).collect();
-    let mut mask = data.mask.clone();
-    let mut tris = data.triangles.clone();
-    let groups = data.groups.clone();
-    let hidden = data.hidden.clone();
+    let vcount = data.positions.len();
+    let n = data.triangles.len();
+    let mut w = Work {
+        pos: data.positions.iter().map(|p| p.as_dvec3()).collect(),
+        mask: data.mask.clone(),
+        tris: data.triangles.clone(),
+        groups: data.groups.clone(),
+    };
+    let mut hidden = data.hidden.clone();
+
+    let threads = rayon::current_num_threads();
+    if allow_parallel && n > PARALLEL_ABOVE && target_triangles < n && threads > 1 && mesh.chunks.len() > 1 {
+        let parts = (threads * 4).min(mesh.chunks.len());
+        let per = mesh.chunks.len().div_ceil(parts);
+        let ranges: Vec<std::ops::Range<usize>> = mesh
+            .chunks
+            .chunks(per)
+            .map(|cs| cs[0].triangles.start as usize..cs[cs.len() - 1].triangles.end as usize)
+            .collect();
+        // Vertices used by more than one part stay where they are.
+        let mut owner = vec![u32::MAX; vcount];
+        let mut shared = vec![false; vcount];
+        for (pi, r) in ranges.iter().enumerate() {
+            for tri in &w.tris[r.clone()] {
+                for &v in tri {
+                    let o = &mut owner[v as usize];
+                    if *o == u32::MAX {
+                        *o = pi as u32;
+                    } else if *o != pi as u32 {
+                        shared[v as usize] = true;
+                    }
+                }
+            }
+        }
+        let ratio = target_triangles as f64 / n as f64;
+        let (w_ref, shared) = (&w, &shared);
+        let results: Vec<PartResult> = ranges
+            .par_iter()
+            .map(|r| {
+                // The part with its own vertex numbering.
+                let mut local_of = vec![u32::MAX; vcount];
+                let mut globals: Vec<u32> = Vec::new();
+                let tris: Vec<[u32; 3]> = w_ref.tris[r.clone()]
+                    .iter()
+                    .map(|tri| {
+                        tri.map(|v| {
+                            let l = &mut local_of[v as usize];
+                            if *l == u32::MAX {
+                                *l = globals.len() as u32;
+                                globals.push(v);
+                            }
+                            *l
+                        })
+                    })
+                    .collect();
+                let mut part = Work {
+                    pos: globals.iter().map(|&v| w_ref.pos[v as usize]).collect(),
+                    mask: globals.iter().map(|&v| w_ref.mask.get(v as usize).copied().unwrap_or(0.0)).collect(),
+                    tris,
+                    groups: w_ref.groups[r.clone()].to_vec(),
+                };
+                let pinned: Vec<bool> = globals.iter().map(|&v| shared[v as usize]).collect();
+                let target = ((r.len() as f64) * ratio) as usize;
+                let alive = collapse(&mut part, &pinned, target);
+                let mut tris = Vec::new();
+                let mut groups = Vec::new();
+                let mut part_hidden = Vec::new();
+                for (k, tri) in part.tris.iter().enumerate() {
+                    if alive[k] {
+                        tris.push(tri.map(|l| globals[l as usize]));
+                        groups.push(part.groups[k]);
+                        part_hidden.push(hidden[r.start + k]);
+                    }
+                }
+                let moved: Vec<(u32, DVec3, f32)> = globals
+                    .iter()
+                    .enumerate()
+                    .filter(|&(_, &g)| !shared[g as usize])
+                    .map(|(l, &g)| (g, part.pos[l], part.mask[l]))
+                    .collect();
+                (tris, groups, part_hidden, moved)
+            })
+            .collect();
+        w.tris.clear();
+        w.groups.clear();
+        hidden.clear();
+        for (tris, groups, part_hidden, moved) in results {
+            w.tris.extend(tris);
+            w.groups.extend(groups);
+            hidden.extend(part_hidden);
+            for (g, p, m) in moved {
+                w.pos[g as usize] = p;
+                if let Some(x) = w.mask.get_mut(g as usize) {
+                    *x = m;
+                }
+            }
+        }
+    }
+
+    let nothing_pinned = vec![false; w.pos.len()];
+    let alive = collapse(&mut w, &nothing_pinned, target_triangles);
+    let mut out = MeshData {
+        positions: w.pos.iter().map(|p| p.as_vec3()).collect::<Vec<Vec3>>(),
+        mask: w.mask,
+        ..Default::default()
+    };
+    for (t, tri) in w.tris.iter().enumerate() {
+        if alive[t] {
+            out.triangles.push(*tri);
+            out.groups.push(w.groups[t]);
+            out.hidden.push(hidden[t]);
+        }
+    }
+    Mesh::from_data(out)
+}
+
+/// Collapse edges of `w` (cheapest first) until at most `target`
+/// triangles are left or nothing more can go. No edge touching a `pinned`
+/// vertex collapses; open boundaries and face-group borders don't move.
+/// Returns which triangles are left.
+fn collapse(w: &mut Work, pinned: &[bool], target: usize) -> Vec<bool> {
+    let Work { pos, mask, tris, groups } = w;
+    let groups: &[u32] = groups;
+    let vcount = pos.len();
     let mut alive = vec![true; tris.len()];
     let mut alive_count = tris.len();
-    let vcount = pos.len();
+    if mask.len() != vcount {
+        mask.resize(vcount, 0.0);
+    }
+    let target_triangles = target;
 
     let mut vt: Vec<Vec<u32>> = vec![Vec::new(); vcount];
     for (t, tri) in tris.iter().enumerate() {
@@ -162,7 +310,7 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     }
 
     // Lock open-boundary and group-border vertices.
-    let mut locked = vec![false; vcount];
+    let mut locked = pinned.to_vec();
     {
         // Sort the half-edges by edge so each edge's triangles are adjacent:
         // an edge not shared by exactly two triangles is an open boundary
@@ -193,7 +341,7 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     }
 
     let mut quadrics = vec![Quadric::default(); vcount];
-    for tri in &tris {
+    for tri in tris.iter() {
         let [a, b, c] = tri.map(|i| pos[i as usize]);
         let n = (b - a).cross(c - a);
         let area = n.length();
@@ -211,7 +359,10 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     // Best collapse position and its error for edge (a, b): a locked vertex
     // stays put; otherwise the cheaper of the endpoints and the midpoint.
     let best = |a: u32, b: u32, pos: &[DVec3], quadrics: &[Quadric], locked: &[bool]| -> Option<(f64, DVec3)> {
-        if locked[a as usize] && locked[b as usize] {
+        // A pinned vertex is shared with another part of the mesh: this part
+        // can't see all its triangles, so no edge touching it collapses here
+        // (the whole-mesh pass afterwards takes care of them).
+        if (locked[a as usize] && locked[b as usize]) || pinned[a as usize] || pinned[b as usize] {
             return None;
         }
         let mut q = quadrics[a as usize];
@@ -253,19 +404,24 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
     let mut neighbors_b = Vec::new();
     while alive_count > target_triangles {
         let Some(c) = heap.pop() else { break };
-        let (a, b) = (c.a, c.b);
+        let (mut a, mut b) = (c.a, c.b);
         if stamp[a as usize] != c.stamp_a || stamp[b as usize] != c.stamp_b {
             continue;
         }
+        // The locked end of an edge (an open boundary or group border) stays
+        // where it is and keeps its index.
+        if locked[b as usize] && !locked[a as usize] {
+            std::mem::swap(&mut a, &mut b);
+        }
         // Same inputs as when queued (stamps match), so the same result.
-        let Some((_, target)) = best(a, b, &pos, &quadrics, &locked) else { continue };
+        let Some((_, target)) = best(a, b, pos, &quadrics, &locked) else { continue };
         // Edge must still exist.
         if !vt[a as usize].iter().any(|&t| tris[t as usize].contains(&b)) {
             continue;
         }
         // Link condition: exactly two shared neighbors for an interior edge.
-        ring(&vt[a as usize], &tris, a, &mut neighbors_a);
-        ring(&vt[b as usize], &tris, b, &mut neighbors_b);
+        ring(&vt[a as usize], tris, a, &mut neighbors_a);
+        ring(&vt[b as usize], tris, b, &mut neighbors_b);
         let shared = neighbors_a.iter().filter(|v| neighbors_b.contains(v)).count();
         if shared != 2 {
             continue;
@@ -320,24 +476,15 @@ pub fn decimate(mesh: &Mesh, target_triangles: usize) -> Mesh {
         // Only edges touching `a` changed cost; other heap entries stay valid.
         stamp[a as usize] += 1;
         stamp[b as usize] += 1;
-        ring(&vt[a as usize], &tris, a, &mut neighbors_a);
+        ring(&vt[a as usize], tris, a, &mut neighbors_a);
         for &n in &neighbors_a {
-            if let Some((cost, cand)) = candidate(a.min(n), a.max(n), &pos, &quadrics, &locked, &stamp) {
+            if let Some((cost, cand)) = candidate(a.min(n), a.max(n), pos, &quadrics, &locked, &stamp) {
                 heap.push(cost, cand);
             }
         }
     }
 
-    let mut out =
-        MeshData { positions: pos.iter().map(|p| p.as_vec3()).collect::<Vec<Vec3>>(), mask, ..Default::default() };
-    for (t, tri) in tris.iter().enumerate() {
-        if alive[t] {
-            out.triangles.push(*tri);
-            out.groups.push(groups[t]);
-            out.hidden.push(hidden[t]);
-        }
-    }
-    Mesh::from_data(out)
+    alive
 }
 
 fn ring(vt: &[u32], tris: &[[u32; 3]], v: u32, out: &mut Vec<u32>) {
@@ -392,6 +539,33 @@ mod tests {
         // Still closed: V - E + F = 2.
         let f = d.triangle_count() as i64;
         assert_eq!(d.vertex_count() as i64 - f * 3 / 2 + f, 2);
+    }
+
+    #[test]
+    fn large_meshes_decimate_in_parallel_without_cracks() {
+        let s = primitives::icosphere(7, 1.0);
+        assert!(s.triangle_count() > PARALLEL_ABOVE);
+        let target = 20_000;
+        let mean_error =
+            |m: &Mesh| m.positions.iter().map(|p| (p.length() - 1.0).abs()).sum::<f32>() / m.vertex_count() as f32;
+        let parallel = decimate(&s, target);
+        let serial = decimate_with(&s, target, false);
+        let f = parallel.triangle_count();
+        assert!(f <= target + target / 20 && f > target * 9 / 10, "{f}");
+        // Closed, with every edge shared by exactly two triangles: no
+        // cracks where the parts met.
+        let mut edges = std::collections::HashMap::new();
+        for t in &parallel.triangles {
+            for k in 0..3 {
+                let (a, b) = (t[k], t[(k + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+            }
+        }
+        assert!(edges.values().all(|&c| c == 2), "open or non-manifold edges after the parallel pass");
+        assert_eq!(parallel.vertex_count() as i64 - edges.len() as i64 + f as i64, 2);
+        // As good a shape as decimating it all at once.
+        let (ep, es) = (mean_error(&parallel), mean_error(&serial));
+        assert!(ep < es * 1.5 + 1e-5, "parallel {ep} vs serial {es}");
     }
 
     #[test]

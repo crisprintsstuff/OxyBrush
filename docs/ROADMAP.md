@@ -131,7 +131,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 ## Known limitations (v3.0.4-beta)
 
 - macOS is new: untested on real Macs, not notarized (first launch needs "Open Anyway"), and double-clicking `.oxb` files doesn't open them yet
-- Decimation takes a few seconds on dense meshes (runs in the background)
+- Decimation takes about a second for a million triangles (runs in the background)
 - Remesh resets mask and face groups; open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
 - Only interface settings are remembered between sessions (save brushes as presets to keep them)
