@@ -66,7 +66,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 ![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
 
-Your layout, arrangement, brush order, interface scale, theme, material, autosave interval, whether the welcome window appears at startup, are remembered between sessions. The brush you were using, with its settings and each brush's strength, is remembered too if you turn on **Remember brush settings between sessions** in Preferences > General (off by default).
+Your window size and position, layout, arrangement, brush order, interface scale, theme, material, autosave interval, whether the welcome window appears at startup, are remembered between sessions. The brush you were using, with its settings and each brush's strength, is remembered too if you turn on **Remember brush settings between sessions** in Preferences > General (off by default).
 
 ![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 

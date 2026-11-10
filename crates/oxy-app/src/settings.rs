@@ -336,6 +336,66 @@ pub struct Settings {
     /// In-app plugins' panel settings, by `<plugin folder>/<param id>`: one
     /// value, or three for a color (RFC 0013).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
+    /// The main window as it was when OxyBrush last closed (issue #95).
+    pub window: Option<WindowGeometry>,
+}
+
+/// A monitor's physical top-left corner and size.
+pub type MonitorRect = ((i32, i32), (u32, u32));
+
+/// Where the main window was and how big, to open it the same way again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct WindowGeometry {
+    /// Inner size in logical points (independent of the display's scale).
+    pub width: f32,
+    pub height: f32,
+    /// Outer top-left corner in physical pixels; None where the system
+    /// doesn't say (Wayland).
+    pub position: Option<(i32, i32)>,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    pub const MIN: (f32, f32) = (640.0, 400.0);
+
+    /// Parse `width, height, maximized[, x, y]`.
+    fn parse(v: &str) -> Option<WindowGeometry> {
+        let parts: Vec<&str> = v.split(',').map(str::trim).collect();
+        let (w, h) = (parts.first()?.parse::<f32>().ok()?, parts.get(1)?.parse::<f32>().ok()?);
+        if !(w.is_finite() && h.is_finite()) {
+            return None;
+        }
+        let maximized = parts.get(2)?.parse::<bool>().ok()?;
+        let position = match (parts.get(3), parts.get(4)) {
+            (Some(x), Some(y)) => Some((x.parse().ok()?, y.parse().ok()?)),
+            _ => None,
+        };
+        Some(WindowGeometry {
+            width: w.clamp(Self::MIN.0, 16384.0),
+            height: h.clamp(Self::MIN.1, 16384.0),
+            position,
+            maximized,
+        })
+    }
+
+    fn to_line(self) -> String {
+        let pos = self.position.map_or(String::new(), |(x, y)| format!(", {x}, {y}"));
+        format!("window = {}, {}, {}{pos}\n", self.width, self.height, self.maximized)
+    }
+
+    /// Whether a window at `position` with physical size `size` would show
+    /// enough of its title bar on one of `monitors` (each: physical
+    /// top-left and size) to be moved: at least 120 by 40 pixels of its top.
+    pub fn top_is_visible(position: (i32, i32), size: (u32, u32), monitors: &[MonitorRect]) -> bool {
+        let (x, y) = (position.0 as i64, position.1 as i64);
+        let (right, top_band) = (x + size.0 as i64, y + 40);
+        monitors.iter().any(|&((mx, my), (mw, mh))| {
+            let (mx, my, mr, mb) = (mx as i64, my as i64, mx as i64 + mw as i64, my as i64 + mh as i64);
+            let overlap_x = right.min(mr) - x.max(mx);
+            let overlap_y = top_band.min(mb) - y.max(my);
+            overlap_x >= 120 && overlap_y >= 40
+        })
+    }
 }
 
 /// Overall visual theme preset.
@@ -622,6 +682,7 @@ impl Default for Settings {
             brush_strengths: Vec::new(),
             remember_brushes: false,
             plugin_params: Default::default(),
+            window: None,
         }
     }
 }
@@ -753,6 +814,7 @@ impl Settings {
                     format!("plugin_param = {k}: {}\n", v.join(", "))
                 })
                 .collect::<String>()
+            + &self.window.map_or(String::new(), WindowGeometry::to_line)
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -943,6 +1005,7 @@ impl Settings {
                     }
                 }
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
+                "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "plugin_param" => {
                     // `<plugin folder>/<param id>: v[, v, v]`; bad lines are skipped.
                     if let Some((key, vals)) = v.rsplit_once(':') {
@@ -1014,6 +1077,26 @@ pub fn show_welcome(
 mod tests {
     use super::*;
 
+    #[test]
+    fn window_geometry_is_read_back_and_kept_on_screen() {
+        let t = "window = 1300, 850, false, 100, 200\n";
+        let w = Settings::from_text(t).window.unwrap();
+        assert_eq!(w, WindowGeometry { width: 1300.0, height: 850.0, position: Some((100, 200)), maximized: false });
+        // Wayland gives no position; tiny or huge sizes are clamped; junk is ignored.
+        let w = Settings::from_text("window = 10, 99999, true\n").window.unwrap();
+        assert_eq!((w.width, w.height, w.position, w.maximized), (640.0, 16384.0, None, true));
+        assert!(Settings::from_text("window = big, 3, x\n").window.is_none());
+        assert!(Settings::from_text("ui_scale = 1\n").window.is_none(), "older files: no saved window");
+        // On screen: two monitors side by side, the left one at negative x.
+        let monitors = [((0, 0), (2560, 1440)), ((-1920, 200), (1920, 1080))];
+        let visible = |p, s| WindowGeometry::top_is_visible(p, s, &monitors);
+        assert!(visible((100, 100), (1440, 900)));
+        assert!(visible((-1800, 300), (1000, 700)), "on the left monitor");
+        assert!(!visible((-1800, 0), (1000, 700)), "above the left monitor, beside the right one: title hidden");
+        assert!(!visible((5000, 100), (1440, 900)), "on a monitor that's gone");
+        assert!(!visible((2500, 100), (1440, 900)), "only a sliver left on screen");
+        assert!(!visible((100, 1430), (1440, 900)), "title bar below the bottom edge");
+    }
     #[test]
     fn renamed_options_still_load_from_older_files() {
         let old = "layout = zbrush_classic\ntheme = zbrush_classic\naccent = zbrush_orange\nmaterial = red_wax\n\
@@ -1134,6 +1217,7 @@ mod tests {
             ]
             .into_iter()
             .collect(),
+            window: Some(WindowGeometry { width: 1200.5, height: 800.0, position: Some((-1920, 40)), maximized: true }),
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.
