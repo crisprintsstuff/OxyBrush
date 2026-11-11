@@ -229,18 +229,38 @@ fn grid(divisions: u32, f: impl Fn(f32, f32) -> Vec3) -> (Vec<Vec3>, Vec<[u32; 3
 }
 
 /// Merge vertices closer than `epsilon` (grid-hash based).
+///
+/// Points are hashed into cells `epsilon` wide, and each point is compared
+/// with the points already kept in its own and the 26 neighbouring cells.
+/// Hashing alone isn't enough: two copies of one point that differ by a
+/// rounding error can fall on either side of a cell boundary, and were then
+/// never merged (the 64-division cube that File > New > Cube makes had 128
+/// open seam edges that way).
 pub fn weld(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
-    let inv = 1.0 / epsilon.max(f32::MIN_POSITIVE);
-    let mut map: HashMap<[i64; 3], u32> = HashMap::new();
-    let mut out = Vec::new();
+    let epsilon = epsilon.max(f32::MIN_POSITIVE);
+    let inv = 1.0 / epsilon;
+    let cell = |p: Vec3| [(p.x * inv).floor() as i64, (p.y * inv).floor() as i64, (p.z * inv).floor() as i64];
+    let mut map: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
+    let mut out: Vec<Vec3> = Vec::new();
     let remap: Vec<u32> = positions
         .iter()
-        .map(|p| {
-            let key = [(p.x * inv).round() as i64, (p.y * inv).round() as i64, (p.z * inv).round() as i64];
-            *map.entry(key).or_insert_with(|| {
-                out.push(*p);
-                out.len() as u32 - 1
-            })
+        .map(|&p| {
+            let [x, y, z] = cell(p);
+            for dx in -1..=1 {
+                for dy in -1..=1 {
+                    for dz in -1..=1 {
+                        if let Some(kept) = map.get(&[x + dx, y + dy, z + dz])
+                            && let Some(&i) = kept.iter().find(|&&i| out[i as usize].distance(p) <= epsilon)
+                        {
+                            return i;
+                        }
+                    }
+                }
+            }
+            out.push(p);
+            let i = out.len() as u32 - 1;
+            map.entry([x, y, z]).or_default().push(i);
+            i
         })
         .collect();
     let tris = tris.into_iter().map(|t| t.map(|i| remap[i as usize])).collect();
@@ -250,6 +270,36 @@ pub fn weld(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_cube_resolution_is_closed_and_manifold() {
+        // Seam points that differ by a rounding error must still weld, at
+        // every resolution, including the 64 that File > New > Cube uses.
+        for div in [1, 2, 3, 7, 16, 63, 64, 100, 128] {
+            let m = cube(div, 1.6);
+            let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+            for t in &m.triangles {
+                for (a, b) in [(t[0], t[1]), (t[1], t[2]), (t[2], t[0])] {
+                    *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+                }
+            }
+            assert!(edges.values().all(|&n| n == 2), "div {div}: every edge has two faces");
+            let n = div as usize;
+            assert_eq!(m.vertex_count(), 6 * n * n + 2, "div {div}: seam points shared");
+        }
+    }
+
+    #[test]
+    fn weld_merges_points_on_either_side_of_a_cell_boundary() {
+        let eps = 1e-3;
+        // 0.0005 is exactly a cell boundary of the old rounding scheme.
+        let a = Vec3::new(0.0005 - 1e-6, 0.0, 0.0);
+        let b = Vec3::new(0.0005 + 1e-6, 0.0, 0.0);
+        let c = Vec3::new(1.0, 0.0, 0.0);
+        let (p, t) = weld(vec![a, b, c], vec![[0, 1, 2]], eps);
+        assert_eq!(p.len(), 2);
+        assert_eq!(t[0][0], t[0][1]);
+    }
 
     #[test]
     fn cube_is_closed() {
