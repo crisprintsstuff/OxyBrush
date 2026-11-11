@@ -14,6 +14,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   Panel settings are remembered between sessions (**Reset** restores the defaults). A command's edits to a piece are still one undo step. Plugins written for API 1 and 2 keep working. Two new bundled plugins, **Group by Height** and **Flip Faces**, and **Displace** now previews.
 - **Plugin guide and API reference** in [docs/plugins](docs/plugins/README.md), with a WebAssembly-text and a Rust example.
 
+### Changed
+- **Meshes use about 18% less memory** ([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)): each vertex's neighbours are now worked out from its triangles when needed instead of being stored. A 1.3-million-triangle mesh takes 68 MB instead of 82 MB, and it's built a little faster. The Smooth and Polish brushes take about 0.4 ms longer per dab on a 14,000-vertex brush, still well within a frame.
+
 ## [3.0.6-beta] - 2026-11-10
 
 ### Added
