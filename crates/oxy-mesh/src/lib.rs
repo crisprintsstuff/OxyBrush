@@ -99,6 +99,47 @@ pub struct MeshData {
     pub color: Vec<Vec3>,
 }
 
+impl MeshData {
+    /// Put several meshes side by side in one, unchanged: no welding, no
+    /// remeshing. Every part keeps its triangles, mask, visibility and vertex
+    /// color, and its face groups move up past the previous parts' so no two
+    /// parts share a group (each part can still be selected or hidden on its
+    /// own). Missing attributes take their defaults: unmasked, shown, white.
+    pub fn join(parts: &[MeshData]) -> MeshData {
+        let mut out = MeshData::default();
+        let painted = parts.iter().any(|p| !p.color.is_empty());
+        let mut group_offset = 0u32;
+        for p in parts {
+            let base = out.positions.len() as u32;
+            let (nv, nt) = (p.positions.len(), p.triangles.len());
+            out.positions.extend_from_slice(&p.positions);
+            out.triangles.extend(p.triangles.iter().map(|t| t.map(|v| v + base)));
+            if p.mask.len() == nv {
+                out.mask.extend_from_slice(&p.mask);
+            } else {
+                out.mask.extend(std::iter::repeat_n(0.0, nv));
+            }
+            if p.hidden.len() == nt {
+                out.hidden.extend_from_slice(&p.hidden);
+            } else {
+                out.hidden.extend(std::iter::repeat_n(false, nt));
+            }
+            if painted {
+                if p.color.len() == nv {
+                    out.color.extend_from_slice(&p.color);
+                } else {
+                    out.color.extend(std::iter::repeat_n(WHITE, nv));
+                }
+            }
+            let groups: Vec<u32> = if p.groups.len() == nt { p.groups.clone() } else { vec![0; nt] };
+            let top = groups.iter().copied().max().map_or(0, |g| g + 1);
+            out.groups.extend(groups.iter().map(|g| g + group_offset));
+            group_offset += top;
+        }
+        out
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
@@ -1173,6 +1214,13 @@ impl Mesh {
         group
     }
 
+    /// Which triangles count as masked: those whose corners' mask averages
+    /// at least one half. Used to split a piece along its mask, so a soft
+    /// mask edge is cut through its middle.
+    pub fn masked_faces(&self) -> Vec<bool> {
+        self.triangles.iter().map(|t| t.iter().map(|&v| self.mask[v as usize]).sum::<f32>() >= 1.5).collect()
+    }
+
     /// Plain data for the triangles where `keep(t)` holds, with unused
     /// vertices dropped (mask, groups and visibility carried along).
     pub fn extract(&self, keep: impl Fn(usize) -> bool) -> MeshData {
@@ -2074,6 +2122,50 @@ mod tests {
         let before = m.mask[hidden_vertex as usize];
         m.mask_by_curvature(true);
         assert_eq!(m.mask[hidden_vertex as usize], before);
+    }
+
+    #[test]
+    fn join_keeps_every_part_and_their_groups_apart() {
+        let a = primitives::icosphere(1, 1.0).to_data();
+        let mut b = primitives::cube(1, 0.5).to_data();
+        b.groups = vec![0; b.triangles.len()];
+        b.groups[0] = 3;
+        b.color = vec![Vec3::X; b.positions.len()];
+        b.mask = vec![1.0; b.positions.len()];
+        let j = MeshData::join(&[a.clone(), b.clone()]);
+        assert_eq!(j.positions.len(), a.positions.len() + b.positions.len());
+        assert_eq!(j.triangles.len(), a.triangles.len() + b.triangles.len());
+        assert_eq!(j.triangles[a.triangles.len()], b.triangles[0].map(|v| v + a.positions.len() as u32));
+        // Groups: the sphere's stay, the cube's move up past them.
+        let top_a = a.groups.iter().copied().max().unwrap_or(0);
+        let (ga, gb) = j.groups.split_at(a.triangles.len());
+        assert!(ga.iter().all(|&g| g <= top_a));
+        assert!(gb.iter().all(|&g| g > top_a));
+        assert_eq!(gb[0] - gb[1], 3, "the cube's own groups stay distinct");
+        // Paint and mask come along; the unpainted sphere is white.
+        assert_eq!(j.color.len(), j.positions.len());
+        assert!(j.color[..a.positions.len()].iter().all(|&c| c == WHITE));
+        assert!(j.color[a.positions.len()..].iter().all(|&c| c == Vec3::X));
+        assert_eq!(j.mask[a.positions.len()..].iter().sum::<f32>(), b.positions.len() as f32);
+        assert_eq!(Mesh::from_data(j).triangle_count(), a.triangles.len() + b.triangles.len());
+    }
+
+    #[test]
+    fn masked_faces_cut_through_the_middle_of_a_soft_mask() {
+        let mut d = primitives::icosphere(2, 1.0).to_data();
+        d.mask = d.positions.iter().map(|p| (p.x * 2.0 + 0.5).clamp(0.0, 1.0)).collect();
+        let m = Mesh::from_data(d);
+        let masked = m.masked_faces();
+        for (t, &on) in m.triangles.iter().zip(&masked) {
+            let x = t.iter().map(|&v| m.positions[v as usize].x).sum::<f32>() / 3.0;
+            if x > 0.2 {
+                assert!(on);
+            }
+            if x < -0.2 {
+                assert!(!on);
+            }
+        }
+        assert!(masked.iter().any(|&b| b) && masked.iter().any(|&b| !b));
     }
 
     #[test]

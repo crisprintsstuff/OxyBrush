@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Split masked** (Mask menu, Mesh menu, the masking tools and the command palette): moves the masked part of the active piece into a new piece and keeps the unmasked part in the original. A face goes with the mask when its corners average at least half masked, so a soft mask edge is cut through its middle. Invert the mask first to split off the unmasked part. Both parts come out unmasked; one undo step.
+- **Join** (Pieces panel, Pieces menu, command palette): combines the active piece and the other visible pieces into one piece exactly as they are, with no remesh and nothing welded. Triangles, mask, hidden faces and vertex color are kept, and each piece's face groups stay apart from the others', so a joined piece can still be hidden or selected by group. One undo step; subdivision levels are dropped (undo restores them).
 - **Five bundled in-app plugins** for Plugin API 3, in `crates/oxy-plugin/plugins/` and copied into the plugins folder like the others (a folder you already changed is left alone):
   - **Group by Angle:** face groups from the angle between neighbouring faces, with a live preview. Complements Group by Height.
   - **Hide Faces by Angle:** hides faces by how far their normal points from an axis, with Invert and an option to leave masked faces alone. The first bundled plugin that writes hidden faces.
@@ -13,6 +15,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **Simplify Mesh:** removes triangles while keeping the shape, open edges, face-group borders and fully masked vertices. Reports progress and can be stopped.
 
   Fill Holes and Simplify Mesh use `edit_topology`. After replacing the triangles they write the mask, color, face groups and hidden faces back, because a new mesh starts blank. Subdivision levels are cleared, and Undo restores them.
+
+### Changed
+- **Merge is now "Merge + remesh"** (Pieces panel; "Merge and remesh visible" in the Pieces menu). It always fused the visible pieces with a voxel remesh, which the Pieces panel's plain "Merge" button didn't say. Use **Join** to combine pieces without remeshing.
 
 ## [4.0.0-beta.3] - 2026-11-11
 

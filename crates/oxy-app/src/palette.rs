@@ -105,7 +105,8 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
         cmd(ed, Cmd::Solo, "pieces isolate", Editor::solo_active),
-        cmd(ed, Cmd::Merge, "pieces union combine", Editor::merge_visible),
+        cmd(ed, Cmd::Join, "pieces combine merge attach together one", Editor::join_visible),
+        cmd(ed, Cmd::Merge, "pieces union combine fuse remesh voxel", Editor::merge_visible),
         cmd(ed, Cmd::SplitGroups, "pieces separate", |e| e.split_active(false)),
         cmd(ed, Cmd::SplitLoose, "pieces separate islands", |e| e.split_active(true)),
         cmd(ed, Cmd::Lod, "pieces level of detail decimate game", |e| e.make_lod_chain(3)),
@@ -122,6 +123,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::ExportAlpha, "alpha save png image height map 2d edit", |e| e.request_export_alpha = true),
         cmd(ed, Cmd::CloseHoles, "topology fill cap watertight print gap boundary", Editor::close_holes),
         cmd(ed, Cmd::SplitHidden, "topology visibility separate piece", Editor::split_hidden),
+        cmd(ed, Cmd::SplitMasked, "mask unmasked separate piece detach", Editor::split_masked),
         cmd(ed, Cmd::GroupVisible, "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
         cmd(ed, Cmd::GroupFromMask, "face groups", |e| {
             e.edit_faces("Group from mask", oxy_mesh::Mesh::group_from_mask)
