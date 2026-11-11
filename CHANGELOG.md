@@ -18,6 +18,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Fixed
 - **Double-clicking a project opens it on macOS** ([#135](https://github.com/crisprintsstuff/OxyBrush/issues/135)). macOS showed "can't open files of this type": the app didn't declare its file types, and macOS hands a double-clicked file to an app in a way OxyBrush didn't receive. Now `.oxb` projects and `.oxyaddon` add-ons open with OxyBrush from Finder, Open With and the Dock, and OBJ and STL files list it under Open With.
 - **Drop files on the window to open them**, on every system: a project opens (asking to save first if needed), a mesh is imported, an add-on is installed.
+- **Pen pressure on Linux** (X11 and XWayland, including the Flatpak; [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)). Tablets report pressure as a raw reading, from 0 up to 2047, 8191 or 65535 depending on the model, and OxyBrush only understood values between 0 and 1, so on most tablets pressure had no effect. The pen's pressure axis is now found by name and scaled properly. Other pen axes, such as tilt, can no longer be mistaken for pressure. The log notes when pressure first arrives, to help with tablet reports.
 
 ## [3.0.6-beta] - 2026-11-10
 

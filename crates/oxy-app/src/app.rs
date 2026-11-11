@@ -1408,6 +1408,11 @@ impl ApplicationHandler for App {
                 redraw = true;
             }
             WindowEvent::TouchpadPressure { pressure, .. } => {
+                if !self.editor.pen_seen {
+                    // Once per session, so a bug report's log shows whether
+                    // pen pressure reaches OxyBrush at all.
+                    log::info!("pen pressure is coming in (first reading {pressure:.3})");
+                }
                 self.editor.pressure = *pressure;
                 self.editor.pen_seen = true;
                 redraw = true;
@@ -1420,12 +1425,10 @@ impl ApplicationHandler for App {
                 self.editor.camera.orbit(Vec2::new(*delta * 2.0, 0.0));
                 redraw = true;
             }
-            WindowEvent::AxisMotion { value, .. } => {
-                if self.editor.is_stroking() && *value > 0.0 && *value <= 1.0 {
-                    self.editor.pressure = *value as f32;
-                    self.editor.pen_seen = true;
-                }
-            }
+            // Pen pressure on X11 arrives as TouchpadPressure, scaled to 0..=1
+            // by the vendored winit (third_party/README.md). Other raw axes
+            // (tilt, for example) used to be taken for pressure when their
+            // value happened to fall in 0..=1; they are ignored now.
             WindowEvent::CursorLeft { .. } => {
                 if !self.editor.is_stroking() {
                     self.editor.pointer = None;
