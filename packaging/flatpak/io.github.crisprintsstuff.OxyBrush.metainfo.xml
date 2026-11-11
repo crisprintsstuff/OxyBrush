@@ -53,6 +53,17 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.8-beta" date="2026-11-11" type="development">
+      <description>
+        <p>File > Close project returns to the start screen. OBJ files
+        whose materials failed to parse now import. Imported meshes in other units (such as millimetres) are
+        scaled to fit the scene, and box masking follows symmetry.
+        Window title bars are much slimmer. The Studio theme is
+        refined: slider handles are solid bars,
+        corners are a little squarer, and windows and menus cast a
+        smaller, fainter shadow.</p>
+      </description>
+    </release>
     <release version="3.0.7-beta" date="2026-11-11" type="development">
       <description>
         <p>Pen pressure now works on Linux tablets, the window opens where

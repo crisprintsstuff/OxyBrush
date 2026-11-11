@@ -72,9 +72,30 @@ pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
     }
 }
 
-fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
+/// The models of an OBJ file, geometry only.
+///
+/// OxyBrush doesn't use materials, so `mtllib` and `usemtl` lines are
+/// dropped before parsing and no `.mtl` file is read. Files whose material
+/// lines the parser rejects (a bare `usemtl` with no name, as some exporters
+/// write, fails the whole load with "material parse error") import anyway.
+/// Text that isn't valid UTF-8 (a name in another encoding) is read lossily
+/// for the same reason.
+fn load_obj_geometry(path: &Path) -> Result<Vec<tobj::Model>> {
+    let bytes = std::fs::read(path)?;
+    let text = String::from_utf8_lossy(&bytes);
+    let is_material = |line: &str| {
+        let mut words = line.split_whitespace();
+        matches!(words.next(), Some("usemtl" | "mtllib"))
+    };
+    let geometry: String = text.lines().filter(|l| !is_material(l)).flat_map(|l| [l, "\n"]).collect();
     let opts = tobj::LoadOptions { triangulate: true, single_index: false, ..Default::default() };
-    let (models, _) = tobj::load_obj(path, &opts).map_err(Error::Obj)?;
+    let (models, _) = tobj::load_obj_buf(&mut geometry.as_bytes(), &opts, |_| Err(tobj::LoadError::OpenFileFailed))
+        .map_err(Error::Obj)?;
+    Ok(models)
+}
+
+fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
+    let models = load_obj_geometry(path)?;
     // (name, positions, triangles) in file order, merged by name.
     let mut parts: Vec<(String, Vec<Vec3>, Vec<[u32; 3]>)> = Vec::new();
     for m in models {
@@ -115,8 +136,7 @@ fn extension(path: &Path) -> String {
 }
 
 pub fn import_obj(path: &Path) -> Result<Mesh> {
-    let opts = tobj::LoadOptions { triangulate: true, single_index: false, ..Default::default() };
-    let (models, _) = tobj::load_obj(path, &opts).map_err(Error::Obj)?;
+    let models = load_obj_geometry(path)?;
     let mut positions = Vec::new();
     let mut tris = Vec::new();
     for m in models {
@@ -378,6 +398,28 @@ mod tests {
         // A file without object names is one piece named after the file.
         std::fs::write(&p, format!("{}f 1 2 3\n", tri(0.0))).unwrap();
         assert_eq!(import_pieces(&p).unwrap()[0].0, "scene");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn obj_materials_are_ignored_even_when_broken() {
+        let dir = std::env::temp_dir().join(format!("oxy-io-mtl-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join("model.obj");
+        // A missing .mtl, a bare `usemtl` (which used to fail the whole
+        // import with "material parse error"), material switches inside an
+        // object, and a name that isn't UTF-8.
+        let text = b"mtllib missing.mtl\no Body\nusemtl\nv 0 0 0\nv 1 0 0\nv 0 1 0\nv 1 1 0\nf 1 2 3\nusemtl Skin\nf 2 4 3\no Hat\xe9\nusemtl  \nv 0 0 1\nv 1 0 1\nv 0 1 1\nf 5 6 7\n".to_vec();
+        std::fs::write(&p, &text).unwrap();
+        let pieces = import_pieces(&p).unwrap();
+        assert_eq!(pieces.len(), 2, "material switches don't split an object");
+        assert_eq!(pieces[0].0, "Body");
+        assert_eq!(pieces[0].1.triangle_count(), 2);
+        assert_eq!(pieces[1].1.triangle_count(), 1);
+        assert_eq!(import(&p).unwrap().triangle_count(), 3);
+        // A broken .mtl next to the file changes nothing.
+        std::fs::write(dir.join("missing.mtl"), "newmtl Skin\nKd one two three\n").unwrap();
+        assert_eq!(import_pieces(&p).unwrap().len(), 2);
         std::fs::remove_dir_all(dir).ok();
     }
 

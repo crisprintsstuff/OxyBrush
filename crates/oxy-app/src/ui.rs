@@ -63,7 +63,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             slider_width: 130.0,
             body: 13.5,
             small: 11.0,
-            heading: 20.0,
+            heading: 15.0,
             shelf_width: 206.0,
             inspector_width: 290.0,
             strip_width: 46.0,
@@ -75,7 +75,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             slider_width: 110.0,
             body: 12.5,
             small: 10.5,
-            heading: 17.0,
+            heading: 14.0,
             shelf_width: 176.0,
             inspector_width: 250.0,
             strip_width: 38.0,
@@ -87,7 +87,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             slider_width: 150.0,
             body: 16.0,
             small: 13.0,
-            heading: 22.0,
+            heading: 18.0,
             shelf_width: 240.0,
             inspector_width: 330.0,
             strip_width: 64.0,
@@ -99,7 +99,7 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             slider_width: 120.0,
             body: 12.0,
             small: 10.0,
-            heading: 18.0,
+            heading: 14.5,
             shelf_width: 88.0,
             inspector_width: 275.0,
             strip_width: 40.0,
@@ -373,7 +373,13 @@ pub fn apply_theme(
             s.spacing.icon_width = 22.0;
             s.spacing.icon_width_inner = 14.0;
         }
-        s.spacing.window_margin = egui::Margin::same(14);
+        // egui pads a window's title bar with this same margin above and
+        // below the title, so it is kept modest; a finger-sized title bar
+        // still comes from the larger Touch heading.
+        // egui pads a window's title bar with this same margin above and
+        // below the title, so it is kept modest; a finger-sized title bar
+        // still comes from the larger Touch heading.
+        s.spacing.window_margin = egui::Margin::same(if layout == UiLayout::Touch { 11 } else { 9 });
         s.spacing.menu_margin = egui::Margin::same(8);
         s.spacing.indent = 14.0;
         use egui::{FontFamily::Proportional, FontId, TextStyle};
@@ -420,6 +426,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 }
                 if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
                     action = Some(UiAction::SaveAs);
+                }
+                if tips::button(ui, "Close project", Cmd::CloseProject).clicked() {
+                    ed.request(Pending::Close);
                 }
                 if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
                     ed.send_back();
@@ -4276,6 +4285,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         let what = match &pending {
             Pending::Quit => "quitting",
             Pending::New(_) => "starting a new document",
+            Pending::Close => "closing the project",
             Pending::OpenProject(_) => "opening another project",
             Pending::OpenLink(_) => "opening the objects sent from another app",
         };
@@ -5579,6 +5589,44 @@ mod tests {
         assert_eq!(v.window_corner_radius.nw, 20);
         assert!(v.window_shadow.blur > 0);
         assert_eq!(v.selection.stroke.color, Color32::from_rgb(0x10, 0xB9, 0x81));
+    }
+
+    #[test]
+    fn window_title_bars_are_compact() {
+        // Testers found window title bars huge: egui sizes them from the
+        // Heading font plus the window margin above and below the title.
+        for (layout, max) in [
+            (UiLayout::Standard, 40.0),
+            (UiLayout::Compact, 38.0),
+            (UiLayout::Workstation, 38.0),
+            (UiLayout::Touch, 46.0),
+        ] {
+            let ctx = egui::Context::default();
+            apply_theme(
+                &ctx,
+                ThemePreset::Graphite,
+                AccentPreset::Emerald,
+                [0, 0, 0],
+                CornerStyle::Rounded,
+                false,
+                1.0,
+                layout,
+            );
+            let mut rects = None;
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(Default::default(), |ui| {
+                    let r = egui::Window::new("Keymap").open(&mut true).show(ui.ctx(), |ui| ui.label("content").rect);
+                    if let Some(r) = r {
+                        rects = Some((r.response.rect, r.inner.unwrap_or(egui::Rect::NOTHING)));
+                    }
+                });
+                out.textures_delta.clear();
+            }
+            let (window, label) = rects.expect("window shown");
+            let margin = ctx.global_style().spacing.window_margin.top as f32;
+            let title_bar = label.top() - margin - window.top();
+            assert!(title_bar > 20.0 && title_bar <= max, "{layout:?}: title bar {title_bar} px");
+        }
     }
 
     #[test]

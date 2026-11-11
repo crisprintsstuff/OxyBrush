@@ -713,6 +713,8 @@ pub struct GizmoDrag {
 pub enum Pending {
     Quit,
     New(&'static str),
+    /// Close the project: back to the start screen over a fresh sphere.
+    Close,
     OpenProject(PathBuf),
     /// Open a link manifest from another app (RFC 0010).
     OpenLink(PathBuf),
@@ -1107,6 +1109,11 @@ pub struct Editor {
     pub show_diagnostics: bool,
     /// Unit scale: millimeters per world unit.
     pub print_scale_mm_per_unit: f32,
+    /// The power-of-ten scale given to the first import that was far out of
+    /// scale with the scene (see `import_unit_scale`), reused for every
+    /// later import into the same document so parts from one source still
+    /// fit together. Cleared when another document is opened or started.
+    pub import_scale: Option<f32>,
     /// Minimum wall thickness in millimeters for 3D printing and hollowing.
     pub print_wall_thickness_mm: f32,
     /// Radius of drain holes in millimeters.
@@ -1315,6 +1322,7 @@ impl Default for Editor {
             show_print_dialog: false,
             show_diagnostics: false,
             print_scale_mm_per_unit: 10.0,
+            import_scale: None,
             print_wall_thickness_mm: 2.0,
             print_drain_hole_radius_mm: 2.5,
             print_drain_hole_count: 1,
@@ -3044,6 +3052,14 @@ impl Editor {
         let inside = move |p: Vec3| camera.project(p, size).is_some_and(|s| point_in_polygon(s, &poly));
         match action {
             SelectAction::Mask | SelectAction::Unmask => {
+                // Masking follows symmetry like a stroke: a vertex is picked
+                // when it or any of its mirror or radial copies is inside.
+                // The transforms form a group (each one's inverse is in the
+                // list), so testing the copies is the same as testing the
+                // mirrored box.
+                let center = self.symmetry_center();
+                let transforms = self.symmetry.transforms();
+                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center)));
                 // A mask box drawn around none of the model clears the mask.
                 let mesh = &self.scene.active().mesh;
                 let any =
@@ -3179,6 +3195,16 @@ impl Editor {
                 self.replace_document(Scene::new(Piece::new(name, mesh)), None);
                 self.status = format!("New document ({which})");
             }
+            Pending::Close => {
+                let closed = self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+                let (name, mesh) = Self::primitive("sphere");
+                self.replace_document(Scene::new(Piece::new(name, mesh)), None);
+                self.show_welcome = true;
+                self.status = match closed {
+                    Some(name) => format!("Closed {name}"),
+                    None => "Closed the project".into(),
+                };
+            }
             Pending::OpenProject(path) => self.open_project_now(&path),
             Pending::OpenLink(path) => self.open_link_now(&path),
         }
@@ -3197,6 +3223,7 @@ impl Editor {
         self.path = path;
         self.link = None;
         self.bridge = None;
+        self.import_scale = None;
         self.camera.frame(self.scene.bounds());
         self.reopen_saved_curve();
     }
@@ -3341,6 +3368,7 @@ impl Editor {
         match oxy_io::import_pieces(path) {
             Ok(parts) => {
                 self.pointer_up();
+                let scene_before = self.scene.bounds();
                 let tris: usize = parts.iter().map(|(_, m)| m.triangle_count()).sum();
                 let n = parts.len();
                 let mut steps = Vec::with_capacity(n);
@@ -3355,14 +3383,47 @@ impl Editor {
                 // Make the first imported piece active.
                 self.scene.set_active(self.scene.pieces.len() - n);
                 self.history.record_compound("Import", steps);
-                self.camera.frame(self.scene.bounds());
                 let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
                 self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
+                let first = self.scene.pieces.len() - n;
+                let size = |b: oxy_mesh::Aabb| (b.max - b.min).max_element();
+                let imported =
+                    self.scene.pieces[first..].iter().fold(oxy_mesh::Aabb::EMPTY, |a, p| a.union(&p.mesh.bounds()));
+                let factor = self.import_scale.or_else(|| import_unit_scale(size(imported), size(scene_before)));
+                if let Some(factor) = factor {
+                    self.import_scale = Some(factor);
+                    self.scale_pieces(first, factor);
+                    self.status = format!(
+                        "Imported {} ({tris} triangles{pieces}), scaled by {factor} to match the scene: its file uses other units. Undo once to keep its original size.",
+                        path.display()
+                    );
+                }
+                self.camera.frame(self.scene.bounds());
                 self.protect_path(path);
                 self.remember_recent(path);
             }
             Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
         }
+    }
+
+    /// Scale pieces `first..` about the origin by `factor`, as one undo step
+    /// ("Fit import to scene"): each piece is replaced by a scaled copy, so
+    /// Undo brings back the original, symmetry centre included.
+    fn scale_pieces(&mut self, first: usize, factor: f32) {
+        let mut steps = Vec::new();
+        for index in first..self.scene.pieces.len() {
+            let original = &self.scene.pieces[index];
+            let mut mesh = original.mesh.clone();
+            mesh.positions.iter_mut().for_each(|p| *p *= factor);
+            let all: Vec<u32> = (0..mesh.positions.len() as u32).collect();
+            mesh.update_after_move(&all);
+            let symmetry_center = original.symmetry_center.map(|c| c * factor);
+            let scaled = Piece { symmetry_center, ..Piece::new(original.name.clone(), mesh) };
+            let original = std::mem::replace(&mut self.scene.pieces[index], scaled);
+            steps.push(Step::Removed { index, piece: original });
+            steps.push(Step::Inserted { index });
+        }
+        self.history.record_compound("Fit import to scene", steps);
     }
 
     /// Add a custom matcap to the list and use it.
@@ -5729,6 +5790,26 @@ pub(crate) fn sculptable_at(coarse: Mesh, resolution: u32) -> Mesh {
 }
 
 /// Give `piece` a symmetry centre from its shape if it has none yet.
+/// The scale for an import of size `imported` into a scene of size `scene`
+/// (largest bounding-box side of each), or `None` to keep it as it is.
+///
+/// Mesh files carry no units: an STL in millimetres arrives tens of times
+/// larger than the 1-unit starting sphere, a model in metres or inches can
+/// be far smaller. When the import is more than 8× larger or smaller than
+/// the scene, it is scaled by the power of ten (a unit conversion, like mm
+/// to cm) that brings it closest to the scene's size.
+pub(crate) fn import_unit_scale(imported: f32, scene: f32) -> Option<f32> {
+    const OUT_OF_SCALE: f32 = 8.0;
+    if !(imported.is_finite() && scene.is_finite() && imported > 0.0 && scene > 0.0) {
+        return None;
+    }
+    let ratio = imported / scene;
+    if (1.0 / OUT_OF_SCALE..=OUT_OF_SCALE).contains(&ratio) {
+        return None;
+    }
+    Some(10f32.powi(-(ratio.log10().round() as i32)))
+}
+
 fn ensure_symmetry_center(piece: &mut Piece) {
     if piece.symmetry_center.is_none() {
         piece.symmetry_center = Some(oxy_sculpt::estimate_symmetry_center(&piece.mesh.positions));
@@ -6947,8 +7028,39 @@ mod tests {
     }
 
     #[test]
+    fn box_mask_follows_mirror_symmetry() {
+        let side = |e: &Editor| {
+            let mesh = &e.scene.active().mesh;
+            let (mut left, mut right) = (0usize, 0usize);
+            for (p, &m) in mesh.positions.iter().zip(&mesh.mask) {
+                if m > 0.5 {
+                    if p.x < 0.0 { left += 1 } else { right += 1 }
+                }
+            }
+            (left, right)
+        };
+        for mirror in [false, true] {
+            let mut e = editor();
+            e.symmetry = oxy_sculpt::Symmetry { x: mirror, ..Default::default() };
+            e.modifiers.ctrl = true;
+            // A box over the right edge of the sphere only.
+            drag(&mut e, Vec2::new(470.0, 5.0), Vec2::new(795.0, 595.0));
+            let (left, right) = side(&e);
+            assert!(right > 0, "mirror {mirror}: the boxed side is masked");
+            if mirror {
+                // Each masked vertex's mirror image is masked too.
+                assert!(left > 0 && left.abs_diff(right) * 10 <= right, "both sides alike: {left} vs {right}");
+            } else {
+                assert_eq!(left, 0, "without symmetry only the boxed side");
+            }
+        }
+    }
+
+    #[test]
     fn box_mask_from_empty_space_and_undo() {
         let mut e = editor();
+        // Without symmetry, so only what's in the box is masked.
+        e.symmetry = oxy_sculpt::Symmetry::default();
         e.modifiers.ctrl = true;
         // Drag a box starting off the model, covering its left half.
         drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
@@ -8045,6 +8157,37 @@ mod tests {
     }
 
     #[test]
+    fn close_asks_about_unsaved_work_then_returns_to_the_start_screen() {
+        let dir = std::env::temp_dir().join(format!("oxy-close-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bust.oxb");
+        let mut e = editor();
+        e.show_welcome = false;
+        e.add_primitive("cube");
+        assert!(e.save(&path));
+        // Unsaved work: Close waits for the Save / Don't save answer.
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        e.request(Pending::Close);
+        assert!(matches!(e.pending, Some(Pending::Close)));
+        assert_eq!(e.scene.pieces.len(), 3, "nothing closed yet");
+        // "Don't save": the project closes.
+        e.perform(Pending::Close);
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.path, None);
+        assert!(!e.is_modified());
+        assert!(e.show_welcome, "back to the start screen");
+        assert_eq!(e.status, "Closed bust.oxb");
+        assert_eq!(e.history.undo_labels().count(), 0, "the closed project's history is gone");
+        // With nothing unsaved, Close closes at once.
+        e.show_welcome = false;
+        e.request(Pending::Close);
+        assert!(e.pending.is_none());
+        assert!(e.show_welcome);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn a_failed_save_says_so_and_keeps_the_work_unsaved() {
         let mut e = editor();
         e.add_primitive("cube");
@@ -8734,6 +8877,58 @@ mod tests {
         assert!(e.status.contains("2 pieces"), "{}", e.status);
         e.undo();
         assert_eq!(e.scene.pieces.len(), 1, "one undo step removes the whole import");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_import_far_out_of_scale_is_scaled_by_a_power_of_ten() {
+        assert_eq!(import_unit_scale(3.0, 2.0), None, "close enough: kept as it is");
+        assert_eq!(import_unit_scale(15.0, 2.0), None, "within 8x");
+        assert_eq!(import_unit_scale(60.0, 2.0), Some(0.1), "millimetres next to the 2-unit sphere");
+        assert_eq!(import_unit_scale(180.0, 2.0), Some(0.01));
+        assert_eq!(import_unit_scale(0.02, 2.0), Some(100.0), "much smaller");
+        assert_eq!(import_unit_scale(60.0, f32::NEG_INFINITY), None, "empty scene");
+        assert_eq!(import_unit_scale(0.0, 2.0), None);
+    }
+
+    #[test]
+    fn importing_a_huge_mesh_fits_it_to_the_scene_and_undo_keeps_the_original() {
+        let dir = std::env::temp_dir().join(format!("oxy-import-scale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A 60-unit triangle, as from a file in millimetres, next to the
+        // 2-unit starting sphere; then a 5-unit part from the same source.
+        let big = dir.join("head.obj");
+        std::fs::write(&big, "v 0 0 0\nv 60 0 0\nv 0 60 0\nf 1 2 3\n").unwrap();
+        let small = dir.join("eye.obj");
+        std::fs::write(&small, "v 10 10 0\nv 15 10 0\nv 10 15 0\nf 1 2 3\n").unwrap();
+        let size = |e: &Editor, i: usize| {
+            let b = e.scene.pieces[i].mesh.bounds();
+            (b.max - b.min).max_element()
+        };
+        let mut e = editor();
+        e.import(&big);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert!((size(&e, 1) - 6.0).abs() < 1e-4, "scaled by 0.1: {}", size(&e, 1));
+        assert!(e.status.contains("scaled by 0.1"), "{}", e.status);
+        let center = e.scene.pieces[1].symmetry_center.unwrap();
+        // The second part uses the same factor although it alone would not
+        // be out of scale, so the two still fit together.
+        e.import(&small);
+        assert!((size(&e, 2) - 0.5).abs() < 1e-4, "same factor: {}", size(&e, 2));
+        let eye = e.scene.pieces[2].mesh.bounds().min;
+        assert!((eye - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-4, "scaled about the origin: {eye:?}");
+        // One undo keeps the part at its original size, the next removes it.
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!((size(&e, 2) - 5.0).abs() < 1e-4, "original size: {}", size(&e, 2));
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        e.undo();
+        assert!((size(&e, 1) - 60.0).abs() < 1e-3, "original size: {}", size(&e, 1));
+        assert!((e.scene.pieces[1].symmetry_center.unwrap() - center * 10.0).length() < 1e-3, "centre restored too");
+        // A new document forgets the factor.
+        e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
+        assert_eq!(e.import_scale, None);
         std::fs::remove_dir_all(dir).ok();
     }
 

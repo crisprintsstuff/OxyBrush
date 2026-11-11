@@ -340,9 +340,11 @@ fn background(ed: &mut Editor, start: impl FnOnce(&mut Editor)) -> Apply {
     }
 }
 
+/// Label every undo step recorded since revision `before` as the agent's.
 fn tag(ed: &mut Editor, before: u64) {
-    if ed.history.revision() != before {
-        ed.history.prefix_latest_undo(AGENT_LABEL);
+    let recorded = ed.history.revision().saturating_sub(before) as usize;
+    if recorded > 0 {
+        ed.history.prefix_recent_undo(AGENT_LABEL, recorded);
     }
 }
 
@@ -683,6 +685,23 @@ mod tests {
         ed.pixels_per_point = 1.0;
         ed.camera.frame(ed.scene.bounds());
         ed
+    }
+
+    #[test]
+    fn an_agent_import_scaled_to_fit_labels_both_steps() {
+        let dir = std::env::temp_dir().join(format!("oxy-agent-import-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("big.obj");
+        std::fs::write(&path, "v 0 0 0\nv 60 0 0\nv 0 60 0\nf 1 2 3\n").unwrap();
+        let mut ed = editor();
+        match apply(&mut ed, "import", &serde_json::json!({"path": path.to_str().unwrap()})) {
+            Apply::Done(result) => assert!(!result.is_error, "{}", result.text),
+            _ => panic!("import should finish immediately"),
+        }
+        let labels: Vec<&str> = ed.history.undo_labels().collect();
+        assert_eq!(labels.len(), 2, "{labels:?}");
+        assert!(labels.iter().all(|l| l.starts_with("Agent:")), "{labels:?}");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]

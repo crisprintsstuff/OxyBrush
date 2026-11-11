@@ -396,6 +396,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.updater.check(crate::updates::now_secs());
             }
         }),
+        cmd(ed, Cmd::CloseProject, "close project document file", |e| e.request(Pending::Close)),
         cmd(ed, Cmd::Quit, "exit close", |e| e.request(Pending::Quit)),
     ]
 }
