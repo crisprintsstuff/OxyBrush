@@ -344,6 +344,8 @@ pub struct Settings {
     /// A side shelf as one narrow column: the current brush, alpha and
     /// material stacked, then one brush per row with its name underneath.
     pub narrow_shelf: bool,
+    /// Side of a captured alpha in pixels (Capture from view).
+    pub alpha_capture_size: u32,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -698,6 +700,7 @@ impl Default for Settings {
             window: None,
             show_brush_names: true,
             narrow_shelf: false,
+            alpha_capture_size: 1024,
         }
     }
 }
@@ -832,6 +835,7 @@ impl Settings {
             + &self.window.map_or(String::new(), WindowGeometry::to_line)
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
+            + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -1025,6 +1029,13 @@ impl Settings {
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
+                "alpha_capture_size" => {
+                    s.alpha_capture_size = v
+                        .parse()
+                        .ok()
+                        .filter(|n| crate::editor::CAPTURE_SIZES.contains(n))
+                        .unwrap_or(s.alpha_capture_size)
+                }
                 "plugin_param" => {
                     // `<plugin folder>/<param id>: v[, v, v]`; bad lines are skipped.
                     if let Some((key, vals)) = v.rsplit_once(':') {
@@ -1115,6 +1126,10 @@ mod tests {
         assert!(!Settings::default().narrow_shelf);
         let narrow = Settings { narrow_shelf: true, ..Settings::default() };
         assert!(Settings::from_text(&narrow.to_text()).narrow_shelf);
+        assert_eq!(Settings::default().alpha_capture_size, 1024);
+        let big = Settings { alpha_capture_size: 4096, ..Settings::default() };
+        assert_eq!(Settings::from_text(&big.to_text()).alpha_capture_size, 4096);
+        assert_eq!(Settings::from_text("alpha_capture_size = 300\n").alpha_capture_size, 1024, "only offered sizes");
     }
     #[test]
     fn window_geometry_is_read_back_and_kept_on_screen() {
@@ -1259,6 +1274,7 @@ mod tests {
             window: Some(WindowGeometry { width: 1200.5, height: 800.0, position: Some((-1920, 40)), maximized: true }),
             show_brush_names: false,
             narrow_shelf: true,
+            alpha_capture_size: 2048,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

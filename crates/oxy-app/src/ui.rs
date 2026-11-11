@@ -24,6 +24,8 @@ pub enum UiAction {
     SaveThenContinue,
     /// Load a grayscale image as a brush alpha.
     LoadAlpha,
+    /// Save the selected alpha as a PNG.
+    ExportAlpha,
     /// Load a PNG/JPEG image as a custom matcap.
     LoadMatcap,
     /// Import a brush preset file.
@@ -644,6 +646,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
 
     if std::mem::take(&mut ed.request_load_alpha) {
         action = Some(UiAction::LoadAlpha);
+    }
+    if std::mem::take(&mut ed.request_export_alpha) {
+        action = Some(UiAction::ExportAlpha);
     }
     if std::mem::take(&mut ed.request_load_matcap) {
         action = Some(UiAction::LoadMatcap);
@@ -2255,9 +2260,7 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
                 ed.request_load_alpha = true;
             }
-            if tips::button(ui, "Capture from view", Cmd::CaptureAlpha).clicked() {
-                ed.capture_alpha();
-            }
+            capture_controls(ui, ed);
         });
 
         let mat_tex = match ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i)) {
@@ -3538,6 +3541,30 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     widgets::section(ui, "History", plain::SECTION_HISTORY, false, |ui| history_section(ui, ed));
 }
 
+/// Capture from view with its size, and Export alpha… for the selected one.
+fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.horizontal(|ui| {
+        let busy = ed.job.is_some();
+        if ui.add_enabled_ui(!busy, |ui| tips::button(ui, "Capture from view", Cmd::CaptureAlpha)).inner.clicked() {
+            ed.capture_alpha();
+        }
+        let r = egui::ComboBox::from_id_salt("capture_size")
+            .width(78.0)
+            .selected_text(format!("{} px", ed.capture_alpha_size))
+            .show_ui(ui, |ui| {
+                for n in crate::editor::CAPTURE_SIZES {
+                    ui.selectable_value(&mut ed.capture_alpha_size, n, format!("{n} px"));
+                }
+            })
+            .response;
+        tips::hover(r, plain::CAPTURE_SIZE);
+    });
+    if ui.add_enabled_ui(ed.alpha.is_some(), |ui| tips::button(ui, "Export alpha…", Cmd::ExportAlpha)).inner.clicked()
+    {
+        ed.request_export_alpha = true;
+    }
+}
+
 fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
@@ -3945,9 +3972,7 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
         if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
             ed.request_load_alpha = true;
         }
-        if tips::button(ui, "Capture from view", Cmd::CaptureAlpha).clicked() {
-            ed.capture_alpha();
-        }
+        capture_controls(ui, ed);
     });
     match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
         Some(a) => {
