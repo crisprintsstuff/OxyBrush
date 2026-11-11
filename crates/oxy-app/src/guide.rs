@@ -168,11 +168,12 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
     },
     Topic {
         title: "Retopology",
-        keywords: "retopology retopo quads low poly topology draw game animation edge loop relax",
+        keywords: "retopology retopo quads low poly topology draw game animation edge loop relax pin lock",
         body: "Mesh > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
 - Click to place a point. Drag a point, edge or face to slide it along the surface; drop a point on another to weld them.\n\
 - Hold Shift: the quad the nearest points make shows in green (a triangle in purple). Shift+click makes it. Shift+drag relaxes the points under the cursor.\n\
 - Tab+drag a border edge to pull out a new quad. Ctrl+click an edge to insert an edge loop across it. Ctrl+Shift+click deletes a point or face.\n\
+- Alt+click a point, edge or face to pin its points (shown as orange squares): relaxing leaves them where they are, though you can still drag them. Alt+click again, or Unpin all in the window, to free them.\n\
 - Mirror across X (in the window, on when X symmetry is) repeats everything on the other side; points near the centre snap onto it.\n\n\
 Subdivide and project (in the window) adds subdivision levels moved onto the sculpt: the top level carries its detail, level 1 stays your quads. The first face makes a new piece, Retopo. Each action is one undo step, it is saved with the project, and its quads export as quads (OBJ). Done (or Esc) closes the tool; open it again with the sculpt or the Retopo piece active to carry on.",
     },

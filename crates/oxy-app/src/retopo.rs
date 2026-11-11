@@ -14,7 +14,9 @@
 //!   Shift+click makes it; Shift+drag relaxes the points under the cursor;
 //! - Tab+drag a border edge: pull out a new quad from it;
 //! - Ctrl+click an edge: insert an edge loop across its quad ring;
-//! - Ctrl+Shift+click: delete the point or face under the cursor.
+//! - Ctrl+Shift+click: delete the point or face under the cursor;
+//! - Alt+click a point, edge or face: pin its points (Alt+click again to
+//!   unpin); relax leaves pinned points where they are.
 
 use crate::editor::{Drag, Editor};
 use glam::{Vec2, Vec3};
@@ -646,6 +648,38 @@ impl Editor {
     }
 
     /// Delete what is under window pixel `p`: a point (and its faces), or a face.
+    /// Pin the points of the point, edge or face at `p` (and their mirror
+    /// images), or unpin them if they all are already. One undo step.
+    pub fn retopo_pin_at(&mut self, p: Vec2) -> bool {
+        let mirror = self.retopo_mirror();
+        let Some(hit) = self.retopo_hit(p) else { return false };
+        self.retopo_edit("Retopo: pin points", |_, c| {
+            let mut verts: Vec<u32> = match hit {
+                Hit::Vertex(v) => vec![v],
+                Hit::Edge(a, b, _) => vec![a, b],
+                Hit::Face(f) => corners(&c.faces[f]).to_vec(),
+            };
+            if let Some(m) = mirror {
+                let partners: Vec<u32> = verts.iter().filter_map(|&v| m.partner(c, v)).collect();
+                verts.extend(partners);
+            }
+            let pin = !verts.iter().all(|&v| c.is_pinned(v));
+            for v in verts {
+                c.set_pinned(v, pin);
+            }
+            true
+        })
+    }
+
+    /// Unpin every point. One undo step; false if nothing was pinned.
+    pub fn retopo_unpin_all(&mut self) -> bool {
+        self.retopo_edit("Retopo: unpin all", |_, c| {
+            let any = c.pinned_count() > 0;
+            c.pinned.clear();
+            any
+        })
+    }
+
     pub fn retopo_delete_at(&mut self, p: Vec2) -> bool {
         let mirror = self.retopo_mirror();
         match self.retopo_hit(p) {
@@ -708,6 +742,9 @@ impl Editor {
         let m = self.active_modifiers();
         if m.ctrl && m.shift {
             self.retopo_delete_at(p);
+            return true;
+        }
+        if m.alt && !m.ctrl && !m.shift && self.retopo_pin_at(p) {
             return true;
         }
         if m.ctrl {
@@ -1208,6 +1245,12 @@ mod tests {
         with_keys(e, true, false, |e| click(e, c));
     }
 
+    fn cage_mut(e: &mut Editor) -> &mut Cage {
+        let id = e.retopo.as_ref().unwrap().cage_piece.unwrap();
+        let i = e.scene.index_of(id).unwrap();
+        e.scene.pieces[i].cage.as_mut().unwrap()
+    }
+
     fn cage(e: &Editor) -> &Cage {
         e.retopo_cage().unwrap()
     }
@@ -1252,6 +1295,60 @@ mod tests {
         e.redo();
         e.retopo_sync();
         assert_eq!(cage(&e).quad_count(), 1);
+    }
+
+    #[test]
+    fn alt_click_pins_points_relax_leaves_them_and_undo_works() {
+        let mut e = editor();
+        first_quad(&mut e);
+        // A second quad and a loop across both give an inner point to relax.
+        e.retopo_refresh_view();
+        let right = Vec2::new(440.0, 300.0);
+        e.tab_held = true;
+        drag(&mut e, right, right + Vec2::new(60.0, 0.0));
+        e.tab_held = false;
+        e.retopo_refresh_view();
+        with_keys(&mut e, false, true, |e| click(e, Vec2::new(360.0, 300.0)));
+        assert_eq!(cage(&e).quad_count(), 4, "{}", e.status);
+        let inner = {
+            let c = cage(&e);
+            let border: std::collections::HashSet<u32> = c.border_edges().into_iter().flatten().collect();
+            (0..c.positions.len() as u32)
+                .find(|v| !border.contains(v) && c.faces.iter().any(|f| corners(f).contains(v)))
+                .expect("an inner point")
+        };
+        // Alt+click it: pinned, as one undo step.
+        e.retopo_refresh_view();
+        let at = e.retopo.as_ref().unwrap().screen[inner as usize].expect("on screen");
+        assert!(matches!(e.retopo_hit(at), Some(Hit::Vertex(v)) if v == inner));
+        e.modifiers.alt = true;
+        click(&mut e, at);
+        e.modifiers.alt = false;
+        assert!(cage(&e).is_pinned(inner), "{}", e.status);
+        assert_eq!(e.history.undo_labels().last(), Some("Retopo: pin points"));
+        // Relax over everything: the pinned point stays put.
+        let before = cage(&e).positions[inner as usize];
+        let all: Vec<u32> = (0..cage(&e).positions.len() as u32).collect();
+        assert!(!cage_mut(&mut e).relax(&all, 1.0).contains(&inner));
+        assert_eq!(cage(&e).positions[inner as usize], before);
+        // Alt+click again unpins; undo pins it back; Unpin all clears.
+        e.retopo_refresh_view();
+        e.modifiers.alt = true;
+        click(&mut e, at);
+        e.modifiers.alt = false;
+        assert!(!cage(&e).is_pinned(inner));
+        e.undo();
+        e.retopo_sync();
+        assert!(cage(&e).is_pinned(inner));
+        assert!(e.retopo_unpin_all());
+        assert_eq!(cage(&e).pinned_count(), 0);
+        assert!(!e.retopo_unpin_all(), "nothing left to unpin");
+        // Alt+click on empty space pins nothing.
+        let n = e.history.undo_labels().count();
+        e.modifiers.alt = true;
+        click(&mut e, Vec2::new(5.0, 5.0));
+        e.modifiers.alt = false;
+        assert_eq!(e.history.undo_labels().count(), n);
     }
 
     #[test]
