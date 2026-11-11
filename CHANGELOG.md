@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.9-beta] - 2026-11-11
+
 ### Added
 - **Capture from view at up to 4096 px:** a size picker next to **Capture from view** offers 256, 512, 1024 (the new default, was a fixed 256), 2048 and 4096 px; larger captures have smooth edges instead of blocky ones. The model is now rasterized into a depth image instead of ray-cast per pixel, so even 4096 px is quick (about 1.2 s for a 1.3-million-triangle sculpt on four cores, where ray casting took two minutes); it runs on a worker thread so the interface stays responsive, and the size is remembered.
 - **Alphas are saved with the project:** captured and loaded alphas are stored in the `.oxb` (a new `ALPH` section, 16-bit, compressed) and come back when you open it; opening it again doesn't duplicate them. A new alpha counts as an unsaved change. Older versions skip the section.

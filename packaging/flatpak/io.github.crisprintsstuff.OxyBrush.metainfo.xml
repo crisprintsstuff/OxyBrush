@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.9-beta" date="2026-11-11" type="development">
+      <description>
+        <p>Alphas captured from view can be up to 4096 pixels with smooth
+        edges, are saved with the project, and can be exported as 16-bit
+        PNG images to edit in other apps. A new cube from the File menu no
+        longer has open seams.</p>
+      </description>
+    </release>
     <release version="3.0.8-beta" date="2026-11-11" type="development">
       <description>
         <p>File > Close project returns to the start screen. OBJ files
