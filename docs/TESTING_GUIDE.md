@@ -21,7 +21,7 @@ Download from the [latest release](https://github.com/crisprintsstuff/OxyBrush/r
 **Linux**
 - Flatpak (recommended):
   ```bash
-  flatpak install --user OxyBrush-3.0.7-beta-linux-x86_64.flatpak
+  flatpak install --user OxyBrush-3.0.8-beta-linux-x86_64.flatpak
   flatpak run io.github.crisprintsstuff.OxyBrush
   ```
   The first install downloads the freedesktop runtime from Flathub, so you need the Flathub remote (`flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo`).
@@ -52,7 +52,8 @@ Each of these is something we couldn't check without you:
 - **Crash recovery:** sculpt something, wait 2 minutes, then force-close OxyBrush (Task Manager / `kill`). Does it offer to recover your work on the next start?
 - **Installers:** do the Start-menu entry, uninstaller and `.oxb` double-click work on Windows? Does the Flatpak show up in your app menu with its icon? On macOS, does the app start after "Open Anyway", and does it run natively (Activity Monitor > Kind: "Apple" on Apple Silicon)?
 - **macOS is brand new:** any report from a real Mac (which model, which macOS version, does the GPU work, does a tablet work) is especially valuable.
-- **New in 3.0.7:** on Linux with a tablet, does pen pressure change the stroke now (the log says "pen pressure is coming in" once it does)? On macOS, does double-clicking a `.oxb` file open it, and does dropping a file on the window open it? Does the window reopen where you left it? Try **Preferences > Appearance > Studio** and **Show brush names**, and an in-app plugin with a live preview (**Plugins > Group by Height**).
+- **New in 3.0.8:** in **Preferences > Appearance > Studio**, do the solid slider handles, slightly squarer corners and lighter window shadow look right? Hover and drag a slider: the handle should turn to the accent color.
+- **From 3.0.7:** on Linux with a tablet, does pen pressure change the stroke now (the log says "pen pressure is coming in" once it does)? On macOS, does double-clicking a `.oxb` file open it, and does dropping a file on the window open it? Does the window reopen where you left it? Try **Preferences > Appearance > Studio** and **Show brush names**, and an in-app plugin with a live preview (**Plugins > Group by Height**).
 - **From 3.0.6:** turn on **Add detail as you sculpt** (Topology) and build a shape from a sphere: do the new triangles look even and stay under the brush, and how big can the mesh get before it lags? If you use a network drive, save a project there: does it save, or does a **Couldn't save** dialog tell you why (please send us the log either way)? Does the **Interface scale** slider behave? In the Retopology window, try **Subdivide and project** on a real sculpt.
 - **From 3.0.5:** try **Mesh > Retopology (draw quads)…** on a real sculpt (a head is ideal): does drawing quads feel right, and what do you miss?
 - **Anything confusing:** if you had to guess how something works, that's a bug in the interface.
