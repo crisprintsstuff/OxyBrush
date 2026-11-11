@@ -2800,12 +2800,20 @@ fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
 }
 
 /// Axis gizmo in the viewport corner: shows the orientation; click an axis
-/// end to view the model from that side.
+/// end to view the model from that side, or drag anywhere on it to orbit
+/// freely (as dragging empty space does).
 fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
     let size = 84.0;
     let pos = canvas.right_top() + egui::vec2(-size - 10.0, 10.0);
     egui::Area::new(egui::Id::unique("orientation_gizmo")).fixed_pos(pos).show(ctx, |ui| {
-        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::click_and_drag());
+        if response.dragged() {
+            let d = response.drag_delta() * ed.pixels_per_point.max(0.1);
+            ed.orbit_by(glam::Vec2::new(d.x, d.y));
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        } else if response.drag_stopped() {
+            ed.snap_orbit = None;
+        }
         let c = rect.center();
         let len = size * 0.36;
         let view = ed.camera.view();
@@ -5396,6 +5404,31 @@ mod tests {
             });
             out.textures_delta.clear();
         }
+    }
+
+    #[test]
+    fn dragging_the_axis_gizmo_orbits_and_clicking_an_end_still_snaps() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        // Where the viewport is, so where the gizmo is (84 pt square, 10 pt from the top right).
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let mut canvas = egui::Rect::NOTHING;
+        let mut out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            canvas = draw(ui, &mut ed).1;
+        });
+        out.textures_delta.clear();
+        let centre = canvas.right_top() + egui::vec2(-10.0 - 42.0, 10.0 + 42.0);
+        let (yaw, pitch) = (ed.camera.yaw, ed.camera.pitch);
+        // A drag that starts on the gizmo turns the view, both ways.
+        drag(&mut ed, &ctx, centre + egui::vec2(-20.0, 30.0), centre + egui::vec2(60.0, 10.0));
+        assert!((ed.camera.yaw - yaw).abs() > 0.1, "yaw {yaw} -> {}", ed.camera.yaw);
+        assert!((ed.camera.pitch - pitch).abs() > 0.01, "pitch {pitch} -> {}", ed.camera.pitch);
+        // A drag elsewhere in the viewport isn't the gizmo's (the app handles it).
+        let (yaw, pitch) = (ed.camera.yaw, ed.camera.pitch);
+        drag(&mut ed, &ctx, canvas.center(), canvas.center() + egui::vec2(80.0, 0.0));
+        assert_eq!((ed.camera.yaw, ed.camera.pitch), (yaw, pitch));
     }
 
     #[test]

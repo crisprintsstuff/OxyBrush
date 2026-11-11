@@ -30,7 +30,7 @@ pub const TOPICS: &[Topic] = &[
         keywords: "camera navigate orbit rotate pan zoom view focal length fov lens",
         body: "Drag on empty space to orbit around the model. Right-drag (or Alt+drag on empty space) pans, and the mouse wheel zooms. With a pen, use the drag buttons in the strip beside the viewport.\n\n\
 - F centres and frames the active piece; Alt+F frames every visible piece.\n\
-- Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others.\n\
+- Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others, or drag on it to orbit freely.\n\
 - Hold Shift while orbiting to snap the view to 45° steps.\n\
 - O switches between perspective and orthographic (P in the Single-key tools scheme).\n\
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
