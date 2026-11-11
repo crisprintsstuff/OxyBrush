@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::mem;
+use std::path::PathBuf;
 use std::rc::Weak;
 use std::time::Instant;
 
@@ -9,7 +10,7 @@ use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate,
     NSApplicationTerminateReply, NSRunningApplication,
 };
-use objc2_foundation::{MainThreadMarker, NSNotification, NSObject, NSObjectProtocol};
+use objc2_foundation::{MainThreadMarker, NSArray, NSNotification, NSObject, NSObjectProtocol, NSURL};
 
 use super::event_handler::EventHandler;
 use super::event_loop::{notify_windows_of_exit, stop_app_immediately, ActiveEventLoop, PanicInfo};
@@ -42,6 +43,9 @@ pub(super) struct AppState {
     start_time: Cell<Option<Instant>>,
     wait_timeout: Cell<Option<Instant>>,
     pending_redraw: RefCell<Vec<WindowId>>,
+    /// OxyBrush patch: files the system asked the application to open (see
+    /// `open_urls`), until there is a window to deliver them to.
+    pending_open: RefCell<Vec<PathBuf>>,
     // NOTE: This is strongly referenced by our `NSWindowDelegate` and our `NSView` subclass, and
     // as such should be careful to not add fields that, in turn, strongly reference those.
 }
@@ -78,6 +82,12 @@ declare_class!(
         fn app_should_terminate(&self, _sender: &NSApplication) -> NSApplicationTerminateReply {
             self.should_terminate()
         }
+
+        // OxyBrush patch: see `open_urls`.
+        #[method(application:openURLs:)]
+        fn app_open_urls(&self, _application: &NSApplication, urls: &NSArray<NSURL>) {
+            self.open_urls(urls)
+        }
     }
 );
 
@@ -106,6 +116,7 @@ impl ApplicationDelegate {
             start_time: Cell::new(None),
             wait_timeout: Cell::new(None),
             pending_redraw: RefCell::new(vec![]),
+            pending_open: RefCell::new(vec![]),
         });
         unsafe { msg_send_id![super(this), init] }
     }
@@ -198,6 +209,46 @@ impl ApplicationDelegate {
             NSApplicationTerminateReply::NSTerminateCancel
         } else {
             NSApplicationTerminateReply::NSTerminateNow
+        }
+    }
+
+    /// OxyBrush patch. macOS hands documents to an application (a double-
+    /// click in Finder, Open With, dropping on the Dock icon) through
+    /// `application:openURLs:`, not the command line, and upstream winit
+    /// has no event for it. Report each file as a `DroppedFile` on the first
+    /// window, as if it had been dropped there. Files that arrive before a
+    /// window exists (at launch) wait in `pending_open`; `cleared` delivers
+    /// them once there is one.
+    fn open_urls(&self, urls: &NSArray<NSURL>) {
+        trace_scope!("application:openURLs:");
+        let mut pending = self.ivars().pending_open.borrow_mut();
+        for url in urls.iter() {
+            if !unsafe { url.isFileURL() } {
+                continue;
+            }
+            if let Some(path) = unsafe { url.path() } {
+                pending.push(PathBuf::from(path.to_string()));
+            }
+        }
+    }
+
+    /// OxyBrush patch: deliver `pending_open` to the first window, if any.
+    fn deliver_open_files(&self) {
+        if self.ivars().pending_open.borrow().is_empty() {
+            return;
+        }
+        let mtm = MainThreadMarker::from(self);
+        let app = NSApplication::sharedApplication(mtm);
+        let Some(window) = app.windows().into_iter().find(|w| w.is_kind_of::<WinitWindow>()) else {
+            return;
+        };
+        let id = WindowId(Retained::as_ptr(&window) as usize);
+        let files = mem::take(&mut *self.ivars().pending_open.borrow_mut());
+        for path in files {
+            self.handle_event(Event::WindowEvent {
+                window_id: RootWindowId(id),
+                event: WindowEvent::DroppedFile(path),
+            });
         }
     }
 
@@ -418,6 +469,9 @@ impl ApplicationDelegate {
         }
 
         self.handle_event(Event::UserEvent(HandlePendingUserEvents));
+
+        // OxyBrush patch: files to open (see `open_urls`).
+        self.deliver_open_files();
 
         let redraw = mem::take(&mut *self.ivars().pending_redraw.borrow_mut());
         for window_id in redraw {

@@ -849,6 +849,9 @@ pub struct Editor {
     pub remember_brushes: bool,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
+    /// The main window's size, position and state, kept up to date by the
+    /// app and saved with the settings (issue #95).
+    pub window_geometry: Option<crate::settings::WindowGeometry>,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     /// The interface scale before it was last changed, until the
@@ -1174,6 +1177,7 @@ impl Default for Editor {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
             plugin_params: Default::default(),
+            window_geometry: None,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             ui_scale_from: None,
@@ -1566,6 +1570,7 @@ impl Editor {
             },
             remember_brushes: self.remember_brushes,
             plugin_params: self.plugin_params.clone(),
+            window: self.window_geometry,
         }
     }
 
@@ -1715,6 +1720,7 @@ impl Editor {
         self.remesh_engine = s.remesh_engine;
         self.remember_brushes = s.remember_brushes;
         self.plugin_params = s.plugin_params.clone();
+        self.window_geometry = s.window;
         if !s.remember_brushes {
             return;
         }
@@ -8070,6 +8076,12 @@ mod tests {
             brush_strengths: Vec::new(),
             remember_brushes: true,
             plugin_params: [("squash/amount".to_string(), vec![0.5])].into_iter().collect(),
+            window: Some(crate::settings::WindowGeometry {
+                width: 1000.0,
+                height: 700.0,
+                position: Some((10, 20)),
+                maximized: false,
+            }),
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
