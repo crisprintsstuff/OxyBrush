@@ -1035,6 +1035,13 @@ fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.separator();
     theme_appearance_controls(ui, ed);
     ui.add_space(4.0);
+    tips::check_plain(
+        ui,
+        &mut ed.show_brush_names,
+        "Show brush names in the brush shelf",
+        "Off shows the brushes as icons only, so more fit in the shelf; hover one to see its name. Works with every theme and layout.",
+    );
+    ui.add_space(4.0);
 
     ui.separator();
     ui.label(RichText::new("Viewport background").strong());
@@ -1639,6 +1646,9 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
+/// Size of a brush icon in the shelf when names are hidden.
+const NAMELESS_BRUSH: f32 = 46.0;
+
 /// The brush list, in the form that suits the layout.
 fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     let ctx = ui.ctx().clone();
@@ -1650,6 +1660,11 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         let key_owned = ed.number_key(k);
         let key = key_owned.as_deref();
         let r = match (ed.layout, horizontal) {
+            // Names off: icons only, the name on hover.
+            (UiLayout::Standard | UiLayout::Touch, _) if !ed.show_brush_names => {
+                let size = if ed.layout == UiLayout::Touch { 66.0 } else { NAMELESS_BRUSH };
+                widgets::brush_icon_button(ui, k, selected, size, key)
+            }
             (UiLayout::Standard, false) => widgets::brush_row(ui, k, selected, key),
             (UiLayout::Compact, _) => widgets::brush_icon_button(ui, k, selected, 38.0, key),
             (UiLayout::Workstation, _) => widgets::brush_icon_button(ui, k, selected, 36.0, key),
@@ -1681,7 +1696,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         });
     } else {
         match ed.layout {
-            UiLayout::Standard => {
+            UiLayout::Standard if ed.show_brush_names => {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, k) in order.iter().enumerate() {
                     item(ui, i, *k, ed);
@@ -1691,6 +1706,11 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
                 let (cols, gap) = match layout {
                     UiLayout::Compact => (4, 3.0),
                     UiLayout::Workstation => (2, 3.0),
+                    // Names off: as many icons across as fit.
+                    UiLayout::Standard => {
+                        let gap = 4.0;
+                        (((ui.available_width() + gap) / (NAMELESS_BRUSH + gap)).floor().max(1.0) as usize, gap)
+                    }
                     _ => (3, 8.0),
                 };
                 egui::Grid::new("brush_grid").spacing([gap, gap]).show(ui, |ui| {

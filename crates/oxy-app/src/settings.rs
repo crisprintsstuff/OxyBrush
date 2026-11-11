@@ -338,6 +338,9 @@ pub struct Settings {
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window as it was when OxyBrush last closed (issue #95).
     pub window: Option<WindowGeometry>,
+    /// Show each brush's name in the brush shelf; off shows icons only
+    /// (names still appear on hover).
+    pub show_brush_names: bool,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -690,6 +693,7 @@ impl Default for Settings {
             remember_brushes: false,
             plugin_params: Default::default(),
             window: None,
+            show_brush_names: true,
         }
     }
 }
@@ -822,6 +826,7 @@ impl Settings {
                 })
                 .collect::<String>()
             + &self.window.map_or(String::new(), WindowGeometry::to_line)
+            + &format!("brush_names = {}\n", self.show_brush_names)
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -1013,6 +1018,7 @@ impl Settings {
                 }
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
+                "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "plugin_param" => {
                     // `<plugin folder>/<param id>: v[, v, v]`; bad lines are skipped.
                     if let Some((key, vals)) = v.rsplit_once(':') {
@@ -1090,6 +1096,15 @@ mod tests {
         let s = Settings { theme: ThemePreset::Studio, ..Settings::default() };
         assert!(s.to_text().contains("theme = studio"));
         assert_eq!(Settings::from_text(&s.to_text()).theme, ThemePreset::Studio);
+    }
+
+    #[test]
+    fn brush_names_are_shown_unless_turned_off() {
+        assert!(Settings::default().show_brush_names);
+        assert!(Settings::from_text("ui_scale = 1\n").show_brush_names, "older files keep the names");
+        let off = Settings { show_brush_names: false, ..Settings::default() };
+        assert!(off.to_text().contains("brush_names = false"));
+        assert!(!Settings::from_text(&off.to_text()).show_brush_names);
     }
     #[test]
     fn window_geometry_is_read_back_and_kept_on_screen() {
@@ -1232,6 +1247,7 @@ mod tests {
             .into_iter()
             .collect(),
             window: Some(WindowGeometry { width: 1200.5, height: 800.0, position: Some((-1920, 40)), maximized: true }),
+            show_brush_names: false,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.
