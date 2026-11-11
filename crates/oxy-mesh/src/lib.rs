@@ -8,6 +8,7 @@
 
 mod aabb;
 mod adjacency;
+pub use adjacency::Neighbors;
 pub mod dyntopo;
 pub mod multires;
 
@@ -121,7 +122,6 @@ pub struct Mesh {
     source_vertex: Vec<u32>,
     source_triangle: Vec<u32>,
     vertex_triangles: Csr,
-    vertex_neighbors: Csr,
     vertex_chunk: Vec<u32>,
     triangle_chunk: Vec<u32>,
     dirty: Vec<bool>,
@@ -219,7 +219,6 @@ impl Mesh {
         }
 
         let vertex_triangles = Csr::vertex_triangles(vcount, &triangles);
-        let vertex_neighbors = Csr::vertex_neighbors(vcount, &triangles, &vertex_triangles);
 
         let mut mesh = Mesh {
             normals: vec![Vec3::Z; vcount],
@@ -237,7 +236,6 @@ impl Mesh {
             chunks,
             triangles,
             vertex_triangles,
-            vertex_neighbors,
             vertex_chunk,
             triangle_chunk,
             topology_version: NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed),
@@ -324,7 +322,7 @@ impl Mesh {
                 if self.vertex_hidden[v] {
                     continue;
                 }
-                let n = self.vertex_neighbors.get(v);
+                let n = self.neighbors(v as u32);
                 if !n.is_empty() {
                     let avg = n.iter().map(|&i| prev[i as usize]).sum::<f32>() / n.len() as f32;
                     self.mask[v] = (prev[v] + avg) * 0.5;
@@ -349,7 +347,8 @@ impl Mesh {
             if self.vertex_hidden[v] {
                 continue;
             }
-            let n = self.vertex_neighbors.get(v).iter().map(|&i| prev[i as usize]);
+            let n = self.neighbors(v as u32);
+            let n = n.iter().map(|&i| prev[i as usize]);
             self.mask[v] = if grow { n.fold(prev[v], f32::max) } else { n.fold(prev[v], f32::min) };
         }
     }
@@ -373,7 +372,7 @@ impl Mesh {
         // relative to the local edge length.
         let curv: Vec<f32> = (0..self.positions.len())
             .map(|v| {
-                let n = self.vertex_neighbors.get(v);
+                let n = self.neighbors(v as u32);
                 if n.is_empty() {
                     return 0.0;
                 }
@@ -1281,8 +1280,8 @@ impl Mesh {
         })
     }
 
-    pub fn neighbors(&self, v: u32) -> &[u32] {
-        self.vertex_neighbors.get(v as usize)
+    pub fn neighbors(&self, v: u32) -> adjacency::Neighbors {
+        adjacency::Neighbors::gather(v, self.vertex_triangles.get(v as usize), &self.triangles)
     }
 
     pub fn vertex_triangles(&self, v: u32) -> &[u32] {
@@ -1361,7 +1360,13 @@ impl Mesh {
         const PAR_ABOVE: usize = 2048;
 
         // 1. moved vertices + their neighbours, de-duplicated (parallel when large).
-        let verts = collect_unique(moved, |&v| self.vertex_neighbors.get(v as usize), |&v| v, &self.vert_stamp, stamp);
+        let verts = collect_unique(
+            moved,
+            |&v| self.vertex_triangles.get(v as usize).iter().flat_map(|&t| self.triangles[t as usize]),
+            |&v| v,
+            &self.vert_stamp,
+            stamp,
+        );
 
         // 2. normals: unchanged maths, parallel above a threshold so tiny dabs avoid fork/join cost.
         let normals: Vec<Vec3> = if verts.len() > PAR_ABOVE {
@@ -1419,9 +1424,9 @@ impl Mesh {
 }
 
 /// Distinct ids among `items` (via `seed`) and what `expand` yields for them.
-fn collect_unique<'a>(
+fn collect_unique<I: IntoIterator<Item = u32>>(
     items: &[u32],
-    expand: impl Fn(&u32) -> &'a [u32] + Sync,
+    expand: impl Fn(&u32) -> I + Sync,
     seed: impl Fn(&u32) -> u32 + Sync,
     stamps: &Stamps,
     stamp: u32,
@@ -1434,7 +1439,7 @@ fn collect_unique<'a>(
             if stamps.claim(s, stamp) {
                 out.push(s);
             }
-            for &id in expand(item) {
+            for id in expand(item) {
                 if stamps.claim(id, stamp) {
                     out.push(id);
                 }
@@ -1449,6 +1454,37 @@ fn collect_unique<'a>(
     let mut out = Vec::with_capacity(parts.iter().map(Vec::len).sum());
     parts.into_iter().for_each(|mut p| out.append(&mut p));
     out
+}
+
+impl Mesh {
+    /// Bytes held by each part of the mesh (allocated capacity), for
+    /// measuring memory use. Largest first.
+    pub fn memory_breakdown(&self) -> Vec<(&'static str, usize)> {
+        fn v<T>(x: &Vec<T>) -> usize {
+            x.capacity() * std::mem::size_of::<T>()
+        }
+        let mut out = vec![
+            ("positions", v(&self.positions)),
+            ("normals", v(&self.normals)),
+            ("mask", v(&self.mask)),
+            ("color", v(&self.color)),
+            ("triangles", v(&self.triangles)),
+            ("chunks", v(&self.chunks)),
+            ("groups", v(&self.groups)),
+            ("hidden", v(&self.hidden)),
+            ("vertex_hidden", v(&self.vertex_hidden)),
+            ("source_vertex", v(&self.source_vertex)),
+            ("source_triangle", v(&self.source_triangle)),
+            ("vertex_triangles", self.vertex_triangles.bytes()),
+            ("vertex_chunk", v(&self.vertex_chunk)),
+            ("triangle_chunk", v(&self.triangle_chunk)),
+            ("dirty", v(&self.dirty)),
+            ("loose_bounds", v(&self.loose_bounds)),
+            ("vert_stamp", v(&self.vert_stamp.0)),
+        ];
+        out.sort_by_key(|a| std::cmp::Reverse(a.1));
+        out
+    }
 }
 
 impl Mesh {
@@ -1613,7 +1649,7 @@ impl Mesh {
                 sum += n * w;
                 weight += w;
             }
-            for &nb in self.neighbors(v) {
+            for &nb in &self.neighbors(v) {
                 if seen.insert(nb) {
                     queue.push_back(nb);
                 }
