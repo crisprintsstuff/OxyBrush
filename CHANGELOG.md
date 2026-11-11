@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.8-beta] - 2026-11-11
+
 ### Changed
 - **Studio theme refinements:** slider handles are solid bars with no outline, corners are a little squarer (60% of the chosen corner style's radius), and windows and menus have a smaller, fainter shadow.
 
