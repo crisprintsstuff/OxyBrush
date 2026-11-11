@@ -14,6 +14,7 @@ const HELP: &[(&str, &str)] = &[
     ("Tab+drag", "pull a new quad out of a border edge"),
     ("Ctrl+click", "insert an edge loop across an edge"),
     ("Ctrl+Shift+click", "delete a point or face"),
+    ("Alt+click", "pin or unpin a point, edge or face (relax leaves pins)"),
 ];
 
 /// The tool's window: counts, relax settings, the controls, and Done (Esc).
@@ -22,11 +23,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         return;
     }
     let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+    let mut unpin_all = false;
     let mut done = esc && !matches!(ed.drag, Drag::Retopo(_)) && !ctx.egui_wants_keyboard_input();
     let surface = ed.retopo.as_ref().map(|r| r.surface);
     let surface_name =
         surface.and_then(|s| ed.scene.index_of(s)).map(|i| ed.scene.pieces[i].name.clone()).unwrap_or_default();
     let counts = ed.retopo_cage().map(|c| (c.quad_count(), c.triangle_count(), c.dot_count()));
+    let pinned = ed.retopo_cage().map_or(0, |c| c.pinned_count());
     let screen = ctx.content_rect();
     egui::Window::new("Retopology")
         .collapsible(true)
@@ -57,6 +60,18 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.label("Relax radius");
                     ui.add(crate::widgets::Bar(egui::Slider::new(&mut r.relax_radius_pt, 10.0..=200.0).suffix(" pt")));
                     ui.end_row();
+                    ui.label("Pinned");
+                    ui.horizontal(|ui| {
+                        ui.label(format!("{pinned} points"));
+                        if ui
+                            .add_enabled(pinned > 0, egui::Button::new("Unpin all"))
+                            .on_hover_text("Let relax move every point again (Alt+click pins or unpins points)")
+                            .clicked()
+                        {
+                            unpin_all = true;
+                        }
+                    });
+                    ui.end_row();
                     ui.label("Symmetry");
                     ui.checkbox(&mut r.mirror, "Mirror across X").on_hover_text(
                         "Every point, face, loop, move and delete is mirrored across the piece's X symmetry plane. Points near the plane snap onto it and are shared by both sides.",
@@ -85,6 +100,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.add_space(4.0);
             done |= ui.button("Done").on_hover_text("Close the tool; the new mesh stays as a piece (Esc)").clicked();
         });
+    if unpin_all {
+        ed.retopo_unpin_all();
+    }
     if done {
         ed.finish_retopo();
     }
@@ -129,6 +147,18 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         if let Some(p) = at(v) {
             let loose = !cage.faces.iter().any(|f| corners(f).contains(&v));
             let radius = if loose { 4.5 } else { 3.0 };
+            if cage.is_pinned(v) {
+                // Pinned: a square in the accent colour, so it stands out from points relax can move.
+                let rect = egui::Rect::from_center_size(p, egui::vec2(8.0, 8.0));
+                painter.rect(
+                    rect,
+                    1.0,
+                    accent,
+                    Stroke::new(1.0, Color32::from_black_alpha(200)),
+                    egui::StrokeKind::Middle,
+                );
+                continue;
+            }
             let fill = if open[v as usize] { POINT } else { EDGE };
             painter.circle(p, radius, fill, Stroke::new(1.0, Color32::from_black_alpha(160)));
         }
