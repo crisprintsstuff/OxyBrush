@@ -2099,7 +2099,7 @@ impl Editor {
             .drain(..)
             .flat_map(|(c, r)| transforms.iter().map(move |m| (center + *m * (c - center), r)))
             .collect();
-        let detail = oxy_mesh::dyntopo::Detail { edge, max_triangles, collapse: true };
+        let detail = oxy_mesh::dyntopo::Detail { edge, max_triangles: triangle_cap(max_triangles), collapse: true };
         if let Some(r) = oxy_mesh::dyntopo::refine(&piece.mesh, &spheres, detail) {
             if !d.changed {
                 // From here on the stroke is one topology step (the mesh
@@ -5061,7 +5061,7 @@ impl Editor {
             return false;
         };
 
-        if new_mesh.triangle_count() > self.max_triangles {
+        if new_mesh.triangle_count() > triangle_cap(self.max_triangles) {
             self.status = format!(
                 "Duplication would exceed maximum triangle limit {} (mesh has {})",
                 self.max_triangles,
@@ -5137,7 +5137,7 @@ impl Editor {
 
         let transforms = self.symmetry.transforms();
         let added_tris = prim_mesh.triangle_count() * transforms.len();
-        if base_mesh.triangle_count() + added_tris > self.max_triangles {
+        if base_mesh.triangle_count() + added_tris > triangle_cap(self.max_triangles) {
             self.status = format!(
                 "Inserting primitive would exceed maximum triangle limit {} (mesh has {})",
                 self.max_triangles,
@@ -5751,6 +5751,12 @@ fn symmetric_planes(
     }
     planes
 }
+/// The triangle limit as a number to compare against: the setting's 0
+/// means unlimited (Settings > Subdivision limit), not "no triangles".
+pub(crate) fn triangle_cap(max_triangles: usize) -> usize {
+    if max_triangles == 0 { usize::MAX } else { max_triangles }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -6540,6 +6546,34 @@ mod tests {
         assert_eq!(e.scene.active().mesh.positions, before);
         e.redo();
         assert_eq!(e.scene.active().mesh.triangle_count(), after);
+    }
+
+    #[test]
+    fn an_unlimited_triangle_limit_limits_nothing() {
+        // The Subdivision limit's "Unlimited" is stored as 0. Insert
+        // Primitive, Duplicate and dynamic detail took it as a limit of
+        // zero triangles: inserting said "exceed maximum triangle limit 0".
+        let mut e = editor();
+        e.max_triangles = 0;
+        e.symmetry = Symmetry::default();
+        e.brush_kind = BrushKind::InsertPrimitive;
+        let before = e.scene.active().mesh.triangle_count();
+        center(&mut e);
+        let at = e.pointer.unwrap();
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(at + Vec2::new(50.0, 50.0));
+        e.pointer_up();
+        assert!(e.scene.active().mesh.triangle_count() > before, "inserted: {}", e.status);
+        assert!(!e.status.contains("limit"), "{}", e.status);
+        let pieces = e.scene.pieces.len();
+        e.duplicate_active(false);
+        assert_eq!(e.scene.pieces.len(), pieces + 1, "duplicated: {}", e.status);
+
+        let mut e = dyntopo_editor();
+        e.max_triangles = 0;
+        let before = e.scene.active().mesh.triangle_count();
+        short_stroke(&mut e);
+        assert!(e.scene.active().mesh.triangle_count() > before * 2, "detail added: {}", e.status);
     }
 
     #[test]
