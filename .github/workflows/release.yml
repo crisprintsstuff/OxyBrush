@@ -175,9 +175,11 @@ jobs:
           cat icon-check/report.txt
           sw_vers
           # Small copies in the log too, for when the artifact can't be fetched.
+          # The small copies go to a temporary folder, not the artifact.
+          SMALL=$(mktemp -d)
           for f in icon-check/*.icon.png; do
-            sips -z 64 64 "$f" --out "$f.small.png" >/dev/null
-            echo "ICON-BASE64 $(basename "$f") $(base64 -i "$f.small.png" | tr -d '\n')"
+            sips -z 64 64 "$f" --out "$SMALL/small.png" >/dev/null
+            echo "ICON-BASE64 $(basename "$f") $(base64 -i "$SMALL/small.png" | tr -d '\n')"
           done
       - uses: actions/upload-artifact@v4
         if: always()
@@ -256,7 +258,7 @@ jobs:
       - name: Checksums
         run: |
           cd dist
-          rm -f oxybrush dist-screenshot-macos.png *.icon.png report.txt lsregister.txt   # job-internal artifacts, not release assets
+          rm -f oxybrush dist-screenshot-macos.png *.icon.png* report.txt lsregister.txt   # job-internal artifacts, not release assets
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
       - uses: dtolnay/rust-toolchain@1.99.1
