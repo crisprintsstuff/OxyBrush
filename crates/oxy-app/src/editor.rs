@@ -836,6 +836,9 @@ pub struct Editor {
     pub request_load_alpha: bool,
     /// Ask the app for a file to export the selected alpha to.
     pub request_export_alpha: bool,
+    /// An alpha was captured or loaded since the project was last saved:
+    /// alphas are saved with it, but aren't in the undo history.
+    alphas_unsaved: bool,
     /// How many alphas have been captured from the view this session (for names).
     captures: u32,
     /// Side of a captured alpha, in pixels (`CAPTURE_SIZES`).
@@ -1183,6 +1186,7 @@ impl Default for Editor {
             selection_lasso: false,
             request_load_alpha: false,
             request_export_alpha: false,
+            alphas_unsaved: false,
             captures: 0,
             capture_alpha_size: 1024,
             symmetry: Symmetry { x: true, ..Default::default() },
@@ -1421,7 +1425,7 @@ impl Editor {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.history.revision() != self.saved_revision
+        self.history.revision() != self.saved_revision || self.alphas_unsaved
     }
 
     pub fn title(&self) -> String {
@@ -2483,6 +2487,42 @@ impl Editor {
         self.status = format!("Loaded alpha {}", alpha.name);
         self.alphas.push(Arc::new(alpha));
         self.alpha = Some(self.alphas.len() - 1);
+        self.alphas_unsaved = true;
+    }
+
+    /// The alphas saved with the project: every one after the built-ins
+    /// (captured from view or loaded from an image), at 16 bits.
+    fn saved_alphas(&self) -> Vec<oxy_doc::AlphaData> {
+        self.alphas[BuiltinAlpha::ALL.len().min(self.alphas.len())..]
+            .iter()
+            .map(|a| oxy_doc::AlphaData {
+                name: a.name.clone(),
+                size: a.size,
+                data: a.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16).collect(),
+            })
+            .collect()
+    }
+
+    /// Add the alphas a project was saved with, skipping any already in the
+    /// list (same name and pixels), so opening a project again doesn't
+    /// duplicate them. Later captures are numbered after its captures.
+    fn adopt_alphas(&mut self, saved: Vec<oxy_doc::AlphaData>) {
+        for a in saved {
+            let n = (a.size as usize).pow(2);
+            if a.size == 0 || a.data.len() != n {
+                continue;
+            }
+            let data: Vec<f32> = a.data.iter().map(|&v| v as f32 / 65535.0).collect();
+            let same = |b: &Alpha| {
+                b.name == a.name && b.size == a.size && b.data.iter().zip(&data).all(|(x, y)| (x - y).abs() < 1e-4)
+            };
+            if let Some(k) = a.name.strip_prefix("Capture ").and_then(|k| k.parse::<u32>().ok()) {
+                self.captures = self.captures.max(k);
+            }
+            if !self.alphas.iter().any(|b| same(b)) {
+                self.alphas.push(Arc::new(Alpha { name: a.name, size: a.size, data }));
+            }
+        }
     }
 
     /// Returns true if anything changed that needs a redraw.
@@ -3235,6 +3275,7 @@ impl Editor {
         self.history.clear();
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
+        self.alphas_unsaved = false;
         self.path = path;
         self.link = None;
         self.bridge = None;
@@ -3247,6 +3288,7 @@ impl Editor {
     /// open, if any, on its piece (the `CURV` section), so it isn't lost.
     pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
         let mut data = self.scene.to_data();
+        data.alphas = self.saved_alphas();
         if let Some(c) = self.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
             && let Some(i) = self.scene.index_of(c.piece)
         {
@@ -3330,10 +3372,15 @@ impl Editor {
     }
 
     fn open_project_now(&mut self, path: &Path) {
-        match format::load(path).map(Scene::from_data) {
+        let mut alphas = Vec::new();
+        match format::load(path).map(|mut d| {
+            alphas = std::mem::take(&mut d.alphas);
+            Scene::from_data(d)
+        }) {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
                 self.replace_document(scene, Some(path.to_path_buf()));
+                self.adopt_alphas(alphas);
                 self.link = Link::detect(path, &self.scene);
                 self.protect_path(path);
                 self.remember_recent(path);
@@ -3486,6 +3533,7 @@ impl Editor {
             Ok(()) => {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
+                self.alphas_unsaved = false;
                 self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
@@ -3616,9 +3664,14 @@ impl Editor {
     }
 
     pub fn recover(&mut self, r: &autosave::Recoverable) {
-        match format::load(&r.path).map(Scene::from_data) {
+        let mut alphas = Vec::new();
+        match format::load(&r.path).map(|mut d| {
+            alphas = std::mem::take(&mut d.alphas);
+            Scene::from_data(d)
+        }) {
             Ok(Some(scene)) => {
                 self.replace_document(scene, None);
+                self.adopt_alphas(alphas);
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
@@ -6430,6 +6483,37 @@ mod tests {
             let real = oxy_topo::voxel_remesh(&[&e.scene.active().mesh], opts).unwrap().triangle_count() as f32;
             assert!((estimate / real - 1.0).abs() < 0.15, "res {res}: estimate {estimate}, real {real}");
         }
+    }
+
+    #[test]
+    fn captured_alphas_are_saved_with_the_project() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stamps.oxb");
+        let mut e = editor();
+        let builtins = e.alphas.len();
+        e.capture_alpha_size = 256;
+        e.capture_alpha();
+        wait_job(&mut e);
+        assert!(e.is_modified(), "a new alpha is unsaved work");
+        assert!(e.save(&path));
+        assert!(!e.is_modified());
+        let captured = e.alphas.last().unwrap().clone();
+        // A fresh start opens the project with its alpha.
+        let mut f = editor();
+        f.open_project_now(&path);
+        assert_eq!(f.alphas.len(), builtins + 1);
+        let back = f.alphas.last().unwrap();
+        assert_eq!((back.name.as_str(), back.size), ("Capture 1", 256));
+        assert!(back.data.iter().zip(&captured.data).all(|(a, b)| (a - b).abs() < 1e-4), "same pixels");
+        assert!(!f.is_modified(), "opening isn't an edit");
+        // Opening it again doesn't duplicate it, and the next capture is number 2.
+        f.open_project_now(&path);
+        assert_eq!(f.alphas.len(), builtins + 1);
+        f.capture_alpha();
+        wait_job(&mut f);
+        assert_eq!(f.alphas.last().unwrap().name, "Capture 2");
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
