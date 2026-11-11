@@ -151,6 +151,7 @@ commands! {
     Guide => "Guide", "F2", "Open the built-in guide. It works offline.";
     Welcome => "Welcome screen", "", "Open the welcome window.";
     CheckUpdates => "Check for updates…", "", "Look for a new version. Nothing about you or your work is sent.";
+    CloseProject => "Close project", "", "Close this project and go back to the start screen. You are asked to save unsaved work first.";
     Quit => "Quit", "", "Close OxyBrush. You are asked before unsaved work is discarded.";
     Radius => "Brush radius", "[ and ]", "Brush size on screen, in points.";
     Strength => "Brush strength", "- and =", "How strong each dab is.";

@@ -427,6 +427,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
                     action = Some(UiAction::SaveAs);
                 }
+                if tips::button(ui, "Close project", Cmd::CloseProject).clicked() {
+                    ed.request(Pending::Close);
+                }
                 if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
                     ed.send_back();
                 }
@@ -4282,6 +4285,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         let what = match &pending {
             Pending::Quit => "quitting",
             Pending::New(_) => "starting a new document",
+            Pending::Close => "closing the project",
             Pending::OpenProject(_) => "opening another project",
             Pending::OpenLink(_) => "opening the objects sent from another app",
         };

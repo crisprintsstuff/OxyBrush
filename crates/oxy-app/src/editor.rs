@@ -713,6 +713,8 @@ pub struct GizmoDrag {
 pub enum Pending {
     Quit,
     New(&'static str),
+    /// Close the project: back to the start screen over a fresh sphere.
+    Close,
     OpenProject(PathBuf),
     /// Open a link manifest from another app (RFC 0010).
     OpenLink(PathBuf),
@@ -3192,6 +3194,16 @@ impl Editor {
                 let (name, mesh) = Self::primitive(which);
                 self.replace_document(Scene::new(Piece::new(name, mesh)), None);
                 self.status = format!("New document ({which})");
+            }
+            Pending::Close => {
+                let closed = self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+                let (name, mesh) = Self::primitive("sphere");
+                self.replace_document(Scene::new(Piece::new(name, mesh)), None);
+                self.show_welcome = true;
+                self.status = match closed {
+                    Some(name) => format!("Closed {name}"),
+                    None => "Closed the project".into(),
+                };
             }
             Pending::OpenProject(path) => self.open_project_now(&path),
             Pending::OpenLink(path) => self.open_link_now(&path),
@@ -8142,6 +8154,37 @@ mod tests {
         assert!(turned.dot(Vec3::X) > 0.9, "a real move should follow: {turned}");
         let flipped = ease_cursor_normal(Vec3::Y, Vec3::ZERO, -Vec3::Y, Vec3::ZERO, 1.0);
         assert!(flipped.dot(-Vec3::Y) > 0.99, "the other side of a thin part snaps: {flipped}");
+    }
+
+    #[test]
+    fn close_asks_about_unsaved_work_then_returns_to_the_start_screen() {
+        let dir = std::env::temp_dir().join(format!("oxy-close-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bust.oxb");
+        let mut e = editor();
+        e.show_welcome = false;
+        e.add_primitive("cube");
+        assert!(e.save(&path));
+        // Unsaved work: Close waits for the Save / Don't save answer.
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        e.request(Pending::Close);
+        assert!(matches!(e.pending, Some(Pending::Close)));
+        assert_eq!(e.scene.pieces.len(), 3, "nothing closed yet");
+        // "Don't save": the project closes.
+        e.perform(Pending::Close);
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.path, None);
+        assert!(!e.is_modified());
+        assert!(e.show_welcome, "back to the start screen");
+        assert_eq!(e.status, "Closed bust.oxb");
+        assert_eq!(e.history.undo_labels().count(), 0, "the closed project's history is gone");
+        // With nothing unsaved, Close closes at once.
+        e.show_welcome = false;
+        e.request(Pending::Close);
+        assert!(e.pending.is_none());
+        assert!(e.show_welcome);
+        std::fs::remove_dir_all(dir).ok();
     }
 
     #[test]
