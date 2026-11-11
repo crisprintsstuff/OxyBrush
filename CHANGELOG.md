@@ -10,6 +10,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 - **Opening a file no longer leaves the Home window on top:** with **Show at startup** on, a project double-clicked in Finder (or opened with Open With, dropped on the window or picked in the Open dialog) opened behind the Home window. Opening any file now closes it, as starting OxyBrush with a file already did.
+- **macOS: `.oxb` projects showed a generic "?" icon** in Finder, and the Dock and Open With didn't know OxyBrush opens them, when macOS had missed the app's document types (for example after opening it first from the disk image). OxyBrush now registers itself with macOS's Launch Services (the system `lsregister` tool, in the background) each time it starts from its installed location. When macOS runs it from a temporary translocated copy, it logs a hint to move it to Applications instead.
 
 ## [4.0.0-beta.1] - 2026-11-11
 
