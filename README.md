@@ -58,6 +58,8 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 | **Touch friendly** | Touch screens and pen tablets: large buttons, a brush tile grid, on-screen **Smooth / Mask / Invert** toggles instead of modifier keys, and undo/redo beside the viewport |
 | **Workstation** | Dense layout: a two-column brush shelf and the main controls in the top bar (Preferences > Appearance has a matching **Workstation** quick preset) |
 
+To fit more brushes in the shelf, turn off **Preferences > Appearance > Show brush names in the brush shelf**: the brushes become a grid of icons, with each name on hover.
+
 **Arrange it your way** (Settings > Arrange panels, or right-click the brush shelf or the size/strength bar):
 
 - **Brush shelf:** left, bottom (a horizontal strip of brush previews) or right. **Drag brushes** to put the ones you use most first; number keys 1–9, 0 follow your order.

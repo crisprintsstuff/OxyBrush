@@ -852,6 +852,8 @@ pub struct Editor {
     /// The main window's size, position and state, kept up to date by the
     /// app and saved with the settings (issue #95).
     pub window_geometry: Option<crate::settings::WindowGeometry>,
+    /// Brush names in the brush shelf (Preferences > Appearance).
+    pub show_brush_names: bool,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     /// The interface scale before it was last changed, until the
@@ -1178,6 +1180,7 @@ impl Default for Editor {
             remember_brushes: false,
             plugin_params: Default::default(),
             window_geometry: None,
+            show_brush_names: true,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             ui_scale_from: None,
@@ -1571,6 +1574,7 @@ impl Editor {
             remember_brushes: self.remember_brushes,
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
+            show_brush_names: self.show_brush_names,
         }
     }
 
@@ -1721,6 +1725,7 @@ impl Editor {
         self.remember_brushes = s.remember_brushes;
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
+        self.show_brush_names = s.show_brush_names;
         if !s.remember_brushes {
             return;
         }
@@ -8082,6 +8087,7 @@ mod tests {
                 position: Some((10, 20)),
                 maximized: false,
             }),
+            show_brush_names: false,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();

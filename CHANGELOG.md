@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Hide brush names in the shelf:** **Preferences > Appearance > Show brush names in the brush shelf**, on by default. Off shows the brushes as a grid of icons, so more fit at once; hover one for its name. Works with every theme and layout.
 - **The window opens where you left it** ([#95](https://github.com/crisprintsstuff/OxyBrush/issues/95)): its size, position and maximized state are remembered between sessions. If it was last on a monitor that's no longer connected, it opens on one that is, at the same size. On Wayland, where apps aren't told their position, the size and maximized state are remembered.
 - **Plugin API 3** ([RFC 0013](docs/rfcs/0013-plugin-api-3.md)): in-app plugins can now:
   - change face groups and hidden faces, and replace a piece's triangles (new `edit_topology` capability);
