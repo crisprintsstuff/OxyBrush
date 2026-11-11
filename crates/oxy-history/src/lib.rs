@@ -381,10 +381,16 @@ impl History {
     /// Prefix the newest undo entry. Agent edits use this so the history
     /// panel shows who made the change, without a second undo stack.
     pub fn prefix_latest_undo(&mut self, prefix: &str) {
-        if let Some(entry) = self.undo.back_mut()
-            && !entry.label.starts_with(prefix)
-        {
-            entry.label.insert_str(0, prefix);
+        self.prefix_recent_undo(prefix, 1);
+    }
+
+    /// Prefix the newest `count` undo entries, for an action that recorded
+    /// more than one step (an import scaled to fit is two).
+    pub fn prefix_recent_undo(&mut self, prefix: &str, count: usize) {
+        for entry in self.undo.iter_mut().rev().take(count) {
+            if !entry.label.starts_with(prefix) {
+                entry.label.insert_str(0, prefix);
+            }
         }
     }
 
@@ -424,6 +430,22 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prefix_recent_undo_labels_only_the_newest_steps() {
+        let mut scene = Scene::new(Piece::new("A", oxy_mesh::primitives::icosphere(1, 1.0)));
+        let mut h = History::default();
+        for label in ["One", "Two", "Three"] {
+            scene.pieces.push(Piece::new(label, oxy_mesh::primitives::icosphere(1, 1.0)));
+            h.record(label, Step::Inserted { index: scene.pieces.len() - 1 });
+        }
+        h.prefix_recent_undo("Agent: ", 2);
+        h.prefix_recent_undo("Agent: ", 2);
+        let labels: Vec<&str> = h.undo_labels().collect();
+        assert_eq!(labels.iter().filter(|l| l.starts_with("Agent: ")).count(), 2, "{labels:?}");
+        assert!(labels.contains(&"One"), "the older step is untouched: {labels:?}");
+        assert!(!labels.iter().any(|l| l.starts_with("Agent: Agent:")), "never prefixed twice: {labels:?}");
+    }
     use oxy_mesh::primitives;
 
     fn scene() -> Scene {
