@@ -101,6 +101,7 @@ enum DialogReply {
     SaveAs(Option<PathBuf>),
     LoadMatcap(Option<PathBuf>),
     LoadAlpha(Option<PathBuf>),
+    ExportAlpha(Option<PathBuf>),
     ImportBrush(Option<PathBuf>),
     ExportBrush { preset: oxy_sculpt::BrushPreset, path: Option<PathBuf> },
     ImportKeymap(Option<PathBuf>),
@@ -880,6 +881,22 @@ impl App {
                 }
                 self.spawn_dialog(dialog.pick_file(), DialogReply::LoadAlpha);
             }
+            UiAction::ExportAlpha => {
+                if self.dialog_active {
+                    return;
+                }
+                let Some(alpha) = ed.alpha.and_then(|i| ed.alphas.get(i)) else {
+                    ed.status = "Select an alpha to export first".into();
+                    return;
+                };
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("PNG image", &["png", "PNG"])
+                    .set_file_name(format!("{}.png", alpha.name));
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                self.spawn_dialog(dialog.save_file(), DialogReply::ExportAlpha);
+            }
             UiAction::ImportBrush => {
                 if self.dialog_active {
                     return;
@@ -1021,6 +1038,7 @@ impl App {
                         Err(e) => self.editor.status = format!("Could not load {}: {e}", p.display()),
                     }
                 }
+                DialogReply::ExportAlpha(Some(p)) => self.editor.export_alpha(&p),
                 DialogReply::LoadAlpha(Some(p)) => match crate::support::load_alpha_png(&p) {
                     Ok(alpha) => self.editor.add_alpha(alpha),
                     Err(e) => self.editor.status = format!("Could not load {}: {e}", p.display()),

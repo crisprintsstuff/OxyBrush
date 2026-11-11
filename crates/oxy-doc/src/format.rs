@@ -16,6 +16,10 @@
 //!   is derived by subdividing the base. When present, the preceding
 //!   `PIEC` stores the active level in level order. Older readers skip it
 //!   and simply load the active level as a plain mesh.
+//! - `ALPH` (optional, since 3.0.9): a brush alpha kept with the project,
+//!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
+//!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
+//!   Not tied to a piece. Older readers skip it and lose only the alpha.
 //! - `VCOL` (optional, since 0.4): vertex color of the **preceding** `PIEC`:
 //!   `vcount:u32 rgb:f32*3v` (sRGB, 0..=1), indexed like its positions.
 //!   Only written for painted pieces; older readers skip it and show the
@@ -145,6 +149,17 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             }
             sections.push((*b"VCOL", b));
         }
+    }
+
+    for a in &scene.alphas {
+        let mut b = Vec::with_capacity(12 + a.name.len() + a.data.len() * 2);
+        b.extend_from_slice(&(a.name.len() as u32).to_le_bytes());
+        b.extend_from_slice(a.name.as_bytes());
+        b.extend_from_slice(&a.size.to_le_bytes());
+        for v in &a.data {
+            b.extend_from_slice(&v.to_le_bytes());
+        }
+        sections.push((*b"ALPH", b));
     }
 
     let mut out = Vec::new();
@@ -335,6 +350,10 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring a damaged retopology cage on piece {:?}: {e}", piece.name),
                 }
             }
+            b"ALPH" => match decode_alpha(&raw) {
+                Ok(a) => scene.alphas.push(a),
+                Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
+            },
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
@@ -369,6 +388,21 @@ fn encode_curve(c: &crate::SavedCurve) -> Vec<u8> {
     u(&mut b, c.vertices);
     u(&mut b, c.triangles);
     b
+}
+
+fn decode_alpha(raw: &[u8]) -> Result<crate::AlphaData> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let name_len = r.u32()? as usize;
+    let name = String::from_utf8_lossy(r.take(name_len)?).into_owned();
+    let size = r.u32()?;
+    let n = (size as usize).checked_mul(size as usize).ok_or_else(truncated)?;
+    if size == 0 {
+        return Err(Error::Corrupt("empty alpha".into()));
+    }
+    r.check(n, 2)?;
+    let data =
+        (0..n).map(|_| Ok(u16::from_le_bytes(r.take(2)?.try_into().expect("2 bytes")))).collect::<Result<_>>()?;
+    Ok(crate::AlphaData { name, size, data })
 }
 
 fn decode_curve(raw: &[u8]) -> Result<crate::SavedCurve> {
@@ -691,6 +725,29 @@ mod tests {
     use super::*;
     use oxy_mesh::primitives;
 
+    #[test]
+    fn brush_alphas_round_trip_and_a_damaged_one_is_skipped() {
+        let mut scene = sample();
+        let n = 4u32;
+        scene.alphas = vec![
+            crate::AlphaData {
+                name: "Capture 1".into(),
+                size: n,
+                data: (0..n * n).map(|k| (k * 4000) as u16).collect(),
+            },
+            crate::AlphaData { name: "rivet".into(), size: 2, data: vec![0, 65535, 32768, 1] },
+        ];
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"ALPH").count(), 2);
+        assert_eq!(decode(&bytes).unwrap(), scene);
+        // A section claiming more pixels than it holds is skipped; the rest loads.
+        let mut broken = scene.clone();
+        broken.alphas[1].size = 3;
+        let back = decode(&encode(&broken)).unwrap();
+        assert_eq!(back.alphas, scene.alphas[..1]);
+        assert_eq!(back.pieces, scene.pieces);
+    }
+
     fn sample() -> SceneData {
         let mut a = primitives::icosphere(3, 1.0).to_data();
         a.mask = (0..a.positions.len()).map(|i| (i % 7) as f32 / 7.0).collect();
@@ -724,6 +781,7 @@ mod tests {
                 },
             ],
             active: 1,
+            alphas: Vec::new(),
         }
     }
 
@@ -760,7 +818,7 @@ mod tests {
         piece.cage = Some(cage);
         // A brush moved a vertex after the last cage edit: the saved cage has it.
         piece.mesh.positions[0].z = 0.25;
-        let data = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let data = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() };
         let bytes = encode(&data);
         assert_eq!(bytes.windows(4).filter(|w| w == b"CAGE").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
@@ -893,7 +951,7 @@ mod tests {
         };
         piece.tubes.push(recipe.clone());
         assert_eq!(piece.tube_recipe(), Some(&recipe));
-        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0 });
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"TUBE").count(), 1);
         let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
         assert_eq!(loaded.tubes, vec![recipe]);
@@ -1011,7 +1069,7 @@ mod tests {
         m = oxy_mesh::Mesh::from_data(d);
         mr.bind(&m);
         let piece = Piece { multires: Some(mr), ..Piece::new("Head", m) };
-        let scene = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let scene = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() };
         let bytes = encode(&scene);
         let back = decode(&bytes).unwrap();
         assert_eq!(back, scene);
@@ -1051,6 +1109,7 @@ mod tests {
                 curve: None,
             }],
             active: 0,
+            alphas: Vec::new(),
         };
         let points_at_theirs = |p: &Piece| {
             let map = p.current_origin().expect("origin while topology is unchanged");
@@ -1062,7 +1121,7 @@ mod tests {
         assert!(points_at_theirs(&piece));
 
         // Saved: VMAP is written and round-trips exactly.
-        let saved = SceneData { pieces: vec![piece.to_data()], active: 0 };
+        let saved = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() };
         let bytes = encode(&saved);
         assert_eq!(bytes.windows(4).filter(|w| w == b"VMAP").count(), 1);
         let back = decode(&bytes).unwrap();
