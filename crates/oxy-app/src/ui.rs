@@ -3,7 +3,9 @@
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
 use crate::pose::{GizmoMode, Handle};
-use crate::settings::{AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, ThemePreset, UiLayout};
+use crate::settings::{
+    AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, SliderSize, ThemePreset, UiLayout,
+};
 use crate::tips::{self, Cmd, plain};
 use crate::widgets::{self, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
@@ -109,43 +111,26 @@ pub fn metrics(layout: UiLayout) -> Metrics {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn apply_theme(
-    ctx: &egui::Context,
-    theme: ThemePreset,
-    accent: AccentPreset,
-    custom_accent: [u8; 3],
-    corner_style: CornerStyle,
-    high_contrast: bool,
-    ui_scale: f32,
-    layout: UiLayout,
-) {
-    let m = metrics(layout);
-    let is_high_contrast = high_contrast || theme == ThemePreset::HighContrast;
-    let accent_rgb = accent.rgb(custom_accent);
-    let accent_color = Color32::from_rgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
+/// The colours of a theme's chrome (what `apply_theme` uses, and what the
+/// Theme window's preview cards show).
+#[derive(Debug, Clone, Copy)]
+pub struct Palette {
+    pub bg: Color32,
+    pub panel: Color32,
+    pub window: Color32,
+    pub faint: Color32,
+    pub text: Color32,
+    pub inactive_weak: Color32,
+    pub inactive_fill: Color32,
+    pub hovered_weak: Color32,
+    pub hovered_fill: Color32,
+    pub stroke: Color32,
+    pub window_stroke: Color32,
+}
 
-    let mut v = if theme == ThemePreset::StudioLight && !is_high_contrast {
-        egui::Visuals::light()
-    } else {
-        egui::Visuals::dark()
-    };
-
-    struct Palette {
-        bg: Color32,
-        panel: Color32,
-        window: Color32,
-        faint: Color32,
-        text: Color32,
-        inactive_weak: Color32,
-        inactive_fill: Color32,
-        hovered_weak: Color32,
-        hovered_fill: Color32,
-        stroke: Color32,
-        window_stroke: Color32,
-    }
-
-    let p = if is_high_contrast {
+/// The chrome colours of `theme` (high contrast overrides it).
+pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
+    if is_high_contrast {
         Palette {
             bg: Color32::BLACK,
             panel: Color32::from_gray(10),
@@ -273,7 +258,33 @@ pub fn apply_theme(
                 window_stroke: Color32::from_gray(175),
             },
         }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn apply_theme(
+    ctx: &egui::Context,
+    theme: ThemePreset,
+    accent: AccentPreset,
+    custom_accent: [u8; 3],
+    corner_style: CornerStyle,
+    slider_size: SliderSize,
+    high_contrast: bool,
+    ui_scale: f32,
+    layout: UiLayout,
+) {
+    let m = metrics(layout);
+    let is_high_contrast = high_contrast || theme == ThemePreset::HighContrast;
+    let accent_rgb = accent.rgb(custom_accent);
+    let accent_color = Color32::from_rgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
+
+    let mut v = if theme == ThemePreset::StudioLight && !is_high_contrast {
+        egui::Visuals::light()
+    } else {
+        egui::Visuals::dark()
     };
+
+    let p = theme_palette(theme, is_high_contrast);
 
     v.panel_fill = p.panel;
     v.window_fill = p.window;
@@ -375,9 +386,7 @@ pub fn apply_theme(
             s.spacing.icon_width = 22.0;
             s.spacing.icon_width_inner = 14.0;
         }
-        // egui pads a window's title bar with this same margin above and
-        // below the title, so it is kept modest; a finger-sized title bar
-        // still comes from the larger Touch heading.
+        s.spacing.slider_rail_height = slider_size.rail_height(s.spacing.slider_rail_height, m.interact_height);
         // egui pads a window's title bar with this same margin above and
         // below the title, so it is kept modest; a finger-sized title bar
         // still comes from the larger Touch heading.
@@ -398,6 +407,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
     let busy = ed.job.is_some();
     ed.preview_matcap = None;
+    // With pen panel gestures on (RFC 0015) a pen drag over a label scrolls
+    // the panel, so labels don't start a text selection then.
+    let selectable = !ed.pen_panels_active();
+    if ui.ctx().global_style().interaction.selectable_labels != selectable {
+        ui.ctx().all_styles_mut(|s| s.interaction.selectable_labels = selectable);
+    }
 
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -561,10 +576,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ed.request_load_matcap = true;
                     }
                 });
-                tips::menu(ui, "Background", plain::VIEWPORT_BACKGROUND, |ui| background_menu(ui, ed));
                 ui.separator();
-                if tips::button(ui, "Appearance & Theme…", Cmd::ThemeWindow).clicked() {
-                    ed.open_settings(crate::editor::SettingsTab::Appearance);
+                if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
+                    ed.open_theme(crate::editor::ThemeTab::Themes);
                 }
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
             });
@@ -672,8 +686,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         action = Some(UiAction::InstallAddon);
     }
     dialogs(ui, ed, &mut action);
-    background_window(ui.ctx(), ed);
-    theme_appearance_window(ui.ctx(), ed);
+    theme_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
@@ -751,7 +764,9 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
                         let tip = match tab {
                             crate::editor::SettingsTab::General => plain::SETTINGS,
                             crate::editor::SettingsTab::Pen => plain::PEN_SETTINGS,
-                            crate::editor::SettingsTab::Appearance => "Theme, accent color, wireframe, and background",
+                            crate::editor::SettingsTab::Interface => {
+                                "Brush shelf options; the look is in the Theme window"
+                            }
                             crate::editor::SettingsTab::Plugins => plain::PLUGINS,
                             crate::editor::SettingsTab::Keymap => plain::KEYMAP_SETTINGS,
                             crate::editor::SettingsTab::Agent => plain::AGENT_ENABLED,
@@ -775,7 +790,7 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
                             match ed.settings_tab {
                                 crate::editor::SettingsTab::General => settings_general_tab(ui, ed),
                                 crate::editor::SettingsTab::Pen => settings_pen_tab(ui, ed),
-                                crate::editor::SettingsTab::Appearance => settings_appearance_tab(ui, ed),
+                                crate::editor::SettingsTab::Interface => settings_interface_tab(ui, ed),
                                 crate::editor::SettingsTab::Plugins => settings_plugins_tab(ui, ed),
                                 crate::editor::SettingsTab::Keymap => settings_keymap_tab(ui, ed),
                                 crate::editor::SettingsTab::Agent => settings_agent_tab(ui, ed),
@@ -1058,31 +1073,16 @@ pub(crate) fn scale_slider(ui: &mut Ui, scale: &mut f32) -> egui::Response {
     r
 }
 
-fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("Appearance & Themes");
-    ui.label(
-        RichText::new("Color schemes, UI scaling, accent highlights, wireframe colors, and viewport backdrops.")
-            .weak()
-            .small(),
-    );
-    ui.add_space(6.0);
-
-    ui.label(RichText::new("Interface scale").strong());
+fn settings_interface_tab(ui: &mut Ui, ed: &mut Editor) {
+    ui.heading("Interface");
     ui.horizontal(|ui| {
-        let before = ed.ui_scale;
-        tips::hover(scale_slider(ui, &mut ed.ui_scale), plain::UI_SCALE);
-        if ui.button("Reset (100%)").clicked() {
-            ed.ui_scale = 1.0;
-        }
-        if ed.ui_scale != before {
-            ed.ui_scale_from = Some(before);
+        ui.label(RichText::new("Theme, colors, interface scale and corners are in the Theme window.").weak().small());
+        if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
+            ed.open_theme(crate::editor::ThemeTab::Themes);
         }
     });
-    ui.add_space(4.0);
-
-    ui.separator();
-    theme_appearance_controls(ui, ed);
-    ui.add_space(4.0);
+    ui.add_space(6.0);
+    ui.label(RichText::new("Brush shelf").strong());
     tips::check_plain(
         ui,
         &mut ed.show_brush_names,
@@ -1095,11 +1095,6 @@ fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
         "Narrow brush shelf (one column)",
         "A side shelf as one narrow column, leaving more room for the model: the current brush, alpha and material stacked on top, then one brush per row with its name underneath (or icons only, with names off). Not used when the shelf is at the bottom.",
     );
-    ui.add_space(4.0);
-
-    ui.separator();
-    ui.label(RichText::new("Viewport background").strong());
-    background_menu(ui, ed);
 }
 
 fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
@@ -1269,143 +1264,318 @@ fn settings_updates_tab(ui: &mut Ui, ed: &mut Editor) {
     update_menu(ui, ed);
 }
 
-fn theme_appearance_window(ctx: &egui::Context, ed: &mut Editor) {
+/// A "look": a theme with the accent, corners and viewport background that
+/// suit it, applied in one click from the Theme window. Looks only change
+/// how OxyBrush looks; shortcuts and navigation are set in the Keymap.
+struct Look {
+    name: &'static str,
+    note: &'static str,
+    theme: ThemePreset,
+    accent: AccentPreset,
+    corners: CornerStyle,
+    background: (oxy_render::BackgroundStyle, [f64; 3], [f64; 3]),
+}
+
+const LOOKS: [Look; 3] = [
+    Look {
+        name: "Classic",
+        note: "Neutral graphite, the clay accent and rounded corners: OxyBrush's default look.",
+        theme: ThemePreset::Graphite,
+        accent: AccentPreset::Terracotta,
+        corners: CornerStyle::Rounded,
+        // The default viewport background (`ViewSettings::default`).
+        background: (oxy_render::BackgroundStyle::Gradient, [0.011, 0.011, 0.011], [0.064, 0.064, 0.064]),
+    },
+    Look {
+        name: "Workstation",
+        note: "Matte dark panels, a tangerine accent and sharp corners.",
+        theme: ThemePreset::Matte,
+        accent: AccentPreset::Tangerine,
+        corners: CornerStyle::Sharp,
+        background: (oxy_render::BackgroundStyle::Gradient, [0.08, 0.08, 0.08], [0.02, 0.02, 0.02]),
+    },
+    Look {
+        name: "Midnight",
+        note: "Deep navy glass panels, pill-shaped controls, an emerald accent and a navy viewport.",
+        theme: ThemePreset::Midnight,
+        accent: AccentPreset::Emerald,
+        corners: CornerStyle::Pill,
+        background: (oxy_render::BackgroundStyle::Gradient, [0.012, 0.024, 0.062], [0.003, 0.005, 0.014]),
+    },
+];
+
+fn apply_look(ed: &mut Editor, look: &Look) {
+    ed.theme = look.theme;
+    ed.high_contrast = false;
+    ed.accent = look.accent;
+    ed.corner_style = look.corners;
+    let (style, edge, center) = look.background;
+    ed.view.background_style = style;
+    ed.view.background = edge;
+    ed.view.background_center = center;
+    ed.status = format!("Applied the {} look", look.name);
+}
+
+/// A theme's name without the note in brackets ("Graphite (Neutral Dark)" → "Graphite").
+fn theme_name(t: ThemePreset) -> &'static str {
+    t.label().split(" (").next().unwrap_or(t.label())
+}
+
+/// A label without its note in brackets ("Terracotta (Clay)" → "Terracotta").
+fn short_label(label: &'static str) -> &'static str {
+    label.split(" (").next().unwrap_or(label)
+}
+
+/// The note in brackets of a theme's label, if any.
+fn theme_note(t: ThemePreset) -> &'static str {
+    t.label().split_once(" (").map_or("", |(_, n)| n.trim_end_matches(')'))
+}
+
+/// The Theme window (RFC 0014): everything about how OxyBrush looks, in
+/// one place. Themes: the theme gallery and looks. Colors: accent and
+/// viewport background. Size & shape: interface scale and corner rounding.
+/// Changes apply at once and are remembered.
+fn theme_window(ctx: &egui::Context, ed: &mut Editor) {
     if !ed.show_theme {
         return;
     }
     let mut open = true;
-    egui::Window::new("Theme & Appearance")
+    egui::Window::new("Theme")
         .open(&mut open)
         .resizable(false)
         .collapsible(false)
-        .default_pos(egui::pos2(300.0, 90.0))
+        .default_pos(egui::pos2(300.0, 140.0))
         .show(ctx, |ui| {
-            ui.label(
-                RichText::new("Visual theme, accent color, and wireframe styling. Remembered between sessions.")
-                    .weak()
-                    .small(),
-            );
-            ui.add_space(4.0);
-            theme_appearance_controls(ui, ed);
+            ui.set_width(520.0);
+            ui.horizontal(|ui| {
+                for tab in crate::editor::ThemeTab::ALL {
+                    ui.selectable_value(&mut ed.theme_tab, tab, tab.label());
+                }
+            });
+            ui.separator();
+            match ed.theme_tab {
+                crate::editor::ThemeTab::Themes => theme_tab_themes(ui, ed),
+                crate::editor::ThemeTab::Colors => theme_tab_colors(ui, ed),
+                crate::editor::ThemeTab::SizeShape => theme_tab_size_shape(ui, ed),
+            }
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Changes apply at once and are remembered.").weak().small());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .button("Reset everything")
+                        .on_hover_text("Back to the default look: Graphite, the terracotta accent, rounded corners, 100% scale and the default viewport background")
+                        .clicked()
+                    {
+                        ed.reset_theme();
+                    }
+                });
+            });
         });
-    ed.show_theme = open;
+    ed.show_theme &= open;
 }
 
-fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
-    ui.label(RichText::new("Quick presets").strong());
-    ui.horizontal(|ui| {
-        if ui
-            .button("Workstation")
-            .on_hover_text(
-                "Matte dark panels, tangerine highlights, sharp corners, the crimson clay material, \
-                 right-drag orbit and single-key tool shortcuts",
-            )
-            .clicked()
-        {
-            ed.theme = ThemePreset::Matte;
-            ed.accent = AccentPreset::Tangerine;
-            ed.corner_style = CornerStyle::Sharp;
-            ed.matcap = oxy_render::MatcapPreset::CrimsonClay;
-            ed.custom_matcap = None;
-            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
-            ed.view.background = [0.08, 0.08, 0.08];
-            ed.view.background_center = [0.02, 0.02, 0.02];
-            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::SingleKey);
-            ed.keymap.apply_navigation_preset(crate::keymap::Preset::RightDrag);
-            ed.status = "Applied the Workstation preset".into();
-        }
-        if ui
-            .button("Midnight")
-            .on_hover_text("Deep navy glass panels, pill-shaped controls, emerald highlights and a navy viewport")
-            .clicked()
-        {
-            ed.theme = ThemePreset::Midnight;
-            ed.high_contrast = false;
-            ed.accent = AccentPreset::Emerald;
-            ed.corner_style = CornerStyle::Pill;
-            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
-            ed.view.background = [0.012, 0.024, 0.062];
-            ed.view.background_center = [0.003, 0.005, 0.014];
-            ed.status = "Applied the Midnight preset".into();
-        }
-        if ui
-            .button("Default Studio")
-            .on_hover_text("Standard neutral graphite theme with clay accent, rounded corners, and default shortcuts")
-            .clicked()
-        {
-            ed.theme = ThemePreset::Graphite;
-            ed.accent = AccentPreset::Terracotta;
-            ed.corner_style = CornerStyle::Rounded;
-            ed.matcap = oxy_render::MatcapPreset::Terracotta;
-            ed.custom_matcap = None;
-            ed.view.background_style = oxy_render::BackgroundStyle::Gradient;
-            ed.view.background = [0.12, 0.12, 0.12];
-            ed.view.background_center = [0.04, 0.04, 0.04];
-            ed.keymap.apply_shortcuts_preset(crate::keymap::ShortcutsPreset::Default);
-            ed.keymap.apply_navigation_preset(crate::keymap::Preset::OxyBrush);
-            ed.status = "Applied Default Studio theme preset".into();
+/// One theme as a small picture of its panels, a window with text and a
+/// button, and an accent dot, with its name under it.
+fn theme_card(ui: &mut Ui, ed: &Editor, theme: ThemePreset, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(116.0, 92.0), egui::Sense::click());
+    let p = theme_palette(theme, theme == ThemePreset::HighContrast);
+    let accent = {
+        let [r, g, b] = ed.accent.rgb(ed.custom_accent);
+        Color32::from_rgb(r, g, b)
+    };
+    let painter = ui.painter_at(rect);
+    let pic = egui::Rect::from_min_size(rect.min, egui::vec2(rect.width(), 62.0));
+    painter.rect_filled(pic, widgets::rounding(5.0), p.bg);
+    let panel = egui::Rect::from_min_size(pic.min, egui::vec2(30.0, pic.height()));
+    painter.rect_filled(panel, widgets::rounding(5.0), p.panel);
+    let win = egui::Rect::from_min_max(pic.min + egui::vec2(38.0, 10.0), pic.max - egui::vec2(8.0, 8.0));
+    painter.rect(win, widgets::rounding(3.0), p.window, EStroke::new(1.0, p.window_stroke), egui::StrokeKind::Inside);
+    for (k, w) in [(0.0, 0.7), (1.0, 0.5)] {
+        let y = win.top() + 9.0 + k * 8.0;
+        painter.line_segment(
+            [egui::pos2(win.left() + 7.0, y), egui::pos2(win.left() + 7.0 + (win.width() - 14.0) * w, y)],
+            EStroke::new(2.0, p.text),
+        );
+    }
+    let button = egui::Rect::from_min_size(egui::pos2(win.left() + 7.0, win.bottom() - 15.0), egui::vec2(30.0, 9.0));
+    painter.rect_filled(button, widgets::rounding(2.0), p.inactive_fill);
+    painter.circle_filled(egui::pos2(win.right() - 11.0, win.bottom() - 10.5), 4.5, accent);
+    let outline = if selected {
+        EStroke::new(2.0, accent)
+    } else if response.hovered() {
+        EStroke::new(1.0, ui.visuals().widgets.hovered.bg_stroke.color)
+    } else {
+        EStroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color)
+    };
+    painter.rect_stroke(pic, widgets::rounding(5.0), outline, egui::StrokeKind::Inside);
+    let text = if selected { RichText::new(theme_name(theme)).strong() } else { RichText::new(theme_name(theme)) };
+    let galley = egui::WidgetText::from(text).into_galley(
+        ui,
+        Some(egui::TextWrapMode::Truncate),
+        rect.width(),
+        egui::TextStyle::Body,
+    );
+    painter.galley(egui::pos2(rect.left() + 2.0, pic.bottom() + 5.0), galley, ui.visuals().text_color());
+    let note = theme_note(theme);
+    if !note.is_empty() { response.on_hover_text(format!("{} ({note})", theme_name(theme))) } else { response }
+}
+
+fn theme_tab_themes(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Theme").strong());
+    egui::Grid::new("theme_cards").spacing([8.0, 8.0]).show(ui, |ui| {
+        for (k, t) in ThemePreset::ALL.into_iter().enumerate() {
+            let selected = if ed.high_contrast { t == ThemePreset::HighContrast } else { ed.theme == t };
+            if theme_card(ui, ed, t, selected).clicked() {
+                ed.theme = t;
+                ed.high_contrast = t == ThemePreset::HighContrast;
+                ed.status = format!("Theme: {}", theme_name(t));
+            }
+            if k % 4 == 3 {
+                ui.end_row();
+            }
         }
     });
-    ui.separator();
-    ui.label(RichText::new("Base theme").strong());
-    for t in ThemePreset::ALL {
-        let is_selected = ed.theme == t && (!ed.high_contrast || t == ThemePreset::HighContrast);
-        if ui.selectable_label(is_selected, t.label()).clicked() {
-            ed.theme = t;
-            ed.high_contrast = t == ThemePreset::HighContrast;
-        }
-    }
-    ui.separator();
-    ui.label(RichText::new("Accent color").strong());
-    for a in AccentPreset::ALL {
-        let rgb = a.rgb(ed.custom_accent);
-        let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-        ui.horizontal(|ui| {
-            let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, widgets::rounding(3.0), color);
-            let label_resp = ui.selectable_label(ed.accent == a, a.label());
-            if resp.clicked() || label_resp.clicked() {
-                ed.accent = a;
+    ui.add_space(8.0);
+    ui.label(RichText::new("Looks").strong());
+    ui.label(
+        RichText::new("A theme with the accent, corners and viewport background that suit it, in one click.")
+            .weak()
+            .small(),
+    );
+    ui.horizontal(|ui| {
+        for look in &LOOKS {
+            if ui.button(look.name).on_hover_text(look.note).clicked() {
+                apply_look(ed, look);
             }
-        });
-    }
+        }
+    });
+}
+
+fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Accent color").strong());
+    ui.label(RichText::new("Highlights what is selected or active.").weak().small());
+    egui::Grid::new("accent_swatches").spacing([10.0, 4.0]).show(ui, |ui| {
+        for (k, a) in AccentPreset::ALL.into_iter().enumerate() {
+            let [r, g, b] = a.rgb(ed.custom_accent);
+            ui.horizontal(|ui| {
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
+                ui.painter().rect_filled(rect, widgets::rounding(3.0), Color32::from_rgb(r, g, b));
+                let label = ui.selectable_label(ed.accent == a, short_label(a.label())).on_hover_text(a.label());
+                if resp.clicked() || label.clicked() {
+                    ed.accent = a;
+                }
+            });
+            if k % 4 == 3 {
+                ui.end_row();
+            }
+        }
+    });
     if ed.accent == AccentPreset::Custom {
         ui.horizontal(|ui| {
-            ui.label("Custom RGB:");
-            let mut rgb_f32 = [
-                ed.custom_accent[0] as f32 / 255.0,
-                ed.custom_accent[1] as f32 / 255.0,
-                ed.custom_accent[2] as f32 / 255.0,
-            ];
-            if ui.color_edit_button_rgb(&mut rgb_f32).changed() {
-                ed.custom_accent = [
-                    (rgb_f32[0] * 255.0).round() as u8,
-                    (rgb_f32[1] * 255.0).round() as u8,
-                    (rgb_f32[2] * 255.0).round() as u8,
-                ];
+            ui.label("Custom color:");
+            let mut rgb = ed.custom_accent.map(|c| c as f32 / 255.0);
+            if ui.color_edit_button_rgb(&mut rgb).changed() {
+                ed.custom_accent = rgb.map(|c| (c * 255.0).round() as u8);
             }
         });
     }
-    ui.separator();
-    ui.label(RichText::new("Wireframe overlay").strong());
-    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe enabled", Cmd::Wireframe);
-    ui.add(crate::widgets::Bar(
-        egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity"),
-    ));
+    ui.add_space(8.0);
+    ui.label(RichText::new("Viewport background").strong());
+    background_controls(ui, ed);
+}
+
+fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
+    ui.label(RichText::new("Interface scale").strong());
     ui.horizontal(|ui| {
-        ui.label("Wireframe color:");
-        edit_linear_color(ui, &mut ed.view.wireframe_color).on_hover_text("Color of the wireframe lines");
-        if ui.button("Reset").on_hover_text("Reset wireframe color to default").clicked() {
-            ed.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
+        let before = ed.ui_scale;
+        tips::hover(scale_slider(ui, &mut ed.ui_scale), plain::UI_SCALE);
+        if ui.button("Reset (100%)").clicked() {
+            ed.ui_scale = 1.0;
+        }
+        if ed.ui_scale != before {
+            ed.ui_scale_from = Some(before);
         }
     });
-    ui.separator();
-    ui.label(RichText::new("Corner rounding").strong());
-    for c in CornerStyle::ALL {
-        if ui.selectable_label(ed.corner_style == c, c.label()).clicked() {
-            ed.corner_style = c;
+    ui.add_space(8.0);
+    ui.label(RichText::new("Corners").strong());
+    ui.horizontal(|ui| {
+        for c in CornerStyle::ALL {
+            let selected = ed.corner_style == c;
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(84.0, 56.0), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            let sample = egui::Rect::from_center_size(rect.center() - egui::vec2(0.0, 8.0), egui::vec2(56.0, 22.0));
+            let r = c.radius_pt().min(11.0);
+            let accent = ui.visuals().selection.stroke.color;
+            painter.rect(
+                sample,
+                r,
+                ui.visuals().widgets.inactive.bg_fill,
+                EStroke::new(
+                    if selected { 2.0 } else { 1.0 },
+                    if selected { accent } else { ui.visuals().widgets.noninteractive.bg_stroke.color },
+                ),
+                egui::StrokeKind::Inside,
+            );
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() - 8.0),
+                egui::Align2::CENTER_CENTER,
+                short_label(c.label()),
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            );
+            if resp.on_hover_text(c.label()).clicked() {
+                ed.corner_style = c;
+            }
         }
+    });
+    ui.add_space(8.0);
+    ui.label(RichText::new("Slider thickness").strong());
+    ui.horizontal(|ui| {
+        for size in SliderSize::ALL {
+            let selected = ed.slider_size == size;
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(84.0, 56.0), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            let accent = ui.visuals().selection.stroke.color;
+            // A sample bar at the thickness this choice gives in the current
+            // theme and layout, half filled, with a frame round the choice.
+            let h = size.rail_height(normal_rail_height(ed), metrics(ed.layout).interact_height).min(20.0);
+            let bar = egui::Rect::from_center_size(rect.center() - egui::vec2(0.0, 8.0), egui::vec2(60.0, h));
+            let r = (h / 2.0).min(ui.visuals().widgets.inactive.corner_radius.nw as f32);
+            painter.rect_filled(bar, r, ui.visuals().widgets.inactive.bg_fill);
+            painter.rect_filled(
+                egui::Rect::from_min_max(bar.min, egui::pos2(bar.center().x, bar.max.y)),
+                r,
+                ui.visuals().selection.bg_fill,
+            );
+            if selected {
+                painter.rect_stroke(rect.shrink(2.0), 6.0, EStroke::new(2.0, accent), egui::StrokeKind::Inside);
+            }
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() - 8.0),
+                egui::Align2::CENTER_CENTER,
+                size.label(),
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            );
+            if tips::hover(resp, plain::SLIDER_SIZE).clicked() {
+                ed.slider_size = size;
+            }
+        }
+    });
+}
+
+/// The bar height the current theme and layout give at Normal thickness,
+/// matching `apply_theme`.
+fn normal_rail_height(ed: &Editor) -> f32 {
+    let m = metrics(ed.layout);
+    let studio = ed.theme == ThemePreset::Studio && !ed.high_contrast;
+    let mut h =
+        if studio { (m.interact_height - 6.0).max(12.0) } else { egui::style::Spacing::default().slider_rail_height };
+    if ed.layout == UiLayout::Touch {
+        h = h.max(10.0);
     }
+    h
 }
 
 fn wireframe_window(ctx: &egui::Context, ed: &mut Editor) {
@@ -1491,47 +1661,6 @@ fn subdivision_limit_menu(ui: &mut Ui, ed: &mut Editor) {
 
 /// Style and reset in the View menu and in Settings. Color pickers open in
 /// a window: a menu closes on the click that would open the picker.
-fn background_menu(ui: &mut Ui, ed: &mut Editor) {
-    let before = ed.view.background_style;
-    for style in BackgroundStyle::ALL {
-        let tip = match style {
-            BackgroundStyle::Gradient => {
-                "Soft radial gradient, lighter toward the middle. Remembered between sessions."
-            }
-            BackgroundStyle::Flat => "One solid color. Remembered between sessions.",
-        };
-        ui.radio_value(&mut ed.view.background_style, style, style.label()).on_hover_text(tip);
-    }
-    if ed.view.background_style != before {
-        ed.status = format!("Viewport background: {}", ed.view.background_style.label().to_lowercase());
-    }
-    if ui.button("Colors…").on_hover_text(plain::BACKGROUND_COLORS).clicked() {
-        ed.show_background = true;
-    }
-    if ui.button("Reset to default").on_hover_text(plain::BACKGROUND_RESET).clicked() {
-        ed.reset_background();
-    }
-}
-
-fn background_window(ctx: &egui::Context, ed: &mut Editor) {
-    if !ed.show_background {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new("Viewport background")
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_pos(egui::pos2(280.0, 80.0))
-        .show(ctx, |ui| {
-            ui.label(RichText::new("Remembered between sessions.").weak().small());
-            background_controls(ui, ed);
-        });
-    if !open {
-        ed.show_background = false;
-    }
-}
-
 /// Viewport backdrop: gradient (center and edge) or one flat color, plus a reset.
 fn background_controls(ui: &mut Ui, ed: &mut Editor) {
     let before = ed.view.background_style;
@@ -3383,6 +3512,39 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     });
     ui.add_space(6.0);
     ui.label(RichText::new(plain::PRESSURE_DRIVER).weak().small());
+
+    ui.separator();
+    ui.label(RichText::new("Pen in panels").strong());
+    ui.horizontal(|ui| {
+        ui.label("Drag empty space to scroll");
+        egui::ComboBox::from_id_salt("panel_drag_scroll").selected_text(ed.panel_drag_scroll.label()).show_ui(
+            ui,
+            |ui| {
+                for m in crate::settings::PanelDragScroll::ALL {
+                    ui.selectable_value(&mut ed.panel_drag_scroll, m, m.label());
+                }
+            },
+        );
+    })
+    .response
+    .on_hover_text(plain::PANEL_DRAG_SCROLL);
+    ui.label(
+        RichText::new(
+            "With a pen: drag in a panel or list to scroll it (or drag with a side button held). \
+             Hold the pen still on a control for a moment to open its menu, like a right-click, and read its tip.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Side buttons in the viewport:").weak().small());
+        if ui.button("Use the Pen navigation preset").on_hover_text(crate::keymap::Preset::Pen.description()).clicked()
+        {
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::Pen);
+            ed.status = "Navigation: Pen side buttons".into();
+        }
+    });
 }
 
 /// Preview of an alpha (texture cached per alpha name).
@@ -5181,6 +5343,7 @@ mod tests {
             AccentPreset::Terracotta,
             [0xE0, 0x7A, 0x4F],
             CornerStyle::Rounded,
+            SliderSize::Normal,
             high_contrast,
             ui_scale,
             layout,
@@ -5326,6 +5489,90 @@ mod tests {
         run_frames(&mut ed, 1);
         ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
         run_frames(&mut ed, 1);
+    }
+
+    #[test]
+    fn the_theme_window_draws_every_tab_in_every_layout() {
+        for layout in UiLayout::ALL {
+            for tab in crate::editor::ThemeTab::ALL {
+                let mut ed = Editor::default();
+                ed.layout = layout;
+                ed.show_welcome = false;
+                ed.open_theme(tab);
+                ed.accent = AccentPreset::Custom;
+                run_frames(&mut ed, 2);
+                assert!(ed.show_theme, "{layout:?} {tab:?} stays open");
+            }
+        }
+    }
+
+    #[test]
+    fn looks_change_only_how_oxybrush_looks() {
+        let mut ed = Editor::default();
+        let keymap = ed.keymap.clone();
+        let matcap = ed.matcap;
+        for look in &LOOKS {
+            apply_look(&mut ed, look);
+            assert_eq!(
+                (ed.theme, ed.accent, ed.corner_style),
+                (look.theme, look.accent, look.corners),
+                "{}",
+                look.name
+            );
+            assert_eq!(ed.view.background, look.background.1);
+            assert_eq!(ed.keymap, keymap, "{} leaves the keymap alone", look.name);
+            assert_eq!(ed.matcap, matcap, "{} leaves the material alone", look.name);
+        }
+        // Classic is the default look, so Reset to default matches it.
+        ed.theme = ThemePreset::Midnight;
+        ed.high_contrast = true;
+        ed.ui_scale = 1.4;
+        ed.view.background = [0.5, 0.0, 0.0];
+        ed.reset_theme();
+        let classic = &LOOKS[0];
+        assert_eq!((ed.theme, ed.accent, ed.corner_style), (classic.theme, classic.accent, classic.corners));
+        assert!(!ed.high_contrast);
+        assert_eq!(ed.ui_scale, 1.0);
+        assert_eq!(ed.view.background, oxy_render::ViewSettings::default().background);
+        assert_eq!(ed.view.background, classic.background.1, "Classic's background is the default one");
+    }
+
+    #[test]
+    fn theme_names_and_notes_come_from_the_labels() {
+        assert_eq!(theme_name(ThemePreset::Graphite), "Graphite");
+        assert_eq!(theme_note(ThemePreset::Graphite), "Neutral Dark");
+        assert_eq!(theme_name(ThemePreset::HighContrast), "High Contrast");
+        assert_eq!(theme_note(ThemePreset::HighContrast), "");
+        // Every theme has a distinct short name for its card.
+        let mut names: Vec<&str> = ThemePreset::ALL.iter().map(|t| theme_name(*t)).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), ThemePreset::ALL.len());
+    }
+
+    #[test]
+    fn labels_stop_selecting_text_while_pen_gestures_are_on() {
+        // RFC 0015: a pen drag over a label scrolls the panel instead.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let frame = |ed: &mut Editor| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+            ctx.global_style().interaction.selectable_labels
+        };
+        assert!(frame(&mut ed), "a mouse: labels select text as usual");
+        ed.pen_seen = true;
+        assert!(!frame(&mut ed), "a pen has been used");
+        ed.panel_drag_scroll = crate::settings::PanelDragScroll::Off;
+        assert!(frame(&mut ed), "pen gestures turned off");
     }
 
     #[test]
@@ -5633,6 +5880,7 @@ mod tests {
             AccentPreset::Emerald,
             [0, 0, 0],
             CornerStyle::Pill,
+            SliderSize::Normal,
             false,
             1.0,
             UiLayout::Standard,
@@ -5666,6 +5914,7 @@ mod tests {
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
+                SliderSize::Normal,
                 false,
                 1.0,
                 layout,
@@ -5697,6 +5946,7 @@ mod tests {
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
+                SliderSize::Normal,
                 false,
                 1.0,
                 UiLayout::Standard,
@@ -5720,12 +5970,56 @@ mod tests {
     }
 
     #[test]
+    fn slider_thickness_changes_only_the_bar() {
+        for theme in ThemePreset::ALL {
+            for layout in UiLayout::ALL {
+                let rail = |size| {
+                    let ctx = egui::Context::default();
+                    apply_theme(
+                        &ctx,
+                        theme,
+                        AccentPreset::Terracotta,
+                        [0; 3],
+                        CornerStyle::Rounded,
+                        size,
+                        false,
+                        1.0,
+                        layout,
+                    );
+                    let s = ctx.global_style();
+                    (s.spacing.slider_rail_height, s.spacing.interact_size.y, s.spacing.slider_width)
+                };
+                let (thin, normal, thick) = (rail(SliderSize::Thin), rail(SliderSize::Normal), rail(SliderSize::Thick));
+                assert!(thin.0 < normal.0 && normal.0 < thick.0, "{theme:?} {layout:?}: {thin:?} {normal:?} {thick:?}");
+                assert!(thick.0 <= thick.1, "{theme:?} {layout:?}: the bar fits in its control");
+                assert_eq!((thin.1, thin.2), (normal.1, normal.2), "controls keep their size");
+                assert_eq!((thick.1, thick.2), (normal.1, normal.2), "controls keep their size");
+                // The Theme window's samples use the same Normal bar.
+                let mut ed = Editor::default();
+                (ed.theme, ed.layout) = (theme, layout);
+                ed.high_contrast = false;
+                assert_eq!(normal_rail_height(&ed), normal.0, "{theme:?} {layout:?}");
+            }
+        }
+    }
+
+    #[test]
     fn all_theme_presets_and_accents_apply_cleanly() {
         let ctx = egui::Context::default();
         for theme in ThemePreset::ALL {
             for accent in AccentPreset::ALL {
                 for corner in CornerStyle::ALL {
-                    apply_theme(&ctx, theme, accent, [100, 150, 200], corner, false, 1.0, UiLayout::Standard);
+                    apply_theme(
+                        &ctx,
+                        theme,
+                        accent,
+                        [100, 150, 200],
+                        corner,
+                        SliderSize::Normal,
+                        false,
+                        1.0,
+                        UiLayout::Standard,
+                    );
                     let v = ctx.global_style().visuals.clone();
                     let expected_accent = Color32::from_rgb(
                         accent.rgb([100, 150, 200])[0],

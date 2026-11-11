@@ -206,9 +206,8 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             e.view.wireframe_color = oxy_render::ViewSettings::default().wireframe_color;
             e.status = "Wireframe color reset to default".into();
         }),
-        cmd(ed, Cmd::ThemeWindow, "settings visual theme accent color appearance corner rounding", |e| {
-            e.open_settings(crate::editor::SettingsTab::Appearance);
-            e.show_theme = true;
+        cmd(ed, Cmd::ThemeWindow, "settings visual theme accent color appearance corner rounding scale look", |e| {
+            e.open_theme(crate::editor::ThemeTab::Themes)
         }),
         cmd(
             ed,
@@ -221,7 +220,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::RunScript, "plugins python script execute run api macro", |e| {
             e.request_run_script = true;
         }),
-        cmd(ed, Cmd::BackgroundWindow, "view color picker backdrop", |e| e.show_background = true),
+        cmd(ed, Cmd::BackgroundWindow, "view color picker backdrop theme", |e| {
+            e.open_theme(crate::editor::ThemeTab::Colors)
+        }),
         cmd(ed, Cmd::BackgroundGradient, "view color backdrop", |e| e.set_background_style(BackgroundStyle::Gradient)),
         cmd(ed, Cmd::BackgroundFlat, "view color backdrop solid", |e| e.set_background_style(BackgroundStyle::Flat)),
         cmd(ed, Cmd::ResetBackground, "view color default backdrop", Editor::reset_background),
@@ -233,6 +234,17 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Keymap, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
         cmd(ed, Cmd::Guide, "help manual documentation", |e| e.guide.open = true),
         cmd(ed, Cmd::Welcome, "help start", |e| e.show_welcome = true),
+        Entry {
+            label: "Theme: Studio".into(),
+            detail: String::new(),
+            keywords: "theme style dark studio flat neutral appearance",
+            tooltip: "Switch to the flat neutral Studio theme".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Studio;
+                e.high_contrast = false;
+                e.status = "Theme: Studio".into();
+            }),
+        },
         Entry {
             label: "Theme: Graphite".into(),
             detail: String::new(),

@@ -316,6 +316,7 @@ pub struct Settings {
     pub custom_accent: [u8; 3],
     /// Window and button corner rounding style.
     pub corner_style: CornerStyle,
+    pub slider_size: SliderSize,
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
     /// Default extrusion thickness for Mask Extract (in scene units).
@@ -346,6 +347,8 @@ pub struct Settings {
     pub narrow_shelf: bool,
     /// Side of a captured alpha in pixels (Capture from view).
     pub alpha_capture_size: u32,
+    /// When dragging empty space in a panel scrolls it (RFC 0015).
+    pub panel_drag_scroll: PanelDragScroll,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -403,6 +406,44 @@ impl WindowGeometry {
             let overlap_y = top_band.min(mb) - y.max(my);
             overlap_x >= 120 && overlap_y >= 40
         })
+    }
+}
+
+/// When dragging empty space in a panel or list scrolls it, as a finger
+/// does on a touch screen (RFC 0015). A pen usually reaches OxyBrush as a
+/// mouse without a wheel, so without this it can't scroll panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelDragScroll {
+    /// While using a pen (OxyBrush saw its pressure). The default.
+    #[default]
+    Pen,
+    /// With any pointer, for pens whose drivers send no pressure.
+    Always,
+    /// Never (touch screens still scroll by dragging).
+    Off,
+}
+
+impl PanelDragScroll {
+    pub const ALL: [PanelDragScroll; 3] = [PanelDragScroll::Pen, PanelDragScroll::Always, PanelDragScroll::Off];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            PanelDragScroll::Pen => "pen",
+            PanelDragScroll::Always => "always",
+            PanelDragScroll::Off => "off",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.key() == k)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PanelDragScroll::Pen => "With a pen",
+            PanelDragScroll::Always => "Always",
+            PanelDragScroll::Off => "Never",
+        }
     }
 }
 
@@ -562,6 +603,54 @@ impl AccentPreset {
     }
 }
 
+/// How thick slider bars are drawn (Theme window > Size & shape). Only the
+/// bar changes: the rest of the interface keeps its size, which the
+/// interface scale controls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SliderSize {
+    /// A thin line, for a quieter look.
+    Thin,
+    /// The theme's own bar.
+    #[default]
+    Normal,
+    /// A fat bar, easier to see and to hit with a pen.
+    Thick,
+}
+
+impl SliderSize {
+    pub const ALL: [SliderSize; 3] = [SliderSize::Thin, SliderSize::Normal, SliderSize::Thick];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SliderSize::Thin => "Thin",
+            SliderSize::Normal => "Normal",
+            SliderSize::Thick => "Thick",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            SliderSize::Thin => "thin",
+            SliderSize::Normal => "normal",
+            SliderSize::Thick => "thick",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == k)
+    }
+
+    /// The bar's height in points, given the theme's normal bar and the
+    /// height of a control (the bar never outgrows the control it sits in).
+    pub fn rail_height(self, normal: f32, control_height: f32) -> f32 {
+        match self {
+            SliderSize::Thin => (normal * 0.5).clamp(3.0, 6.0),
+            SliderSize::Normal => normal,
+            SliderSize::Thick => (normal * 1.75).max(14.0).min(control_height - 2.0).max(normal),
+        }
+    }
+}
+
 /// Interface corner rounding style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CornerStyle {
@@ -689,6 +778,7 @@ impl Default for Settings {
             accent: AccentPreset::Terracotta,
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: CornerStyle::Rounded,
+            slider_size: SliderSize::Normal,
             max_triangles: default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
@@ -701,6 +791,7 @@ impl Default for Settings {
             show_brush_names: true,
             narrow_shelf: false,
             alpha_capture_size: 1024,
+            panel_drag_scroll: PanelDragScroll::Pen,
         }
     }
 }
@@ -765,7 +856,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -800,6 +891,7 @@ impl Settings {
             self.custom_accent[1],
             self.custom_accent[2],
             self.corner_style.key(),
+            self.slider_size.key(),
             self.max_triangles,
             self.extract_thickness,
             self.extract_smooth,
@@ -836,6 +928,7 @@ impl Settings {
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
+            + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -1001,6 +1094,11 @@ impl Settings {
                         s.custom_accent = c;
                     }
                 }
+                "slider_size" => {
+                    if let Some(c) = SliderSize::from_key(v) {
+                        s.slider_size = c;
+                    }
+                }
                 "corner_style" => {
                     if let Some(c) = CornerStyle::from_key(v) {
                         s.corner_style = c;
@@ -1029,6 +1127,9 @@ impl Settings {
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
+                "panel_drag_scroll" => {
+                    s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
+                }
                 "alpha_capture_size" => {
                     s.alpha_capture_size = v
                         .parse()
@@ -1188,7 +1289,10 @@ mod tests {
 
     #[test]
     fn midnight_theme_and_pill_corners_are_remembered() {
-        let s = Settings::from_text("theme = midnight\ncorner_style = pill\n");
+        let s = Settings::from_text("theme = midnight\ncorner_style = pill\nslider_size = thick\n");
+        assert_eq!(s.slider_size, SliderSize::Thick);
+        assert_eq!(Settings::from_text(&s.to_text()).slider_size, SliderSize::Thick);
+        assert_eq!(Settings::default().slider_size, SliderSize::Normal);
         assert_eq!(s.theme, ThemePreset::Midnight);
         assert_eq!(s.corner_style, CornerStyle::Pill);
         let back = Settings::from_text(&s.to_text());
@@ -1255,6 +1359,7 @@ mod tests {
             accent: AccentPreset::Cyan,
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: CornerStyle::Soft,
+            slider_size: SliderSize::Thick,
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,
@@ -1275,6 +1380,7 @@ mod tests {
             show_brush_names: false,
             narrow_shelf: true,
             alpha_capture_size: 2048,
+            panel_drag_scroll: crate::settings::PanelDragScroll::Always,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

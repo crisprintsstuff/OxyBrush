@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.3" date="2026-11-11" type="development">
+      <description>
+        <p>One Theme window holds themes, colors, interface size, corners and
+        a new slider thickness option. With a pen, dragging a panel scrolls
+        it, holding the pen still opens menus and tooltips, and a new
+        navigation preset uses the pen's side buttons.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.2" date="2026-11-11" type="development">
       <description>
         <p>Points in the retopology tool can be pinned so relaxing leaves
