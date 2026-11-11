@@ -93,7 +93,7 @@ wins.
   `write_mesh` was for the old mesh, so it's discarded.
 - **What isn't written starts fresh:** unmasked, white, face group 0, all
   visible. To keep attributes, read them first and write them back after;
-  the bundled Flip Faces plugin does this.
+  the bundled Flip Faces, Fill Holes and Simplify Mesh plugins do this.
 - **Subdivision levels** of the piece are removed. Undo restores them, and
   the old mesh.
 

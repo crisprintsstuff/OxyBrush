@@ -1,0 +1,31 @@
+{
+  "name": "Hide Faces by Angle",
+  "version": "1.0",
+  "description": "Hides faces whose normal points farther from an axis than an angle, or the opposite with Invert. Mostly-masked faces can keep their visibility. Shows the result before you accept it.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "hide", "label": "Hide by angle", "preview": true }
+  ],
+  "params": [
+    { "id": "axis", "label": "Axis", "type": "choice", "options": ["X (side to side)", "Y (up)", "Z (front to back)"], "default": 1 },
+    {
+      "id": "angle",
+      "label": "Angle (degrees)",
+      "min": 0,
+      "max": 180,
+      "step": 1,
+      "default": 90,
+      "help": "Hide a face when the angle between its normal and the axis is greater than this. 90 hides faces that face away from the axis."
+    },
+    { "id": "invert", "label": "Invert", "type": "toggle", "default": false, "help": "Hide the faces that would have stayed visible." },
+    {
+      "id": "protect",
+      "label": "Keep masked faces",
+      "type": "toggle",
+      "default": true,
+      "help": "A face whose vertices are mostly masked keeps the visibility it already has."
+    },
+    { "id": "note", "type": "label", "text": "Hidden faces stay in the piece. Show them again from the face-group or visibility tools, or run this with a wider angle." }
+  ]
+}

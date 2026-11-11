@@ -608,3 +608,386 @@ fn a_stop_asked_for_before_the_run_starts_still_counts() {
     // (this plugin would then loop until its fuel ran out, an error).
     assert!(!p.progress().cancelled());
 }
+
+fn boundary_edges(tris: &[[u32; 3]]) -> usize {
+    let mut count = std::collections::HashMap::<(u32, u32), u32>::new();
+    for t in tris {
+        for i in 0..3 {
+            let (a, b) = (t[i], t[(i + 1) % 3]);
+            *count.entry((a.min(b), a.max(b))).or_default() += 1;
+        }
+    }
+    count.values().filter(|&&c| c == 1).count()
+}
+
+fn signed_volume(pos: &[Vec3], tris: &[[u32; 3]]) -> f32 {
+    tris.iter()
+        .map(|t| {
+            let a = pos[t[0] as usize];
+            let b = pos[t[1] as usize];
+            let c = pos[t[2] as usize];
+            a.dot(b.cross(c)) / 6.0
+        })
+        .sum()
+}
+
+fn assert_mesh_ok(pos: &[Vec3], tris: &[[u32; 3]]) {
+    assert!(pos.len() >= 3 && !tris.is_empty());
+    assert!(pos.iter().all(|p| p.is_finite()), "non-finite position");
+    for t in tris {
+        assert!(t.iter().all(|&i| (i as usize) < pos.len()), "index out of range {t:?}");
+        assert!(t[0] != t[1] && t[1] != t[2] && t[0] != t[2], "repeated index {t:?}");
+        let a = pos[t[0] as usize];
+        let b = pos[t[1] as usize];
+        let c = pos[t[2] as usize];
+        let cross = (b - a).cross(c - a);
+        assert!(cross.is_finite() && cross.length() > 1e-8, "degenerate {t:?}");
+    }
+}
+
+fn face_normal(pos: &[Vec3], t: [u32; 3]) -> Vec3 {
+    let a = pos[t[0] as usize];
+    let b = pos[t[1] as usize];
+    let c = pos[t[2] as usize];
+    (b - a).cross(c - a).normalize_or_zero()
+}
+
+/// A flat grid in the XZ plane, `n` vertices on a side.
+fn grid(n: usize) -> PieceView {
+    let mut positions = Vec::with_capacity(n * n);
+    let mut colors = Vec::with_capacity(n * n);
+    for z in 0..n {
+        for x in 0..n {
+            positions.push(Vec3::new(x as f32, 0.0, z as f32));
+            colors.push(Vec3::new(x as f32 / n as f32, 0.2, z as f32 / n as f32));
+        }
+    }
+    let mut triangles = Vec::new();
+    for z in 0..n - 1 {
+        for x in 0..n - 1 {
+            let i = (z * n + x) as u32;
+            let row = n as u32;
+            triangles.push([i, i + row, i + 1]);
+            triangles.push([i + 1, i + row, i + row + 1]);
+        }
+    }
+    let nt = triangles.len();
+    PieceView {
+        positions,
+        triangles,
+        mask: vec![0.0; n * n],
+        normals: vec![Vec3::Y; n * n],
+        colors,
+        groups: vec![3; nt],
+        hidden: vec![false; nt],
+    }
+}
+
+fn grid_snapshot(n: usize) -> Snapshot {
+    let g = grid(n);
+    let (nv, nt) = (g.positions.len(), g.triangles.len());
+    Snapshot {
+        pieces: vec![g],
+        vertex_counts: vec![nv],
+        triangle_counts: vec![nt],
+        active: 0,
+        scene_json: String::new(),
+    }
+}
+
+/// A regular octahedron, closed and pointing out.
+fn octahedron_snapshot() -> Snapshot {
+    let positions = vec![Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::Z, -Vec3::Z];
+    let triangles = vec![[0, 2, 4], [2, 1, 4], [1, 3, 4], [3, 0, 4], [0, 3, 5], [3, 1, 5], [1, 2, 5], [2, 0, 5]];
+    let piece = PieceView {
+        positions,
+        triangles,
+        mask: vec![0.0; 6],
+        normals: vec![Vec3::Y; 6],
+        colors: vec![Vec3::ONE; 6],
+        groups: vec![0; 8],
+        hidden: vec![false; 8],
+    };
+    Snapshot {
+        pieces: vec![piece],
+        vertex_counts: vec![6],
+        triangle_counts: vec![8],
+        active: 0,
+        scene_json: String::new(),
+    }
+}
+
+#[test]
+fn group_by_angle_splits_a_cube_on_creases() {
+    let mut p = bundled("group_angle");
+    assert!(p.manifest.commands[0].preview);
+    assert!(p.manifest.capabilities.read_mesh && p.manifest.capabilities.edit_mesh);
+    assert!(!p.manifest.capabilities.edit_topology);
+    // 40 degrees: coplanar triangles share a group, the cube's 90 degree
+    // corners do not. Six faces.
+    p.params[0] = 40.0;
+    p.params[1] = 0.0;
+    let cube = cube();
+    let r = p.run(0, cube_snapshot()).unwrap();
+    let groups = &r.groups[0].1;
+    assert_eq!(groups.len(), 12);
+    let mut pairs = 0;
+    for i in 0..12 {
+        for j in (i + 1)..12 {
+            let dot =
+                face_normal(&cube.positions, cube.triangles[i]).dot(face_normal(&cube.positions, cube.triangles[j]));
+            if dot > 0.99 {
+                assert_eq!(groups[i], groups[j], "coplanar {i} and {j}");
+                pairs += 1;
+            } else if dot.abs() < 0.01 {
+                assert_ne!(groups[i], groups[j], "a crease between {i} and {j}");
+            }
+        }
+    }
+    assert_eq!(pairs, 6, "one pair per face");
+    assert_eq!(groups.iter().copied().collect::<std::collections::BTreeSet<_>>().len(), 6);
+    assert_eq!(r.log, vec!["Grouped by angle"]);
+    assert_eq!(p.progress().fraction(), Some(1.0));
+    // Wide open: the whole cube is one smooth-enough piece.
+    p.params[0] = 180.0;
+    let r = p.run(0, cube_snapshot()).unwrap();
+    assert!(r.groups[0].1.iter().all(|&g| g == r.groups[0].1[0]));
+    // Existing different groups are an extra wall when asked.
+    let mut snap = cube_snapshot();
+    snap.pieces[0].groups[0] = 1;
+    snap.pieces[0].groups[1] = 2;
+    p.params[0] = 40.0;
+    p.params[1] = 1.0;
+    let r = p.run(0, snap.clone()).unwrap();
+    assert_ne!(r.groups[0].1[0], r.groups[0].1[1], "the two triangles of one face stay apart");
+    p.params[1] = 0.0;
+    let r = p.run(0, snap).unwrap();
+    assert_eq!(r.groups[0].1[0], r.groups[0].1[1]);
+}
+
+#[test]
+fn hide_faces_by_angle_uses_the_axis_and_can_protect_a_mask() {
+    let mut p = bundled("hide_angle");
+    assert!(p.manifest.commands[0].preview);
+    let cube = cube();
+    p.params[0] = 1.0; // +Y
+    p.params[1] = 45.0;
+    p.params[2] = 0.0; // not inverted
+    p.params[3] = 0.0; // don't protect the mask
+    let r = p.run(0, cube_snapshot()).unwrap();
+    let hidden = &r.hidden[0].1;
+    assert_eq!(hidden.len(), 12);
+    for (i, t) in cube.triangles.iter().enumerate() {
+        let dot = face_normal(&cube.positions, *t).dot(Vec3::Y);
+        let want = dot < (45.0f32).to_radians().cos();
+        assert_eq!(hidden[i], want, "triangle {i} dot {dot}");
+    }
+    assert_eq!(r.log, vec!["Hid faces by angle"]);
+    // Invert keeps the faces that were hidden.
+    p.params[2] = 1.0;
+    let r = p.run(0, cube_snapshot()).unwrap();
+    for (i, t) in cube.triangles.iter().enumerate() {
+        let dot = face_normal(&cube.positions, *t).dot(Vec3::Y);
+        let away = dot < (45.0f32).to_radians().cos();
+        assert_eq!(r.hidden[0].1[i], !away, "inverted triangle {i}");
+    }
+    // A fully masked piece keeps the visibility it had.
+    p.params[2] = 0.0;
+    p.params[3] = 1.0;
+    let mut snap = cube_snapshot();
+    snap.pieces[0].mask.fill(1.0);
+    snap.pieces[0].hidden[4] = true;
+    let r = p.run(0, snap).unwrap();
+    assert!(r.hidden[0].1[4], "the face that was hidden stays hidden");
+    assert_eq!(r.hidden[0].1.iter().filter(|h| **h).count(), 1);
+}
+
+#[test]
+fn color_by_group_paints_one_group_or_every_group_and_respects_the_mask() {
+    let mut p = bundled("color_group");
+    assert!(p.manifest.commands[0].preview);
+    assert!(matches!(p.manifest.params[2].kind, ParamKind::Color(_)));
+    let mut snap = cube_snapshot();
+    // The -Z face (triangles 0 and 1) is group 1; vertices 0, 1, 2 and 3.
+    snap.pieces[0].groups[0] = 1;
+    snap.pieces[0].groups[1] = 1;
+    snap.pieces[0].mask[0] = 1.0;
+    p.params[0] = 0.0; // selected group
+    p.params[1] = 1.0;
+    p.param_colors[2] = Vec3::new(0.0, 1.0, 0.0);
+    p.params[3] = 1.0;
+    let r = p.run(0, snap.clone()).unwrap();
+    let colors = &r.colors[0].1;
+    assert_eq!(colors[0], Vec3::ONE, "masked vertex keeps white");
+    for (v, color) in colors.iter().enumerate().take(4).skip(1) {
+        assert!((*color - Vec3::Y).length() < 1e-5, "vertex {v} is the chosen green, got {color}");
+    }
+    for (v, color) in colors.iter().enumerate().skip(4) {
+        assert_eq!(*color, Vec3::ONE, "vertex {v} is not in the group");
+    }
+    assert_eq!(r.log, vec!["Colored by face group"]);
+    // Half strength blends from the color that was there.
+    p.params[3] = 0.5;
+    let r = p.run(0, snap.clone()).unwrap();
+    assert!((r.colors[0].1[1] - Vec3::new(0.5, 1.0, 0.5)).length() < 1e-4);
+    // Every group: group 2 is not the selected one, so it gets its own hue.
+    snap.pieces[0].groups.fill(2);
+    p.params[0] = 1.0;
+    p.params[1] = 1.0;
+    p.params[3] = 1.0;
+    p.param_colors[2] = Vec3::X;
+    let r = p.run(0, snap).unwrap();
+    let painted = r.colors[0].1[1];
+    assert!(painted.distance(Vec3::ONE) > 0.2, "not left white: {painted}");
+    assert!(painted.distance(Vec3::X) > 0.2, "not the picked color: {painted}");
+    assert_eq!(r.colors[0].1[0], Vec3::ONE, "masked vertex still stays");
+}
+
+#[test]
+fn fill_holes_caps_an_opening_without_moving_the_surface() {
+    let mut p = bundled("fill_holes");
+    assert!(!p.manifest.commands[0].preview);
+    assert!(p.manifest.capabilities.edit_topology && p.manifest.capabilities.edit_mesh);
+    let whole = cube();
+    let whole_volume = signed_volume(&whole.positions, &whole.triangles);
+    // Drop the -Z face. The opening is a quad.
+    let mut open = whole.clone();
+    open.triangles.drain(0..2);
+    open.groups.drain(0..2);
+    open.hidden.drain(0..2);
+    open.groups[3] = 9;
+    open.hidden[2] = true;
+    open.mask[6] = 0.4;
+    open.colors[4] = Vec3::X;
+    let before_tris = open.triangles.clone();
+    let snap = Snapshot {
+        pieces: vec![open.clone()],
+        vertex_counts: vec![8],
+        triangle_counts: vec![before_tris.len()],
+        active: 0,
+        scene_json: String::new(),
+    };
+    p.params[0] = 128.0;
+    p.params[1] = 1.0;
+    let r = p.run(0, snap.clone()).unwrap();
+    assert_eq!(r.log, vec!["Filled 1 hole"]);
+    let mesh = &r.meshes[0].1;
+    assert_eq!(mesh.positions, open.positions, "existing vertices stay put");
+    assert_eq!(&mesh.triangles[..before_tris.len()], before_tris.as_slice());
+    assert_eq!(
+        boundary_edges(&mesh.triangles),
+        0,
+        "the opening is closed\nlog {:?}\nbefore {:?}\nafter {:?}",
+        r.log,
+        before_tris,
+        mesh.triangles
+    );
+    assert_mesh_ok(&mesh.positions, &mesh.triangles);
+    assert!((signed_volume(&mesh.positions, &mesh.triangles) - whole_volume).abs() < 1e-3);
+    assert_eq!(r.masks[0].1[6], 0.4);
+    assert_eq!(r.colors[0].1[4], Vec3::X);
+    assert_eq!(r.groups[0].1[3], 9, "a kept face keeps its group");
+    assert!(r.hidden[0].1[2]);
+    let patch: Vec<u32> = r.groups[0].1[before_tris.len()..].to_vec();
+    assert!(patch.iter().all(|&g| g == patch[0] && g > 9), "the patch gets a new group {patch:?}");
+    assert!(r.hidden[0].1[before_tris.len()..].iter().all(|h| !h));
+    assert_eq!(p.progress().fraction(), Some(1.0));
+    // A closed piece has nothing to do, and nothing is written.
+    let r = p.run(0, cube_snapshot()).unwrap();
+    assert!(r.meshes.is_empty());
+    assert_eq!(r.log, vec!["No holes to fill"]);
+    // The quad is larger than a 3-edge limit, so it is left open.
+    p.params[0] = 3.0;
+    let r = p.run(0, snap).unwrap();
+    assert!(r.meshes.is_empty(), "{:?}", r.log);
+    assert_eq!(r.log, vec!["Holes are larger than the limit"]);
+}
+
+#[test]
+fn simplify_reduces_a_mesh_and_keeps_open_edges() {
+    let mut p = bundled("simplify");
+    assert!(!p.manifest.commands[0].preview);
+    assert!(p.manifest.capabilities.edit_topology);
+    // A closed octahedron can lose triangles; it stays closed and finite.
+    p.params[0] = 50.0;
+    let r = p.run(0, octahedron_snapshot()).unwrap();
+    assert!(r.log.iter().any(|l| l.starts_with("Removed ")), "{:?}", r.log);
+    let mesh = &r.meshes[0].1;
+    assert!(mesh.triangles.len() < 8, "got {} triangles: {}", mesh.triangles.len(), r.log[0]);
+    assert_eq!(boundary_edges(&mesh.triangles), 0);
+    assert_mesh_ok(&mesh.positions, &mesh.triangles);
+    assert!(mesh.positions.iter().all(|v| v.length() <= 1.0 + 1e-4));
+    assert_eq!(r.groups[0].1.len(), mesh.triangles.len());
+    assert_eq!(r.masks[0].1.len(), mesh.positions.len());
+    assert_eq!(r.colors[0].1.len(), mesh.positions.len());
+    assert_eq!(r.hidden[0].1.len(), mesh.triangles.len());
+    assert_eq!(p.progress().fraction(), Some(1.0));
+    // A grid keeps its outline. Fully masked interior vertices stay put,
+    // and the face group and a corner's color survive.
+    let mut snap = grid_snapshot(6);
+    let n = 6usize;
+    let corner = |x, z| z * n + x;
+    snap.pieces[0].mask[corner(2, 2)] = 1.0;
+    let boundary_before = boundary_edges(&snap.pieces[0].triangles);
+    let tris_before = snap.pieces[0].triangles.len();
+    p.params[0] = 40.0;
+    let r = p.run(0, snap).unwrap();
+    let mesh = &r.meshes[0].1;
+    assert!(mesh.triangles.len() < tris_before, "{} -> {}", tris_before, mesh.triangles.len());
+    assert_eq!(boundary_edges(&mesh.triangles), boundary_before, "open edges stay: {:?}", r.log);
+    // Every vertex of the outline was locked, so it is still here, unmoved.
+    for z in 0..n {
+        for x in 0..n {
+            if x == 0 || z == 0 || x + 1 == n || z + 1 == n {
+                let want = Vec3::new(x as f32, 0.0, z as f32);
+                assert!(
+                    mesh.positions.iter().any(|v| (*v - want).length() < 1e-4),
+                    "boundary vertex {want} gone ({:?})",
+                    r.log
+                );
+            }
+        }
+    }
+    assert_mesh_ok(&mesh.positions, &mesh.triangles);
+    for (x, z) in [(0, 0), (5, 0), (0, 5), (5, 5)] {
+        let want = Vec3::new(x as f32, 0.0, z as f32);
+        assert!(mesh.positions.iter().any(|v| (*v - want).length() < 1e-4), "corner {want} gone");
+    }
+    let protected = Vec3::new(2.0, 0.0, 2.0);
+    let kept = mesh.positions.iter().position(|v| (*v - protected).length() < 1e-4).expect("masked vertex moved");
+    assert!((r.masks[0].1[kept] - 1.0).abs() < 1e-5);
+    assert!(r.groups[0].1.iter().all(|&g| g == 3));
+    let corner_color = snap_color_at(&mesh.positions, &r.colors[0].1, Vec3::new(0.0, 0.0, 0.0));
+    assert!(corner_color.x < 0.05 && corner_color.z < 0.05, "{corner_color}");
+    // Nothing asked for: no rewrite.
+    p.params[0] = 0.0;
+    let r = p.run(0, octahedron_snapshot()).unwrap();
+    assert!(r.meshes.is_empty());
+    assert_eq!(r.log, vec!["Nothing to remove"]);
+}
+
+fn snap_color_at(pos: &[Vec3], colors: &[Vec3], at: Vec3) -> Vec3 {
+    let i = pos.iter().position(|v| (*v - at).length() < 1e-4).expect("vertex");
+    colors[i]
+}
+
+#[test]
+fn showcase_plugins_stop_before_writing() {
+    for name in ["group_angle", "hide_angle", "color_group", "fill_holes", "simplify"] {
+        let mut p = bundled(name);
+        p.progress().cancel();
+        let snap = if name == "simplify" { octahedron_snapshot() } else { cube_snapshot() };
+        let r = p.run(0, snap).unwrap();
+        assert!(r.cancelled, "{name}");
+        assert!(r.groups.is_empty() && r.hidden.is_empty() && r.colors.is_empty() && r.meshes.is_empty(), "{name}");
+        assert!(
+            r.log.iter().all(|l| !l.contains("Grouped")
+                && !l.contains("Hid")
+                && !l.contains("Colored")
+                && !l.contains("Filled")
+                && !l.contains("Removed")),
+            "{name}: {l:?}",
+            l = r.log
+        );
+    }
+}

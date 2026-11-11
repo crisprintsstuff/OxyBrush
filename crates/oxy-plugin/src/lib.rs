@@ -86,6 +86,19 @@ pub const BUNDLED: &[(&str, &str, &str)] = &[
         include_str!("../plugins/group_height/plugin.wat"),
     ),
     ("flip_faces", include_str!("../plugins/flip_faces/plugin.json"), include_str!("../plugins/flip_faces/plugin.wat")),
+    (
+        "group_angle",
+        include_str!("../plugins/group_angle/plugin.json"),
+        include_str!("../plugins/group_angle/plugin.wat"),
+    ),
+    ("hide_angle", include_str!("../plugins/hide_angle/plugin.json"), include_str!("../plugins/hide_angle/plugin.wat")),
+    (
+        "color_group",
+        include_str!("../plugins/color_group/plugin.json"),
+        include_str!("../plugins/color_group/plugin.wat"),
+    ),
+    ("fill_holes", include_str!("../plugins/fill_holes/plugin.json"), include_str!("../plugins/fill_holes/plugin.wat")),
+    ("simplify", include_str!("../plugins/simplify/plugin.json"), include_str!("../plugins/simplify/plugin.wat")),
 ];
 
 use glam::Vec3;

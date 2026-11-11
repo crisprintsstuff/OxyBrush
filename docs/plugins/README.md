@@ -92,6 +92,21 @@ starts, if they aren't already there:
 - Measure
 - Group by Height
 - Flip Faces
+- Group by Angle
+- Hide Faces by Angle
+- Fill Holes
+- Simplify Mesh
+- Color by Group
+
+Group by Angle, Hide Faces by Angle and Color by Group show a result
+before you accept it. Fill Holes and Simplify Mesh change the triangles
+and can be stopped; they are not previews, because they can take a
+moment. Group by Angle reads and writes face groups from the angle
+between neighbouring faces. Hide Faces by Angle is the one that writes
+hidden faces. Color by Group is the one with a color setting. Fill Holes
+and Simplify Mesh replace the triangles (`edit_topology`) and write the
+mask, color, groups and hidden faces back afterwards, since a new mesh
+starts blank.
 
 Their source (`plugin.wat`) is a good place to start. A plugin you've
 changed is never overwritten. To get a newer version of a bundled plugin,
