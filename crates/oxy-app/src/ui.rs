@@ -3,7 +3,9 @@
 use crate::editor::{Drag, Editor, Pending, StrokeMode};
 use crate::keymap::{self, CommandId};
 use crate::pose::{GizmoMode, Handle};
-use crate::settings::{AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, ThemePreset, UiLayout};
+use crate::settings::{
+    AccentPreset, Choice, CornerStyle, PanelSide, QuickBar, ShelfPosition, SliderSize, ThemePreset, UiLayout,
+};
 use crate::tips::{self, Cmd, plain};
 use crate::widgets::{self, Icon};
 use egui::{Color32, RichText, Stroke as EStroke, Ui};
@@ -266,6 +268,7 @@ pub fn apply_theme(
     accent: AccentPreset,
     custom_accent: [u8; 3],
     corner_style: CornerStyle,
+    slider_size: SliderSize,
     high_contrast: bool,
     ui_scale: f32,
     layout: UiLayout,
@@ -383,9 +386,7 @@ pub fn apply_theme(
             s.spacing.icon_width = 22.0;
             s.spacing.icon_width_inner = 14.0;
         }
-        // egui pads a window's title bar with this same margin above and
-        // below the title, so it is kept modest; a finger-sized title bar
-        // still comes from the larger Touch heading.
+        s.spacing.slider_rail_height = slider_size.rail_height(s.spacing.slider_rail_height, m.interact_height);
         // egui pads a window's title bar with this same margin above and
         // below the title, so it is kept modest; a finger-sized title bar
         // still comes from the larger Touch heading.
@@ -406,6 +407,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
     let busy = ed.job.is_some();
     ed.preview_matcap = None;
+    // With pen panel gestures on (RFC 0015) a pen drag over a label scrolls
+    // the panel, so labels don't start a text selection then.
+    let selectable = !ed.pen_panels_active();
+    if ui.ctx().global_style().interaction.selectable_labels != selectable {
+        ui.ctx().all_styles_mut(|s| s.interaction.selectable_labels = selectable);
+    }
 
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -1503,7 +1510,7 @@ fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
             painter.rect(
                 sample,
                 r,
-                ui.visuals().widgets.inactive.weak_bg_fill,
+                ui.visuals().widgets.inactive.bg_fill,
                 EStroke::new(
                     if selected { 2.0 } else { 1.0 },
                     if selected { accent } else { ui.visuals().widgets.noninteractive.bg_stroke.color },
@@ -1522,6 +1529,53 @@ fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
+    ui.add_space(8.0);
+    ui.label(RichText::new("Slider thickness").strong());
+    ui.horizontal(|ui| {
+        for size in SliderSize::ALL {
+            let selected = ed.slider_size == size;
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(84.0, 56.0), egui::Sense::click());
+            let painter = ui.painter_at(rect);
+            let accent = ui.visuals().selection.stroke.color;
+            // A sample bar at the thickness this choice gives in the current
+            // theme and layout, half filled, with a frame round the choice.
+            let h = size.rail_height(normal_rail_height(ed), metrics(ed.layout).interact_height).min(20.0);
+            let bar = egui::Rect::from_center_size(rect.center() - egui::vec2(0.0, 8.0), egui::vec2(60.0, h));
+            let r = (h / 2.0).min(ui.visuals().widgets.inactive.corner_radius.nw as f32);
+            painter.rect_filled(bar, r, ui.visuals().widgets.inactive.bg_fill);
+            painter.rect_filled(
+                egui::Rect::from_min_max(bar.min, egui::pos2(bar.center().x, bar.max.y)),
+                r,
+                ui.visuals().selection.bg_fill,
+            );
+            if selected {
+                painter.rect_stroke(rect.shrink(2.0), 6.0, EStroke::new(2.0, accent), egui::StrokeKind::Inside);
+            }
+            painter.text(
+                egui::pos2(rect.center().x, rect.bottom() - 8.0),
+                egui::Align2::CENTER_CENTER,
+                size.label(),
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
+            );
+            if tips::hover(resp, plain::SLIDER_SIZE).clicked() {
+                ed.slider_size = size;
+            }
+        }
+    });
+}
+
+/// The bar height the current theme and layout give at Normal thickness,
+/// matching `apply_theme`.
+fn normal_rail_height(ed: &Editor) -> f32 {
+    let m = metrics(ed.layout);
+    let studio = ed.theme == ThemePreset::Studio && !ed.high_contrast;
+    let mut h =
+        if studio { (m.interact_height - 6.0).max(12.0) } else { egui::style::Spacing::default().slider_rail_height };
+    if ed.layout == UiLayout::Touch {
+        h = h.max(10.0);
+    }
+    h
 }
 
 fn wireframe_window(ctx: &egui::Context, ed: &mut Editor) {
@@ -3458,6 +3512,39 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     });
     ui.add_space(6.0);
     ui.label(RichText::new(plain::PRESSURE_DRIVER).weak().small());
+
+    ui.separator();
+    ui.label(RichText::new("Pen in panels").strong());
+    ui.horizontal(|ui| {
+        ui.label("Drag empty space to scroll");
+        egui::ComboBox::from_id_salt("panel_drag_scroll").selected_text(ed.panel_drag_scroll.label()).show_ui(
+            ui,
+            |ui| {
+                for m in crate::settings::PanelDragScroll::ALL {
+                    ui.selectable_value(&mut ed.panel_drag_scroll, m, m.label());
+                }
+            },
+        );
+    })
+    .response
+    .on_hover_text(plain::PANEL_DRAG_SCROLL);
+    ui.label(
+        RichText::new(
+            "With a pen: drag in a panel or list to scroll it (or drag with a side button held). \
+             Hold the pen still on a control for a moment to open its menu, like a right-click, and read its tip.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Side buttons in the viewport:").weak().small());
+        if ui.button("Use the Pen navigation preset").on_hover_text(crate::keymap::Preset::Pen.description()).clicked()
+        {
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::Pen);
+            ed.status = "Navigation: Pen side buttons".into();
+        }
+    });
 }
 
 /// Preview of an alpha (texture cached per alpha name).
@@ -5256,6 +5343,7 @@ mod tests {
             AccentPreset::Terracotta,
             [0xE0, 0x7A, 0x4F],
             CornerStyle::Rounded,
+            SliderSize::Normal,
             high_contrast,
             ui_scale,
             layout,
@@ -5460,6 +5548,31 @@ mod tests {
         names.sort_unstable();
         names.dedup();
         assert_eq!(names.len(), ThemePreset::ALL.len());
+    }
+
+    #[test]
+    fn labels_stop_selecting_text_while_pen_gestures_are_on() {
+        // RFC 0015: a pen drag over a label scrolls the panel instead.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let frame = |ed: &mut Editor| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+            ctx.global_style().interaction.selectable_labels
+        };
+        assert!(frame(&mut ed), "a mouse: labels select text as usual");
+        ed.pen_seen = true;
+        assert!(!frame(&mut ed), "a pen has been used");
+        ed.panel_drag_scroll = crate::settings::PanelDragScroll::Off;
+        assert!(frame(&mut ed), "pen gestures turned off");
     }
 
     #[test]
@@ -5767,6 +5880,7 @@ mod tests {
             AccentPreset::Emerald,
             [0, 0, 0],
             CornerStyle::Pill,
+            SliderSize::Normal,
             false,
             1.0,
             UiLayout::Standard,
@@ -5800,6 +5914,7 @@ mod tests {
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
+                SliderSize::Normal,
                 false,
                 1.0,
                 layout,
@@ -5831,6 +5946,7 @@ mod tests {
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
+                SliderSize::Normal,
                 false,
                 1.0,
                 UiLayout::Standard,
@@ -5854,12 +5970,56 @@ mod tests {
     }
 
     #[test]
+    fn slider_thickness_changes_only_the_bar() {
+        for theme in ThemePreset::ALL {
+            for layout in UiLayout::ALL {
+                let rail = |size| {
+                    let ctx = egui::Context::default();
+                    apply_theme(
+                        &ctx,
+                        theme,
+                        AccentPreset::Terracotta,
+                        [0; 3],
+                        CornerStyle::Rounded,
+                        size,
+                        false,
+                        1.0,
+                        layout,
+                    );
+                    let s = ctx.global_style();
+                    (s.spacing.slider_rail_height, s.spacing.interact_size.y, s.spacing.slider_width)
+                };
+                let (thin, normal, thick) = (rail(SliderSize::Thin), rail(SliderSize::Normal), rail(SliderSize::Thick));
+                assert!(thin.0 < normal.0 && normal.0 < thick.0, "{theme:?} {layout:?}: {thin:?} {normal:?} {thick:?}");
+                assert!(thick.0 <= thick.1, "{theme:?} {layout:?}: the bar fits in its control");
+                assert_eq!((thin.1, thin.2), (normal.1, normal.2), "controls keep their size");
+                assert_eq!((thick.1, thick.2), (normal.1, normal.2), "controls keep their size");
+                // The Theme window's samples use the same Normal bar.
+                let mut ed = Editor::default();
+                (ed.theme, ed.layout) = (theme, layout);
+                ed.high_contrast = false;
+                assert_eq!(normal_rail_height(&ed), normal.0, "{theme:?} {layout:?}");
+            }
+        }
+    }
+
+    #[test]
     fn all_theme_presets_and_accents_apply_cleanly() {
         let ctx = egui::Context::default();
         for theme in ThemePreset::ALL {
             for accent in AccentPreset::ALL {
                 for corner in CornerStyle::ALL {
-                    apply_theme(&ctx, theme, accent, [100, 150, 200], corner, false, 1.0, UiLayout::Standard);
+                    apply_theme(
+                        &ctx,
+                        theme,
+                        accent,
+                        [100, 150, 200],
+                        corner,
+                        SliderSize::Normal,
+                        false,
+                        1.0,
+                        UiLayout::Standard,
+                    );
                     let v = ctx.global_style().visuals.clone();
                     let expected_accent = Color32::from_rgb(
                         accent.rgb([100, 150, 200])[0],

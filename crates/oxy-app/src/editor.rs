@@ -892,6 +892,8 @@ pub struct Editor {
     pub show_brush_names: bool,
     /// A side brush shelf as one narrow column (Preferences > Interface).
     pub narrow_shelf: bool,
+    /// When dragging empty panel space scrolls it (Preferences > Pen & tablet).
+    pub panel_drag_scroll: crate::settings::PanelDragScroll,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     /// The interface scale before it was last changed, until the
@@ -1132,6 +1134,8 @@ pub struct Editor {
     pub custom_accent: [u8; 3],
     /// Window and button corner rounding style.
     pub corner_style: crate::settings::CornerStyle,
+    /// How thick slider bars are (Theme window > Size & shape).
+    pub slider_size: crate::settings::SliderSize,
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
     /// Default extrusion thickness for Mask Extract (in scene units).
@@ -1229,6 +1233,7 @@ impl Default for Editor {
             window_geometry: None,
             show_brush_names: true,
             narrow_shelf: false,
+            panel_drag_scroll: crate::settings::PanelDragScroll::Pen,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             ui_scale_from: None,
@@ -1354,6 +1359,7 @@ impl Default for Editor {
             accent: crate::settings::AccentPreset::Terracotta,
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: crate::settings::CornerStyle::Rounded,
+            slider_size: crate::settings::SliderSize::Normal,
             max_triangles: crate::settings::default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
@@ -1610,6 +1616,7 @@ impl Editor {
             accent: self.accent,
             custom_accent: self.custom_accent,
             corner_style: self.corner_style,
+            slider_size: self.slider_size,
             max_triangles: self.max_triangles,
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
@@ -1625,6 +1632,7 @@ impl Editor {
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
             narrow_shelf: self.narrow_shelf,
+            panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
         }
     }
@@ -1684,19 +1692,43 @@ impl Editor {
     }
 
     /// Put every theme setting back to the default look: Graphite, the
-    /// terracotta accent, rounded corners, 100% interface scale and the
-    /// default viewport background.
+    /// terracotta accent, rounded corners, normal sliders, 100% interface
+    /// scale and the default viewport background.
     pub fn reset_theme(&mut self) {
         self.theme = crate::settings::ThemePreset::default();
         self.high_contrast = false;
         self.accent = crate::settings::AccentPreset::default();
         self.corner_style = crate::settings::CornerStyle::default();
+        self.slider_size = crate::settings::SliderSize::default();
         if self.ui_scale != 1.0 {
             self.ui_scale_from = Some(self.ui_scale);
             self.ui_scale = 1.0;
         }
         self.view.reset_background();
         self.status = "Theme reset to the default look".into();
+    }
+
+    /// Whether pen panel gestures are on (RFC 0015): with a pen once its
+    /// pressure has been seen, always, or never.
+    pub fn pen_panels_active(&self) -> bool {
+        match self.panel_drag_scroll {
+            crate::settings::PanelDragScroll::Always => true,
+            crate::settings::PanelDragScroll::Off => false,
+            crate::settings::PanelDragScroll::Pen => self.pen_seen,
+        }
+    }
+
+    /// Whether a press on a panel should count as a touch for egui (RFC 0015),
+    /// so dragging empty panel space scrolls it and holding still shows a
+    /// control's tooltip or opens its menu, as on a touch screen. A pen is
+    /// recognised by its pressure: `since_pressure` is how long ago the last
+    /// pressure reading arrived.
+    pub fn press_counts_as_touch(&self, since_pressure: Option<std::time::Duration>) -> bool {
+        match self.panel_drag_scroll {
+            crate::settings::PanelDragScroll::Always => true,
+            crate::settings::PanelDragScroll::Off => false,
+            crate::settings::PanelDragScroll::Pen => since_pressure.is_some_and(|d| d.as_secs_f32() < 1.5),
+        }
     }
 
     pub fn open_settings(&mut self, tab: SettingsTab) {
@@ -1791,6 +1823,7 @@ impl Editor {
         self.accent = s.accent;
         self.custom_accent = s.custom_accent;
         self.corner_style = s.corner_style;
+        self.slider_size = s.slider_size;
         self.max_triangles = s.max_triangles;
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
@@ -1800,6 +1833,7 @@ impl Editor {
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
         self.narrow_shelf = s.narrow_shelf;
+        self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
         if !s.remember_brushes {
             return;
@@ -8609,6 +8643,7 @@ mod tests {
             accent: crate::settings::AccentPreset::Cyan,
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: crate::settings::CornerStyle::Soft,
+            slider_size: crate::settings::SliderSize::Thick,
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,
@@ -8626,6 +8661,7 @@ mod tests {
             show_brush_names: false,
             narrow_shelf: true,
             alpha_capture_size: 2048,
+            panel_drag_scroll: crate::settings::PanelDragScroll::Always,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
@@ -9036,6 +9072,62 @@ mod tests {
             }
         }
         assert_eq!(e.history.undo_labels().count(), 0, "nothing was sculpted or masked");
+    }
+
+    #[test]
+    fn the_pen_preset_maps_the_side_buttons() {
+        // RFC 0015: lower side button (right) orbits, Shift pans, Ctrl zooms;
+        // upper side button (middle) pans. Never sculpts or masks.
+        let mut e = editor();
+        e.keymap.apply_navigation_preset(crate::keymap::Preset::Pen);
+        for at in [Vec2::new(400.0, 300.0), Vec2::new(30.0, 30.0)] {
+            for (button, shift, ctrl) in [
+                (PointerButton::Secondary, false, false),
+                (PointerButton::Secondary, true, false),
+                (PointerButton::Secondary, false, true),
+                (PointerButton::Middle, false, false),
+            ] {
+                e.modifiers.shift = shift;
+                e.modifiers.ctrl = ctrl;
+                e.pointer = Some(at);
+                e.pointer_down(button);
+                let what = match &e.drag {
+                    Drag::Orbit => "orbit",
+                    Drag::Zoom => "zoom",
+                    Drag::Pan => "pan",
+                    _ => "other",
+                };
+                let expect = match (button, shift, ctrl) {
+                    (PointerButton::Middle, ..) => "pan",
+                    (_, true, _) => "pan",
+                    (_, _, true) => "zoom",
+                    _ => "orbit",
+                };
+                assert_eq!(what, expect, "{button:?} shift {shift} ctrl {ctrl} at {at}");
+                e.pointer_up();
+                e.quick_menu = None;
+            }
+        }
+        e.modifiers.shift = false;
+        e.modifiers.ctrl = false;
+        assert_eq!(e.history.undo_labels().count(), 0, "nothing was sculpted or masked");
+        // Alt while orbiting snaps.
+        assert_eq!(e.keymap.snap, Some(crate::keymap::ModKey::Alt));
+    }
+
+    #[test]
+    fn a_panel_press_counts_as_touch_with_a_pen_or_always() {
+        use crate::settings::PanelDragScroll;
+        use std::time::Duration;
+        let mut e = editor();
+        assert_eq!(e.panel_drag_scroll, PanelDragScroll::Pen, "default");
+        assert!(e.press_counts_as_touch(Some(Duration::from_millis(100))), "pen pressure just now");
+        assert!(!e.press_counts_as_touch(Some(Duration::from_secs(10))), "pen put away long ago");
+        assert!(!e.press_counts_as_touch(None), "a mouse");
+        e.panel_drag_scroll = PanelDragScroll::Always;
+        assert!(e.press_counts_as_touch(None));
+        e.panel_drag_scroll = PanelDragScroll::Off;
+        assert!(!e.press_counts_as_touch(Some(Duration::from_millis(1))));
     }
 
     #[test]

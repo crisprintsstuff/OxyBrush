@@ -19,7 +19,7 @@ One **Theme** window (**View > Theme…**, the command palette, or the button in
 |---|---|
 | **Themes** | A gallery of the nine themes. Each card is a small picture drawn from the theme's own colors (panels, a window with text and a button, the current accent). Below the gallery are **Looks**, the old quick presets, each a theme with the accent, corners and viewport background that suit it: **Classic** (the default), **Workstation**, **Midnight**. |
 | **Colors** | The accent color (eight swatches, with a picker for the custom one) and the viewport background (gradient or flat, its colors, reset). |
-| **Size & shape** | Interface scale, and corner rounding as four previews. |
+| **Size & shape** | Interface scale, corner rounding as four previews, and slider thickness (Thin, Normal, Thick) as three previews. |
 
 Every tab has a footer with **Reset everything**, which goes back to the default look: Graphite, terracotta, rounded corners, 100% scale and the default background.
 
@@ -36,4 +36,4 @@ Every tab has a footer with **Reset everything**, which goes back to the default
 
 ## Compatibility
 
-There's nothing new to store and no settings change: the window edits the same settings (`theme`, `accent`, `custom_accent`, `corner_style`, `ui_scale`, the background). Commands that opened the old windows (**Theme & Appearance**, **Viewport background**) now open the Theme window, on the right tab.
+The window edits the same settings as before (`theme`, `accent`, `custom_accent`, `corner_style`, `ui_scale`, the background), plus one new one, `slider_size` (`thin`, `normal` or `thick`; missing means `normal`, so older settings files load unchanged). Commands that opened the old windows (**Theme & Appearance**, **Viewport background**) now open the Theme window, on the right tab.
