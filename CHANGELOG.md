@@ -4,6 +4,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Five bundled in-app plugins** for Plugin API 3, in `crates/oxy-plugin/plugins/` and copied into the plugins folder like the others (a folder you already changed is left alone):
+  - **Group by Angle:** face groups from the angle between neighbouring faces, with a live preview. Complements Group by Height.
+  - **Hide Faces by Angle:** hides faces by how far their normal points from an axis, with Invert and an option to leave masked faces alone. The first bundled plugin that writes hidden faces.
+  - **Color by Group:** paints one face group in a color you pick, or every group in its own color. Uses the color setting. Masked vertices keep their color. Live preview.
+  - **Fill Holes:** caps open holes with new triangles and does not move the existing surface. Reports progress and can be stopped.
+  - **Simplify Mesh:** removes triangles while keeping the shape, open edges, face-group borders and fully masked vertices. Reports progress and can be stopped.
+
+  Fill Holes and Simplify Mesh use `edit_topology`. After replacing the triangles they write the mask, color, face groups and hidden faces back, because a new mesh starts blank. Subdivision levels are cleared, and Undo restores them.
+
 ### Fixed
 - **Retopology: Tab+drag pulls out a quad again.** Tab+drag on a border edge never worked in the app: the key handling that keeps Tab from moving focus between panels returned before OxyBrush noted that Tab was held, so the retopology tool never saw it. The tool's tests set the flag directly and missed it; they now go through the same key handling as the app. Dragging so far that the new quad would leave the model now says so in the status bar instead of doing nothing.
 

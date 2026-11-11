@@ -36,7 +36,9 @@ A folder in the plugins folder holding:
 OxyBrush ships plugins written in WebAssembly text in
 `crates/oxy-plugin/plugins/` (listed in `oxy_plugin::BUNDLED`) and installs
 any that are missing into the plugins folder: **Squash**, **Displace**,
-**Mask by Height**, **Color Ramp**, **Array** and **Measure**. They are
+**Mask by Height**, **Color Ramp**, **Array** and **Measure** (later
+releases add more; the [plugin guide](../plugins/README.md) lists the
+current set). They are
 useful tools and examples for plugin authors at the same time.
 
 ### What a plugin can do

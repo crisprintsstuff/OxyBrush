@@ -1,0 +1,29 @@
+{
+  "name": "Group by Angle",
+  "version": "1.0",
+  "description": "Gives each smooth region of the active piece its own face group, splitting where the surface bends more sharply than an angle. Shows the result before you accept it.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "group", "label": "Group by angle", "preview": true }
+  ],
+  "params": [
+    {
+      "id": "angle",
+      "label": "Angle (degrees)",
+      "min": 0,
+      "max": 180,
+      "step": 1,
+      "default": 40,
+      "help": "Faces that meet more sharply than this are put in different groups. Flat areas stay together."
+    },
+    {
+      "id": "keep",
+      "label": "Keep existing splits",
+      "type": "toggle",
+      "default": false,
+      "help": "Faces that already have different groups stay apart, even when the surface between them is smooth."
+    },
+    { "id": "note", "type": "label", "text": "Each smooth patch becomes a face group. Ctrl+Shift+click one to isolate it." }
+  ]
+}

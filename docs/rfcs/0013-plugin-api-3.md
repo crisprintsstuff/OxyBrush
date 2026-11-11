@@ -125,6 +125,12 @@ While a command runs, its panel and the Plugins menu show a progress bar
   plugins folder only when they're missing, so people who already have
   Displace keep their old copy until they delete its folder.
 
+Later showcase plugins, listed in the [plugin guide](../plugins/README.md),
+cover the rest of this surface: **Group by Angle** (face groups from the
+angle between faces), **Hide Faces by Angle** (`write_hidden`), **Color by
+Group** (a color param), **Fill Holes** and **Simplify Mesh**
+(`write_mesh`, with progress and Stop).
+
 ## Not in this version
 
 - Partial writes (only some vertices) for large meshes, selection and
