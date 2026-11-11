@@ -47,7 +47,7 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. Hover over any brush or control for a short explanation and its shortcut. On a touch screen, press and hold a control to read the same text.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. **File > Close project** brings it back: it closes the project, asking to save unsaved work first. Hover over any brush or control for a short explanation and its shortcut. On a touch screen, press and hold a control to read the same text.
 
 **Layouts** (Settings > Layout, or in the welcome window):
 

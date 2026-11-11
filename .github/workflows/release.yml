@@ -173,6 +173,12 @@ jobs:
           sed -i '' 's/^          //' icon-check/icons.swift
           swift icon-check/icons.swift "$APP" "$PWD/icon-check/sample.oxb" "$APP/Contents/Resources/oxybrush.icns"
           cat icon-check/report.txt
+          sw_vers
+          # Small copies in the log too, for when the artifact can't be fetched.
+          for f in icon-check/*.icon.png; do
+            sips -z 64 64 "$f" --out "$f.small.png" >/dev/null
+            echo "ICON-BASE64 $(basename "$f") $(base64 -i "$f.small.png" | tr -d '\n')"
+          done
       - uses: actions/upload-artifact@v4
         if: always()
         with:
