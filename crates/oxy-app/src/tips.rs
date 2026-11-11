@@ -338,7 +338,7 @@ pub fn hover(response: Response, text: impl Into<String>) -> Response {
         return response;
     }
     let response = response.on_hover_text(text.clone()).on_disabled_hover_text(text.clone());
-    if response.long_touched() {
+    if response.long_touched() || (response.secondary_clicked() && pen_hold(&response.ctx)) {
         let pos = response.rect.left_bottom() + egui::vec2(0.0, 4.0);
         // Read the clock before taking the data lock. `data_mut` holds that
         // lock, and `input` needs it too.
@@ -348,8 +348,26 @@ pub fn hover(response: Response, text: impl Into<String>) -> Response {
     response
 }
 
+fn pen_hold_id() -> egui::Id {
+    egui::Id::unique("oxy_pen_hold")
+}
+
+/// The app turned a pen held still on a panel into a right-click this frame
+/// (RFC 0015): the control under it pins its tooltip, as a long touch does.
+pub fn mark_pen_hold(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(pen_hold_id(), true));
+}
+
+fn pen_hold(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<bool>(pen_hold_id())).unwrap_or(false)
+}
+
 /// Draw a tooltip that was pinned by a long-press. Call once per frame.
 pub fn show_pinned(ctx: &egui::Context) {
+    // The pen-hold mark lasts the frame that turned it into a right-click.
+    ctx.data_mut(|d| {
+        d.remove::<bool>(pen_hold_id());
+    });
     let Some(mut tip) = ctx.data(|d| d.get_temp::<PinnedTip>(pin_id())) else { return };
     let (time, down, pressed) = ctx.input(|i| (i.time, i.pointer.any_down(), i.pointer.any_pressed()));
     if tip.fresh {
@@ -604,6 +622,7 @@ pub mod plain {
     pub const BRUSH_TILE: &str = "The current brush. Click to pick another.";
     pub const ALPHA_TILE: &str = "An image that shapes each dab. Click to pick one, or none.";
     pub const MATERIAL_TILE: &str = "How the clay is shaded. Click to pick a material.";
+    pub const PANEL_DRAG_SCROLL: &str = "A pen reaches OxyBrush as a mouse without a wheel. With a pen (recognised by its pressure), dragging empty space in a panel scrolls it, as a finger does on a touch screen. Always also does it with a mouse, for pens whose drivers send no pressure. Never turns it off (touch screens still scroll).";
     pub const LOAD_IMAGE: &str = "Load a grayscale PNG. White is full strength, black is none.";
     pub const CAPTURE_SIZE: &str = "Size of the next captured alpha, in pixels. Larger sizes give smoother edges; 4096 takes a few seconds on a dense model.";
     pub const REMOVE_MATCAP: &str = "Remove this material from your library. The file is deleted.";
@@ -799,6 +818,7 @@ pub mod plain {
         ALPHA_TILE,
         MATERIAL_TILE,
         LOAD_IMAGE,
+        PANEL_DRAG_SCROLL,
         REMOVE_MATCAP,
         ORBIT,
         PAN,
@@ -985,6 +1005,51 @@ mod tests {
             time: Some(time),
             events,
             ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_pen_hold_right_click_pins_the_tooltip_and_a_mouse_right_click_doesnt() {
+        // RFC 0015: the app turns a pen held still into a right-click and
+        // marks the frame; the control under it pins its tooltip.
+        for (pen, expect) in [(true, true), (false, false)] {
+            let ctx = egui::Context::default();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+            let mut rect = egui::Rect::NOTHING;
+            let mut out = ctx.run_ui(raw(0.0, vec![]), |ui| {
+                rect = ui.button("Go").rect;
+            });
+            out.textures_delta.clear();
+            let pos = rect.center();
+            let click = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Secondary,
+                pressed,
+                modifiers: Default::default(),
+            };
+            if pen {
+                mark_pen_hold(&ctx);
+            }
+            let mut pinned = false;
+            for (k, events) in
+                [vec![egui::Event::PointerMoved(pos), click(true), click(false)], vec![]].into_iter().enumerate()
+            {
+                let mut out = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(screen),
+                        time: Some(0.1 + k as f64 * 0.1),
+                        events,
+                        ..Default::default()
+                    },
+                    |ui| {
+                        hover(ui.button("Go"), "Does the thing.");
+                        pinned |= ui.ctx().data(|d| d.get_temp::<PinnedTip>(pin_id())).is_some();
+                        show_pinned(ui.ctx());
+                    },
+                );
+                out.textures_delta.clear();
+            }
+            assert_eq!(pinned, expect, "pen hold: {pen}");
         }
     }
 

@@ -398,6 +398,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
     let busy = ed.job.is_some();
     ed.preview_matcap = None;
+    // With pen panel gestures on (RFC 0015) a pen drag over a label scrolls
+    // the panel, so labels don't start a text selection then.
+    let selectable = !ed.pen_panels_active();
+    if ui.ctx().global_style().interaction.selectable_labels != selectable {
+        ui.ctx().all_styles_mut(|s| s.interaction.selectable_labels = selectable);
+    }
 
     egui::Panel::top("menu").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
@@ -3383,6 +3389,39 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     });
     ui.add_space(6.0);
     ui.label(RichText::new(plain::PRESSURE_DRIVER).weak().small());
+
+    ui.separator();
+    ui.label(RichText::new("Pen in panels").strong());
+    ui.horizontal(|ui| {
+        ui.label("Drag empty space to scroll");
+        egui::ComboBox::from_id_salt("panel_drag_scroll").selected_text(ed.panel_drag_scroll.label()).show_ui(
+            ui,
+            |ui| {
+                for m in crate::settings::PanelDragScroll::ALL {
+                    ui.selectable_value(&mut ed.panel_drag_scroll, m, m.label());
+                }
+            },
+        );
+    })
+    .response
+    .on_hover_text(plain::PANEL_DRAG_SCROLL);
+    ui.label(
+        RichText::new(
+            "With a pen: drag in a panel or list to scroll it (or drag with a side button held). \
+             Hold the pen still on a control for a moment to open its menu, like a right-click, and read its tip.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Side buttons in the viewport:").weak().small());
+        if ui.button("Use the Pen navigation preset").on_hover_text(crate::keymap::Preset::Pen.description()).clicked()
+        {
+            ed.keymap.apply_navigation_preset(crate::keymap::Preset::Pen);
+            ed.status = "Navigation: Pen side buttons".into();
+        }
+    });
 }
 
 /// Preview of an alpha (texture cached per alpha name).
@@ -5326,6 +5365,31 @@ mod tests {
         run_frames(&mut ed, 1);
         ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Brushes));
         run_frames(&mut ed, 1);
+    }
+
+    #[test]
+    fn labels_stop_selecting_text_while_pen_gestures_are_on() {
+        // RFC 0015: a pen drag over a label scrolls the panel instead.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let frame = |ed: &mut Editor| {
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+            ctx.global_style().interaction.selectable_labels
+        };
+        assert!(frame(&mut ed), "a mouse: labels select text as usual");
+        ed.pen_seen = true;
+        assert!(!frame(&mut ed), "a pen has been used");
+        ed.panel_drag_scroll = crate::settings::PanelDragScroll::Off;
+        assert!(frame(&mut ed), "pen gestures turned off");
     }
 
     #[test]

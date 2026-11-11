@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Pen gestures** ([RFC 0015](docs/rfcs/0015-pen-gestures.md)): with a pen (recognised by its pressure), dragging in a panel or list scrolls it, unless a control such as a slider takes the drag, and holding the pen still on a control for 0.8 s right-clicks it, opening its menu and pinning its tooltip without activating it. Dragging over a panel with a side button (right or middle) held scrolls it too. A new **Pen side buttons** navigation preset: lower side button orbits, with Shift pans, with Ctrl zooms; upper side button pans. **Preferences > Pen & tablet > Drag empty space to scroll**: with a pen (default), always (for drivers without pressure) or never. Labels don't start a text selection while pen gestures are on.
+
 ## [4.0.0-beta.2] - 2026-11-11
 
 ### Added

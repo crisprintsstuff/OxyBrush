@@ -346,6 +346,8 @@ pub struct Settings {
     pub narrow_shelf: bool,
     /// Side of a captured alpha in pixels (Capture from view).
     pub alpha_capture_size: u32,
+    /// When dragging empty space in a panel scrolls it (RFC 0015).
+    pub panel_drag_scroll: PanelDragScroll,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -403,6 +405,44 @@ impl WindowGeometry {
             let overlap_y = top_band.min(mb) - y.max(my);
             overlap_x >= 120 && overlap_y >= 40
         })
+    }
+}
+
+/// When dragging empty space in a panel or list scrolls it, as a finger
+/// does on a touch screen (RFC 0015). A pen usually reaches OxyBrush as a
+/// mouse without a wheel, so without this it can't scroll panels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PanelDragScroll {
+    /// While using a pen (OxyBrush saw its pressure). The default.
+    #[default]
+    Pen,
+    /// With any pointer, for pens whose drivers send no pressure.
+    Always,
+    /// Never (touch screens still scroll by dragging).
+    Off,
+}
+
+impl PanelDragScroll {
+    pub const ALL: [PanelDragScroll; 3] = [PanelDragScroll::Pen, PanelDragScroll::Always, PanelDragScroll::Off];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            PanelDragScroll::Pen => "pen",
+            PanelDragScroll::Always => "always",
+            PanelDragScroll::Off => "off",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.key() == k)
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            PanelDragScroll::Pen => "With a pen",
+            PanelDragScroll::Always => "Always",
+            PanelDragScroll::Off => "Never",
+        }
     }
 }
 
@@ -701,6 +741,7 @@ impl Default for Settings {
             show_brush_names: true,
             narrow_shelf: false,
             alpha_capture_size: 1024,
+            panel_drag_scroll: PanelDragScroll::Pen,
         }
     }
 }
@@ -836,6 +877,7 @@ impl Settings {
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
+            + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -1029,6 +1071,9 @@ impl Settings {
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
+                "panel_drag_scroll" => {
+                    s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
+                }
                 "alpha_capture_size" => {
                     s.alpha_capture_size = v
                         .parse()
@@ -1275,6 +1320,7 @@ mod tests {
             show_brush_names: false,
             narrow_shelf: true,
             alpha_capture_size: 2048,
+            panel_drag_scroll: crate::settings::PanelDragScroll::Always,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.

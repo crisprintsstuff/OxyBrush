@@ -102,7 +102,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: oxybrush [PROJECT.oxb|MESH.obj|MESH.stl] [--layout standard|compact|touch] [--backend x11|wayland] [--x11] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo] [--open-keymap [mmb]] [--link MANIFEST]\n\nPROJECT.oxb opens the project (a .oxylink.json next to it marks a document from OxyCharacter, which File > Send back to OxyCharacter returns to); a mesh file is imported\n--backend selects windowing backend on Linux (x11 or wayland)\n--x11 shortcut for --backend x11 (recommended for drawing tablets / pens under Wayland)\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)\n--open-keymap opens Settings > Keymap (add mmb for the middle-mouse preset)\n--link opens objects another app sent (an *.oxylink.json link manifest, e.g. from the Blender add-on)"
+                    "Usage: oxybrush [PROJECT.oxb|MESH.obj|MESH.stl] [--layout standard|compact|touch] [--backend x11|wayland] [--x11] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo] [--open-keymap [mmb|right-drag|pen]] [--link MANIFEST]\n\nPROJECT.oxb opens the project (a .oxylink.json next to it marks a document from OxyCharacter, which File > Send back to OxyCharacter returns to); a mesh file is imported\n--backend selects windowing backend on Linux (x11 or wayland)\n--x11 shortcut for --backend x11 (recommended for drawing tablets / pens under Wayland)\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)\n--open-keymap opens Settings > Keymap (add mmb for the middle-mouse preset)\n--link opens objects another app sent (an *.oxylink.json link manifest, e.g. from the Blender add-on)"
                 );
                 return;
             }
@@ -143,6 +143,10 @@ fn main() {
                     Some("oxybrush") => {
                         args.next();
                         keymap::Preset::OxyBrush
+                    }
+                    Some("pen") => {
+                        args.next();
+                        keymap::Preset::Pen
                     }
                     _ => keymap::Preset::OxyBrush,
                 });

@@ -60,6 +60,11 @@ pub struct App {
     applied_matcap: Option<(MatcapPreset, Option<String>)>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
+    /// When the last pen pressure reading arrived (a pen is in use).
+    last_pressure: Option<Instant>,
+    /// A pen press on a panel (RFC 0015): it scrolls the panel once it moves,
+    /// or opens the control's menu once held still.
+    pen_press: Option<PenPress>,
     applied_theme: Option<AppliedThemeKey>,
     applied_title: String,
     last_frame: Instant,
@@ -193,6 +198,8 @@ impl App {
             },
             applied_matcap: None,
             mmb_scroll: None,
+            last_pressure: None,
+            pen_press: None,
             applied_theme: None,
             applied_title: String::new(),
             last_frame: Instant::now(),
@@ -497,6 +504,25 @@ impl App {
         self.sync_agent();
         let Some(g) = &mut self.gfx else { return };
         let now = Instant::now();
+        // A pen held still on a panel: a right-click there, which opens the
+        // control's menu, and pins its tooltip (RFC 0015).
+        if let Some(press) = &mut self.pen_press
+            && press.held(now)
+            && let Some(p) = self.editor.pointer
+        {
+            let at = p / self.editor.pixels_per_point.max(0.1);
+            let pos = egui::pos2(at.x, at.y);
+            let input = g.egui_state.egui_input_mut();
+            for pressed in [true, false] {
+                input.events.push(egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Secondary,
+                    pressed,
+                    modifiers: Default::default(),
+                });
+            }
+            crate::tips::mark_pen_hold(&self.egui_ctx);
+        }
         let dt = now.duration_since(self.last_frame).as_secs_f32() * 1000.0;
         self.last_frame = now;
         self.editor.frame_ms = self.editor.frame_ms * 0.9 + dt * 0.1;
@@ -1280,6 +1306,17 @@ impl ApplicationHandler for App {
                 wait = wait.min(target.saturating_duration_since(now));
             }
         }
+        // A pen press on a panel becomes a right-click once held long enough.
+        if let Some(due) = self.pen_press.as_ref().and_then(PenPress::hold_due) {
+            let now = Instant::now();
+            if now >= due {
+                if let Some(g) = &self.gfx {
+                    g.window.request_redraw();
+                }
+            } else {
+                wait = wait.min(due - now);
+            }
+        }
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wait));
     }
 
@@ -1419,6 +1456,20 @@ impl ApplicationHandler for App {
                 redraw = true;
             }
             WindowEvent::CursorMoved { position, .. } => {
+                if let Some(press) = &mut self.pen_press {
+                    let p = Vec2::new(position.x as f32, position.y as f32);
+                    let ppp = self.editor.pixels_per_point.max(0.1);
+                    let widget_drag = self.egui_ctx.dragged_id().is_some();
+                    if let Some(d) = press.moved(p, ppp, widget_drag) {
+                        g.egui_state.egui_input_mut().events.push(egui::Event::MouseWheel {
+                            unit: egui::MouseWheelUnit::Point,
+                            delta: egui::vec2(d.x, d.y),
+                            phase: egui::TouchPhase::Move,
+                            source: egui::MouseWheelSource::Unknown,
+                            modifiers: Default::default(),
+                        });
+                    }
+                }
                 if !self.editor.is_stroking() || self.editor.pressure <= 0.0 {
                     self.editor.pressure = 1.0;
                 }
@@ -1433,6 +1484,7 @@ impl ApplicationHandler for App {
                 }
                 self.editor.pressure = *pressure;
                 self.editor.pen_seen = true;
+                self.last_pressure = Some(Instant::now());
                 redraw = true;
             }
             WindowEvent::PinchGesture { delta, .. } if !over_egui => {
@@ -1460,11 +1512,27 @@ impl ApplicationHandler for App {
                     MouseButton::Right => Some(PointerButton::Secondary),
                     _ => None,
                 };
-                if *button == MouseButton::Middle {
+                // Middle- or right-drag over a panel scrolls it, like grabbing
+                // the page: a pen's side buttons send these (RFC 0015). A
+                // right-click that doesn't move still opens a context menu.
+                if matches!(button, MouseButton::Middle | MouseButton::Right) {
                     self.mmb_scroll = match state {
                         ElementState::Pressed if over_egui => self.editor.pointer,
                         _ => None,
                     };
+                }
+                // A pen press on a panel (RFC 0015): dragging it scrolls the
+                // panel unless a control (a slider, a brush tile) takes the
+                // drag, and holding it still opens the control's menu.
+                if *button == MouseButton::Left {
+                    let since = self.last_pressure.map(|t| t.elapsed());
+                    match state {
+                        ElementState::Pressed if over_egui && self.editor.press_counts_as_touch(since) => {
+                            self.pen_press = self.editor.pointer.map(PenPress::new);
+                        }
+                        ElementState::Released => self.pen_press = None,
+                        _ => {}
+                    }
                 }
                 if let Some(b) = b {
                     match state {
@@ -1754,6 +1822,59 @@ fn character_key(s: &str) -> Option<KeyId> {
     }
 }
 
+/// A pen press on a panel (RFC 0015), in physical pixels. A pen reaches
+/// OxyBrush as a mouse without a wheel, so egui can't scroll a panel with
+/// it or tell a long press. Once the press moves past a click's distance it
+/// scrolls the panel under it (as middle-drag does), unless egui gave the
+/// drag to a control; held still for egui's longest click it becomes a
+/// right-click there, which opens the control's menu and pins its tooltip,
+/// and egui no longer counts the press as a click when it's released.
+pub(crate) struct PenPress {
+    start: Vec2,
+    last: Vec2,
+    at: Instant,
+    scrolling: bool,
+    /// Moved, scrolled or already turned into a right-click.
+    done_holding: bool,
+}
+
+/// A press held this long becomes a right-click (egui's `max_click_duration`,
+/// past which the release is no longer a click).
+pub(crate) const PEN_HOLD: Duration = Duration::from_millis(800);
+
+impl PenPress {
+    pub(crate) fn new(at: Vec2) -> Self {
+        PenPress { start: at, last: at, at: Instant::now(), scrolling: false, done_holding: false }
+    }
+
+    /// The pen moved to `p`: the scroll to apply, in points, if this press
+    /// scrolls. `widget_drag`: egui is dragging a control with it.
+    pub(crate) fn moved(&mut self, p: Vec2, pixels_per_point: f32, widget_drag: bool) -> Option<Vec2> {
+        let delta = (p - self.last) / pixels_per_point;
+        self.last = p;
+        if !self.done_holding && (p - self.start).length() / pixels_per_point > 6.0 {
+            self.done_holding = true;
+            self.scrolling = !widget_drag;
+        }
+        self.scrolling.then_some(delta)
+    }
+
+    /// When the press becomes a right-click, if it still can.
+    pub(crate) fn hold_due(&self) -> Option<Instant> {
+        (!self.done_holding).then_some(self.at + PEN_HOLD)
+    }
+
+    /// Whether the press has now been held still long enough to be a
+    /// right-click (true once).
+    pub(crate) fn held(&mut self, now: Instant) -> bool {
+        if self.done_holding || now.duration_since(self.at) < PEN_HOLD {
+            return false;
+        }
+        self.done_holding = true;
+        true
+    }
+}
+
 /// Note the window's size, position and maximized state for next time.
 /// While it's maximized (or full screen) the normal size and position are
 /// kept, so un-maximizing next session goes back to them.
@@ -1779,6 +1900,39 @@ fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
 
 #[cfg(test)]
 mod tests {
+    use super::{PEN_HOLD, PenPress};
+    use glam::Vec2;
+
+    #[test]
+    fn a_pen_press_scrolls_once_it_moves_unless_a_control_takes_it() {
+        // RFC 0015. Physical pixels at 2 px per point: 6 pt is 12 px.
+        let mut p = PenPress::new(Vec2::new(100.0, 100.0));
+        assert_eq!(p.moved(Vec2::new(100.0, 108.0), 2.0, false), None, "within a click's distance");
+        assert_eq!(
+            p.moved(Vec2::new(100.0, 120.0), 2.0, false),
+            Some(Vec2::new(0.0, 6.0)),
+            "past it: scroll by the move, in points"
+        );
+        assert_eq!(p.moved(Vec2::new(100.0, 100.0), 2.0, false), Some(Vec2::new(0.0, -10.0)));
+        assert!(p.hold_due().is_none(), "a press that moved never becomes a right-click");
+        // A slider took the drag: no scrolling, ever, for this press.
+        let mut p = PenPress::new(Vec2::new(100.0, 100.0));
+        assert_eq!(p.moved(Vec2::new(140.0, 100.0), 2.0, true), None);
+        assert_eq!(p.moved(Vec2::new(180.0, 100.0), 2.0, false), None);
+    }
+
+    #[test]
+    fn a_pen_held_still_becomes_one_right_click() {
+        let mut p = PenPress::new(Vec2::new(10.0, 10.0));
+        let start = p.at;
+        assert!(!p.held(start + PEN_HOLD / 2), "not yet");
+        assert!(p.moved(Vec2::new(12.0, 11.0), 1.0, false).is_none(), "a tremble isn't a move");
+        assert_eq!(p.hold_due(), Some(start + PEN_HOLD));
+        assert!(p.held(start + PEN_HOLD));
+        assert!(!p.held(start + PEN_HOLD * 2), "only once");
+        assert!(p.hold_due().is_none());
+    }
+
     #[test]
     fn window_icons_decode() {
         for png in [

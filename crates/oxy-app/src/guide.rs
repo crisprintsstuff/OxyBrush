@@ -50,10 +50,12 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
     },
     Topic {
         title: "Pen tablets and stylus",
-        keywords: "tablet pen stylus side button barrel windows ink pressure curve sensitivity firm soft wacom huion kamvas xppen x11 wayland linux cachy",
+        keywords: "tablet pen stylus side button barrel windows ink pressure curve sensitivity firm soft wacom huion kamvas xppen x11 wayland linux cachy scroll panel hold gesture",
         body: "OxyBrush supports pressure-sensitive stylus and drawing tablets (Wacom, Huion, XP-Pen, etc.).\n\n\
 - Stylus pressure controls brush strength, and can also modulate brush radius when enabled in the brush settings.\n\
 - Preferences > Pen & tablet sets how pressure feels: drag the two points on the curve (an S shape gives fine control at both ends; double-click to straighten), the curve bend, Lightest touch (the strength of a very light stroke) and Full pressure at (how hard you press for full strength), with Soft, Linear and Firm presets. While you draw, a dot shows your pen on the curve. If your tablet driver has its own pressure curve, keep that one straight so the two don't add up.\n\
+- In panels and lists, drag with the pen to scroll (or drag with a side button held), and hold the pen still on a control for a moment to open its menu, like a right-click, and read its tip. Preferences > Pen & tablet sets when dragging scrolls: with a pen, always (for pens whose drivers send no pressure) or never.\n\
+- In the viewport, the Pen side buttons navigation preset (Preferences > Keymap, or the button in Pen & tablet) makes the lower side button orbit, with Shift pan and with Ctrl zoom, and the upper side button pan.\n\
 - Pen side buttons can be mapped to right-click (quick menu), middle-click (navigation/scrolling), or modifier keys in your tablet driver.\n\
 - On Windows with Windows Ink, the pen's side button already acts as the right mouse button: a tap opens the quick menu, and with the Right-drag orbit preset (Settings > Keymap) holding it while you drag orbits the view and Ctrl + side button zooms.\n\
 - On Linux under Wayland compositors (CachyOS, KDE Wayland, GNOME Wayland, Hyprland), drawing tablets require the X11/XWayland backend because native Wayland tablet events are not exposed to winit. OxyBrush automatically detects connected tablets and defaults to the X11 backend when available. You can also manually force X11 mode by starting with `oxybrush --x11` (or `oxybrush --backend x11`), or by setting `OXY_BACKEND=x11`.",
