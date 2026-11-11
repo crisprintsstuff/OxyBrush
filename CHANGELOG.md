@@ -6,6 +6,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [3.0.8-beta] - 2026-11-11
 
+### Fixed
+- **Window title bars are no longer huge:** they were about 53 px tall at 100% scale, because egui sizes them from the heading font (20 pt) plus the window margin above and below the title. The heading font is now 15 pt (14–18 pt depending on the layout) and the window margin 9 px (11 in Touch), so title bars are about 37 px (45 in Touch). In-window headings are a little smaller too.
+
 ### Changed
 - **Studio theme refinements:** slider handles are solid bars with no outline, corners are a little squarer (60% of the chosen corner style's radius), and windows and menus have a smaller, fainter shadow.
 

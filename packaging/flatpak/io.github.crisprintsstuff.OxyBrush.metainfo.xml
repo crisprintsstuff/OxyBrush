@@ -55,7 +55,8 @@
   <releases>
     <release version="3.0.8-beta" date="2026-11-11" type="development">
       <description>
-        <p>The Studio theme is refined: slider handles are solid bars,
+        <p>Window title bars are much slimmer. The Studio theme is
+        refined: slider handles are solid bars,
         corners are a little squarer, and windows and menus cast a
         smaller, fainter shadow.</p>
       </description>
