@@ -32,6 +32,10 @@ pub struct Cage {
     /// [`Mesh::topology_version`] of the mesh last built from (or linked
     /// to) this cage. Not saved.
     pub linked: Option<u64>,
+    /// Pinned vertices, by index, kept in step with `positions` through
+    /// every edit (shorter means the rest aren't pinned). Relax leaves
+    /// them where they are; they can still be moved by hand.
+    pub pinned: Vec<bool>,
 }
 
 /// The corners of a face (3 or 4).
@@ -119,7 +123,39 @@ impl Cage {
         open
     }
 
+    pub fn is_pinned(&self, v: u32) -> bool {
+        self.pinned.get(v as usize).copied().unwrap_or(false)
+    }
+
+    pub fn set_pinned(&mut self, v: u32, on: bool) {
+        if (v as usize) < self.positions.len() && on != self.is_pinned(v) {
+            self.pinned.resize(self.positions.len(), false);
+            self.pinned[v as usize] = on;
+            if !on && !self.pinned.iter().any(|p| *p) {
+                self.pinned.clear();
+            }
+        }
+    }
+
+    pub fn pinned_count(&self) -> usize {
+        self.pinned.iter().take(self.positions.len()).filter(|p| **p).count()
+    }
+
+    /// `pinned` padded to the vertex count, before an edit that removes or
+    /// reorders vertices (it stays empty while nothing is pinned).
+    fn fit_pins(&mut self) {
+        if self.pinned.iter().any(|p| *p) {
+            self.pinned.resize(self.positions.len(), false);
+        } else {
+            self.pinned.clear();
+        }
+    }
+
     pub fn add_vertex(&mut self, p: Vec3) -> u32 {
+        self.fit_pins();
+        if !self.pinned.is_empty() {
+            self.pinned.push(false);
+        }
         self.positions.push(p);
         (self.positions.len() - 1) as u32
     }
@@ -208,6 +244,10 @@ impl Cage {
         }
         self.faces.retain(|f| !corners(f).contains(&v));
         let last = n - 1;
+        self.fit_pins();
+        if !self.pinned.is_empty() {
+            self.pinned.swap_remove(v as usize);
+        }
         self.positions.swap_remove(v as usize);
         if v != last {
             for f in &mut self.faces {
@@ -250,6 +290,10 @@ impl Cage {
             seen.insert(c)
         });
         self.faces = faces;
+        // The welded point stays pinned if either was.
+        if self.is_pinned(gone) {
+            self.set_pinned(keep, true);
+        }
         let last = n - 1;
         self.remove_vertex(gone);
         if keep == last { gone } else { keep }
@@ -342,14 +386,15 @@ impl Cage {
             Some(f) => Some(f),
             None => {
                 self.positions.truncate(self.positions.len() - 2);
+                self.pinned.truncate(self.positions.len());
                 None
             }
         }
     }
 
     /// Move each vertex of `which` part of the way (`amount`, 0..=1)
-    /// towards the middle of its neighbours. Vertices on a border, and
-    /// dots, stay. Returns the vertices that moved.
+    /// towards the middle of its neighbours. Vertices on a border, pinned
+    /// vertices and dots stay. Returns the vertices that moved.
     pub fn relax(&mut self, which: &[u32], amount: f32) -> Vec<u32> {
         let amount = amount.clamp(0.0, 1.0);
         let edge_faces = self.edge_faces();
@@ -366,7 +411,7 @@ impl Cage {
         let targets: Vec<(u32, Vec3)> = which
             .iter()
             .filter(|&&v| (v as usize) < self.positions.len())
-            .filter(|&&v| !border[v as usize] && !neighbours[v as usize].is_empty())
+            .filter(|&&v| !border[v as usize] && !self.is_pinned(v) && !neighbours[v as usize].is_empty())
             .map(|&v| {
                 let n = &neighbours[v as usize];
                 let avg = n.iter().map(|&w| self.positions[w as usize]).sum::<Vec3>() / n.len() as f32;
@@ -431,6 +476,14 @@ impl Cage {
             positions[new as usize] = self.positions[old];
         }
         self.positions = positions;
+        self.fit_pins();
+        if !self.pinned.is_empty() {
+            let mut pinned = vec![false; n];
+            for (old, &new) in perm.iter().enumerate() {
+                pinned[new as usize] = self.pinned[old];
+            }
+            self.pinned = pinned;
+        }
         for f in &mut self.faces {
             for c in f.iter_mut() {
                 if *c != NONE {
@@ -683,5 +736,49 @@ mod tests {
         assert_eq!(moved, vec![4]);
         assert!((c.positions[4] - Vec3::new(1.0, 1.0, 0.0)).length() < 1e-6);
         assert_eq!(c.positions[0], Vec3::ZERO);
+        // Pinned, the middle vertex stays where it is.
+        c.positions[4] = Vec3::new(1.6, 1.4, 0.0);
+        c.set_pinned(4, true);
+        assert!(c.relax(&all, 1.0).is_empty());
+        assert_eq!(c.positions[4], Vec3::new(1.6, 1.4, 0.0));
+    }
+
+    #[test]
+    fn pins_follow_their_points_through_edits() {
+        let pinned_at = |c: &Cage| -> Vec<Vec3> {
+            let mut p: Vec<Vec3> =
+                (0..c.positions.len() as u32).filter(|&v| c.is_pinned(v)).map(|v| c.positions[v as usize]).collect();
+            p.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
+            p
+        };
+        let mut c = strip();
+        c.set_pinned(1, true);
+        c.set_pinned(5, true);
+        let expect = pinned_at(&c);
+        assert_eq!(c.pinned_count(), 2);
+        // New points, an edge loop and a removed point renumber vertices;
+        // the pins stay on the same positions.
+        c.add_vertex(Vec3::new(9.0, 9.0, 0.0));
+        c.insert_loop(0, 3, 0.5);
+        assert_eq!(pinned_at(&c), expect);
+        let loose = c.add_vertex(Vec3::new(-5.0, 0.0, 0.0));
+        c.remove_vertex(0);
+        assert_eq!(pinned_at(&c), expect);
+        // Building the mesh renumbers the cage to the mesh's order.
+        c.build_mesh().unwrap();
+        assert_eq!(pinned_at(&c), expect);
+        // Welding a pinned point into another keeps it pinned.
+        let n = c.positions.len() as u32;
+        let a = (0..n).find(|&v| c.is_pinned(v)).unwrap();
+        let b = (0..n).find(|&v| !c.is_pinned(v) && c.positions[v as usize] != Vec3::new(-5.0, 0.0, 0.0)).unwrap();
+        let kept = c.weld(b, a);
+        assert!(c.is_pinned(kept));
+        assert_eq!(c.pinned_count(), 2);
+        let _ = loose;
+        // Unpinning the last pin leaves nothing pinned (and equal to a fresh cage).
+        for v in 0..c.positions.len() as u32 {
+            c.set_pinned(v, false);
+        }
+        assert!(c.pinned.is_empty());
     }
 }

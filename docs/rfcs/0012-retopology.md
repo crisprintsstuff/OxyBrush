@@ -33,6 +33,7 @@ and has **Done** (Esc).
 | Tab+drag a border edge | pull a **new quad** out of it |
 | Ctrl+click an edge | **insert an edge loop** across its ring of quads |
 | Ctrl+Shift+click | **delete** the point (and its faces) or face under the cursor |
+| Alt+click a point, edge or face | **pin** its points so relax leaves them (Alt+click again to unpin; added in 4.0.0-beta.2) |
 | Drag empty space, right/middle drag | navigate as usual |
 | Ctrl+Z / Ctrl+Shift+Z | undo / redo, one step per action |
 
@@ -71,6 +72,9 @@ quads.
   (`vcount, positions, fcount, faces`), indexed like the piece's vertices,
   written only while the cage matches the mesh. Older versions skip it and
   load the Retopo piece as a plain mesh (architecture invariant 7).
+  Pinned points (since 4.0.0-beta.2) go in a separate optional `PINS`
+  section after the `CAGE` (`count, vertex indices`); older versions skip
+  it and nothing is pinned.
 - **Snapping:** placing and moving cast the camera ray onto the live
   surface; relaxed and inserted points are moved to the nearest surface
   point along their normal.
