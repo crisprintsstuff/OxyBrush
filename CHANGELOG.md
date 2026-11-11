@@ -4,7 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.7-beta] - 2026-11-11
+
 ### Added
+- **Narrow brush shelf:** **Preferences > Appearance > Narrow brush shelf (one column)** turns a side shelf into a single narrow column, leaving more room for the model. The current brush, alpha and material are stacked on top, then one brush per row with its name underneath (icons only with brush names off).
 - **Studio theme** (Preferences > Appearance, [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)): flat neutral greys with thin edges, sliders drawn as bars with a fill and a thin handle, small uppercase section headings with dividers, and the accent kept for what's selected or active, shown as an outline. Optional; Graphite stays the default.
 - **Hide brush names in the shelf:** **Preferences > Appearance > Show brush names in the brush shelf**, on by default. Off shows the brushes as a grid of icons, so more fit at once; hover one for its name. Works with every theme and layout.
 - **The window opens where you left it** ([#95](https://github.com/crisprintsstuff/OxyBrush/issues/95)): its size, position and maximized state are remembered between sessions. If it was last on a monitor that's no longer connected, it opens on one that is, at the same size. On Wayland, where apps aren't told their position, the size and maximized state are remembered.
@@ -21,6 +24,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Meshes use about 18% less memory** ([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)): each vertex's neighbours are now worked out from its triangles when needed instead of being stored. A 1.3-million-triangle mesh takes 68 MB instead of 82 MB, and it's built a little faster. The Smooth and Polish brushes take about 0.4 ms longer per dab on a 14,000-vertex brush, still well within a frame.
 
 ### Fixed
+- **Insert Primitive, Duplicate and dynamic detail work with the triangle limit set to Unlimited.** Unlimited is stored as 0, and these three took it as a limit of zero triangles: inserting a primitive said "would exceed maximum triangle limit 0" and added nothing, Duplicate refused the same way, and dynamic detail stopped adding detail at once.
 - **Stopping a plugin right after starting it works.** A Stop clicked in the moment between starting a plugin command and it beginning to run was forgotten, and the command ran to the end.
 - **Double-clicking a project opens it on macOS** ([#135](https://github.com/crisprintsstuff/OxyBrush/issues/135)). macOS showed "can't open files of this type": the app didn't declare its file types, and macOS hands a double-clicked file to an app in a way OxyBrush didn't receive. Now `.oxb` projects and `.oxyaddon` add-ons open with OxyBrush from Finder, Open With and the Dock, and OBJ and STL files list it under Open With.
 - **Drop files on the window to open them**, on every system: a project opens (asking to save first if needed), a mesh is imported, an add-on is installed.
