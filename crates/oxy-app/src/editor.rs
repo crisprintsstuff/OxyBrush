@@ -5824,19 +5824,90 @@ pub const CAPTURE_SIZES: [u32; 5] = [256, 512, 1024, 2048, 4096];
 
 /// View depth of the nearest visible surface under each cell of a
 /// `res`-square grid of the viewport with its top-left at `corner`, `side`
-/// px wide (one ray through each cell's centre, in parallel).
+/// px wide, sampled at each cell's centre; `None` where nothing is.
+///
+/// The visible triangles are rasterized into a depth buffer rather than
+/// ray-cast per cell: a 4096² capture of a 1.3M-triangle sculpt cast 16.7M
+/// rays (about two minutes on four cores), while rasterizing touches each
+/// triangle once. Depth is interpolated as 1/z across a triangle in a
+/// perspective view (exact for perspective projection) and linearly in an
+/// orthographic one. Both windings count, as for a ray; hidden faces and
+/// triangles reaching behind the camera are skipped.
 fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, side: f32, res: u32) -> Vec<Option<f32>> {
     use rayon::prelude::*;
-    let forward = camera.forward();
-    (0..res * res)
-        .into_par_iter()
-        .map(|k| {
-            let (i, j) = (k % res, k / res);
-            let px = corner + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * (side / res as f32);
-            let (o, d) = camera.ray(px, size);
-            meshes.iter().filter_map(|m| m.raycast(o, d)).map(|h| (h.point - o).dot(forward)).min_by(f32::total_cmp)
+    let view_proj = camera.view_projection(size.x / size.y);
+    let (eye, forward, ortho) = (camera.eye(), camera.forward(), camera.orthographic);
+    let scale = res as f32 / side;
+    // Every visible triangle in capture-pixel space: (x, y, view depth).
+    let tris: Vec<[Vec3; 3]> = meshes
+        .par_iter()
+        .flat_map_iter(|m| {
+            let projected: Vec<Option<Vec3>> = m
+                .positions
+                .iter()
+                .map(|&p| {
+                    let clip = view_proj * p.extend(1.0);
+                    (clip.w > 1e-6).then(|| {
+                        let ndc = clip.truncate() / clip.w;
+                        let screen = Vec2::new((ndc.x + 1.0) * 0.5 * size.x, (1.0 - ndc.y) * 0.5 * size.y);
+                        ((screen - corner) * scale).extend((p - eye).dot(forward))
+                    })
+                })
+                .collect();
+            m.triangles
+                .iter()
+                .zip(m.hidden())
+                .filter(|(_, hidden)| !**hidden)
+                .filter_map(move |(t, _)| {
+                    Some([projected[t[0] as usize]?, projected[t[1] as usize]?, projected[t[2] as usize]?])
+                })
+                .collect::<Vec<_>>()
         })
-        .collect()
+        .collect();
+    const BAND: u32 = 32;
+    let bands: Vec<Vec<f32>> = (0..res.div_ceil(BAND))
+        .into_par_iter()
+        .map(|band| {
+            let (y0, y1) = (band * BAND, ((band + 1) * BAND).min(res));
+            let mut depth = vec![f32::INFINITY; ((y1 - y0) * res) as usize];
+            for [a, b, c] in &tris {
+                let lo = a.min(*b).min(*c);
+                let hi = a.max(*b).max(*c);
+                // Pixel centres at i + 0.5 inside the triangle's bounds.
+                let (px0, px1) = ((lo.x - 0.5).ceil().max(0.0), (hi.x - 0.5).floor().min(res as f32 - 1.0));
+                let (py0, py1) = ((lo.y - 0.5).ceil().max(y0 as f32), (hi.y - 0.5).floor().min(y1 as f32 - 1.0));
+                if px0 > px1 || py0 > py1 {
+                    continue;
+                }
+                let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                if area.abs() < 1e-12 {
+                    continue;
+                }
+                let inv_area = 1.0 / area;
+                let (za, zb, zc) = if ortho { (a.z, b.z, c.z) } else { (1.0 / a.z, 1.0 / b.z, 1.0 / c.z) };
+                for y in py0 as u32..=py1 as u32 {
+                    let fy = y as f32 + 0.5;
+                    for x in px0 as u32..=px1 as u32 {
+                        let fx = x as f32 + 0.5;
+                        let wa = ((b.x - fx) * (c.y - fy) - (b.y - fy) * (c.x - fx)) * inv_area;
+                        let wb = ((c.x - fx) * (a.y - fy) - (c.y - fy) * (a.x - fx)) * inv_area;
+                        let wc = 1.0 - wa - wb;
+                        if wa < 0.0 || wb < 0.0 || wc < 0.0 {
+                            continue;
+                        }
+                        let z = wa * za + wb * zb + wc * zc;
+                        let z = if ortho { z } else { 1.0 / z };
+                        let d = &mut depth[((y - y0) * res + x) as usize];
+                        if z < *d {
+                            *d = z;
+                        }
+                    }
+                }
+            }
+            depth
+        })
+        .collect();
+    bands.into_iter().flatten().map(|z| z.is_finite().then_some(z)).collect()
 }
 
 pub(crate) fn import_unit_scale(imported: f32, scene: f32) -> Option<f32> {
@@ -6358,6 +6429,49 @@ mod tests {
             let opts = RemeshOptions { resolution: res, smooth_passes: 1, ..Default::default() };
             let real = oxy_topo::voxel_remesh(&[&e.scene.active().mesh], opts).unwrap().triangle_count() as f32;
             assert!((estimate / real - 1.0).abs() < 0.15, "res {res}: estimate {estimate}, real {real}");
+        }
+    }
+
+    #[test]
+    fn rasterized_capture_depth_matches_ray_casting() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        let mut data = e.scene.pieces[1].mesh.to_data();
+        data.positions.iter_mut().for_each(|p| *p = *p * 0.4 + Vec3::new(0.6, 0.2, 0.5));
+        e.scene.pieces[1].mesh = Mesh::from_data(data);
+        let meshes: Vec<Mesh> = e.scene.pieces.iter().map(|p| p.mesh.clone()).collect();
+        for ortho in [false, true] {
+            e.camera.orthographic = ortho;
+            let (size, res) = (e.canvas_size(), 64);
+            let side = size.x.min(size.y);
+            let corner = (size - Vec2::splat(side)) * 0.5;
+            let raster = capture_depth(&meshes, &e.camera, size, corner, side, res);
+            let (mut agree, mut covered) = (0, 0);
+            for (k, r) in raster.iter().enumerate() {
+                let (i, j) = (k as u32 % res, k as u32 / res);
+                let px = corner + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * (side / res as f32);
+                let (o, d) = e.camera.ray(px, size);
+                let ray = meshes
+                    .iter()
+                    .filter_map(|m| m.raycast(o, d))
+                    .map(|h| (h.point - o).dot(e.camera.forward()))
+                    .min_by(f32::total_cmp);
+                match (r, ray) {
+                    (Some(a), Some(b)) => {
+                        covered += 1;
+                        // Same surface; the ray's depth counts from its own origin.
+                        let b = b + (o - e.camera.eye()).dot(e.camera.forward());
+                        if (a - b).abs() < 2e-3 * b.abs().max(1.0) {
+                            agree += 1;
+                        }
+                    }
+                    (None, None) => {}
+                    // Silhouette pixels may differ by a hair.
+                    _ => covered += 1,
+                }
+            }
+            assert!(covered > 500, "ortho {ortho}: the model is in view");
+            assert!(agree * 100 >= covered * 97, "ortho {ortho}: {agree} of {covered} pixels agree");
         }
     }
 

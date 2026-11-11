@@ -5,11 +5,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
-- **Capture from view at up to 4096 px:** a size picker next to **Capture from view** offers 256, 512, 1024 (the new default, was a fixed 256), 2048 and 4096 px; larger captures have smooth edges instead of blocky ones. The capture is cast on a worker thread so the interface stays responsive, and the size is remembered.
+- **Capture from view at up to 4096 px:** a size picker next to **Capture from view** offers 256, 512, 1024 (the new default, was a fixed 256), 2048 and 4096 px; larger captures have smooth edges instead of blocky ones. The model is now rasterized into a depth image instead of ray-cast per pixel, so even 4096 px is quick (about 1.2 s for a 1.3-million-triangle sculpt on four cores, where ray casting took two minutes); it runs on a worker thread so the interface stays responsive, and the size is remembered.
 - **Export alpha…** saves the selected alpha (a capture, a loaded image or a built-in) as a 16-bit grayscale PNG to edit in a 2D app; **Load image…** brings it back. Also in the command palette.
 
 ### Fixed
-- **File > New > Cube** (and the welcome window's cube) made a cube with open seams: 128 edges where two faces met weren't joined, so it shaded and sculpted badly; a cube added with **Pieces > Add** was fine. Vertex welding now also compares neighbouring cells, so points a rounding error apart always join. Projects already started from the broken cube keep its seams; a voxel remesh repairs them.
+- **File > New > Cube** (and the welcome window's cube) made a cube with open seams: 128 edges where two faces met weren't joined, so it shaded and sculpted badly; a cube added with **Pieces > Add** was fine. Vertex welding now also compares neighbouring cells, so points a rounding error apart always join (STL import welds this way too: about 25% slower, 0.5 s for 1.3 million triangles). Projects already started from the broken cube keep its seams; a voxel remesh repairs them.
 
 ## [3.0.8-beta] - 2026-11-11
 

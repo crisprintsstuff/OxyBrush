@@ -228,38 +228,79 @@ fn grid(divisions: u32, f: impl Fn(f32, f32) -> Vec3) -> (Vec<Vec3>, Vec<[u32; 3
     (p, t)
 }
 
+/// A fast hash for `weld`'s pre-mixed u64 cell keys (it looks up to 8 cells
+/// per point, and the default SipHash made a million-triangle STL import
+/// several times slower).
+#[derive(Clone, Copy, Default)]
+struct CellHash;
+
+impl std::hash::BuildHasher for CellHash {
+    type Hasher = CellHasher;
+    fn build_hasher(&self) -> CellHasher {
+        CellHasher(0)
+    }
+}
+
+struct CellHasher(u64);
+
+impl std::hash::Hasher for CellHasher {
+    fn write(&mut self, bytes: &[u8]) {
+        for &b in bytes {
+            self.write_u64(b as u64);
+        }
+    }
+    fn write_u64(&mut self, v: u64) {
+        // Keys are already mixed; spread the high bits into the low ones.
+        self.0 = v ^ (v >> 29);
+    }
+    fn finish(&self) -> u64 {
+        self.0
+    }
+}
+
 /// Merge vertices closer than `epsilon` (grid-hash based).
 ///
-/// Points are hashed into cells `epsilon` wide, and each point is compared
-/// with the points already kept in its own and the 26 neighbouring cells.
-/// Hashing alone isn't enough: two copies of one point that differ by a
-/// rounding error can fall on either side of a cell boundary, and were then
-/// never merged (the 64-division cube that File > New > Cube makes had 128
-/// open seam edges that way).
+/// Points are hashed into cells `2 * epsilon` wide. A point within
+/// `epsilon` of `p` lies in `p`'s cell or, on each axis, in the neighbour
+/// on the side `p` is nearer to, so at most 8 cells are searched, `p`'s own
+/// first. Hashing alone isn't enough: two copies of one point that differ by
+/// a rounding error can fall on either side of a cell boundary, and were
+/// then never merged (the 64-division cube that File > New > Cube makes had
+/// 128 open seam edges that way).
 pub fn weld(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let epsilon = epsilon.max(f32::MIN_POSITIVE);
-    let inv = 1.0 / epsilon;
-    let cell = |p: Vec3| [(p.x * inv).floor() as i64, (p.y * inv).floor() as i64, (p.z * inv).floor() as i64];
-    let mut map: HashMap<[i64; 3], Vec<u32>> = HashMap::new();
-    let mut out: Vec<Vec3> = Vec::new();
+    let inv = 0.5 / epsilon;
+    // Each cell's kept points as a linked list: `head` per cell, `next` per point.
+    // Cells are folded into one u64; two cells sharing a key only means
+    // more candidates, each still checked by distance.
+    let key = |c: [i64; 3]| {
+        (c[0] as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            ^ (c[1] as u64).wrapping_mul(0xc2b2_ae3d_27d4_eb4f)
+            ^ (c[2] as u64).wrapping_mul(0x1656_67b1_9e37_79f9)
+    };
+    let mut head: HashMap<u64, u32, CellHash> = HashMap::with_capacity_and_hasher(positions.len(), CellHash);
+    let mut next: Vec<u32> = Vec::with_capacity(positions.len());
+    let mut out: Vec<Vec3> = Vec::with_capacity(positions.len());
     let remap: Vec<u32> = positions
         .iter()
         .map(|&p| {
-            let [x, y, z] = cell(p);
-            for dx in -1..=1 {
-                for dy in -1..=1 {
-                    for dz in -1..=1 {
-                        if let Some(kept) = map.get(&[x + dx, y + dy, z + dz])
-                            && let Some(&i) = kept.iter().find(|&&i| out[i as usize].distance(p) <= epsilon)
-                        {
-                            return i;
-                        }
+            let f = p * inv;
+            let c = [f.x.floor() as i64, f.y.floor() as i64, f.z.floor() as i64];
+            let side = |v: f32, c: i64| if v - c as f32 >= 0.5 { 1 } else { -1 };
+            let s = [side(f.x, c[0]), side(f.y, c[1]), side(f.z, c[2])];
+            for k in 0..8 {
+                let cell = [c[0] + s[0] * (k & 1), c[1] + s[1] * (k >> 1 & 1), c[2] + s[2] * (k >> 2 & 1)];
+                let mut at = head.get(&key(cell)).copied().unwrap_or(u32::MAX);
+                while at != u32::MAX {
+                    if out[at as usize].distance(p) <= epsilon {
+                        return at;
                     }
+                    at = next[at as usize];
                 }
             }
+            let i = out.len() as u32;
             out.push(p);
-            let i = out.len() as u32 - 1;
-            map.entry([x, y, z]).or_default().push(i);
+            next.push(head.insert(key(c), i).unwrap_or(u32::MAX));
             i
         })
         .collect();
