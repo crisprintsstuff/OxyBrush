@@ -32,6 +32,89 @@
   <true/>
   <key>NSPrincipalClass</key>
   <string>NSApplication</string>
+  <!-- Files OxyBrush opens (issue #135): its projects and add-ons, which
+       it owns, and the mesh formats it imports, offered under Open With. -->
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>OxyBrush Project</string>
+      <key>CFBundleTypeRole</key>
+      <string>Editor</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>CFBundleTypeIconFile</key>
+      <string>oxybrush</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>io.github.crisprintsstuff.oxybrush.project</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>OxyBrush Add-on</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>io.github.crisprintsstuff.oxybrush.addon</string>
+      </array>
+    </dict>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>3D Mesh</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Alternate</string>
+      <key>CFBundleTypeExtensions</key>
+      <array>
+        <string>obj</string>
+        <string>stl</string>
+      </array>
+    </dict>
+  </array>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>io.github.crisprintsstuff.oxybrush.project</string>
+      <key>UTTypeDescription</key>
+      <string>OxyBrush Project</string>
+      <key>UTTypeIconFile</key>
+      <string>oxybrush</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>oxb</string>
+        </array>
+      </dict>
+    </dict>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>io.github.crisprintsstuff.oxybrush.addon</string>
+      <key>UTTypeDescription</key>
+      <string>OxyBrush Add-on</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.data</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>oxyaddon</string>
+        </array>
+      </dict>
+    </dict>
+  </array>
   <key>NSHumanReadableCopyright</key>
   <string>The OxyBrush Contributors. MIT OR Apache-2.0.</string>
 </dict>

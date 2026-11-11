@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **The window opens where you left it** ([#95](https://github.com/crisprintsstuff/OxyBrush/issues/95)): its size, position and maximized state are remembered between sessions. If it was last on a monitor that's no longer connected, it opens on one that is, at the same size. On Wayland, where apps aren't told their position, the size and maximized state are remembered.
 - **Plugin API 3** ([RFC 0013](docs/rfcs/0013-plugin-api-3.md)): in-app plugins can now:
   - change face groups and hidden faces, and replace a piece's triangles (new `edit_topology` capability);
   - show their result live before you **Accept** it;
@@ -15,6 +16,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Plugin guide and API reference** in [docs/plugins](docs/plugins/README.md), with a WebAssembly-text and a Rust example.
 
 ### Fixed
+- **Double-clicking a project opens it on macOS** ([#135](https://github.com/crisprintsstuff/OxyBrush/issues/135)). macOS showed "can't open files of this type": the app didn't declare its file types, and macOS hands a double-clicked file to an app in a way OxyBrush didn't receive. Now `.oxb` projects and `.oxyaddon` add-ons open with OxyBrush from Finder, Open With and the Dock, and OBJ and STL files list it under Open With.
+- **Drop files on the window to open them**, on every system: a project opens (asking to save first if needed), a mesh is imported, an add-on is installed.
 - **Pen pressure on Linux** (X11 and XWayland, including the Flatpak; [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)). Tablets report pressure as a raw reading, from 0 up to 2047, 8191 or 65535 depending on the model, and OxyBrush only understood values between 0 and 1, so on most tablets pressure had no effect. The pen's pressure axis is now found by name and scaled properly. Other pen axes, such as tilt, can no longer be mistaken for pressure. The log notes when pressure first arrives, to help with tablet reports.
 
 ## [3.0.6-beta] - 2026-11-10

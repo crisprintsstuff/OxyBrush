@@ -66,7 +66,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 ![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
 
-Your layout, arrangement, brush order, interface scale, theme, material, autosave interval, whether the welcome window appears at startup, are remembered between sessions. The brush you were using, with its settings and each brush's strength, is remembered too if you turn on **Remember brush settings between sessions** in Preferences > General (off by default).
+Your window size and position, layout, arrangement, brush order, interface scale, theme, material, autosave interval, whether the welcome window appears at startup, are remembered between sessions. The brush you were using, with its settings and each brush's strength, is remembered too if you turn on **Remember brush settings between sessions** in Preferences > General (off by default).
 
 ![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 
@@ -131,7 +131,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 - **Level set filters & shelling:** surface dilation and erosion offset, hollow wall shelling for 3D printing, and 3D Laplacian smoothing directly on the narrow-band SDF.
 - **Decimation:** quadric edge collapse that keeps open borders, face-group borders and vertex color. Large meshes are decimated in parallel (1.3M → 131k triangles in about 0.7 s on 4 cores).
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, delete hidden, and a group color overlay.
-- **Projects:** `.oxb` project files (versioned, checksummed, compressed, saved atomically), a prompt before discarding unsaved changes, **autosave every 2 minutes** (or set to 0/"Off" in Settings), and **crash recovery** on the next launch.
+- **Projects:** `.oxb` project files (versioned, checksummed, compressed, saved atomically; open one by double-clicking it or dropping it on the window), a prompt before discarding unsaved changes, **autosave every 2 minutes** (or set to 0/"Off" in Settings), and **crash recovery** on the next launch.
 - **Python plugins & scripting:** a pure-Python client SDK (`python/oxybrush`) with zero external dependencies. Connects over loopback Model Context Protocol (MCP JSON-RPC 2.0) to inspect scenes, configure brushes, execute 3D strokes, manage topology (remesh, decimate, subdivide), and import/export assets. Manage plugins in **Edit > Preferences > Plugins** (`Ctrl+,`) with dynamic discovery, reload, and non-blocking background execution. Includes procedural sample plugins (`examples/plugins/`).
 - **Dense mesh performance optimizations:** stroke coalescing and adaptive dab budgeting (`OXYBRUSH_DAB_BUDGET_MS`, default 10 ms) eliminate stroke queuing during rapid gestures; parallel Rayon geometry passes, atomic stamps, 1024-triangle chunk granularity, parallel GPU vertex packing, and zero-copy GPU index buffer binding.
 - **Background jobs:** remesh, booleans, merge and decimate run on a worker thread, so the UI stays responsive.

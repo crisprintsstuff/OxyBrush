@@ -384,10 +384,31 @@ impl App {
     }
 
     fn init_gfx(&mut self, event_loop: &ActiveEventLoop) -> Result<(), String> {
-        let attrs = Window::default_attributes()
+        // The window as it was last time (issue #95), except in automated
+        // runs, which keep the fixed default size.
+        let saved = self.editor.window_geometry.filter(|_| self.auto.screenshot.is_none());
+        let (w, h) = saved.map_or((1440.0, 900.0), |g| (g.width, g.height));
+        let mut attrs = Window::default_attributes()
             .with_title("OxyBrush")
-            .with_inner_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
-            .with_min_inner_size(winit::dpi::LogicalSize::new(640.0, 400.0))
+            .with_inner_size(winit::dpi::LogicalSize::new(w, h))
+            .with_maximized(saved.is_some_and(|g| g.maximized));
+        // Reuse the position only if the title bar would be on a monitor
+        // that's connected now, so a window last on an unplugged screen
+        // doesn't open out of reach.
+        if let Some((x, y)) = saved.and_then(|g| g.position) {
+            let monitors: Vec<crate::settings::MonitorRect> = event_loop
+                .available_monitors()
+                .map(|m| ((m.position().x, m.position().y), (m.size().width, m.size().height)))
+                .collect();
+            let scale = event_loop.primary_monitor().map_or(1.0, |m| m.scale_factor());
+            let size = ((w as f64 * scale) as u32, (h as f64 * scale) as u32);
+            if crate::settings::WindowGeometry::top_is_visible((x, y), size, &monitors) {
+                attrs = attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+            }
+        }
+        let (min_w, min_h) = crate::settings::WindowGeometry::MIN;
+        let attrs = attrs
+            .with_min_inner_size(winit::dpi::LogicalSize::new(min_w, min_h))
             // The title bar / window list icon. Without it, Windows shows a
             // generic icon there even though the exe has one.
             .with_window_icon(window_icon(include_bytes!("../../../packaging/icons/oxybrush-32.png")));
@@ -731,6 +752,12 @@ impl App {
         if std::mem::take(&mut self.editor.request_reload_plugins) {
             self.editor.reload_plugins();
             self.editor.status = format!("Loaded {} plugins", self.editor.plugins.len());
+        }
+        if self.editor.quit_now
+            && let Some(g) = &self.gfx
+        {
+            // Where the window is now, in case no move event said so.
+            remember_window(&mut self.editor, &g.window);
         }
         self.persist_settings(self.editor.quit_now);
         if self.editor.quit_now {
@@ -1299,6 +1326,7 @@ impl ApplicationHandler for App {
                 } else {
                     self.editor.request(crate::editor::Pending::Quit);
                     if self.editor.quit_now {
+                        remember_window(&mut self.editor, &g.window);
                         self.persist_settings(true);
                         self.editor.autosaver.finish();
                         event_loop.exit();
@@ -1306,12 +1334,21 @@ impl ApplicationHandler for App {
                     redraw = true;
                 }
             }
+            // A file dropped on the window, or (macOS) one the system asked
+            // OxyBrush to open: a double-click in Finder, Open With, the Dock.
+            WindowEvent::DroppedFile(path) => {
+                log::info!("opening {} (dropped or opened by the system)", path.display());
+                self.editor.open(path);
+                redraw = true;
+            }
             WindowEvent::Resized(size) => {
                 g.config.width = size.width.max(1);
                 g.config.height = size.height.max(1);
                 g.surface.configure(&g.device, &g.config);
                 redraw = true;
+                remember_window(&mut self.editor, &g.window);
             }
+            WindowEvent::Moved(_) => remember_window(&mut self.editor, &g.window),
             WindowEvent::RedrawRequested => {
                 self.redraw(event_loop);
                 if self.auto.demo && self.frames == 2 {
@@ -1697,6 +1734,29 @@ fn character_key(s: &str) -> Option<KeyId> {
     } else {
         None
     }
+}
+
+/// Note the window's size, position and maximized state for next time.
+/// While it's maximized (or full screen) the normal size and position are
+/// kept, so un-maximizing next session goes back to them.
+fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
+    let maximized = window.is_maximized();
+    let mut g = ed.window_geometry.unwrap_or(crate::settings::WindowGeometry {
+        width: 1440.0,
+        height: 900.0,
+        position: None,
+        maximized,
+    });
+    g.maximized = maximized;
+    if !maximized && window.fullscreen().is_none() && !window.is_minimized().unwrap_or(false) {
+        let size: winit::dpi::LogicalSize<f32> = window.inner_size().to_logical(window.scale_factor());
+        let (min_w, min_h) = crate::settings::WindowGeometry::MIN;
+        g.width = size.width.max(min_w);
+        g.height = size.height.max(min_h);
+        // Wayland doesn't tell windows where they are.
+        g.position = window.outer_position().ok().map(|p| (p.x, p.y)).or(g.position);
+    }
+    ed.window_geometry = Some(g);
 }
 
 #[cfg(test)]

@@ -481,6 +481,7 @@ features = [
     "NSRunLoop",
     "NSString",
     "NSThread",
+    "NSURL",
     "NSValue",
 ]
 
