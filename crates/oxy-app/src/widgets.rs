@@ -531,16 +531,20 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, enabled: bool, toolt
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
         let accent = v.selection.stroke.color;
+        let (selected_bg, selected_stroke) = selected_look(v, 0.45);
         let bg = if selected {
-            accent.linear_multiply(0.45)
+            selected_bg
         } else if response.hovered() && enabled {
             v.widgets.hovered.weak_bg_fill
         } else {
             Color32::TRANSPARENT
         };
-        ui.painter().rect_filled(rect, 6.0, bg);
+        let stroke = if selected && studio_style() { selected_stroke } else { Stroke::NONE };
+        ui.painter().rect(rect, 6.0, bg, stroke, egui::StrokeKind::Inside);
         let fg = if !enabled {
             v.weak_text_color().linear_multiply(0.5)
+        } else if selected && studio_style() {
+            accent
         } else if selected {
             Color32::WHITE
         } else {
@@ -587,9 +591,8 @@ pub fn brush_row(ui: &mut Ui, k: BrushKind, selected: bool, key: Option<&str>) -
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
-        let accent = v.selection.stroke.color;
         let (bg, stroke) = if selected {
-            (accent.linear_multiply(0.28), Stroke::new(1.0, accent))
+            selected_look(v, 0.28)
         } else if response.hovered() {
             (v.widgets.hovered.weak_bg_fill, Stroke::NONE)
         } else {
@@ -924,6 +927,30 @@ pub fn thumb_sized(
     crate::tips::hover(response, tooltip)
 }
 
+/// Whether the Studio theme's drawing style is on (set by `apply_theme`):
+/// quiet uppercase section headings with a divider, and selected items as a
+/// dark fill with an accent outline rather than an accent-tinted fill.
+static STUDIO_STYLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_studio_style(on: bool) {
+    STUDIO_STYLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn studio_style() -> bool {
+    STUDIO_STYLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// Fill and outline for a selected row or tile, with `tint` the strength of
+/// the accent fill in the other themes.
+pub fn selected_look(v: &egui::Visuals, tint: f32) -> (Color32, Stroke) {
+    let accent = v.selection.stroke.color;
+    if studio_style() {
+        (v.widgets.inactive.weak_bg_fill, Stroke::new(1.0, accent))
+    } else {
+        (accent.linear_multiply(tint), Stroke::new(1.0, accent))
+    }
+}
+
 /// Collapsible inspector section with a consistent header style.
 /// `tip` is the hover (and long-press) explanation of the section.
 pub fn section<R>(
@@ -933,9 +960,17 @@ pub fn section<R>(
     default_open: bool,
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
-    let opened = egui::CollapsingHeader::new(egui::RichText::new(title).strong().size(14.0))
-        .default_open(default_open)
-        .show(ui, add);
+    let header = if studio_style() {
+        // A thin divider, then the title small, uppercase and spaced out.
+        let r = ui.available_rect_before_wrap();
+        let y = r.top() + 1.0;
+        ui.painter().hline(r.x_range(), y, ui.visuals().widgets.noninteractive.bg_stroke);
+        ui.add_space(4.0);
+        egui::RichText::new(title.to_uppercase()).size(11.5).strong().extra_letter_spacing(0.8).weak()
+    } else {
+        egui::RichText::new(title).strong().size(14.0)
+    };
+    let opened = egui::CollapsingHeader::new(header).id_salt(title).default_open(default_open).show(ui, add);
     crate::tips::hover(opened.header_response.clone(), tip);
     ui.add_space(2.0);
     opened.body_returned

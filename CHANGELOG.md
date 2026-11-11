@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Studio theme** (Preferences > Appearance, [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)): flat neutral greys with thin edges, sliders drawn as bars with a fill and a thin handle, small uppercase section headings with dividers, and the accent kept for what's selected or active, shown as an outline. Optional; Graphite stays the default.
 - **The window opens where you left it** ([#95](https://github.com/crisprintsstuff/OxyBrush/issues/95)): its size, position and maximized state are remembered between sessions. If it was last on a monitor that's no longer connected, it opens on one that is, at the same size. On Wayland, where apps aren't told their position, the size and maximized state are remembered.
 - **Plugin API 3** ([RFC 0013](docs/rfcs/0013-plugin-api-3.md)): in-app plugins can now:
   - change face groups and hidden faces, and replace a piece's triangles (new `edit_topology` capability);

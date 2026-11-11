@@ -242,6 +242,21 @@ pub fn apply_theme(
                 stroke: Color32::from_rgb(31, 52, 78),
                 window_stroke: Color32::from_rgb(44, 72, 104),
             },
+            // Studio: flat neutral greys, close together, with crisp 1 px
+            // edges doing the separating instead of big steps in brightness.
+            ThemePreset::Studio => Palette {
+                bg: Color32::from_gray(21),
+                panel: Color32::from_gray(29),
+                window: Color32::from_gray(33),
+                faint: Color32::from_gray(35),
+                text: Color32::from_gray(220),
+                inactive_weak: Color32::from_gray(41),
+                inactive_fill: Color32::from_gray(44),
+                hovered_weak: Color32::from_gray(52),
+                hovered_fill: Color32::from_gray(60),
+                stroke: Color32::from_gray(42),
+                window_stroke: Color32::from_gray(50),
+            },
             ThemePreset::StudioLight => Palette {
                 bg: Color32::from_gray(245),
                 panel: Color32::from_gray(236),
@@ -300,6 +315,23 @@ pub fn apply_theme(
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
         v.widgets.active.bg_fill = accent_color;
+        if theme == ThemePreset::Studio {
+            // Bar sliders: a dark bar, a quiet fill up to the value and a thin
+            // handle that turns to the accent while hovered or dragged. The
+            // accent otherwise marks only what is selected or active.
+            v.slider_trailing_fill = true;
+            v.handle_shape = egui::style::HandleShape::Rect { aspect_ratio: 0.3 };
+            v.selection.bg_fill = Color32::from_gray(72);
+            v.selection.stroke = EStroke::new(1.0, accent_color);
+            v.widgets.inactive.bg_fill = Color32::from_gray(38);
+            v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_gray(46));
+            v.widgets.hovered.bg_fill = accent_color.linear_multiply(0.85);
+            v.widgets.open.bg_stroke = EStroke::new(1.0, Color32::from_gray(64));
+            v.weak_text_color = Some(Color32::from_gray(140));
+            let shadow = egui::Shadow { offset: [0, 6], blur: 16, spread: 0, color: Color32::from_black_alpha(110) };
+            v.window_shadow = shadow;
+            v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 10, ..shadow };
+        }
         if theme == ThemePreset::Midnight {
             // Glass look: every control has a thin light-blue rim, and windows
             // and menus float on a soft, wide shadow.
@@ -312,6 +344,7 @@ pub fn apply_theme(
         }
     }
     ctx.set_visuals(v);
+    crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
     ctx.all_styles_mut(|s| {
         s.interaction.show_tooltips_only_when_still = false;
         s.interaction.tooltip_delay = 0.2;
@@ -320,9 +353,13 @@ pub fn apply_theme(
         s.spacing.button_padding = m.button_padding;
         s.spacing.interact_size.y = m.interact_height;
         s.spacing.slider_width = m.slider_width;
+        if theme == ThemePreset::Studio && !is_high_contrast {
+            // A bar as tall as a value box, rather than a thin line.
+            s.spacing.slider_rail_height = (m.interact_height - 6.0).max(12.0);
+        }
         if layout == UiLayout::Touch {
             // Fatter sliders and scroll bars are easier to hit with a finger.
-            s.spacing.slider_rail_height = 10.0;
+            s.spacing.slider_rail_height = s.spacing.slider_rail_height.max(10.0);
             s.spacing.scroll.bar_width = 14.0;
             s.spacing.icon_width = 22.0;
             s.spacing.icon_width_inner = 14.0;
@@ -3392,27 +3429,38 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
-        let fill =
-            if i == active { ui.visuals().selection.stroke.color.linear_multiply(0.18) } else { Color32::TRANSPARENT };
-        egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (icon, tip) =
-                    if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
-                if widgets::icon_button(ui, icon, false, true, tip).clicked() {
-                    p.visible = !p.visible;
-                }
-                if i == active {
-                    tips::hover(
-                        ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
-                        plain::PIECE_RENAME,
-                    );
-                } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE).clicked()
-                {
-                    select = Some(i);
-                }
-                ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+        let (fill, stroke) = if i == active {
+            widgets::selected_look(ui.visuals(), 0.18)
+        } else {
+            (Color32::TRANSPARENT, EStroke::NONE)
+        };
+        // Without the outline in the other themes, as before.
+        let stroke = if widgets::studio_style() { stroke } else { EStroke::NONE };
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(2, 1))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (icon, tip) =
+                        if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
+                    if widgets::icon_button(ui, icon, false, true, tip).clicked() {
+                        p.visible = !p.visible;
+                    }
+                    if i == active {
+                        tips::hover(
+                            ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
+                            plain::PIECE_RENAME,
+                        );
+                    } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE)
+                        .clicked()
+                    {
+                        select = Some(i);
+                    }
+                    ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+                });
             });
-        });
     }
     if let Some(i) = select {
         ed.scene.set_active(i);
