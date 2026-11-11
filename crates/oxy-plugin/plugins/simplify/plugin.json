@@ -1,0 +1,43 @@
+{
+  "name": "Simplify Mesh",
+  "version": "1.0",
+  "description": "Removes triangles from the active piece while keeping its shape. Open edges, face-group borders and fully masked vertices stay put. Reports progress and can be stopped.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh", "edit_topology"],
+  "commands": [
+    { "id": "simplify", "label": "Simplify" }
+  ],
+  "params": [
+    {
+      "id": "amount",
+      "label": "Remove (%)",
+      "min": 0,
+      "max": 90,
+      "step": 1,
+      "default": 50,
+      "help": "How much of the triangle count to try to remove. The shape is kept; this is not a live preview, because it can take a moment."
+    },
+    {
+      "id": "boundary",
+      "label": "Keep open edges",
+      "type": "toggle",
+      "default": true,
+      "help": "Vertices on a hole or an outer edge stay where they are, and those edges are not deleted."
+    },
+    {
+      "id": "groups",
+      "label": "Keep group borders",
+      "type": "toggle",
+      "default": true,
+      "help": "The edge between two face groups is left in place."
+    },
+    {
+      "id": "mask",
+      "label": "Keep fully masked",
+      "type": "toggle",
+      "default": true,
+      "help": "A fully masked vertex is not moved."
+    },
+    { "id": "note", "type": "label", "text": "Mask, color, face groups and hidden faces of what remains are kept. Subdivision levels are cleared; Undo restores them. A very large piece is only partly simplified, so you can run it again." }
+  ]
+}

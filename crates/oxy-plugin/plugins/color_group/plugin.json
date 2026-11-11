@@ -1,0 +1,25 @@
+{
+  "name": "Color by Group",
+  "version": "1.0",
+  "description": "Paints the active piece from its face groups: one group in a color you pick, or every group in its own color. Masked vertices keep their color. Shows the result before you accept it.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh"],
+  "commands": [
+    { "id": "color", "label": "Color by group", "preview": true }
+  ],
+  "params": [
+    { "id": "mode", "label": "Paint", "type": "choice", "options": ["Selected group", "Every group"], "default": 0 },
+    {
+      "id": "group",
+      "label": "Group",
+      "min": 0,
+      "max": 256,
+      "step": 1,
+      "default": 1,
+      "help": "Which face group gets the chosen color. 0 is the usual ungrouped faces. In Every group, the others get their own colors."
+    },
+    { "id": "color", "label": "Color", "type": "color", "default": [0.86, 0.28, 0.22] },
+    { "id": "strength", "label": "Strength", "min": 0, "max": 1, "default": 1 },
+    { "id": "note", "type": "label", "text": "Masked vertices keep their color. A vertex on a border blends the groups that meet there." }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "Fill Holes",
+  "version": "1.0",
+  "description": "Closes open holes in the active piece with new triangles and leaves the existing surface where it is. A patch can get its own face group. Reports progress and can be stopped.",
+  "api": 3,
+  "capabilities": ["read_mesh", "edit_mesh", "edit_topology"],
+  "commands": [
+    { "id": "fill", "label": "Fill holes" }
+  ],
+  "params": [
+    {
+      "id": "largest",
+      "label": "Largest hole (edges)",
+      "min": 3,
+      "max": 512,
+      "step": 1,
+      "default": 128,
+      "help": "Openings with more boundary edges than this are left open, so a missing back doesn't get a cap by accident."
+    },
+    {
+      "id": "group",
+      "label": "New group for each patch",
+      "type": "toggle",
+      "default": true,
+      "help": "Each filled hole gets the next free face group, so the patch is easy to mask, hide or paint."
+    },
+    { "id": "note", "type": "label", "text": "Existing vertices, mask, color, groups and hidden faces stay. Only the holes gain triangles. Subdivision levels are cleared; Undo brings them back." }
+  ]
+}
