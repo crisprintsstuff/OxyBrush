@@ -42,6 +42,10 @@
 //!   order; any after them are loose points not yet used by a face. Written
 //!   only while the piece's mesh is still the one built from the cage.
 //!   Older readers skip it and load the piece as an ordinary mesh.
+//! - `PINS` (optional, since 4.0.0-beta.2): pinned points of the cage in
+//!   the **preceding** `CAGE`: `count:u32 vertex:u32*count`, cage vertex
+//!   indices. Pinned points stay put when the cage is relaxed. Written only
+//!   when something is pinned. Older readers skip it and nothing is pinned.
 //! - `TUBE` (optional, since 3.0.6): how the tubes in the **preceding**
 //!   `PIEC` were made (RFC 0009), so they can be edited again:
 //!   `count:u32` then per tube `n:u32 points:f32*3n radii:f32*n sides:u32
@@ -132,6 +136,15 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(cage) = &p.cage {
             sections.push((*b"CAGE", encode_cage(cage)));
+            let pinned: Vec<u32> = (0..cage.positions.len() as u32).filter(|&v| cage.is_pinned(v)).collect();
+            if !pinned.is_empty() {
+                let mut b = Vec::with_capacity(4 + pinned.len() * 4);
+                b.extend_from_slice(&(pinned.len() as u32).to_le_bytes());
+                for v in pinned {
+                    b.extend_from_slice(&v.to_le_bytes());
+                }
+                sections.push((*b"PINS", b));
+            }
         }
         if !p.tubes.is_empty() {
             sections.push((*b"TUBE", encode_tubes(&p.tubes)));
@@ -350,6 +363,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring a damaged retopology cage on piece {:?}: {e}", piece.name),
                 }
             }
+            b"PINS" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PINS before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let pins = r.u32().and_then(|n| {
+                    r.check(n as usize, 4)?;
+                    (0..n).map(|_| r.u32()).collect::<Result<Vec<u32>>>()
+                });
+                match (pins, piece.cage.as_mut()) {
+                    (Ok(pins), Some(cage)) => pins.into_iter().for_each(|v| cage.set_pinned(v, true)),
+                    (Ok(_), None) => log::warn!("ignoring pinned points without a retopology cage"),
+                    (Err(e), _) => log::warn!("ignoring damaged pinned points on piece {:?}: {e}", piece.name),
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -543,7 +569,7 @@ fn decode_cage(raw: &[u8]) -> Result<oxy_mesh::retopo::Cage> {
     if !positions.iter().all(|p| p.is_finite()) {
         return Err(Error::Corrupt("cage has non-finite positions".into()));
     }
-    Ok(oxy_mesh::retopo::Cage { positions, faces, linked: None })
+    Ok(oxy_mesh::retopo::Cage { positions, faces, linked: None, pinned: Vec::new() })
 }
 
 fn decode_piece(raw: &[u8]) -> Result<PieceData> {
@@ -842,6 +868,49 @@ mod tests {
         let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
         assert!(plain.cage.is_none());
         assert_eq!(plain.mesh.triangle_count(), 4);
+    }
+
+    #[test]
+    fn pinned_cage_points_roundtrip() {
+        use crate::Piece;
+        use oxy_mesh::retopo::Cage;
+        let mut cage = Cage::default();
+        for y in 0..2 {
+            for x in 0..3 {
+                cage.add_vertex(Vec3::new(x as f32, y as f32, 0.0));
+            }
+        }
+        cage.add_face(&[0, 1, 4, 3], Vec3::Z).unwrap();
+        cage.add_face(&[1, 2, 5, 4], Vec3::Z).unwrap();
+        let loose = cage.add_vertex(Vec3::new(7.0, 7.0, 7.0));
+        cage.set_pinned(2, true);
+        cage.set_pinned(loose, true);
+        let pinned_points = |c: &Cage| -> Vec<Vec3> {
+            let mut p: Vec<Vec3> =
+                (0..c.positions.len() as u32).filter(|&v| c.is_pinned(v)).map(|v| c.positions[v as usize]).collect();
+            p.sort_by(|a, b| a.x.total_cmp(&b.x));
+            p
+        };
+        let mesh = cage.build_mesh().unwrap();
+        let expect = pinned_points(&cage);
+        assert_eq!(expect, [Vec3::new(2.0, 0.0, 0.0), Vec3::new(7.0, 7.0, 7.0)]);
+        let mut piece = Piece::new("Retopo", mesh);
+        piece.cage = Some(cage);
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PINS").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(pinned_points(loaded.cage.as_ref().unwrap()), expect, "the same points, after relinking");
+        // An older reader skips PINS: the cage loads with nothing pinned.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"PINS").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(plain.cage.as_ref().unwrap().pinned_count(), 0);
+        // Nothing pinned: no section.
+        let mut none = loaded;
+        none.cage.as_mut().unwrap().pinned.clear();
+        let bytes = encode(&SceneData { pieces: vec![none.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PINS").count(), 0);
     }
 
     /// A drive that refuses some operations, like the SMB share in issue #117.

@@ -197,6 +197,55 @@ fn luminance(p: &[u8]) -> u8 {
     (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8
 }
 
+/// macOS: the system tool that registers an app's document types.
+const LSREGISTER: &str =
+    "/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister";
+
+/// The `.app` bundle the running executable is in (`…/X.app/Contents/MacOS/x`),
+/// or None when it isn't run from a bundle.
+pub fn app_bundle(exe: &std::path::Path) -> Option<std::path::PathBuf> {
+    let macos = exe.parent()?;
+    let contents = macos.parent()?;
+    let bundle = contents.parent()?;
+    let is_bundle = macos.file_name()? == "MacOS"
+        && contents.file_name()? == "Contents"
+        && bundle.extension().is_some_and(|e| e.eq_ignore_ascii_case("app"));
+    is_bundle.then(|| bundle.to_path_buf())
+}
+
+/// Whether macOS is running the app from a temporary, read-only copy
+/// ("App Translocation", for apps opened from a download or a disk image
+/// before they're moved): registering that copy would point Finder at a
+/// folder that disappears.
+pub fn is_translocated(bundle: &std::path::Path) -> bool {
+    bundle.components().any(|c| c.as_os_str() == "AppTranslocation")
+}
+
+/// macOS: register the running app with Launch Services, in the background,
+/// so Finder knows `.oxb` projects belong to it and shows their icon.
+///
+/// Finder learns an app's document types when it registers the app, which
+/// can miss them: an app first opened from the disk image, or translocated
+/// on its first launch, leaves projects with the generic "?" document icon.
+/// Registering again on every start (a fraction of a second, off the UI
+/// thread, with the system's own tool) fixes that. Nothing is sent anywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub fn register_document_types() {
+    let Some(bundle) = std::env::current_exe().ok().and_then(|e| app_bundle(&e)) else { return };
+    if is_translocated(&bundle) {
+        log::info!(
+            "running from a temporary copy ({}); move OxyBrush to Applications so Finder shows its project icons",
+            bundle.display()
+        );
+        return;
+    }
+    std::thread::spawn(move || match std::process::Command::new(LSREGISTER).arg("-f").arg(&bundle).output() {
+        Ok(out) if out.status.success() => log::info!("registered {} for .oxb projects", bundle.display()),
+        Ok(out) => log::warn!("lsregister failed ({}): {}", out.status, String::from_utf8_lossy(&out.stderr).trim()),
+        Err(e) => log::warn!("could not run lsregister: {e}"),
+    });
+}
+
 /// The program that shows a folder in the system file manager.
 ///
 /// Folders are opened with it directly, not as a `file://` link: a link goes
@@ -296,6 +345,19 @@ mod tests {
         }
         assert!(std::fs::read_dir(&dir).unwrap().count() == 1, "no temporary file left");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn the_app_bundle_is_found_from_the_executable() {
+        use std::path::Path;
+        assert_eq!(
+            app_bundle(Path::new("/Applications/OxyBrush.app/Contents/MacOS/oxybrush")).as_deref(),
+            Some(Path::new("/Applications/OxyBrush.app"))
+        );
+        assert_eq!(app_bundle(Path::new("/usr/local/bin/oxybrush")), None, "not in a bundle");
+        assert_eq!(app_bundle(Path::new("/tmp/OxyBrush/Contents/MacOS/oxybrush")), None, "no .app");
+        assert!(is_translocated(Path::new("/private/var/folders/x/T/AppTranslocation/ABC-123/d/OxyBrush.app")));
+        assert!(!is_translocated(Path::new("/Applications/OxyBrush.app")));
     }
 
     #[test]

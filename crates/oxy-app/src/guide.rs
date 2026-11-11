@@ -30,7 +30,7 @@ pub const TOPICS: &[Topic] = &[
         keywords: "camera navigate orbit rotate pan zoom view focal length fov lens",
         body: "Drag on empty space to orbit around the model. Right-drag (or Alt+drag on empty space) pans, and the mouse wheel zooms. With a pen, use the drag buttons in the strip beside the viewport.\n\n\
 - F centres and frames the active piece; Alt+F frames every visible piece.\n\
-- Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others.\n\
+- Numpad 1, 3 and 7 snap to the front, right and top views; click the axis gizmo at the top right for the others, or drag on it to orbit freely.\n\
 - Hold Shift while orbiting to snap the view to 45° steps.\n\
 - O switches between perspective and orthographic (P in the Single-key tools scheme).\n\
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
@@ -50,10 +50,12 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
     },
     Topic {
         title: "Pen tablets and stylus",
-        keywords: "tablet pen stylus side button barrel windows ink pressure curve sensitivity firm soft wacom huion kamvas xppen x11 wayland linux cachy",
+        keywords: "tablet pen stylus side button barrel windows ink pressure curve sensitivity firm soft wacom huion kamvas xppen x11 wayland linux cachy scroll panel hold gesture",
         body: "OxyBrush supports pressure-sensitive stylus and drawing tablets (Wacom, Huion, XP-Pen, etc.).\n\n\
 - Stylus pressure controls brush strength, and can also modulate brush radius when enabled in the brush settings.\n\
 - Preferences > Pen & tablet sets how pressure feels: drag the two points on the curve (an S shape gives fine control at both ends; double-click to straighten), the curve bend, Lightest touch (the strength of a very light stroke) and Full pressure at (how hard you press for full strength), with Soft, Linear and Firm presets. While you draw, a dot shows your pen on the curve. If your tablet driver has its own pressure curve, keep that one straight so the two don't add up.\n\
+- In panels and lists, drag with the pen to scroll (or drag with a side button held), and hold the pen still on a control for a moment to open its menu, like a right-click, and read its tip. Preferences > Pen & tablet sets when dragging scrolls: with a pen, always (for pens whose drivers send no pressure) or never.\n\
+- In the viewport, the Pen side buttons navigation preset (Preferences > Keymap, or the button in Pen & tablet) makes the lower side button orbit, with Shift pan and with Ctrl zoom, and the upper side button pan.\n\
 - Pen side buttons can be mapped to right-click (quick menu), middle-click (navigation/scrolling), or modifier keys in your tablet driver.\n\
 - On Windows with Windows Ink, the pen's side button already acts as the right mouse button: a tap opens the quick menu, and with the Right-drag orbit preset (Settings > Keymap) holding it while you drag orbits the view and Ctrl + side button zooms.\n\
 - On Linux under Wayland compositors (CachyOS, KDE Wayland, GNOME Wayland, Hyprland), drawing tablets require the X11/XWayland backend because native Wayland tablet events are not exposed to winit. OxyBrush automatically detects connected tablets and defaults to the X11 backend when available. You can also manually force X11 mode by starting with `oxybrush --x11` (or `oxybrush --backend x11`), or by setting `OXY_BACKEND=x11`.",
@@ -168,11 +170,12 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
     },
     Topic {
         title: "Retopology",
-        keywords: "retopology retopo quads low poly topology draw game animation edge loop relax",
+        keywords: "retopology retopo quads low poly topology draw game animation edge loop relax pin lock",
         body: "Mesh > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
 - Click to place a point. Drag a point, edge or face to slide it along the surface; drop a point on another to weld them.\n\
 - Hold Shift: the quad the nearest points make shows in green (a triangle in purple). Shift+click makes it. Shift+drag relaxes the points under the cursor.\n\
 - Tab+drag a border edge to pull out a new quad. Ctrl+click an edge to insert an edge loop across it. Ctrl+Shift+click deletes a point or face.\n\
+- Alt+click a point, edge or face to pin its points (shown as orange squares): relaxing leaves them where they are, though you can still drag them. Alt+click again, or Unpin all in the window, to free them.\n\
 - Mirror across X (in the window, on when X symmetry is) repeats everything on the other side; points near the centre snap onto it.\n\n\
 Subdivide and project (in the window) adds subdivision levels moved onto the sculpt: the top level carries its detail, level 1 stays your quads. The first face makes a new piece, Retopo. Each action is one undo step, it is saved with the project, and its quads export as quads (OBJ). Done (or Esc) closes the tool; open it again with the sculpt or the Retopo piece active to carry on.",
     },
@@ -214,7 +217,7 @@ OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it eve
         title: "Layouts and panels",
         keywords: "interface layout touch compact tablet arrange panels scale theme",
         body: "Settings > Layout switches between Standard, Compact (small screens) and Touch friendly (bigger controls and on-screen Smooth/Mask/Invert buttons for tablets). Settings > Arrange panels moves the brush shelf, the settings panel and the size/strength bar.\n\n\
-Interface scale, themes (including Studio, flat neutral greys with bar sliders, and the navy Midnight theme with pill-shaped controls) and a high-contrast theme are in Settings too. All of these are remembered.\n\n\
+View > Theme… holds everything about the look in one window: the themes (including Studio, flat neutral greys with bar sliders, the navy Midnight theme and a high-contrast theme) and looks that set a theme with matching colors and corners, the accent color and viewport background, the interface scale, corner rounding and slider thickness (Thick bars are easier to hit with a pen). All of these are remembered.\n\n\
 The Touch layout has no mouse hover. Press and hold a control to read what it does.",
     },
     Topic {

@@ -32,16 +32,21 @@ pub enum Preset {
     MmbOrbit,
     /// Right-drag orbits (familiar to people coming from ZBrush).
     RightDrag,
+    /// For a pen with side buttons (RFC 0015): the lower side button
+    /// (right-click) orbits, with Shift pans and with Ctrl zooms; the upper
+    /// side button (middle-click) pans.
+    Pen,
 }
 
 impl Preset {
-    pub const ALL: [Preset; 3] = [Preset::OxyBrush, Preset::MmbOrbit, Preset::RightDrag];
+    pub const ALL: [Preset; 4] = [Preset::OxyBrush, Preset::MmbOrbit, Preset::RightDrag, Preset::Pen];
 
     pub fn key(self) -> &'static str {
         match self {
             Preset::OxyBrush => "oxybrush",
             Preset::MmbOrbit => "mmb_orbit",
             Preset::RightDrag => "right_drag",
+            Preset::Pen => "pen",
         }
     }
 
@@ -50,6 +55,7 @@ impl Preset {
             Preset::OxyBrush => "OxyBrush",
             Preset::MmbOrbit => "MMB orbit",
             Preset::RightDrag => "Right-drag orbit",
+            Preset::Pen => "Pen side buttons",
         }
     }
 
@@ -67,6 +73,11 @@ impl Preset {
             Preset::RightDrag => {
                 "Right-drag orbits (similar to ZBrush), Alt+Right-drag pans, Ctrl+Right-drag zooms (drag down to zoom in), \
                  Middle-drag pans. Left-drag on canvas orbits, Alt+Left-drag pans. Shift while orbiting snaps to 90°."
+            }
+            Preset::Pen => {
+                "For a pen with side buttons: drag with the lower side button (right-click) held to orbit, \
+                 add Shift to pan or Ctrl to zoom (drag up to zoom in); the upper side button (middle-click) pans. \
+                 The pen tip sculpts on the model and orbits on empty space. Alt while orbiting snaps to 45°."
             }
         }
     }
@@ -839,6 +850,13 @@ fn navigation_for(preset: Preset) -> Vec<NavRule> {
             rule(Right, No, Yes, No, Zoom),
             rule(Middle, Any, Any, Any, Pan),
         ],
+        // Alt stays "any" on orbit so the snap key (Alt) still orbits.
+        Preset::Pen => vec![
+            rule(Right, No, No, Any, Orbit),
+            rule(Right, Yes, No, No, Pan),
+            rule(Right, No, Yes, No, Zoom),
+            rule(Middle, Any, Any, Any, Pan),
+        ],
     }
 }
 
@@ -899,7 +917,7 @@ impl Keymap {
     pub fn builtin_with(preset: Preset, shortcuts: ShortcutsPreset) -> Self {
         let snap = match preset {
             Preset::OxyBrush | Preset::RightDrag => Some(ModKey::Shift),
-            Preset::MmbOrbit => Some(ModKey::Alt),
+            Preset::MmbOrbit | Preset::Pen => Some(ModKey::Alt),
         };
         Self {
             version: VERSION,
