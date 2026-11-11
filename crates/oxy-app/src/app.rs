@@ -1350,6 +1350,11 @@ impl ApplicationHandler for App {
         if self.gfx.is_none() {
             return;
         }
+        // Held keys first: the Tab branch below returns early, and the
+        // retopology tool's Tab+drag needs to know Tab is down.
+        if let WindowEvent::KeyboardInput { event: key, is_synthetic: false, .. } = &event {
+            note_held_key(&mut self.editor, key.physical_key, key.state);
+        }
         // Tab is OxyBrush's shortcut (show / hide panels) unless a text field
         // is being typed in. egui would otherwise use it to move keyboard
         // focus between controls: that scrolls the panels to the focused
@@ -1634,12 +1639,6 @@ impl ApplicationHandler for App {
             // A keymap capture, or releasing the quick-menu key, wins over a focused
             // slider so the key the user pressed is the one that gets bound.
             WindowEvent::KeyboardInput { event, is_synthetic: false, .. } => {
-                if let PhysicalKey::Code(KeyCode::Space) = event.physical_key {
-                    self.editor.space_held = event.state == ElementState::Pressed;
-                }
-                if let PhysicalKey::Code(KeyCode::Tab) = event.physical_key {
-                    self.editor.tab_held = event.state == ElementState::Pressed;
-                }
                 let capture_or_quick = self.editor.keymap_capture.is_some()
                     || (event.state == ElementState::Released && self.editor.quick_menu.is_some_and(|q| q.held));
                 if capture_or_quick || !self.egui_ctx.egui_wants_keyboard_input() {
@@ -1654,6 +1653,17 @@ impl ApplicationHandler for App {
         if redraw && let Some(g) = &self.gfx {
             g.window.request_redraw();
         }
+    }
+}
+
+/// Keep track of the keys that change what a click or drag does while held:
+/// Space (the quick menu) and Tab (retopology: pull a quad out of an edge).
+pub(crate) fn note_held_key(ed: &mut crate::editor::Editor, key: PhysicalKey, state: ElementState) {
+    let down = state == ElementState::Pressed;
+    match key {
+        PhysicalKey::Code(KeyCode::Space) => ed.space_held = down,
+        PhysicalKey::Code(KeyCode::Tab) => ed.tab_held = down,
+        _ => {}
     }
 }
 
@@ -1903,8 +1913,28 @@ fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PEN_HOLD, PenPress};
+    use super::{PEN_HOLD, PenPress, note_held_key};
     use glam::Vec2;
+    use winit::event::ElementState::{Pressed, Released};
+    use winit::keyboard::{KeyCode, PhysicalKey};
+
+    #[test]
+    fn tab_and_space_are_tracked_while_held() {
+        // The retopology tool's Tab+drag reads `tab_held`; Tab presses take an
+        // early path in `window_event`, so they're noted before it.
+        let mut ed = crate::editor::Editor::default();
+        let tab = PhysicalKey::Code(KeyCode::Tab);
+        note_held_key(&mut ed, tab, Pressed);
+        assert!(ed.tab_held);
+        note_held_key(&mut ed, PhysicalKey::Code(KeyCode::KeyA), Pressed);
+        assert!(ed.tab_held, "other keys leave it alone");
+        note_held_key(&mut ed, tab, Released);
+        assert!(!ed.tab_held);
+        note_held_key(&mut ed, PhysicalKey::Code(KeyCode::Space), Pressed);
+        assert!(ed.space_held);
+        note_held_key(&mut ed, PhysicalKey::Code(KeyCode::Space), Released);
+        assert!(!ed.space_held);
+    }
 
     #[test]
     fn a_pen_press_scrolls_once_it_moves_unless_a_control_takes_it() {
