@@ -110,6 +110,8 @@
 </head>
 <body class="antialiased selection:bg-oxy-pink selection:text-white flex flex-col min-h-screen">
 
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:rounded-full focus:bg-white focus:text-black focus:font-semibold focus:text-sm">Skip to content</a>
+
   <!-- Ambient Background Elements -->
   <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
       <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-oxy-pink/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob"></div>
@@ -118,9 +120,9 @@
   </div>
 
   <!-- Notification Toast -->
-  <div id="toast" class="fixed bottom-6 right-6 z-50 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-3 px-4 py-3 rounded-2xl glass text-xs font-mono text-slate-200 shadow-2xl">
-    <div class="w-2 h-2 rounded-full bg-oxy-pink animate-ping"></div>
-    <span id="toastMsg">Copied to clipboard</span>
+  <div id="toast" role="status" aria-live="polite" aria-atomic="true" class="fixed bottom-6 right-6 z-50 transform translate-y-24 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-3 px-4 py-3 max-w-[calc(100vw-3rem)] rounded-2xl glass text-xs font-mono text-slate-200 shadow-2xl">
+    <div class="w-2 h-2 rounded-full bg-oxy-pink animate-ping" aria-hidden="true"></div>
+    <span id="toastMsg"></span>
   </div>
 
   <!-- Navigation -->
@@ -157,9 +159,9 @@
       <div class="flex items-center gap-3">
         <a href="#downloads" class="px-5 py-2.5 rounded-full bg-gradient-to-r from-oxy-pink to-oxy-purple hover:opacity-90 text-white font-semibold text-xs transition-all flex items-center gap-1.5 shadow-lg">
           <i data-lucide="download" class="w-4 h-4"></i>
-          <span data-latest-version data-short>Get v3.0.0</span>
+          <span data-latest-version data-short>Get v3.0.8</span>
         </a>
-        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2.5 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white transition-all group" title="GitHub Repository">
+        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2.5 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white transition-all group" title="GitHub repository" aria-label="OxyBrush on GitHub">
           <svg class="w-4 h-4 group-hover:scale-110 transition-transform" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"></path></svg>
         </a>
       </div>
@@ -167,7 +169,7 @@
     </div>
   </header>
 
-  <main class="flex-grow relative z-10 pt-20">
+  <main id="main" tabindex="-1" class="flex-grow relative z-10 pt-20 focus:outline-none">
     
     <!-- Hero Section -->
     <section class="relative pt-24 pb-20 border-b border-white/5">
@@ -203,7 +205,7 @@
             <i data-lucide="download-cloud" class="w-5 h-5 text-oxy-pink"></i>
             <span>Download <span data-latest-version>v3.0.8-beta</span></span>
           </a>
-          <button onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" class="px-6 py-4 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white font-mono text-xs transition-all flex items-center gap-3">
+          <button type="button" onclick="copyCommand('git clone https://github.com/crisprintsstuff/OxyBrush.git')" aria-label="Copy command: git clone https://github.com/crisprintsstuff/OxyBrush.git" class="px-6 py-4 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white font-mono text-xs transition-all flex items-center gap-3">
             <i data-lucide="terminal" class="w-4 h-4 text-oxy-blue"></i>
             <span>git clone https://github.com/crisprintsstuff/OxyBrush.git</span>
             <i data-lucide="copy" class="w-4 h-4 opacity-50"></i>
@@ -243,9 +245,9 @@
               <i data-lucide="sparkles" class="w-3.5 h-3.5"></i>
               What's New in v3.0.8-beta
             </div>
-            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Plugins, a New Theme &amp; Tablet Fixes</h2>
+            <h2 class="text-4xl font-display font-extrabold text-white tracking-tight">Smoother Imports &amp; a Sharper Studio</h2>
           </div>
-          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v3.0.8-beta" target="_blank" class="text-sm font-medium text-oxy-blue hover:text-oxy-pink transition-colors flex items-center gap-1.5 self-start md:self-end">
+          <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v3.0.8-beta" target="_blank" rel="noopener noreferrer" class="text-sm font-medium text-oxy-blue hover:text-oxy-pink transition-colors flex items-center gap-1.5 self-start md:self-end">
             <span>View GitHub Release</span>
             <i data-lucide="arrow-up-right" class="w-4 h-4"></i>
           </a>
@@ -257,16 +259,16 @@
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-oxy-pink/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
             <div class="relative z-10">
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-pink mb-6">
-                <i data-lucide="puzzle" class="w-6 h-6"></i>
+                <i data-lucide="folder-input" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Plugin API 3</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">Imports That Just Work</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                In-app plugins can change face groups and topology, show their result live before you accept it, offer switches, choices and colors, and be stopped. With a full guide and API reference.
+                OBJ files with broken materials now import, and models saved in other units, like millimetres, are scaled to fit next to your sculpt. One Undo keeps the original size.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-pink font-medium relative z-10">
               <i data-lucide="check" class="w-4 h-4"></i>
-              <span>New in 3.0.7</span>
+              <span>Fixed in 3.0.8</span>
             </div>
           </div>
 
@@ -276,9 +278,9 @@
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-purple mb-6">
                 <i data-lucide="sliders-horizontal" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Studio Theme</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">A Sharper Studio Theme</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                Flat neutral greys, bar sliders with solid handles, crisp corners and quiet section headings, with the accent kept for what's selected. Brush names in the shelf can be hidden.
+                Solid slider handles, slightly squarer corners and a lighter shadow behind windows. In every theme, window title bars are now a third slimmer.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-purple font-medium relative z-10">
@@ -291,11 +293,11 @@
             <div class="absolute -right-12 -top-12 w-32 h-32 bg-oxy-blue/20 rounded-full blur-2xl group-hover:scale-150 transition-transform duration-700"></div>
             <div class="relative z-10">
               <div class="w-12 h-12 rounded-2xl glass flex items-center justify-center text-oxy-blue mb-6">
-                <i data-lucide="pen-tool" class="w-6 h-6"></i>
+                <i data-lucide="flip-horizontal-2" class="w-6 h-6"></i>
               </div>
-              <h3 class="text-xl font-display font-bold text-white mb-3">Tablet &amp; Desktop Fixes</h3>
+              <h3 class="text-xl font-display font-bold text-white mb-3">Close Project &amp; Mirrored Masks</h3>
               <p class="text-slate-400 text-sm leading-relaxed mb-6">
-                Pen pressure works on Linux tablets, the window reopens where you left it, files open by dropping them on the window (and by double-click on macOS), and meshes use 18% less memory.
+                File &gt; Close project takes you back to the start screen, asking to save first. With symmetry on, mask boxes and lassos now mask both sides, just like brush strokes.
               </p>
             </div>
             <div class="pt-4 border-t border-white/10 flex items-center gap-2 text-xs text-oxy-blue font-medium relative z-10">
@@ -585,14 +587,14 @@
               <p class="text-sm text-slate-400 mb-8">Windows 10 / 11 with DirectX 12 or Vulkan support.</p>
               
               <div class="space-y-3">
-                <a data-asset="windows-setup" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-blue hover:text-white hover:border-oxy-blue text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="windows-setup" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v3.0.8-beta/OxyBrush-3.0.8-beta-windows-x86_64-setup.exe" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-blue hover:text-white hover:border-oxy-blue text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="package" class="w-4 h-4 opacity-70"></i>
                     <span>Installer (.exe)</span>
                   </span>
                   <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="windows-portable" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                <a data-asset="windows-portable" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v3.0.8-beta/OxyBrush-3.0.8-beta-windows-x86_64-portable.zip" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.zip)</span>
@@ -616,7 +618,7 @@
               <p class="text-sm text-slate-400 mb-8">macOS 11+ running Apple Silicon (M-series) &amp; Intel.</p>
               
               <div class="space-y-3">
-                <a data-asset="macos-dmg" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-purple hover:text-white hover:border-oxy-purple text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="macos-dmg" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v3.0.8-beta/OxyBrush-3.0.8-beta-macos-universal.dmg" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-purple hover:text-white hover:border-oxy-purple text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="disc" class="w-4 h-4 opacity-70"></i>
                     <span>App Image (.dmg)</span>
@@ -640,14 +642,14 @@
               <p class="text-sm text-slate-400 mb-8">Modern desktop distributions via Flatpak or standalone.</p>
               
               <div class="space-y-3">
-                <a data-asset="linux-flatpak" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-pink hover:text-white hover:border-oxy-pink text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
+                <a data-asset="linux-flatpak" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v3.0.8-beta/OxyBrush-3.0.8-beta-linux-x86_64.flatpak" class="w-full py-4 px-6 rounded-2xl glass hover:bg-oxy-pink hover:text-white hover:border-oxy-pink text-sm font-medium text-slate-200 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="box" class="w-4 h-4 opacity-70"></i>
                     <span>Flatpak Bundle</span>
                   </span>
                   <i data-lucide="download" class="w-4 h-4"></i>
                 </a>
-                <a data-asset="linux-tarball" href="#" target="_blank" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
+                <a data-asset="linux-tarball" href="https://github.com/crisprintsstuff/OxyBrush/releases/download/v3.0.8-beta/OxyBrush-3.0.8-beta-linux-x86_64.tar.gz" class="w-full py-4 px-6 rounded-2xl glass hover:bg-white/10 text-sm font-medium text-slate-300 flex items-center justify-between transition-all">
                   <span class="flex items-center gap-3">
                     <i data-lucide="file-archive" class="w-4 h-4 opacity-70"></i>
                     <span>Portable (.tar.gz)</span>
@@ -666,7 +668,7 @@
             <div class="text-lg font-display font-bold text-white mb-2">Prefer building from source?</div>
             <div class="text-sm text-slate-400">Requires a standard stable Rust toolchain (<code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white">cargo</code>).</div>
           </div>
-          <button onclick="copyCommand('cargo run --release -p oxy-app')" class="px-6 py-4 rounded-2xl glass hover:bg-white/10 text-sm font-mono text-white flex items-center gap-3 transition-all">
+          <button type="button" onclick="copyCommand('cargo run --release -p oxy-app')" aria-label="Copy command: cargo run --release -p oxy-app" class="px-6 py-4 rounded-2xl glass hover:bg-white/10 text-sm font-mono text-white flex items-center gap-3 transition-all">
             <i data-lucide="terminal" class="w-4 h-4 text-oxy-pink"></i>
             <span>cargo run --release -p oxy-app</span>
             <i data-lucide="copy" class="w-4 h-4 opacity-50"></i>
@@ -698,8 +700,16 @@
             </div>
             <div class="p-8 text-sm text-slate-300 space-y-6 leading-relaxed">
               <div>
+                <span class="font-bold text-oxy-pink block mb-2 uppercase tracking-wider font-mono text-[11px]">New</span>
+                <p class="text-slate-400">File &gt; Close project returns to the start screen, asking to save unsaved work first.</p>
+              </div>
+              <div>
+                <span class="font-bold text-oxy-blue block mb-2 uppercase tracking-wider font-mono text-[11px]">Fixes</span>
+                <p class="text-slate-400">OBJ files with broken materials import; imports in other units (like millimetres) are fitted to the scene; mask boxes and lassos follow symmetry; window title bars are a third slimmer.</p>
+              </div>
+              <div>
                 <span class="font-bold text-oxy-purple block mb-2 uppercase tracking-wider font-mono text-[11px]">Look</span>
-                <p class="text-slate-400">File &gt; Close project; OBJ files with broken materials import; imports in other units fitted to the scene, box masking follows symmetry, slimmer window title bars. Studio theme refined: solid slider handles, slightly squarer corners, and a smaller, fainter shadow behind windows and menus.</p>
+                <p class="text-slate-400">Studio theme refined: solid slider handles, slightly squarer corners, and a lighter shadow behind windows and menus.</p>
               </div>
             </div>
           </div>
@@ -1145,21 +1155,30 @@
               </div>
           </div>
           <div class="flex gap-6 mb-8">
-              <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" class="text-slate-400 hover:text-oxy-pink transition-colors text-sm font-medium">Changelog</a>
-              <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" class="text-slate-400 hover:text-oxy-purple transition-colors text-sm font-medium">Releases</a>
-              <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" class="text-slate-400 hover:text-oxy-blue transition-colors text-sm font-medium">GitHub</a>
+              <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-pink transition-colors text-sm font-medium">Changelog</a>
+              <a data-release-link href="https://github.com/crisprintsstuff/OxyBrush/releases" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-purple transition-colors text-sm font-medium">Releases</a>
+              <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-blue transition-colors text-sm font-medium">GitHub</a>
           </div>
           <p class="text-slate-600 text-xs font-mono">
-              &copy; <script>document.write(new Date().getFullYear())</script> Oxytocin Labs. OxyBrush created by crisprintsstuff.
+              &copy; <span id="year">2026</span> Oxytocin Labs. OxyBrush created by crisprintsstuff.
           </p>
       </div>
   </footer>
 
   <!-- Script Logic -->
   <script>
-    lucide.createIcons();
+    // Everything below is progressive enhancement. With no JavaScript, or if
+    // a CDN or the GitHub API is unreachable, the page still works: download
+    // links point straight at the v3.0.8-beta files (update them on release),
+    // and only the icons and the copy buttons are missing.
+    if (window.lucide) lucide.createIcons();
 
-    // Release Fetching
+    const year = document.getElementById('year');
+    if (year) year.textContent = new Date().getFullYear();
+
+    // Point the download links at the newest release, if GitHub answers in
+    // time. Every OxyBrush release is a pre-release, so /releases/latest
+    // returns 404; list releases and take the newest published one instead.
     (async function latestRelease() {
       const patterns = {
         'windows-setup': /-windows-x86_64-setup\.exe$/,
@@ -1168,53 +1187,80 @@
         'linux-flatpak': /-linux-x86_64\.flatpak$/,
         'linux-tarball': /-linux-x86_64\.tar\.gz$/,
       };
+      const controller = 'AbortController' in window ? new AbortController() : null;
+      const timer = controller && setTimeout(() => controller.abort(), 6000);
       try {
         const r = await fetch('https://api.github.com/repos/crisprintsstuff/OxyBrush/releases?per_page=10', {
           headers: { Accept: 'application/vnd.github+json' },
+          signal: controller ? controller.signal : undefined,
         });
+        // 403/429 (rate limit), 5xx, or anything unexpected: keep the static links.
         if (!r.ok) return;
-        const release = (await r.json()).find((x) => !x.draft && x.assets && x.assets.length);
+        const list = await r.json();
+        if (!Array.isArray(list)) return;
+        const release = list.find((x) => x && !x.draft && Array.isArray(x.assets) && x.assets.length && x.tag_name && x.html_url);
         if (!release) return;
-        const tag = release.tag_name;
+        const tag = String(release.tag_name);
         document.querySelectorAll('[data-latest-version]').forEach((el) => {
           el.textContent = el.hasAttribute('data-short') ? 'Get ' + tag.replace(/-.*$/, '') : tag;
         });
         document.querySelectorAll('[data-release-link]').forEach((el) => { el.href = release.html_url; });
         document.querySelectorAll('[data-asset]').forEach((el) => {
-          const asset = release.assets.find((a) => patterns[el.dataset.asset]?.test(a.name));
+          const pattern = patterns[el.dataset.asset];
+          const asset = pattern && release.assets.find((a) => a && pattern.test(a.name) && a.browser_download_url);
+          // A release missing this file: send people to its release page
+          // rather than to a file from a different version.
           el.href = asset ? asset.browser_download_url : release.html_url;
         });
-      } catch (e) { }
+      } catch (e) {
+        // Offline, blocked, timed out or malformed: the static links stay.
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
     })();
 
-    // Copy to clipboard
-    function copyCommand(text) {
-      const textarea = document.createElement('textarea');
-      textarea.value = text;
-      textarea.style.position = 'fixed';
-      textarea.style.opacity = '0';
-      document.body.appendChild(textarea);
-      textarea.select();
-      try {
-        document.execCommand('copy');
-        showToast('Copied to clipboard');
-      } catch (err) {
-        showToast('Unable to copy');
+    // Copy to clipboard: the async Clipboard API where allowed (HTTPS), else
+    // the legacy fallback. Report failure honestly instead of claiming success.
+    async function copyCommand(text) {
+      let ok = false;
+      if (navigator.clipboard && window.isSecureContext) {
+        try {
+          await navigator.clipboard.writeText(text);
+          ok = true;
+        } catch (e) { }
       }
-      document.body.removeChild(textarea);
+      if (!ok) {
+        const textarea = document.createElement('textarea');
+        textarea.value = text;
+        textarea.setAttribute('readonly', '');
+        textarea.style.position = 'fixed';
+        textarea.style.opacity = '0';
+        document.body.appendChild(textarea);
+        textarea.select();
+        try { ok = document.execCommand('copy'); } catch (e) { ok = false; }
+        document.body.removeChild(textarea);
+      }
+      showToast(ok ? 'Copied: ' + text : "Couldn't copy. Select the command and press Ctrl+C (⌘C on a Mac).");
     }
 
-    // Toast notifications
-    function showToast(message) {
+    // Toast notifications. Clicking again restarts the timer instead of the
+    // first click's timer hiding the second message early. Failures stay
+    // on screen longer so there is time to read the recovery.
+    let toastTimer = null;
+    function showToast(message, ms) {
       const toast = document.getElementById('toast');
       const msg = document.getElementById('toastMsg');
-      msg.textContent = message;
+      if (!toast || !msg) return;
+      clearTimeout(toastTimer);
+      msg.textContent = '';
+      // Re-set on the next frame so screen readers announce a repeated message.
+      requestAnimationFrame(() => { msg.textContent = message; });
       toast.classList.remove('translate-y-24', 'opacity-0');
       toast.classList.add('translate-y-0', 'opacity-100');
-      setTimeout(() => {
+      toastTimer = setTimeout(() => {
         toast.classList.add('translate-y-24', 'opacity-0');
         toast.classList.remove('translate-y-0', 'opacity-100');
-      }, 2400);
+      }, ms || (message.startsWith('Copied') ? 2400 : 6000));
     }
   </script>
 </body>
