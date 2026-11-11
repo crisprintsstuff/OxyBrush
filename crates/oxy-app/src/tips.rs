@@ -178,11 +178,11 @@ commands! {
     Focal85 => "Focal length 85 mm", "", "Set the perspective lens to 85 mm (portrait lens).";
     Focal135 => "Focal length 135 mm", "", "Set the perspective lens to 135 mm (telephoto lens).";
     ResetFocal => "Reset focal length", "", "Restore the default perspective lens (about 38 mm, 35°).";
-    BackgroundWindow => "Viewport background…", "", "Open the background colors window.";
+    BackgroundWindow => "Viewport background…", "", "Open the Theme window on its Colors tab, where the viewport background is set.";
     BackgroundGradient => "Viewport background: gradient", "", "Use a soft radial gradient for the viewport background.";
     BackgroundFlat => "Viewport background: flat", "", "Use a solid color for the viewport background.";
     ResetBackground => "Reset viewport background", "", "Restore the default gradient and viewport background colors.";
-    ThemeWindow => "Theme & Appearance…", "", "Open the theme and accent colors window.";
+    ThemeWindow => "Theme…", "", "Open the Theme window: the theme, looks, accent color, viewport background, interface scale and corners, in one place.";
     WireframeWindow => "Wireframe settings…", "", "Open the wireframe color and opacity window.";
     AlignCursor => "Align cursor to surface on / off", "", "Draw the brush ring flat against the surface under the pointer.";
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
@@ -739,8 +739,6 @@ pub mod plain {
     pub const KEYMAP_SETTINGS: &str = "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
     pub const SURFACE_CURSOR: &str = "Draw the brush ring flat on the surface under the pointer, at the brush size. Off the model it stays flat to the screen.";
     pub const FOCAL_LENGTH_MENU: &str = "Perspective lens in millimeters (35mm equivalent).";
-    pub const VIEWPORT_BACKGROUND: &str = "Switch between a soft gradient and one flat color.";
-    pub const BACKGROUND_COLORS: &str = "Center and edge for a gradient, or one color when flat.";
     pub const BACKGROUND_RESET: &str = "Restore the built-in gradient and its colors.";
     pub const FOCAL_SLIDER: &str =
         "Shorter is wider, with more perspective. Longer flattens depth. The model stays the same size.";
@@ -870,8 +868,6 @@ pub mod plain {
         KEYMAP_SETTINGS,
         SURFACE_CURSOR,
         FOCAL_LENGTH_MENU,
-        VIEWPORT_BACKGROUND,
-        BACKGROUND_COLORS,
         BACKGROUND_RESET,
         FOCAL_SLIDER,
         FOCAL_RESET,

@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **One Theme window** ([RFC 0014](docs/rfcs/0014-theme-window.md)): **View > Theme…** (or the command palette, or **Preferences > Interface**) opens a single window with three tabs: **Themes** (a gallery of the nine themes drawn in their own colors, and **Looks**: Classic, Workstation, Midnight), **Colors** (accent and viewport background) and **Size & shape** (interface scale and corners), plus **Reset everything**. It replaces the long Preferences > Appearance tab, View's Background menu and window, and the old Theme & Appearance window. **Preferences > Appearance** is now **Preferences > Interface** (brush-shelf options). Looks no longer change shortcuts, navigation or the material (set those in the Keymap and the material picker); "Default Studio" is now **Classic**, with the real default background. The command palette gains **Theme: Studio**.
+
 ### Added
 - **Pin points in the retopology tool:** Alt+click a point, edge or face to pin its points (with X mirror, their mirror images too); Shift+drag relax leaves pinned points where they are, while you can still drag them by hand. Alt+click again or **Unpin all** in the window frees them. Pinned points are drawn as squares in the accent colour, pinning is an undo step, and pins are saved with the project (a new `PINS` section after the cage; older versions skip it).
 

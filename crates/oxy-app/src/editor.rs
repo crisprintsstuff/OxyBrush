@@ -457,7 +457,8 @@ pub enum SettingsTab {
     General,
     /// Pen pressure curve and tablet options.
     Pen,
-    Appearance,
+    /// Brush shelf options and a way into the Theme window.
+    Interface,
     Plugins,
     Keymap,
     Agent,
@@ -511,7 +512,7 @@ impl SettingsTab {
     pub const ALL: [SettingsTab; 7] = [
         SettingsTab::General,
         SettingsTab::Pen,
-        SettingsTab::Appearance,
+        SettingsTab::Interface,
         SettingsTab::Plugins,
         SettingsTab::Keymap,
         SettingsTab::Agent,
@@ -522,11 +523,35 @@ impl SettingsTab {
         match self {
             SettingsTab::General => "General",
             SettingsTab::Pen => "Pen & tablet",
-            SettingsTab::Appearance => "Appearance",
+            SettingsTab::Interface => "Interface",
             SettingsTab::Plugins => "Plugins",
             SettingsTab::Keymap => "Keymap",
             SettingsTab::Agent => "AI Agent",
             SettingsTab::Updates => "Updates",
+        }
+    }
+}
+
+/// The tabs of the Theme window (RFC 0014).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ThemeTab {
+    /// The theme gallery and the looks (preset combinations).
+    #[default]
+    Themes,
+    /// Accent color and viewport background.
+    Colors,
+    /// Interface scale and corner rounding.
+    SizeShape,
+}
+
+impl ThemeTab {
+    pub const ALL: [ThemeTab; 3] = [ThemeTab::Themes, ThemeTab::Colors, ThemeTab::SizeShape];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ThemeTab::Themes => "Themes",
+            ThemeTab::Colors => "Colors",
+            ThemeTab::SizeShape => "Size & shape",
         }
     }
 }
@@ -863,9 +888,9 @@ pub struct Editor {
     /// The main window's size, position and state, kept up to date by the
     /// app and saved with the settings (issue #95).
     pub window_geometry: Option<crate::settings::WindowGeometry>,
-    /// Brush names in the brush shelf (Preferences > Appearance).
+    /// Brush names in the brush shelf (Preferences > Interface).
     pub show_brush_names: bool,
-    /// A side brush shelf as one narrow column (Preferences > Appearance).
+    /// A side brush shelf as one narrow column (Preferences > Interface).
     pub narrow_shelf: bool,
     pub decimate_percent: f32,
     pub ui_scale: f32,
@@ -880,9 +905,10 @@ pub struct Editor {
     pub show_about: bool,
     /// Color pickers for the viewport backdrop. A menu closes on click, so
     /// the pickers live in this window (opened from View and Settings).
-    pub show_background: bool,
     /// Theme and accent color window (with clickable swatches and color pickers).
+    /// The Theme window is open, on `theme_tab`.
     pub show_theme: bool,
+    pub theme_tab: ThemeTab,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
     /// The Lights window is open (its markers show in the viewport).
@@ -1210,8 +1236,8 @@ impl Default for Editor {
             show_panels: true,
             show_shortcuts: false,
             show_about: false,
-            show_background: false,
             show_theme: false,
+            theme_tab: ThemeTab::Themes,
             show_wireframe: false,
             show_lights: false,
             show_settings: false,
@@ -1651,6 +1677,28 @@ impl Editor {
     }
 
     /// Open the unified Preferences / Settings window at the given tab.
+    /// Open the Theme window on `tab`.
+    pub fn open_theme(&mut self, tab: ThemeTab) {
+        self.show_theme = true;
+        self.theme_tab = tab;
+    }
+
+    /// Put every theme setting back to the default look: Graphite, the
+    /// terracotta accent, rounded corners, 100% interface scale and the
+    /// default viewport background.
+    pub fn reset_theme(&mut self) {
+        self.theme = crate::settings::ThemePreset::default();
+        self.high_contrast = false;
+        self.accent = crate::settings::AccentPreset::default();
+        self.corner_style = crate::settings::CornerStyle::default();
+        if self.ui_scale != 1.0 {
+            self.ui_scale_from = Some(self.ui_scale);
+            self.ui_scale = 1.0;
+        }
+        self.view.reset_background();
+        self.status = "Theme reset to the default look".into();
+    }
+
     pub fn open_settings(&mut self, tab: SettingsTab) {
         self.show_settings = true;
         self.settings_tab = tab;
