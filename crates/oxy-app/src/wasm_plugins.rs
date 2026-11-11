@@ -896,7 +896,7 @@ fn param_widget(ui: &mut Ui, param: &oxy_plugin::Param, value: &mut f32, color: 
                     s = s.integer();
                 }
             }
-            ui.add(s)
+            ui.add(crate::widgets::Bar(s))
         }
         ParamKind::Toggle => {
             let mut on = *value >= 0.5;

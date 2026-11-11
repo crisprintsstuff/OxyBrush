@@ -147,7 +147,7 @@ fn arrow(p: &Painter, from: Pos2, to: Pos2, stroke: Stroke) {
 #[allow(dead_code)]
 pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
     // Neutral gray behind the clay profile. The old 0x26, 0x28, 0x2D well was blue.
-    p.rect_filled(rect, 5.0, Color32::from_gray(41));
+    p.rect_filled(rect, rounding(5.0), Color32::from_gray(41));
     let r = rect.shrink(3.0);
     let base = r.top() + r.height() * 0.68;
     let amp = r.height() * 0.55;
@@ -570,7 +570,7 @@ pub fn keycap(ui: &mut Ui, text: &str) {
     egui::Frame::new()
         .stroke(Stroke::new(1.0, ui.visuals().widgets.inactive.bg_stroke.color.gamma_multiply(1.6)))
         .fill(ui.visuals().extreme_bg_color)
-        .corner_radius(4.0)
+        .corner_radius(rounding(4.0))
         .inner_margin(egui::Margin::symmetric(5, 1))
         .show(ui, |ui| {
             ui.label(egui::RichText::new(text).small().monospace());
@@ -698,7 +698,7 @@ pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
         } else {
             v.widgets.inactive.weak_bg_fill
         };
-        ui.painter().rect_filled(rect, 6.0, bg);
+        ui.painter().rect_filled(rect, rounding(6.0), bg);
         paint_icon(ui.painter(), rect.shrink(6.0), icon, v.text_color());
     }
     if response.hovered() || response.dragged() {
@@ -940,6 +940,66 @@ pub fn studio_style() -> bool {
     STUDIO_STYLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// How much of the usual corner radius the Studio theme keeps: a little
+/// squarer than the other themes, without going sharp.
+pub const STUDIO_ROUNDING: f32 = 0.6;
+
+/// A corner radius `r` drawn by the app itself (popups, tiles, swatches),
+/// made squarer in the Studio theme to match its widgets.
+pub fn rounding(r: f32) -> f32 {
+    if studio_style() { r * STUDIO_ROUNDING } else { r }
+}
+
+/// A slider that, in the Studio theme, draws its handle as a solid bar with
+/// no outline. Elsewhere it is egui's slider unchanged.
+///
+/// egui paints an idle handle in the rail's own colour and makes it visible
+/// with an outline, so the outline can't simply be switched off. Instead the
+/// handle is found among the shapes the slider just painted (the last
+/// outlined rectangle taller than it is wide) and repainted: filled with the
+/// outline's colour while idle, or keeping its accent fill while hovered or
+/// dragged, and with no outline either way.
+pub struct Bar<'a>(pub egui::Slider<'a>);
+
+impl egui::Widget for Bar<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        if !studio_style() {
+            return ui.add(self.0);
+        }
+        let layer = ui.layer_id();
+        let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.next_idx().0));
+        let response = ui.add(self.0);
+        let rail = ui.visuals().widgets.inactive.bg_fill;
+        ui.ctx().graphics_mut(|g| solid_handle(g.entry(layer), start, rail));
+        response
+    }
+}
+
+/// Repaints the slider handle among the shapes from `start` on as a solid
+/// bar with no outline (see [`Bar`]). `rail` is the rail's colour, which an
+/// idle handle shares.
+fn solid_handle(list: &mut egui::layers::PaintList, start: usize, rail: Color32) {
+    let handle = list
+        .all_entries()
+        .enumerate()
+        .skip(start)
+        .filter_map(|(i, c)| match &c.shape {
+            Shape::Rect(r) if r.stroke.width > 0.0 && r.rect.height() > r.rect.width() => Some(i),
+            _ => None,
+        })
+        .last();
+    if let Some(i) = handle {
+        list.mutate_shape(egui::layers::ShapeIdx(i), |c| {
+            if let Shape::Rect(r) = &mut c.shape {
+                if r.fill == rail {
+                    r.fill = r.stroke.color;
+                }
+                r.stroke = Stroke::NONE;
+            }
+        });
+    }
+}
+
 /// Fill and outline for a selected row or tile, with `tint` the strength of
 /// the accent fill in the other themes.
 pub fn selected_look(v: &egui::Visuals, tint: f32) -> (Color32, Stroke) {
@@ -979,6 +1039,48 @@ pub fn section<R>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rect_shape(rect: Rect, fill: Color32, stroke: Stroke) -> Shape {
+        Shape::Rect(egui::epaint::RectShape::new(rect, 2.0, fill, stroke, egui::StrokeKind::Inside))
+    }
+
+    fn rect_at(list: &egui::layers::PaintList, i: usize) -> egui::epaint::RectShape {
+        match &list.all_entries().nth(i).unwrap().shape {
+            Shape::Rect(r) => r.clone(),
+            s => panic!("not a rect: {s:?}"),
+        }
+    }
+
+    #[test]
+    fn the_studio_slider_handle_is_a_solid_bar() {
+        let rail = Color32::from_gray(38);
+        let outline = Stroke::new(1.0, Color32::from_gray(190));
+        let accent = Color32::from_rgb(230, 120, 40);
+        let clip = Rect::EVERYTHING;
+        let mut list = egui::layers::PaintList::default();
+        // Something painted before the slider: never touched.
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(0.0, 0.0), vec2(4.0, 20.0)), rail, outline));
+        let start = list.next_idx().0;
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(10.0, 0.0), vec2(120.0, 16.0)), rail, Stroke::NONE));
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(60.0, -2.0), vec2(6.0, 20.0)), rail, outline));
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(140.0, 0.0), vec2(40.0, 18.0)), rail, outline));
+        solid_handle(&mut list, start, rail);
+        // Idle: filled with the outline's colour, and no outline.
+        let h = rect_at(&list, 2);
+        assert_eq!(h.fill, outline.color);
+        assert_eq!(h.stroke, Stroke::NONE);
+        // The rail, the value box and earlier shapes are unchanged.
+        assert_eq!(rect_at(&list, 1).fill, rail);
+        assert_eq!(rect_at(&list, 3).stroke, outline);
+        assert_eq!(rect_at(&list, 0).stroke, outline);
+
+        // Hovered or dragged: keeps its accent fill, still with no outline.
+        let mut list = egui::layers::PaintList::default();
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(60.0, -2.0), vec2(6.0, 20.0)), accent, outline));
+        solid_handle(&mut list, 0, rail);
+        assert_eq!(rect_at(&list, 0).fill, accent);
+        assert_eq!(rect_at(&list, 0).stroke, Stroke::NONE);
+    }
 
     #[test]
     fn every_brush_has_help_and_a_distinct_icon() {

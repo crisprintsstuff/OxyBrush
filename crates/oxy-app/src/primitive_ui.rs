@@ -164,30 +164,30 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             egui::Grid::new("primitive_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 let slider_f = |ui: &mut egui::Ui, label: &str, v: &mut f32, max: f32| {
                     ui.label(label);
-                    ui.add(egui::Slider::new(v, 0.01..=max).logarithmic(true));
+                    ui.add(crate::widgets::Bar(egui::Slider::new(v, 0.01..=max).logarithmic(true)));
                     ui.end_row();
                 };
                 match p.shape {
                     Shape::Sphere => {
                         slider_f(ui, "Radius", &mut p.size, 10.0);
                         ui.label("Subdivisions");
-                        ui.add(egui::Slider::new(&mut p.segments, 0..=7));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 0..=7)));
                         ui.end_row();
                     }
                     Shape::Cube | Shape::Plane => {
                         slider_f(ui, "Size", &mut p.size, 20.0);
                         ui.label("Divisions per side");
-                        ui.add(egui::Slider::new(&mut p.segments, 1..=256).logarithmic(true));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 1..=256).logarithmic(true)));
                         ui.end_row();
                     }
                     Shape::Cylinder | Shape::Cone => {
                         slider_f(ui, "Radius", &mut p.size, 10.0);
                         slider_f(ui, "Height", &mut p.second, 20.0);
                         ui.label("Segments around");
-                        ui.add(egui::Slider::new(&mut p.segments, 3..=256).logarithmic(true));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 3..=256).logarithmic(true)));
                         ui.end_row();
                         ui.label("Rows up the side");
-                        ui.add(egui::Slider::new(&mut p.rows, 1..=128).logarithmic(true));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.rows, 1..=128).logarithmic(true)));
                         ui.end_row();
                         ui.label("Ends");
                         ui.checkbox(&mut p.caps, if p.shape == Shape::Cone { "Closed base" } else { "Closed caps" });
@@ -197,10 +197,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         slider_f(ui, "Ring radius", &mut p.size, 10.0);
                         slider_f(ui, "Tube radius", &mut p.second, 5.0);
                         ui.label("Segments around the ring");
-                        ui.add(egui::Slider::new(&mut p.segments, 3..=512).logarithmic(true));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 3..=512).logarithmic(true)));
                         ui.end_row();
                         ui.label("Segments around the tube");
-                        ui.add(egui::Slider::new(&mut p.rows, 3..=256).logarithmic(true));
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.rows, 3..=256).logarithmic(true)));
                         ui.end_row();
                     }
                 }
@@ -211,7 +211,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.end_row();
                 if p.remesh {
                     ui.label("Remesh resolution");
-                    ui.add(egui::Slider::new(&mut p.resolution, 16..=320));
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.resolution, 16..=320)));
                     ui.end_row();
                 }
             });

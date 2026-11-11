@@ -52,10 +52,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             if let Some(r) = ed.retopo.as_mut() {
                 egui::Grid::new("retopo_relax").num_columns(2).show(ui, |ui| {
                     ui.label("Relax strength");
-                    ui.add(egui::Slider::new(&mut r.relax_strength, 0.05..=1.0));
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut r.relax_strength, 0.05..=1.0)));
                     ui.end_row();
                     ui.label("Relax radius");
-                    ui.add(egui::Slider::new(&mut r.relax_radius_pt, 10.0..=200.0).suffix(" pt"));
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut r.relax_radius_pt, 10.0..=200.0).suffix(" pt")));
                     ui.end_row();
                     ui.label("Symmetry");
                     ui.checkbox(&mut r.mirror, "Mirror across X").on_hover_text(
@@ -70,7 +70,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.horizontal(|ui| {
                 let can = counts.is_some_and(|c| c.0 + c.1 > 0) && ed.job.is_none();
                 let mut levels = ed.retopo.as_ref().map_or(3, |r| r.project_levels);
-                ui.add(egui::Slider::new(&mut levels, 1..=5).text("levels"));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut levels, 1..=5).text("levels")));
                 if let Some(r) = ed.retopo.as_mut() {
                     r.project_levels = levels;
                 }

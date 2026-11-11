@@ -72,26 +72,26 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
     ui.add_space(4.0);
     egui::Grid::new("lights_global").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         ui.label("Exposure");
-        tips::hover(ui.add(egui::Slider::new(&mut l.exposure, -3.0..=3.0)), tip::EXPOSURE);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.exposure, -3.0..=3.0))), tip::EXPOSURE);
         ui.end_row();
         ui.label("Sky and ground");
         ui.horizontal(|ui| {
-            tips::hover(ui.add(egui::Slider::new(&mut l.ambient, 0.0..=1.5)), tip::AMBIENT);
+            tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.ambient, 0.0..=1.5))), tip::AMBIENT);
             tips::hover(color_edit(ui, &mut l.sky), tip::SKY);
             tips::hover(color_edit(ui, &mut l.ground), tip::GROUND);
         });
         ui.end_row();
         ui.label("Rim light");
-        tips::hover(ui.add(egui::Slider::new(&mut l.rim, 0.0..=1.0)), tip::RIM);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.rim, 0.0..=1.0))), tip::RIM);
         ui.end_row();
         ui.label("Surface");
         tips::hover(color_edit(ui, &mut l.surface), tip::SURFACE);
         ui.end_row();
         ui.label("Roughness");
-        tips::hover(ui.add(egui::Slider::new(&mut l.roughness, 0.05..=1.0)), tip::ROUGHNESS);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.roughness, 0.05..=1.0))), tip::ROUGHNESS);
         ui.end_row();
         ui.label("Specular");
-        tips::hover(ui.add(egui::Slider::new(&mut l.specular, 0.0..=1.0)), tip::SPECULAR);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.specular, 0.0..=1.0))), tip::SPECULAR);
         ui.end_row();
         ui.label("Shadows");
         ui.horizontal(|ui| {
@@ -125,7 +125,10 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                 tips::hover(ui.checkbox(&mut light.follow_camera, ""), tip::FOLLOW);
                 ui.end_row();
                 ui.label("Intensity");
-                tips::hover(ui.add(egui::Slider::new(&mut light.intensity, 0.0..=10.0)), tip::INTENSITY);
+                tips::hover(
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.intensity, 0.0..=10.0))),
+                    tip::INTENSITY,
+                );
                 ui.end_row();
                 ui.label("Color");
                 ui.horizontal(|ui| {
@@ -171,14 +174,20 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                         });
                         ui.end_row();
                         ui.label("Falloff");
-                        tips::hover(ui.add(egui::Slider::new(&mut light.falloff, 0.0..=3.0)), tip::FALLOFF);
+                        tips::hover(
+                            ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.falloff, 0.0..=3.0))),
+                            tip::FALLOFF,
+                        );
                         ui.end_row();
                     }
                 }
                 if light.kind == LightKind::Spot {
                     ui.label("Cone");
                     ui.horizontal(|ui| {
-                        tips::hover(ui.add(egui::Slider::new(&mut light.cone, 2.0..=80.0).suffix("°")), tip::CONE);
+                        tips::hover(
+                            ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.cone, 2.0..=80.0).suffix("°"))),
+                            tip::CONE,
+                        );
                         if tips::hover(ui.small_button("Aim at the model"), tip::AIM).clicked() {
                             light.aim = [0.0, 0.0, 0.0];
                             light.follow_camera = false;
@@ -186,7 +195,10 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                     });
                     ui.end_row();
                     ui.label("Soft edge");
-                    tips::hover(ui.add(egui::Slider::new(&mut light.cone_edge, 0.0..=1.0)), tip::CONE_EDGE);
+                    tips::hover(
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.cone_edge, 0.0..=1.0))),
+                        tip::CONE_EDGE,
+                    );
                     ui.end_row();
                 }
                 if light.kind != LightKind::Point {
@@ -195,7 +207,9 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                         tips::hover(ui.checkbox(&mut light.shadows, ""), tip::SHADOWS);
                         ui.add_enabled_ui(light.shadows, |ui| {
                             tips::hover(
-                                ui.add(egui::Slider::new(&mut light.softness, 0.0..=1.0).text("Soft")),
+                                ui.add(crate::widgets::Bar(
+                                    egui::Slider::new(&mut light.softness, 0.0..=1.0).text("Soft"),
+                                )),
                                 tip::SOFTNESS,
                             );
                         });
