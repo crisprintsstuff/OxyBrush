@@ -42,13 +42,19 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 match tube.selected.filter(|&i| i < tube.radii.len()) {
                     Some(i) => {
                         ui.label(format!("Thickness (point {})", i + 1));
-                        ui.add(egui::Slider::new(&mut tube.radii[i], 0.001..=2.0).logarithmic(true));
+                        ui.add(crate::widgets::Bar(
+                            egui::Slider::new(&mut tube.radii[i], 0.001..=2.0).logarithmic(true),
+                        ));
                     }
                     None => {
                         ui.label("Thickness");
                         let mean = tube.radii.iter().sum::<f32>() / tube.radii.len() as f32;
                         let mut r = mean;
-                        if ui.add(egui::Slider::new(&mut r, 0.001..=2.0).logarithmic(true)).changed() && mean > 0.0 {
+                        if ui
+                            .add(crate::widgets::Bar(egui::Slider::new(&mut r, 0.001..=2.0).logarithmic(true)))
+                            .changed()
+                            && mean > 0.0
+                        {
                             let k = r / mean;
                             tube.radii.iter_mut().for_each(|x| *x = (*x * k).max(1e-4));
                         }
@@ -56,7 +62,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
                 ui.end_row();
                 ui.label("Sides");
-                ui.add(egui::Slider::new(&mut tube.sides, 6..=64));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut tube.sides, 6..=64)));
                 ui.end_row();
                 ui.label("Ends");
                 ui.checkbox(&mut tube.caps, "Rounded caps");

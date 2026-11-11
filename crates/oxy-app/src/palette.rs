@@ -623,7 +623,11 @@ fn entry_row(ui: &mut Ui, e: &Entry, selected: bool) -> egui::Response {
     let (rect, r) = ui.allocate_exact_size(egui::vec2(ui.available_width(), h), egui::Sense::click());
     let v = ui.visuals();
     if selected || r.hovered() {
-        ui.painter().rect_filled(rect, 4.0, if selected { v.selection.bg_fill } else { v.widgets.hovered.bg_fill });
+        ui.painter().rect_filled(
+            rect,
+            crate::widgets::rounding(4.0),
+            if selected { v.selection.bg_fill } else { v.widgets.hovered.bg_fill },
+        );
     }
     if selected {
         r.scroll_to_me(None);

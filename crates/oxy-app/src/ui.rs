@@ -285,9 +285,16 @@ pub fn apply_theme(
     v.ime_composition.active_underline_stroke.color = p.text;
     v.ime_composition.inactive_underline_stroke.color = p.text.linear_multiply(0.5);
 
-    let radius = egui::CornerRadius::same(corner_style.radius_pt().min(255.0) as u8);
-    v.window_corner_radius = egui::CornerRadius::same(corner_style.window_radius_pt().min(255.0) as u8);
-    v.menu_corner_radius = egui::CornerRadius::same(corner_style.menu_radius_pt().min(255.0) as u8);
+    // Studio is a little squarer than the other themes at the same corner
+    // style (see `widgets::STUDIO_ROUNDING`).
+    let studio = theme == ThemePreset::Studio && !is_high_contrast;
+    let corner = |r: f32| {
+        let r = if studio { (r * crate::widgets::STUDIO_ROUNDING).round() } else { r };
+        egui::CornerRadius::same(r.min(255.0) as u8)
+    };
+    let radius = corner(corner_style.radius_pt());
+    v.window_corner_radius = corner(corner_style.window_radius_pt());
+    v.menu_corner_radius = corner(corner_style.menu_radius_pt());
     v.window_stroke = EStroke::new(1.0, p.window_stroke);
 
     for w in [
@@ -328,9 +335,11 @@ pub fn apply_theme(
             v.widgets.hovered.bg_fill = accent_color.linear_multiply(0.85);
             v.widgets.open.bg_stroke = EStroke::new(1.0, Color32::from_gray(64));
             v.weak_text_color = Some(Color32::from_gray(140));
-            let shadow = egui::Shadow { offset: [0, 6], blur: 16, spread: 0, color: Color32::from_black_alpha(110) };
+            // A tight, faint shadow: windows and menus sit just off the
+            // panels rather than floating above them.
+            let shadow = egui::Shadow { offset: [0, 2], blur: 6, spread: 0, color: Color32::from_black_alpha(70) };
             v.window_shadow = shadow;
-            v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 10, ..shadow };
+            v.popup_shadow = egui::Shadow { offset: [0, 1], blur: 4, ..shadow };
         }
         if theme == ThemePreset::Midnight {
             // Glass look: every control has a thin light-blue rim, and windows
@@ -491,10 +500,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 });
                 tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, lights, wireframe and face group colors", |ui| {
                     tips::hover(
-                        ui.add(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion")),
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))),
                         plain::AO,
                     );
-                    tips::hover(ui.add(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity")), plain::CAVITY);
+                    tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))), plain::CAVITY);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
                     tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
                     if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
@@ -776,7 +785,11 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
             ui.heading("Physical Scale & Metrics");
             ui.horizontal(|ui| {
                 ui.label("Unit scale:");
-                if ui.add(egui::Slider::new(&mut ed.print_scale_mm_per_unit, 0.1..=100.0).suffix(" mm/unit")).changed()
+                if ui
+                    .add(crate::widgets::Bar(
+                        egui::Slider::new(&mut ed.print_scale_mm_per_unit, 0.1..=100.0).suffix(" mm/unit"),
+                    ))
+                    .changed()
                 {
                     ed.update_print_dimensions();
                 }
@@ -813,7 +826,9 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
             ui.heading("Wall-Thickness Check");
             ui.horizontal(|ui| {
                 ui.label("Min wall thickness:");
-                ui.add(egui::Slider::new(&mut ed.print_wall_thickness_mm, 0.5..=10.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(
+                    egui::Slider::new(&mut ed.print_wall_thickness_mm, 0.5..=10.0).suffix(" mm"),
+                ));
             });
             if ui.button("Analyze Wall Thickness").clicked() {
                 ed.analyze_print_wall_thickness();
@@ -844,15 +859,19 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
             ui.heading("Hollowing & Drain Holes");
             ui.horizontal(|ui| {
                 ui.label("Wall thickness:");
-                ui.add(egui::Slider::new(&mut ed.print_wall_thickness_mm, 1.0..=8.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(
+                    egui::Slider::new(&mut ed.print_wall_thickness_mm, 1.0..=8.0).suffix(" mm"),
+                ));
             });
             ui.horizontal(|ui| {
                 ui.label("Drain hole radius:");
-                ui.add(egui::Slider::new(&mut ed.print_drain_hole_radius_mm, 1.0..=10.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(
+                    egui::Slider::new(&mut ed.print_drain_hole_radius_mm, 1.0..=10.0).suffix(" mm"),
+                ));
             });
             ui.horizontal(|ui| {
                 ui.label("Drain holes:");
-                ui.add(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4)));
             });
             let busy = ed.job.is_some();
             if ui.add_enabled(!busy, egui::Button::new("Hollow mesh (voxel)")).clicked() {
@@ -878,19 +897,21 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
             };
             ui.horizontal(|ui| {
                 ui.label("Plane Position:");
-                ui.add(egui::Slider::new(&mut ed.print_split_offset, min_val..=max_val).max_decimals(2));
+                ui.add(crate::widgets::Bar(
+                    egui::Slider::new(&mut ed.print_split_offset, min_val..=max_val).max_decimals(2),
+                ));
             });
             ui.horizontal(|ui| {
                 ui.label("Pin Radius:");
-                ui.add(egui::Slider::new(&mut ed.print_pin_radius_mm, 1.0..=10.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_radius_mm, 1.0..=10.0).suffix(" mm")));
             });
             ui.horizontal(|ui| {
                 ui.label("Pin Height:");
-                ui.add(egui::Slider::new(&mut ed.print_pin_height_mm, 2.0..=20.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_height_mm, 2.0..=20.0).suffix(" mm")));
             });
             ui.horizontal(|ui| {
                 ui.label("Pin Clearance:");
-                ui.add(egui::Slider::new(&mut ed.print_clearance_mm, 0.05..=1.0).suffix(" mm"));
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_clearance_mm, 0.05..=1.0).suffix(" mm")));
             });
             if ui.add_enabled(!busy, egui::Button::new("Split into Interlocking Parts")).clicked() {
                 ed.split_active_piece_with_keys();
@@ -979,9 +1000,11 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.separator();
     ui.label(RichText::new("Autosave").strong());
     let mut mins = if ed.autosaver.enabled { (ed.autosaver.interval.as_secs_f32() / 60.0).round() } else { 0.0 };
-    let slider = egui::Slider::new(&mut mins, 0.0..=30.0)
-        .step_by(1.0)
-        .custom_formatter(|v, _| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} min") });
+    let slider = crate::widgets::Bar(
+        egui::Slider::new(&mut mins, 0.0..=30.0)
+            .step_by(1.0)
+            .custom_formatter(|v, _| if v <= 0.0 { "Off".to_string() } else { format!("{v:.0} min") }),
+    );
     if tips::hover(ui.add(slider), plain::AUTOSAVE).changed() {
         if mins <= 0.0 {
             ed.autosaver.enabled = false;
@@ -1004,12 +1027,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
 pub(crate) fn scale_slider(ui: &mut Ui, scale: &mut f32) -> egui::Response {
     let id = ui.scope_id().with("ui_scale_draft");
     let mut value = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(*scale);
-    let r = ui.add(
+    let r = ui.add(crate::widgets::Bar(
         egui::Slider::new(&mut value, 0.75..=3.0)
             .step_by(0.05)
             .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
             .custom_parser(|s| s.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|v| v / 100.0)),
-    );
+    ));
     if r.dragged() || r.is_pointer_button_down_on() {
         ui.data_mut(|d| d.insert_temp(id, value));
     } else {
@@ -1325,7 +1348,7 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
         let color = Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
         ui.horizontal(|ui| {
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, 3.0, color);
+            ui.painter().rect_filled(rect, widgets::rounding(3.0), color);
             let label_resp = ui.selectable_label(ed.accent == a, a.label());
             if resp.clicked() || label_resp.clicked() {
                 ed.accent = a;
@@ -1352,7 +1375,9 @@ fn theme_appearance_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.separator();
     ui.label(RichText::new("Wireframe overlay").strong());
     tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe enabled", Cmd::Wireframe);
-    ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity"));
+    ui.add(crate::widgets::Bar(
+        egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Wireframe opacity"),
+    ));
     ui.horizontal(|ui| {
         ui.label("Wireframe color:");
         edit_linear_color(ui, &mut ed.view.wireframe_color).on_hover_text("Color of the wireframe lines");
@@ -1389,7 +1414,7 @@ fn wireframe_controls(ui: &mut Ui, ed: &mut Editor) {
     tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe enabled", Cmd::Wireframe);
     ui.add_space(4.0);
     tips::hover(
-        ui.add(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Line opacity")),
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.wireframe_opacity, 0.05..=1.0).text("Line opacity"))),
         "Wireframe line opacity",
     );
     ui.add_space(4.0);
@@ -1415,7 +1440,7 @@ fn wireframe_controls(ui: &mut Ui, ed: &mut Editor) {
             let srgb = col.map(linear_to_srgb_byte);
             let color = Color32::from_rgb(srgb[0], srgb[1], srgb[2]);
             let (rect, resp) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, 3.0, color);
+            ui.painter().rect_filled(rect, widgets::rounding(3.0), color);
             if resp.on_hover_text(name).clicked() {
                 ed.view.wireframe_color = col;
             }
@@ -1904,12 +1929,12 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     let size_label = "Size";
     ui.label(RichText::new(size_label).weak());
     tips::hover(
-        ui.add(
+        ui.add(crate::widgets::Bar(
             egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
                 .logarithmic(true)
                 .max_decimals(0)
                 .trailing_fill(true),
-        ),
+        )),
         Cmd::Radius.tip(),
     );
     let shift_smooth = ed.brush_roles().shift;
@@ -1917,7 +1942,9 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
     ui.label(RichText::new(strength_label).weak());
     tips::hover(
-        ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true)),
+        ui.add(crate::widgets::Bar(
+            egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true),
+        )),
         if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
     );
 }
@@ -1932,9 +1959,10 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
         .fixed_pos(pos)
         .constrain(true)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 10)).show(
-                ui,
-                |ui| {
+            egui::Frame::popup(ui.style())
+                .corner_radius(widgets::rounding(10.0))
+                .inner_margin(egui::Margin::symmetric(12, 10))
+                .show(ui, |ui| {
                     ui.set_width(175.0);
                     ui.vertical(|ui| {
                         let shift_smooth = ed.brush_roles().shift;
@@ -1965,12 +1993,12 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
 
                         ui.label(RichText::new("Size").weak().small());
                         tips::hover(
-                            ui.add(
+                            ui.add(crate::widgets::Bar(
                                 egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
                                     .logarithmic(true)
                                     .max_decimals(0)
                                     .trailing_fill(true),
-                            ),
+                            )),
                             Cmd::Radius.tip(),
                         );
 
@@ -1978,9 +2006,9 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
                         ui.label(RichText::new(strength_label).weak().small());
                         tips::hover(
-                            ui.add(
+                            ui.add(crate::widgets::Bar(
                                 egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true),
-                            ),
+                            )),
                             if shift_smooth {
                                 "Smoothing intensity when holding Shift".to_string()
                             } else {
@@ -1991,9 +2019,9 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         ui.add_space(2.0);
                         ui.label(RichText::new("Focal shift").weak().small());
                         tips::hover(
-                            ui.add(
+                            ui.add(crate::widgets::Bar(
                                 egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2).trailing_fill(true),
-                            ),
+                            )),
                             plain::FOCAL_SHIFT,
                         );
 
@@ -2001,11 +2029,11 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                             ui.add_space(2.0);
                             ui.label(RichText::new("Pinch").weak().small());
                             tips::hover(
-                                ui.add(
+                                ui.add(crate::widgets::Bar(
                                     egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0)
                                         .max_decimals(2)
                                         .trailing_fill(true),
-                                ),
+                                )),
                                 plain::CREASE_PINCH,
                             );
                         }
@@ -2030,8 +2058,7 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         };
                         ui.label(RichText::new(hint).weak().small());
                     });
-                },
-            );
+                });
         })
         .response;
     if !q.held {
@@ -2058,9 +2085,10 @@ fn pointer_slider(ctx: &egui::Context, ed: &mut Editor) {
         .fixed_pos(pos)
         .constrain(true)
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(12, 8)).show(
-                ui,
-                |ui| {
+            egui::Frame::popup(ui.style())
+                .corner_radius(widgets::rounding(10.0))
+                .inner_margin(egui::Margin::symmetric(12, 8))
+                .show(ui, |ui| {
                     ui.spacing_mut().slider_width = 180.0;
                     let k = ed.brush_kind;
                     let (title, tip) = match ps.kind {
@@ -2082,14 +2110,13 @@ fn pointer_slider(ctx: &egui::Context, ed: &mut Editor) {
                         }
                         SliderKind::FocalShift => egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2),
                     };
-                    tips::hover(ui.add(slider.trailing_fill(true)), tip);
+                    tips::hover(ui.add(crate::widgets::Bar(slider.trailing_fill(true))), tip);
                     let hint = match key {
                         Some(key) => format!("{key}, Esc or click outside to close"),
                         None => "Esc or click outside to close".into(),
                     };
                     ui.label(RichText::new(hint).weak().small());
-                },
-            );
+                });
         })
         .response;
     let (esc, clicked_outside) = ctx.input(|i| {
@@ -2110,7 +2137,7 @@ fn floating_quick_bar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) 
     };
     egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
-            .corner_radius(10.0)
+            .corner_radius(widgets::rounding(10.0))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -2330,13 +2357,13 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
     let mut mm = ed.focal_mm;
     ui.spacing_mut().slider_width = 160.0;
     let slider = ui
-        .add(
+        .add(crate::widgets::Bar(
             egui::Slider::new(&mut mm, FOCAL_MM_MIN..=FOCAL_MM_MAX)
                 .logarithmic(true)
                 .suffix(" mm")
                 .max_decimals(2)
                 .min_decimals(2),
-        )
+        ))
         .on_hover_text(plain::FOCAL_SLIDER);
     let typed = ui
         .horizontal(|ui| {
@@ -2508,9 +2535,10 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                 - egui::vec2(0.0, if ed.quick_bar == QuickBar::ViewportBottom { 64.0 } else { 12.0 }),
         )
         .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).corner_radius(10.0).inner_margin(egui::Margin::symmetric(10, 6)).show(
-                ui,
-                |ui| {
+            egui::Frame::popup(ui.style())
+                .corner_radius(widgets::rounding(10.0))
+                .inner_margin(egui::Margin::symmetric(10, 6))
+                .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Transform").strong());
                         for m in GizmoMode::ALL {
@@ -2546,8 +2574,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                         }
                     });
                     gizmo_numeric_row(ui, ed, mode);
-                },
-            );
+                });
         });
     let Some(layout) = ed.gizmo_layout() else { return };
     let ppp = ed.pixels_per_point;
@@ -2593,7 +2620,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         let [r, g, b, _] = AXIS_COLORS[i].to_array();
         let fill = if hot { Color32::WHITE } else { Color32::from_rgba_unmultiplied(r, g, b, 150) };
         let rect = egui::Rect::from_center_size(to_pt(*at), egui::vec2(12.0, 12.0));
-        painter.rect_filled(rect, 1.5, fill);
+        painter.rect_filled(rect, widgets::rounding(1.5), fill);
         painter.rect_stroke(rect, 1.5, EStroke::new(1.0, AXIS_COLORS[i]), egui::StrokeKind::Inside);
     }
     if let Some(r) = &layout.rings {
@@ -3311,25 +3338,25 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     egui::Grid::new("pen_pressure_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         ui.label("Curve");
         tips::hover(
-            ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true)),
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))),
             plain::PRESSURE_CURVE,
         );
         ui.end_row();
         ui.label("Lightest touch");
         tips::hover(
-            ui.add(
+            ui.add(crate::widgets::Bar(
                 egui::Slider::new(&mut ed.pressure_min, 0.0..=0.5)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            ),
+            )),
             plain::PRESSURE_MIN,
         );
         ui.end_row();
         ui.label("Full pressure at");
         tips::hover(
-            ui.add(
+            ui.add(crate::widgets::Bar(
                 egui::Slider::new(&mut ed.pressure_full, 0.3..=1.0)
                     .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-            ),
+            )),
             plain::PRESSURE_FULL,
         );
         ui.end_row();
@@ -3396,12 +3423,17 @@ fn extract_window(ctx: &egui::Context, ed: &mut Editor) {
             egui::Grid::new("extract_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 ui.label("Thickness");
                 tips::hover(
-                    ui.add(egui::Slider::new(&mut ed.extract_thickness, 0.0..=0.5).logarithmic(true)),
+                    ui.add(crate::widgets::Bar(
+                        egui::Slider::new(&mut ed.extract_thickness, 0.0..=0.5).logarithmic(true),
+                    )),
                     plain::EXTRACT_THICKNESS,
                 );
                 ui.end_row();
                 ui.label("Smooth edge");
-                tips::hover(ui.add(egui::Slider::new(&mut ed.extract_smooth, 0..=10)), plain::EXTRACT_SMOOTH);
+                tips::hover(
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.extract_smooth, 0..=10))),
+                    plain::EXTRACT_SMOOTH,
+                );
                 ui.end_row();
             });
             ui.add_space(4.0);
@@ -3511,7 +3543,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         egui::Frame::new()
             .fill(fill)
             .stroke(stroke)
-            .corner_radius(6.0)
+            .corner_radius(widgets::rounding(6.0))
             .inner_margin(egui::Margin::symmetric(2, 1))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -3688,7 +3720,9 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Radius");
         tips::hover(
-            ui.add(egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt")),
+            ui.add(crate::widgets::Bar(
+                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt"),
+            )),
             Cmd::Radius.tip(),
         );
         ui.end_row();
@@ -3697,7 +3731,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
         ui.label(strength_label);
         tips::hover(
-            ui.add(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0)),
+            ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0))),
             if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
         );
         ui.end_row();
@@ -3715,13 +3749,16 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         );
         ui.end_row();
         ui.label("Focal shift");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2)), plain::FOCAL_SHIFT);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2))),
+            plain::FOCAL_SHIFT,
+        );
         ui.end_row();
         ui.label("Spacing");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.spacing, 0.02..=1.0)), plain::SPACING);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0))), plain::SPACING);
         ui.end_row();
         ui.label("Auto smooth");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0)), plain::AUTO_SMOOTH);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0))), plain::AUTO_SMOOTH);
         ui.end_row();
         if ed.brush_kind == BrushKind::Grab {
             ui.label("Grab through");
@@ -3735,13 +3772,13 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         }
         if ed.brush_kind == BrushKind::Noise {
             ui.label("Noise scale");
-            tips::hover(ui.add(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0)), plain::NOISE);
+            tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0))), plain::NOISE);
             ui.end_row();
         }
         if ed.brush_kind == BrushKind::Crease {
             ui.label("Pinch");
             tips::hover(
-                ui.add(egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0).max_decimals(2)),
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0).max_decimals(2))),
                 plain::CREASE_PINCH,
             );
             ui.end_row();
@@ -3792,7 +3829,7 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
         for (i, s) in SWATCHES.iter().enumerate() {
             let col = Color32::from_rgb((s[0] * 255.0) as u8, (s[1] * 255.0) as u8, (s[2] * 255.0) as u8);
             let (rect, r) = ui.allocate_exact_size(egui::vec2(16.0, 16.0), egui::Sense::click());
-            ui.painter().rect_filled(rect, 3.0, col);
+            ui.painter().rect_filled(rect, widgets::rounding(3.0), col);
             if ed.paint_color.to_array() == *s {
                 ui.painter().rect_stroke(
                     rect.expand(1.5),
@@ -3845,7 +3882,10 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
         );
         ui.end_row();
         ui.label("Stabilizer");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt")), plain::STABILIZER);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.stabilizer_pt, 0.0..=120.0).suffix(" pt"))),
+            plain::STABILIZER,
+        );
         ui.end_row();
         ui.label("Hold to adjust");
         tips::hover(
@@ -3860,12 +3900,12 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
         );
         ui.end_row();
         ui.label("Spray");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.spray, 0.0..=1.0)), plain::SPRAY);
+        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spray, 0.0..=1.0))), plain::SPRAY);
         ui.end_row();
         ui.label("Pressure curve");
         ui.horizontal(|ui| {
             tips::hover(
-                ui.add(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true)),
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))),
                 plain::PRESSURE_CURVE,
             );
             let plot = pressure_curve_plot(ui, ed, egui::vec2(36.0, 24.0)).interact(egui::Sense::click());
@@ -3906,9 +3946,9 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
                 alpha_thumbnail(ui, &a);
                 ui.vertical(|ui| {
                     tips::hover(
-                        ui.add(
+                        ui.add(crate::widgets::Bar(
                             egui::Slider::new(&mut ed.alpha_rotation_deg, -180.0..=180.0).suffix("°").text("rotation"),
-                        ),
+                        )),
                         plain::ALPHA_ROTATION,
                     );
                     tips::check_plain(ui, &mut ed.alpha_follow_stroke, "Follow stroke direction", plain::ALPHA_FOLLOW);
@@ -3974,7 +4014,9 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ui.label("Detail");
                 let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
                 tips::hover(
-                    ui.add(egui::Slider::new(&mut ed.dyntopo_detail, 0.0..=1.0).custom_formatter(pct)),
+                    ui.add(crate::widgets::Bar(
+                        egui::Slider::new(&mut ed.dyntopo_detail, 0.0..=1.0).custom_formatter(pct),
+                    )),
                     plain::DYN_DETAIL,
                 );
             });
@@ -4012,7 +4054,10 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             oxy_topo::RemeshEngine::Vdb => 1024,
             oxy_topo::RemeshEngine::RegularGrid => oxy_topo::MAX_RESOLUTION,
         };
-        tips::hover(ui.add(egui::Slider::new(&mut ed.remesh_resolution, 32..=max_res)), plain::REMESH_RES);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.remesh_resolution, 32..=max_res))),
+            plain::REMESH_RES,
+        );
     });
     let estimate = ed.remesh_estimate();
     let text = format!("Makes about {} triangles", fmt_count(estimate));
@@ -4026,7 +4071,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ui.horizontal(|ui| {
             ui.label("Adaptivity");
             tips::hover(
-                ui.add(egui::Slider::new(&mut ed.remesh_adaptivity, 0.0..=1.0)),
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.remesh_adaptivity, 0.0..=1.0))),
                 "Simplifies flat planar areas while keeping high-curvature areas dense",
             );
         });
@@ -4053,7 +4098,10 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     });
     ui.horizontal(|ui| {
         ui.label("Keep");
-        tips::hover(ui.add(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %")), plain::KEEP);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))),
+            plain::KEEP,
+        );
         if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
             ed.decimate_active();
         }
@@ -4822,12 +4870,14 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.end_row();
                 if !c.closed && !moving {
                     ui.label("Fade in");
-                    let r = ui.add(egui::Slider::new(&mut c.fade_in, 0.0..=0.5).custom_formatter(pct));
+                    let r =
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut c.fade_in, 0.0..=0.5).custom_formatter(pct)));
                     dragging |= r.dragged();
                     tips::hover(r, plain::CURVE_FADE);
                     ui.end_row();
                     ui.label("Fade out");
-                    let r = ui.add(egui::Slider::new(&mut c.fade_out, 0.0..=0.5).custom_formatter(pct));
+                    let r = ui
+                        .add(crate::widgets::Bar(egui::Slider::new(&mut c.fade_out, 0.0..=0.5).custom_formatter(pct)));
                     dragging |= r.dragged();
                     tips::hover(r, plain::CURVE_FADE);
                     ui.end_row();
@@ -4835,14 +4885,16 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
                 if let Some(i) = c.selected.filter(|&i| i < c.weights.len()) {
                     let w = &mut c.weights[i];
                     ui.label(if moving { "Point reach" } else { "Point size" });
-                    let r = ui.add(egui::Slider::new(&mut w.0, 0.1..=3.0).logarithmic(true).custom_formatter(pct));
+                    let r = ui.add(crate::widgets::Bar(
+                        egui::Slider::new(&mut w.0, 0.1..=3.0).logarithmic(true).custom_formatter(pct),
+                    ));
                     dragging |= r.dragged();
                     tips::hover(r, if moving { plain::MOVE_POINT_REACH } else { plain::CURVE_POINT_SIZE });
                     ui.end_row();
                     ui.label("Point strength");
                     // The model can't follow more than all the way.
                     let top = if moving { 1.0 } else { 2.0 };
-                    let r = ui.add(egui::Slider::new(&mut w.1, 0.0..=top).custom_formatter(pct));
+                    let r = ui.add(crate::widgets::Bar(egui::Slider::new(&mut w.1, 0.0..=top).custom_formatter(pct)));
                     dragging |= r.dragged();
                     tips::hover(r, if moving { plain::MOVE_POINT_STRENGTH } else { plain::CURVE_POINT_STRENGTH });
                     ui.end_row();
@@ -5527,6 +5579,38 @@ mod tests {
         assert_eq!(v.window_corner_radius.nw, 20);
         assert!(v.window_shadow.blur > 0);
         assert_eq!(v.selection.stroke.color, Color32::from_rgb(0x10, 0xB9, 0x81));
+    }
+
+    #[test]
+    fn studio_is_squarer_with_a_tighter_shadow() {
+        let look = |theme| {
+            let ctx = egui::Context::default();
+            apply_theme(
+                &ctx,
+                theme,
+                AccentPreset::Emerald,
+                [0, 0, 0],
+                CornerStyle::Rounded,
+                false,
+                1.0,
+                UiLayout::Standard,
+            );
+            ctx.global_style().visuals.clone()
+        };
+        let studio = look(ThemePreset::Studio);
+        let graphite = look(ThemePreset::Graphite);
+        // A little squarer than the other themes, but not sharp.
+        for (s, g) in [
+            (studio.widgets.inactive.corner_radius.nw, graphite.widgets.inactive.corner_radius.nw),
+            (studio.window_corner_radius.nw, graphite.window_corner_radius.nw),
+            (studio.menu_corner_radius.nw, graphite.menu_corner_radius.nw),
+        ] {
+            assert!(s > 0 && s < g, "studio {s} vs graphite {g}");
+        }
+        // A small, faint shadow behind windows and menus.
+        assert!(studio.window_shadow.blur <= 6 && studio.window_shadow.offset[1] <= 2);
+        assert!(studio.window_shadow.color.a() <= 70);
+        assert!(studio.popup_shadow.blur < studio.window_shadow.blur);
     }
 
     #[test]
