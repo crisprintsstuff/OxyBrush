@@ -51,7 +51,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | # | Feature | Details | Status |
 |---|---|---|---|
 | 3.1 | **Stroke control** | Stabilizer (lazy mouse), Stamp (drag to size), spray, Line, pressure curve; editable Curve strokes ([RFC 0004](rfcs/0004-curve-stroke.md), after 2.5.7) | ✅ 0.1.0 |
-| 3.2 | **Masking and selection** | Box/lasso hide and mask; mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
+| 3.2 | **Masking and selection** | Box/lasso hide and mask (mask box and lasso follow symmetry since 3.0.8); mask by cavity, peaks, face group; blur/sharpen/grow/shrink mask; grow/shrink visible area | ✅ 0.1.0 |
 | 3.3 | **Alphas and stencils** | Alphas ✅ (7 procedural CC0 + user PNGs, rotation, follow stroke). Stencils (screen-space overlays) ⏳ | 🚧 |
 | 3.4 | **More brushes** | Polish, Planar Trim, Topological Move, Noise ✅. A dedicated Dam-style crease ⏳ (Crease covers most uses) | ✅ 0.1.0 |
 | 3.5 | **Multiresolution** | Subdivision levels (Loop), sculpt at any level with detail propagated upward, saved in `.oxb` (MRES section), undoable ✅. Rebuild lower levels from an imported dense mesh ⏳; tangent-space detail (so detail rotates with large low-level bends) ⏳. Level changes above 1M triangles run in the background (5.2M: ~0.7 s to switch, ~2–4 s to add) | 🚧 |
@@ -130,7 +130,8 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 ## Known limitations (v3.0.8-beta)
 
-- macOS: not notarized (first launch needs "Open Anyway"); opening `.oxb` files by double-click is new and not yet confirmed on a Mac
+- macOS: not notarized (first launch needs "Open Anyway"); opening `.oxb` files by double-click is new and not yet confirmed on a Mac; testers see a "?" instead of the app icon (app, Dock and `.oxb` files) although the bundled icon is valid: being investigated with a check in the release builds
+- Import scaling guesses from size alone: an import more than 8× larger or smaller than the scene is scaled by a power of ten (one Undo keeps the original size); the box/lasso hide and show tools don't follow symmetry yet
 - Decimation takes about a second for a million triangles (runs in the background)
 - Open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)

@@ -96,13 +96,13 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Symmetry",
         keywords: "mirror x y z radial",
-        body: "X symmetry is on by default: strokes on one side are mirrored to the other. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.",
+        body: "X symmetry is on by default: strokes on one side are mirrored to the other, and so are mask boxes and lassos. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.",
     },
     Topic {
         title: "Masking",
         keywords: "mask protect freeze unmask invert blur selection",
         body: "Masked areas (shown darker or tinted) are protected from brushes. Hold Ctrl and paint to mask; add Alt to unmask.\n\n\
-- Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso.\n\
+- Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso. With symmetry on, the mirrored area is masked too.\n\
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it.\n\
 - The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically.",
@@ -198,14 +198,14 @@ Decimate reduces the triangle count to the Keep percentage while preserving the 
     },
     Topic {
         title: "Saving, autosave and recovery",
-        keywords: "save project oxb autosave crash recover recent files open",
+        keywords: "save project oxb autosave crash recover recent files open close",
         body: "Ctrl+S saves the whole scene as an .oxb project (pieces, levels, masks and groups). Saves are atomic: a crash while saving never damages the previous file.\n\n\
-OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it ever closes unexpectedly, the next start offers to recover your work. File > Open recent and the welcome window list the files you used last.",
+OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it ever closes unexpectedly, the next start offers to recover your work. File > Open recent and the welcome window list the files you used last. File > Close project closes the project (asking to save unsaved work first) and goes back to the start screen.",
     },
     Topic {
         title: "Importing and exporting",
-        keywords: "export import obj stl gltf glb ply 3d print file other programs game engine lod split cli",
-        body: "Ctrl+I imports an OBJ or STL file; each object in an OBJ file becomes its own piece. Ctrl+E exports every visible piece (hidden faces are left out): glTF/GLB keeps each piece as its own object for game engines and other 3D tools, OBJ writes one object per piece, and STL and PLY combine them (STL is the usual choice for 3D printing).\n\n\
+        keywords: "export import obj stl gltf glb ply 3d print file other programs game engine lod split cli units scale size millimetres mtl material",
+        body: "Ctrl+I imports an OBJ or STL file; each object in an OBJ file becomes its own piece. Materials in OBJ files are ignored.\n\nMesh files don't say what units they use. If an import is more than 8 times larger or smaller than what's already in the scene (a model in millimetres, say), it's scaled by a power of ten to fit, and later imports into the same project get the same scale so parts still fit together. One Undo keeps the original size.\n\n Ctrl+E exports every visible piece (hidden faces are left out): glTF/GLB keeps each piece as its own object for game engines and other 3D tools, OBJ writes one object per piece, and STL and PLY combine them (STL is the usual choice for 3D printing).\n\n\
 - Pieces > Make LOD chain adds lighter copies at 1/2, 1/4 and 1/8 of the triangles.\n\
 - Pieces > Split by face groups or Split into loose parts turns one piece into several.\n\
 - The oxybrush-cli command-line tool converts, remeshes, decimates, makes LODs and splits files without opening the app.",
@@ -379,7 +379,9 @@ mod tests {
         assert_eq!(TOPICS[mask[0]].title, "Masking");
         assert!(mask.len() > 1, "other topics mention masks too");
         let lasso = search("lasso");
-        assert_eq!(lasso.iter().map(|&i| TOPICS[i].title).collect::<Vec<_>>(), ["Masking"]);
+        let mut lasso: Vec<_> = lasso.iter().map(|&i| TOPICS[i].title).collect();
+        lasso.sort_unstable();
+        assert_eq!(lasso, ["Masking", "Symmetry"], "masking, and symmetry for mirrored mask lassos");
         assert!(search("stl export").iter().any(|&i| TOPICS[i].title == "Importing and exporting"));
         assert!(search("cursor").iter().any(|&i| TOPICS[i].title == "Brush cursor"));
         assert!(search("zzzz nothing").is_empty());
