@@ -167,6 +167,13 @@ touching this area. In particular:
 
 ## Releases
 
+Versions follow [semantic versioning](https://semver.org) (from 4.0.0-beta.1;
+earlier releases were `X.Y.Z-beta`). Betas of the next release count up as
+`MAJOR.MINOR.PATCH-beta.N` (`4.0.0-beta.1`, `4.0.0-beta.2`, …) and the
+stable release drops the suffix. After a stable release, fixes bump PATCH,
+new features bump MINOR (with `-beta.N` previews if wanted), and breaking
+changes, such as an `.oxb` change older versions can't read, bump MAJOR.
+
 1. Bump `version` in the root `Cargo.toml` (`[workspace.package]`).
 2. Add `docs/releases/v<version>.md` (it becomes the release notes) and update
    `docs/ROADMAP.md`, plus the `<releases>` entry in

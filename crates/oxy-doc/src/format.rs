@@ -16,7 +16,7 @@
 //!   is derived by subdividing the base. When present, the preceding
 //!   `PIEC` stores the active level in level order. Older readers skip it
 //!   and simply load the active level as a plain mesh.
-//! - `ALPH` (optional, since 3.0.9): a brush alpha kept with the project,
+//! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
 //!   Not tied to a piece. Older readers skip it and lose only the alpha.
