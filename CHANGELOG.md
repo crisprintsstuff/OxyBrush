@@ -7,10 +7,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Changed
 - **One Theme window** ([RFC 0014](docs/rfcs/0014-theme-window.md)): **View > Theme…** (or the command palette, or **Preferences > Interface**) opens a single window with three tabs: **Themes** (a gallery of the nine themes drawn in their own colors, and **Looks**: Classic, Workstation, Midnight), **Colors** (accent and viewport background) and **Size & shape** (interface scale and corners), plus **Reset everything**. It replaces the long Preferences > Appearance tab, View's Background menu and window, and the old Theme & Appearance window. **Preferences > Appearance** is now **Preferences > Interface** (brush-shelf options). Looks no longer change shortcuts, navigation or the material (set those in the Keymap and the material picker); "Default Studio" is now **Classic**, with the real default background. The command palette gains **Theme: Studio**.
 
+## [4.0.0-beta.2] - 2026-11-11
+
 ### Added
+- **Drag the axis gizmo to orbit:** dragging anywhere on the axis gizmo at the top right of the viewport turns the view freely, as dragging empty space does (the snap key steps it by 45°); clicking an axis end still snaps to that side.
 - **Pin points in the retopology tool:** Alt+click a point, edge or face to pin its points (with X mirror, their mirror images too); Shift+drag relax leaves pinned points where they are, while you can still drag them by hand. Alt+click again or **Unpin all** in the window frees them. Pinned points are drawn as squares in the accent colour, pinning is an undo step, and pins are saved with the project (a new `PINS` section after the cage; older versions skip it).
 
 ### Fixed
+- **Opening a file no longer leaves the Home window on top:** with **Show at startup** on, a project double-clicked in Finder (or opened with Open With, dropped on the window or picked in the Open dialog) opened behind the Home window. Opening any file now closes it, as starting OxyBrush with a file already did.
 - **macOS: `.oxb` projects showed a generic "?" icon** in Finder, and the Dock and Open With didn't know OxyBrush opens them, when macOS had missed the app's document types (for example after opening it first from the disk image). OxyBrush now registers itself with macOS's Launch Services (the system `lsregister` tool, in the background) each time it starts from its installed location. When macOS runs it from a temporary translocated copy, it logs a hint to move it to Applications instead.
 
 ## [4.0.0-beta.1] - 2026-11-11
