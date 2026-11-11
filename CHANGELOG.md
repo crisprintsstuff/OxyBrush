@@ -6,7 +6,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [3.0.8-beta] - 2026-11-11
 
+### Added
+- **File > Close project:** closes the project (asking to save unsaved work first) and goes back to the start screen. Also in the command palette.
+
 ### Fixed
+- **OBJ files with material problems import:** materials are now ignored on import. `mtllib`/`usemtl` lines are skipped and no `.mtl` file is read, so a bare `usemtl` with no name (which failed the whole import with "material parse error"), a missing or broken `.mtl`, or names that aren't UTF-8 no longer stop an OBJ from opening. Material switches no longer split an object into several pieces.
 - **Imports far out of scale are fitted to the scene:** mesh files carry no units, so a model in millimetres (common for STL) arrived tens of times larger than the starting sphere. An import more than 8× larger or smaller than the scene is now scaled by a power of ten (a unit conversion, like mm to cm), about the origin; later imports into the same document reuse that factor so parts from one source still fit together. The status bar says so, and one Undo ("Fit import to scene") restores the original size. Blender bridge and OxyCharacter round trips are unchanged. An agent's import labels both undo steps `Agent:`.
 - **Box and lasso masking follow symmetry:** with Mirror or radial symmetry on, Ctrl+drag masking (and Ctrl+Alt unmasking) now picks the mirrored region too, as strokes do.
 - **Window title bars are no longer huge:** they were about 53 px tall at 100% scale, because egui sizes them from the heading font (20 pt) plus the window margin above and below the title. The heading font is now 15 pt (14–18 pt depending on the layout) and the window margin 9 px (11 in Touch), so title bars are about 37 px (45 in Touch). In-window headings are a little smaller too.
