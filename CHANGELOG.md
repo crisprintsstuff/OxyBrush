@@ -16,6 +16,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Plugin guide and API reference** in [docs/plugins](docs/plugins/README.md), with a WebAssembly-text and a Rust example.
 
 ### Fixed
+- **Stopping a plugin right after starting it works.** A Stop clicked in the moment between starting a plugin command and it beginning to run was forgotten, and the command ran to the end.
 - **Double-clicking a project opens it on macOS** ([#135](https://github.com/crisprintsstuff/OxyBrush/issues/135)). macOS showed "can't open files of this type": the app didn't declare its file types, and macOS hands a double-clicked file to an app in a way OxyBrush didn't receive. Now `.oxb` projects and `.oxyaddon` add-ons open with OxyBrush from Finder, Open With and the Dock, and OBJ and STL files list it under Open With.
 - **Drop files on the window to open them**, on every system: a project opens (asking to save first if needed), a mesh is imported, an add-on is installed.
 

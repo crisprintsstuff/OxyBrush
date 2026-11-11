@@ -585,3 +585,26 @@ fn param_color_and_a_stopped_command() {
     assert!(!r.cancelled);
     assert_eq!(r.edits[0].1[0], Vec3::new(0.25, 0.5, 1.0));
 }
+
+#[test]
+fn a_stop_asked_for_before_the_run_starts_still_counts() {
+    // The app takes the progress handle, then the worker runs the command:
+    // a Stop clicked in between must not be lost (it was, which made the
+    // test above fail now and then).
+    let json = r#"{"name":"Loop","api":3,"commands":[{"id":"go"}]}"#;
+    let wat = r#"(module
+        (import "oxybrush" "progress" (func $pr (param f32) (result i32)))
+        (memory (export "memory") 1)
+        (func (export "run") (param i32)
+          (block $stop (loop $wait
+            (br_if $stop (call $pr (f32.const 0.5)))
+            (br $wait)))))"#;
+    let mut p = Plugin::from_parts(json, wat.as_bytes(), Path::new(".")).unwrap();
+    assert_eq!(p.progress().fraction(), None, "nothing reported yet");
+    p.progress().cancel();
+    let r = p.run(0, snapshot()).unwrap();
+    assert!(r.cancelled);
+    // The stop was used up: the next run isn't stopped before it starts
+    // (this plugin would then loop until its fuel ran out, an error).
+    assert!(!p.progress().cancelled());
+}
