@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [3.0.7-beta] - 2026-11-11
+
 ### Added
 - **Studio theme** (Preferences > Appearance, [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)): flat neutral greys with thin edges, sliders drawn as bars with a fill and a thin handle, small uppercase section headings with dividers, and the accent kept for what's selected or active, shown as an outline. Optional; Graphite stays the default.
 - **Hide brush names in the shelf:** **Preferences > Appearance > Show brush names in the brush shelf**, on by default. Off shows the brushes as a grid of icons, so more fit at once; hover one for its name. Works with every theme and layout.

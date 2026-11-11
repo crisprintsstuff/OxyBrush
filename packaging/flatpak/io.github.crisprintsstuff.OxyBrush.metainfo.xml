@@ -53,6 +53,17 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="3.0.7-beta" date="2026-11-11" type="development">
+      <description>
+        <p>Pen pressure now works on Linux tablets, the window opens where
+        it was left, files open by dropping them on the window, and meshes
+        use about 18% less memory. A new Studio theme has bar sliders and
+        quieter headings, and brush names can be hidden in the shelf.
+        In-app plugins can change face groups and topology, preview their
+        result before it is applied, offer richer settings and be
+        stopped.</p>
+      </description>
+    </release>
     <release version="3.0.6-beta" date="2026-11-10" type="development">
       <description>
         <p>Dynamic detail now makes even triangles that stay under the
