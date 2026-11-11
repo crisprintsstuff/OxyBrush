@@ -561,7 +561,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         let m = metrics(ed.layout);
         // Panel ids include the layout and position so each arrangement
         // starts at its own default size.
-        let key = format!("{:?}_{:?}_{:?}", ed.layout, ed.shelf, ed.panels);
+        let key = format!("{:?}_{:?}_{:?}_{}", ed.layout, ed.shelf, ed.panels, ed.narrow_shelf);
         // Outer panels first: the shelf sits at the window edge, the settings
         // panel and view strip inside it when they share a side.
         match ed.shelf {
@@ -584,14 +584,25 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 } else {
                     egui::Panel::right(format!("shelf_{key}"))
                 };
-                panel.resizable(false).default_size(m.shelf_width).show(ui, |ui| {
+                // One narrow column: just wider than a tile, plus a scroll bar.
+                let panel = if ed.narrow_shelf {
+                    panel.exact_size(narrow_shelf_width(ed.layout))
+                } else {
+                    panel.default_size(m.shelf_width)
+                };
+                panel.resizable(false).show(ui, |ui| {
                     ui.add_space(6.0);
                     current_tiles(ui, ed);
                     ui.add_space(4.0);
                     if ed.layout == UiLayout::Touch {
                         // Always visible: there are no modifier keys on a tablet.
-                        let w = (ui.available_width() - 12.0) / 3.0;
-                        ui.horizontal(|ui| touch_modifier_buttons(ui, ed, w));
+                        if ed.narrow_shelf {
+                            let w = ui.available_width();
+                            ui.vertical(|ui| touch_modifier_buttons(ui, ed, w));
+                        } else {
+                            let w = (ui.available_width() - 12.0) / 3.0;
+                            ui.horizontal(|ui| touch_modifier_buttons(ui, ed, w));
+                        }
                     }
                     ui.separator();
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| brush_shelf(ui, ed, false));
@@ -1040,6 +1051,12 @@ fn settings_appearance_tab(ui: &mut Ui, ed: &mut Editor) {
         &mut ed.show_brush_names,
         "Show brush names in the brush shelf",
         "Off shows the brushes as icons only, so more fit in the shelf; hover one to see its name. Works with every theme and layout.",
+    );
+    tips::check_plain(
+        ui,
+        &mut ed.narrow_shelf,
+        "Narrow brush shelf (one column)",
+        "A side shelf as one narrow column, leaving more room for the model: the current brush, alpha and material stacked on top, then one brush per row with its name underneath (or icons only, with names off). Not used when the shelf is at the bottom.",
     );
     ui.add_space(4.0);
 
@@ -1660,6 +1677,17 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         let key_owned = ed.number_key(k);
         let key = key_owned.as_deref();
         let r = match (ed.layout, horizontal) {
+            // The narrow shelf: one tile per row, the name underneath.
+            (layout, false) if ed.narrow_shelf => {
+                let size = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
+                if ed.show_brush_names {
+                    let t = widgets::brush_texture(&ctx, k);
+                    let tip = tips::brush_tip(k, key);
+                    widgets::thumb_sized(ui, Some(&t), k.label(), selected, size, &tip)
+                } else {
+                    widgets::brush_icon_button(ui, k, selected, size, key)
+                }
+            }
             // Names off: icons only, the name on hover.
             (UiLayout::Standard | UiLayout::Touch, _) if !ed.show_brush_names => {
                 let size = if ed.layout == UiLayout::Touch { 66.0 } else { NAMELESS_BRUSH };
@@ -1696,6 +1724,14 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         });
     } else {
         match ed.layout {
+            _ if ed.narrow_shelf => {
+                ui.vertical_centered(|ui| {
+                    ui.spacing_mut().item_spacing.y = 6.0;
+                    for (i, k) in order.iter().enumerate() {
+                        item(ui, i, *k, ed);
+                    }
+                });
+            }
             UiLayout::Standard if ed.show_brush_names => {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, k) in order.iter().enumerate() {
@@ -2118,10 +2154,26 @@ fn touch_modifier_buttons(ui: &mut Ui, ed: &mut Editor, w: f32) {
 /// Size of the current brush / alpha / material tiles.
 const CURRENT_TILE: f32 = 58.0;
 
+/// Width of the narrow (one-column) side shelf.
+fn narrow_shelf_width(layout: UiLayout) -> f32 {
+    let tile = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
+    tile + 26.0
+}
+
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     let ctx = ui.ctx().clone();
-    ui.horizontal_top(|ui| {
+    // Side by side, or stacked in the narrow shelf.
+    let stacked = ed.narrow_shelf && ed.shelf != ShelfPosition::Bottom;
+    let layout = if stacked {
+        egui::Layout::top_down(egui::Align::Center)
+    } else {
+        egui::Layout::left_to_right(egui::Align::Min)
+    };
+    ui.with_layout(layout, |ui| {
         ui.spacing_mut().item_spacing.x = 6.0;
+        if stacked {
+            ui.spacing_mut().item_spacing.y = 6.0;
+        }
         let size = CURRENT_TILE;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
         let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);

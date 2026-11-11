@@ -854,6 +854,8 @@ pub struct Editor {
     pub window_geometry: Option<crate::settings::WindowGeometry>,
     /// Brush names in the brush shelf (Preferences > Appearance).
     pub show_brush_names: bool,
+    /// A side brush shelf as one narrow column (Preferences > Appearance).
+    pub narrow_shelf: bool,
     pub decimate_percent: f32,
     pub ui_scale: f32,
     /// The interface scale before it was last changed, until the
@@ -1181,6 +1183,7 @@ impl Default for Editor {
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
+            narrow_shelf: false,
             decimate_percent: 25.0,
             ui_scale: 1.0,
             ui_scale_from: None,
@@ -1575,6 +1578,7 @@ impl Editor {
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
+            narrow_shelf: self.narrow_shelf,
         }
     }
 
@@ -1726,6 +1730,7 @@ impl Editor {
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
+        self.narrow_shelf = s.narrow_shelf;
         if !s.remember_brushes {
             return;
         }
@@ -8088,6 +8093,7 @@ mod tests {
                 maximized: false,
             }),
             show_brush_names: false,
+            narrow_shelf: true,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();

@@ -341,6 +341,9 @@ pub struct Settings {
     /// Show each brush's name in the brush shelf; off shows icons only
     /// (names still appear on hover).
     pub show_brush_names: bool,
+    /// A side shelf as one narrow column: the current brush, alpha and
+    /// material stacked, then one brush per row with its name underneath.
+    pub narrow_shelf: bool,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -694,6 +697,7 @@ impl Default for Settings {
             plugin_params: Default::default(),
             window: None,
             show_brush_names: true,
+            narrow_shelf: false,
         }
     }
 }
@@ -827,6 +831,7 @@ impl Settings {
                 .collect::<String>()
             + &self.window.map_or(String::new(), WindowGeometry::to_line)
             + &format!("brush_names = {}\n", self.show_brush_names)
+            + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_strengths.is_empty() {
                 String::new()
@@ -1019,6 +1024,7 @@ impl Settings {
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
+                "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
                 "plugin_param" => {
                     // `<plugin folder>/<param id>: v[, v, v]`; bad lines are skipped.
                     if let Some((key, vals)) = v.rsplit_once(':') {
@@ -1105,6 +1111,10 @@ mod tests {
         let off = Settings { show_brush_names: false, ..Settings::default() };
         assert!(off.to_text().contains("brush_names = false"));
         assert!(!Settings::from_text(&off.to_text()).show_brush_names);
+        // The narrow (one-column) shelf is off unless chosen.
+        assert!(!Settings::default().narrow_shelf);
+        let narrow = Settings { narrow_shelf: true, ..Settings::default() };
+        assert!(Settings::from_text(&narrow.to_text()).narrow_shelf);
     }
     #[test]
     fn window_geometry_is_read_back_and_kept_on_screen() {
@@ -1248,6 +1258,7 @@ mod tests {
             .collect(),
             window: Some(WindowGeometry { width: 1200.5, height: 800.0, position: Some((-1920, 40)), maximized: true }),
             show_brush_names: false,
+            narrow_shelf: true,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.
