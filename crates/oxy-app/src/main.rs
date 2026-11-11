@@ -173,6 +173,12 @@ fn main() {
     }
 
     let log_path = support::init_logging();
+    // Finder shows `.oxb` projects with OxyBrush's icon only once macOS has
+    // registered the app; not in automated runs.
+    #[cfg(target_os = "macos")]
+    if auto.screenshot.is_none() {
+        support::register_document_types();
+    }
 
     let mut builder = winit::event_loop::EventLoop::builder();
 

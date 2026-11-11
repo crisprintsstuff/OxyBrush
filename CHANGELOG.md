@@ -7,6 +7,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 - **Pin points in the retopology tool:** Alt+click a point, edge or face to pin its points (with X mirror, their mirror images too); Shift+drag relax leaves pinned points where they are, while you can still drag them by hand. Alt+click again or **Unpin all** in the window frees them. Pinned points are drawn as squares in the accent colour, pinning is an undo step, and pins are saved with the project (a new `PINS` section after the cage; older versions skip it).
 
+### Fixed
+- **macOS: `.oxb` projects showed a generic "?" icon** in Finder, and the Dock and Open With didn't know OxyBrush opens them, when macOS had missed the app's document types (for example after opening it first from the disk image). OxyBrush now registers itself with macOS's Launch Services (the system `lsregister` tool, in the background) each time it starts from its installed location. When macOS runs it from a temporary translocated copy, it logs a hint to move it to Applications instead.
+
 ## [4.0.0-beta.1] - 2026-11-11
 
 OxyBrush now uses [semantic versioning](https://semver.org): this is the first beta of 4.0.0 and follows 3.0.8-beta. Betas count up (`4.0.0-beta.2`, …) until 4.0.0 is stable.
