@@ -401,11 +401,18 @@ pub struct NewMesh {
 
 /// A running command's progress and stop request, shared between the
 /// worker thread and the app.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Progress {
     /// 0..=1 as `f32` bits; `u32::MAX` until the plugin reports.
     fraction: AtomicU32,
     cancel: AtomicBool,
+}
+
+impl Default for Progress {
+    /// Nothing reported yet (not "0 %"), and no stop asked for.
+    fn default() -> Self {
+        Progress { fraction: AtomicU32::new(u32::MAX), cancel: AtomicBool::new(false) }
+    }
 }
 
 impl Progress {
@@ -421,9 +428,17 @@ impl Progress {
     pub fn cancelled(&self) -> bool {
         self.cancel.load(Ordering::Relaxed)
     }
-    fn reset(&self) {
+    /// Clear the reported fraction for a new run. A stop asked for before
+    /// the run starts (between launching it and the worker picking it up)
+    /// is kept, so it still counts.
+    fn start(&self) {
         self.fraction.store(u32::MAX, Ordering::Relaxed);
-        self.cancel.store(false, Ordering::Relaxed);
+    }
+
+    /// Whether a stop was asked for during the run that just ended, clearing
+    /// it for the next one.
+    fn finish(&self) -> bool {
+        self.cancel.swap(false, Ordering::Relaxed)
     }
 }
 
@@ -1031,14 +1046,14 @@ impl Plugin {
         st.in_overlay = false;
         st.reshaped.clear();
         st.result = RunResult::default();
-        self.progress.reset();
+        self.progress.start();
         self.store.set_fuel(RUN_FUEL).map_err(|e| e.to_string())?;
         let out = self.run.call(&mut self.store, command as i32);
         let st = self.store.data_mut();
         st.snap = Snapshot::default();
         st.reshaped.clear();
         let mut result = std::mem::take(&mut st.result);
-        if self.progress.cancelled() {
+        if self.progress.finish() {
             // Stopped: whatever it did is dropped, even if it then failed.
             return Ok(RunResult { cancelled: true, log: result.log, ..Default::default() });
         }

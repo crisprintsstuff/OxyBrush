@@ -357,9 +357,20 @@ impl EventProcessor {
     pub fn init_device(&self, device: xinput::DeviceId) {
         let window_target = Self::window_target(&self.target);
         let mut devices = self.devices.borrow_mut();
+        // OxyBrush patch: the label X gives pen pressure axes, to find them
+        // (see `Device::pressure_axis`). `only_if_exists`: no tablet driver,
+        // no atom, nothing to find.
+        let pressure_atom = window_target
+            .xconn
+            .xcb_connection()
+            .intern_atom(true, b"Abs Pressure")
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| reply.atom)
+            .filter(|&atom| atom != 0);
         if let Some(info) = DeviceInfo::get(&window_target.xconn, device as _) {
             for info in info.iter() {
-                devices.insert(DeviceId(info.deviceid as _), Device::new(info));
+                devices.insert(DeviceId(info.deviceid as _), Device::new(info, pressure_atom));
             }
         }
     }
@@ -1151,7 +1162,18 @@ impl EventProcessor {
 
             let x = unsafe { *value };
 
-            let event = if let Some(&mut (_, ref mut info)) =
+            // OxyBrush patch: a pen's pressure axis carries the raw device
+            // reading (0..=2047 or 0..=65535, say), which upstream reports
+            // as an `AxisMotion` the application can't interpret. Report it
+            // as `TouchpadPressure` scaled to 0..=1, as the macOS patch does
+            // for tablets there (#81).
+            let pressure = physical_device
+                .pressure_axis
+                .filter(|&(axis, _, _)| axis == i as i32)
+                .map(|(_, min, max)| ((x - min) / (max - min)).clamp(0.0, 1.0) as f32);
+            let event = if let Some(pressure) = pressure {
+                WindowEvent::TouchpadPressure { device_id, pressure, stage: 0 }
+            } else if let Some(&mut (_, ref mut info)) =
                 physical_device.scroll_axes.iter_mut().find(|&&mut (axis, _)| axis == i as _)
             {
                 let delta = (x - info.position) / info.increment;

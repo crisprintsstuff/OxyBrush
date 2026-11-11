@@ -1169,7 +1169,7 @@ fn connected_to_nearest(mesh: &Mesh, center: Vec3, verts: Vec<GrabHit>) -> Vec<G
     let mut reached = HashSet::from([seed]);
     let mut stack = vec![seed];
     while let Some(v) = stack.pop() {
-        for &n in mesh.neighbors(v) {
+        for &n in &mesh.neighbors(v) {
             if inside.contains(&n) && reached.insert(n) {
                 stack.push(n);
             }

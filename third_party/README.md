@@ -6,7 +6,7 @@ A copy of [winit](https://github.com/rust-windowing/winit) 0.30.13 from crates.i
 (examples, tests and docs removed), used through `[patch.crates-io]` in the root
 `Cargo.toml`. Its license is in `winit/LICENSE`.
 
-There are four changes, each marked `OxyBrush patch`.
+There are five changes, each marked `OxyBrush patch`.
 
 **Windows pen side button** (`src/platform_impl/windows/event_loop.rs`): with Windows Ink, winit turns pen input into touch events
 and drops the pen's button flags, so a pen touching down with its barrel (side)
@@ -44,6 +44,17 @@ patch implements that method and reports each file as a `DroppedFile` on the
 first window. Files that arrive at launch, before there is a window, wait
 until the next `cleared` (before the event loop waits) finds one. The app's
 `Info.plist` declares the document types so Finder offers OxyBrush.
+
+**X11 tablet pressure** (`src/platform_impl/linux/x11/mod.rs` and
+`event_processor.rs`): winit reports a pen's XInput2 pressure valuator as an
+`AxisMotion` with the device's raw reading (0..=2047, 0..=8191 or 0..=65535,
+depending on the tablet), with no way for the application to know which axis
+is pressure or its range. OxyBrush only accepted values between 0 and 1, so on
+most tablets pressure never took effect on Linux
+([#81](https://github.com/crisprintsstuff/OxyBrush/issues/81)). The patch
+finds the valuator labelled "Abs Pressure" when a device is added, keeps its
+range, and reports its value as `TouchpadPressure` scaled to 0..=1, the same
+event the macOS patch uses.
 
 Drop this copy when OxyBrush moves to a winit release that reports pen buttons
 itself (winit 0.31 has pen input), lets the application veto Quit on macOS

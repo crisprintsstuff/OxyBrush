@@ -422,10 +422,15 @@ pub enum ThemePreset {
     /// Deep navy glass: dark blue panels, cards that read as frosted glass,
     /// thin blue outlines. Pairs with pill corners and the emerald accent.
     Midnight,
+    /// Flat neutral dark for long sessions: low-contrast panels with crisp
+    /// edges, bar sliders with a fill and a thin handle, small corners, and
+    /// the accent kept for what is selected or active.
+    Studio,
 }
 
 impl ThemePreset {
-    pub const ALL: [ThemePreset; 8] = [
+    pub const ALL: [ThemePreset; 9] = [
+        ThemePreset::Studio,
         ThemePreset::Graphite,
         ThemePreset::Matte,
         ThemePreset::Midnight,
@@ -446,6 +451,7 @@ impl ThemePreset {
             ThemePreset::StudioLight => "Studio Light (Bright)",
             ThemePreset::HighContrast => "High Contrast",
             ThemePreset::Midnight => "Midnight (Navy Glass)",
+            ThemePreset::Studio => "Studio (Flat Neutral)",
         }
     }
 
@@ -459,6 +465,7 @@ impl ThemePreset {
             ThemePreset::StudioLight => "studio_light",
             ThemePreset::HighContrast => "high_contrast",
             ThemePreset::Midnight => "midnight",
+            ThemePreset::Studio => "studio",
         }
     }
 
@@ -1082,6 +1089,14 @@ pub fn show_welcome(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn studio_theme_is_saved_and_graphite_stays_the_default() {
+        assert_eq!(Settings::default().theme, ThemePreset::Graphite);
+        let s = Settings { theme: ThemePreset::Studio, ..Settings::default() };
+        assert!(s.to_text().contains("theme = studio"));
+        assert_eq!(Settings::from_text(&s.to_text()).theme, ThemePreset::Studio);
+    }
 
     #[test]
     fn brush_names_are_shown_unless_turned_off() {
