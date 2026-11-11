@@ -128,4 +128,23 @@ mod tests {
             assert!(v(w[0]) < v(w[1]), "{} < {}", w[0], w[1]);
         }
     }
+
+    #[test]
+    fn the_switch_to_numbered_betas_orders_after_the_old_releases() {
+        // OxyBrush moved from `X.Y.Z-beta` to semver betas at 4.0.0-beta.1.
+        let ordered = [
+            "3.0.8-beta",
+            "3.0.9-beta",
+            "4.0.0-beta.1",
+            "4.0.0-beta.2",
+            "4.0.0-beta.10",
+            "4.0.0",
+            "4.0.1",
+            "4.1.0-beta.1",
+            "4.1.0",
+        ];
+        for w in ordered.windows(2) {
+            assert!(v(w[0]) < v(w[1]), "{} < {}", w[0], w[1]);
+        }
+    }
 }
