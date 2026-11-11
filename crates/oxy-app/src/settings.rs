@@ -1085,6 +1085,13 @@ mod tests {
     use super::*;
 
     #[test]
+    fn studio_theme_is_saved_and_graphite_stays_the_default() {
+        assert_eq!(Settings::default().theme, ThemePreset::Graphite);
+        let s = Settings { theme: ThemePreset::Studio, ..Settings::default() };
+        assert!(s.to_text().contains("theme = studio"));
+        assert_eq!(Settings::from_text(&s.to_text()).theme, ThemePreset::Studio);
+    }
+    #[test]
     fn window_geometry_is_read_back_and_kept_on_screen() {
         let t = "window = 1300, 850, false, 100, 200\n";
         let w = Settings::from_text(t).window.unwrap();

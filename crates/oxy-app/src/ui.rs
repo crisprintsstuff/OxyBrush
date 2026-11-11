@@ -344,6 +344,7 @@ pub fn apply_theme(
         }
     }
     ctx.set_visuals(v);
+    crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
     ctx.all_styles_mut(|s| {
         s.interaction.show_tooltips_only_when_still = false;
         s.interaction.tooltip_delay = 0.2;
@@ -3428,27 +3429,38 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
-        let fill =
-            if i == active { ui.visuals().selection.stroke.color.linear_multiply(0.18) } else { Color32::TRANSPARENT };
-        egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(2, 1)).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let (icon, tip) =
-                    if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
-                if widgets::icon_button(ui, icon, false, true, tip).clicked() {
-                    p.visible = !p.visible;
-                }
-                if i == active {
-                    tips::hover(
-                        ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
-                        plain::PIECE_RENAME,
-                    );
-                } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE).clicked()
-                {
-                    select = Some(i);
-                }
-                ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+        let (fill, stroke) = if i == active {
+            widgets::selected_look(ui.visuals(), 0.18)
+        } else {
+            (Color32::TRANSPARENT, EStroke::NONE)
+        };
+        // Without the outline in the other themes, as before.
+        let stroke = if widgets::studio_style() { stroke } else { EStroke::NONE };
+        egui::Frame::new()
+            .fill(fill)
+            .stroke(stroke)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(2, 1))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let (icon, tip) =
+                        if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
+                    if widgets::icon_button(ui, icon, false, true, tip).clicked() {
+                        p.visible = !p.visible;
+                    }
+                    if i == active {
+                        tips::hover(
+                            ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
+                            plain::PIECE_RENAME,
+                        );
+                    } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE)
+                        .clicked()
+                    {
+                        select = Some(i);
+                    }
+                    ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+                });
             });
-        });
     }
     if let Some(i) = select {
         ed.scene.set_active(i);
