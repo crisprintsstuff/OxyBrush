@@ -610,7 +610,7 @@ pub mod plain {
     pub const ORBIT: &str = "Drag to orbit. You can also drag empty space in the view.";
     pub const PAN: &str = "Drag to pan. You can also right-drag in the view.";
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
-    pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side.";
+    pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side, or drag to orbit.";
     pub const GIZMO_DONE: &str = "Hide the transform gizmo.";
     pub const GIZMO_SNAP: &str =
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";

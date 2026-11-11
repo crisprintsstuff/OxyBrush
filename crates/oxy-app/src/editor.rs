@@ -1023,7 +1023,7 @@ pub struct Editor {
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
     /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
-    snap_orbit: Option<(f32, f32)>,
+    pub(crate) snap_orbit: Option<(f32, f32)>,
     /// User matcaps (from the library folder), and which one is in use
     /// instead of the built-in `matcap`.
     pub custom_matcaps: Vec<crate::matcaps::CustomMatcap>,
@@ -2525,6 +2525,19 @@ impl Editor {
         }
     }
 
+    /// Orbit the view by a pointer movement of `delta` physical pixels, as
+    /// dragging empty space does: the snap key (Shift, unless the keymap
+    /// says otherwise) steps it by 45°. Also used by dragging the axis gizmo.
+    pub fn orbit_by(&mut self, delta: Vec2) {
+        if self.snap_modifier_held() {
+            let free = self.snap_orbit.get_or_insert((self.camera.yaw, self.camera.pitch));
+            self.camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
+        } else {
+            self.snap_orbit = None;
+            self.camera.orbit(delta);
+        }
+    }
+
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
@@ -2547,14 +2560,7 @@ impl Editor {
             // Handled by `tube_pointer_moved` / `retopo_pointer_moved` above.
             Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. } | Drag::Retopo(_) => true,
             Drag::Orbit => {
-                // The snap key (Shift, unless the keymap says otherwise) steps the view by 45°.
-                if self.snap_modifier_held() {
-                    let free = self.snap_orbit.get_or_insert((self.camera.yaw, self.camera.pitch));
-                    self.camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
-                } else {
-                    self.snap_orbit = None;
-                    self.camera.orbit(delta);
-                }
+                self.orbit_by(delta);
                 true
             }
             Drag::Zoom => {
@@ -3392,7 +3398,12 @@ impl Editor {
     }
 
     /// Open a project (`.oxb`) or import a mesh file as a new piece.
+    ///
+    /// However the file comes (a double-click in Finder, Open With, a drop
+    /// on the window, the Open dialog), the user wants to work on it, so the
+    /// Home window closes, as it does for a file named on the command line.
     pub fn open(&mut self, path: &Path) {
+        self.show_welcome = false;
         let is_project = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(format::EXTENSION));
         let is_addon = path.extension().is_some_and(|e| e.eq_ignore_ascii_case(oxy_plugin::addon::EXTENSION));
         if is_addon {
@@ -8414,6 +8425,41 @@ mod tests {
         assert!(turned.dot(Vec3::X) > 0.9, "a real move should follow: {turned}");
         let flipped = ease_cursor_normal(Vec3::Y, Vec3::ZERO, -Vec3::Y, Vec3::ZERO, 1.0);
         assert!(flipped.dot(-Vec3::Y) > 0.99, "the other side of a thin part snaps: {flipped}");
+    }
+
+    #[test]
+    fn opening_a_file_closes_the_home_window() {
+        // A file double-clicked in Finder or dropped on the window arrives
+        // after startup, when the Home window may already be up.
+        let dir = std::env::temp_dir().join(format!("oxy-open-home-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mesh = dir.join("tri.obj");
+        std::fs::write(&mesh, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let project = dir.join("p.oxb");
+        let mut e = editor();
+        assert!(e.save(&project));
+        for path in [&mesh, &project] {
+            e.show_welcome = true;
+            e.open(path);
+            assert!(!e.show_welcome, "{}", path.display());
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn orbit_by_turns_the_view_and_snaps_with_the_snap_key() {
+        let mut e = editor();
+        let yaw = e.camera.yaw;
+        e.orbit_by(Vec2::new(40.0, 0.0));
+        assert!((e.camera.yaw - yaw).abs() > 0.05);
+        e.modifiers.shift = true;
+        for _ in 0..10 {
+            e.orbit_by(Vec2::new(25.0, 0.0));
+        }
+        e.modifiers.shift = false;
+        let step = std::f32::consts::FRAC_PI_4;
+        let r = (e.camera.yaw / step).round() * step;
+        assert!((e.camera.yaw - r).abs() < 1e-4, "snapped to 45°: {}", e.camera.yaw);
     }
 
     #[test]
