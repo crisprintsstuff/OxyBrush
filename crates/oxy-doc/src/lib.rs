@@ -284,6 +284,18 @@ impl PieceData {
 pub struct SceneData {
     pub pieces: Vec<PieceData>,
     pub active: usize,
+    /// Brush alphas kept with the project (captured from view or loaded
+    /// from an image), in the order they appear in the alpha list.
+    pub alphas: Vec<AlphaData>,
+}
+
+/// A brush alpha saved in a project: `size`² values, row-major, row 0 at
+/// the top, 0 (none) ..= 65535 (full strength).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AlphaData {
+    pub name: String,
+    pub size: u32,
+    pub data: Vec<u16>,
 }
 
 pub struct Scene {
@@ -340,7 +352,11 @@ impl Scene {
     }
 
     pub fn to_data(&self) -> SceneData {
-        SceneData { pieces: self.pieces.iter().map(Piece::to_data).collect(), active: self.active_index() }
+        SceneData {
+            pieces: self.pieces.iter().map(Piece::to_data).collect(),
+            active: self.active_index(),
+            alphas: Vec::new(),
+        }
     }
 
     /// Returns None for a scene without pieces.

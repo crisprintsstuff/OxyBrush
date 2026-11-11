@@ -155,6 +155,7 @@ mod tests {
                 curve: None,
             }],
             active: 0,
+            alphas: Vec::new(),
         };
         a.start(scene.clone());
         let deadline = Instant::now() + Duration::from_secs(10);

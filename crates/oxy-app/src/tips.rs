@@ -95,7 +95,8 @@ commands! {
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
-    CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white. It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
+    CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white, at the size chosen next to it (up to 4096 px). It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
+    ExportAlpha => "Export alpha…", "", "Save the selected alpha as a 16-bit grayscale PNG to edit in a 2D app. Load it back with Load image….";
     CloseHoles => "Close holes", "", "Fill every hole in this piece with a smooth patch of new faces, in a face group of its own. Useful before 3D printing or after cutting.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
@@ -604,6 +605,7 @@ pub mod plain {
     pub const ALPHA_TILE: &str = "An image that shapes each dab. Click to pick one, or none.";
     pub const MATERIAL_TILE: &str = "How the clay is shaded. Click to pick a material.";
     pub const LOAD_IMAGE: &str = "Load a grayscale PNG. White is full strength, black is none.";
+    pub const CAPTURE_SIZE: &str = "Size of the next captured alpha, in pixels. Larger sizes give smoother edges; 4096 takes a few seconds on a dense model.";
     pub const REMOVE_MATCAP: &str = "Remove this material from your library. The file is deleted.";
     pub const ORBIT: &str = "Drag to orbit. You can also drag empty space in the view.";
     pub const PAN: &str = "Drag to pan. You can also right-drag in the view.";

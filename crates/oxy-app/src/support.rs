@@ -167,6 +167,32 @@ pub fn load_alpha_png(path: &std::path::Path) -> Result<oxy_sculpt::Alpha, Strin
     oxy_sculpt::Alpha::from_luma(name, w, h, &luma).ok_or_else(|| "empty image".to_string())
 }
 
+/// Write `alpha` as a 16-bit grayscale PNG (white = 1), for editing in a 2D
+/// app; `load_alpha_png` reads it back. Written to a temporary file next to
+/// `path` and renamed over it, so a failed write never leaves half a file.
+pub fn write_alpha_png(alpha: &oxy_sculpt::Alpha, path: &std::path::Path) -> Result<(), String> {
+    let n = alpha.size;
+    let mut px = Vec::with_capacity(alpha.data.len() * 2);
+    for v in &alpha.data {
+        px.extend_from_slice(&((v.clamp(0.0, 1.0) * 65535.0).round() as u16).to_be_bytes());
+    }
+    let name = path.file_name().map_or("alpha.png".into(), |n| n.to_string_lossy().into_owned());
+    let tmp = path.with_file_name(format!(".{name}.tmp-{}", std::process::id()));
+    let write = || -> Result<(), String> {
+        let file = File::create(&tmp).map_err(|e| e.to_string())?;
+        let mut enc = png::Encoder::new(io::BufWriter::new(file), n, n);
+        enc.set_color(png::ColorType::Grayscale);
+        enc.set_depth(png::BitDepth::Sixteen);
+        let mut w = enc.write_header().map_err(|e| e.to_string())?;
+        w.write_image_data(&px).map_err(|e| e.to_string())?;
+        w.finish().map_err(|e| e.to_string())?;
+        std::fs::rename(&tmp, path).map_err(|e| e.to_string())
+    };
+    write().inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
+}
+
 fn luminance(p: &[u8]) -> u8 {
     (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8
 }
@@ -242,6 +268,33 @@ mod tests {
         assert!(a.sample(glam::Vec2::new(0.95, 0.0)) > 0.9);
         std::fs::write(dir.join("bad.png"), b"not a png").unwrap();
         assert!(load_alpha_png(&dir.join("bad.png")).is_err());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn an_exported_alpha_reads_back_the_same() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let n = 64u32;
+        let data: Vec<f32> =
+            (0..n * n).map(|k| ((k % n) as f32 / (n - 1) as f32) * ((k / n) as f32 / (n - 1) as f32)).collect();
+        let alpha = oxy_sculpt::Alpha { name: "Capture 1".into(), size: n, data };
+        let path = dir.join("capture.png");
+        write_alpha_png(&alpha, &path).unwrap();
+        // 16-bit grayscale on disk.
+        let info =
+            png::Decoder::new(io::BufReader::new(File::open(&path).unwrap())).read_info().unwrap().info().clone();
+        assert_eq!(
+            (info.width, info.height, info.color_type, info.bit_depth),
+            (n, n, png::ColorType::Grayscale, png::BitDepth::Sixteen)
+        );
+        let back = load_alpha_png(&path).unwrap();
+        assert_eq!(back.name, "capture");
+        for (uv, expect) in [((-0.99, 0.99), 0.0), ((0.99, -0.99), 1.0), ((0.0, 0.0), 0.25)] {
+            let (a, b) = (alpha.sample(glam::Vec2::from(uv)), back.sample(glam::Vec2::from(uv)));
+            assert!((a - b).abs() < 0.01 && (a - expect).abs() < 0.05, "{uv:?}: {a} vs {b}");
+        }
+        assert!(std::fs::read_dir(&dir).unwrap().count() == 1, "no temporary file left");
         std::fs::remove_dir_all(dir).ok();
     }
 

@@ -742,6 +742,8 @@ pub enum JobResult {
     NewPieces(Vec<(String, Mesh)>),
     /// A new primitive piece (Add > Cylinder, Cone), added and made active.
     Primitive(String, Mesh),
+    /// A captured alpha (Capture from view), to add and select.
+    Alpha(Alpha),
     /// A WebAssembly plugin command finished (RFC 0011).
     Plugin(Box<crate::wasm_plugins::PluginJob>),
     /// A subdivision level change: the new active-level mesh, the stack,
@@ -832,8 +834,15 @@ pub struct Editor {
     pub selection_lasso: bool,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
     pub request_load_alpha: bool,
+    /// Ask the app for a file to export the selected alpha to.
+    pub request_export_alpha: bool,
+    /// An alpha was captured or loaded since the project was last saved:
+    /// alphas are saved with it, but aren't in the undo history.
+    alphas_unsaved: bool,
     /// How many alphas have been captured from the view this session (for names).
     captures: u32,
+    /// Side of a captured alpha, in pixels (`CAPTURE_SIZES`).
+    pub capture_alpha_size: u32,
     pub symmetry: Symmetry,
     /// The mirror settings last drawn, to notice a plane being turned on.
     symmetry_seen: Symmetry,
@@ -1176,7 +1185,10 @@ impl Default for Editor {
             alpha_follow_stroke: false,
             selection_lasso: false,
             request_load_alpha: false,
+            request_export_alpha: false,
+            alphas_unsaved: false,
             captures: 0,
+            capture_alpha_size: 1024,
             symmetry: Symmetry { x: true, ..Default::default() },
             symmetry_seen: Symmetry { x: true, ..Default::default() },
             symmetry_flash: None,
@@ -1413,7 +1425,7 @@ impl Editor {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.history.revision() != self.saved_revision
+        self.history.revision() != self.saved_revision || self.alphas_unsaved
     }
 
     pub fn title(&self) -> String {
@@ -1587,6 +1599,7 @@ impl Editor {
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
             narrow_shelf: self.narrow_shelf,
+            alpha_capture_size: self.capture_alpha_size,
         }
     }
 
@@ -1739,6 +1752,7 @@ impl Editor {
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
         self.narrow_shelf = s.narrow_shelf;
+        self.capture_alpha_size = s.alpha_capture_size;
         if !s.remember_brushes {
             return;
         }
@@ -2403,38 +2417,28 @@ impl Editor {
 
     /// Make an alpha from what the viewport shows: a depth image of the
     /// visible pieces inside the largest square centred in the viewport,
-    /// nearest surface white, empty space black. It is added to the alpha
-    /// list and selected, so a stamp of it reproduces the shape seen.
+    /// nearest surface white, empty space black, `capture_alpha_size` pixels
+    /// square. It is added to the alpha list and selected, so a stamp of it
+    /// reproduces the shape seen.
+    ///
+    /// A coarse pass finds the model here; the full image (up to 4096², 16.7
+    /// million rays) is cast on a worker thread over copies of the meshes, so
+    /// the interface stays responsive.
     pub fn capture_alpha(&mut self) {
-        const RES: u32 = 256;
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        let res = self.capture_alpha_size.clamp(CAPTURE_SIZES[0], CAPTURE_SIZES[CAPTURE_SIZES.len() - 1]);
         let size = self.canvas_size();
-        let forward = self.camera.forward();
-        let meshes: Vec<&Mesh> = self.scene.pieces.iter().filter(|p| p.visible).map(|p| &p.mesh).collect();
-        let camera = &self.camera;
-        // View depth of the nearest visible surface under each cell of a
-        // `res`-square grid with its top-left at `corner`, `side` px wide.
-        let grid = |corner: Vec2, side: f32, res: u32| -> Vec<Option<f32>> {
-            use rayon::prelude::*;
-            (0..res * res)
-                .into_par_iter()
-                .map(|k| {
-                    let (i, j) = (k % res, k / res);
-                    let px = corner + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * (side / res as f32);
-                    let (o, d) = camera.ray(px, size);
-                    meshes
-                        .iter()
-                        .filter_map(|m| m.raycast(o, d))
-                        .map(|h| (h.point - o).dot(forward))
-                        .min_by(f32::total_cmp)
-                })
-                .collect()
-        };
+        let camera = self.camera;
+        let meshes: Vec<Mesh> = self.scene.pieces.iter().filter(|p| p.visible).map(|p| p.mesh.clone()).collect();
         // A quick coarse pass over the largest centred square finds where the
         // model is; the capture then fills a square around just that.
         const COARSE: u32 = 48;
         let side = size.x.min(size.y);
         let corner = (size - Vec2::splat(side)) * 0.5;
-        let coarse = grid(corner, side, COARSE);
+        let coarse = capture_depth(&meshes, &camera, size, corner, side, COARSE);
         let cell = side / COARSE as f32;
         let (mut lo, mut hi) = (Vec2::splat(f32::MAX), Vec2::splat(f32::MIN));
         for (k, z) in coarse.iter().enumerate() {
@@ -2449,18 +2453,33 @@ impl Editor {
             return;
         }
         let tight = (hi - lo).max_element() * 1.06;
-        let depth = grid((lo + hi) * 0.5 - Vec2::splat(tight * 0.5), tight, RES);
-        let (near, far) = depth.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), &z| (lo.min(z), hi.max(z)));
-        if near > far {
-            self.status = "Nothing to capture: no model in the middle of the view".into();
-            return;
-        }
-        let range = (far - near).max(1e-6);
-        let data: Vec<f32> = depth.iter().map(|z| z.map_or(0.0, |z| 1.0 - 0.9 * (z - near) / range)).collect();
+        let corner = (lo + hi) * 0.5 - Vec2::splat(tight * 0.5);
         self.captures += 1;
         let name = format!("Capture {}", self.captures);
-        self.add_alpha(Alpha { name: name.clone(), size: RES, data });
-        self.status = format!("{name} added to the alphas and selected");
+        self.start_job(format!("Capture alpha ({res}×{res})"), Vec::new(), move || {
+            let depth = capture_depth(&meshes, &camera, size, corner, tight, res);
+            let (near, far) = depth.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), &z| (lo.min(z), hi.max(z)));
+            if near > far {
+                return Err("Nothing to capture: no model in the middle of the view".into());
+            }
+            let range = (far - near).max(1e-6);
+            let data: Vec<f32> = depth.iter().map(|z| z.map_or(0.0, |z| 1.0 - 0.9 * (z - near) / range)).collect();
+            Ok(JobResult::Alpha(Alpha { name, size: res, data }))
+        });
+    }
+
+    /// The selected alpha as a 16-bit grayscale PNG, for editing in a 2D
+    /// app (white is raised, as OxyBrush reads it back). Written atomically.
+    pub fn export_alpha(&mut self, path: &Path) {
+        let Some(alpha) = self.alpha.and_then(|i| self.alphas.get(i)).cloned() else {
+            self.status = "Select an alpha to export first".into();
+            return;
+        };
+        let path = if path.extension().is_none() { path.with_extension("png") } else { path.to_path_buf() };
+        self.status = match crate::support::write_alpha_png(&alpha, &path) {
+            Ok(()) => format!("Exported {} ({}×{}) to {}", alpha.name, alpha.size, alpha.size, path.display()),
+            Err(e) => format!("Could not export the alpha: {e}"),
+        };
     }
 
     /// Add a user alpha and select it.
@@ -2468,6 +2487,42 @@ impl Editor {
         self.status = format!("Loaded alpha {}", alpha.name);
         self.alphas.push(Arc::new(alpha));
         self.alpha = Some(self.alphas.len() - 1);
+        self.alphas_unsaved = true;
+    }
+
+    /// The alphas saved with the project: every one after the built-ins
+    /// (captured from view or loaded from an image), at 16 bits.
+    fn saved_alphas(&self) -> Vec<oxy_doc::AlphaData> {
+        self.alphas[BuiltinAlpha::ALL.len().min(self.alphas.len())..]
+            .iter()
+            .map(|a| oxy_doc::AlphaData {
+                name: a.name.clone(),
+                size: a.size,
+                data: a.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16).collect(),
+            })
+            .collect()
+    }
+
+    /// Add the alphas a project was saved with, skipping any already in the
+    /// list (same name and pixels), so opening a project again doesn't
+    /// duplicate them. Later captures are numbered after its captures.
+    fn adopt_alphas(&mut self, saved: Vec<oxy_doc::AlphaData>) {
+        for a in saved {
+            let n = (a.size as usize).pow(2);
+            if a.size == 0 || a.data.len() != n {
+                continue;
+            }
+            let data: Vec<f32> = a.data.iter().map(|&v| v as f32 / 65535.0).collect();
+            let same = |b: &Alpha| {
+                b.name == a.name && b.size == a.size && b.data.iter().zip(&data).all(|(x, y)| (x - y).abs() < 1e-4)
+            };
+            if let Some(k) = a.name.strip_prefix("Capture ").and_then(|k| k.parse::<u32>().ok()) {
+                self.captures = self.captures.max(k);
+            }
+            if !self.alphas.iter().any(|b| same(b)) {
+                self.alphas.push(Arc::new(Alpha { name: a.name, size: a.size, data }));
+            }
+        }
     }
 
     /// Returns true if anything changed that needs a redraw.
@@ -3220,6 +3275,7 @@ impl Editor {
         self.history.clear();
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
+        self.alphas_unsaved = false;
         self.path = path;
         self.link = None;
         self.bridge = None;
@@ -3232,6 +3288,7 @@ impl Editor {
     /// open, if any, on its piece (the `CURV` section), so it isn't lost.
     pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
         let mut data = self.scene.to_data();
+        data.alphas = self.saved_alphas();
         if let Some(c) = self.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
             && let Some(i) = self.scene.index_of(c.piece)
         {
@@ -3315,10 +3372,15 @@ impl Editor {
     }
 
     fn open_project_now(&mut self, path: &Path) {
-        match format::load(path).map(Scene::from_data) {
+        let mut alphas = Vec::new();
+        match format::load(path).map(|mut d| {
+            alphas = std::mem::take(&mut d.alphas);
+            Scene::from_data(d)
+        }) {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
                 self.replace_document(scene, Some(path.to_path_buf()));
+                self.adopt_alphas(alphas);
                 self.link = Link::detect(path, &self.scene);
                 self.protect_path(path);
                 self.remember_recent(path);
@@ -3471,6 +3533,7 @@ impl Editor {
             Ok(()) => {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
+                self.alphas_unsaved = false;
                 self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
@@ -3601,9 +3664,14 @@ impl Editor {
     }
 
     pub fn recover(&mut self, r: &autosave::Recoverable) {
-        match format::load(&r.path).map(Scene::from_data) {
+        let mut alphas = Vec::new();
+        match format::load(&r.path).map(|mut d| {
+            alphas = std::mem::take(&mut d.alphas);
+            Scene::from_data(d)
+        }) {
             Ok(Some(scene)) => {
                 self.replace_document(scene, None);
+                self.adopt_alphas(alphas);
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
@@ -5010,6 +5078,12 @@ impl Editor {
                 };
             }
             Ok(JobResult::Plugin(done)) => self.finish_plugin_job(*done, secs),
+            Ok(JobResult::Alpha(alpha)) => {
+                let name = alpha.name.clone();
+                let n = alpha.size;
+                self.add_alpha(alpha);
+                self.status = format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s");
+            }
             Ok(JobResult::Primitive(name, mesh)) => {
                 let name = self.scene.unique_name(&name);
                 let tris = mesh.triangle_count();
@@ -5798,6 +5872,97 @@ pub(crate) fn sculptable_at(coarse: Mesh, resolution: u32) -> Mesh {
 /// be far smaller. When the import is more than 8× larger or smaller than
 /// the scene, it is scaled by the power of ten (a unit conversion, like mm
 /// to cm) that brings it closest to the scene's size.
+/// Sizes offered for Capture from view, in pixels (square).
+pub const CAPTURE_SIZES: [u32; 5] = [256, 512, 1024, 2048, 4096];
+
+/// View depth of the nearest visible surface under each cell of a
+/// `res`-square grid of the viewport with its top-left at `corner`, `side`
+/// px wide, sampled at each cell's centre; `None` where nothing is.
+///
+/// The visible triangles are rasterized into a depth buffer rather than
+/// ray-cast per cell: a 4096² capture of a 1.3M-triangle sculpt cast 16.7M
+/// rays (about two minutes on four cores), while rasterizing touches each
+/// triangle once. Depth is interpolated as 1/z across a triangle in a
+/// perspective view (exact for perspective projection) and linearly in an
+/// orthographic one. Both windings count, as for a ray; hidden faces and
+/// triangles reaching behind the camera are skipped.
+fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, side: f32, res: u32) -> Vec<Option<f32>> {
+    use rayon::prelude::*;
+    let view_proj = camera.view_projection(size.x / size.y);
+    let (eye, forward, ortho) = (camera.eye(), camera.forward(), camera.orthographic);
+    let scale = res as f32 / side;
+    // Every visible triangle in capture-pixel space: (x, y, view depth).
+    let tris: Vec<[Vec3; 3]> = meshes
+        .par_iter()
+        .flat_map_iter(|m| {
+            let projected: Vec<Option<Vec3>> = m
+                .positions
+                .iter()
+                .map(|&p| {
+                    let clip = view_proj * p.extend(1.0);
+                    (clip.w > 1e-6).then(|| {
+                        let ndc = clip.truncate() / clip.w;
+                        let screen = Vec2::new((ndc.x + 1.0) * 0.5 * size.x, (1.0 - ndc.y) * 0.5 * size.y);
+                        ((screen - corner) * scale).extend((p - eye).dot(forward))
+                    })
+                })
+                .collect();
+            m.triangles
+                .iter()
+                .zip(m.hidden())
+                .filter(|(_, hidden)| !**hidden)
+                .filter_map(move |(t, _)| {
+                    Some([projected[t[0] as usize]?, projected[t[1] as usize]?, projected[t[2] as usize]?])
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    const BAND: u32 = 32;
+    let bands: Vec<Vec<f32>> = (0..res.div_ceil(BAND))
+        .into_par_iter()
+        .map(|band| {
+            let (y0, y1) = (band * BAND, ((band + 1) * BAND).min(res));
+            let mut depth = vec![f32::INFINITY; ((y1 - y0) * res) as usize];
+            for [a, b, c] in &tris {
+                let lo = a.min(*b).min(*c);
+                let hi = a.max(*b).max(*c);
+                // Pixel centres at i + 0.5 inside the triangle's bounds.
+                let (px0, px1) = ((lo.x - 0.5).ceil().max(0.0), (hi.x - 0.5).floor().min(res as f32 - 1.0));
+                let (py0, py1) = ((lo.y - 0.5).ceil().max(y0 as f32), (hi.y - 0.5).floor().min(y1 as f32 - 1.0));
+                if px0 > px1 || py0 > py1 {
+                    continue;
+                }
+                let area = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+                if area.abs() < 1e-12 {
+                    continue;
+                }
+                let inv_area = 1.0 / area;
+                let (za, zb, zc) = if ortho { (a.z, b.z, c.z) } else { (1.0 / a.z, 1.0 / b.z, 1.0 / c.z) };
+                for y in py0 as u32..=py1 as u32 {
+                    let fy = y as f32 + 0.5;
+                    for x in px0 as u32..=px1 as u32 {
+                        let fx = x as f32 + 0.5;
+                        let wa = ((b.x - fx) * (c.y - fy) - (b.y - fy) * (c.x - fx)) * inv_area;
+                        let wb = ((c.x - fx) * (a.y - fy) - (c.y - fy) * (a.x - fx)) * inv_area;
+                        let wc = 1.0 - wa - wb;
+                        if wa < 0.0 || wb < 0.0 || wc < 0.0 {
+                            continue;
+                        }
+                        let z = wa * za + wb * zb + wc * zc;
+                        let z = if ortho { z } else { 1.0 / z };
+                        let d = &mut depth[((y - y0) * res + x) as usize];
+                        if z < *d {
+                            *d = z;
+                        }
+                    }
+                }
+            }
+            depth
+        })
+        .collect();
+    bands.into_iter().flatten().map(|z| z.is_finite().then_some(z)).collect()
+}
+
 pub(crate) fn import_unit_scale(imported: f32, scene: f32) -> Option<f32> {
     const OUT_OF_SCALE: f32 = 8.0;
     if !(imported.is_finite() && scene.is_finite() && imported > 0.0 && scene > 0.0) {
@@ -6321,15 +6486,94 @@ mod tests {
     }
 
     #[test]
+    fn captured_alphas_are_saved_with_the_project() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stamps.oxb");
+        let mut e = editor();
+        let builtins = e.alphas.len();
+        e.capture_alpha_size = 256;
+        e.capture_alpha();
+        wait_job(&mut e);
+        assert!(e.is_modified(), "a new alpha is unsaved work");
+        assert!(e.save(&path));
+        assert!(!e.is_modified());
+        let captured = e.alphas.last().unwrap().clone();
+        // A fresh start opens the project with its alpha.
+        let mut f = editor();
+        f.open_project_now(&path);
+        assert_eq!(f.alphas.len(), builtins + 1);
+        let back = f.alphas.last().unwrap();
+        assert_eq!((back.name.as_str(), back.size), ("Capture 1", 256));
+        assert!(back.data.iter().zip(&captured.data).all(|(a, b)| (a - b).abs() < 1e-4), "same pixels");
+        assert!(!f.is_modified(), "opening isn't an edit");
+        // Opening it again doesn't duplicate it, and the next capture is number 2.
+        f.open_project_now(&path);
+        assert_eq!(f.alphas.len(), builtins + 1);
+        f.capture_alpha();
+        wait_job(&mut f);
+        assert_eq!(f.alphas.last().unwrap().name, "Capture 2");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn rasterized_capture_depth_matches_ray_casting() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        let mut data = e.scene.pieces[1].mesh.to_data();
+        data.positions.iter_mut().for_each(|p| *p = *p * 0.4 + Vec3::new(0.6, 0.2, 0.5));
+        e.scene.pieces[1].mesh = Mesh::from_data(data);
+        let meshes: Vec<Mesh> = e.scene.pieces.iter().map(|p| p.mesh.clone()).collect();
+        for ortho in [false, true] {
+            e.camera.orthographic = ortho;
+            let (size, res) = (e.canvas_size(), 64);
+            let side = size.x.min(size.y);
+            let corner = (size - Vec2::splat(side)) * 0.5;
+            let raster = capture_depth(&meshes, &e.camera, size, corner, side, res);
+            let (mut agree, mut covered) = (0, 0);
+            for (k, r) in raster.iter().enumerate() {
+                let (i, j) = (k as u32 % res, k as u32 / res);
+                let px = corner + Vec2::new(i as f32 + 0.5, j as f32 + 0.5) * (side / res as f32);
+                let (o, d) = e.camera.ray(px, size);
+                let ray = meshes
+                    .iter()
+                    .filter_map(|m| m.raycast(o, d))
+                    .map(|h| (h.point - o).dot(e.camera.forward()))
+                    .min_by(f32::total_cmp);
+                match (r, ray) {
+                    (Some(a), Some(b)) => {
+                        covered += 1;
+                        // Same surface; the ray's depth counts from its own origin.
+                        let b = b + (o - e.camera.eye()).dot(e.camera.forward());
+                        if (a - b).abs() < 2e-3 * b.abs().max(1.0) {
+                            agree += 1;
+                        }
+                    }
+                    (None, None) => {}
+                    // Silhouette pixels may differ by a hair.
+                    _ => covered += 1,
+                }
+            }
+            assert!(covered > 500, "ortho {ortho}: the model is in view");
+            assert!(agree * 100 >= covered * 97, "ortho {ortho}: {agree} of {covered} pixels agree");
+        }
+    }
+
+    #[test]
     fn capture_alpha_makes_a_depth_image_of_the_view() {
         let mut e = editor();
+        assert_eq!(e.capture_alpha_size, 1024, "default size");
+        e.capture_alpha_size = 256;
         let count = e.alphas.len();
         e.capture_alpha();
+        assert!(e.job.is_some(), "cast on a worker thread");
+        wait_job(&mut e);
         assert_eq!(e.alphas.len(), count + 1);
         assert_eq!(e.alpha, Some(count), "the capture is selected");
         let a = e.alphas.last().unwrap().clone();
         assert_eq!(a.name, "Capture 1");
         assert_eq!(a.size, 256);
+        assert!(e.status.contains("Capture 1 (256×256)"), "{}", e.status);
         // The sphere's nearest point (the middle) is white; it falls off toward its edge.
         let at = |x: f32, y: f32| a.sample(Vec2::new(x, y));
         assert!(at(0.0, 0.0) > 0.95, "centre {}", at(0.0, 0.0));
@@ -6338,10 +6582,26 @@ mod tests {
         assert!(at(0.9, 0.0) > 0.0 || at(0.85, 0.0) > 0.0, "the sphere reaches near the edge");
         assert_eq!(at(0.99, 0.99), 0.0, "the corners are empty space");
         assert!((at(0.6, 0.0) - at(-0.6, 0.0)).abs() < 0.02, "symmetric");
+        // The chosen size is used, and the export round-trips through a PNG.
+        e.capture_alpha_size = 512;
+        e.capture_alpha();
+        wait_job(&mut e);
+        let big = e.alphas.last().unwrap().clone();
+        assert_eq!(big.size, 512);
+        assert!((big.sample(Vec2::ZERO) - a.sample(Vec2::ZERO)).abs() < 0.02, "same picture, more pixels");
+        let dir = std::env::temp_dir().join(format!("oxy-capture-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        e.export_alpha(&dir.join("capture"));
+        assert!(e.status.starts_with("Exported Capture 2 (512×512)"), "{}", e.status);
+        let back = crate::support::load_alpha_png(&dir.join("capture.png")).unwrap();
+        assert_eq!(back.size, 512);
+        assert!((back.sample(Vec2::new(0.3, 0.2)) - big.sample(Vec2::new(0.3, 0.2))).abs() < 0.01);
+        std::fs::remove_dir_all(dir).ok();
         // Nothing visible: nothing captured.
         e.scene.active_mut().visible = false;
         e.capture_alpha();
-        assert_eq!(e.alphas.len(), count + 1);
+        assert!(e.job.is_none());
+        assert_eq!(e.alphas.len(), count + 2);
         assert!(e.status.starts_with("Nothing to capture"));
     }
 
@@ -8271,6 +8531,7 @@ mod tests {
             }),
             show_brush_names: false,
             narrow_shelf: true,
+            alpha_capture_size: 2048,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
