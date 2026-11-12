@@ -16,9 +16,11 @@
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="downloads" src="https://img.shields.io/github/downloads/crisprintsstuff/OxyBrush/total?label=downloads"></a>
 </p>
 
+
 <p align="center">
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases/latest"><b>Download</b></a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
+  <a href="https://discord.gg/Vfm7Km7xvG"><b>Discord</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
@@ -27,9 +29,20 @@
 
 ![OxyBrush with two pieces: a sculpted sphere and a cube, with the brush shelf on the left, the toolbar on top and the settings panel on the right](docs/images/screenshot.png)
 
-OxyBrush is for sculptors: concept artists, character artists, miniature and 3D-print makers, and students. The model fills the screen, tools show up when you call for them, and brushes respond immediately even on dense meshes.
+OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.4](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. You can sculpt multi-piece scenes with subdivision levels, build shapes from a sphere with dynamic detail, bend parts with the Curve Move brush, draw strokes as editable curves, insert 3D primitives (Sphere, Cube, Cylinder, Cone, Torus, Plane) that grow on the surface as you drag, with auto-masking, draw tubes along a path and reshape them, even after adding them, retopologize a sculpt by drawing quads on it (with X mirroring), cut with screen lines (Plane Clip, Line Split, Cut Away) that follow symmetry, switch between navigation presets (including right-drag orbit) and a single-key tool shortcut set, preview matcaps in real time on hover, adjust smooth intensity on the fly by holding Shift, prepare models with dedicated 3D-print tools (dimensions, volume, resin/filament weight estimation, wall-thickness check with warning heatmap, sparse voxel hollowing with drain holes, and split with keyed pins/sockets), remesh with sparse voxel grids with pure quad topology and quad OBJ export, use graphics tablets and touchscreens with full pressure, the pen side button and multi-touch gestures (pinch zoom, orbit, two-finger tap undo), perform volumetric CSG Booleans, tune the Crease brush with the Pinch parameter, navigate via the sleek vertical quick menu, import native ZBrush (`.ztl`, `.zpr`) models, paint vertex color, pose with a transform gizmo, extract masks into solid shells, deform with Kelvinlet brushes, inspect with real-time wireframe overlays and a floor grid that follows the model, customize themes (including the navy Midnight theme with pill-shaped controls), decimate, run Python plugins and sandboxed in-app WebAssembly plugins, round-trip meshes with Blender through the OxyBrush Bridge add-on, and export for 3D printing and game engines. Expect rough edges, and keep copies of anything important. **Testers wanted** — see [Help test OxyBrush](#help-test-oxybrush).
+> **Beta:** [v4.0.0-beta.4](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+
+**Highlights**
+
+- **19 sculpting brushes** plus masking, painting, cutting and primitive tools, with stroke stabilizer, editable curve strokes, alphas and pen pressure.
+- **Subdivision levels and dynamic detail:** sculpt broad shapes low and fine detail high, or build up a plain sphere as you go.
+- **Pieces:** many objects per scene, with voxel remesh, booleans, Join, Split, Symmetrize and decimation.
+- **Retopology:** draw a clean quad mesh over a sculpt and project the detail onto it.
+- **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
+- **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
+- **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.
+- **Open files:** projects in `.oxb`; import OBJ, STL and ZBrush `.ztl`/`.zpr`; export glTF/GLB, OBJ, STL and PLY.
 
 ## Download and install
 
@@ -47,109 +60,129 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. **File > Close project** brings it back: it closes the project, asking to save unsaved work first. Hover over any brush or control for a short explanation and its shortcut. On a touch screen, press and hold a control to read the same text.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
 
-**Layouts** (Settings > Layout, or in the welcome window):
+![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
+
+1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
+2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the brush shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
+3. **Need more detail?** **Ctrl+D** adds a subdivision level, and **D** / **Shift+D** step between levels, keeping your detail. **Ctrl+R** remeshes to even triangles.
+4. **Save** with **Ctrl+S** (an `.oxb` project). **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY for game engines, other 3D apps or 3D printing.
+5. **Find anything:** **Ctrl+K** finds any command by typing part of its name, **Space** finds a brush, **F1** lists every shortcut and **F2** opens the built-in guide (searchable, works offline). **Ctrl+,** opens Preferences.
+
+### Make it yours
+
+**Layouts** (Preferences > General, or in the welcome window):
 
 | Layout | For |
 |---|---|
 | **Standard** | Mouse and keyboard: brush list with names and icons |
 | **Compact** | Small screens: tighter spacing and an icon-only brush grid |
 | **Touch friendly** | Touch screens and pen tablets: large buttons, a brush tile grid, on-screen **Smooth / Mask / Invert** toggles instead of modifier keys, and undo/redo beside the viewport |
-| **Workstation** | Dense layout: a two-column brush shelf and the main controls in the top bar (**View > Theme…** has a matching **Workstation** look) |
-
-To fit more brushes in the shelf, turn off **Preferences > Interface > Show brush names in the brush shelf**: the brushes become a grid of icons, with each name on hover. For more room for the model, **Narrow brush shelf (one column)** turns a side shelf into a single column: the current brush, alpha and material stacked, then one brush per row with its name underneath.
-
-**Arrange it your way** (Settings > Arrange panels, or right-click the brush shelf or the size/strength bar):
-
-- **Brush shelf:** left, bottom (a horizontal strip of brush previews) or right. **Drag brushes** to put the ones you use most first; number keys 1–9, 0 follow your order.
-- **Settings panel and view strip:** right or left.
-- **Size, strength and Raise/Carve:** floating at the center top or center bottom of the viewport (default: center top, where your eyes are), or in the toolbar.
-
-![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
-
-Your window size and position, layout, arrangement, brush order, interface scale, theme, material, autosave interval, whether the welcome window appears at startup, are remembered between sessions. The brush you were using, with its settings and each brush's strength, is remembered too if you turn on **Remember brush settings between sessions** in Preferences > General (off by default).
+| **Workstation** | Dense layout: a two-column brush shelf and the main controls in the top bar |
 
 ![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 
-![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
+- **Arrange the panels** (Preferences > General, or right-click the brush shelf or the size/strength bar): put the brush shelf left, bottom or right; the settings panel left or right; and size, strength and Raise/Carve floating at the top or bottom of the viewport, or in the toolbar. **Drag brushes** in the shelf to reorder them; the number keys follow your order.
+- **Fit more in the shelf:** turn off **Show brush names** (Preferences > Interface) for an icon grid, or use **Narrow brush shelf** for a single column.
+- **Change the look** in **View > Theme…**: themes, accent and button colors, brush icon colors, the viewport background, interface scale, corners and slider thickness.
 
-1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
-2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the left shelf (each brush has an icon showing what it does to the surface); hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
-3. Need more detail? **Ctrl+D** adds a subdivision level; **D** / **Shift+D** step up and down between levels, keeping your detail. **Remesh** (right panel) rebuilds even topology.
-4. **Ctrl+S** saves a project (`.oxb`); **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY (for game engines, other 3D tools or 3D printing).
-5. **Ctrl+K** finds any command by typing part of its name, and **Space** finds a brush the same way. **Ctrl+,** opens Preferences (General, Pen & tablet, Interface, Plugins, Keymap, AI Agent, Updates). **F1** shows every shortcut, and **F2** opens the built-in guide (searchable, works offline).
+![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
 
-**Sculpting characters from OxyCharacter:** OxyCharacter opens its character in OxyBrush as a project (`oxybrush character.oxb`) with a `character.oxb.oxylink.json` file next to it. OxyBrush shows **Linked to OxyCharacter** in the top bar; sculpt, add pieces, then click it (or **File > Send back to OxyCharacter**, or Ctrl+K) to save to the file OxyCharacter is watching, even after a Save As elsewhere. Sculpted changes to `OxyCharacter Body` come back as a morph; new pieces come back as accessories. To keep the body a morph, use subdivision levels (Ctrl+D) rather than remesh, subdivide once, decimate, Boolean, split or delete hidden: OxyBrush says so once if you change its topology. Save As copies the `.oxylink.json` next to the new file; OxyBrush never reads, moves or deletes it.
+OxyBrush remembers your window, layout, arrangement, brush order, theme, material and other preferences between sessions. Turn on **Remember brush settings between sessions** (Preferences > General) to keep the current brush and each brush's strength too.
 
-**Working with an AI agent** (off unless you turn it on): Edit > Preferences > AI Agent lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
+### Working with other apps
 
-**Retopology:** **Mesh > Retopology (draw quads)…** lets you draw a clean, low-polygon quad mesh over a sculpt: click to place points on the surface, Shift+click between them to make quads, Tab+drag a border edge to extend, Ctrl+click an edge to add a loop, Shift+drag to relax (Alt+click pins points so relax leaves them). The result is a new piece that exports as quads; **Subdivide and project** gives it subdivision levels that carry the sculpt's detail ([RFC 0012](docs/rfcs/0012-retopology.md)).
-
-**Plugins menu:** every installed plugin's commands are one click away in the **Plugins** menu. OxyBrush comes with in-app plugins that need nothing installed: **Displace** (inflate, deflate, roughen), **Mask by Height**, **Color Ramp** (color by height or direction), **Array** (copies in a row), **Measure** (size, volume and bounding box), **Group by Height** (face groups in bands), **Group by Angle** (face groups from creases), **Hide Faces by Angle**, **Color by Group**, **Fill Holes**, **Simplify Mesh**, **Flip Faces** and **Squash**. Some show their result live before you **Accept** it, long ones can be stopped, and their settings are remembered. **Plugins > Install add-on…** adds an `.oxyaddon`; **Manage plugins…** lists them, with Remove for ones you installed. To write your own (in Rust, WebAssembly text or any language that compiles to WebAssembly), see the [plugin guide](docs/plugins/README.md) and [API reference](docs/plugins/api-reference.md).
-
-**Python plugins & scripting:** Write Python scripts or install custom plugins in your local plugins folder using the zero-dependency pure-Python SDK (`python/oxybrush`). Manage plugins in **Edit > Preferences > Plugins** (`Ctrl+,`) or run `.py` scripts via file dialog and reload plugins on the fly. Example plugins are in `examples/plugins/`.
+- **OxyCharacter:** OxyCharacter opens its character in OxyBrush as a project with a `character.oxb.oxylink.json` file next to it. OxyBrush shows **Linked to OxyCharacter** in the top bar; sculpt, add pieces, then click it (or **File > Send back to OxyCharacter**) to send the result back. Sculpted changes to `OxyCharacter Body` return as a morph and new pieces as accessories. To keep the body a morph, use subdivision levels rather than operations that change its topology (remesh, decimate, Boolean, split, delete hidden); OxyBrush warns you once if you do.
+- **Blender:** the OxyBrush Bridge add-on sends meshes from Blender to OxyBrush and back ([RFC 0010](docs/rfcs/0010-blender-bridge.md)). It hasn't been tested inside Blender yet.
+- **An AI agent on your computer** (off unless you turn it on): **Preferences > AI Agent** lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
 
 ## Help test OxyBrush
 
-Testers are the most useful contribution right now — especially with **pen tablets**, **varied GPUs** and **3D printing workflows**.
+Testers are the most useful contribution right now, especially with **pen tablets**, **varied GPUs** and **3D printing workflows**.
 
-1. Follow the [alpha testing guide](docs/TESTING_GUIDE.md) (about 20 minutes).
-2. Report problems with **Help > Report a bug…** in the app — it opens a GitHub issue form with your version, OS and GPU already filled in. Attach the log from **Help > Open log folder**.
-3. Share impressions with **Help > Send feedback…**: what felt good, what was frustrating, what you missed.
+1. Follow the [testing guide](docs/TESTING_GUIDE.md) (about 20 minutes).
+2. Report problems with **Help > Report a bug…** in the app. It opens a GitHub issue form with your version, OS and GPU filled in. Attach the log from **Help > Open log folder**.
+3. Share impressions with **Help > Send feedback…**, or chat with other testers on [Discord](https://discord.gg/Vfm7Km7xvG): what felt good, what was frustrating, what you missed.
 
 ## Features
 
-- **19 sculpting brushes, plus 7 tools in the same brush shelf:**
-  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease, Layer, Polish, Planar Trim, Noise.
-  - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the volume-preserving Kelvinlet brushes (Kelvin Grab, Kelvin Twist, Kelvin Scale).
-  - **Tools:** Mask, Paint (vertex color), Insert Primitives, Tube, and the screen-line cutting tools (Plane Clip, Line Split, Cut Away).
+### Sculpting
 
-  The shelf scrolls, and number keys 1–0 pick the first ten (drag to reorder). Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options.
-- **Curve Move:** draw a curve along an arm or a tail, then drag its points; the part bends and stretches to follow, like a simple rig. Masks protect what shouldn't move, and symmetry moves both sides. Preview first, then Accept as one undo step. Design in [RFC 0005](docs/rfcs/0005-curve-move.md).
-- **Regularized Kelvinlet brushes:** volume-preserving elastodynamic Grab, Twist, and Scale brushes based on *de Goes & James (SIGGRAPH 2017)* for organic pulling, non-pinching twisting, and radial expansion.
-- **Floor grid (View > Shading):** a fading grid on the floor under the model. It stays at the bottom of the visible pieces and its spacing follows the model's size, so it moves and rescales as you sculpt.
-- **Real-time wireframe overlay:** hardware-accelerated wireframe rendering (`Shift+W`) over shaded matcaps with depth bias to eliminate Z-fighting, and user-selectable wireframe colors that persist across sessions.
-- **Mask extract for sculpting:** Extract shows a live preview of the shell; adjust its thickness and edge smoothing (Laplacian boundary smoothing) and click **Accept** to add it as a new piece, or **Cancel**. It makes to create watertight 2-manifold shells or flat surface patches with front, back, and rim face groups.
-- **Customizable theme & appearance**, all in one **Theme** window (**View > Theme…**: themes and looks, colors, size & shape; [RFC 0014](docs/rfcs/0014-theme-window.md)): 9 theme presets (`Graphite`, `Studio` — flat neutral greys, bar sliders with a solid handle, slightly squarer corners, uppercase section headings and outlined selection —, `Matte`, `Midnight`, `Charcoal`, `Slate`, `Warm Umber`, `Studio Light`, `High Contrast`), 7 accent color presets (`Terracotta`, `Tangerine`, `Cyan`, `Emerald`, `Amber`, `Crimson`, `Violet`) plus a custom RGB picker, corner styles (`Sharp`, `Rounded`, `Soft`, `Pill`), slider thickness (`Thin`, `Normal`, `Thick`), a custom button color, and brush icons in their terracotta clay, your accent color or a color of your own. **Midnight** is a deep navy "glass" look with thin blue outlines; the **Midnight** look pairs it with pill-shaped controls, the emerald accent and a navy viewport.
-- **Stroke control:** stabilizer for smooth lines, Freehand / Line / Stamp / **Curve** stroke modes, spray, pressure curve. A Curve stroke stays editable after you draw it: drag its points to reshape it, click to add a point, Alt+click to remove one, change size, strength and the fades, and see the result live before you Accept ([RFC 0004](docs/rfcs/0004-curve-stroke.md)). In Freehand mode, hold still for a moment mid-stroke to turn that stroke into a curve (optionally after asking). Each point can have its own size and strength, curves can be closed into loops, and Ctrl+Z undoes curve edits while it is open.
-- **Brush presets:** save any brush (kind, size, strength, falloff, stroke, alpha) as a preset; five starter presets included. Share a brush as a one-line code (`oxyb1:…`) you can paste into a chat, or as an `.oxbrush` file. Everything stays on your computer.
-- **Alphas:** grayscale images shape each dab; seven built-in procedural alphas plus your own grayscale PNGs, with rotation and follow-stroke. **Capture from view** turns what the viewport shows into an alpha at up to 4096 px; captured and loaded alphas are saved with the project, and **Export alpha…** saves any alpha as a 16-bit PNG to edit in a 2D app.
-- **Masking and selection:** box or lasso mask/unmask (following symmetry) and show/hide, mask by cavity, peaks or face group, blur/sharpen/grow/shrink the mask, grow/shrink the visible area.
-- **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks that respect the mask. Saved in projects and carried through subdivision levels, remesh, merge, booleans and decimate (as are the mask and face groups). Exported in glTF/GLB, PLY and OBJ.
-- **Transform gizmo (T):** move, rotate or scale a piece in the viewport. With a mask, only the unmasked part moves, and a soft mask edge bends smoothly, which makes it a quick posing tool (mask the body, rotate an arm at the shoulder). Rotate shows a ring per axis plus an outer ring for the view direction. Squares between the axes move or scale along two axes; **Shift** snaps to steps; the gizmo bar takes typed values, has pivot choices (bounding box, ground, origin, align to view) and operators: mirror, put on the ground, centre at origin.
-- **Symmetry:** X/Y/Z mirroring with $C^2$ cubic directional weighting ($\omega_i = w_i^3$) preventing midline creasing and circular boundary tearing, plus radial symmetry (up to 64 copies around any axis). Each piece mirrors about its own centre, picked from its shape when it's imported or opened (models built around the origin keep the origin), with **Recentre** and **World origin** buttons to change it. **Mesh > Symmetrize** makes a piece symmetric after the fact: it keeps one half, replaces the other with its mirror image and welds the seam (any axis, either side).
-- **Multiple pieces per document:** add, duplicate, mirror-duplicate, delete, rename, show/hide, solo. Alt+click a piece to make it active. **Join** combines the visible pieces into one exactly as they are (each keeps its own face groups); **Merge + remesh** fuses them into one closed surface with a voxel remesh. **Split masked** (Mask menu) moves the masked part of a piece into a new piece.
-- **Dynamic detail:** turn it on in the Topology section and sculpting brushes add triangles where they need more detail (and remove ones that have become too small), so you can build a shape from a plain sphere without remeshing. New triangles stay under the brush and come out even (edge flips and relaxation along the surface). The Detail slider and the brush size set how fine it gets; symmetry and masks are respected, and each stroke is one undo step. Works best up to a few hundred thousand triangles. Design in [RFC 0006](docs/rfcs/0006-dynamic-detail.md).
-- **Viewport lights and shadows:** switch the viewport from the matcap to up to four lights (sun, point or spot) in **View > Shading > Light the viewport**, and set them up in **Lights…**: color, intensity, direction, spot cone, lights that follow the view, sky/ground and rim light, and soft shadows from suns and spots. Drag the numbered markers in the viewport to move the lights. Design in [RFC 0008](docs/rfcs/0008-viewport-lights.md).
-- **Subdivision levels (multiresolution):** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo. Configurable ceiling for high-density meshes (`max_triangles`).
-- **Sparse voxel remesher:** a pure-Rust hierarchical sparse grid (VDB-style, from the published research; $8^3 = 512$ voxel leaf nodes with 512-bit masks). Remeshes past 1024 or 2048 voxels with low memory usage. Includes an **Adaptivity slider** to decimate flat planar regions while retaining high polygon density in curved sculpt areas. Toggle between `Sparse voxels (VDB)` and the legacy `Regular Grid` engine.
-- **Volumetric CSG Booleans (`Mesh > Boolean`):** true Constructive Solid Geometry Boolean tools operating directly on VDB signed distance fields: **Difference** (subtract cutter), **Union** (weld into single manifold mesh), and **Intersection** (common volume). Immune to non-manifold edges, self-intersections, and coplanar face errors.
-- **3D-print preparation tools (`Mesh > 3D Print Tools...`):** real-world millimeter scale and bounding dimensions ($W \times D \times H$), surface area ($cm^2$), divergence theorem watertight volume ($cm^3$), topological manifold validation, and photopolymer resin (~1.15 g/cm³) and PLA filament (~1.24 g/cm³) weight estimates. **Wall-thickness analyzer** casts inward rays along negative normals to detect fragile areas and paints a red/orange warning heatmap onto the mesh. **Volumetric hollowing** erodes the interior with sparse voxel and punches cylindrical drain holes for resin/powder drainage. **Planar split with alignment keys** cuts pieces along X/Y/Z planes into interlocking parts with male registration pins and matching clearance sockets (0.2mm tolerance) for post-print assembly.
-- **Tablet input & multi-touch gestures:** continuous pen pressure pipeline for graphics tablets (Wacom, Huion, XP-Pen, Apple Pencil, Windows Ink, Linux Wayland/XInput2), an adjustable pressure curve (**Preferences > Pen & tablet**: a two-point curve you can drag into an S shape, curve shape, lightest-touch strength, the pressure that counts as full, Soft/Linear/Firm presets and a live readout of your pen), and multi-touch gesture engine: two-finger pinch-to-zoom, two-finger orbit/pan, and **two-finger tap for Undo**. Native trackpad pinch-zoom and rotation gestures.
-- **Vertical quick menu at cursor:** right-click or hold `Q` on the viewport opens a sleek, compact vertical card (175px width) for Raise/Carve, brush Size, Strength, and brush-specific controls without obscuring your model.
-- **Crease brush Pinch control:** adjustable Pinch slider in the brush settings and vertical quick menu controlling how tightly groove walls are gathered toward the crease line (0.0 = pure carving groove, 0.3 = default, 1.0 = sharp tight pinch).
-- **Software hardening & autosave:** automatic non-blocking autosave on window focus loss and app suspension, robust corrupt file import guards rejecting out-of-bounds indices and non-finite coordinates, subdivision memory ceiling guards, and topological manifold diagnostics (`check_manifold`).
-- **Level set filters & shelling:** surface dilation and erosion offset, hollow wall shelling for 3D printing, and 3D Laplacian smoothing directly on the narrow-band SDF.
-- **Decimation:** quadric edge collapse that keeps open borders, face-group borders and vertex color. Large meshes are decimated in parallel (1.3M → 131k triangles in about 0.7 s on 4 cores).
-- **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, delete hidden, and a group color overlay.
-- **Projects:** `.oxb` project files (versioned, checksummed, compressed, saved atomically; open one by double-clicking it or dropping it on the window), a prompt before discarding unsaved changes, **autosave every 2 minutes** (or set to 0/"Off" in Settings), and **crash recovery** on the next launch.
-- **Python plugins & scripting:** a pure-Python client SDK (`python/oxybrush`) with zero external dependencies. Connects over loopback Model Context Protocol (MCP JSON-RPC 2.0) to inspect scenes, configure brushes, execute 3D strokes, manage topology (remesh, decimate, subdivide), and import/export assets. Manage plugins in **Edit > Preferences > Plugins** (`Ctrl+,`) with dynamic discovery, reload, and non-blocking background execution. Includes procedural sample plugins (`examples/plugins/`).
-- **Dense mesh performance optimizations:** stroke coalescing and adaptive dab budgeting (`OXYBRUSH_DAB_BUDGET_MS`, default 10 ms) eliminate stroke queuing during rapid gestures; parallel Rayon geometry passes, atomic stamps, 1024-triangle chunk granularity, parallel GPU vertex packing, and zero-copy GPU index buffer binding.
-- **Background jobs:** remesh, booleans, merge and decimate run on a worker thread, so the UI stays responsive.
-- **Chunked mesh engine:** a stroke only re-computes, re-uploads and snapshots the regions it touches.
-- **Undo/redo:** covers strokes, topology changes, face groups and visibility, and adding, removing or merging pieces, within a memory budget.
-- **Matcap viewport (wgpu):** five procedurally generated materials (no third-party assets), with **ambient occlusion and cavity shading** that darken folds, creases and pores so fine detail reads clearly (toggle in the view strip, strengths in View > Shading). Load your own matcaps (PNG or JPEG) from the material picker, and switch to **flat shading** in the View menu to see every polygon. **View > Background** switches the soft gradient and one flat color; Colors… sets the center and edge, or the single flat color, and Reset to default restores the original gradient. The choice is remembered. **View > Align cursor to surface** (off by default and remembered) draws the brush ring on the clay under the pointer; off the model it stays flat to the screen.
-- **Focal length:** the perspective lens is a 35mm-equivalent focal length from 15 to 200 mm (View > Focal length, the lens button in the view strip, or the command palette), with a slider, a numeric field, presets and the field of view in degrees. The model stays the same size; orthographic view is unchanged. Remembered between sessions.
-- **Import/export:** Native ZBrush (`.ztl`, `.zpr`) subtool import with geometry decompression, quad/triangle polygon reconstruction, polygroup extraction, and world transformation matrices. OBJ and STL import (each object or SubTool becomes its own piece; OBJ materials are ignored, so a broken `.mtl` or material line doesn't stop an import). Mesh files carry no units, so an import more than 8× larger or smaller than the scene (for example one in millimetres) is scaled by a power of ten to fit, and later imports into the same project use the same factor; one Undo keeps the original size. Export of all visible pieces to glTF 2.0 (`.glb`/`.gltf`, one object per piece), OBJ (one object per piece), binary STL and binary PLY.
-- **Pipeline helpers:** make an LOD chain (1/2, 1/4, 1/8 of the triangles), split a piece by face groups or into loose parts, and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting (`cargo run -p oxy-cli -- --help`).
-- **Friendly interface & menu bar:** streamlined into 8 clean top categories: `File`, `Edit`, `Pieces`, `Mesh`, `Groups`, `Mask`, `View`, `Help`. A welcome window with starter shapes and the basics; large brush, alpha and material previews that open thumbnail pickers; brush icons and a short tooltip on every control (what it does, and its shortcut); a toolbar with Raise/Carve, brush size and strength, symmetry and subdivision levels; a view strip beside the viewport (drag to orbit, pan or zoom, focal length, and toggles for the mask, face groups, shading, wireframe and floor grid; handy with a pen) and an axis gizmo you click to snap to a side view or drag to orbit; collapsible panel sections; and a status bar that explains what the held keys do. On a touch screen, press and hold a control to read its tooltip.
-  - **Fast workflow:** a command palette (Ctrl+K) that finds any command, brush, recent file or guide topic as you type; a type-to-pick brush finder (Space); recent files in File > Open recent and on the welcome window; and a built-in, searchable guide (F2) that works offline.
-- **Pen gestures** ([RFC 0015](docs/rfcs/0015-pen-gestures.md)): drag with the pen in a panel or list to scroll it (or drag with a side button held), and hold the pen still on a control to open its menu and read its tip. The **Pen side buttons** navigation preset makes the lower side button orbit (Shift pans, Ctrl zooms) and the upper one pan. **Preferences > Pen & tablet** sets when dragging scrolls panels: with a pen, always or never.
-- **Unified Preferences window (Ctrl+,):** a multi-tab dialog organizing General, Pen & tablet, Interface, Plugins, Keymap, AI Agent, and Updates into one place. Rebind every command, brush and view key (conflict warnings, reset one or all) and the mouse. Navigation presets: **OxyBrush** (the controls in the table below), **MMB orbit** (middle-drag orbits, Ctrl+middle zooms, Shift+middle pans, 45° snap on Alt until you change it) and **Right-drag orbit** (right-drag orbits, Alt+right pans, Ctrl+right zooms; on a pen, the side button). Shortcut presets: **Default** and **Single-key tools** (B brush palette, W/E/R move/scale/rotate, and similar single keys). An optional sculpt setup makes Ctrl carve and Alt mask. Keys are remembered and can be exported. The touch layout's on-screen Smooth, Mask and Invert buttons keep those jobs.
-- **Accessibility basics:** UI scaling (75–300%), a high-contrast theme, a full mouse-only workflow, and screen-reader labels through AccessKit.
-- **Optional updates:** off by default. Preferences > Updates can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Help > Check for updates checks once on demand. Only GitHub is contacted and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
-- **Rust:** a standard Rust toolchain is all you need on Windows, Linux or macOS (the optional updater's TLS library compiles a little C with the compiler Rust already uses).
+- **19 sculpting brushes, plus 7 tools in the same shelf:**
+  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Layer, Polish, Planar Trim, Noise.
+  - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the volume-preserving Kelvinlet brushes Kelvin Grab, Kelvin Twist and Kelvin Scale (after *de Goes & James, SIGGRAPH 2017*).
+  - **Tools:** Mask, Paint (vertex color), Insert Primitives (sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
+
+  Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options. **Shift** smooths, and holding it while dragging changes the smoothing strength on the fly.
+- **Strokes:** a stabilizer for smooth lines, Freehand, Line, Stamp and **Curve** stroke modes, spray, and a pressure curve. A Curve stroke stays editable after you draw it: drag, add or remove points, change size and strength per point, close it into a loop, and see the result live before you Accept ([RFC 0004](docs/rfcs/0004-curve-stroke.md)). In Freehand mode, hold still mid-stroke to turn it into a curve.
+- **Curve Move:** draw a curve along an arm or a tail, then drag its points. The part bends and stretches to follow, like a simple rig; masks protect what shouldn't move, and symmetry moves both sides ([RFC 0005](docs/rfcs/0005-curve-move.md)).
+- **Tubes:** drag a path from the model or empty space to get a tube along it, shape its points and thickness, and edit it again later ([RFC 0009](docs/rfcs/0009-tube-tool.md)).
+- **Alphas:** grayscale images shape each dab: seven built-in alphas plus your own PNGs, with rotation and follow-stroke. **Capture from view** turns what the viewport shows into an alpha (up to 4096 px), saved with the project; **Export alpha…** saves one as a 16-bit PNG to edit in a 2D app.
+- **Brush presets:** save any brush (kind, size, strength, falloff, stroke, alpha) as a preset, and share it as a one-line code (`oxyb1:…`) or an `.oxbrush` file. Five starter presets are included.
+- **Symmetry:** X, Y and Z mirroring that blends smoothly across the middle, plus radial symmetry (up to 64 copies around any axis). Each piece mirrors about its own centre, chosen from its shape when it's opened, with **Recentre** and **World origin** buttons to change it.
+- **Quick menu at the cursor:** right-click or hold **Q** on the viewport for Raise/Carve, size, strength and the brush's own settings.
+
+### Detail and topology
+
+- **Subdivision levels:** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo, with a configurable triangle limit (`max_triangles`).
+- **Dynamic detail:** turn it on in the Topology section and brushes add triangles where they need more detail and remove ones that became too small, so you can build a shape from a plain sphere without remeshing. Works best up to a few hundred thousand triangles ([RFC 0006](docs/rfcs/0006-dynamic-detail.md)).
+- **Voxel remesh:** rebuilds a piece with even triangles, on a sparse voxel grid that reaches 1024+ voxels across with little memory. An **Adaptivity** slider uses fewer triangles on flat areas, and quad output exports as quads in OBJ.
+- **Booleans** (Mesh > Boolean): Union, Difference and Intersection on voxel volumes, robust to self-intersecting or non-manifold input.
+- **Decimate:** reduces triangles while keeping the shape, open borders, face-group borders and vertex color (1.3M → 131k triangles in about 0.7 s on 4 cores).
+- **Symmetrize** (Mesh > Symmetrize): makes a piece symmetric after the fact. It keeps one half, replaces the other with its mirror image and welds the seam (any axis, either side).
+- **Retopology** (Mesh > Retopology): draw a clean quad mesh over a sculpt. Click to place points on the surface, Shift+click to make quads, Tab+drag a border edge to extend, Ctrl+click an edge to add a loop, Shift+drag to relax (Alt+click pins points so relax leaves them). The result is a new piece that exports as quads; **Subdivide and project** gives it levels that carry the sculpt's detail ([RFC 0012](docs/rfcs/0012-retopology.md)).
+- **Mesh repair:** Close holes, Delete hidden, and a Topology Diagnostics window that finds open edges, non-manifold edges and degenerate triangles.
+
+### Pieces, masks and groups
+
+- **Pieces:** many meshes per scene: add, duplicate, mirror-duplicate, delete, rename, show/hide, solo; Alt+click a piece to make it active. **Join** combines the visible pieces exactly as they are (each keeps its face groups); **Merge + remesh** fuses them into one closed surface. Split a piece by face groups, into loose parts, by its hidden faces or by its mask (**Split masked**).
+- **Masking and selection:** paint a mask with Ctrl, or box or lasso it (following symmetry); mask by cavity, peaks or face group; blur, sharpen, grow, shrink or invert it. **Extract mask…** turns the masked area into a shell piece with live preview of its thickness.
+- **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, and a group color overlay.
+- **Transform gizmo (T):** move, rotate or scale a piece. With a mask, only the unmasked part moves and a soft mask edge bends smoothly, which makes it a quick posing tool. It snaps with Shift, takes typed values, and has pivot choices and operators (mirror, put on the ground, centre at origin).
+
+### Color and viewport
+
+- **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks, all respecting the mask. Color is kept through subdivision, remesh, booleans and decimate, and exported in glTF/GLB, PLY and OBJ.
+- **Materials:** five built-in matcaps, or load your own (PNG or JPEG), previewed live as you hover. **Ambient occlusion and cavity shading** make folds and pores read clearly; **flat shading** shows every polygon.
+- **Lights and shadows:** switch the viewport to up to four lights (sun, point or spot) with soft shadows, in **View > Shading > Light the viewport** and **Lights…** ([RFC 0008](docs/rfcs/0008-viewport-lights.md)).
+- **Wireframe and floor grid:** a wireframe overlay (Shift+W) in a color of your choice, and a floor grid that follows the model's size and position.
+- **Camera:** a focal length from 15 to 200 mm (35 mm equivalent), orthographic view, numpad side views, and an axis gizmo you click to snap to a side or drag to orbit.
+
+### 3D printing
+
+**Mesh > 3D Print Tools…** shows real-world size in millimetres, surface area and volume, checks that the mesh is closed, and estimates resin and filament weight. It also has:
+- **Wall thickness:** finds walls that are too thin and paints them red/orange on the model.
+- **Hollowing:** hollows a piece with a chosen wall thickness and adds drain holes.
+- **Split for printing:** cuts a piece along X, Y or Z into parts with registration pins and matching sockets (0.2 mm clearance).
+
+### Input and tablets
+
+- **Pen pressure** for graphics tablets (Wacom, Huion, XP-Pen and others; Windows Ink; Linux X11 and Wayland), with an adjustable pressure curve, presets and a live readout in **Preferences > Pen & tablet**. The pen's side button works too.
+- **Pen gestures:** drag with the pen in a panel to scroll it, and hold the pen still on a control to open its menu or read its tip. The **Pen side buttons** navigation preset orbits and pans with the side buttons ([RFC 0015](docs/rfcs/0015-pen-gestures.md)).
+- **Touch:** pinch to zoom, two-finger orbit and pan, and two-finger tap to undo; trackpad pinch and rotate.
+- **Keymap editor** (Preferences > Keymap): rebind every command, brush, view key and mouse button, with conflict warnings. Navigation presets: **OxyBrush**, **MMB orbit**, **Right-drag orbit** and **Pen side buttons**; shortcut presets **Default** and **Single-key tools**.
+
+### Files and pipeline
+
+- **Projects:** `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Autosave** every 2 minutes (adjustable) and **crash recovery** on the next launch.
+- **Import:** OBJ and STL (each object becomes its own piece; broken material files don't stop an import), and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; one Undo keeps the original size.
+- **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL or binary PLY, one object per piece.
+- **Pipeline helpers:** make an LOD chain (1/2, 1/4 and 1/8 of the triangles), and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting.
+
+### Interface
+
+- **Menus:** File, Edit, Pieces, Mesh, Groups, Mask, View, Plugins and Help, a toolbar with Raise/Carve, size, strength, symmetry and subdivision levels, and a view strip beside the viewport with toggles for the mask, face groups, shading, wireframe and floor grid.
+- **Command palette (Ctrl+K)** for any command, brush, recent file or guide topic; a **brush finder (Space)**; and a searchable **offline guide (F2)**.
+- **Accessibility:** interface scale from 75 to 300%, a high-contrast theme, a full mouse-only workflow, and screen-reader labels.
+- **Undo/redo** covers strokes, topology changes, face groups, visibility and pieces, within a memory budget.
+- **Optional updates:** off by default. **Preferences > Updates** can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Only GitHub is contacted, and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
+
+### Plugins
+
+- **Built-in plugins** in the **Plugins** menu, nothing to install: Displace, Mask by Height, Color Ramp, Array, Measure, Group by Height, Group by Angle, Hide Faces by Angle, Color by Group, Fill Holes, Simplify Mesh, Flip Faces and Squash. Some preview their result live before you Accept, long ones can be stopped, and their settings are remembered.
+- **Your own plugins:** WebAssembly plugins run sandboxed inside OxyBrush, written in Rust, WebAssembly text or any language that compiles to WebAssembly. **Plugins > Install add-on…** adds an `.oxyaddon`. See the [plugin guide](docs/plugins/README.md) and [API reference](docs/plugins/api-reference.md).
+- **Python scripts:** a zero-dependency Python SDK (`python/oxybrush`) talks to OxyBrush over the local AI-agent connection to inspect the scene, run strokes, remesh and more. Run a script with **File > Run Python script…** or manage scripts in **Preferences > Plugins**; examples are in `examples/plugins/`.
 
 ## Controls
 
@@ -188,7 +221,7 @@ Testers are the most useful contribution right now — especially with **pen tab
 | `Ctrl+,` | Preferences window (General, Pen & tablet, Interface, Plugins, Keymap, AI Agent, Updates) |
 | `F1` / `F2` | Full shortcut list / built-in guide |
 
-These are the OxyBrush preset. **Settings > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit or Right-drag orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
+These are the OxyBrush preset. **Preferences > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit or Right-drag orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
 
 ## Roadmap
 
@@ -200,17 +233,17 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
 | — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.4 |
-| 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, touch gestures, iPad app with Apple Pencil (TestFlight) ⏳ | 🚧 |
-| 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, layers, symmetrize/projection, deformers & posing, viewport, wireframe & lights ✅, themes ✅, quick palette ✅, keymap editor ✅, Python plugins ✅, local AI agent (MCP) ✅ | 🚧 |
+| 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
+| 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅ · layers, more deformers ⏳ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
-| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ✅ · 🚧 · ✅ Native .ztl/.zpr import live |
-| After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking, plugin API | long-term |
+| Parallel | 3D-print tools · tablet input · ZBrush file research ([rules](docs/formats/zbrush/README.md)) | ✅ · 🚧 · ✅ `.ztl`/`.zpr` import |
+| After 1.0 | Auto-retopology, live booleans, armature spheres, poly modeling, UVs & baking | long-term |
 
 ## For developers
 
 ### Building from source
 
-You need Rust 1.88 or newer ([rustup](https://rustup.rs)).
+You need [rustup](https://rustup.rs); it installs the Rust version pinned in `rust-toolchain.toml` (currently 1.99.1) the first time you build.
 
 ```bash
 git clone https://github.com/crisprintsstuff/OxyBrush
@@ -245,21 +278,24 @@ sudo apt install libxkbcommon-x11-0 libwayland-dev mesa-vulkan-drivers
 ```
 crates/
   oxy-mesh     chunked triangle mesh, face groups/visibility, raycast, subdivision  (no GPU)
-  oxy-topo     voxel remesh (with unions) and quadric decimation                  (no GPU)
+  oxy-vdb      sparse voxel grid: remesh, booleans, level set filters            (no GPU)
+  oxy-topo     voxel remesh, quadric decimation, 3D-print tools                   (no GPU)
   oxy-doc      scenes of pieces, .oxb project format, autosave/recovery           (no GPU)
   oxy-sculpt   stroke engine, brush kernels, symmetry, falloff                     (no GPU)
   oxy-history  scene-wide undo/redo (chunk snapshots, topology, pieces)           (no GPU)
   oxy-io       OBJ/STL and ZBrush import; glTF/GLB, OBJ, STL, PLY export          (no GPU)
-  oxy-ztl      clean-room ZBrush (.ztl/.zpr) format parser & geometry loader      (no GPU)
+  oxy-ztl      clean-room ZBrush (.ztl/.zpr) file reader                          (no GPU)
   oxy-cli      headless command-line tool (binary: `oxybrush-cli`)                (no GPU)
   oxy-mcp      local MCP server for an on-machine AI agent                        (no GPU)
+  oxy-plugin   sandboxed WebAssembly plugins: manifest, runtime, host API         (no GPU)
+  oxy-update   opt-in update checks: release choice, verification, HTTPS          (no GPU)
   oxy-render   wgpu matcap renderer, wireframe overlay, and orbit camera
   oxy-app      winit + egui desktop app (binary: `oxybrush`)
 ```
 
 Every crate except `oxy-render` and `oxy-app` runs headless and is unit-tested. The full design is in [RFC-0001](docs/rfcs/0001-oxybrush.md).
 
-### Python SDK & Plugins
+### Python SDK
 
 The `python/` directory contains the zero-dependency pure-Python `oxybrush` client library:
 
