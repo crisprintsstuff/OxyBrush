@@ -6,6 +6,7 @@
 mod agent;
 mod app;
 mod bridge;
+mod deform_ui;
 mod editor;
 mod gizmo_ops;
 mod guide;

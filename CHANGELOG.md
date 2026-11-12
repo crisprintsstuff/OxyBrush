@@ -5,10 +5,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Deform window** (Mesh > Deform…, [RFC 0016](docs/rfcs/0016-deform-window.md)): 25 whole-piece deformers in three sections. **Shape:** move, rotate, scale, bend, S-bend, skew, S-skew, flatten, flatten to axis, flatten one side, twist, taper, squeeze, perspective and sag. **Surface:** noise, inflate, inflate keep size and spherize. **Smoothing:** smooth, polish (plain, keep detail, keep group edges, keep sharp edges) and relax. Each has large X/Y/Z toggles. Drag a bar to see the result live; let go to apply it as one undo step (the bar springs back, Escape cancels). The mask holds parts back unless **Use mask** is off. **Repeat on this piece** and **Repeat on other pieces** reapply the last one; **Fit to standard size** centres the piece and scales its longest side to 2 units; Mirror and Symmetrize are repeated in the window.
 - **Mask border** and **Mask group borders** (Mask menu and command palette, [#170](https://github.com/crisprintsstuff/OxyBrush/issues/170)): mask the edge of the visible surface (an open mesh's border, or the edge of what's left visible when part of it is hidden), or the lines where face groups meet. Other visible points are unmasked, hidden ones keep their mask, and **Grow** widens the result. One undo step; when there's no border, nothing changes and the status bar says why. About 60 ms on 1.3M triangles.
 
 ### Changed
 - **New interface font and softer text.** The interface uses [Inter](https://rsms.me/inter/) (Regular for text, SemiBold for headings) instead of the toolkit's thin default, Ubuntu Light, so text is sturdier and easier to read on dark panels. Text in the dark themes is toned down a little (about 205 instead of 228 on a 0–255 scale), and bold and highlighted text is no longer pure white. Inter is under the SIL Open Font License 1.1, which ships next to the app's licenses and is credited in Help > About.
+- **Mirror X / Y / Z buttons are larger** (toolbar and Symmetry section), easier to hit with a mouse or a pen.
 
 ## [4.0.0-beta.4] - 2026-11-12
 

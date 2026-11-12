@@ -910,6 +910,12 @@ pub struct Editor {
     /// Theme and accent color window (with clickable swatches and color pickers).
     /// The Theme window is open, on `theme_tab`.
     pub show_theme: bool,
+    /// The Deform window (RFC 0016), its settings, the deformer being
+    /// dragged and the last one applied (for Repeat).
+    pub show_deform: bool,
+    pub deform: crate::deform_ui::DeformSettings,
+    pub deform_drag: Option<crate::deform_ui::DeformDrag>,
+    pub deform_last: Option<crate::deform_ui::LastDeform>,
     pub theme_tab: ThemeTab,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
@@ -1247,6 +1253,10 @@ impl Default for Editor {
             show_shortcuts: false,
             show_about: false,
             show_theme: false,
+            show_deform: false,
+            deform: Default::default(),
+            deform_drag: None,
+            deform_last: None,
             theme_tab: ThemeTab::Themes,
             show_wireframe: false,
             show_lights: false,
@@ -3022,6 +3032,10 @@ impl Editor {
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
         self.insert_preview = None;
+        if self.deform_drag.is_some() {
+            self.deform_cancel();
+            return;
+        }
         if matches!(self.drag, Drag::Retopo(_)) {
             self.retopo_cancel_drag();
             return;

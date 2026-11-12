@@ -117,6 +117,13 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::DeleteLower, "multires", Editor::delete_lower_levels),
         cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
+        cmd(
+            ed,
+            Cmd::DeformWindow,
+            "deformation bend twist taper skew inflate polish relax noise spherize squeeze flatten sag",
+            |e| e.show_deform = true,
+        ),
+        cmd(ed, Cmd::DeformFit, "unify normalize size centre center scale", Editor::deform_fit_standard_size),
         cmd(ed, Cmd::Decimate, "topology reduce polygons triangles", Editor::decimate_active),
         cmd(ed, Cmd::DeleteHidden, "topology visibility", Editor::delete_hidden),
         cmd(ed, Cmd::CaptureAlpha, "alpha stamp screen grab depth height map snapshot", Editor::capture_alpha),

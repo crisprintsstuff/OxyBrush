@@ -101,6 +101,16 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         body: "X symmetry is on by default: strokes on one side are mirrored to the other, and so are mask boxes and lassos. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.\n\nSymmetry mirrors new strokes; it doesn't fix a model whose sides already differ. For that, Mesh > Symmetrize keeps one half (for example +X onto −X: the +X side is where the axis gizmo's red X points), replaces the other half with its mirror image and welds the two along the middle, about the piece's centre. It's one undo step and removes subdivision levels.",
     },
     Topic {
+        title: "Deform window",
+        keywords: "deform bend twist taper skew flatten squeeze sag inflate spherize noise polish relax smooth unify",
+        body: "Mesh > Deform… changes the whole piece at once: bend, twist, taper, skew, flatten, squeeze, sag, inflate, spherize, noise, smooth, polish, relax and more.\n\n\
+- Drag a bar left or right to see the result on the model; let go to apply it as one undo step. The bar springs back, so another drag adds more. Escape while dragging cancels.\n\
+- X, Y and Z next to each bar pick the axes it uses.\n\
+- Masked parts stay put. Turn off Use mask to deform the whole visible piece.\n\
+- Repeat on this piece applies the last one again; Repeat on other pieces applies it to every other visible piece.\n\
+- Fit to standard size centres the piece and scales it so its longest side is 2 units.",
+    },
+    Topic {
         title: "Masking",
         keywords: "mask protect freeze unmask invert blur selection",
         body: "Masked areas (shown darker or tinted) are protected from brushes. Hold Ctrl and paint to mask; add Alt to unmask.\n\n\
