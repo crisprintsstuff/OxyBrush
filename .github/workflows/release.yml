@@ -74,6 +74,7 @@ jobs:
           Copy-Item target\x86_64-pc-windows-msvc\dist\oxybrush.exe, target\x86_64-pc-windows-msvc\dist\oxybrush-cli.exe, README.md "dist\$name\"
           Copy-Item LICENSE-MIT "dist\$name\LICENSE-MIT.txt"
           Copy-Item LICENSE-APACHE "dist\$name\LICENSE-APACHE.txt"
+          Copy-Item crates\oxy-app\assets\fonts\OFL.txt "dist\$name\LICENSE-Inter-font-OFL.txt"
           Compress-Archive -Path "dist\$name" -DestinationPath "dist\$name.zip"
           Remove-Item -Recurse "dist\$name"
           Get-ChildItem dist
@@ -96,6 +97,7 @@ jobs:
           name="OxyBrush-${{ needs.version.outputs.version }}-linux-x86_64"
           mkdir -p "dist/$name"
           cp target/x86_64-unknown-linux-gnu/dist/oxybrush target/x86_64-unknown-linux-gnu/dist/oxybrush-cli README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cp crates/oxy-app/assets/fonts/OFL.txt "dist/$name/LICENSE-Inter-font-OFL.txt"
           cp packaging/icons/oxybrush-256.png "dist/$name/oxybrush.png"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -r "dist/$name"

@@ -61,6 +61,7 @@ Source: "{#SourceDir}\oxybrush.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE-MIT"; DestDir: "{app}"; DestName: "LICENSE-MIT.txt"; Flags: ignoreversion
 Source: "{#RepoRoot}\LICENSE-APACHE"; DestDir: "{app}"; DestName: "LICENSE-APACHE.txt"; Flags: ignoreversion
+Source: "{#RepoRoot}\crates\oxy-app\assets\fonts\OFL.txt"; DestDir: "{app}"; DestName: "LICENSE-Inter-font-OFL.txt"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\OxyBrush"; Filename: "{app}\oxybrush.exe"
