@@ -557,7 +557,9 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, enabled: bool, toolt
 
 /// A text toggle chip (e.g. the X/Y/Z symmetry axes).
 pub fn chip(ui: &mut Ui, on: &mut bool, text: &str, tooltip: &str) -> Response {
-    let mut r = ui.add(egui::Button::selectable(*on, egui::RichText::new(text).strong()).min_size(vec2(26.0, 26.0)));
+    // Big enough to hit easily, with a pen too.
+    let mut r =
+        ui.add(egui::Button::selectable(*on, egui::RichText::new(text).strong().size(15.0)).min_size(vec2(32.0, 28.0)));
     if r.clicked() {
         *on = !*on;
         r.mark_changed();

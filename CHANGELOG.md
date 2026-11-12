@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Deform window** (Mesh > Deform…, [RFC 0016](docs/rfcs/0016-deform-window.md)): 25 whole-piece deformers in three sections. **Shape:** move, rotate, scale, bend, S-bend, skew, S-skew, flatten, flatten to axis, flatten one side, twist, taper, squeeze, perspective and sag. **Surface:** noise, inflate, inflate keep size and spherize. **Smoothing:** smooth, polish (plain, keep detail, keep group edges, keep sharp edges) and relax. Each has large X/Y/Z toggles. Drag a bar to see the result live; let go to apply it as one undo step (the bar springs back, Escape cancels). The mask holds parts back unless **Use mask** is off. **Repeat on this piece** and **Repeat on other pieces** reapply the last one; **Fit to standard size** centres the piece and scales its longest side to 2 units; Mirror and Symmetrize are repeated in the window.
+
+### Changed
+- **Mirror X / Y / Z buttons are larger** (toolbar and Symmetry section), easier to hit with a mouse or a pen.
+
 ## [4.0.0-beta.4] - 2026-11-12
 
 ### Added
