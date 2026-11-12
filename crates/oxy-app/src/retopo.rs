@@ -1078,10 +1078,14 @@ impl Editor {
                 }
             }
             RetopoDrag::Extend { a, b, start } => {
-                if let Some(p) = pos
-                    && p.distance(start) >= CLICK_PT * self.pixels_per_point.max(0.5)
-                    && let Some((pa, pb)) = self.retopo_extend_points(a, b, start, p)
-                {
+                let far_enough = pos.is_some_and(|p| p.distance(start) >= CLICK_PT * self.pixels_per_point.max(0.5));
+                let points = pos.filter(|_| far_enough).and_then(|p| self.retopo_extend_points(a, b, start, p));
+                if far_enough && points.is_none() {
+                    // Both new points must land on the model; say so rather
+                    // than dropping the drag without a word.
+                    self.status = "Retopo: the new quad would leave the model; drag less far".into();
+                }
+                if let Some((pa, pb)) = points {
                     let mirror = self.retopo_mirror();
                     self.retopo_edit("Retopo: extend", |_, c| {
                         let (mut pa, mut pb) = (pa, pb);
@@ -1219,6 +1223,13 @@ mod tests {
         e.pointer_up();
     }
 
+    /// Press or release Tab the way the app does for a real key event.
+    fn hold_tab(e: &mut Editor, down: bool) {
+        use winit::event::ElementState;
+        let state = if down { ElementState::Pressed } else { ElementState::Released };
+        crate::app::note_held_key(e, winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::Tab), state);
+    }
+
     fn drag(e: &mut Editor, from: Vec2, to: Vec2) {
         e.pointer = Some(from);
         e.pointer_down(PointerButton::Primary);
@@ -1304,9 +1315,9 @@ mod tests {
         // A second quad and a loop across both give an inner point to relax.
         e.retopo_refresh_view();
         let right = Vec2::new(440.0, 300.0);
-        e.tab_held = true;
+        hold_tab(&mut e, true);
         drag(&mut e, right, right + Vec2::new(60.0, 0.0));
-        e.tab_held = false;
+        hold_tab(&mut e, false);
         e.retopo_refresh_view();
         with_keys(&mut e, false, true, |e| click(e, Vec2::new(360.0, 300.0)));
         assert_eq!(cage(&e).quad_count(), 4, "{}", e.status);
@@ -1352,6 +1363,19 @@ mod tests {
     }
 
     #[test]
+    fn extend_off_the_model_explains_instead_of_doing_nothing_silently() {
+        let mut e = editor();
+        first_quad(&mut e);
+        e.retopo_refresh_view();
+        let right = Vec2::new(440.0, 300.0);
+        hold_tab(&mut e, true);
+        drag(&mut e, right, right + Vec2::new(5000.0, 0.0));
+        hold_tab(&mut e, false);
+        assert_eq!(cage(&e).quad_count(), 1);
+        assert!(e.status.contains("leave the model"), "{}", e.status);
+    }
+
+    #[test]
     fn extend_insert_loop_move_weld_relax_and_delete() {
         let mut e = editor();
         first_quad(&mut e);
@@ -1360,9 +1384,9 @@ mod tests {
         e.retopo_refresh_view();
         let right = Vec2::new(440.0, 300.0);
         assert!(matches!(e.retopo_hit(right), Some(Hit::Edge(..))));
-        e.tab_held = true;
+        hold_tab(&mut e, true);
         drag(&mut e, right, right + Vec2::new(60.0, 0.0));
-        e.tab_held = false;
+        hold_tab(&mut e, false);
         assert_eq!(cage(&e).quad_count(), 2, "{}", e.status);
         // Ctrl+click the top edge: a loop down through the first quad only.
         e.retopo_refresh_view();
@@ -1423,9 +1447,9 @@ mod tests {
         first_quad(&mut e);
         e.retopo_refresh_view();
         let right = Vec2::new(440.0, 300.0);
-        e.tab_held = true;
+        hold_tab(&mut e, true);
         drag(&mut e, right, right + Vec2::new(90.0, 0.0));
-        e.tab_held = false;
+        hold_tab(&mut e, false);
         let id = e.retopo.as_ref().unwrap().cage_piece.unwrap();
         let mesh = &e.scene.pieces[e.scene.index_of(id).unwrap()].mesh;
         let mut obj = Vec::new();
@@ -1571,9 +1595,9 @@ mod tests {
         first_quad(&mut e);
         // Two more quads to the right.
         e.retopo_refresh_view();
-        e.tab_held = true;
+        hold_tab(&mut e, true);
         drag(&mut e, Vec2::new(440.0, 300.0), Vec2::new(500.0, 300.0));
-        e.tab_held = false;
+        hold_tab(&mut e, false);
         let id = e.retopo.as_ref().unwrap().cage_piece.unwrap();
         let drawn = cage(&e).positions.clone();
         e.retopo_project_detail(2);
