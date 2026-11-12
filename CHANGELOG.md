@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.4] - 2026-11-12
+
 ### Added
 - **Mesh > Symmetrize**: makes the active piece symmetric. It keeps one half (+X onto −X, −X onto +X, and the same for Y and Z), replaces the other half with its mirror image and welds the two along the piece's symmetry centre, so the result is one closed surface. Triangles crossing the middle are cut there, so the seam is straight. Mask, vertex color and face groups are mirrored too. Runs in the background (about 0.1 s for 80k triangles); one undo step; subdivision levels are removed. Also in the command palette for X.
 - **Split masked** (Mask menu, Mesh menu, the masking tools and the command palette): moves the masked part of the active piece into a new piece and keeps the unmasked part in the original. A face goes with the mask when its corners average at least half masked, so a soft mask edge is cut through its middle. Invert the mask first to split off the unmasked part. Both parts come out unmasked; one undo step.
