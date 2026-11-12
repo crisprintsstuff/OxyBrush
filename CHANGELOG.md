@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Mask border** and **Mask group borders** (Mask menu and command palette, [#170](https://github.com/crisprintsstuff/OxyBrush/issues/170)): mask the edge of the visible surface (an open mesh's border, or the edge of what's left visible when part of it is hidden), or the lines where face groups meet. Other visible points are unmasked, hidden ones keep their mask, and **Grow** widens the result. One undo step; when there's no border, nothing changes and the status bar says why. About 60 ms on 1.3M triangles.
+
 ## [4.0.0-beta.4] - 2026-11-12
 
 ### Added
