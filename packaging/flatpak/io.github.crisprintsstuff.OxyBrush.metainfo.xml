@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.4" date="2026-11-12" type="development">
+      <description>
+        <p>Mesh, Symmetrize mirrors one half of a piece onto the other and
+        welds the seam. Split masked moves the masked part of a piece into a
+        new piece, and Join combines pieces without remeshing (Merge is now
+        Merge + remesh). Five new bundled plugins. The retopology tool's
+        Tab+drag now pulls out a new quad. Buttons and brush icons can have
+        colors of their own.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.3" date="2026-11-11" type="development">
       <description>
         <p>One Theme window holds themes, colors, interface size, corners and

@@ -4,7 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.4] - 2026-11-12
+
 ### Added
+- **Button and brush icon colors** (View > Theme… > Colors): **Custom button color** gives buttons and other controls a color of your own instead of the theme's (a little lighter on hover; High Contrast keeps its own), with a note when button text might be hard to read on it. **Brush icons** can keep their terracotta **Clay**, **Match accent**, or use a **Custom** color, with a preview row; Mask, Paint and the other icons that show their own colors keep those parts. Saved as `button_color`, `brush_icon_color` and `brush_icon_custom`; **Reset everything** puts both back.
 - **Mesh > Symmetrize**: makes the active piece symmetric. It keeps one half (+X onto −X, −X onto +X, and the same for Y and Z), replaces the other half with its mirror image and welds the two along the piece's symmetry centre, so the result is one closed surface. Triangles crossing the middle are cut there, so the seam is straight. Mask, vertex color and face groups are mirrored too. Runs in the background (about 0.1 s for 80k triangles); one undo step; subdivision levels are removed. Also in the command palette for X.
 - **Split masked** (Mask menu, Mesh menu, the masking tools and the command palette): moves the masked part of the active piece into a new piece and keeps the unmasked part in the original. A face goes with the mask when its corners average at least half masked, so a soft mask edge is cut through its middle. Invert the mask first to split off the unmasked part. Both parts come out unmasked; one undo step.
 - **Join** (Pieces panel, Pieces menu, command palette): combines the active piece and the other visible pieces into one piece exactly as they are, with no remesh and nothing welded. Triangles, mask, hidden faces and vertex color are kept, and each piece's face groups stay apart from the others', so a joined piece can still be hidden or selected by group. One undo step; subdivision levels are dropped (undo restores them).

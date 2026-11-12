@@ -603,6 +603,9 @@ pub mod plain {
     pub const OPEN_RECENT: &str = "Files you opened, imported or saved recently.";
     pub const CLEAR_RECENT: &str = "Forget the recent-file list. The files themselves stay where they are.";
     pub const VERTEX_COLOR: &str = "Paint and fill vertex color. Masked areas are left alone.";
+    pub const BUTTON_COLOR: &str = "Give buttons and other controls a color of your own instead of the theme's. Hovered buttons get a little lighter.";
+    pub const BRUSH_ICON_COLOR: &str =
+        "The color of the clay in the brush icons: the original terracotta, your accent color, or one of your own.";
     pub const SYMMETRIZE: &str = "Make this piece symmetric: keep one half, replace the other with its mirror image, and weld them along the middle. The axis gizmo's colored ends are the + sides.";
     pub const SYMMETRIZE_AXIS: &str =
         "Keep the first half named and mirror it onto the second, across the piece's symmetry centre. One undo step.";
@@ -805,6 +808,8 @@ pub mod plain {
         OPEN_RECENT,
         CLEAR_RECENT,
         VERTEX_COLOR,
+        BUTTON_COLOR,
+        BRUSH_ICON_COLOR,
         SYMMETRIZE,
         SYMMETRIZE_AXIS,
         TRANSFORM_MENU,

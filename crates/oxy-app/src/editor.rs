@@ -1136,6 +1136,11 @@ pub struct Editor {
     pub corner_style: crate::settings::CornerStyle,
     /// How thick slider bars are (Theme window > Size & shape).
     pub slider_size: crate::settings::SliderSize,
+    /// Fill of buttons and other controls; `None` keeps the theme's.
+    pub button_color: Option<[u8; 3]>,
+    /// What color the brush icons' clay is, and the custom one.
+    pub brush_icon_color: crate::settings::BrushIconColor,
+    pub brush_icon_custom: [u8; 3],
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
     /// Default extrusion thickness for Mask Extract (in scene units).
@@ -1360,6 +1365,9 @@ impl Default for Editor {
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: crate::settings::CornerStyle::Rounded,
             slider_size: crate::settings::SliderSize::Normal,
+            button_color: None,
+            brush_icon_color: crate::settings::BrushIconColor::Clay,
+            brush_icon_custom: crate::settings::DEFAULT_BRUSH_ICON_RGB,
             max_triangles: crate::settings::default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
@@ -1617,6 +1625,9 @@ impl Editor {
             custom_accent: self.custom_accent,
             corner_style: self.corner_style,
             slider_size: self.slider_size,
+            button_color: self.button_color,
+            brush_icon_color: self.brush_icon_color,
+            brush_icon_custom: self.brush_icon_custom,
             max_triangles: self.max_triangles,
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
@@ -1685,6 +1696,15 @@ impl Editor {
     }
 
     /// Open the unified Preferences / Settings window at the given tab.
+    /// The color brush icons are drawn in, or `None` for the original clay.
+    pub fn brush_icon_rgb(&self) -> Option<[u8; 3]> {
+        match self.brush_icon_color {
+            crate::settings::BrushIconColor::Clay => None,
+            crate::settings::BrushIconColor::Accent => Some(self.accent.rgb(self.custom_accent)),
+            crate::settings::BrushIconColor::Custom => Some(self.brush_icon_custom),
+        }
+    }
+
     /// Open the Theme window on `tab`.
     pub fn open_theme(&mut self, tab: ThemeTab) {
         self.show_theme = true;
@@ -1692,7 +1712,7 @@ impl Editor {
     }
 
     /// Put every theme setting back to the default look: Graphite, the
-    /// terracotta accent, rounded corners, normal sliders, 100% interface
+    /// terracotta accent, rounded corners, normal sliders, theme button and clay brush icon colors, 100% interface
     /// scale and the default viewport background.
     pub fn reset_theme(&mut self) {
         self.theme = crate::settings::ThemePreset::default();
@@ -1700,6 +1720,8 @@ impl Editor {
         self.accent = crate::settings::AccentPreset::default();
         self.corner_style = crate::settings::CornerStyle::default();
         self.slider_size = crate::settings::SliderSize::default();
+        self.button_color = None;
+        self.brush_icon_color = crate::settings::BrushIconColor::Clay;
         if self.ui_scale != 1.0 {
             self.ui_scale_from = Some(self.ui_scale);
             self.ui_scale = 1.0;
@@ -1824,6 +1846,9 @@ impl Editor {
         self.custom_accent = s.custom_accent;
         self.corner_style = s.corner_style;
         self.slider_size = s.slider_size;
+        self.button_color = s.button_color;
+        self.brush_icon_color = s.brush_icon_color;
+        self.brush_icon_custom = s.brush_icon_custom;
         self.max_triangles = s.max_triangles;
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
@@ -8873,6 +8898,9 @@ mod tests {
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: crate::settings::CornerStyle::Soft,
             slider_size: crate::settings::SliderSize::Thick,
+            button_color: Some([1, 2, 3]),
+            brush_icon_color: crate::settings::BrushIconColor::Accent,
+            brush_icon_custom: [4, 5, 6],
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,
