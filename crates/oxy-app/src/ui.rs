@@ -702,6 +702,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     dialogs(ui, ed, &mut action);
     theme_window(ui.ctx(), ed);
+    crate::deform_ui::deform_window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
@@ -3336,6 +3337,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
+    }
+    if tips::button(ui, "Deform…", Cmd::DeformWindow).clicked() {
+        ed.show_deform = true;
     }
     if tips::button(ui, "Retopology (draw quads)…", Cmd::Retopology).clicked() {
         ed.start_retopo();

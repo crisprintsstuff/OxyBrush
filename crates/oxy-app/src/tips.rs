@@ -76,6 +76,10 @@ commands! {
     AddCylinder => "Add cylinder piece", "", "Add a cylinder as a new piece, with even triangles ready to sculpt.";
     AddCone => "Add cone piece", "", "Add a cone as a new piece, with even triangles ready to sculpt.";
     AddTorus => "Add torus piece", "", "Add a torus (ring) as a new piece.";
+    DeformWindow => "Deform…", "", "Open the Deform window: bend, twist, taper, inflate, polish and more for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
+    DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";
+    DeformRepeat => "Repeat on this piece", "", "Apply the last deformer again, with the same amount and axes.";
+    DeformRepeatOthers => "Repeat on other pieces", "", "Apply the last deformer to every other visible piece, each around its own middle. One undo step.";
     Retopology => "Retopology (draw quads)", "", "Draw a new low-polygon mesh of quads by hand over the active piece: click to place points on its surface, Shift+click between them to make quads. The result is a new piece, saved with the project, and exports as quads.";
     AddTube => "Draw a tube", "", "Drag a path from the model or empty space to get a tube along it. Drag its points to shape it, Shift+drag a point to change its thickness, then Accept to add it as a new piece.";
     EditTube => "Edit tube", "", "Reopen the active piece's most recent tube to change its path, thickness, sides or caps. Accept replaces it, as one undo step. A tube that was sculpted, remeshed or regrouped since is an ordinary part of the mesh and can't be edited this way.";
@@ -619,6 +623,10 @@ pub mod plain {
     #[allow(dead_code)]
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";
     pub const UI_SCALE: &str = "Make the whole interface larger or smaller.";
+    pub const DEFORM_AXIS: &str = "Which axes this deformer uses. Several can be on at once.";
+    pub const DEFORM_MIRROR: &str =
+        "Flip the whole piece across the X, Y or Z plane through its middle. Needs no mask and nothing hidden.";
+    pub const DEFORM_USE_MASK: &str = "On: masked parts stay put and partly masked parts move partly. Off: the deformers move the whole visible piece.";
     pub const SLIDER_SIZE: &str = "How thick slider bars are. Thick bars are easier to see and to hit with a pen; the rest of the interface keeps its size.";
     pub const AUTOSAVE: &str = "How often a recovery copy is written, or Off to disable it.";
     pub const AO: &str = "Darkens places other parts of the surface shade, such as folds and the inside of ears.";
@@ -821,6 +829,9 @@ pub mod plain {
         WELCOME_STARTUP,
         HIGH_CONTRAST,
         UI_SCALE,
+        DEFORM_AXIS,
+        DEFORM_MIRROR,
+        DEFORM_USE_MASK,
         SLIDER_SIZE,
         AUTOSAVE,
         AO,
