@@ -151,7 +151,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_gray(34),
                 window: Color32::from_gray(39),
                 faint: Color32::from_gray(40),
-                text: Color32::from_gray(228),
+                text: Color32::from_gray(208),
                 inactive_weak: Color32::from_gray(47),
                 inactive_fill: Color32::from_gray(56),
                 hovered_weak: Color32::from_gray(59),
@@ -166,7 +166,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_gray(28),
                 window: Color32::from_gray(34),
                 faint: Color32::from_gray(36),
-                text: Color32::from_gray(230),
+                text: Color32::from_gray(210),
                 inactive_weak: Color32::from_gray(50),
                 inactive_fill: Color32::from_gray(62),
                 hovered_weak: Color32::from_gray(70),
@@ -179,7 +179,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_gray(18),
                 window: Color32::from_gray(24),
                 faint: Color32::from_gray(26),
-                text: Color32::from_gray(236),
+                text: Color32::from_gray(214),
                 inactive_weak: Color32::from_gray(30),
                 inactive_fill: Color32::from_gray(38),
                 hovered_weak: Color32::from_gray(44),
@@ -192,7 +192,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_rgb(30, 35, 44),
                 window: Color32::from_rgb(36, 42, 53),
                 faint: Color32::from_rgb(42, 49, 61),
-                text: Color32::from_rgb(226, 232, 240),
+                text: Color32::from_rgb(204, 210, 220),
                 inactive_weak: Color32::from_rgb(45, 52, 64),
                 inactive_fill: Color32::from_rgb(51, 60, 75),
                 hovered_weak: Color32::from_rgb(60, 71, 88),
@@ -205,7 +205,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_rgb(38, 33, 30),
                 window: Color32::from_rgb(46, 40, 36),
                 faint: Color32::from_rgb(52, 45, 41),
-                text: Color32::from_rgb(240, 232, 226),
+                text: Color32::from_rgb(218, 210, 204),
                 inactive_weak: Color32::from_rgb(54, 47, 43),
                 inactive_fill: Color32::from_rgb(64, 56, 51),
                 hovered_weak: Color32::from_rgb(76, 67, 61),
@@ -221,7 +221,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_rgb(12, 20, 37),
                 window: Color32::from_rgb(16, 28, 50),
                 faint: Color32::from_rgb(19, 32, 56),
-                text: Color32::from_rgb(230, 237, 246),
+                text: Color32::from_rgb(208, 216, 228),
                 inactive_weak: Color32::from_rgb(22, 37, 64),
                 inactive_fill: Color32::from_rgb(30, 50, 84),
                 hovered_weak: Color32::from_rgb(33, 54, 90),
@@ -236,7 +236,7 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 panel: Color32::from_gray(29),
                 window: Color32::from_gray(33),
                 faint: Color32::from_gray(35),
-                text: Color32::from_gray(220),
+                text: Color32::from_gray(204),
                 inactive_weak: Color32::from_gray(41),
                 inactive_fill: Color32::from_gray(44),
                 hovered_weak: Color32::from_gray(52),
@@ -259,6 +259,35 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
             },
         }
     }
+}
+
+/// The font family name for headings: Inter SemiBold.
+pub const HEADING_FONT: &str = "Inter SemiBold";
+
+/// Use Inter (SIL Open Font License, `assets/fonts/OFL.txt`) for the
+/// interface: Regular for text, SemiBold for headings. egui's own fonts stay
+/// behind it for symbols and emoji Inter doesn't have. Done once per context.
+pub fn install_fonts(ctx: &egui::Context) {
+    let id = egui::Id::unique("oxy_fonts_installed");
+    if ctx.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        return;
+    }
+    let mut fonts = egui::FontDefinitions::default();
+    fonts.font_data.insert(
+        "Inter".into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-Regular.ttf"))),
+    );
+    fonts.font_data.insert(
+        HEADING_FONT.into(),
+        std::sync::Arc::new(egui::FontData::from_static(include_bytes!("../assets/fonts/Inter-SemiBold.ttf"))),
+    );
+    let fallback = fonts.families.get(&egui::FontFamily::Proportional).cloned().unwrap_or_default();
+    fonts.families.entry(egui::FontFamily::Proportional).or_default().insert(0, "Inter".into());
+    let mut heading = vec![HEADING_FONT.to_string(), "Inter".to_string()];
+    heading.extend(fallback);
+    fonts.families.insert(egui::FontFamily::Name(HEADING_FONT.into()), heading);
+    ctx.set_fonts(fonts);
+    ctx.data_mut(|d| d.insert_temp(id, true));
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -379,6 +408,16 @@ pub fn apply_theme(
         v.widgets.inactive.weak_bg_fill = fill;
         v.widgets.hovered.weak_bg_fill = hover;
     }
+    // Bold and highlighted text (egui's "strong" text, hovered and pressed
+    // controls) is white in egui's dark style; on these dark panels that is
+    // harsh, so it's the theme's text color brightened a little instead.
+    if !is_high_contrast && theme != ThemePreset::StudioLight {
+        let strong = p.text.lerp_to_gamma(Color32::WHITE, 0.4);
+        v.widgets.active.fg_stroke.color = strong;
+        v.widgets.hovered.fg_stroke.color = strong;
+        v.widgets.open.fg_stroke.color = strong;
+    }
+    install_fonts(ctx);
     ctx.set_visuals(v);
     crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
     ctx.all_styles_mut(|s| {
@@ -407,8 +446,8 @@ pub fn apply_theme(
         s.spacing.window_margin = egui::Margin::same(if layout == UiLayout::Touch { 11 } else { 9 });
         s.spacing.menu_margin = egui::Margin::same(8);
         s.spacing.indent = 14.0;
-        use egui::{FontFamily::Proportional, FontId, TextStyle};
-        s.text_styles.insert(TextStyle::Heading, FontId::new(m.heading, Proportional));
+        use egui::{FontFamily, FontFamily::Proportional, FontId, TextStyle};
+        s.text_styles.insert(TextStyle::Heading, FontId::new(m.heading, FontFamily::Name(HEADING_FONT.into())));
         s.text_styles.insert(TextStyle::Body, FontId::new(m.body, Proportional));
         s.text_styles.insert(TextStyle::Button, FontId::new(m.body, Proportional));
         s.text_styles.insert(TextStyle::Small, FontId::new(m.small, Proportional));
@@ -4514,13 +4553,16 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         ui.heading(format!("OxyBrush {}", env!("CARGO_PKG_VERSION")));
         ui.label("An open-source digital sculpting application written in Rust.");
         ui.label("Licensed under MIT OR Apache-2.0.");
+        ui.label(
+            RichText::new("Interface font: Inter, by The Inter Project Authors, under the SIL Open Font License 1.1.")
+                .weak()
+                .small(),
+        );
         tips::hover(ui.hyperlink(crate::support::REPO_URL), plain::REPO);
         ui.add_space(6.0);
         ui.label(
-            RichText::new(
-                "This is an alpha. Thank you for testing! Please report anything odd via Help > Report a bug.",
-            )
-            .weak(),
+            RichText::new("This is a beta. Thank you for testing! Please report anything odd via Help > Report a bug.")
+                .weak(),
         );
         ui.add_space(6.0);
         egui::Grid::new("about_info").num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {

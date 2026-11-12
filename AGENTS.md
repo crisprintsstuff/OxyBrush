@@ -103,7 +103,7 @@ alone don't show visual regressions.
   code, and never read the source of copyleft (e.g. GPL) projects whose
   features we reimplement; use their public docs only and log it in
   [docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md). Don't copy other products' UI layouts, icons, materials, brushes or
-  other assets; everything shipped is original or CC0/CC-BY.
+  other assets; everything shipped is original or CC0/CC-BY, except fonts, which may also be under the SIL Open Font License 1.1 (the interface font, Inter, is; its license ships next to the app's licenses).
 - **Trademarks.** Don't use ZBrush/Maxon proprietary feature names (DynaMesh,
   ZRemesher, ZSpheres, SubTool, Polypaint, …) for OxyBrush features, in code,
   UI or docs. Use generic names: voxel remesh, auto-retopology, armature

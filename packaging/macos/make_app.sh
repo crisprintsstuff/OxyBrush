@@ -38,6 +38,7 @@ sed -e "s/@VERSION@/$VERSION/g" -e "s/@NUMERIC_VERSION@/$NUMERIC/g" \
   "$ROOT/packaging/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 plutil -lint "$APP/Contents/Info.plist"
 cp "$ROOT/LICENSE-MIT" "$ROOT/LICENSE-APACHE" "$APP/Contents/Resources/"
+cp "$ROOT/crates/oxy-app/assets/fonts/OFL.txt" "$APP/Contents/Resources/LICENSE-Inter-font-OFL.txt"
 
 # Ad-hoc signature: required for Apple Silicon to run the binary at all.
 codesign --force --deep --sign - "$APP"

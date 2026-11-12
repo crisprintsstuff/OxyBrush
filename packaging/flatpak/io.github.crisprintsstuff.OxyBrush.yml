@@ -36,6 +36,7 @@ modules:
       - for s in 16 24 32 48 64 128 256 512; do install -Dm644 oxybrush-$s.png /app/share/icons/hicolor/${s}x${s}/apps/io.github.crisprintsstuff.OxyBrush.png; done
       - install -Dm644 LICENSE-MIT /app/share/licenses/io.github.crisprintsstuff.OxyBrush/LICENSE-MIT
       - install -Dm644 LICENSE-APACHE /app/share/licenses/io.github.crisprintsstuff.OxyBrush/LICENSE-APACHE
+      - install -Dm644 OFL.txt /app/share/licenses/io.github.crisprintsstuff.OxyBrush/LICENSE-Inter-font-OFL
     sources:
       - type: file
         path: oxybrush
@@ -49,6 +50,8 @@ modules:
         path: ../../LICENSE-MIT
       - type: file
         path: ../../LICENSE-APACHE
+      - type: file
+        path: ../../crates/oxy-app/assets/fonts/OFL.txt
       - type: file
         path: ../icons/oxybrush-16.png
       - type: file
