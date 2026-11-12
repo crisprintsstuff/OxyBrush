@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.5" date="2026-11-12" type="development">
+      <description>
+        <p>A Deform window with 25 whole-piece deformers (bend, twist, taper,
+        inflate, polish and more) that respect the mask. Mask border and Mask
+        group borders. A new interface font, Inter, with softer text in the
+        dark themes, and larger Mirror X, Y and Z buttons.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.4" date="2026-11-12" type="development">
       <description>
         <p>Mesh, Symmetrize mirrors one half of a piece onto the other and
