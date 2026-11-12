@@ -5776,6 +5776,49 @@ impl Editor {
         self.status = label.into();
     }
 
+    /// Mask the visible border of the active piece (issue #170): the edge of
+    /// an open surface and the edge of what's left visible when part of it
+    /// is hidden. Everything else that's visible is unmasked.
+    pub fn mask_border(&mut self) {
+        self.mask_feature(
+            "Mask border",
+            Mesh::mask_border,
+            "No border: this piece is closed and nothing is hidden (hide part of it, or open it, first)",
+        );
+    }
+
+    /// Mask the points where face groups meet on the active piece (issue
+    /// #170). Everything else that's visible is unmasked.
+    pub fn mask_group_borders(&mut self) {
+        self.mask_feature(
+            "Mask group borders",
+            Mesh::mask_group_borders,
+            "No group borders: everything visible is in one face group",
+        );
+    }
+
+    /// Run a mask command that returns how many points it masked, as one
+    /// undo step; when it masks nothing, leave the mask as it was and say why.
+    fn mask_feature(&mut self, label: &str, f: impl FnOnce(&mut Mesh) -> usize, nothing: &str) {
+        self.pointer_up();
+        let piece = self.scene.active_mut();
+        let before = piece.mesh.mask.clone();
+        self.history.begin(label, piece.id, &piece.mesh);
+        for c in 0..piece.mesh.chunks.len() as u32 {
+            self.history.touch(&piece.mesh, c);
+        }
+        let n = f(&mut piece.mesh);
+        if n == 0 {
+            piece.mesh.mask = before;
+            self.history.cancel();
+            self.status = nothing.into();
+            return;
+        }
+        piece.mesh.mark_all_dirty();
+        self.history.commit();
+        self.status = format!("{label}: {n} points masked");
+    }
+
     pub fn invert_mask(&mut self) {
         self.edit_mask("Invert mask", |m| 1.0 - m);
     }
@@ -6878,6 +6921,39 @@ mod tests {
         e.symmetrize(0, true);
         assert!(e.job.is_none());
         assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
+    }
+
+    #[test]
+    fn mask_border_and_group_borders_are_undoable_and_say_when_there_is_none() {
+        let mut e = editor();
+        e.scene.active_mut().mesh.mask[0] = 0.5;
+        // A closed sphere in one group: nothing to mask, and the mask is untouched.
+        e.mask_border();
+        assert!(e.status.starts_with("No border"), "{}", e.status);
+        e.mask_group_borders();
+        assert!(e.status.starts_with("No group borders"), "{}", e.status);
+        assert_eq!(e.scene.active().mesh.mask[0], 0.5);
+        // Hide the top: the edge of the visible part gets masked, in one undo step.
+        let hidden: Vec<bool> = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.0)).collect()
+        };
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.mask_border();
+        assert!(e.status.starts_with("Mask border:"), "{}", e.status);
+        assert!(e.scene.active().mesh.mask.contains(&1.0));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.mask[0], 0.5, "undo restores the old mask");
+        assert!(!e.scene.active().mesh.mask.contains(&1.0));
+        // Two groups: their meeting line gets masked.
+        e.edit_faces("Show all", Mesh::show_all);
+        let groups = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| u32::from(m.positions[t[0] as usize].x > 0.0)).collect()
+        };
+        e.scene.active_mut().mesh.set_groups(groups);
+        e.mask_group_borders();
+        assert!(e.status.starts_with("Mask group borders:"), "{}", e.status);
     }
 
     #[test]

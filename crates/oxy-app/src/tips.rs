@@ -115,6 +115,8 @@ commands! {
     SharpenMask => "Sharpen mask", "", "Make the mask edge crisper, more on or off.";
     MaskCavities => "Mask cavities", "", "Mask creases, pores and other concave areas.";
     MaskPeaks => "Mask peaks", "", "Mask ridges, edges and other convex areas.";
+    MaskBorder => "Mask border", "", "Mask the edge of the visible surface: the border of an open mesh, and the edge of what's left when part of it is hidden. The rest is unmasked. Grow the mask to widen it.";
+    MaskGroupBorders => "Mask group borders", "", "Mask the lines where face groups meet. The rest is unmasked. Grow the mask to widen them.";
     ShowMask => "Show / hide mask", "M", "Show or hide the mask tint.";
     GizmoMove => "Transform: move", "T", "Move the active piece. Masked parts stay put. T cycles the gizmo.";
     GizmoRotate => "Transform: rotate", "", "Rotate the active piece. Masked parts stay put. T cycles the gizmo.";

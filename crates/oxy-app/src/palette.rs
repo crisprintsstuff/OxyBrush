@@ -148,6 +148,8 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::MaskPeaks, "masking convex ridges", |e| {
             e.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false))
         }),
+        cmd(ed, Cmd::MaskBorder, "masking edge boundary outline open hole hidden", Editor::mask_border),
+        cmd(ed, Cmd::MaskGroupBorders, "masking face groups boundary edges seams", Editor::mask_group_borders),
         cmd(ed, Cmd::ShowMask, "masking view", |e| e.view.show_mask = !e.view.show_mask),
         cmd(ed, Cmd::GizmoMove, "gizmo pose translate", |e| e.toggle_gizmo(crate::pose::GizmoMode::Move)),
         cmd(ed, Cmd::GizmoRotate, "gizmo pose turn", |e| e.toggle_gizmo(crate::pose::GizmoMode::Rotate)),
