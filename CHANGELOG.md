@@ -19,6 +19,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Changed
 - **Merge is now "Merge + remesh"** (Pieces panel; "Merge and remesh visible" in the Pieces menu). It always fused the visible pieces with a voxel remesh, which the Pieces panel's plain "Merge" button didn't say. Use **Join** to combine pieces without remeshing.
 
+### Fixed
+- **Retopology: Tab+drag pulls out a quad again.** Tab+drag on a border edge never worked in the app: the key handling that keeps Tab from moving focus between panels returned before OxyBrush noted that Tab was held, so the retopology tool never saw it. The tool's tests set the flag directly and missed it; they now go through the same key handling as the app. Dragging so far that the new quad would leave the model now says so in the status bar instead of doing nothing.
+
 ## [4.0.0-beta.3] - 2026-11-11
 
 ### Added
