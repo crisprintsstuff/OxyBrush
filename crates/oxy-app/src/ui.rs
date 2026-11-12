@@ -269,6 +269,7 @@ pub fn apply_theme(
     custom_accent: [u8; 3],
     corner_style: CornerStyle,
     slider_size: SliderSize,
+    button_color: Option<[u8; 3]>,
     high_contrast: bool,
     ui_scale: f32,
     layout: UiLayout,
@@ -365,6 +366,19 @@ pub fn apply_theme(
             v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, ..shadow };
         }
     }
+    // A custom button color replaces the theme's fill for buttons and other
+    // controls, a little lighter on hover; high contrast keeps its own. The
+    // "open" fill is left alone: egui also paints window title bars with it.
+    if let Some([r, g, b]) = button_color.filter(|_| !is_high_contrast) {
+        let fill = Color32::from_rgb(r, g, b);
+        let hover = Color32::from_rgb(
+            r.saturating_add(((255 - r) as f32 * 0.15) as u8),
+            g.saturating_add(((255 - g) as f32 * 0.15) as u8),
+            b.saturating_add(((255 - b) as f32 * 0.15) as u8),
+        );
+        v.widgets.inactive.weak_bg_fill = fill;
+        v.widgets.hovered.weak_bg_fill = hover;
+    }
     ctx.set_visuals(v);
     crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
     ctx.all_styles_mut(|s| {
@@ -410,6 +424,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     // With pen panel gestures on (RFC 0015) a pen drag over a label scrolls
     // the panel, so labels don't start a text selection then.
     let selectable = !ed.pen_panels_active();
+    widgets::set_brush_clay(ed.brush_icon_rgb());
     if ui.ctx().global_style().interaction.selectable_labels != selectable {
         ui.ctx().all_styles_mut(|s| s.interaction.selectable_labels = selectable);
     }
@@ -1481,8 +1496,69 @@ fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
         });
     }
     ui.add_space(8.0);
+    ui.label(RichText::new("Buttons").strong());
+    ui.horizontal(|ui| {
+        let mut custom = ed.button_color.is_some();
+        if tips::hover(ui.checkbox(&mut custom, "Custom button color"), plain::BUTTON_COLOR).changed() {
+            // Start from the theme's own button fill.
+            ed.button_color = custom.then(|| {
+                let c = ui.visuals().widgets.inactive.weak_bg_fill;
+                [c.r(), c.g(), c.b()]
+            });
+        }
+        if let Some(rgb) = &mut ed.button_color {
+            let mut f = rgb.map(|c| c as f32 / 255.0);
+            if ui.color_edit_button_rgb(&mut f).changed() {
+                *rgb = f.map(|c| (c * 255.0).round() as u8);
+            }
+        }
+    });
+    if let Some(rgb) = ed.button_color
+        && contrast_ratio(rgb, ui.visuals().text_color()) < 3.0
+    {
+        ui.label(RichText::new("Button text may be hard to read on this color.").weak().small());
+    }
+    ui.add_space(8.0);
+    ui.label(RichText::new("Brush icons").strong());
+    ui.horizontal(|ui| {
+        for c in crate::settings::BrushIconColor::ALL {
+            if tips::hover(ui.selectable_label(ed.brush_icon_color == c, c.label()), plain::BRUSH_ICON_COLOR).clicked()
+            {
+                ed.brush_icon_color = c;
+            }
+        }
+        if ed.brush_icon_color == crate::settings::BrushIconColor::Custom {
+            let mut f = ed.brush_icon_custom.map(|c| c as f32 / 255.0);
+            if ui.color_edit_button_rgb(&mut f).changed() {
+                ed.brush_icon_custom = f.map(|c| (c * 255.0).round() as u8);
+            }
+        }
+    });
+    // A row of icons in the chosen color.
+    ui.horizontal(|ui| {
+        let ctx = ui.ctx().clone();
+        widgets::set_brush_clay(ed.brush_icon_rgb());
+        for k in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate, BrushKind::Grab, BrushKind::Crease] {
+            let t = widgets::brush_texture(&ctx, k);
+            ui.add(egui::Image::new((t.id(), egui::vec2(32.0, 32.0))));
+        }
+    });
+    ui.add_space(8.0);
     ui.label(RichText::new("Viewport background").strong());
     background_controls(ui, ed);
+}
+
+/// WCAG contrast ratio between an sRGB color and a text color (1 to 21).
+fn contrast_ratio(rgb: [u8; 3], text: Color32) -> f32 {
+    let lum = |c: [u8; 3]| {
+        let l = c.map(|v| {
+            let s = v as f32 / 255.0;
+            if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+        });
+        0.2126 * l[0] + 0.7152 * l[1] + 0.0722 * l[2]
+    };
+    let (a, b) = (lum(rgb), lum([text.r(), text.g(), text.b()]));
+    (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
 fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
@@ -5379,6 +5455,7 @@ mod tests {
             [0xE0, 0x7A, 0x4F],
             CornerStyle::Rounded,
             SliderSize::Normal,
+            None,
             high_contrast,
             ui_scale,
             layout,
@@ -5563,7 +5640,11 @@ mod tests {
         ed.high_contrast = true;
         ed.ui_scale = 1.4;
         ed.view.background = [0.5, 0.0, 0.0];
+        ed.button_color = Some([1, 2, 3]);
+        ed.brush_icon_color = crate::settings::BrushIconColor::Accent;
+        assert_eq!(ed.brush_icon_rgb(), Some(ed.accent.rgb(ed.custom_accent)), "icons follow the accent");
         ed.reset_theme();
+        assert_eq!((ed.button_color, ed.brush_icon_rgb()), (None, None), "theme buttons, clay icons");
         let classic = &LOOKS[0];
         assert_eq!((ed.theme, ed.accent, ed.corner_style), (classic.theme, classic.accent, classic.corners));
         assert!(!ed.high_contrast);
@@ -5916,6 +5997,7 @@ mod tests {
             [0, 0, 0],
             CornerStyle::Pill,
             SliderSize::Normal,
+            None,
             false,
             1.0,
             UiLayout::Standard,
@@ -5950,6 +6032,7 @@ mod tests {
                 [0, 0, 0],
                 CornerStyle::Rounded,
                 SliderSize::Normal,
+                None,
                 false,
                 1.0,
                 layout,
@@ -5982,6 +6065,7 @@ mod tests {
                 [0, 0, 0],
                 CornerStyle::Rounded,
                 SliderSize::Normal,
+                None,
                 false,
                 1.0,
                 UiLayout::Standard,
@@ -6005,6 +6089,39 @@ mod tests {
     }
 
     #[test]
+    fn a_custom_button_color_fills_buttons_but_not_in_high_contrast() {
+        let fill = |button, theme| {
+            let ctx = egui::Context::default();
+            apply_theme(
+                &ctx,
+                theme,
+                AccentPreset::Terracotta,
+                [0; 3],
+                CornerStyle::Rounded,
+                SliderSize::Normal,
+                button,
+                false,
+                1.0,
+                UiLayout::Standard,
+            );
+            let w = ctx.global_style().visuals.widgets.clone();
+            (w.inactive.weak_bg_fill, w.hovered.weak_bg_fill)
+        };
+        for theme in ThemePreset::ALL {
+            let (themed, _) = fill(None, theme);
+            let (custom, hover) = fill(Some([30, 90, 160]), theme);
+            if theme == ThemePreset::HighContrast {
+                assert_eq!(custom, themed, "high contrast keeps its own buttons");
+            } else {
+                assert_eq!(custom, Color32::from_rgb(30, 90, 160), "{theme:?}");
+                assert!(hover.r() > 30 && hover.b() > 160, "{theme:?}: lighter on hover");
+            }
+        }
+        assert!(contrast_ratio([255, 255, 255], Color32::BLACK) > 20.0);
+        assert!(contrast_ratio([200, 200, 200], Color32::from_gray(210)) < 3.0);
+    }
+
+    #[test]
     fn slider_thickness_changes_only_the_bar() {
         for theme in ThemePreset::ALL {
             for layout in UiLayout::ALL {
@@ -6017,6 +6134,7 @@ mod tests {
                         [0; 3],
                         CornerStyle::Rounded,
                         size,
+                        None,
                         false,
                         1.0,
                         layout,
@@ -6051,6 +6169,7 @@ mod tests {
                         [100, 150, 200],
                         corner,
                         SliderSize::Normal,
+                        None,
                         false,
                         1.0,
                         UiLayout::Standard,

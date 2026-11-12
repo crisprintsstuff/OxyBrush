@@ -317,6 +317,10 @@ pub struct Settings {
     /// Window and button corner rounding style.
     pub corner_style: CornerStyle,
     pub slider_size: SliderSize,
+    /// Fill of buttons and other controls; `None` keeps the theme's.
+    pub button_color: Option<[u8; 3]>,
+    pub brush_icon_color: BrushIconColor,
+    pub brush_icon_custom: [u8; 3],
     /// Maximum triangles allowed during subdivision (0 = unlimited).
     pub max_triangles: usize,
     /// Default extrusion thickness for Mask Extract (in scene units).
@@ -603,6 +607,46 @@ impl AccentPreset {
     }
 }
 
+/// What color the brush icons' clay is (Theme window > Colors).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BrushIconColor {
+    /// The original terracotta clay.
+    #[default]
+    Clay,
+    /// The accent color, so the icons match the theme.
+    Accent,
+    /// A color of the user's choosing (`brush_icon_custom`).
+    Custom,
+}
+
+impl BrushIconColor {
+    pub const ALL: [BrushIconColor; 3] = [BrushIconColor::Clay, BrushIconColor::Accent, BrushIconColor::Custom];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BrushIconColor::Clay => "Clay",
+            BrushIconColor::Accent => "Match accent",
+            BrushIconColor::Custom => "Custom",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            BrushIconColor::Clay => "clay",
+            BrushIconColor::Accent => "accent",
+            BrushIconColor::Custom => "custom",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == k)
+    }
+}
+
+/// The custom brush icon color a fresh install starts from: the clay's own
+/// terracotta, so switching to Custom starts where the icons already are.
+pub const DEFAULT_BRUSH_ICON_RGB: [u8; 3] = [207, 140, 108];
+
 /// How thick slider bars are drawn (Theme window > Size & shape). Only the
 /// bar changes: the rest of the interface keeps its size, which the
 /// interface scale controls.
@@ -779,6 +823,9 @@ impl Default for Settings {
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: CornerStyle::Rounded,
             slider_size: SliderSize::Normal,
+            button_color: None,
+            brush_icon_color: BrushIconColor::Clay,
+            brush_icon_custom: DEFAULT_BRUSH_ICON_RGB,
             max_triangles: default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
@@ -856,7 +903,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nbutton_color = {}\nbrush_icon_color = {}\nbrush_icon_custom = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -892,6 +939,12 @@ impl Settings {
             self.custom_accent[2],
             self.corner_style.key(),
             self.slider_size.key(),
+            self.button_color.map_or("theme".to_string(), |[r, g, b]| format!("{r}, {g}, {b}")),
+            self.brush_icon_color.key(),
+            {
+                let [r, g, b] = self.brush_icon_custom;
+                format!("{r}, {g}, {b}")
+            },
             self.max_triangles,
             self.extract_thickness,
             self.extract_smooth,
@@ -1094,6 +1147,17 @@ impl Settings {
                         s.custom_accent = c;
                     }
                 }
+                "button_color" => s.button_color = parse_u8_rgb(v),
+                "brush_icon_color" => {
+                    if let Some(c) = BrushIconColor::from_key(v) {
+                        s.brush_icon_color = c;
+                    }
+                }
+                "brush_icon_custom" => {
+                    if let Some(c) = parse_u8_rgb(v) {
+                        s.brush_icon_custom = c;
+                    }
+                }
                 "slider_size" => {
                     if let Some(c) = SliderSize::from_key(v) {
                         s.slider_size = c;
@@ -1293,6 +1357,16 @@ mod tests {
         assert_eq!(s.slider_size, SliderSize::Thick);
         assert_eq!(Settings::from_text(&s.to_text()).slider_size, SliderSize::Thick);
         assert_eq!(Settings::default().slider_size, SliderSize::Normal);
+        // Button and brush icon colors round-trip; "theme" means no custom color.
+        let mut c = Settings::default();
+        assert_eq!(Settings::from_text(&c.to_text()).button_color, None);
+        c.button_color = Some([10, 20, 30]);
+        c.brush_icon_color = BrushIconColor::Custom;
+        c.brush_icon_custom = [40, 50, 60];
+        let back = Settings::from_text(&c.to_text());
+        assert_eq!(back.button_color, Some([10, 20, 30]));
+        assert_eq!((back.brush_icon_color, back.brush_icon_custom), (BrushIconColor::Custom, [40, 50, 60]));
+        assert_eq!(Settings::from_text("button_color = theme\n").button_color, None);
         assert_eq!(s.theme, ThemePreset::Midnight);
         assert_eq!(s.corner_style, CornerStyle::Pill);
         let back = Settings::from_text(&s.to_text());
@@ -1360,6 +1434,9 @@ mod tests {
             custom_accent: [0x38, 0xBD, 0xF8],
             corner_style: CornerStyle::Soft,
             slider_size: SliderSize::Thick,
+            button_color: Some([1, 2, 3]),
+            brush_icon_color: BrushIconColor::Accent,
+            brush_icon_custom: [4, 5, 6],
             max_triangles: 48_000_000,
             extract_thickness: 0.035,
             extract_smooth: 3,

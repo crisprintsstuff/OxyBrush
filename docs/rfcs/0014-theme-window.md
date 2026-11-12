@@ -36,4 +36,4 @@ Every tab has a footer with **Reset everything**, which goes back to the default
 
 ## Compatibility
 
-The window edits the same settings as before (`theme`, `accent`, `custom_accent`, `corner_style`, `ui_scale`, the background), plus one new one, `slider_size` (`thin`, `normal` or `thick`; missing means `normal`, so older settings files load unchanged). Commands that opened the old windows (**Theme & Appearance**, **Viewport background**) now open the Theme window, on the right tab.
+The window edits the same settings as before (`theme`, `accent`, `custom_accent`, `corner_style`, `ui_scale`, the background), plus `slider_size` (`thin`, `normal` or `thick`), and, from 4.0.0-beta.4, `button_color` (`theme` or `r, g, b`), `brush_icon_color` (`clay`, `accent` or `custom`) and `brush_icon_custom` (`r, g, b`) on the Colors tab. Missing keys keep the defaults (normal sliders, the theme's buttons, clay icons), so older settings files load unchanged. Commands that opened the old windows (**Theme & Appearance**, **Viewport background**) now open the Theme window, on the right tab.

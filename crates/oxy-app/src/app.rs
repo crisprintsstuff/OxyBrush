@@ -48,6 +48,7 @@ type AppliedThemeKey = (
     [u8; 3],
     crate::settings::CornerStyle,
     crate::settings::SliderSize,
+    Option<[u8; 3]>,
     bool,
     f32,
     crate::settings::UiLayout,
@@ -534,6 +535,7 @@ impl App {
             self.editor.custom_accent,
             self.editor.corner_style,
             self.editor.slider_size,
+            self.editor.button_color,
             self.editor.high_contrast,
             self.editor.ui_scale,
             self.editor.layout,
@@ -549,6 +551,7 @@ impl App {
                 theme_key.5,
                 theme_key.6,
                 theme_key.7,
+                theme_key.8,
             );
             self.applied_theme = Some(theme_key);
         }

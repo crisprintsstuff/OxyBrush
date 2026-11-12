@@ -709,7 +709,13 @@ pub fn drag_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
 
 /// A brush preview: a clay ball with the brush's effect pressed into it,
 /// shaded with a fixed key light. Computed on the CPU (64 px, cached).
-pub fn brush_preview_image(k: BrushKind, size: usize) -> egui::ColorImage {
+///
+/// The clay is drawn in `clay` (linear light). Brushes whose icon shows
+/// something else in its own color (Mask's blue, a split line's green half)
+/// keep those parts.
+pub fn brush_preview_image(k: BrushKind, size: usize, clay: [f32; 3]) -> egui::ColorImage {
+    let scale = |f: f32| clay.map(|c| (c * f).min(1.0));
+    let lighter = clay.map(|c| c + (1.0 - c) * 0.35);
     let asymmetric = matches!(
         k,
         BrushKind::Grab | BrushKind::SnakeHook | BrushKind::TopoMove | BrushKind::KelvinGrab | BrushKind::KelvinTwist
@@ -757,15 +763,15 @@ pub fn brush_preview_image(k: BrushKind, size: usize) -> egui::ColorImage {
             let base = if masked {
                 [0.18, 0.26, 0.6]
             } else if trimmed {
-                [0.8, 0.45, 0.3]
+                lighter
             } else if k == BrushKind::PlaneClip {
                 [0.72, 0.48, 0.2]
             } else if k == BrushKind::LineSplit {
-                if sx > 0.0 { [0.25, 0.65, 0.45] } else { [0.62, 0.26, 0.15] }
+                if sx > 0.0 { [0.25, 0.65, 0.45] } else { clay }
             } else if k == BrushKind::CutAway {
-                if sx > 0.0 { [0.75, 0.32, 0.25] } else { [0.45, 0.2, 0.15] }
+                if sx > 0.0 { scale(1.2) } else { scale(0.72) }
             } else {
-                [0.62, 0.26, 0.15]
+                clay
             };
             let lin = |b: f32| b * (0.1 + diffuse * 0.95) + spec + rim * 0.5;
             let srgb = |l: f32| {
@@ -815,7 +821,10 @@ pub fn cached_texture(
 
 /// Brush preview texture.
 pub fn brush_texture(ctx: &egui::Context, k: BrushKind) -> egui::TextureHandle {
-    cached_texture(ctx, ("brush", k.label()), || brush_preview_image(k, 64))
+    let clay = brush_clay();
+    cached_texture(ctx, ("brush", k.label(), clay), || {
+        brush_preview_image(k, 64, clay.map_or(CLAY_LINEAR, srgb_to_linear))
+    })
 }
 
 /// Material preview texture.
@@ -930,6 +939,37 @@ pub fn thumb_sized(
 /// Whether the Studio theme's drawing style is on (set by `apply_theme`):
 /// quiet uppercase section headings with a divider, and selected items as a
 /// dark fill with an accent outline rather than an accent-tinted fill.
+/// The brush icons' clay color as packed sRGB, or `u32::MAX` for the
+/// original terracotta (Theme window > Colors > Brush icons).
+static BRUSH_CLAY: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(u32::MAX);
+
+/// Set the brush icons' clay color (`None`: the original terracotta).
+/// Icons in another color are separate cached textures, so a change shows
+/// on the next frame.
+pub fn set_brush_clay(rgb: Option<[u8; 3]>) {
+    let packed = rgb.map_or(u32::MAX, |[r, g, b]| u32::from_be_bytes([0, r, g, b]));
+    BRUSH_CLAY.store(packed, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn brush_clay() -> Option<[u8; 3]> {
+    let packed = BRUSH_CLAY.load(std::sync::atomic::Ordering::Relaxed);
+    (packed != u32::MAX).then(|| {
+        let [_, r, g, b] = packed.to_be_bytes();
+        [r, g, b]
+    })
+}
+
+/// The original terracotta clay of the brush icons, in linear light.
+const CLAY_LINEAR: [f32; 3] = [0.62, 0.26, 0.15];
+
+/// An sRGB color in linear light, as the brush icon shading works.
+fn srgb_to_linear(rgb: [u8; 3]) -> [f32; 3] {
+    rgb.map(|c| {
+        let s = c as f32 / 255.0;
+        if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) }
+    })
+}
+
 static STUDIO_STYLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_studio_style(on: bool) {
@@ -1104,8 +1144,25 @@ mod tests {
     }
 
     #[test]
+    fn brush_icons_take_the_chosen_clay_color() {
+        let center = |img: &egui::ColorImage| img.pixels[16 * 32 + 16];
+        let clay = brush_preview_image(BrushKind::Draw, 32, CLAY_LINEAR);
+        let blue = brush_preview_image(BrushKind::Draw, 32, srgb_to_linear([40, 90, 220]));
+        assert!(center(&clay).r() > center(&clay).b(), "terracotta by default");
+        assert!(center(&blue).b() > center(&blue).r(), "blue when asked");
+        // Mask keeps its own blue whatever the clay.
+        let mask = |c| brush_preview_image(BrushKind::Mask, 32, c);
+        assert_eq!(center(&mask(CLAY_LINEAR)), center(&mask(srgb_to_linear([0, 200, 0]))));
+        // The tint is kept between frames and cleared with None.
+        set_brush_clay(Some([1, 2, 3]));
+        assert_eq!(brush_clay(), Some([1, 2, 3]));
+        set_brush_clay(None);
+        assert_eq!(brush_clay(), None);
+    }
+
+    #[test]
     fn previews_are_round_and_distinct() {
-        let images: Vec<_> = BrushKind::ALL.iter().map(|k| brush_preview_image(*k, 32)).collect();
+        let images: Vec<_> = BrushKind::ALL.iter().map(|k| brush_preview_image(*k, 32, CLAY_LINEAR)).collect();
         for (k, img) in BrushKind::ALL.iter().zip(&images) {
             assert_eq!(img.pixels.len(), 32 * 32);
             assert_eq!(img.pixels[0].a(), 0, "{k:?}: corners are transparent");
