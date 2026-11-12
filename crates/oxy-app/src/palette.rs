@@ -123,6 +123,8 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::ExportAlpha, "alpha save png image height map 2d edit", |e| e.request_export_alpha = true),
         cmd(ed, Cmd::CloseHoles, "topology fill cap watertight print gap boundary", Editor::close_holes),
         cmd(ed, Cmd::SplitHidden, "topology visibility separate piece", Editor::split_hidden),
+        cmd(ed, Cmd::SymmetrizePosX, "mirror weld symmetric copy half side", |e| e.symmetrize(0, true)),
+        cmd(ed, Cmd::SymmetrizeNegX, "mirror weld symmetric copy half side", |e| e.symmetrize(0, false)),
         cmd(ed, Cmd::SplitMasked, "mask unmasked separate piece detach", Editor::split_masked),
         cmd(ed, Cmd::GroupVisible, "face groups", |e| e.edit_faces("Group visible", oxy_mesh::Mesh::group_visible)),
         cmd(ed, Cmd::GroupFromMask, "face groups", |e| {

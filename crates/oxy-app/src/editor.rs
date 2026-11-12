@@ -5001,6 +5001,32 @@ impl Editor {
         self.decimate_to(target);
     }
 
+    /// Make the active piece symmetric across `axis` (0 = X, 1 = Y, 2 = Z)
+    /// through its symmetry centre: keep the half on the `keep_positive`
+    /// side, replace the other half with its mirror image and weld the two
+    /// along the plane (see [`topo::symmetrize`]). Off the UI thread; one
+    /// undo step; subdivision levels are dropped.
+    pub fn symmetrize(&mut self, axis: usize, keep_positive: bool) {
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let center = self.symmetry_center()[axis];
+        let name = ["X", "Y", "Z"][axis.min(2)];
+        let (from, to) = if keep_positive { ("+", "−") } else { ("−", "+") };
+        let sign = if keep_positive { 1.0 } else { -1.0 };
+        let data = self.scene.active().mesh.to_data();
+        if !data.positions.iter().any(|p| (p[axis] - center) * sign > 0.0) {
+            self.status = format!("Nothing to keep: no part of this piece is on the {from}{name} side of its centre");
+            return;
+        }
+        self.start_job(format!("Symmetrize {from}{name} onto {to}{name}"), Vec::new(), move || {
+            topo::symmetrize(&data, axis, center, keep_positive)
+                .map(|d| JobResult::Mesh(Mesh::from_data(d)))
+                .ok_or_else(|| "nothing on the kept side".to_string())
+        });
+    }
+
     /// Decimate the active piece to about `target` triangles, off the UI thread.
     pub fn decimate_to(&mut self, target: usize) {
         let mesh = self.scene.active().mesh.clone();
@@ -6790,6 +6816,43 @@ mod tests {
         assert!(e.job.is_none());
         assert_eq!(e.alphas.len(), count + 2);
         assert!(e.status.starts_with("Nothing to capture"));
+    }
+
+    #[test]
+    fn symmetrize_makes_the_piece_symmetric_in_one_undo_step() {
+        let mut e = editor();
+        // Push the +X side out so the halves differ, with a centre off the origin.
+        for p in &mut e.scene.active_mut().mesh.positions {
+            if p.x > 0.3 {
+                p.x *= 1.4;
+            }
+        }
+        e.scene.active_mut().symmetry_center = Some(Vec3::new(0.05, 0.0, 0.0));
+        let before = e.scene.active().mesh.positions.clone();
+        let reach = |e: &Editor| {
+            let xs = e.scene.active().mesh.positions.iter().map(|p| p.x);
+            (xs.clone().fold(f32::MAX, f32::min), xs.fold(f32::MIN, f32::max))
+        };
+        let (lo, hi) = reach(&e);
+        e.symmetrize(0, true);
+        wait_job(&mut e);
+        let (lo2, hi2) = reach(&e);
+        assert!((hi2 - hi).abs() < 1e-3, "the +X half is kept");
+        assert!(((0.05 - lo2) - (hi2 - 0.05)).abs() < 1e-3, "and mirrored about the centre: {lo2} {hi2}");
+        assert!(lo2 < lo - 0.1, "the −X half grew to match");
+        assert!(oxy_mesh::topo::boundary_loops(&e.scene.active().mesh.triangles).is_empty(), "welded shut");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before, "one undo step");
+        // Keeping the other side mirrors the unchanged half instead.
+        e.symmetrize(0, false);
+        wait_job(&mut e);
+        let (lo3, hi3) = reach(&e);
+        assert!((lo3 - lo).abs() < 1e-3 && hi3 < hi - 0.1, "{lo3} {hi3}");
+        // A plane past the whole piece leaves nothing to keep.
+        e.scene.active_mut().symmetry_center = Some(Vec3::new(5.0, 0.0, 0.0));
+        e.symmetrize(0, true);
+        assert!(e.job.is_none());
+        assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
     }
 
     #[test]

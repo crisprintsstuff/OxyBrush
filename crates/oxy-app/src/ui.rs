@@ -3313,6 +3313,24 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
     }
+    tips::menu(ui, "Symmetrize", plain::SYMMETRIZE, |ui| {
+        if tips::button_on(ui, !busy, "+X onto −X", Cmd::SymmetrizePosX).clicked() {
+            ed.symmetrize(0, true);
+        }
+        if tips::button_on(ui, !busy, "−X onto +X", Cmd::SymmetrizeNegX).clicked() {
+            ed.symmetrize(0, false);
+        }
+        ui.separator();
+        for (axis, name) in [(1, "Y"), (2, "Z")] {
+            for keep_positive in [true, false] {
+                let (from, to) = if keep_positive { ("+", "−") } else { ("−", "+") };
+                let b = ui.add_enabled(!busy, egui::Button::new(format!("{from}{name} onto {to}{name}")));
+                if tips::hover(b, plain::SYMMETRIZE_AXIS).clicked() {
+                    ed.symmetrize(axis, keep_positive);
+                }
+            }
+        }
+    });
     if tips::button(ui, "Close holes", Cmd::CloseHoles).clicked() {
         ed.close_holes();
     }
