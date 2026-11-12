@@ -6,7 +6,7 @@ use crate::pose::{self, GizmoMode, Handle};
 use glam::{Mat3, Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
-use oxy_mesh::{Mesh, primitives, topo};
+use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
 use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
 use oxy_topo::RemeshOptions;
@@ -5119,9 +5119,44 @@ impl Editor {
         self.status = format!("Split into {count} pieces by {what}");
     }
 
-    /// Move the active piece's hidden faces into a piece of their own
-    /// (shown), leaving the visible faces in the original. One undo step.
+    /// Move the hidden faces of the active piece into a new piece.
     pub fn split_hidden(&mut self) {
+        let keys: Vec<u32> = self.scene.active().mesh.hidden().iter().map(|&h| u32::from(h)).collect();
+        self.split_off(
+            &keys,
+            SplitOff {
+                label: "Split hidden",
+                suffix: "hidden",
+                all: "Nothing to split: every face of this piece is hidden",
+                none: "Nothing to split: this piece has no hidden faces (hide some first)",
+                done: "Split the hidden faces into a new piece",
+                clear_mask: false,
+            },
+        );
+    }
+
+    /// Move the masked part of the active piece into a new piece; the
+    /// unmasked part stays as the original. A face goes with the mask when
+    /// its corners average at least half masked. The mask was the
+    /// selection, so both parts come out unmasked.
+    pub fn split_masked(&mut self) {
+        let keys: Vec<u32> = self.scene.active().mesh.masked_faces().into_iter().map(u32::from).collect();
+        self.split_off(
+            &keys,
+            SplitOff {
+                label: "Split masked",
+                suffix: "masked",
+                all: "Nothing to split: the whole piece is masked (Invert the mask to split the other way)",
+                none: "Nothing to split: mask the part you want as a new piece first",
+                done: "Split the masked part into a new piece",
+                clear_mask: true,
+            },
+        );
+    }
+
+    /// Split the active piece in two by `keys` (per triangle: 1 goes to a
+    /// new piece, 0 stays). One undo step; subdivision levels are dropped.
+    fn split_off(&mut self, keys: &[u32], how: SplitOff) {
         if self.job_blocks_active() {
             self.status = "Wait for the running operation to finish first".into();
             return;
@@ -5129,14 +5164,9 @@ impl Editor {
         self.pointer_up();
         let index = self.scene.active_index();
         let piece = &self.scene.pieces[index];
-        let keys: Vec<u32> = piece.mesh.hidden().iter().map(|&h| u32::from(h)).collect();
-        let parts = piece.mesh.split_by(&keys);
+        let parts = piece.mesh.split_by(keys);
         if parts.len() < 2 {
-            self.status = if keys.contains(&1) {
-                "Nothing to split: every face of this piece is hidden".into()
-            } else {
-                "Nothing to split: this piece has no hidden faces (hide some first)".into()
-            };
+            self.status = if keys.contains(&1) { how.all } else { how.none }.into();
             return;
         }
         let base_name = piece.name.clone();
@@ -5145,10 +5175,13 @@ impl Editor {
         // Insert both parts after the original, then remove it (see split_active).
         let mut steps = Vec::new();
         for (k, (key, mut data)) in parts.into_iter().enumerate() {
+            if how.clear_mask {
+                data.mask.iter_mut().for_each(|m| *m = 0.0);
+            }
             let name = if key == 1 {
-                // The hidden part comes out shown, as its own piece.
+                // The part split off comes out shown, as its own piece.
                 data.hidden = vec![false; data.triangles.len()];
-                self.scene.unique_name(&format!("{base_name} hidden"))
+                self.scene.unique_name(&format!("{base_name} {}", how.suffix))
             } else {
                 base_name.clone()
             };
@@ -5158,15 +5191,63 @@ impl Editor {
         }
         let removed = self.scene.pieces.remove(index);
         steps.push(Step::Removed { index, piece: removed });
-        // Parts come in key order, so the visible part (key 0) now sits where
-        // the original was; it stays active.
+        // Parts come in key order, so the part that stays (key 0) now sits
+        // where the original was; it stays active.
         self.scene.set_active(index);
-        self.history.record_compound("Split hidden", steps);
+        self.history.record_compound(how.label, steps);
         self.status = if multires {
-            "Split the hidden faces into a new piece (subdivision levels were removed; undo restores them)".into()
+            format!("{} (subdivision levels were removed; undo restores them)", how.done)
         } else {
-            "Split the hidden faces into a new piece".into()
+            how.done.into()
         };
+    }
+
+    /// Join the active piece and every other visible piece into one piece,
+    /// as they are: no remesh, nothing welded. Triangles, mask, visibility
+    /// and vertex color are kept; each piece's face groups stay apart from
+    /// the others'. The joined piece takes the active piece's name and
+    /// place. One undo step. Subdivision levels are dropped (the current
+    /// level is what's joined). Merge and remesh is the fused alternative.
+    pub fn join_visible(&mut self) {
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let active = self.scene.active_index();
+        let joined: Vec<usize> = (0..self.scene.pieces.len()).filter(|&i| self.scene.pieces[i].visible).collect();
+        if joined.len() < 2 || !self.scene.pieces[active].visible {
+            self.status = "Join needs the active piece plus at least one more visible piece".into();
+            return;
+        }
+        self.pointer_up();
+        // The active piece first, so its face groups keep their numbers.
+        let order = std::iter::once(active).chain(joined.iter().copied().filter(|&i| i != active));
+        let parts: Vec<MeshData> = order.map(|i| self.scene.pieces[i].mesh.to_data()).collect();
+        let levels = joined.iter().any(|&i| self.scene.pieces[i].multires.is_some());
+        let first = &self.scene.pieces[active];
+        let piece = Piece {
+            symmetry_center: first.symmetry_center,
+            ..Piece::new(first.name.clone(), Mesh::from_data(MeshData::join(&parts)))
+        };
+        let id = piece.id;
+        // Insert the joined piece after the active one, then remove the
+        // originals from the back so the indices stay valid.
+        self.scene.pieces.insert(active + 1, piece);
+        let mut steps = vec![Step::Inserted { index: active + 1 }];
+        for &i in joined.iter().rev() {
+            let index = if i > active { i + 1 } else { i };
+            let removed = self.scene.pieces.remove(index);
+            steps.push(Step::Removed { index, piece: removed });
+        }
+        if let Some(i) = self.scene.index_of(id) {
+            self.scene.set_active(i);
+        }
+        self.history.record_compound(format!("Join {} pieces", joined.len()), steps);
+        self.status = format!(
+            "Joined {} pieces into one{}",
+            joined.len(),
+            if levels { " (subdivision levels were removed; undo restores them)" } else { "" }
+        );
     }
 
     /// Apply a finished background job. Call once per frame.
@@ -6125,6 +6206,19 @@ fn symmetric_planes(
 /// means unlimited (Settings > Subdivision limit), not "no triangles".
 pub(crate) fn triangle_cap(max_triangles: usize) -> usize {
     if max_triangles == 0 { usize::MAX } else { max_triangles }
+}
+
+/// How [`Editor::split_off`] names, labels and reports a split.
+struct SplitOff {
+    label: &'static str,
+    /// Added to the piece's name for the part split off.
+    suffix: &'static str,
+    /// Status when every face would go, or none would.
+    all: &'static str,
+    none: &'static str,
+    done: &'static str,
+    /// Leave both parts unmasked (the mask chose the split).
+    clear_mask: bool,
 }
 
 #[cfg(test)]
@@ -7152,6 +7246,78 @@ mod tests {
         e.undo();
         assert_eq!(e.scene.pieces.len(), 1);
         assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+    }
+
+    #[test]
+    fn split_masked_moves_the_masked_part_to_a_new_piece() {
+        let mut e = editor();
+        let tris = e.scene.active().mesh.triangle_count();
+        e.split_masked();
+        assert_eq!(e.scene.pieces.len(), 1, "nothing masked: nothing to split");
+        assert!(e.status.contains("mask the part"), "{}", e.status);
+        // Mask the top half.
+        let mask: Vec<f32> =
+            e.scene.active().mesh.positions.iter().map(|p| if p.y > 0.0 { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+        let n_masked = e.scene.active().mesh.masked_faces().iter().filter(|&&m| m).count();
+        assert!(n_masked > 0 && n_masked < tris);
+        e.split_masked();
+        assert_eq!(e.scene.pieces.len(), 2);
+        let (kept, split) = (&e.scene.pieces[0], &e.scene.pieces[1]);
+        assert_eq!((kept.name.as_str(), split.name.as_str()), ("Sphere", "Sphere masked"));
+        assert_eq!(e.scene.active_index(), 0, "the unmasked part stays active");
+        assert_eq!(split.mesh.triangle_count(), n_masked);
+        assert_eq!(kept.mesh.triangle_count(), tris - n_masked);
+        assert!(split.mesh.positions.iter().all(|p| p.y > -0.2), "the masked (top) part was split off");
+        assert!(kept.mesh.mask.iter().chain(&split.mesh.mask).all(|&m| m == 0.0), "both come out unmasked");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0), "undo brings the mask back");
+        // Everything masked: nothing to split.
+        e.scene.active_mut().mesh.mask.iter_mut().for_each(|m| *m = 1.0);
+        e.split_masked();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert!(e.status.contains("whole piece is masked"), "{}", e.status);
+    }
+
+    #[test]
+    fn join_combines_visible_pieces_without_remeshing() {
+        let mut e = editor();
+        e.duplicate_active(true);
+        e.duplicate_active(false);
+        assert_eq!(e.scene.pieces.len(), 3);
+        // Hide the last one: it stays out of the join.
+        e.scene.pieces[2].visible = false;
+        let hidden_id = e.scene.pieces[2].id;
+        e.scene.set_active(0);
+        let (t0, t1) = (e.scene.pieces[0].mesh.triangle_count(), e.scene.pieces[1].mesh.triangle_count());
+        let v = e.scene.pieces[0].mesh.vertex_count() + e.scene.pieces[1].mesh.vertex_count();
+        e.scene.pieces[1].mesh.mask.iter_mut().for_each(|m| *m = 1.0);
+        e.join_visible();
+        assert!(e.job.is_none(), "no background remesh");
+        assert_eq!(e.scene.pieces.len(), 2, "{}", e.status);
+        let joined = e.scene.active();
+        assert_eq!(joined.name, "Sphere");
+        assert_eq!(joined.mesh.triangle_count(), t0 + t1, "every triangle kept");
+        assert_eq!(joined.mesh.vertex_count(), v, "nothing welded");
+        assert!(joined.mesh.mask.contains(&1.0), "mask kept");
+        let groups: std::collections::HashSet<u32> = joined.mesh.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "each piece keeps a face group of its own");
+        assert!(e.scene.pieces.iter().any(|p| p.id == hidden_id), "the hidden piece is left alone");
+        // One undo step brings both pieces back, active first.
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert_eq!(e.scene.pieces[0].mesh.triangle_count(), t0);
+        assert_eq!(e.scene.pieces[1].mesh.triangle_count(), t1);
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        // A single visible piece has nothing to join.
+        e.scene.pieces.iter_mut().for_each(|p| p.visible = false);
+        e.scene.active_mut().visible = true;
+        e.join_visible();
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert!(e.status.contains("at least one more"), "{}", e.status);
     }
 
     #[test]

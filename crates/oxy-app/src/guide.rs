@@ -107,7 +107,8 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso. With symmetry on, the mirrored area is masked too.\n\
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it.\n\
-- The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically.",
+- The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically.\n\
+- Split masked moves the masked part into a new piece (Invert first to split off the unmasked part). Extract mask… makes a new shell from the masked area and leaves the piece whole.",
     },
     Topic {
         title: "Face groups and hiding",
@@ -120,11 +121,12 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     },
     Topic {
         title: "Pieces",
-        keywords: "objects parts scene add duplicate merge solo",
+        keywords: "objects parts scene add duplicate merge join combine split detach solo",
         body: "A scene can hold several pieces (separate meshes), listed in the Pieces section. Sculpting affects the active piece; Alt+click another piece to make it active.\n\n\
 - + Add opens a window for a sphere, cube, plane, cylinder, cone or torus: set its size and segments (low-poly by default, or tick Even triangles to remesh it for sculpting), then Accept; Duplicate and Mirror duplicate copy the active piece.\n\
 - The eye button hides a piece; Alt+S shows only the active one.\n\
-- Merge fuses the visible pieces into one with a voxel remesh.",
+- Join combines the active piece and the other visible pieces into one piece, exactly as they are: nothing is remeshed or welded, and each keeps its own face groups, so you can still hide or select it. Merge + remesh instead fuses them into one closed surface with new, even triangles (a voxel remesh).\n\
+- Mesh > Split masked (also in the Mask menu) moves the masked part of the active piece into a new piece; invert the mask first to split off the unmasked part instead.",
     },
     Topic {
         title: "Painting color",
@@ -166,7 +168,7 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
 - Shift+drag a point up or down to make the tube thicker or thinner there. Thickness blends smoothly between points.\n\
 - Click the line between two points to add one; Alt+click a point to remove it.\n\
 - The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\n\
-Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge in the Pieces panel, which joins the visible pieces into one surface with a voxel remesh.",
+Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge + remesh in the Pieces panel, which fuses the visible pieces into one surface with a voxel remesh; Join keeps them as they are, in one piece.",
     },
     Topic {
         title: "Retopology",

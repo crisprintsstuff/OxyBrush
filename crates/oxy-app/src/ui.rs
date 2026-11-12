@@ -3226,7 +3226,10 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.make_lod_chain(3);
     }
     ui.separator();
-    if tips::button_on(ui, !busy, "Merge visible (remesh)", Cmd::Merge).clicked() {
+    if tips::button_on(ui, !busy, "Join visible", Cmd::Join).clicked() {
+        ed.join_visible();
+    }
+    if tips::button_on(ui, !busy, "Merge and remesh visible", Cmd::Merge).clicked() {
         ed.merge_visible();
     }
 }
@@ -3333,6 +3336,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if tips::button(ui, "Split hidden", Cmd::SplitHidden).clicked() {
         ed.split_hidden();
+    }
+    if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
+        ed.split_masked();
     }
     ui.separator();
     tips::menu(ui, "Vertex color", plain::VERTEX_COLOR, |ui| {
@@ -3659,6 +3665,9 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
         ed.begin_extract();
     }
+    if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
+        ed.split_masked();
+    }
     ui.separator();
     if tips::hover(ui.button("Blur"), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
         ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
@@ -3820,7 +3829,10 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
             ed.delete_active();
         }
-        if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Merge", Cmd::Merge).clicked() {
+        if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Join", Cmd::Join).clicked() {
+            ed.join_visible();
+        }
+        if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Merge + remesh", Cmd::Merge).clicked() {
             ed.merge_visible();
         }
     });
@@ -4354,9 +4366,14 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.add_space(4.0);
-    if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
-        ed.begin_extract();
-    }
+    ui.horizontal(|ui| {
+        if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
+            ed.begin_extract();
+        }
+        if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
+            ed.split_masked();
+        }
+    });
     ui.label(RichText::new("More in the Groups and Mask menus.").weak().small());
 }
 
