@@ -98,6 +98,8 @@ commands! {
     CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white, at the size chosen next to it (up to 4096 px). It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
     ExportAlpha => "Export alpha…", "", "Save the selected alpha as a 16-bit grayscale PNG to edit in a 2D app. Load it back with Load image….";
     CloseHoles => "Close holes", "", "Fill every hole in this piece with a smooth patch of new faces, in a face group of its own. Useful before 3D printing or after cutting.";
+    SymmetrizePosX => "Symmetrize: +X onto −X", "", "Make this piece symmetric: keep the +X half (where the axis gizmo's red X points), replace the other half with its mirror image, and weld the two along the middle. Uses the piece's symmetry centre. One undo step.";
+    SymmetrizeNegX => "Symmetrize: −X onto +X", "", "Make this piece symmetric: keep the −X half (away from the axis gizmo's red X), replace the other half with its mirror image, and weld the two along the middle. Uses the piece's symmetry centre. One undo step.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
     GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
@@ -599,6 +601,9 @@ pub mod plain {
     pub const OPEN_RECENT: &str = "Files you opened, imported or saved recently.";
     pub const CLEAR_RECENT: &str = "Forget the recent-file list. The files themselves stay where they are.";
     pub const VERTEX_COLOR: &str = "Paint and fill vertex color. Masked areas are left alone.";
+    pub const SYMMETRIZE: &str = "Make this piece symmetric: keep one half, replace the other with its mirror image, and weld them along the middle. The axis gizmo's colored ends are the + sides.";
+    pub const SYMMETRIZE_AXIS: &str =
+        "Keep the first half named and mirror it onto the second, across the piece's symmetry centre. One undo step.";
     pub const TRANSFORM_MENU: &str = "Move, rotate or scale the active piece.";
     pub const ARRANGE: &str = "Where the brush shelf, the settings and the size bar sit.";
     pub const UPDATES: &str = "Whether OxyBrush looks for new versions. Off unless you turn it on.";
@@ -798,6 +803,8 @@ pub mod plain {
         OPEN_RECENT,
         CLEAR_RECENT,
         VERTEX_COLOR,
+        SYMMETRIZE,
+        SYMMETRIZE_AXIS,
         TRANSFORM_MENU,
         ARRANGE,
         UPDATES,

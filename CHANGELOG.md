@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Mesh > Symmetrize**: makes the active piece symmetric. It keeps one half (+X onto −X, −X onto +X, and the same for Y and Z), replaces the other half with its mirror image and welds the two along the piece's symmetry centre, so the result is one closed surface. Triangles crossing the middle are cut there, so the seam is straight. Mask, vertex color and face groups are mirrored too. Runs in the background (about 0.1 s for 80k triangles); one undo step; subdivision levels are removed. Also in the command palette for X.
 - **Five bundled in-app plugins** for Plugin API 3, in `crates/oxy-plugin/plugins/` and copied into the plugins folder like the others (a folder you already changed is left alone):
   - **Group by Angle:** face groups from the angle between neighbouring faces, with a live preview. Complements Group by Height.
   - **Hide Faces by Angle:** hides faces by how far their normal points from an axis, with Invert and an option to leave masked faces alone. The first bundled plugin that writes hidden faces.

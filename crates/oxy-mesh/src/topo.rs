@@ -463,6 +463,257 @@ pub fn close_holes(data: &mut crate::MeshData) -> usize {
     loops.len()
 }
 
+/// Make a mesh symmetric across the plane `position[axis] == center`:
+/// keep the half on one side (`keep_positive`: the side where the
+/// coordinate is larger), throw the other half away, and replace it with a
+/// mirror image of the kept half, welded to it along the plane. Returns
+/// `None` when nothing lies on the kept side.
+///
+/// Triangles that cross the plane are cut at it (polygon clipping against a
+/// plane, as in Sutherland & Hodgman, "Reentrant polygon clipping", 1974),
+/// so the seam is straight. Points cut from one edge are shared by both
+/// triangles on that edge, and points lying on the plane (within a small
+/// tolerance, then snapped onto it) are shared by both halves and merged
+/// when several sit at the same place, so the result is welded: no seam,
+/// no gap. Mask, vertex color, face groups and visibility are carried
+/// across the cut (interpolated along cut edges) and mirrored with the half.
+///
+/// INVARIANT: every vertex of the result lies on the kept side or on the
+/// plane, or is the mirror image of one that does; vertices on the plane
+/// are not duplicated.
+pub fn symmetrize(data: &crate::MeshData, axis: usize, center: f32, keep_positive: bool) -> Option<crate::MeshData> {
+    let n = data.positions.len();
+    let extent = {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for p in &data.positions {
+            lo = lo.min(*p);
+            hi = hi.max(*p);
+        }
+        (hi - lo).max_element().max(1e-6)
+    };
+    let eps = extent * 1e-5;
+    let sign = if keep_positive { 1.0 } else { -1.0 };
+    // Signed distance to the plane, positive on the kept side; snapped to
+    // exactly zero near it.
+    let dist: Vec<f32> = data
+        .positions
+        .iter()
+        .map(|p| {
+            let d = (p[axis] - center) * sign;
+            if d.abs() <= eps { 0.0 } else { d }
+        })
+        .collect();
+    if !dist.iter().any(|&d| d > 0.0) {
+        return None;
+    }
+    let has_mask = data.mask.len() == n;
+    let has_color = data.color.len() == n;
+    let mut out = crate::MeshData::default();
+    // Vertices of the kept half: old vertices (by index) and cut points
+    // (by edge), each added once.
+    let mut remap = vec![u32::MAX; n];
+    let mut on_plane: Vec<bool> = Vec::new();
+    let add = |out: &mut crate::MeshData, on_plane: &mut Vec<bool>, p: Vec3, m: f32, c: Vec3, flat: bool| {
+        out.positions.push(p);
+        out.mask.push(m);
+        if has_color {
+            out.color.push(c);
+        }
+        on_plane.push(flat);
+        out.positions.len() as u32 - 1
+    };
+    let mask = |v: usize| if has_mask { data.mask[v] } else { 0.0 };
+    let color = |v: usize| if has_color { data.color[v] } else { Vec3::ONE };
+    let mut keep_vertex = |v: u32, out: &mut crate::MeshData, on_plane: &mut Vec<bool>| -> u32 {
+        let r = &mut remap[v as usize];
+        if *r == u32::MAX {
+            let mut p = data.positions[v as usize];
+            let flat = dist[v as usize] == 0.0;
+            if flat {
+                p[axis] = center;
+            }
+            *r = add(out, on_plane, p, mask(v as usize), color(v as usize), flat);
+        }
+        *r
+    };
+    let mut cuts: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut groups = Vec::new();
+    let mut hidden = Vec::new();
+    for (t, tri) in data.triangles.iter().enumerate() {
+        let d = tri.map(|v| dist[v as usize]);
+        if d.iter().all(|&x| x <= 0.0) {
+            continue; // removed side, or lying in the plane
+        }
+        // Clip the triangle to the kept side: walk its edges, keeping
+        // corners on the kept side or the plane and adding a cut point where
+        // an edge goes strictly from one side to the other.
+        let mut poly: Vec<u32> = Vec::with_capacity(4);
+        for i in 0..3 {
+            let (a, b) = (tri[i], tri[(i + 1) % 3]);
+            let (da, db) = (d[i], d[(i + 1) % 3]);
+            if da >= 0.0 {
+                poly.push(keep_vertex(a, &mut out, &mut on_plane));
+            }
+            if (da > 0.0 && db < 0.0) || (da < 0.0 && db > 0.0) {
+                let key = (a.min(b), a.max(b));
+                let idx = match cuts.get(&key) {
+                    Some(&i) => i,
+                    None => {
+                        let f = da / (da - db);
+                        let (ua, ub) = (a as usize, b as usize);
+                        let mut p = data.positions[ua].lerp(data.positions[ub], f);
+                        p[axis] = center;
+                        let m = mask(ua) + (mask(ub) - mask(ua)) * f;
+                        let c = color(ua).lerp(color(ub), f);
+                        let i = add(&mut out, &mut on_plane, p, m, c, true);
+                        cuts.insert(key, i);
+                        i
+                    }
+                };
+                poly.push(idx);
+            }
+        }
+        for k in 1..poly.len().saturating_sub(1) {
+            out.triangles.push([poly[0], poly[k], poly[k + 1]]);
+            groups.push(data.groups.get(t).copied().unwrap_or(0));
+            hidden.push(data.hidden.get(t).copied().unwrap_or(false));
+        }
+    }
+    // Weld: points on the plane at the same place become one (an import may
+    // have split vertices along the middle, for example at a UV seam).
+    let q = |p: Vec3| ((p * (1.0 / eps)).round()).as_ivec3();
+    let mut seen: HashMap<glam::IVec3, u32> = HashMap::new();
+    let mut weld: Vec<u32> = (0..out.positions.len() as u32).collect();
+    for v in 0..out.positions.len() {
+        if on_plane[v] {
+            weld[v] = *seen.entry(q(out.positions[v])).or_insert(v as u32);
+        }
+    }
+    for t in &mut out.triangles {
+        *t = t.map(|v| weld[v as usize]);
+    }
+    // Mirror the half: new vertices for those off the plane, shared ones on it.
+    let half = out.positions.len();
+    let mut mirror = vec![0u32; half];
+    for v in 0..half {
+        mirror[v] = if on_plane[v] {
+            weld[v]
+        } else {
+            let mut p = out.positions[v];
+            p[axis] = 2.0 * center - p[axis];
+            out.positions.push(p);
+            out.mask.push(out.mask[v]);
+            if has_color {
+                out.color.push(out.color[v]);
+            }
+            out.positions.len() as u32 - 1
+        };
+    }
+    let kept = out.triangles.len();
+    for t in 0..kept {
+        let [a, b, c] = out.triangles[t];
+        // Reversed winding keeps the mirrored faces facing outward.
+        out.triangles.push([mirror[a as usize], mirror[c as usize], mirror[b as usize]]);
+    }
+    out.groups = groups.iter().chain(&groups).copied().collect();
+    out.hidden = hidden.iter().chain(&hidden).copied().collect();
+    // Points merged away by the weld are left unused; `Mesh::from_data`
+    // drops them, along with any triangle the weld collapsed.
+    Some(out)
+}
+
+#[cfg(test)]
+mod symmetrize_tests {
+    use super::*;
+    use crate::{Mesh, MeshData, primitives};
+
+    /// A sphere with a bump on the +X side, so the halves differ.
+    fn lopsided() -> MeshData {
+        let mut d = primitives::icosphere(3, 1.0).to_data();
+        for p in &mut d.positions {
+            if p.x > 0.5 {
+                *p *= 1.3;
+            }
+        }
+        d
+    }
+
+    fn assert_mirror_symmetric(m: &Mesh, axis: usize, center: f32) {
+        let q = |p: Vec3| (p * 1e4).round().as_ivec3();
+        let set: std::collections::HashSet<glam::IVec3> = m.positions.iter().map(|&p| q(p)).collect();
+        for &p in &m.positions {
+            let mut r = p;
+            r[axis] = 2.0 * center - r[axis];
+            assert!(set.contains(&q(r)), "{p} has no mirror image");
+        }
+    }
+
+    #[test]
+    fn symmetrize_mirrors_the_kept_half_and_welds_the_seam() {
+        let d = lopsided();
+        for (center, keep_positive) in [(0.0, true), (0.0, false), (0.13, true), (-0.21, false)] {
+            let out = symmetrize(&d, 0, center, keep_positive).expect("something on the kept side");
+            let m = Mesh::from_data(out);
+            assert_mirror_symmetric(&m, 0, center);
+            // Still a closed surface: the halves are welded along the plane.
+            assert!(boundary_loops(&m.triangles).is_empty(), "open seam at {center} {keep_positive}");
+            // The kept side is unchanged: the bump is on both sides or neither.
+            let max_x = m.positions.iter().map(|p| (p.x - center).abs()).fold(0.0f32, f32::max);
+            // Unbumped, the kept half reaches 1.0 from the origin; bumped, 1.3.
+            let bumped = max_x > if keep_positive { 1.15 - center } else { 1.15 + center };
+            assert_eq!(bumped, keep_positive, "{center} {keep_positive}: max |x| {max_x}");
+            // No point on the plane is duplicated.
+            let on: Vec<Vec3> = m.positions.iter().copied().filter(|p| (p.x - center).abs() < 1e-5).collect();
+            let mut keys: Vec<_> = on.iter().map(|p| (p * 1e4).round().as_ivec3().to_array()).collect();
+            keys.sort_unstable();
+            let n = keys.len();
+            keys.dedup();
+            assert_eq!(keys.len(), n, "seam points welded");
+        }
+        // The other axes work the same way.
+        for axis in [1, 2] {
+            let m = Mesh::from_data(symmetrize(&d, axis, 0.05, true).unwrap());
+            assert_mirror_symmetric(&m, axis, 0.05);
+            assert!(boundary_loops(&m.triangles).is_empty());
+        }
+    }
+
+    #[test]
+    fn symmetrize_carries_mask_color_and_groups_across() {
+        let mut d = lopsided();
+        let n = d.positions.len();
+        d.mask = d.positions.iter().map(|p| if p.x > 0.3 { 1.0 } else { 0.0 }).collect();
+        d.color = d.positions.iter().map(|p| if p.y > 0.0 { Vec3::X } else { Vec3::ONE }).collect();
+        d.groups = d.triangles.iter().map(|t| u32::from(d.positions[t[0] as usize].z > 0.0)).collect();
+        assert_eq!(d.mask.len(), n);
+        let out = symmetrize(&d, 0, 0.0, true).unwrap();
+        assert_eq!(out.mask.len(), out.positions.len());
+        assert_eq!(out.color.len(), out.positions.len());
+        assert_eq!(out.groups.len(), out.triangles.len());
+        let m = Mesh::from_data(out);
+        // Masked on both sides now, and the red top on both sides.
+        for (i, p) in m.positions.iter().enumerate() {
+            if p.x.abs() > 0.35 {
+                assert_eq!(m.mask[i], 1.0, "{p}");
+            }
+            if p.y > 0.05 {
+                assert_eq!(m.color[i], Vec3::X, "{p}");
+            }
+        }
+        assert_eq!(m.groups().iter().copied().max(), Some(1));
+    }
+
+    #[test]
+    fn symmetrize_needs_something_on_the_kept_side() {
+        let d = primitives::icosphere(2, 1.0).to_data();
+        assert!(symmetrize(&d, 0, 2.0, true).is_none());
+        assert!(symmetrize(&d, 0, -2.0, false).is_none());
+        // A plane past the whole mesh on the other side keeps it all, mirrored.
+        let m = Mesh::from_data(symmetrize(&d, 0, -2.0, true).unwrap());
+        assert_eq!(m.triangle_count(), 2 * d.triangles.len());
+    }
+}
+
 #[cfg(test)]
 mod hole_tests {
     use super::*;
