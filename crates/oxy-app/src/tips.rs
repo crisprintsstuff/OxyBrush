@@ -83,7 +83,8 @@ commands! {
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
     Solo => "Solo piece / show all", "Alt+S", "Show only the active piece, or show every piece again.";
-    Merge => "Merge visible pieces", "", "Voxel-remesh all visible pieces into the active one.";
+    Merge => "Merge and remesh visible pieces", "", "Fuse all visible pieces into the active one with a voxel remesh: one closed surface with new, even triangles. Use Join to keep the pieces as they are.";
+    Join => "Join visible pieces", "", "Combine the active piece and the other visible pieces into one piece, exactly as they are: no remesh. Each piece keeps its own face groups, so you can still hide or select it.";
     SplitGroups => "Split by face groups", "", "Turn each face group into its own piece.";
     SplitLoose => "Split into loose parts", "", "Turn each separate surface into its own piece.";
     Lod => "Make LOD chain", "", "Add three lighter copies, at 1/2, 1/4 and 1/8 of the triangles.";
@@ -98,6 +99,7 @@ commands! {
     CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white, at the size chosen next to it (up to 4096 px). It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
     ExportAlpha => "Export alpha…", "", "Save the selected alpha as a 16-bit grayscale PNG to edit in a 2D app. Load it back with Load image….";
     CloseHoles => "Close holes", "", "Fill every hole in this piece with a smooth patch of new faces, in a face group of its own. Useful before 3D printing or after cutting.";
+    SplitMasked => "Split masked", "", "Move the masked part of this piece into a new piece, and keep the unmasked part in this one. Invert the mask first to split off the unmasked part instead. Both parts come out unmasked.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
     GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
