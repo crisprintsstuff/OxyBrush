@@ -3768,6 +3768,12 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button(ui, "Mask peaks", Cmd::MaskPeaks).clicked() {
         ed.edit_mesh_mask("Mask peaks", |m| m.mask_by_curvature(false));
     }
+    if tips::button(ui, "Mask border", Cmd::MaskBorder).clicked() {
+        ed.mask_border();
+    }
+    if tips::button(ui, "Mask group borders", Cmd::MaskGroupBorders).clicked() {
+        ed.mask_group_borders();
+    }
     tips::hover(
         ui.add(
             egui::Label::new(

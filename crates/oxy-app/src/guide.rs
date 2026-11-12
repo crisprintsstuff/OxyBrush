@@ -117,7 +117,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso. With symmetry on, the mirrored area is masked too.\n\
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it.\n\
-- The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically.\n\
+- The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically. Mask border masks the edge of an open surface or of what's left visible after hiding part of it; Mask group borders masks the lines where face groups meet. Grow the mask to widen either.\n\
 - Split masked moves the masked part into a new piece (Invert first to split off the unmasked part). Extract mask… makes a new shell from the masked area and leaves the piece whole.",
     },
     Topic {

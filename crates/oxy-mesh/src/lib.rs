@@ -406,6 +406,80 @@ impl Mesh {
         }
     }
 
+    /// Mask the points on the visible border of the mesh, and unmask the
+    /// other visible points: the edge of an open surface, and the edge of
+    /// what's left visible when part of the mesh is hidden. A border edge is
+    /// an edge with exactly one visible triangle on it. Hidden points keep
+    /// their mask. Returns how many points were masked.
+    pub fn mask_border(&mut self) -> usize {
+        // Every visible triangle's edges as packed (low, high) keys, sorted
+        // so that copies of an edge sit together: an edge that appears once
+        // has a single visible triangle. Sorting is much faster than a hash
+        // map on millions of edges.
+        let mut keys: Vec<u64> = self
+            .triangles
+            .par_iter()
+            .zip(self.hidden.par_iter())
+            .filter(|(_, h)| !**h)
+            .flat_map_iter(|(tri, _)| {
+                (0..3).map(move |i| {
+                    let (a, b) = (tri[i], tri[(i + 1) % 3]);
+                    ((a.min(b) as u64) << 32) | a.max(b) as u64
+                })
+            })
+            .collect();
+        keys.par_sort_unstable();
+        let mut on_border = vec![false; self.positions.len()];
+        for run in keys.chunk_by(|a, b| a == b) {
+            if run.len() == 1 {
+                on_border[(run[0] >> 32) as usize] = true;
+                on_border[(run[0] & 0xffff_ffff) as usize] = true;
+            }
+        }
+        self.set_visible_mask(&on_border)
+    }
+
+    /// Mask the points where face groups meet, and unmask the other visible
+    /// points: a point counts when the visible triangles around it belong
+    /// to more than one group. Hidden triangles don't count, so a group
+    /// next to a hidden one has no border there. Returns how many points
+    /// were masked.
+    pub fn mask_group_borders(&mut self) -> usize {
+        const NONE: u32 = u32::MAX;
+        const MANY: u32 = u32::MAX - 1;
+        // The one group seen around each point so far, or MANY.
+        let mut seen = vec![NONE; self.positions.len()];
+        for (t, tri) in self.triangles.iter().enumerate() {
+            if self.hidden[t] {
+                continue;
+            }
+            let g = self.groups[t];
+            for &v in tri {
+                let s = &mut seen[v as usize];
+                if *s == NONE {
+                    *s = g;
+                } else if *s != g {
+                    *s = MANY;
+                }
+            }
+        }
+        let on_border: Vec<bool> = seen.iter().map(|&s| s == MANY).collect();
+        self.set_visible_mask(&on_border)
+    }
+
+    /// Mask exactly the visible points in `on`, unmask the other visible
+    /// points, and leave hidden points alone. Returns how many were masked.
+    fn set_visible_mask(&mut self, on: &[bool]) -> usize {
+        let mut count = 0;
+        for (v, &b) in on.iter().enumerate() {
+            if !self.vertex_hidden[v] {
+                self.mask[v] = if b { 1.0 } else { 0.0 };
+                count += usize::from(b);
+            }
+        }
+        count
+    }
+
     /// Per-vertex concavity (or convexity when `cavities` is false) in
     /// `0..=1`, normalised so the strongest 5% of the mesh reaches 1.
     pub fn curvature(&self, cavities: bool) -> Vec<f32> {
@@ -2082,6 +2156,60 @@ mod tests {
         m.sharpen_mask();
         m.sharpen_mask();
         assert!(m.mask.iter().filter(|&&x| x > 0.05 && x < 0.95).count() < 10);
+    }
+
+    #[test]
+    fn mask_border_finds_open_edges_and_the_edge_of_what_is_hidden() {
+        // A closed sphere has no border.
+        let mut m = primitives::icosphere(3, 1.0);
+        assert_eq!(m.mask_border(), 0);
+        assert!(m.mask.iter().all(|&x| x == 0.0));
+        // Hide the top half: the ring where visible meets hidden is the border.
+        let hidden: Vec<bool> =
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.0)).collect();
+        m.set_hidden(hidden);
+        m.mask[0] = 0.5; // some earlier mask
+        let n = m.mask_border();
+        assert!(n > 0);
+        for v in 0..m.vertex_count() {
+            if m.vertex_hidden[v] {
+                continue;
+            }
+            let on_ring = m.positions[v].y.abs() < 0.3;
+            if m.mask[v] == 1.0 {
+                assert!(on_ring, "border point far from the ring: {}", m.positions[v]);
+            }
+            if m.positions[v].y < -0.5 {
+                assert_eq!(m.mask[v], 0.0, "visible points away from the border are unmasked");
+            }
+        }
+        // An open plane: its outline is the border, the inside isn't.
+        let mut p = primitives::plane(8, 2.0);
+        let n = p.mask_border();
+        assert_eq!(n, 4 * 8, "the outline of an 8×8 grid has 32 points");
+        let inside =
+            (0..p.vertex_count()).find(|&v| p.positions[v].x.abs() < 0.5 && p.positions[v].z.abs() < 0.5).unwrap();
+        assert_eq!(p.mask[inside], 0.0);
+    }
+
+    #[test]
+    fn mask_group_borders_follows_where_groups_meet() {
+        let mut m = primitives::icosphere(3, 1.0);
+        assert_eq!(m.mask_group_borders(), 0, "one group: no borders");
+        let groups = m.triangles.iter().map(|t| u32::from(m.positions[t[0] as usize].x > 0.0)).collect();
+        m.set_groups(groups);
+        assert!(m.mask_group_borders() > 0);
+        for v in 0..m.vertex_count() {
+            if m.positions[v].x.abs() > 0.4 {
+                assert_eq!(m.mask[v], 0.0, "{} is inside one group", m.positions[v]);
+            }
+        }
+        let masked: Vec<usize> = (0..m.vertex_count()).filter(|&v| m.mask[v] == 1.0).collect();
+        assert!(masked.iter().all(|&v| m.positions[v].x.abs() < 0.4));
+        // Hiding one group leaves no group border among what's visible.
+        let hidden = m.groups().iter().map(|&g| g == 1).collect();
+        m.set_hidden(hidden);
+        assert_eq!(m.mask_group_borders(), 0);
     }
 
     #[test]

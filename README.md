@@ -138,7 +138,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 ### Pieces, masks and groups
 
 - **Pieces:** many meshes per scene: add, duplicate, mirror-duplicate, delete, rename, show/hide, solo; Alt+click a piece to make it active. **Join** combines the visible pieces exactly as they are (each keeps its face groups); **Merge + remesh** fuses them into one closed surface. Split a piece by face groups, into loose parts, by its hidden faces or by its mask (**Split masked**).
-- **Masking and selection:** paint a mask with Ctrl, or box or lasso it (following symmetry); mask by cavity, peaks or face group; blur, sharpen, grow, shrink or invert it. **Extract mask…** turns the masked area into a shell piece with live preview of its thickness.
+- **Masking and selection:** paint a mask with Ctrl, or box or lasso it (following symmetry); mask by cavity, peaks or face group, or mask the border of the visible surface or the lines where face groups meet; blur, sharpen, grow, shrink or invert it. **Extract mask…** turns the masked area into a shell piece with live preview of its thickness.
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, and a group color overlay.
 - **Transform gizmo (T):** move, rotate or scale a piece. With a mask, only the unmasked part moves and a soft mask edge bends smoothly, which makes it a quick posing tool. It snaps with Shift, takes typed values, and has pivot choices and operators (mirror, put on the ground, centre at origin).
 
