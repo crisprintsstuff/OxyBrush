@@ -6,8 +6,10 @@
 use crate::editor::Editor;
 use crate::tips::{self, Cmd};
 use egui::{Color32, Rect, RichText, Sense, Stroke, Ui, vec2};
+use glam::Vec3;
 use oxy_history::Step;
 use oxy_mesh::deform::{Deformation, Deformer, Section, fit_to_standard_size};
+use std::sync::Arc;
 
 /// The window's settings: which axes each deformer uses, and whether the
 /// mask holds parts back.
@@ -38,9 +40,22 @@ pub struct DeformDrag {
     pub piece: u64,
     pub kind: Deformer,
     pub axes: [bool; 3],
+    /// Where the bar is.
     pub amount: f32,
-    prep: Deformation,
+    /// The amount the model shows (behind `amount` while a big piece is
+    /// still being worked out).
+    pub shown: f32,
+    prep: Arc<Deformation>,
+    /// A background computation of the positions for an amount.
+    worker: Option<(f32, std::thread::JoinHandle<Vec<Vec3>>)>,
+    /// The pointer's x where the drag started, so the amount follows the
+    /// pointer even when frames are slow (no movement is lost).
+    pub origin_x: Option<f32>,
 }
+
+/// Pieces with more points than this are previewed in the background, so
+/// the bar keeps following the pointer while the model catches up.
+pub const BACKGROUND_ABOVE: usize = 250_000;
 
 /// The last deformer applied, for Repeat.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -96,28 +111,95 @@ impl Editor {
         for c in 0..piece.mesh.chunks.len() as u32 {
             self.history.touch(&piece.mesh, c);
         }
-        self.deform_drag = Some(DeformDrag { piece: piece.id, kind, axes, amount: 0.0, prep });
+        self.deform_drag = Some(DeformDrag {
+            piece: piece.id,
+            kind,
+            axes,
+            amount: 0.0,
+            shown: 0.0,
+            prep: Arc::new(prep),
+            worker: None,
+            origin_x: None,
+        });
         true
     }
 
-    /// Show the dragged deformer at `amount` (-1 to 1).
+    /// Show the dragged deformer at `amount` (-1 to 1). On a big piece the
+    /// positions are worked out in the background ([`Editor::deform_poll`]
+    /// puts them on the model): the bar moves at once, the model follows,
+    /// and only the newest amount is ever worked out.
     pub fn deform_update(&mut self, amount: f32) {
+        let background = self.deform_background_above;
         let Some(drag) = self.deform_drag.as_mut() else { return };
         drag.amount = amount.clamp(-1.0, 1.0);
-        let positions = drag.prep.apply(drag.kind, drag.axes, drag.amount);
-        let moved: Vec<u32> =
-            drag.prep.weights().iter().enumerate().filter(|(_, w)| **w > 0.0).map(|(v, _)| v as u32).collect();
-        let id = drag.piece;
-        if let Some(i) = self.scene.index_of(id) {
-            let mesh = &mut self.scene.pieces[i].mesh;
-            mesh.positions = positions;
-            mesh.update_after_move(&moved);
-        }
         self.status = format!("{} {:+.0}", drag.kind.label(), drag.amount * 100.0);
+        if drag.prep.original().len() > background {
+            self.deform_kick();
+        } else {
+            let positions = drag.prep.apply(drag.kind, drag.axes, drag.amount);
+            let amount = drag.amount;
+            self.deform_show(positions, amount);
+        }
     }
 
-    /// Let go: apply what's shown as one undo step (or nothing at 0).
+    /// Put `positions` (worked out for `amount`) on the dragged piece.
+    fn deform_show(&mut self, positions: Vec<Vec3>, amount: f32) {
+        let Some(drag) = self.deform_drag.as_mut() else { return };
+        drag.shown = amount;
+        if let Some(i) = self.scene.index_of(drag.piece) {
+            self.scene.pieces[i].mesh.replace_positions(positions);
+        }
+    }
+
+    /// Start working out the bar's amount in the background, unless that's
+    /// already shown or a computation is running (it's started again when
+    /// that one finishes, with the bar's amount at that time).
+    fn deform_kick(&mut self) {
+        let Some(drag) = self.deform_drag.as_mut() else { return };
+        if drag.worker.is_some() || drag.shown == drag.amount {
+            return;
+        }
+        let (prep, kind, axes, amount) = (drag.prep.clone(), drag.kind, drag.axes, drag.amount);
+        let handle = std::thread::spawn(move || prep.apply(kind, axes, amount));
+        drag.worker = Some((amount, handle));
+    }
+
+    /// Wait for the background computation, if any, and show its result.
+    fn deform_join(&mut self) {
+        let Some((amount, handle)) = self.deform_drag.as_mut().and_then(|d| d.worker.take()) else { return };
+        match handle.join() {
+            Ok(positions) => self.deform_show(positions, amount),
+            Err(_) => log::error!("deform preview thread panicked"),
+        }
+    }
+
+    /// Call every frame: shows a finished background preview and starts the
+    /// next one. True while one is still being worked out (keep drawing).
+    pub fn deform_poll(&mut self) -> bool {
+        let done = self.deform_drag.as_ref().and_then(|d| d.worker.as_ref()).is_some_and(|w| w.1.is_finished());
+        if done {
+            self.deform_join();
+            self.deform_kick();
+        }
+        self.deform_busy()
+    }
+
+    /// Whether a deform preview is being worked out in the background.
+    pub fn deform_busy(&self) -> bool {
+        self.deform_drag.as_ref().is_some_and(|d| d.worker.is_some() || d.shown != d.amount)
+    }
+
+    /// Let go: apply the bar's amount as one undo step (or nothing at 0).
+    /// On a big piece still catching up, this waits for the exact result.
     pub fn deform_end(&mut self) {
+        self.deform_join();
+        if let Some(drag) = self.deform_drag.as_ref()
+            && drag.shown != drag.amount
+            && drag.amount != 0.0
+        {
+            let (positions, amount) = (drag.prep.apply(drag.kind, drag.axes, drag.amount), drag.amount);
+            self.deform_show(positions, amount);
+        }
         let Some(drag) = self.deform_drag.take() else { return };
         let Some(i) = self.scene.index_of(drag.piece) else {
             self.history.cancel();
@@ -125,8 +207,9 @@ impl Editor {
         };
         if drag.amount == 0.0 {
             let mesh = &mut self.scene.pieces[i].mesh;
-            mesh.positions = drag.prep.original().to_vec();
-            mesh.mark_all_dirty();
+            if drag.shown != 0.0 {
+                mesh.replace_positions(drag.prep.original().to_vec());
+            }
             self.history.cancel();
             self.status = format!("{}: drag left or right to apply it", drag.kind.label());
             return;
@@ -342,17 +425,42 @@ fn deform_row(ui: &mut Ui, ed: &mut Editor, kind: Deformer) {
         let dragging = ed.deform_drag.as_ref().filter(|d| d.kind == kind).map(|d| d.amount);
         let (rect, resp) = ui.allocate_exact_size(vec2(width, AXIS_SIZE.y), Sense::click_and_drag());
         let resp = tips::hover(resp, kind.help());
-        if resp.drag_started() {
-            ed.deform_begin(kind);
+        if resp.drag_started() && ed.deform_begin(kind) {
+            // Measure from where the press was, so the movement that
+            // started the drag counts too.
+            let origin = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
+            if let Some(d) = ed.deform_drag.as_mut() {
+                d.origin_x = origin.map(|p| p.x);
+            }
         }
-        if resp.dragged()
-            && let Some(d) = ed.deform_drag.as_ref().filter(|d| d.kind == kind)
+        // The amount is where the pointer is now relative to where the drag
+        // started, not a sum of movements, so a fast flick on a slow frame
+        // still lands where the pointer went (and is applied on release).
+        if (resp.dragged() || resp.drag_stopped())
+            && let Some(origin) = ed.deform_drag.as_ref().filter(|d| d.kind == kind).and_then(|d| d.origin_x)
+            && let Some(pos) = ui.input(|i| i.pointer.latest_pos())
         {
-            let amount = d.amount + resp.drag_delta().x / (rect.width() * 0.5);
-            ed.deform_update(amount);
+            let amount = (pos.x - origin) / (rect.width() * 0.5);
+            if ed.deform_drag.as_ref().is_some_and(|d| d.amount != amount.clamp(-1.0, 1.0)) {
+                ed.deform_update(amount);
+            }
         }
+        let was_drag = resp.drag_started() || resp.dragged() || resp.drag_stopped();
         if resp.drag_stopped() {
             ed.deform_end();
+        }
+        let flicked = flick(ui, rect, resp.id);
+        if !was_drag
+            && ed.deform_drag.is_none()
+            && let Some(amount) = flicked
+        {
+            // Pressed, moved and let go between two frames (a fast flick on a
+            // big piece, where each frame is slow): no drag was ever seen, so
+            // apply what the movement asked for.
+            let axes = ed.deform.axes(kind);
+            if axes.iter().any(|&a| a) {
+                ed.deform_once(kind, axes, amount);
+            }
         }
         if resp.clicked() {
             ed.status = format!("{}: drag left or right to apply it", kind.label());
@@ -365,6 +473,37 @@ fn deform_row(ui: &mut Ui, ed: &mut Editor, kind: Deformer) {
             }
         }
     });
+}
+
+/// A press on the bar and its release seen without a drag in between:
+/// the amount the pointer moved, if it moved more than a click would.
+/// Remembers the press across frames, in case the release comes a frame
+/// later.
+fn flick(ui: &Ui, rect: Rect, id: egui::Id) -> Option<f32> {
+    let key = id.with("flick_press");
+    let mut press: Option<egui::Pos2> = ui.data(|d| d.get_temp(key));
+    let mut out = None;
+    ui.input(|i| {
+        for e in &i.events {
+            if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
+                if *pressed {
+                    press = rect.contains(*pos).then_some(*pos);
+                } else if let Some(p) = press.take() {
+                    let dx = pos.x - p.x;
+                    if dx.abs() > 6.0 {
+                        out = Some((dx / (rect.width() * 0.5)).clamp(-1.0, 1.0));
+                    }
+                }
+            }
+        }
+    });
+    ui.data_mut(|d| match press {
+        Some(p) => {
+            d.insert_temp(key, p);
+        }
+        None => d.remove::<egui::Pos2>(key),
+    });
+    out
 }
 
 /// Size of an axis toggle: big enough to hit easily, with a pen too.
@@ -420,6 +559,43 @@ mod tests {
         let mut e = Editor::default();
         e.show_welcome = false;
         e
+    }
+
+    #[test]
+    fn big_pieces_preview_in_the_background_and_apply_the_bar_amount_exactly() {
+        let mut e = editor();
+        e.deform_background_above = 0;
+        let before = e.scene.active().mesh.positions.clone();
+        let normals = e.scene.active().mesh.normals.clone();
+        assert!(e.deform_begin(Deformer::Twist));
+        e.deform_update(0.5);
+        assert!(e.deform_busy(), "worked out in the background");
+        while e.deform_poll() {
+            std::thread::yield_now();
+        }
+        let shown = e.scene.active().mesh.positions.clone();
+        assert_ne!(shown, before, "the preview reaches the model");
+        // Fast movement: only the newest amount matters, and letting go
+        // applies exactly the bar's amount even if the preview is behind.
+        e.deform_update(-0.2);
+        e.deform_update(0.8);
+        e.deform_end();
+        let mut sync = editor();
+        sync.deform_once(Deformer::Twist, Deformer::Twist.default_axes(), 0.8);
+        assert_eq!(e.scene.active().mesh.positions, sync.scene.active().mesh.positions);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        // Back at zero after a preview: shape and shading both put back.
+        assert!(e.deform_begin(Deformer::Bend));
+        e.deform_update(0.6);
+        while e.deform_poll() {
+            std::thread::yield_now();
+        }
+        e.deform_update(0.0);
+        e.deform_end();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        let m = &e.scene.active().mesh;
+        assert!(m.normals.iter().zip(&normals).all(|(a, b)| (*a - *b).length() < 1e-4), "normals put back too");
     }
 
     #[test]

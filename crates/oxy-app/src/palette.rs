@@ -156,6 +156,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             e.edit_faces("Invert visibility", oxy_mesh::Mesh::invert_visibility)
         }),
         cmd(ed, Cmd::InvertMask, "masking", Editor::invert_mask),
+        cmd(ed, Cmd::FillMask, "masking all whole everything", Editor::fill_mask),
         cmd(ed, Cmd::ClearMask, "masking", Editor::clear_mask),
         cmd(ed, Cmd::ExtractMask, "masking extract solidify piece new shell", Editor::begin_extract),
         cmd(ed, Cmd::BlurMask, "masking soften", |e| e.edit_mesh_mask("Blur mask", |m| m.blur_mask(1))),

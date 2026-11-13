@@ -4,6 +4,17 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Fill mask** (Mask menu, Mask section and command palette; bindable in the keymap): masks the whole visible surface in one undo step.
+
+### Changed
+- **Transform gizmo fields are live.** The fields under the gizmo show how far the piece has moved, turned or scaled since the gizmo opened (or the last Apply), and update while you drag a handle. Type a value and press Enter to make the total exactly that (typing 2 in Scale doubles the size it started at, however far you dragged). **Apply** keeps the changes and counts from zero again; the new **Cancel** puts them back; **Done** without Apply puts them back too, like Cancel. Both are undos, so Redo brings the changes back. Mirror, Put on the ground and Centre at origin are applied at once.
+- **Deform window on very large pieces.** On pieces over 250,000 points the deformer is worked out in the background, so the bar follows the pointer while the model catches up, and only the newest position is ever worked out. Letting go applies exactly where the bar is. The amount follows where the pointer is, not the sum of its movements, so a fast drag on a slow frame isn't lost, and a flick that starts and ends between two frames now applies instead of doing nothing. Updating normals and bounds after a whole-piece change is 2.6× faster (78 ms instead of 202 ms on 8.4M triangles, 4 cores).
+
+### Fixed
+- **Invert mask respects hidden faces:** it now only inverts the visible surface, and hidden parts keep their mask (it used to mask everything that was hidden).
+- **Deform window:** letting go at zero after previewing put the shape back but not its shading.
+
 ## [4.0.0-beta.6] - 2026-11-13
 
 ### Added
