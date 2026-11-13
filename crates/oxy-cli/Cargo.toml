@@ -19,5 +19,8 @@ oxy-doc.workspace = true
 oxy-mcp.workspace = true
 oxy-plugin.workspace = true
 
+[dev-dependencies]
+glam.workspace = true
+
 [lints]
 workspace = true
