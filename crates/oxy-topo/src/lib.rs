@@ -6,6 +6,7 @@ pub mod decimate;
 pub mod print3d;
 pub mod remesh;
 pub mod transfer;
+pub mod winding;
 
 pub use decimate::decimate;
 pub use oxy_vdb::BooleanOp;

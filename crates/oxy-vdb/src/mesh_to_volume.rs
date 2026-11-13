@@ -76,6 +76,29 @@ impl Default for MeshToVolumeOptions {
 
 /// Converts a triangle mesh into a sparse narrow-band VDB level set (`FloatGrid`).
 pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshToVolumeOptions) -> VdbFloatGrid {
+    mesh_to_level_set_signed(positions, triangles, opts, None)
+}
+
+/// Which side of the surface a point is on, for the triangles where the
+/// nearest triangle's normal can't tell: `suspect[t]` marks them, and
+/// `inside(p)` answers for points whose nearest triangle is one.
+///
+/// Used for meshes that pass through themselves, where a triangle buried
+/// inside the solid would otherwise mark the points around it as outside.
+pub struct SignOverride<'a> {
+    pub suspect: &'a [bool],
+    pub inside: &'a (dyn Fn(Vec3) -> bool + Sync),
+}
+
+/// [`mesh_to_level_set`], with the sign of voxels next to the triangles in
+/// `sign.suspect` decided by `sign.inside` instead of the nearest triangle's
+/// pseudonormal.
+pub fn mesh_to_level_set_signed(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    opts: MeshToVolumeOptions,
+    sign: Option<&SignOverride>,
+) -> VdbFloatGrid {
     let voxel_size = opts.voxel_size.max(1e-5);
     let half_width = opts.half_width.max(1.0);
     let band_dist = half_width * voxel_size;
@@ -350,9 +373,22 @@ pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshT
             let (c, bary) = closest_point_and_barycentric(p, positions[i0], positions[i1], positions[i2]);
             let n = bary.x * vert_normals[i0] + bary.y * vert_normals[i1] + bary.z * vert_normals[i2];
             let diff = p - c;
-            let outside = diff.length_squared() <= 1e-10 || diff.dot(n) >= 0.0;
             let d = dist[li * LEAF_VOXELS + off].min(bg);
-            *o = if outside { d } else { -d };
+            *o = match sign {
+                // A point inside next to a buried triangle (even on it)
+                // isn't on the outer surface: never 0, which would read as one.
+                Some(s) if s.suspect[t as usize] => {
+                    if (s.inside)(p) {
+                        -d.max(voxel_size * 1e-3)
+                    } else {
+                        d
+                    }
+                }
+                _ => {
+                    let outside = diff.length_squared() <= 1e-10 || diff.dot(n) >= 0.0;
+                    if outside { d } else { -d }
+                }
+            };
         }
     });
 

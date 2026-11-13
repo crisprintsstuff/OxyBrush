@@ -7,6 +7,11 @@
 //! 2. Sign: band cells use the nearest triangle's normal; a flood fill from
 //!    the grid border marks the outside, so everything enclosed is inside.
 //!    Open meshes (nothing enclosed) fall back to a thin shell.
+//!    Where parts of one mesh overlap (a primitive added into a piece, two
+//!    pieces joined, a fold sculpted through the model), voxels next to the
+//!    triangles buried inside the solid are signed by winding number
+//!    instead ([`crate::winding`]): the buried surface used to count as a
+//!    boundary, which left holes and thin walls.
 //! 3. Surface nets extract the zero level set as quads, split into triangles.
 
 use glam::{UVec3, Vec3};
@@ -126,6 +131,57 @@ pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, Remes
     Ok(out)
 }
 
+/// Calls `f` with the sign override for one mesh.
+///
+/// Why: the sign of a voxel comes from its nearest triangle. Where parts of
+/// one mesh overlap (two spheres joined into one piece, a primitive added
+/// with the Insert brush, a fold sculpted through the model), the triangles
+/// buried inside the solid are nearest to voxels inside it and mark them
+/// "outside", so the remesh got inner walls, holes and thin shells (issue
+/// #174).
+/// Those triangles, and two rings of triangles around them (which reach
+/// across the lines where the surface crosses itself), get their side from
+/// the winding number instead ([`crate::winding`]). `None` when nothing is
+/// buried, which costs one winding query per 8 triangles.
+fn with_sign_override<R>(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    f: impl FnOnce(Option<&oxy_vdb::SignOverride>) -> R,
+) -> R {
+    let winding = crate::winding::Winding::new(positions, triangles);
+    let buried = winding.buried();
+    if !buried.contains(&true) {
+        return f(None);
+    }
+    let suspect = crate::winding::grow_triangles(triangles, &buried, 2);
+    let inside = |p: Vec3| winding.at(p) > 0.5;
+    f(Some(&oxy_vdb::SignOverride { suspect: &suspect, inside: &inside }))
+}
+
+/// The union of `meshes` as one narrow-band level set.
+fn union_level_set(meshes: &[&Mesh], h: f32) -> Option<oxy_vdb::VdbFloatGrid> {
+    let mut combined: Option<oxy_vdb::VdbFloatGrid> = None;
+    for m in meshes {
+        let (positions, triangles) = (&m.positions, &m.triangles);
+        if triangles.is_empty() {
+            continue;
+        }
+        let grid = with_sign_override(positions, triangles, |sign| {
+            oxy_vdb::mesh_to_level_set_signed(
+                positions,
+                triangles,
+                oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
+                sign,
+            )
+        });
+        match &mut combined {
+            Some(target) => oxy_vdb::csg_union(target, &grid),
+            None => combined = Some(grid),
+        }
+    }
+    combined
+}
+
 /// Sparse OpenVDB-style hierarchical voxel remeshing.
 pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, RemeshError> {
     let bounds = meshes.iter().fold(Aabb::EMPTY, |a, m| a.union(&m.bounds()));
@@ -138,25 +194,7 @@ pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, Reme
         (bounds.extent().max_element() / res as f32).max(1e-5)
     });
 
-    let mut combined_grid: Option<oxy_vdb::VdbFloatGrid> = None;
-
-    for &m in meshes {
-        if m.triangle_count() == 0 {
-            continue;
-        }
-        let part_grid = oxy_vdb::mesh_to_level_set(
-            &m.positions,
-            &m.triangles,
-            oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
-        );
-
-        match &mut combined_grid {
-            Some(target) => oxy_vdb::csg_union(target, &part_grid),
-            None => combined_grid = Some(part_grid),
-        }
-    }
-
-    let mut grid = combined_grid.ok_or(RemeshError::Empty)?;
+    let mut grid = union_level_set(meshes, h).ok_or(RemeshError::Empty)?;
 
     if opts.offset.abs() > 1e-5 {
         oxy_vdb::offset(&mut grid, opts.offset);
@@ -193,17 +231,8 @@ pub fn boolean_mesh(
         (extent.max_element() / 128.0).max(1e-5)
     });
 
-    let mut target_grid = oxy_vdb::mesh_to_level_set(
-        &target.positions,
-        &target.triangles,
-        oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
-    );
-
-    let tool_grid = oxy_vdb::mesh_to_level_set(
-        &tool.positions,
-        &tool.triangles,
-        oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
-    );
+    let mut target_grid = union_level_set(&[target], h).ok_or(RemeshError::Empty)?;
+    let tool_grid = union_level_set(&[tool], h).ok_or(RemeshError::Empty)?;
 
     oxy_vdb::csg_operation(&mut target_grid, &tool_grid, op);
 
@@ -245,11 +274,12 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
     // surface can't flip signs inside another), combined with `min`.
     let mut sdf = vec![f32::MAX; grid.len()];
     for m in meshes {
-        let tris: Vec<[Vec3; 3]> = m.triangles.iter().map(|t| t.map(|i| m.positions[i as usize])).collect();
+        let (positions, triangles) = (&m.positions, &m.triangles);
+        let tris: Vec<[Vec3; 3]> = triangles.iter().map(|t| t.map(|i| positions[i as usize])).collect();
         if tris.is_empty() {
             continue;
         }
-        let part = mesh_sdf(&grid, &tris);
+        let part = with_sign_override(positions, triangles, |sign| mesh_sdf(&grid, &tris, sign));
         sdf.par_iter_mut().zip(part.par_iter()).for_each(|(a, &b)| *a = a.min(b));
     }
 
@@ -269,7 +299,7 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
 }
 
 /// Narrow-band signed distance for one triangle soup (band-clamped).
-fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]]) -> Vec<f32> {
+fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride>) -> Vec<f32> {
     let (origin, h, dims) = (grid.origin, grid.h, grid.dims);
     // 1. Narrow-band distance + nearest triangle.
     let band = 2.0 * h;
@@ -300,7 +330,15 @@ fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]]) -> Vec<f32> {
             return None;
         }
         let d = f32::from_bits((key >> 32) as u32);
-        let t = &tris[(key & 0xffff_ffff) as usize];
+        let ti = (key & 0xffff_ffff) as usize;
+        if let Some(s) = sign
+            && s.suspect[ti]
+        {
+            // Inside next to a buried triangle is never on the surface (see oxy-vdb).
+            let inside = (s.inside)(p);
+            return Some((if inside { d.max(h * 1e-3) } else { d }, !inside));
+        }
+        let t = &tris[ti];
         let n = (t[1] - t[0]).cross(t[2] - t[0]);
         let c = closest_point_on_triangle(p, t[0], t[1], t[2]);
         Some((d, (p - c).dot(n) >= 0.0))
@@ -583,6 +621,99 @@ mod tests {
         for p in &r.positions {
             assert!(p.length() > 0.9 || p.distance(Vec3::X * 1.2) > 0.9);
         }
+    }
+
+    /// Two overlapping spheres in one mesh, as Join or the Insert brush
+    /// make them; with `tied`, one sliver triangle joins them into one
+    /// connected surface, as when a fold is sculpted through the model.
+    fn joined_spheres(tied: bool) -> Mesh {
+        let a = primitives::icosphere(4, 1.0).to_data();
+        let mut d = a.clone();
+        let n = a.positions.len() as u32;
+        d.positions.extend(a.positions.iter().map(|p| *p + Vec3::X * 1.2));
+        d.triangles.extend(a.triangles.iter().map(|t| t.map(|i| i + n)));
+        if tied {
+            // A small triangle where the two surfaces cross (the circle
+            // x = 0.6, radius 0.8), from a point of one sphere to an edge
+            // of the other.
+            let p = Vec3::new(0.6, 0.8, 0.0);
+            let nearest = |range: std::ops::Range<u32>| {
+                range
+                    .min_by(|&a, &b| {
+                        d.positions[a as usize].distance(p).total_cmp(&d.positions[b as usize].distance(p))
+                    })
+                    .unwrap()
+            };
+            let (i, j) = (nearest(0..n), nearest(n..2 * n));
+            let k = d.triangles.iter().skip(a.triangles.len()).find(|t| t.contains(&j)).unwrap();
+            let k = *k.iter().find(|&&v| v != j).unwrap();
+            d.triangles.push([i, j, k]);
+        }
+        d.mask = vec![0.0; d.positions.len()];
+        d.groups = vec![0; d.triangles.len()];
+        d.hidden = vec![false; d.triangles.len()];
+        Mesh::from_data(d)
+    }
+
+    fn volume(m: &Mesh) -> f32 {
+        m.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    #[test]
+    fn overlapping_parts_of_one_mesh_remesh_as_their_union() {
+        // Issue #174: inner walls, holes and thin shells.
+        let m = joined_spheres(false);
+        // Union of two unit spheres 1.2 apart: 2 · 4/3 π − lens π(4 + 1.2)(2 − 1.2)² / 12.
+        let expected = 2.0 * 4.0 / 3.0 * std::f32::consts::PI - std::f32::consts::PI * 5.2 * 0.64 / 12.0;
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            let r = voxel_remesh(&[&m], RemeshOptions { resolution: 96, engine, ..Default::default() }).unwrap();
+            assert_eq!(euler(&r), 2, "{engine:?}: one closed surface, no holes or inner walls");
+            let v = volume(&r);
+            assert!((v - expected).abs() / expected < 0.05, "{engine:?}: volume {v}, expected about {expected}");
+            for p in &r.positions {
+                assert!(p.length() > 0.9 || p.distance(Vec3::X * 1.2) > 0.9, "{engine:?}: point inside the union");
+            }
+        }
+    }
+
+    #[test]
+    fn a_surface_passing_through_itself_remeshes_as_the_outside() {
+        let m = joined_spheres(true);
+        let expected = 2.0 * 4.0 / 3.0 * std::f32::consts::PI - std::f32::consts::PI * 5.2 * 0.64 / 12.0;
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            let r = voxel_remesh(&[&m], RemeshOptions { resolution: 96, engine, ..Default::default() }).unwrap();
+            let v = volume(&r);
+            assert!((v - expected).abs() / expected < 0.05, "{engine:?}: volume {v}, expected about {expected}");
+            assert_eq!(euler(&r), 2, "{engine:?}: one closed surface");
+        }
+    }
+
+    #[test]
+    fn a_hollow_shell_keeps_its_cavity() {
+        // An outer sphere and an inner one facing inwards (a hollowed model):
+        // the inner surface isn't buried, so the cavity stays.
+        let outer = primitives::icosphere(4, 1.0).to_data();
+        let inner = primitives::icosphere(4, 0.6).to_data();
+        let mut d = outer.clone();
+        let n = outer.positions.len() as u32;
+        d.positions.extend(inner.positions);
+        d.triangles.extend(inner.triangles.iter().map(|t| [t[0] + n, t[2] + n, t[1] + n]));
+        d.mask = vec![0.0; d.positions.len()];
+        d.groups = vec![0; d.triangles.len()];
+        d.hidden = vec![false; d.triangles.len()];
+        let m = Mesh::from_data(d);
+        let expected = 4.0 / 3.0 * std::f32::consts::PI * (1.0 - 0.216);
+        // (The regular-grid engine fills anything enclosed, cavities too.)
+        let r = voxel_remesh(&[&m], RemeshOptions { resolution: 96, ..Default::default() }).unwrap();
+        let v = volume(&r);
+        assert!((v - expected).abs() / expected < 0.05, "volume {v}, expected about {expected}");
+        assert_eq!(euler(&r), 4, "two closed surfaces");
     }
 
     #[test]

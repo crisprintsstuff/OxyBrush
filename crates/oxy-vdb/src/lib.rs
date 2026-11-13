@@ -17,7 +17,9 @@ pub mod volume_to_mesh;
 
 pub use csg::{BooleanOp, csg_difference, csg_intersection, csg_operation, csg_union};
 pub use filter::{FilterType, offset, shell, smooth_laplacian};
-pub use mesh_to_volume::{MeshToVolumeOptions, closest_point_on_triangle, mesh_to_level_set};
+pub use mesh_to_volume::{
+    MeshToVolumeOptions, SignOverride, closest_point_on_triangle, mesh_to_level_set, mesh_to_level_set_signed,
+};
 pub use tree::{BitMask512, LEAF_DIM, LEAF_VOXELS, LeafNode, Transform, VdbFloatGrid};
 pub use volume_to_mesh::{VolumeToMeshOptions, volume_to_mesh};
 
