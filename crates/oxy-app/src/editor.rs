@@ -946,6 +946,10 @@ pub struct Editor {
     /// after every change (on by default). Off, it is found once per piece
     /// and then stays where it is.
     pub gizmo_pivot_follows: bool,
+    /// How new subdivision levels (and Subdivide) are made: quads
+    /// (Catmull–Clark, the default) or triangles (Loop). A piece that has
+    /// levels keeps its own.
+    pub subdivision_scheme: oxy_mesh::multires::Scheme,
     /// The piece whose pivot was kept in place (with following off): the
     /// kept pivot is `custom_gizmo_pivot`; None when that is a pivot you
     /// placed yourself (or there is none).
@@ -1331,6 +1335,7 @@ impl Default for Editor {
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
+            subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             kept_pivot_of: None,
             plugin_params: Default::default(),
             window_geometry: None,
@@ -1750,6 +1755,7 @@ impl Editor {
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
+            subdivision_quads: self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark,
             radius_on_model: self.radius_on_model,
             living_strokes: self.living.enabled,
             living_save: self.living.save,
@@ -1977,6 +1983,11 @@ impl Editor {
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
+        self.subdivision_scheme = if s.subdivision_quads {
+            oxy_mesh::multires::Scheme::CatmullClark
+        } else {
+            oxy_mesh::multires::Scheme::Loop
+        };
         self.radius_on_model = s.radius_on_model;
         self.living.enabled = s.living_strokes;
         self.living.save = s.living_save;
@@ -5051,6 +5062,19 @@ impl Editor {
         self.scene.active().multires.as_ref().map(|m| (m.active(), m.level_count()))
     }
 
+    /// How the active piece's levels are made: its own scheme when it has
+    /// levels, otherwise the one new levels would use.
+    pub fn level_scheme(&self) -> oxy_mesh::multires::Scheme {
+        self.scene.active().multires.as_ref().map_or(self.subdivision_scheme, |m| m.scheme())
+    }
+
+    /// A new level stack for `piece` with the chosen scheme (quads read
+    /// from its own polygons when it has them).
+    pub(crate) fn new_level_stack(&self, piece: &oxy_doc::Piece) -> oxy_mesh::multires::Multires {
+        let cage = piece.current_cage();
+        oxy_mesh::multires::Multires::new_with(&piece.mesh, self.subdivision_scheme, cage.as_ref())
+    }
+
     /// Apply a change to the active piece's level stack, producing a new
     /// mesh, as one undoable step.
     fn multires_op(&mut self, label: &str, result_triangles: usize, change: LevelChange) {
@@ -5061,13 +5085,18 @@ impl Editor {
         }
         self.pointer_up();
         let background = result_triangles > self.level_job_triangles;
+        let fresh = match &self.scene.active().multires {
+            Some(m) if m.is_bound_to(&self.scene.active().mesh) => None,
+            // No levels yet (or stale ones): start from the current mesh.
+            _ => Some(self.new_level_stack(self.scene.active())),
+        };
         let piece = self.scene.active_mut();
         let id = piece.id;
         let had_levels = piece.multires.is_some();
-        let mut mr = match piece.multires.take() {
-            Some(m) if m.is_bound_to(&piece.mesh) => m,
-            // No levels yet (or stale ones): start from the current mesh.
-            _ => Multires::new(&piece.mesh),
+        let mut mr = match (piece.multires.take(), fresh) {
+            (Some(m), None) => m,
+            (_, Some(f)) => f,
+            (None, None) => unreachable!("a stack exists or a fresh one was made"),
         };
         // Cheap and needs the mesh: done here. The rest runs without it.
         let prepared = mr.prepare(&piece.mesh);
@@ -5143,18 +5172,30 @@ impl Editor {
 
     /// Add a subdivision level on top and switch to it.
     pub fn add_level(&mut self) {
-        let piece = self.scene.active();
-        let top_tris =
-            piece.multires.as_ref().map_or(piece.mesh.triangle_count(), |m| m.triangle_count(m.level_count() - 1));
-        if self.max_triangles > 0 && top_tris * 4 > self.max_triangles {
+        let next = self.next_level_triangles();
+        if self.max_triangles > 0 && next > self.max_triangles {
             self.status = format!(
-                "Another level would have {} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
-                top_tris * 4,
+                "Another level would have {next} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
                 self.max_triangles
             );
             return;
         }
-        self.multires_op("Add subdivision level", top_tris * 4, LevelChange::Add);
+        self.multires_op("Add subdivision level", next, LevelChange::Add);
+    }
+
+    /// Triangles the active piece's next subdivision level would have: four
+    /// per triangle with triangle levels; with quad levels two per corner of
+    /// each polygon (a quad makes four quads, a triangle three).
+    pub fn next_level_triangles(&self) -> usize {
+        let piece = self.scene.active();
+        match &piece.multires {
+            Some(m) => m.next_level_triangles(),
+            None if self.subdivision_scheme == oxy_mesh::multires::Scheme::Loop => piece.mesh.triangle_count() * 4,
+            None => {
+                let (q, t) = piece.mesh.quad_and_triangle_counts();
+                8 * q + 6 * t
+            }
+        }
     }
 
     /// Step to another subdivision level (relative: +1 up, −1 down).
@@ -5190,7 +5231,13 @@ impl Editor {
     }
 
     pub fn subdivide(&mut self, smooth: bool) {
-        let n = self.scene.active().mesh.triangle_count() * 4;
+        let quads = smooth && self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
+        let n = if quads {
+            let (q, t) = self.scene.active().mesh.quad_and_triangle_counts();
+            8 * q + 6 * t
+        } else {
+            self.scene.active().mesh.triangle_count() * 4
+        };
         if self.max_triangles > 0 && n > self.max_triangles {
             self.status = format!(
                 "Subdivision would create {n} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
@@ -5198,7 +5245,16 @@ impl Editor {
             );
             return;
         }
-        let mesh = topo::subdivide(&self.scene.active().mesh, if smooth { 1 } else { 0 });
+        let mesh = if quads {
+            // One quad level, kept as a plain mesh.
+            let piece = self.scene.active();
+            let mut mr = self.new_level_stack(piece);
+            let mesh = Mesh::from_data(mr.add_level(&piece.mesh));
+            mr.bind(&mesh);
+            mesh
+        } else {
+            topo::subdivide(&self.scene.active().mesh, if smooth { 1 } else { 0 })
+        };
         self.replace_active_mesh(if smooth { "Smooth subdivide" } else { "Subdivide" }, mesh);
         self.status = format!("Subdivided: {} triangles", self.scene.active().mesh.triangle_count());
     }
@@ -8425,10 +8481,16 @@ mod tests {
     fn subdivide_is_undoable() {
         let mut e = editor();
         let n = e.scene.active().mesh.triangle_count();
+        let quads = e.next_level_triangles();
         e.subdivide(true);
-        assert_eq!(e.scene.active().mesh.triangle_count(), n * 4);
+        assert_eq!(e.scene.active().mesh.triangle_count(), quads);
+        assert_eq!(e.scene.active().mesh.quad_and_triangle_counts(), (quads / 2, 0), "all quads");
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        // With triangles chosen, Loop: four triangles each.
+        e.subdivision_scheme = oxy_mesh::multires::Scheme::Loop;
+        e.subdivide(true);
+        assert_eq!(e.scene.active().mesh.triangle_count(), n * 4);
     }
 
     #[test]
@@ -9317,6 +9379,8 @@ mod tests {
     #[test]
     fn multires_levels_keep_detail_and_undo() {
         let mut e = editor();
+        // Triangle (Loop) levels; quad levels are covered below.
+        e.subdivision_scheme = oxy_mesh::multires::Scheme::Loop;
         let base_tris = e.scene.active().mesh.triangle_count();
         let level_order = |m: &Mesh| {
             let mut out = vec![Vec3::ZERO; m.vertex_count()];
@@ -9359,6 +9423,96 @@ mod tests {
         assert_eq!(e.multires_level(), Some((1, 3)));
         e.undo();
         assert_eq!(e.multires_level(), Some((0, 3)));
+    }
+
+    #[test]
+    fn quad_levels_stay_quads_and_save() {
+        use oxy_mesh::multires::Scheme;
+        let mut e = editor();
+        e.add_primitive("cube");
+        wait_job(&mut e);
+        let base = e.scene.active().mesh.quad_and_triangle_counts();
+        assert!(base.0 > 0 && base.1 == 0, "the cube is quads: {base:?}");
+        assert_eq!(e.level_scheme(), Scheme::CatmullClark, "quads by default");
+        e.add_level();
+        wait_job(&mut e);
+        e.add_level();
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.quad_and_triangle_counts(), (base.0 * 16, 0), "every level is quads");
+        assert_eq!(e.level_scheme(), Scheme::CatmullClark);
+        // Choosing triangles now doesn't change a piece that has levels.
+        e.subdivision_scheme = Scheme::Loop;
+        assert_eq!(e.level_scheme(), Scheme::CatmullClark);
+        e.step_level(-1);
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.quad_and_triangle_counts(), (base.0 * 4, 0));
+        // Saved and opened again: still quad levels.
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        let mut f = editor();
+        f.replace_document(Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap(), None);
+        let i = f.scene.pieces.iter().position(|p| p.multires.is_some()).unwrap();
+        f.scene.set_active(i);
+        assert_eq!(f.level_scheme(), Scheme::CatmullClark);
+        assert_eq!(f.multires_level(), Some((1, 3)));
+        f.step_level(1);
+        wait_job(&mut f);
+        assert_eq!(f.scene.active().mesh.quad_and_triangle_counts(), (base.0 * 16, 0));
+    }
+
+    #[test]
+    fn poly_edit_creases_carry_into_quad_levels() {
+        use oxy_mesh::retopo::{Cage, Face};
+        // A unit cube made of polygons, as Poly Edit keeps it.
+        let cube = |crease: bool| {
+            let p = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+            let positions = vec![
+                p(-0.5, -0.5, -0.5),
+                p(0.5, -0.5, -0.5),
+                p(0.5, 0.5, -0.5),
+                p(-0.5, 0.5, -0.5),
+                p(-0.5, -0.5, 0.5),
+                p(0.5, -0.5, 0.5),
+                p(0.5, 0.5, 0.5),
+                p(-0.5, 0.5, 0.5),
+            ];
+            let quads = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 4, 7, 3]];
+            let faces = quads.iter().map(|k| Face::with_group(k.to_vec(), 0)).collect();
+            let mut cage = Cage { positions, faces, ..Default::default() };
+            let mesh = cage.build_mesh().unwrap();
+            if crease {
+                let edges: Vec<[u32; 2]> = cage
+                    .faces
+                    .iter()
+                    .flat_map(|f| (0..4).map(|i| [f.corners[i], f.corners[(i + 1) % 4]]).collect::<Vec<_>>())
+                    .collect();
+                for [a, b] in edges {
+                    cage.set_crease(a, b, 1.0);
+                }
+            }
+            let mut e = editor();
+            let mut piece = Piece::new("Box", mesh);
+            piece.cage = Some(cage);
+            e.scene = Scene::new(piece);
+            e
+        };
+        // Fully creased: two levels keep it a unit box.
+        let mut e = cube(true);
+        e.add_level();
+        wait_job(&mut e);
+        e.add_level();
+        wait_job(&mut e);
+        let size = {
+            let b = e.scene.active().mesh.bounds();
+            b.max - b.min
+        };
+        assert!((size - Vec3::ONE).abs().max_element() < 1e-4, "{size}");
+        let corner = |e: &Editor| e.scene.active().mesh.positions.iter().map(|p| p.length()).fold(0.0, f32::max);
+        assert!((corner(&e) - 0.75f32.sqrt()).abs() < 1e-4, "the corners stay");
+        // Smooth: the corners round off.
+        let mut g = cube(false);
+        g.add_level();
+        wait_job(&mut g);
+        assert!(corner(&g) < 0.8, "{}", corner(&g));
     }
 
     #[test]
@@ -9851,6 +10005,7 @@ mod tests {
             undo_per_piece: true,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
+            subdivision_quads: false,
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: true,
@@ -9994,6 +10149,7 @@ mod tests {
         let mut e = editor();
         e.level_job_triangles = 0; // treat every level change as large
         let base = e.scene.active().mesh.triangle_count();
+        let next = e.next_level_triangles();
         e.add_level();
         assert!(e.job.is_some(), "the level is built on a worker thread");
         // Sculpting the piece waits; undo waits.
@@ -10005,7 +10161,7 @@ mod tests {
         e.undo();
         assert!(e.status.contains("Wait"), "{}", e.status);
         wait_job(&mut e);
-        assert_eq!(e.scene.active().mesh.triangle_count(), base * 4);
+        assert_eq!(e.scene.active().mesh.triangle_count(), next);
         assert_eq!(e.multires_level(), Some((1, 2)));
         // Level down in the background too, then undo restores level 2.
         e.step_level(-1);
@@ -10014,7 +10170,7 @@ mod tests {
         assert_eq!(e.scene.active().mesh.triangle_count(), base);
         e.undo();
         assert_eq!(e.multires_level(), Some((1, 2)));
-        assert_eq!(e.scene.active().mesh.triangle_count(), base * 4);
+        assert_eq!(e.scene.active().mesh.triangle_count(), next);
         // Sculpting works again once nothing is running.
         center(&mut e);
         e.pointer_down(PointerButton::Primary);

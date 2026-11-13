@@ -967,12 +967,14 @@ impl Editor {
         self.scene.set_active(ci);
         let base = self.scene.pieces[ci].mesh.clone();
         let surface = self.scene.pieces[si].mesh.clone();
+        // Quad levels follow the drawn quads (Catmull–Clark), unless
+        // triangle levels are chosen.
+        let stack = self.new_level_stack(&self.scene.pieces[ci]);
         self.start_job(format!("Project detail ({levels} levels)"), Vec::new(), move || {
-            use oxy_mesh::multires::Multires;
             let sources = [&surface];
             let projector = oxy_topo::SurfaceProjector::new(&sources);
             let mut mesh = base;
-            let mut mr = Multires::new(&mesh);
+            let mut mr = stack;
             for _ in 0..levels {
                 // Not `add_level`, which would first spread this level's
                 // projection down into the drawn quads.

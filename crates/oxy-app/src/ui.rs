@@ -3572,6 +3572,7 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Subdivide (single mesh)", Cmd::SubdivideOnce).clicked() {
         ed.subdivide(true);
     }
+    subdivision_kind(ui, ed);
     ui.separator();
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
@@ -4627,6 +4628,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.add_level();
         }
     });
+    subdivision_kind(ui, ed);
     ui.add_space(4.0);
     ui.label(RichText::new("Rebuild").small().weak());
     ui.horizontal(|ui| {
@@ -5783,6 +5785,37 @@ fn fmt_count(n: usize) -> String {
     } else {
         n.to_string()
     }
+}
+
+/// Quads or triangles for new subdivision levels and Subdivide. A piece that
+/// already has levels keeps the kind they were made with, shown here.
+fn subdivision_kind(ui: &mut egui::Ui, ed: &mut Editor) {
+    use oxy_mesh::multires::Scheme;
+    let has_levels = ed.multires_level().is_some();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Makes").small().weak());
+        if has_levels {
+            let kind = match ed.level_scheme() {
+                Scheme::CatmullClark => "quads (Catmull–Clark)",
+                Scheme::Loop => "triangles (Loop)",
+            };
+            ui.label(RichText::new(kind).small())
+                .on_hover_text("This piece's levels keep the kind they were made with. Delete them (or remesh) to change it.");
+            return;
+        }
+        let quads = ui
+            .selectable_label(ed.subdivision_scheme == Scheme::CatmullClark, "Quads")
+            .on_hover_text("Catmull–Clark: every polygon becomes quads, so edge loops stay and every level is all quads (best for UVs, retopology and export). A triangle becomes three quads.");
+        if quads.clicked() {
+            ed.subdivision_scheme = Scheme::CatmullClark;
+        }
+        let tris = ui
+            .selectable_label(ed.subdivision_scheme == Scheme::Loop, "Triangles")
+            .on_hover_text("Loop: every triangle becomes four triangles. Can be smoother on meshes made only of triangles, such as a voxel remesh.");
+        if tris.clicked() {
+            ed.subdivision_scheme = Scheme::Loop;
+        }
+    });
 }
 
 #[cfg(test)]

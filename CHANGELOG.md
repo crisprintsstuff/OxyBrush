@@ -11,6 +11,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **Strokes are saved with the project** in a new `STRK` section, with their groups, so they stay editable after reopening (also through autosave and recovery), on pieces with subdivision levels too. Turn off **Preferences > General > Save strokes with the project** for smaller files. Older versions skip the section and open the project as it looks. Opening a project with Living strokes off leaves its strokes fixed in place and says so in the Strokes window.
   - Every change in the window is one undo step, renaming included.
 
+### Changed
+- **Subdivision levels make quads** ([RFC 0019](docs/rfcs/0019-quad-subdivision.md)). Ctrl+D, Mesh > Subdivide and the retopology tool's Subdivide and project now use Catmull–Clark subdivision: every polygon becomes quads, so a quad base mesh (the human base meshes, a Poly Edit model, a retopology mesh, the quad sphere) keeps its edge loops at every level, the status bar's quad count is exact and OBJ export writes quads. A triangle becomes three quads, so the first level of a triangle mesh has six times the triangles (then four). Poly Edit creases carry into the levels (100% stays sharp; lower weights round off after a level or two). The old behavior, Loop subdivision (each triangle into four), is under Topology > Subdivision levels > **Makes: Triangles**, chosen before adding the first level and remembered (`subdivision` setting); a piece keeps the kind its levels were made with. Quad levels are saved in a new `MRCC` project section; older versions skip it and open the active level as a plain mesh. Pieces with triangle levels open and save as before.
+
 ## [4.0.0-beta.8] - 2026-11-13
 
 ### Added

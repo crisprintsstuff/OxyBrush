@@ -68,7 +68,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model.
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the brush shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
-3. **Need more detail?** **Ctrl+D** adds a subdivision level, and **D** / **Shift+D** step between levels, keeping your detail. **Ctrl+R** remeshes to even triangles.
+3. **Need more detail?** **Ctrl+D** adds a subdivision level (quads, keeping your edge loops), and **D** / **Shift+D** step between levels, keeping your detail. **Ctrl+R** remeshes to even triangles.
 4. **Save** with **Ctrl+S** (an `.oxb` project). **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY for game engines, other 3D apps or 3D printing.
 5. **Find anything:** **Ctrl+K** finds any command by typing part of its name, **Space** finds a brush, **F1** lists every shortcut and **F2** opens the built-in guide (searchable, works offline). **Ctrl+,** opens Preferences.
 
@@ -130,7 +130,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### Detail and topology
 
-- **Subdivision levels:** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are saved in the project and covered by undo, with a configurable triangle limit (`max_triangles`).
+- **Subdivision levels:** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. Levels are **quads** by default (Catmull–Clark, so a quad base mesh keeps its edge loops and exports as quads at every level, with Poly Edit creases kept sharp), or triangles (Loop) if you choose ([RFC 0019](docs/rfcs/0019-quad-subdivision.md)). Levels are saved in the project and covered by undo, with a configurable triangle limit (`max_triangles`).
 - **Dynamic detail:** turn it on in the Topology section and brushes add triangles where they need more detail and remove ones that became too small, so you can build a shape from a plain sphere without remeshing. Works best up to a few hundred thousand triangles ([RFC 0006](docs/rfcs/0006-dynamic-detail.md)).
 - **Voxel remesh:** rebuilds a piece with even triangles, on a sparse voxel grid that reaches 1024+ voxels across with little memory. Parts that overlap, or a surface sculpted through itself, come out as one solid, and holes are patched first. **Shell** makes a wall of a chosen thickness instead (outward, both sides or inward): a sheet gets a thickness, a closed model comes out hollow. An **Adaptivity** slider uses fewer triangles on flat areas, and quad output exports as quads in OBJ.
 - **Booleans** (Mesh > Boolean): Union, Difference and Intersection on voxel volumes, robust to self-intersecting or non-manifold input.
