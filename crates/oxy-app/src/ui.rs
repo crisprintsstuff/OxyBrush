@@ -3498,6 +3498,7 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ("Cylinder", "cylinder", Cmd::AddCylinder),
             ("Cone", "cone", Cmd::AddCone),
             ("Torus", "torus", Cmd::AddTorus),
+            ("Disc", "disc", Cmd::AddDisc),
         ] {
             if tips::button(ui, label, cmd).clicked() {
                 ed.open_primitive(which);
@@ -4151,6 +4152,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ("Cylinder", "cylinder", Cmd::AddCylinder),
                 ("Cone", "cone", Cmd::AddCone),
                 ("Torus", "torus", Cmd::AddTorus),
+                ("Disc", "disc", Cmd::AddDisc),
             ] {
                 if tips::button(ui, label, cmd).clicked() {
                     ed.open_primitive(which);
