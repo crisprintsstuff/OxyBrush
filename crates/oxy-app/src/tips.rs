@@ -85,6 +85,7 @@ commands! {
     AddCylinder => "Add cylinder piece", "", "Add a cylinder as a new piece, with even triangles ready to sculpt.";
     AddCone => "Add cone piece", "", "Add a cone as a new piece, with even triangles ready to sculpt.";
     AddTorus => "Add torus piece", "", "Add a torus (ring) as a new piece.";
+    AddDisc => "Add disc piece", "", "Add a flat disc as a new piece: a round plate of quads, a ring with a hole, or a slice of one. A good start for hard-surface parts in Poly Edit.";
     LivingStrokes => "Strokes…", "", "Open the Strokes panel (Living strokes): the strokes made on this piece, to fade, delete or solo any of them without undoing what came after. Turn Living strokes on in Preferences > General.";
     DeformWindow => "Deform…", "", "Open the Deform window: bend, twist, taper, inflate, polish and more for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
     DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";

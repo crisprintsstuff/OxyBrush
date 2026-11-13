@@ -1,6 +1,7 @@
 //! Base meshes to start sculpting from.
 
 use crate::Mesh;
+use crate::retopo::{Cage, Face};
 use glam::Vec3;
 use std::collections::HashMap;
 
@@ -132,6 +133,72 @@ pub fn plane(divisions: u32, size: f32) -> Mesh {
 }
 
 /// Cube with each face divided into `divisions`² quads (as triangles).
+/// A flat disc (or ring, or slice of one) lying in the XZ plane and facing
+/// up (+Y), as polygons: quads in rings, with triangles around the centre
+/// when there's no hole.
+///
+/// - `outer`, `inner`: radii; `inner` above 0 makes a ring (a hole in the
+///   middle). It is kept below `outer`.
+/// - `rings`: rows of faces from the inside out (at least 1).
+/// - `segments`: faces around (at least 3), spread over the slice.
+/// - `slice`: `Some((from, to))` keeps only the part between those angles
+///   (degrees, counter-clockwise seen from above, 0 along +X); None is the
+///   whole circle.
+pub fn disc_cage(outer: f32, inner: f32, rings: u32, segments: u32, slice: Option<(f32, f32)>) -> Cage {
+    let outer = outer.max(1e-4);
+    let inner = inner.clamp(0.0, outer * 0.999);
+    let rings = rings.max(1);
+    let segments = segments.max(3);
+    // The slice's span; a full circle wraps around, so it has no last column.
+    let (start, span, closed) = match slice {
+        Some((from, to)) => {
+            let span = (to - from).rem_euclid(360.0);
+            let span = if span < 1e-3 { 360.0 } else { span };
+            (from.to_radians(), span.to_radians(), span >= 360.0)
+        }
+        None => (0.0, std::f32::consts::TAU, true),
+    };
+    let columns = if closed { segments } else { segments + 1 };
+    let point = |r: f32, j: u32| {
+        let a = start + span * j as f32 / segments as f32;
+        Vec3::new(r * a.cos(), 0.0, -r * a.sin())
+    };
+    let hole = inner > 0.0;
+    let mut cage = Cage::default();
+    // Point numbers: the centre first (no hole), then ring by ring outwards.
+    let centre = (!hole).then(|| cage.add_vertex(Vec3::ZERO));
+    let first_ring = if hole { 0 } else { 1 };
+    let mut ring_start = Vec::new();
+    for i in first_ring..=rings {
+        ring_start.push(cage.positions.len() as u32);
+        let r = inner + (outer - inner) * i as f32 / rings as f32;
+        for j in 0..columns {
+            cage.add_vertex(point(r, j));
+        }
+    }
+    let at = |i: u32, j: u32| ring_start[(i - first_ring) as usize] + j % columns;
+    let mut faces: Vec<Vec<u32>> = Vec::new();
+    for j in 0..segments {
+        if let Some(c) = centre {
+            faces.push(vec![c, at(1, j), at(1, j + 1)]);
+        }
+        for i in first_ring..rings {
+            faces.push(vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]);
+        }
+    }
+    for f in faces {
+        cage.faces.push(Face::with_group(f, 0));
+    }
+    cage
+}
+
+/// [`disc_cage`] as a mesh (the cage is relinked to it).
+pub fn disc(outer: f32, inner: f32, rings: u32, segments: u32, slice: Option<(f32, f32)>) -> (Mesh, Cage) {
+    let mut cage = disc_cage(outer, inner, rings, segments, slice);
+    let mesh = cage.build_mesh().expect("a disc has faces");
+    (mesh, cage)
+}
+
 pub fn cube(divisions: u32, size: f32) -> Mesh {
     let mut positions = Vec::new();
     let mut tris = Vec::new();
@@ -868,5 +935,44 @@ mod lathe_tests {
         let open = cylinder_with(12, 2, 1.0, 1.0, false);
         assert!(!closed_and_volume(&open).0);
         assert!(open.positions.iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn disc_ring_and_slice() {
+        let up = |m: &Mesh| {
+            m.triangles.iter().all(|t| {
+                let p = t.map(|i| m.positions[i as usize]);
+                (p[1] - p[0]).cross(p[2] - p[0]).y > 0.0
+            })
+        };
+        let open_edges = |m: &Mesh| crate::topo::check_manifold(m).boundary_edge_count;
+        // Full disc: triangles round the centre, quads outside.
+        let (m, cage) = disc(1.0, 0.0, 3, 16, None);
+        assert_eq!(cage.faces.iter().filter(|f| f.len() == 3).count(), 16);
+        assert_eq!(cage.faces.iter().filter(|f| f.len() == 4).count(), 32);
+        assert_eq!(m.vertex_count(), 1 + 3 * 16);
+        assert!(up(&m), "faces up");
+        assert_eq!(m.quad_and_triangle_counts(), (32, 16));
+        assert_eq!(open_edges(&m), 16, "only the rim is open");
+        let r = m.positions.iter().map(|p| p.length()).fold(0.0, f32::max);
+        assert!((r - 1.0).abs() < 1e-5 && m.positions.iter().all(|p| p.y == 0.0));
+        // Ring: all quads, open inside and out.
+        let (m, cage) = disc(1.0, 0.4, 2, 24, None);
+        assert!(cage.faces.iter().all(|f| f.len() == 4));
+        assert_eq!(cage.faces.len(), 48);
+        assert_eq!(open_edges(&m), 48);
+        let rmin = m.positions.iter().map(|p| p.length()).fold(f32::MAX, f32::min);
+        assert!((rmin - 0.4).abs() < 1e-5 && up(&m));
+        // A quarter slice of a ring: segments spread over the 90°.
+        let (m, cage) = disc(1.0, 0.5, 1, 8, Some((0.0, 90.0)));
+        assert_eq!(cage.faces.len(), 8);
+        assert_eq!(m.vertex_count(), 2 * 9);
+        assert!(m.positions.iter().all(|p| p.x >= -1e-5 && p.z <= 1e-5), "between 0° and 90° (z is -sin)");
+        assert!(up(&m));
+        // A pie slice keeps its centre point, and a slice of 0 or 360° is whole.
+        let (m, _) = disc(1.0, 0.0, 2, 6, Some((45.0, 135.0)));
+        assert_eq!(m.vertex_count(), 1 + 2 * 7);
+        let (whole, _) = disc(1.0, 0.0, 2, 6, Some((10.0, 370.0)));
+        assert_eq!(whole.vertex_count(), 1 + 2 * 6);
     }
 }
