@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+- **Voxel remesh joined close parts with pinched edges** (fingers, toes, lips, nail folds). Where two surfaces came within about a voxel of each other, both were pinned to one point per voxel, so the result had edges shared by four triangles that bridged the parts; brushes, Smooth in particular, could then tear those spots into shreds. The remesh now gives a voxel one point for each piece of surface in it (Manifold Dual Contouring, Schaefer, Ju & Warren 2007), decides ambiguous voxel faces from the sampled values (the asymptotic decider, Nielson & Hamann 1991) so neighbouring voxels agree, separates the rare pinch that's left (a tunnel through a voxel) into two surfaces that touch, and drops specks under two voxels across. The result is a closed surface without pinched edges: on the human base meshes, 0 at resolutions 128 to 512 with both engines, where there were 43 to 75. Parts closer than about a voxel still join; raise the resolution to keep them apart. Remeshing takes about 5% longer.
+
 ## [4.0.0-beta.8] - 2026-11-13
 
 ### Added
