@@ -91,6 +91,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::NewSphere, "file document start", |e| e.request(Pending::New("sphere"))),
         cmd(ed, Cmd::NewCube, "file document start", |e| e.request(Pending::New("cube"))),
         cmd(ed, Cmd::NewPlane, "file document start", |e| e.request(Pending::New("plane"))),
+        cmd(ed, Cmd::NewHumanFemale, "file document start body figure woman base mesh character anatomy", |e| {
+            e.request(Pending::New("human_female"))
+        }),
+        cmd(ed, Cmd::NewHumanMale, "file document start body figure man base mesh character anatomy", |e| {
+            e.request(Pending::New("human_male"))
+        }),
         cmd(ed, Cmd::Undo, "edit", Editor::undo),
         cmd(ed, Cmd::Redo, "edit", Editor::redo),
         cmd(ed, Cmd::LastStrokeAsCurve, "stroke curve edit reshape fix last convert", |e| {
@@ -107,6 +113,10 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::AddSphere, "pieces primitive", |e| e.open_primitive("sphere")),
         cmd(ed, Cmd::AddCube, "pieces primitive", |e| e.open_primitive("cube")),
         cmd(ed, Cmd::AddPlane, "pieces primitive", |e| e.open_primitive("plane")),
+        cmd(ed, Cmd::AddHumanFemale, "pieces body figure woman base mesh character", |e| {
+            e.add_primitive("human_female")
+        }),
+        cmd(ed, Cmd::AddHumanMale, "pieces body figure man base mesh character", |e| e.add_primitive("human_male")),
         cmd(ed, Cmd::AddCylinder, "pieces primitive tube", |e| e.open_primitive("cylinder")),
         cmd(ed, Cmd::AddCone, "pieces primitive", |e| e.open_primitive("cone")),
         cmd(ed, Cmd::AddTorus, "pieces primitive ring donut", |e| e.open_primitive("torus")),

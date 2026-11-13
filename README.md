@@ -62,7 +62,7 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube or plane), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube, plane, or a female or male human base mesh), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
 
 ![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
 
@@ -354,6 +354,6 @@ Everyone is welcome, whether you write code, make art, write docs, translate, or
 
 ## License
 
-Code is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Bundled assets are CC0, except the interface font, [Inter](https://rsms.me/inter/), which is under the [SIL Open Font License 1.1](crates/oxy-app/assets/fonts/OFL.txt).
+Code is dual-licensed under [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at your option. Bundled assets are CC0 (the human base meshes come from Blender's [Human Base Meshes](https://www.blender.org/download/demo/asset-bundles/human-base-meshes/) bundle, CC0 1.0), except the interface font, [Inter](https://rsms.me/inter/), which is under the [SIL Open Font License 1.1](crates/oxy-app/assets/fonts/OFL.txt).
 
 *OxyBrush is an independent project, not affiliated with any commercial sculpting software vendor. ZBrush is a registered trademark of Maxon Computer GmbH; it is mentioned only to identify a file format OxyBrush aims to interoperate with.*

@@ -476,6 +476,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ("Sphere", "sphere", Cmd::NewSphere),
                         ("Cube", "cube", Cmd::NewCube),
                         ("Plane", "plane", Cmd::NewPlane),
+                        ("Human (female)", "human_female", Cmd::NewHumanFemale),
+                        ("Human (male)", "human_male", Cmd::NewHumanMale),
                     ] {
                         if tips::button(ui, label, cmd).clicked() {
                             ed.request(Pending::New(which));
@@ -3498,6 +3500,14 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
             ed.start_tube();
         }
+        ui.separator();
+        for (label, which, cmd) in
+            [("Human (female)", "human_female", Cmd::AddHumanFemale), ("Human (male)", "human_male", Cmd::AddHumanMale)]
+        {
+            if tips::button(ui, label, cmd).clicked() {
+                ed.add_primitive(which);
+            }
+        }
     });
     if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
         ed.edit_tube();
@@ -4131,6 +4141,14 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ] {
                 if tips::button(ui, label, cmd).clicked() {
                     ed.open_primitive(which);
+                }
+            }
+            for (label, which, cmd) in [
+                ("Human (female)", "human_female", Cmd::AddHumanFemale),
+                ("Human (male)", "human_male", Cmd::AddHumanMale),
+            ] {
+                if tips::button(ui, label, cmd).clicked() {
+                    ed.add_primitive(which);
                 }
             }
             if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
@@ -4822,6 +4840,11 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 .weak()
                 .small(),
         );
+        ui.label(
+            RichText::new("Human base meshes: from Blender's Human Base Meshes bundle (blender.org), CC0 1.0.")
+                .weak()
+                .small(),
+        );
         tips::hover(ui.hyperlink(crate::support::REPO_URL), plain::REPO);
         ui.add_space(6.0);
         ui.label(
@@ -5095,6 +5118,8 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     (Icon::Sphere, "Sphere", "Heads, creatures", "sphere", Cmd::NewSphere),
                     (Icon::Cube, "Cube", "Hard surfaces", "cube", Cmd::NewCube),
                     (Icon::Plane, "Plane", "Reliefs, tiles", "plane", Cmd::NewPlane),
+                    (Icon::Human, "Female", "Human base mesh", "human_female", Cmd::NewHumanFemale),
+                    (Icon::Human, "Male", "Human base mesh", "human_male", Cmd::NewHumanMale),
                 ] {
                     if widgets::card(ui, icon, title, sub, &cmd.tip()).clicked() {
                         ed.request(Pending::New(which));

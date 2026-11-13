@@ -260,6 +260,8 @@ pub enum Icon {
     Sphere,
     Cube,
     Plane,
+    /// A standing figure (the human base meshes).
+    Human,
     Open,
     Import,
     Orbit,
@@ -396,6 +398,17 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 let off = vec2(-0.3, -0.3) * rad * t;
                 p.circle_filled(ctr + off, rad * (1.0 - 0.75 * t), lerp_color(CLAY_BOTTOM, CLAY_TOP, t));
             }
+        }
+        Icon::Human => {
+            // A clay figure: head, body, arms and legs.
+            let fill = lerp_color(CLAY_BOTTOM, CLAY_TOP, 0.7);
+            let limb = Stroke::new(r * 0.22, fill);
+            p.circle_filled(ctr + vec2(0.0, -r * 0.68), r * 0.2, fill);
+            p.line_segment([ctr + vec2(0.0, -r * 0.42), ctr + vec2(0.0, r * 0.12)], Stroke::new(r * 0.34, fill));
+            p.line_segment([ctr + vec2(-r * 0.12, -r * 0.36), ctr + vec2(-r * 0.5, r * 0.15)], limb);
+            p.line_segment([ctr + vec2(r * 0.12, -r * 0.36), ctr + vec2(r * 0.5, r * 0.15)], limb);
+            p.line_segment([ctr + vec2(-r * 0.09, r * 0.12), ctr + vec2(-r * 0.2, r * 0.9)], limb);
+            p.line_segment([ctr + vec2(r * 0.09, r * 0.12), ctr + vec2(r * 0.2, r * 0.9)], limb);
         }
         Icon::Plane => {
             let w = r * 0.95;
