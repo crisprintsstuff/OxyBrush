@@ -43,6 +43,7 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
         keywords: "start first stroke clay brush size strength radius",
         body: "Drag on the model to sculpt with the current brush. Raise adds material and Carve removes it; hold Alt to flip for one stroke.\n\n\
 - [ and ] make the brush smaller and larger; - and = change its strength. The size/strength bar does the same with the mouse, and so does the quick menu: right-click the model or hold Q.\n\
+- The brush size is on screen: it stays the same size as you zoom, so zooming in gives finer strokes. Brush settings > Size > On the model makes it a size on the model instead (in scene units, for all brushes): zoom in and the circle grows with the model, so a stroke covers the same area at any zoom.\n\
 - S, U and I open a slider right under the pointer for size, strength and Paint strength; Shift+O opens one for focal shift (O in the Single-key tools scheme). Press the key again, Esc, or click outside to close it.\n\
 - Hold Shift to smooth with any brush, Ctrl to mask.\n\
 - With a pen, pressure sets the strength (and the radius, if you turn that on in the brush settings).\n\

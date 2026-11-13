@@ -173,7 +173,8 @@ commands! {
     CheckUpdates => "Check for updates…", "", "Look for a new version. Nothing about you or your work is sent.";
     CloseProject => "Close project", "", "Close this project and go back to the start screen. You are asked to save unsaved work first.";
     Quit => "Quit", "", "Close OxyBrush. You are asked before unsaved work is discarded.";
-    Radius => "Brush radius", "[ and ]", "Brush size on screen, in points.";
+    Radius => "Brush radius", "[ and ]", "Brush size: on screen in points, or on the model in scene units (Brush settings > Size).";
+    SizeOnModel => "Brush size on the model", "", "Switch the brush size between on screen (the same size at any zoom) and on the model (it grows on screen as you zoom in, like the model). For all brushes.";
     Strength => "Brush strength", "- and =", "How strong each dab is.";
     Raise => "Raise", "", "Brushes add clay. Hold Alt to carve for one stroke.";
     Carve => "Carve", "", "Brushes remove clay. Hold Alt to raise for one stroke.";
@@ -673,6 +674,9 @@ pub mod plain {
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
     pub const GIZMO_APPLY: &str = "Keep the changes made with the gizmo (and any typed values), and count from zero again. \
         The fields show the total since the gizmo opened or the last Apply; type a value and press Enter to make it exactly that.";
+    pub const SIZE_ON_SCREEN: &str =
+        "The brush is the same size on screen however far you zoom: zoom in for finer detail. The size is in points.";
+    pub const SIZE_ON_MODEL: &str = "The brush is a size on the model, in scene units: zoom in and the circle grows with the model, so a stroke is the same size at any zoom. For all brushes.";
     pub const GIZMO_SIZE: &str = "The size of what the gizmo moves along the world X, Y and Z axes, in scene units (Mesh > 3D Print Tools shows millimetres). Type a value and press Enter to make it exactly that, scaled about the pivot; with Even on, the other sides follow in proportion.";
     pub const GIZMO_CENTRE: &str = "Where the middle of what the gizmo moves is, in world coordinates. Type a value and press Enter to move it exactly there.";
     pub const GIZMO_CANCEL: &str =
@@ -875,6 +879,8 @@ pub mod plain {
         AXIS_GIZMO,
         GIZMO_DONE,
         GIZMO_CANCEL,
+        SIZE_ON_SCREEN,
+        SIZE_ON_MODEL,
         GIZMO_SIZE,
         GIZMO_CENTRE,
         GIZMO_SNAP,

@@ -204,6 +204,10 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::SymZ, "mirror", |e| e.symmetry.z = !e.symmetry.z),
         cmd(ed, Cmd::RaiseCarve, "invert direction", |e| e.carve = !e.carve),
         cmd(ed, Cmd::Frame, "view camera zoom fit", Editor::frame),
+        cmd(ed, Cmd::SizeOnModel, "brush radius scene world units zoom scale dynamic", |e| {
+            let on = !e.radius_on_model;
+            e.set_radius_on_model(on);
+        }),
         cmd(ed, Cmd::ZoomIn, "view camera closer magnify plus", |e| e.zoom_view(1.0)),
         cmd(ed, Cmd::ZoomOut, "view camera further minus", |e| e.zoom_view(-1.0)),
         cmd(ed, Cmd::Front, "view camera", |e| e.camera.snap(0.0, 0.0)),

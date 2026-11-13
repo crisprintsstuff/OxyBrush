@@ -853,8 +853,22 @@ pub struct Editor {
     pub history: History,
     pub camera: Camera,
     pub brush_kind: BrushKind,
-    /// Brush radius in logical points (screen space).
+    /// Brush radius in logical points (screen space). With
+    /// `radius_on_model` on it's worked out each frame from
+    /// `brush_radius_world` at the depth under the pointer (see
+    /// [`Editor::sync_model_radius`]), so everything that uses it follows.
     pub brush_radius_pt: f32,
+    /// Brush size is a size on the model (world units) rather than on
+    /// screen: zooming in makes the circle bigger on screen, like the model.
+    pub radius_on_model: bool,
+    /// The brush radius on the model (world units), with `radius_on_model`.
+    pub brush_radius_world: f32,
+    /// `brush_radius_pt` as last worked out from `brush_radius_world`: if it
+    /// differs, a key or slider changed it and the world size follows.
+    radius_pt_derived: f32,
+    /// Where the size on the model was last measured (the surface under the
+    /// pointer), for when the pointer is off the model.
+    radius_depth: Option<Vec3>,
     pub strengths: [f32; BrushKind::ALL.len()],
     pub falloff: Falloff,
     /// Moves the falloff's middle, -1..=1 (negative firmer, positive softer).
@@ -1253,6 +1267,10 @@ impl Default for Editor {
             camera,
             brush_kind: BrushKind::Draw,
             brush_radius_pt: 50.0,
+            radius_on_model: false,
+            brush_radius_world: 0.0,
+            radius_pt_derived: 0.0,
+            radius_depth: None,
             strengths,
             falloff: Falloff::Smooth,
             focal_shift: 0.0,
@@ -1710,6 +1728,12 @@ impl Editor {
             remember_brushes: self.remember_brushes,
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
+            radius_on_model: self.radius_on_model,
+            brush_radius_world: if self.radius_on_model && self.remember_brushes {
+                self.brush_radius_world
+            } else {
+                0.0
+            },
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
@@ -1927,6 +1951,11 @@ impl Editor {
         self.remember_brushes = s.remember_brushes;
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
+        self.radius_on_model = s.radius_on_model;
+        // A remembered size on the model; otherwise the first frame measures
+        // one from the on-screen size.
+        self.brush_radius_world = s.brush_radius_world;
+        self.radius_pt_derived = -1.0;
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
@@ -2036,6 +2065,8 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        // The size on the model, measured where this press lands.
+        self.sync_model_radius();
         if button != PointerButton::Primary {
             // A right click (without dragging) opens the quick menu.
             self.rmb_press = (button == PointerButton::Secondary).then_some(p);
@@ -2362,6 +2393,66 @@ impl Editor {
             self.pressure_min,
             self.pressure_full,
         )
+    }
+
+    /// World units per logical point where the brush size is measured:
+    /// the surface under the pointer, else where it was last measured, else
+    /// the middle of the active piece.
+    fn radius_world_per_pt(&mut self) -> f32 {
+        if let Some(p) = self.pointer
+            && self.pointer_in_canvas()
+        {
+            let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
+            if let Some((_, hit)) = self.pick_piece(o, d) {
+                self.radius_depth = Some(hit.point);
+            }
+        }
+        let at = self.radius_depth.unwrap_or_else(|| self.scene.active().mesh.bounds().center());
+        self.world_radius(at, 1.0).max(1e-9)
+    }
+
+    /// With the brush size on the model, work out the on-screen size for
+    /// the current view (call every frame). A size changed on screen (the
+    /// [ and ] keys, the S slider) since the last call changes the size on
+    /// the model too. Left alone during a drag and while a curve or tube is
+    /// open, whose sizes were fixed when they started.
+    pub fn sync_model_radius(&mut self) {
+        if !self.radius_on_model || !matches!(self.drag, Drag::None) || self.curve.is_some() || self.tube.is_some() {
+            return;
+        }
+        let per_pt = self.radius_world_per_pt();
+        // A negative `radius_pt_derived` means "not worked out yet" (a size
+        // on the model was just loaded): keep that size.
+        if self.brush_radius_world <= 0.0
+            || (self.radius_pt_derived >= 0.0 && self.brush_radius_pt != self.radius_pt_derived)
+        {
+            self.brush_radius_world = self.brush_radius_pt * per_pt;
+        }
+        self.brush_radius_pt = (self.brush_radius_world / per_pt).clamp(0.5, 5000.0);
+        self.radius_pt_derived = self.brush_radius_pt;
+    }
+
+    /// Switch the brush size between on screen and on the model, keeping
+    /// the circle the size it is now.
+    pub fn set_radius_on_model(&mut self, on: bool) {
+        if on == self.radius_on_model {
+            return;
+        }
+        self.radius_on_model = on;
+        if on {
+            self.brush_radius_world = 0.0;
+            self.sync_model_radius();
+            self.status = "Brush size is now on the model: zoom in and the brush grows with it".into();
+        } else {
+            self.brush_radius_pt = self.brush_radius_pt.clamp(2.0, 1000.0);
+            self.status = "Brush size is now on screen: it stays the same size as you zoom".into();
+        }
+    }
+
+    /// A range for the Size slider in world units, from the scene's size.
+    pub fn world_radius_range(&self) -> std::ops::RangeInclusive<f32> {
+        let s = self.scene.bounds().extent().length().max(1e-3);
+        (s * 0.0005)..=(s * 0.5)
     }
 
     /// Screen-space radius (logical points) to world units at `at`.
@@ -6149,6 +6240,16 @@ impl Editor {
     }
 
     pub fn adjust_radius(&mut self, factor: f32) {
+        if self.radius_on_model && self.brush_radius_world > 0.0 {
+            // Scale the size on the model; the on-screen size follows.
+            let range = self.world_radius_range();
+            let world = (self.brush_radius_world * factor).clamp(*range.start(), *range.end());
+            let k = world / self.brush_radius_world;
+            self.brush_radius_world = world;
+            self.brush_radius_pt *= k;
+            self.radius_pt_derived = self.brush_radius_pt;
+            return;
+        }
         self.brush_radius_pt = (self.brush_radius_pt * factor).clamp(2.0, 1000.0);
     }
 
@@ -7252,6 +7353,66 @@ mod tests {
         e.symmetrize(0, true);
         assert!(e.job.is_none());
         assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
+    }
+
+    #[test]
+    fn brush_size_on_the_model_follows_the_zoom() {
+        let mut e = Editor::for_tests();
+        let centre = Vec2::new(400.0, 300.0);
+        e.pointer = Some(centre);
+        e.brush_radius_pt = 50.0;
+        // On screen (default): zooming leaves the on-screen size alone.
+        e.camera.zoom(3.0);
+        e.sync_model_radius();
+        assert_eq!(e.brush_radius_pt, 50.0);
+        e.camera.zoom(-3.0);
+        // Switching keeps the circle the size it is.
+        e.set_radius_on_model(true);
+        assert!((e.brush_radius_pt - 50.0).abs() < 1e-3, "{}", e.brush_radius_pt);
+        let world = e.brush_radius_world;
+        assert!(world > 0.0);
+        let at = |e: &Editor| {
+            let (o, d) = e.camera.ray(e.canvas_local(centre), e.canvas_size());
+            e.pick_piece(o, d).unwrap().1.point
+        };
+        let on_model = |e: &Editor| e.world_radius(at(e), e.brush_radius_pt);
+        let before = on_model(&e);
+        // Zoom in: the circle grows on screen, the size on the model stays.
+        e.camera.zoom(4.0);
+        e.sync_model_radius();
+        assert!(e.brush_radius_pt > 60.0, "bigger on screen: {}", e.brush_radius_pt);
+        assert!((e.brush_radius_world - world).abs() < 1e-6);
+        assert!((on_model(&e) - before).abs() < before * 1e-3, "same on the model");
+        // A press measures it too, so a stroke starts at the same size.
+        e.camera.zoom(-6.0);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        // (The stroke raised the surface a little, which moves where it's measured.)
+        assert!((on_model(&e) - before).abs() < before * 0.03, "{} vs {before}", on_model(&e));
+        // [ and ] scale the size on the model.
+        e.adjust_radius(2.0);
+        assert!((e.brush_radius_world - world * 2.0).abs() < 1e-5);
+        e.sync_model_radius();
+        assert!((e.brush_radius_world - world * 2.0).abs() < 1e-5, "the next frame keeps it");
+        // So does the on-screen size changed some other way (S slider).
+        e.brush_radius_pt *= 0.5;
+        e.sync_model_radius();
+        assert!((e.brush_radius_world - world).abs() < world * 1e-3);
+        // Remembered between sessions with the brush settings.
+        e.remember_brushes = true;
+        let s = e.settings();
+        assert!(s.radius_on_model && s.brush_radius_world > 0.0);
+        let mut next = Editor::for_tests();
+        next.apply_settings(&s);
+        next.pointer = Some(centre);
+        next.sync_model_radius();
+        assert!((next.brush_radius_world - e.brush_radius_world).abs() < 1e-6, "the size on the model is kept");
+        // Back to on screen: the circle stays, and stops following the zoom.
+        e.set_radius_on_model(false);
+        let pt = e.brush_radius_pt;
+        e.camera.zoom(2.0);
+        e.sync_model_radius();
+        assert_eq!(e.brush_radius_pt, pt);
     }
 
     #[test]
@@ -9455,6 +9616,8 @@ mod tests {
         let mut s = Settings {
             undo_per_piece: true,
             gizmo_done_reverts: true,
+            radius_on_model: false,
+            brush_radius_world: 0.0,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,
