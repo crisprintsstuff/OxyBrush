@@ -1752,6 +1752,7 @@ impl Editor {
             gizmo_pivot_follows: self.gizmo_pivot_follows,
             radius_on_model: self.radius_on_model,
             living_strokes: self.living.enabled,
+            living_save: self.living.save,
             living_budget_mb: self.living.budget_mb,
             brush_radius_world: if self.radius_on_model && self.remember_brushes {
                 self.brush_radius_world
@@ -1978,6 +1979,7 @@ impl Editor {
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
         self.radius_on_model = s.radius_on_model;
         self.living.enabled = s.living_strokes;
+        self.living.save = s.living_save;
         self.living.budget_mb = s.living_budget_mb;
         // A remembered size on the model; otherwise the first frame measures
         // one from the on-screen size.
@@ -3729,6 +3731,7 @@ impl Editor {
         self.import_scale = None;
         self.camera.frame(self.scene.bounds());
         self.reopen_saved_curve();
+        self.living_adopt_loaded();
     }
 
     /// The document as saved: the scene, plus the Curve Move curve that is
@@ -3736,6 +3739,9 @@ impl Editor {
     pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
         let mut data = self.scene.to_data();
         data.alphas = self.saved_alphas();
+        for (d, p) in data.pieces.iter_mut().zip(&self.scene.pieces) {
+            d.strokes = self.living_saved(p);
+        }
         if let Some(c) = self.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
             && let Some(i) = self.scene.index_of(c.piece)
         {
@@ -9848,6 +9854,7 @@ mod tests {
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: true,
+            living_save: false,
             living_budget_mb: 300,
             layout: UiLayout::Touch,
             ui_scale: 1.25,

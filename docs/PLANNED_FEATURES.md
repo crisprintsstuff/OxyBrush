@@ -13,7 +13,7 @@ in the app.
 
 > Every stroke stays editable, even after you've sculpted on top of it.
 
-**Status:** the first part is in the app as an option, off by default (Preferences > General, then Mesh > Strokes…): fade, delete and solo past strokes. Keeping part of a stroke, groups and saving strokes with the project come next.
+**Status:** in the app as an option, off by default (Preferences > General, then Mesh > Strokes…): fade, delete and solo past strokes, keep part of a stroke, group strokes into layers, and strokes saved with the project. Next: access for plugins and local AI agents, and extras like copying a stroke to the other side.
 
 Today, once a stroke is done it's part of the model. If a wrinkle you made
 twenty minutes ago is too deep, you either undo everything since, or sculpt

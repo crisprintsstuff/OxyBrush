@@ -1,6 +1,6 @@
 # RFC 0017: Living strokes
 
-Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 (groups, saving) still to do
+Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 landed except the plugin/MCP surface: groups as layers, mask out, saving (`STRK`)
 
 ## Summary
 
@@ -178,6 +178,16 @@ example, fade every stroke in a group.
 - Should the panel also list mask strokes? Proposed: no; masks are cheap to
   redo and would crowd the list.
 - Default memory budget: proposed 256 MB, adjustable in Preferences.
+
+Decided for phase 2: a stroke shows at its own strength times its group's
+(0 when the group is hidden). Moving strokes into a group (Group, Add to
+group, Merge) makes them take the group's strength, as moving something to
+a layer would; taking them out (Ungroup) folds the group's strength into
+theirs so they look the same. "Keep only where unmasked" scales the
+strokes' stored changes, so fading them later fades only what's left.
+Saving is a preference (on by default) rather than a project setting, so
+the file doesn't have to carry it. Strokes on a piece with subdivision
+levels are saved in the level's point order.
 
 Decided for phase 1: one record per symmetric stroke, mask strokes not
 listed, a 256 MB budget adjustable in Preferences. Living strokes is an
