@@ -4,6 +4,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Living strokes: groups, keep part of a stroke, saving** ([RFC 0017](docs/rfcs/0017-living-strokes.md), second phase).
+  - **Groups as sculpt layers:** **Group** puts the selected strokes in a named group ("Group 1", …). Each group row has a box to show or hide its strokes, a strength slider (0–150%, live while you drag) and a **…** menu to select its strokes, rename it (or double-click the name), merge it into another group, ungroup it or delete its strokes. **Add to group** moves strokes into a group, where they take its strength; **Ungroup** takes them out and keeps how they look. A stroke shows at its own strength times its group's.
+  - **Keep only where unmasked:** mask the part of a stroke you don't want, select it and press this. That part is taken away; the rest stays and can still be faded.
+  - **Strokes are saved with the project** in a new `STRK` section, with their groups, so they stay editable after reopening (also through autosave and recovery), on pieces with subdivision levels too. Turn off **Preferences > General > Save strokes with the project** for smaller files. Older versions skip the section and open the project as it looks. Opening a project with Living strokes off leaves its strokes fixed in place and says so in the Strokes window.
+  - Every change in the window is one undo step, renaming included.
+
 ## [4.0.0-beta.8] - 2026-11-13
 
 ### Added

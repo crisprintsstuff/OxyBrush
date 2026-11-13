@@ -1126,7 +1126,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ui,
         &mut living,
         "Living strokes: keep strokes editable",
-        "On: every stroke you make is kept in Mesh > Strokes, where you can fade, delete or solo it later without undoing what came after. Uses memory (see the budget below); a remesh or subdivision level change bakes the list. Off: strokes are final, as usual, and turning it off bakes the list.",
+        "On: every stroke you make is kept in Mesh > Strokes, where you can fade, delete, group or solo it later without undoing what came after. Uses memory (see the budget below); a remesh or subdivision level change bakes the list. Off: strokes are final, as usual, and turning it off bakes the list.",
     );
     if living != ed.living.enabled {
         ed.set_living_strokes(living);
@@ -1137,6 +1137,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
             ui.add(egui::DragValue::new(&mut ed.living.budget_mb).range(16..=8192).suffix(" MB"))
                 .on_hover_text("When the recorded strokes use more than this, the oldest are baked into the surface.");
         });
+        tips::check_plain(
+            ui,
+            &mut ed.living.save,
+            "Save strokes with the project",
+            "On: the strokes stay editable after you save, close and open the project again (they make the file bigger, about 16 bytes per point each stroke moved). Off: projects are saved with the strokes fixed in place.",
+        );
     }
     tips::check_plain(
         ui,

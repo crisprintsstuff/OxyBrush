@@ -153,6 +153,7 @@ mod tests {
                 cage: None,
                 tubes: Vec::new(),
                 curve: None,
+                strokes: None,
             }],
             active: 0,
             alphas: Vec::new(),

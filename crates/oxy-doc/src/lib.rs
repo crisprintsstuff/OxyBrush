@@ -48,6 +48,10 @@ pub struct Piece {
     /// saved (RFC 0005), written as the `CURV` section. Set only by loading;
     /// the app takes it and reopens the curve.
     pub curve: Option<Box<SavedCurve>>,
+    /// Living strokes loaded with the piece (the `STRK` section), with
+    /// point numbers already in this mesh's order. The app takes them on
+    /// load; they aren't kept here afterwards.
+    pub strokes: Option<Box<SavedStrokes>>,
 }
 
 /// An open Curve Move curve (RFC 0005), as saved with the project: the
@@ -158,6 +162,7 @@ impl Piece {
             cage: None,
             tubes: Vec::new(),
             curve: None,
+            strokes: None,
         }
     }
 
@@ -200,6 +205,7 @@ impl Piece {
                     cage: None,
                     tubes: Vec::new(),
                     curve: None,
+                    strokes: None,
                 }
             }
             None => PieceData {
@@ -212,6 +218,7 @@ impl Piece {
                 cage: self.current_cage(),
                 tubes: self.tubes.clone(),
                 curve: self.curve.clone(),
+                strokes: None,
             },
         }
     }
@@ -236,6 +243,9 @@ pub struct PieceData {
     pub tubes: Vec<TubeRecipe>,
     /// The `CURV` section: a Curve Move curve open when it was saved.
     pub curve: Option<Box<SavedCurve>>,
+    /// The `STRK` section: editable strokes (Living strokes), with point
+    /// numbers in `mesh`'s order. Filled in by the app when it saves.
+    pub strokes: Option<SavedStrokes>,
 }
 
 impl PieceData {
@@ -264,6 +274,15 @@ impl PieceData {
             }
             ok.then_some(c)
         });
+        // Stroke point numbers are in the file's order; `Mesh::from_data`
+        // reorders the points, so renumber them for the mesh.
+        let strokes = self.strokes.and_then(|st| {
+            let fits = st.vertices as usize == mesh.vertex_count();
+            if !fits {
+                log::warn!("ignoring saved strokes that don't match piece {:?}", self.name);
+            }
+            fits.then(|| Box::new(st.renumbered(mesh.source_vertices())))
+        });
         Piece {
             id: new_piece_id(),
             name: self.name,
@@ -275,7 +294,72 @@ impl PieceData {
             cage,
             tubes: self.tubes,
             curve: self.curve,
+            strokes,
         }
+    }
+}
+
+/// A piece's editable strokes (Living strokes, RFC 0017) as saved: each
+/// stroke is what it changed, point by point, so the app can fade or remove
+/// it later. The surface saved in the piece already includes every stroke
+/// at its strength.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedStrokes {
+    /// The piece's point count the strokes belong to.
+    pub vertices: u32,
+    pub groups: Vec<SavedStrokeGroup>,
+    /// Oldest first.
+    pub strokes: Vec<SavedStroke>,
+}
+
+/// A named group of strokes, used like a sculpt layer.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedStrokeGroup {
+    pub id: u32,
+    pub name: String,
+    pub strength: f32,
+    pub visible: bool,
+}
+
+/// One stroke: the points it moved (sorted) and what it did to each.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedStroke {
+    /// The brush's settings key (`draw`, `clay`, …).
+    pub brush: String,
+    /// When it was made, in seconds since 1970 (UTC).
+    pub made: u64,
+    pub strength: f32,
+    pub group: Option<u32>,
+    pub vertices: Vec<u32>,
+    pub deltas: Vec<Vec3>,
+    /// Color change per point; empty when the stroke didn't paint.
+    pub colors: Vec<Vec3>,
+}
+
+impl SavedStrokes {
+    /// Renumber the points: `source[v]` is the old number of new point `v`.
+    pub fn renumbered(mut self, source: &[u32]) -> Self {
+        let mut new_of = vec![u32::MAX; self.vertices as usize];
+        for (v, &old) in source.iter().enumerate() {
+            if let Some(slot) = new_of.get_mut(old as usize) {
+                *slot = v as u32;
+            }
+        }
+        for s in &mut self.strokes {
+            let mut rows: Vec<(u32, Vec3, Vec3)> = (0..s.vertices.len())
+                .filter_map(|j| {
+                    let v = *new_of.get(s.vertices[j] as usize)?;
+                    (v != u32::MAX).then(|| (v, s.deltas[j], s.colors.get(j).copied().unwrap_or(Vec3::ZERO)))
+                })
+                .collect();
+            rows.sort_unstable_by_key(|r| r.0);
+            let colored = !s.colors.is_empty();
+            s.vertices = rows.iter().map(|r| r.0).collect();
+            s.deltas = rows.iter().map(|r| r.1).collect();
+            s.colors = if colored { rows.iter().map(|r| r.2).collect() } else { Vec::new() };
+        }
+        self.vertices = source.len() as u32;
+        self
     }
 }
 
