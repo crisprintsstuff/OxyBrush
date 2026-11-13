@@ -240,8 +240,9 @@ While the Lights window is open, numbered dots show the lights in the viewport: 
     },
     Topic {
         title: "Remesh and decimate",
-        keywords: "topology voxel rebuild reduce polygons triangles resolution",
+        keywords: "topology voxel rebuild reduce polygons triangles resolution shell hollow thickness wall holes",
         body: "Voxel remesh (Ctrl+R) rebuilds the active piece with even triangles, so stretched areas sculpt well again. Resolution sets how fine the new mesh is.\n\n\
+A closed model is filled solid. A model with holes has them patched first, so it comes out solid too; an open sheet (a plane, a flat patch) has nothing inside to fill, and the status bar says so. For a wall instead, tick Shell: set its Thickness (in scene units; a standard-size piece is 2 across) and which way the wall goes from the surface (Outward, Both sides or Inward). A sheet gets that thickness; a closed model comes out hollow. Make the wall at least two voxels thick, or raise the resolution.\n\n\
 Decimate reduces the triangle count to the Keep percentage while preserving the shape, for export or to lighten a heavy piece. Both run in the background and can be undone.",
     },
     Topic {

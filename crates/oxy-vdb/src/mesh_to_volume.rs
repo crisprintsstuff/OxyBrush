@@ -76,7 +76,23 @@ impl Default for MeshToVolumeOptions {
 
 /// Converts a triangle mesh into a sparse narrow-band VDB level set (`FloatGrid`).
 pub fn mesh_to_level_set(positions: &[Vec3], triangles: &[[u32; 3]], opts: MeshToVolumeOptions) -> VdbFloatGrid {
-    mesh_to_level_set_signed(positions, triangles, opts, None)
+    mesh_to_level_set_signed(positions, triangles, opts, &Signing::default())
+}
+
+/// How [`mesh_to_level_set_signed`] tells inside from outside.
+pub struct Signing<'a> {
+    /// Triangles whose side the winding number decides (see [`SignOverride`]).
+    pub sign: Option<SignOverride<'a>>,
+    /// When nothing comes out inside (an open sheet), make a thin wall about
+    /// one voxel thick around the surface instead (the old behaviour; the
+    /// remesh asks for a shell of its own thickness instead).
+    pub thin_wall_if_open: bool,
+}
+
+impl Default for Signing<'_> {
+    fn default() -> Self {
+        Signing { sign: None, thin_wall_if_open: true }
+    }
 }
 
 /// Which side of the surface a point is on, for the triangles where the
@@ -97,8 +113,9 @@ pub fn mesh_to_level_set_signed(
     positions: &[Vec3],
     triangles: &[[u32; 3]],
     opts: MeshToVolumeOptions,
-    sign: Option<&SignOverride>,
+    signing: &Signing,
 ) -> VdbFloatGrid {
+    let sign = signing.sign.as_ref();
     let voxel_size = opts.voxel_size.max(1e-5);
     let half_width = opts.half_width.max(1.0);
     let band_dist = half_width * voxel_size;
@@ -541,7 +558,7 @@ pub fn mesh_to_level_set_signed(
             .par_iter()
             .any(|(_, leaf)| (0..LEAF_VOXELS).any(|o| leaf.mask.is_set(o) && (leaf.values[o] < 0.0) == inside))
     };
-    if !any_active(true) && any_active(false) {
+    if signing.thin_wall_if_open && !any_active(true) && any_active(false) {
         // Open mesh: convert unsigned distance into a thin solid shell
         let shell_radius = 0.75 * voxel_size;
         for leaf in grid.leaves.values_mut() {
