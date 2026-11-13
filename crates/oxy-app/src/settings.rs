@@ -338,6 +338,7 @@ pub struct Settings {
     /// start. Off (the default) starts every session with the default
     /// brushes.
     pub remember_brushes: bool,
+    pub undo_per_piece: bool,
     /// In-app plugins' panel settings, by `<plugin folder>/<param id>`: one
     /// value, or three for a color (RFC 0013).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
@@ -833,6 +834,7 @@ impl Default for Settings {
             brush: None,
             brush_strengths: Vec::new(),
             remember_brushes: false,
+            undo_per_piece: false,
             plugin_params: Default::default(),
             window: None,
             show_brush_names: true,
@@ -969,6 +971,7 @@ impl Settings {
             self.dyntopo_detail,
             self.lighting.to_line()
         ) + &format!("remember_brushes = {}\n", self.remember_brushes)
+            + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &self
                 .plugin_params
                 .iter()
@@ -1188,6 +1191,7 @@ impl Settings {
                     }
                 }
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
+                "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
@@ -1447,6 +1451,7 @@ mod tests {
             }),
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
             remember_brushes: false,
+            undo_per_piece: false,
             plugin_params: [
                 ("displace/amount".to_string(), vec![2.5]),
                 ("tint/color".to_string(), vec![0.25, 0.5, 1.0]),

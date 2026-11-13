@@ -405,6 +405,12 @@ impl Editor {
                 _ => 0.01,
             };
         let radius = (self.brush_radius_pt * ppp * world_per_px * 0.5).max(1e-3);
+        self.open_tube(points, radius, self.tube_into);
+    }
+
+    /// Open a tube along `points` (world space), `radius` thick, to be added
+    /// into piece `into` (or as a new piece).
+    pub(crate) fn open_tube(&mut self, points: Vec<Vec3>, radius: f32, into: Option<u64>) {
         let radii = vec![radius; points.len()];
         let mut tube = TubeEdit {
             preview: primitives::tube(&points, &radii, 24, true),
@@ -416,7 +422,7 @@ impl Editor {
             selected: None,
             replace: None,
             mirror_x: self.symmetry_center().x,
-            into: self.tube_into,
+            into,
             built: None,
         };
         tube.update();

@@ -93,6 +93,17 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::NewPlane, "file document start", |e| e.request(Pending::New("plane"))),
         cmd(ed, Cmd::Undo, "edit", Editor::undo),
         cmd(ed, Cmd::Redo, "edit", Editor::redo),
+        cmd(ed, Cmd::LastStrokeAsCurve, "stroke curve edit reshape fix last convert", |e| {
+            e.reopen_last_stroke(crate::editor::LastStrokeAs::Curve)
+        }),
+        cmd(ed, Cmd::LastStrokeAsCurveMove, "stroke curve move bend path last", |e| {
+            e.reopen_last_stroke(crate::editor::LastStrokeAs::CurveMove)
+        }),
+        cmd(ed, Cmd::LastStrokeAsTube, "stroke tube path pipe last", |e| {
+            e.reopen_last_stroke(crate::editor::LastStrokeAs::Tube)
+        }),
+        cmd(ed, Cmd::UndoPiece, "edit piece object only selective", Editor::undo_piece),
+        cmd(ed, Cmd::RedoPiece, "edit piece object only selective", Editor::redo_piece),
         cmd(ed, Cmd::AddSphere, "pieces primitive", |e| e.open_primitive("sphere")),
         cmd(ed, Cmd::AddCube, "pieces primitive", |e| e.open_primitive("cube")),
         cmd(ed, Cmd::AddPlane, "pieces primitive", |e| e.open_primitive("plane")),

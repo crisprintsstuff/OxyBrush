@@ -86,6 +86,37 @@ impl From<Step> for Change {
 }
 
 impl Change {
+    /// The one piece this change edits in place, found by id, when it edits
+    /// exactly one and doesn't add or remove pieces. Such a change can be
+    /// undone out of order: it doesn't depend on any other piece.
+    fn single_piece(&self) -> Option<u64> {
+        match self {
+            Change::Chunks { piece, .. }
+            | Change::Topology { piece, .. }
+            | Change::Faces { piece, .. }
+            | Change::Cage { piece, .. } => Some(*piece),
+            Change::Piece { .. } => None,
+            Change::Compound(c) => {
+                let first = c.first()?.single_piece()?;
+                c.iter().all(|x| x.single_piece() == Some(first)).then_some(first)
+            }
+        }
+    }
+
+    /// Whether this change edits, adds or removes piece `id`. A piece added
+    /// by this change is only known by its place in the list, so an added
+    /// piece doesn't count; that change is never undone out of order anyway.
+    fn touches(&self, id: u64) -> bool {
+        match self {
+            Change::Chunks { piece, .. }
+            | Change::Topology { piece, .. }
+            | Change::Faces { piece, .. }
+            | Change::Cage { piece, .. } => *piece == id,
+            Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
+            Change::Compound(c) => c.iter().any(|x| x.touches(id)),
+        }
+    }
+
     fn bytes(&self) -> usize {
         let mesh_bytes = |m: &Mesh| m.vertex_count() * 44 + m.triangle_count() * 30;
         match self {
@@ -175,6 +206,15 @@ impl Change {
             }
         }
     }
+}
+
+/// Why per-piece undo or redo stopped: the newest change to the piece also
+/// changes other pieces (adds, removes, joins…), and newer changes came after
+/// it, so it can only be taken back with the normal Undo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PieceUndoBlocked {
+    /// The label of the change in the way.
+    pub label: String,
 }
 
 struct Entry {
@@ -417,6 +457,46 @@ impl History {
         Some(label)
     }
 
+    /// Undo the newest change to piece `id`, skipping changes to other
+    /// pieces. A change that only edits `id` can be taken out of order; one
+    /// that also adds, removes or edits other pieces only when it is the
+    /// newest change overall. `Ok(None)`: nothing to undo on this piece.
+    pub fn undo_piece(&mut self, scene: &mut Scene, id: u64) -> Result<Option<String>, PieceUndoBlocked> {
+        self.commit();
+        let Some(i) = self.undo.iter().rposition(|e| e.change.touches(id)) else { return Ok(None) };
+        if self.undo[i].change.single_piece() != Some(id) && i + 1 != self.undo.len() {
+            return Err(PieceUndoBlocked { label: self.undo[i].label.clone() });
+        }
+        let mut e = self.undo.remove(i).expect("index found above");
+        e.change.swap(scene);
+        let label = e.label.clone();
+        self.redo.push(e);
+        self.revision += 1;
+        Ok(Some(label))
+    }
+
+    /// Redo the newest change to piece `id` that was undone, with the same
+    /// rules as [`Self::undo_piece`].
+    pub fn redo_piece(&mut self, scene: &mut Scene, id: u64) -> Result<Option<String>, PieceUndoBlocked> {
+        let Some(i) = self.redo.iter().rposition(|e| e.change.touches(id)) else { return Ok(None) };
+        if self.redo[i].change.single_piece() != Some(id) && i + 1 != self.redo.len() {
+            return Err(PieceUndoBlocked { label: self.redo[i].label.clone() });
+        }
+        let mut e = self.redo.remove(i);
+        e.change.swap(scene);
+        let label = e.label.clone();
+        self.undo.push_back(e);
+        self.revision += 1;
+        self.enforce_budget();
+        Ok(Some(label))
+    }
+
+    /// Labels of the undo list, oldest first, with whether each one changes
+    /// piece `id` (for a History panel filtered to one piece).
+    pub fn undo_labels_for(&self, id: u64) -> Vec<(&str, bool)> {
+        self.undo.iter().map(|e| (e.label.as_str(), e.change.touches(id))).collect()
+    }
+
     pub fn redo(&mut self, scene: &mut Scene) -> Option<String> {
         let mut e = self.redo.pop()?;
         e.change.swap(scene);
@@ -450,6 +530,83 @@ mod tests {
 
     fn scene() -> Scene {
         Scene::new(Piece::new("Sphere", primitives::icosphere(5, 1.0)))
+    }
+
+    /// Move vertex 0 of piece `id` by `d`, as one recorded stroke.
+    fn nudge(h: &mut History, s: &mut Scene, id: u64, label: &str, d: Vec3) {
+        let mesh = &s.get_mut(id).unwrap().mesh;
+        h.begin(label, id, mesh);
+        h.touch(mesh, 0);
+        let mesh = &mut s.get_mut(id).unwrap().mesh;
+        mesh.positions[0] += d;
+        mesh.update_after_move(&[0]);
+        h.commit();
+    }
+
+    fn two_pieces() -> (Scene, u64, u64) {
+        let mut s = scene();
+        let a = s.active().id;
+        s.pieces.push(Piece::new("B", primitives::icosphere(2, 1.0)));
+        let b = s.pieces[1].id;
+        (s, a, b)
+    }
+
+    #[test]
+    fn undo_piece_skips_other_pieces_and_keeps_their_order() {
+        let (mut s, a, b) = two_pieces();
+        let (a0, b0) = (s.get_mut(a).unwrap().mesh.positions[0], s.get_mut(b).unwrap().mesh.positions[0]);
+        let mut h = History::default();
+        nudge(&mut h, &mut s, a, "A1", Vec3::X);
+        nudge(&mut h, &mut s, b, "B1", Vec3::Y);
+        nudge(&mut h, &mut s, a, "A2", Vec3::Z);
+        // Undo on B takes back B1 although A2 is newer.
+        assert_eq!(h.undo_piece(&mut s, b), Ok(Some("B1".into())));
+        assert_eq!(s.get_mut(b).unwrap().mesh.positions[0], b0);
+        assert_eq!(s.get_mut(a).unwrap().mesh.positions[0], a0 + Vec3::X + Vec3::Z, "A untouched");
+        assert_eq!(h.undo_piece(&mut s, b), Ok(None), "nothing more on B");
+        // Undo on A goes newest first.
+        assert_eq!(h.undo_piece(&mut s, a), Ok(Some("A2".into())));
+        assert_eq!(h.undo_piece(&mut s, a), Ok(Some("A1".into())));
+        assert_eq!(s.get_mut(a).unwrap().mesh.positions[0], a0);
+        // Redo on B brings back only B1.
+        assert_eq!(h.redo_piece(&mut s, b), Ok(Some("B1".into())));
+        assert_eq!(s.get_mut(b).unwrap().mesh.positions[0], b0 + Vec3::Y);
+        assert_eq!(s.get_mut(a).unwrap().mesh.positions[0], a0);
+        // Normal redo still works for the rest, oldest undone A first.
+        assert_eq!(h.redo(&mut s).as_deref(), Some("A1"));
+        assert_eq!(h.redo(&mut s).as_deref(), Some("A2"));
+        assert_eq!(s.get_mut(a).unwrap().mesh.positions[0], a0 + Vec3::X + Vec3::Z);
+        // And the normal undo order is intact.
+        assert_eq!(h.undo(&mut s).as_deref(), Some("A2"));
+    }
+
+    #[test]
+    fn undo_piece_stops_at_changes_to_several_pieces() {
+        let (mut s, a, _b) = two_pieces();
+        let mut h = History::default();
+        nudge(&mut h, &mut s, a, "A1", Vec3::X);
+        // A "merge": A's mesh replaced and B removed, as one step.
+        let previous = s.get_mut(a).unwrap().mesh.clone();
+        let removed = s.pieces.remove(1);
+        h.record_compound(
+            "Merge",
+            vec![
+                Step::Topology { piece: a, previous, previous_multires: None },
+                Step::Removed { index: 1, piece: removed },
+            ],
+        );
+        // Newest overall: allowed, and B comes back.
+        assert_eq!(h.undo_piece(&mut s, a), Ok(Some("Merge".into())));
+        assert_eq!(s.pieces.len(), 2);
+        h.redo(&mut s);
+        // With a newer change after it (a new piece added), it's blocked.
+        s.pieces.push(Piece::new("C", primitives::icosphere(1, 1.0)));
+        h.record("Add C", Step::Inserted { index: s.pieces.len() - 1 });
+        assert_eq!(h.undo_piece(&mut s, a), Err(PieceUndoBlocked { label: "Merge".into() }));
+        assert_eq!(s.pieces.len(), 2, "nothing changed");
+        // The filter for a History panel marks what touches A.
+        let marks: Vec<bool> = h.undo_labels_for(a).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(marks, vec![true, true, false]);
     }
 
     #[test]
