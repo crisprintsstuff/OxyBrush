@@ -2869,6 +2869,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                         }
                     });
                     gizmo_numeric_row(ui, ed, mode);
+                    gizmo_absolute_row(ui, ed);
                 });
         });
     let Some(layout) = ed.gizmo_layout() else { return };
@@ -3112,6 +3113,73 @@ fn size_slider(ed: &mut Editor) -> egui::Slider<'_> {
         egui::Slider::new(&mut ed.brush_radius_world, range).logarithmic(true).max_decimals(3)
     } else {
         egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0)
+    }
+}
+
+/// The gizmo bar's absolute row: the size and the centre of what the gizmo
+/// moves, along the world axes, live while dragging. Type a value and press
+/// Enter to make it exactly that (Even keeps the proportions for Size).
+fn gizmo_absolute_row(ui: &mut Ui, ed: &mut Editor) {
+    let Some(b) = ed.gizmo_absolute_bounds() else { return };
+    // Rounding noise would show as -0.000.
+    let clean = |v: glam::Vec3| v.map(|x| if x.abs() < 5e-5 { 0.0 } else { x });
+    let (now_size, now_centre) = (clean(b.max - b.min), clean((b.min + b.max) * 0.5));
+    let id = ui.scope_id().with("gizmo_absolute");
+    // While a field is being edited its typed value is kept; otherwise the
+    // fields follow the model.
+    let (mut size, mut centre, _) = ui
+        .data(|d| d.get_temp::<(glam::Vec3, glam::Vec3, bool)>(id))
+        .filter(|e| e.2)
+        .unwrap_or((now_size, now_centre, false));
+    let mut set_size = false;
+    let mut set_centre = false;
+    let mut any_editing = false;
+    let uniform = ed.gizmo_numeric.uniform;
+    let partial = ed.scene.active().mesh.mask.iter().any(|&m| m > 0.0);
+    ui.horizontal(|ui| {
+        let mut field = |ui: &mut Ui, v: &mut f32, name: &str, color: Color32, done: &mut bool, enabled: bool| {
+            ui.label(RichText::new(name).color(color).strong());
+            let r = ui.add_enabled(enabled, egui::DragValue::new(v).speed(0.01).max_decimals(3).range(0.0..=f32::MAX));
+            any_editing |= r.has_focus() || r.dragged();
+            if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || r.drag_stopped() {
+                *done = true;
+            }
+            r.changed()
+        };
+        let names = ["X", "Y", "Z"];
+        tips::hover(ui.label(RichText::new("Size").weak()), plain::GIZMO_SIZE);
+        let before = size;
+        for a in 0..3 {
+            if field(ui, &mut size[a], names[a], AXIS_COLORS[a], &mut set_size, now_size[a] > 1e-6) && uniform {
+                // Even: the other sides follow in proportion.
+                let k = size[a] / before[a].max(1e-6);
+                for o in 0..3 {
+                    if o != a {
+                        size[o] = before[o] * k;
+                    }
+                }
+            }
+        }
+        ui.separator();
+        tips::hover(ui.label(RichText::new("Centre").weak()), plain::GIZMO_CENTRE);
+        for a in 0..3 {
+            ui.label(RichText::new(names[a]).color(AXIS_COLORS[a]).strong());
+            let r = ui.add(egui::DragValue::new(&mut centre[a]).speed(0.01).max_decimals(3));
+            any_editing |= r.has_focus() || r.dragged();
+            if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || r.drag_stopped() {
+                set_centre = true;
+            }
+        }
+        if partial {
+            ui.label(RichText::new("(unmasked part)").weak().small());
+        }
+    });
+    let still = any_editing && !set_size && !set_centre;
+    ui.data_mut(|d| d.insert_temp(id, (size, centre, still)));
+    if set_size {
+        ed.set_gizmo_size(size);
+    } else if set_centre {
+        ed.set_gizmo_centre(centre);
     }
 }
 

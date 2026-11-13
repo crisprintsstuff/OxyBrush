@@ -677,6 +677,8 @@ pub mod plain {
     pub const SIZE_ON_SCREEN: &str =
         "The brush is the same size on screen however far you zoom: zoom in for finer detail. The size is in points.";
     pub const SIZE_ON_MODEL: &str = "The brush is a size on the model, in scene units: zoom in and the circle grows with the model, so a stroke is the same size at any zoom. For all brushes.";
+    pub const GIZMO_SIZE: &str = "The size of what the gizmo moves along the world X, Y and Z axes, in scene units (Mesh > 3D Print Tools shows millimetres). Type a value and press Enter to make it exactly that, scaled about the pivot; with Even on, the other sides follow in proportion.";
+    pub const GIZMO_CENTRE: &str = "Where the middle of what the gizmo moves is, in world coordinates. Type a value and press Enter to move it exactly there.";
     pub const GIZMO_CANCEL: &str =
         "Put back everything changed with the gizmo since it opened or since the last Apply. Redo brings it back.";
     pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
@@ -879,6 +881,8 @@ pub mod plain {
         GIZMO_CANCEL,
         SIZE_ON_SCREEN,
         SIZE_ON_MODEL,
+        GIZMO_SIZE,
+        GIZMO_CENTRE,
         GIZMO_SNAP,
         GIZMO_APPLY,
         PLUGINS_MENU,
