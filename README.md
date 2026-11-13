@@ -24,6 +24,7 @@
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
+  <a href="docs/PLANNED_FEATURES.md">Coming next</a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/issues/new?template=bug_report.yml">Report a bug</a>
 </p>
 
@@ -103,7 +104,8 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 1. Follow the [testing guide](docs/TESTING_GUIDE.md) (about 20 minutes).
 2. Report problems with **Help > Report a bug…** in the app. It opens a GitHub issue form with your version, OS and GPU filled in. Attach the log from **Help > Open log folder**.
-3. Share impressions with **Help > Send feedback…**, or chat with other testers on [Discord](https://discord.gg/Vfm7Km7xvG): what felt good, what was frustrating, what you missed.
+3. See what's coming in [Coming next](docs/PLANNED_FEATURES.md) and tell us what you'd want first.
+4. Share impressions with **Help > Send feedback…**, or chat with other testers on [Discord](https://discord.gg/Vfm7Km7xvG): what felt good, what was frustrating, what you missed.
 
 ## Features
 
