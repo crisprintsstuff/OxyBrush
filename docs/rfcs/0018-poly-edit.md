@@ -1,6 +1,6 @@
 # RFC 0018: Poly Edit, a click-and-drag polygon modeling tool
 
-Status: accepted; phases A, B and C landed (bevel segments and profile remain)
+Status: accepted; phases A, B and C landed, with bevel segments and profile
 
 ## Summary
 
@@ -158,8 +158,9 @@ after every operation in tests.
 **Phase B: shaping**
 
 - **Bevel** for edges and faces, with segments and a profile (flat to round).
-  *Landed with one segment and a flat profile; segments and profile are
-  left for later.*
+  *Landed: rows (segments) and a profile from flat to round, for edges
+  and faces. Where three or more bevelled edges meet, the corner is one
+  polygon through the rows' ends rather than a grid.*
 - **Bridge** two faces, loops or borders, with segments and a twist
   offset.
 - **Split face** between two clicked points.
