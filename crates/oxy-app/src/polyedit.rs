@@ -21,6 +21,7 @@ use crate::editor::{Drag, Editor};
 use glam::{Vec2, Vec3};
 use oxy_mesh::Mesh;
 use oxy_mesh::polyedit::{self, EdgeReach, Reach, Slide, cage_from_mesh};
+use oxy_mesh::polyshape;
 use oxy_mesh::retopo::{Cage, corners, ear_clip, edge_key};
 
 /// What a click or drag on a face does.
@@ -28,18 +29,32 @@ use oxy_mesh::retopo::{Cage, corners, ear_clip, edge_key};
 pub enum FaceAction {
     Extrude,
     Inset,
+    Bevel,
     Move,
+    Bridge,
+    Equalize,
     Delete,
 }
 
 impl FaceAction {
-    pub const ALL: [FaceAction; 4] = [FaceAction::Extrude, FaceAction::Inset, FaceAction::Move, FaceAction::Delete];
+    pub const ALL: [FaceAction; 7] = [
+        FaceAction::Extrude,
+        FaceAction::Inset,
+        FaceAction::Bevel,
+        FaceAction::Move,
+        FaceAction::Bridge,
+        FaceAction::Equalize,
+        FaceAction::Delete,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             FaceAction::Extrude => "Extrude",
             FaceAction::Inset => "Inset",
+            FaceAction::Bevel => "Bevel",
             FaceAction::Move => "Move",
+            FaceAction::Bridge => "Bridge",
+            FaceAction::Equalize => "Equalize",
             FaceAction::Delete => "Delete",
         }
     }
@@ -52,7 +67,16 @@ impl FaceAction {
             FaceAction::Inset => {
                 "Drag to put a rim of faces inside the faces' edges; drag further for a wider rim. Touching faces get one rim around them all unless Each face on its own is on."
             }
+            FaceAction::Bevel => {
+                "Drag to pull the faces out with walls around them while they shrink in from their edges at 45°: a chamfered extrude."
+            }
             FaceAction::Move => "Drag to move the faces along their normals; the faces around them stretch to follow.",
+            FaceAction::Bridge => {
+                "Click a face, then another with as many corners: both are removed and a tube of faces joins them (a handle, or a hole through). Set the rows and twist below."
+            }
+            FaceAction::Equalize => {
+                "Click to even out the spacing of the faces' points, keeping them on the surface. Click again for more."
+            }
             FaceAction::Delete => "Click to delete the faces, leaving a hole.",
         }
     }
@@ -62,18 +86,31 @@ impl FaceAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EdgeAction {
     InsertLoop,
+    Slide,
+    Bevel,
+    Spin,
     Delete,
     ExtrudeBorder,
     CloseHole,
 }
 
 impl EdgeAction {
-    pub const ALL: [EdgeAction; 4] =
-        [EdgeAction::InsertLoop, EdgeAction::Delete, EdgeAction::ExtrudeBorder, EdgeAction::CloseHole];
+    pub const ALL: [EdgeAction; 7] = [
+        EdgeAction::InsertLoop,
+        EdgeAction::Slide,
+        EdgeAction::Bevel,
+        EdgeAction::Spin,
+        EdgeAction::Delete,
+        EdgeAction::ExtrudeBorder,
+        EdgeAction::CloseHole,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             EdgeAction::InsertLoop => "Insert loop",
+            EdgeAction::Slide => "Slide",
+            EdgeAction::Bevel => "Bevel",
+            EdgeAction::Spin => "Spin",
             EdgeAction::Delete => "Delete",
             EdgeAction::ExtrudeBorder => "Extrude border",
             EdgeAction::CloseHole => "Close hole",
@@ -85,6 +122,13 @@ impl EdgeAction {
             EdgeAction::InsertLoop => {
                 "Click an edge to cut a new edge loop across the quads it runs through, where you clicked; drag along the edge to slide the loop before letting go."
             }
+            EdgeAction::Slide => {
+                "Drag across the edge to slide it (or its loop, with Reach Edge loop) along the edges beside it, towards either side, without changing the shape."
+            }
+            EdgeAction::Bevel => {
+                "Drag to cut the edges off: each becomes a strip of faces, wider as you drag. Reach Edge loop bevels a whole loop; where three bevelled edges meet, a corner face fills in."
+            }
+            EdgeAction::Spin => "Click an edge between two faces to turn it one step within them.",
             EdgeAction::Delete => {
                 "Click to remove the edges, merging the faces on each side into one larger polygon. Reach Edge loop removes a whole loop. Border edges stay."
             }
@@ -100,15 +144,17 @@ impl EdgeAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointAction {
     Move,
+    Split,
     Delete,
 }
 
 impl PointAction {
-    pub const ALL: [PointAction; 2] = [PointAction::Move, PointAction::Delete];
+    pub const ALL: [PointAction; 3] = [PointAction::Move, PointAction::Split, PointAction::Delete];
 
     pub fn label(self) -> &'static str {
         match self {
             PointAction::Move => "Move",
+            PointAction::Split => "Split face",
             PointAction::Delete => "Delete",
         }
     }
@@ -116,6 +162,9 @@ impl PointAction {
     pub fn help(self) -> &'static str {
         match self {
             PointAction::Move => "Drag to move the point across the screen; drop it on another point to weld the two.",
+            PointAction::Split => {
+                "Click a point, then another point of the same face (not next to it): the face is split in two along a new edge between them."
+            }
             PointAction::Delete => "Click to delete the point and the faces around it, leaving a hole.",
         }
     }
@@ -134,6 +183,22 @@ pub struct PolyEdit {
     pub each: bool,
     /// Do the same to the mirrored elements across the piece's X symmetry plane.
     pub mirror: bool,
+    /// Bridge: rows of faces along the tube, and extra steps of twist.
+    pub bridge_segments: u32,
+    pub bridge_twist: i32,
+    /// The first click of a two-click action (bridge, split face).
+    pub pending: Option<Pending>,
+    /// The last dragged amount for faces, edges and points, for Repeat.
+    pub last: [Option<f32>; 3],
+}
+
+/// The first pick of a two-click action.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Pending {
+    /// Bridge from this face.
+    BridgeFrom(usize),
+    /// Split a face from this point.
+    SplitFrom(u32),
 }
 
 /// What is under the pointer.
@@ -169,6 +234,10 @@ struct Free {
 
 /// A drag in the Poly Edit tool.
 pub struct PolyDrag {
+    /// 0 face, 1 edge, 2 point: which `PolyEdit::last` it sets.
+    kind: usize,
+    /// The amount stays in this range.
+    range: (f32, f32),
     /// For the undo step and the status line, e.g. "Extrude 3 faces".
     what: String,
     slide: Slide,
@@ -236,6 +305,10 @@ impl Editor {
             point_action: PointAction::Move,
             each: false,
             mirror: self.symmetry.x,
+            bridge_segments: 1,
+            bridge_twist: 0,
+            pending: None,
+            last: [None; 3],
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -398,6 +471,7 @@ impl Editor {
         let reach = match pe.edge_action {
             EdgeAction::InsertLoop => EdgeReach::Ring,
             EdgeAction::CloseHole => EdgeReach::Loop,
+            EdgeAction::Spin => EdgeReach::One,
             _ => pe.edge_reach,
         };
         let mut edges = polyedit::reach_edges(c, a, b, reach);
@@ -511,6 +585,8 @@ impl Editor {
         before_cage: Option<Cage>,
     ) {
         self.drag = Drag::PolyEdit(Box::new(PolyDrag {
+            kind: 0,
+            range: if click_keeps { (0.02, 0.98) } else { (f32::NEG_INFINITY, f32::INFINITY) },
             what,
             slide,
             free: None,
@@ -526,6 +602,17 @@ impl Editor {
         }));
     }
 
+    /// Mark the drag just started as an edge (1) or point (2) drag, with
+    /// its amount kept in `range`.
+    fn poly_drag_meta(&mut self, kind: usize, range: Option<(f32, f32)>) {
+        if let Drag::PolyEdit(d) = &mut self.drag {
+            d.kind = kind;
+            if let Some(r) = range {
+                d.range = r;
+            }
+        }
+    }
+
     fn poly_face_down(&mut self, p: Vec2, face: usize, edge: [u32; 2]) {
         let Some(pe) = self.poly_edit.as_ref() else { return };
         let (action, each) = (pe.action, pe.each);
@@ -539,12 +626,43 @@ impl Editor {
             self.status = format!("Deleted {count} face(s)");
             return;
         }
+        if action == FaceAction::Bridge {
+            let pe = self.poly_edit.as_mut().expect("checked");
+            let Some(Pending::BridgeFrom(first)) = pe.pending else {
+                pe.pending = Some(Pending::BridgeFrom(face));
+                self.status = "Bridge: now click the face to join it to (Esc to cancel)".into();
+                return;
+            };
+            pe.pending = None;
+            let (segments, twist) = (pe.bridge_segments, pe.bridge_twist);
+            match polyshape::bridge_faces(&mut cage, first, face, segments, twist) {
+                Ok(made) => {
+                    self.poly_commit("Poly Edit: bridge", before_mesh, before_cage, cage);
+                    self.status = format!("Bridged the two faces with {} new faces", made.len());
+                }
+                Err(why) => self.status = format!("Bridge: {why}"),
+            }
+            return;
+        }
+        if action == FaceAction::Equalize {
+            let mut points: Vec<u32> = faces.iter().flat_map(|&f| cage.faces[f].corners.clone()).collect();
+            points.sort_unstable();
+            points.dedup();
+            let mut moved = 0;
+            for _ in 0..3 {
+                moved = polyshape::equalize(&mut cage, &points, 0.5).len();
+            }
+            self.poly_commit("Poly Edit: equalize", before_mesh, before_cage, cage);
+            self.status = format!("Evened out {moved} point(s)");
+            return;
+        }
         // Where the faces are and which way is out, for the drag's direction.
         let center = faces.iter().map(|&f| polyedit::face_center(&cage, f)).sum::<Vec3>() / count as f32;
         let normal = faces.iter().map(|&f| polyedit::face_normal(&cage, f)).sum::<Vec3>().normalize_or(Vec3::Y);
         let mut slide = match action {
             FaceAction::Extrude => polyedit::extrude(&mut cage, &faces, each).0,
             FaceAction::Inset => polyedit::inset(&mut cage, &faces, each).0,
+            FaceAction::Bevel => polyshape::bevel_faces(&mut cage, &faces, each).0,
             _ => polyedit::move_faces(&cage, &faces),
         };
         if action != FaceAction::Move && !self.poly_rebuild(i, cage, &mut slide) {
@@ -558,6 +676,8 @@ impl Editor {
         };
         let what = format!("{} {count} face(s)", action.label());
         self.poly_start_drag(p, what, slide, axis, scale, 0.0, false, before_mesh, before_cage);
+        // A bevel can't go inwards past its own walls.
+        self.poly_drag_meta(0, (action == FaceAction::Bevel).then_some((0.0, f32::INFINITY)));
     }
 
     fn poly_edge_down(&mut self, p: Vec2, a: u32, b: u32, t: f32) {
@@ -567,6 +687,53 @@ impl Editor {
         let Some((i, before_mesh, before_cage)) = self.poly_before() else { return };
         let Some(mut cage) = before_cage.clone() else { return };
         match action {
+            EdgeAction::Slide => {
+                let slide = polyshape::edge_slide(&cage, &edges);
+                if slide.is_empty() {
+                    return;
+                }
+                // Dragging towards the first side's points slides that way.
+                let mid = slide.start.iter().copied().sum::<Vec3>() / slide.start.len() as f32;
+                let toward = slide.dir.iter().copied().sum::<Vec3>() / slide.dir.len() as f32;
+                let size = self.canvas_size();
+                let (axis, scale) = match (self.camera.project(mid, size), self.camera.project(mid + toward, size)) {
+                    (Some(a), Some(b)) if a.distance(b) > 4.0 => ((b - a).normalize(), 1.0 / a.distance(b)),
+                    _ => (Vec2::X, 0.005),
+                };
+                let what = format!("Slide {} edge(s)", edges.len());
+                self.poly_start_drag(p, what, slide, axis, scale, 0.0, false, before_mesh, before_cage);
+                self.poly_drag_meta(1, Some((-0.98, 0.98)));
+            }
+            EdgeAction::Bevel => {
+                let (mut slide, made) = polyshape::bevel_edges(&mut cage, &edges);
+                if made.is_empty() {
+                    self.status = "Bevel: point at an edge between two faces".into();
+                    return;
+                }
+                let mid = edges
+                    .iter()
+                    .map(|&[x, y]| (cage.positions[x as usize] + cage.positions[y as usize]) * 0.5)
+                    .sum::<Vec3>()
+                    / edges.len() as f32;
+                if !self.poly_rebuild(i, cage, &mut slide) {
+                    return;
+                }
+                // Wider to the right, like inset.
+                let scale = self.camera.world_per_pixel(mid, self.canvas_size().y).max(1e-6);
+                let what = format!("Bevel {} edge(s)", edges.len());
+                self.poly_start_drag(p, what, slide, Vec2::X, scale, 0.0, false, before_mesh, before_cage);
+                self.poly_drag_meta(1, Some((0.0, f32::INFINITY)));
+            }
+            EdgeAction::Spin => {
+                let n = edges.iter().filter(|&&[x, y]| polyshape::spin_edge(&mut cage, x, y)).count();
+                if n == 0 {
+                    self.status =
+                        "Spin: point at an edge between two faces (it can't turn onto an edge that exists)".into();
+                    return;
+                }
+                self.poly_commit("Poly Edit: spin edge", before_mesh, before_cage, cage);
+                self.status = format!("Turned {n} edge(s)");
+            }
             EdgeAction::InsertLoop => {
                 // The clicked edge's ring, and its mirror image's if separate.
                 let mut slide = polyedit::insert_loop(&mut cage, a, b, t);
@@ -578,10 +745,7 @@ impl Editor {
                         q.distance(Vec3::new(2.0 * cx - q.x, q.y, q.z)) <= tol
                     })
                 {
-                    let other = polyedit::insert_loop(&mut cage, x, y, t);
-                    slide.verts.extend(other.verts);
-                    slide.start.extend(other.start);
-                    slide.dir.extend(other.dir);
+                    slide.extend(polyedit::insert_loop(&mut cage, x, y, t));
                 }
                 if slide.is_empty() {
                     self.status = "Insert loop: that edge isn't on any face".into();
@@ -600,6 +764,7 @@ impl Editor {
                 };
                 let what = format!("Insert loop ({made} new points)");
                 self.poly_start_drag(p, what, slide, axis, scale, t.clamp(0.02, 0.98), true, before_mesh, before_cage);
+                self.poly_drag_meta(1, None);
             }
             EdgeAction::Delete => {
                 let n = polyedit::dissolve_edges(&mut cage, &edges);
@@ -628,6 +793,7 @@ impl Editor {
                 let (axis, scale) = self.poly_axis(mid, out, -Vec2::Y);
                 let what = format!("Extrude {} border edge(s)", edges.len());
                 self.poly_start_drag(p, what, slide, axis, scale, 0.0, false, before_mesh, before_cage);
+                self.poly_drag_meta(1, None);
             }
             EdgeAction::CloseHole => {
                 let mut holes = 0;
@@ -660,6 +826,21 @@ impl Editor {
         let Some((_, before_mesh, before_cage)) = self.poly_before() else { return };
         let Some(mut cage) = before_cage.clone() else { return };
         match action {
+            PointAction::Split => {
+                let pe = self.poly_edit.as_mut().expect("checked");
+                let Some(Pending::SplitFrom(first)) = pe.pending else {
+                    pe.pending = Some(Pending::SplitFrom(v));
+                    self.status = "Split face: now click another point of the same face (Esc to cancel)".into();
+                    return;
+                };
+                pe.pending = None;
+                if polyshape::split_face(&mut cage, first, v).is_none() {
+                    self.status = "Split face: the two points must be on one face, not next to each other".into();
+                    return;
+                }
+                self.poly_commit("Poly Edit: split face", before_mesh, before_cage, cage);
+                self.status = "Split the face in two".into();
+            }
             PointAction::Delete => {
                 let ids: Vec<u32> = points.iter().map(|&(v, _)| v).collect();
                 polyedit::delete_points(&mut cage, &ids);
@@ -679,6 +860,8 @@ impl Editor {
                     up: self.camera.up() * scale,
                 };
                 self.drag = Drag::PolyEdit(Box::new(PolyDrag {
+                    kind: 2,
+                    range: (f32::NEG_INFINITY, f32::INFINITY),
                     what: "Move point".into(),
                     slide: Slide::default(),
                     free: Some(free),
@@ -694,6 +877,54 @@ impl Editor {
                 }));
             }
         }
+    }
+
+    /// Repeat the last action on what is under the pointer: a press there,
+    /// the last dragged amount for that kind of element, and a release, as
+    /// one undo step. Click actions (delete, spin…) just happen again.
+    pub fn poly_repeat(&mut self) {
+        let Some(p) = self.pointer else { return };
+        if self.poly_edit.is_none() {
+            self.status = "Repeat works in Poly Edit (Mesh > Poly Edit)".into();
+            return;
+        }
+        if !matches!(self.drag, Drag::None) {
+            return;
+        }
+        self.poly_sync();
+        let kind = match self.poly_element_at(p) {
+            Some(Element::Face(..)) => 0,
+            Some(Element::Edge(..)) => 1,
+            Some(Element::Point(..)) => 2,
+            None => {
+                self.status = "Repeat: point at a face, an edge or a point".into();
+                return;
+            }
+        };
+        let last = self.poly_edit.as_ref().and_then(|pe| pe.last[kind]);
+        self.poly_pointer_down(p);
+        let Drag::PolyEdit(d) = &mut self.drag else {
+            // A click action already happened (or nothing did).
+            if matches!(self.drag, Drag::Orbit) {
+                self.drag = Drag::None;
+            }
+            return;
+        };
+        if d.free.is_some() {
+            self.poly_cancel_drag();
+            self.status = "Repeat: points are moved by hand".into();
+            return;
+        }
+        let Some(amount) = last else {
+            self.poly_cancel_drag();
+            self.status = "Repeat: drag once first, then Y repeats that amount".into();
+            return;
+        };
+        d.amount = amount.clamp(d.range.0, d.range.1);
+        d.moved = true;
+        let (slide, amount) = (d.slide.clone(), d.amount);
+        self.poly_slide(&slide, amount);
+        self.poly_pointer_up();
     }
 
     /// Pointer moved: move the dragged points. True if handled.
@@ -724,10 +955,7 @@ impl Editor {
             self.poly_set_points(&moves);
             return true;
         }
-        d.amount = d.base + delta.dot(d.axis) * d.scale;
-        if d.click_keeps {
-            d.amount = d.amount.clamp(0.02, 0.98);
-        }
+        d.amount = (d.base + delta.dot(d.axis) * d.scale).clamp(d.range.0, d.range.1);
         let (amount, what) = (d.amount, d.what.clone());
         let slide = d.slide.clone();
         self.poly_slide(&slide, amount);
@@ -809,6 +1037,11 @@ impl Editor {
             self.status = "Welded the points".into();
             return true;
         }
+        if d.free.is_none()
+            && let Some(pe) = self.poly_edit.as_mut()
+        {
+            pe.last[d.kind] = Some(d.amount);
+        }
         let piece = &mut self.scene.pieces[i];
         piece.mesh.tighten_bounds();
         let id = piece.id;
@@ -853,6 +1086,10 @@ impl Editor {
         piece.cage = Some(cage);
         let id = piece.id;
         self.history.record_cage(label, id, before_mesh, before_cage);
+        // Face and point numbers may have changed.
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.pending = None;
+        }
     }
 }
 
@@ -1161,5 +1398,125 @@ mod tests {
         let both = polyedit::with_mirror(&c, &[side], 0.0, 1e-4);
         assert_eq!(both.len(), 2);
         assert!(polyedit::face_normal(&c, both.iter().copied().find(|&f| f != side).unwrap()).x < -0.9);
+    }
+
+    /// The window position of cage point `v`, nudged towards the centre so
+    /// the pick lands on that face.
+    fn point_pixel(e: &Editor, v: u32) -> Vec2 {
+        let s = e.camera.project(cage(e).positions[v as usize], e.canvas_size()).unwrap();
+        (s + Vec2::new(e.canvas[0], e.canvas[1])).lerp(centre(), 0.01)
+    }
+
+    #[test]
+    fn bevel_faces_and_edges() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Bevel;
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -40.0));
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 10, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        // The cap is smaller than the face it came from.
+        let Some(Element::Face(f, _)) = e.poly_element_at(centre()) else { panic!("a face") };
+        let k = corners(&c.faces[f]);
+        let w = c.positions[k[0] as usize].distance(c.positions[k[1] as usize]);
+        assert!(w < 0.99, "the cap shrank: {w}");
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+        // An edge bevel: a strip where the edge was.
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Bevel;
+        let (_, _, _, edge_px) = front_corner_and_edge(&e);
+        drag(&mut e, edge_px, edge_px + Vec2::new(25.0, 0.0));
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 7, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        assert!(c.border_edges().is_empty());
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+    }
+
+    #[test]
+    fn slide_and_spin_edges() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Slide;
+        let (_, _, [a, b], edge_px) = front_corner_and_edge(&e);
+        let before = cage(&e).positions.clone();
+        drag(&mut e, edge_px, edge_px + Vec2::new(0.0, 40.0));
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 6, "only points move");
+        assert!(c.positions[a as usize] != before[a as usize] || c.positions[b as usize] != before[b as usize]);
+        // The two points moved along cube edges: they stay on the cube's box.
+        for v in [a, b] {
+            let p = c.positions[v as usize];
+            assert!(p.abs().max_element() <= 0.5 + 1e-4, "{p}");
+        }
+        e.undo();
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Spin;
+        click(&mut e, edge_px);
+        let c = cage(&e).clone();
+        polyedit::validate(&c).unwrap();
+        assert_eq!(c.faces.len(), 6);
+        assert!(!c.edges().contains(&edge_key(a, b)), "the edge turned: {}", e.status);
+    }
+
+    #[test]
+    fn bridge_and_split_take_two_clicks() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Bridge;
+        let Some(Element::Face(front, _)) = e.poly_element_at(centre()) else { panic!("a face") };
+        let n = polyedit::face_normal(cage(&e), front);
+        let back = (0..6).find(|&f| polyedit::face_normal(cage(&e), f).dot(n) < -0.9).unwrap();
+        // First pick: the back face (as if clicked), then click the front.
+        // (Two rows: on a cube one row would lie on the side faces' edges.)
+        e.poly_edit.as_mut().unwrap().bridge_segments = 2;
+        e.poly_edit.as_mut().unwrap().pending = Some(Pending::BridgeFrom(back));
+        click(&mut e, centre());
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 12, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        assert!(e.poly_edit.as_ref().unwrap().pending.is_none());
+        e.undo();
+        // A first click only picks.
+        click(&mut e, centre());
+        assert_eq!(e.poly_edit.as_ref().unwrap().pending, Some(Pending::BridgeFrom(front)));
+        assert_eq!(cage(&e).faces.len(), 6);
+        // Split the front face corner to corner.
+        e.poly_edit.as_mut().unwrap().pending = None;
+        e.poly_edit.as_mut().unwrap().point_action = PointAction::Split;
+        let k = corners(&cage(&e).faces[front]).to_vec();
+        let px = point_pixel(&e, k[0]);
+        click(&mut e, px);
+        assert_eq!(e.poly_edit.as_ref().unwrap().pending, Some(Pending::SplitFrom(k[0])), "{}", e.status);
+        let px = point_pixel(&e, k[2]);
+        click(&mut e, px);
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 7, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        assert!(c.edges().contains(&edge_key(k[0], k[2])));
+    }
+
+    #[test]
+    fn repeat_applies_the_last_amount_where_the_pointer_is() {
+        let mut e = editor();
+        e.start_poly_edit();
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -40.0));
+        assert_eq!(cage(&e).faces.len(), 10);
+        let last = e.poly_edit.as_ref().unwrap().last[0].expect("remembered");
+        assert!(last.abs() > 1e-3);
+        // Y over the new cap extrudes it again by the same amount.
+        e.pointer = Some(centre());
+        e.poly_repeat();
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 14, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 10, "one undo step");
+        // Equalize is a click; repeat does it again.
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Equalize;
+        click(&mut e, centre());
+        assert!(e.history.can_undo());
+        polyedit::validate(cage(&e)).unwrap();
     }
 }

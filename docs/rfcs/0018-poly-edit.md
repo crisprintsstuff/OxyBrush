@@ -1,6 +1,6 @@
 # RFC 0018: Poly Edit, a click-and-drag polygon modeling tool
 
-Status: accepted; phase A in progress (steps 0, A1 and A2 landed; edge slide and Repeat still to do)
+Status: accepted; phases A and B landed (creases moved to phase C, where smooth subdivision first uses them)
 
 ## Summary
 
@@ -158,14 +158,16 @@ after every operation in tests.
 **Phase B: shaping**
 
 - **Bevel** for edges and faces, with segments and a profile (flat to round).
+  *Landed with one segment and a flat profile; segments and profile are
+  left for later.*
 - **Bridge** two faces, loops or borders, with segments and a twist
   offset.
 - **Split face** between two clicked points.
 - **Spin edge**, which rotates an edge within its two faces.
 - **Equalize** (relax spacing). The existing `relax` already does this,
   keeping points on the current surface.
-- **Edge crease** on or off, or a weight.
-- **Point crease**, for all of the point's edges.
+- **Edge crease** on or off, or a weight. *(Moved to phase C.)*
+- **Point crease**, for all of the point's edges. *(Moved to phase C.)*
 
 **Phase C: smooth results**
 
@@ -228,8 +230,8 @@ triangle ranges. No work is added to the sculpting per-dab path.
 | 0 | Cage: n-gons, face groups, `PLYC`, validity check (creases moved to B, where they are first used; the `cage.rs` split deferred) | with A1 |
 | A1 | Tool shell: hover picking, reach preview, window, undo, symmetry; Extrude, Inset, Delete, Move | 1 PR |
 | A2 | Remaining phase A actions; Edit as polygons; docs; tester release | 1 PR |
-| B | Bevel, Bridge, Split, Spin, Equalize, Crease | 1–2 PRs |
-| C | Catmull–Clark with creases, preview, hand-off to sculpting | 1 PR |
+| B | Bevel, Bridge, Split, Spin, Equalize (and phase A's Slide and Repeat) | landed |
+| C | Creases, Catmull–Clark with creases, preview, hand-off to sculpting | 1 PR |
 
 ## Alternatives considered
 

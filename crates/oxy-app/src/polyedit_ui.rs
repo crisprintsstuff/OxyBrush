@@ -1,7 +1,7 @@
 //! The Poly Edit window and the polygons drawn over the viewport (RFC 0018).
 
 use crate::editor::{Drag, Editor};
-use crate::polyedit::{EdgeAction, FaceAction, PointAction, outline_edges};
+use crate::polyedit::{EdgeAction, FaceAction, Pending, PointAction, outline_edges};
 use egui::{Color32, RichText, Stroke};
 use glam::Vec2;
 use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
@@ -18,6 +18,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     }
     let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let mut done = esc && !matches!(ed.drag, Drag::PolyEdit(_)) && !ctx.egui_wants_keyboard_input();
+    // Esc first drops a half-done two-click action.
+    if done && let Some(pe) = ed.poly_edit.as_mut().filter(|pe| pe.pending.is_some()) {
+        pe.pending = None;
+        done = false;
+        ed.status = "Poly Edit: cancelled".into();
+    }
+    let repeat_key = ed.keymap.primary(crate::keymap::CommandId::PolyRepeat);
     let counts = ed.poly_cage().map(|c| (c.quad_count(), c.triangle_count(), c.ngon_count()));
     let name = ed.poly_edit.as_ref().and_then(|p| ed.scene.index_of(p.piece)).map(|i| ed.scene.pieces[i].name.clone());
     let screen = ctx.content_rect();
@@ -51,9 +58,22 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.end_row();
                 ui.label("");
                 ui.checkbox(&mut pe.each, "Each face on its own")
-                    .on_hover_text("Extrude and inset every face separately, instead of touching faces as one block");
+                    .on_hover_text("Extrude, inset and bevel every face separately, instead of touching faces as one block");
                 ui.end_row();
+                if pe.action == FaceAction::Bridge {
+                    ui.label("Rows");
+                    ui.add(egui::DragValue::new(&mut pe.bridge_segments).range(1..=64))
+                        .on_hover_text("Rows of faces along the bridge");
+                    ui.end_row();
+                    ui.label("Twist");
+                    ui.add(egui::DragValue::new(&mut pe.bridge_twist).range(-32..=32))
+                        .on_hover_text("Turn one end by this many corners, for a twisted bridge");
+                    ui.end_row();
+                }
             });
+            if let Some(Pending::BridgeFrom(_)) = pe.pending {
+                ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
+            }
             ui.add_space(4.0);
             ui.label(RichText::new("Edges").strong());
             ui.horizontal_wrapped(|ui| {
@@ -62,7 +82,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
             ui.label(RichText::new(pe.edge_action.help()).weak().small());
-            if matches!(pe.edge_action, EdgeAction::Delete | EdgeAction::ExtrudeBorder) {
+            if matches!(
+                pe.edge_action,
+                EdgeAction::Delete | EdgeAction::ExtrudeBorder | EdgeAction::Slide | EdgeAction::Bevel
+            ) {
                 ui.horizontal(|ui| {
                     ui.label("Reach");
                     egui::ComboBox::from_id_salt("poly_edge_reach").selected_text(pe.edge_reach.label()).show_ui(
@@ -83,6 +106,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
             ui.label(RichText::new(pe.point_action.help()).weak().small());
+            if let Some(Pending::SplitFrom(_)) = pe.pending {
+                ui.label(RichText::new("Split face: click the second point (Esc cancels)").color(REACH_EDGE));
+            }
             ui.add_space(4.0);
             egui::Grid::new("poly_edit_options").num_columns(2).show(ui, |ui| {
                 ui.label("Symmetry");
@@ -97,6 +123,15 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     .weak()
                     .small(),
             );
+            if !repeat_key.is_empty() {
+                ui.label(
+                    RichText::new(format!(
+                        "{repeat_key} repeats the last action, with the same amount, on what's under the pointer."
+                    ))
+                    .weak()
+                    .small(),
+                );
+            }
             ui.add_space(4.0);
             done |= ui
                 .button("Done")
@@ -123,6 +158,7 @@ const EDGE: Color32 = Color32::from_rgba_premultiplied(120, 200, 255, 140);
 const REACH_FILL: Color32 = Color32::from_rgba_premultiplied(70, 45, 15, 90);
 const REACH_EDGE: Color32 = Color32::from_rgb(255, 170, 60);
 const DELETE: Color32 = Color32::from_rgb(240, 90, 80);
+const PICKED: Color32 = Color32::from_rgb(120, 230, 140);
 const DELETE_FILL: Color32 = Color32::from_rgba_premultiplied(80, 20, 18, 100);
 
 /// The piece's polygon edges (facing the camera) and, under the pointer,
@@ -140,6 +176,7 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         _ => crate::polyedit::Preview::default(),
     };
     let reach = preview.faces.clone();
+    let pending = ed.poly_edit.as_ref().and_then(|pe| pe.pending);
     let Some(c) = ed.poly_cage() else { return };
     let painter = ui.painter_at(canvas);
     let ppp = ed.pixels_per_point.max(0.1);
@@ -170,6 +207,22 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         if let Some(pv) = screen[*v as usize] {
             painter.circle_filled(pv, 5.0, hot);
         }
+    }
+    // The first pick of a bridge or split, until the second.
+    match pending {
+        Some(Pending::BridgeFrom(f)) if f < c.faces.len() => {
+            for [a, b] in outline_edges(c, &[f]) {
+                if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
+                    painter.line_segment([pa, pb], Stroke::new(3.0, PICKED));
+                }
+            }
+        }
+        Some(Pending::SplitFrom(v)) if (v as usize) < screen.len() => {
+            if let Some(pv) = screen[v as usize] {
+                painter.circle_filled(pv, 6.0, PICKED);
+            }
+        }
+        _ => {}
     }
     if reach.is_empty() {
         return;

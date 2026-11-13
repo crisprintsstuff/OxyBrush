@@ -473,6 +473,7 @@ pub enum CommandId {
     GroupFromMask,
     Guide,
     Preferences,
+    PolyRepeat,
 }
 
 impl CommandId {
@@ -626,6 +627,13 @@ const COMMANDS: &[CommandMeta] = &[
     },
     CommandMeta { id: CommandId::Guide, name: "Guide", group: "Help", defaults: &["f2"] },
     CommandMeta { id: CommandId::Preferences, name: "Preferences", group: "Edit", defaults: &["ctrl+,"] },
+    // Y: no preset uses it (they take B, E, M, O, P, Q, R, T and W).
+    CommandMeta {
+        id: CommandId::PolyRepeat,
+        name: "Poly Edit: repeat on what's under the pointer",
+        group: "Edit",
+        defaults: &["y"],
+    },
 ];
 
 const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Help"];
@@ -1547,6 +1555,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::GroupFromMask => "group_from_mask",
         CommandId::Guide => "guide",
         CommandId::Preferences => "preferences",
+        CommandId::PolyRepeat => "poly_repeat",
     }
 }
 
