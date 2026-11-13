@@ -123,6 +123,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::AddDisc, "pieces primitive disc disk circle round plate washer ring slice pie", |e| {
             e.open_primitive("disc")
         }),
+        cmd(ed, Cmd::SubdivideMasked, "subdivide masked local partial area region resolution detail more faces", |e| {
+            e.subdivide_masked()
+        }),
         cmd(ed, Cmd::AddTube, "pieces tube pipe horn tentacle curve path sweep", |e| e.start_tube()),
         cmd(ed, Cmd::EditTube, "pieces tube edit change reshape again path thickness", |e| e.edit_tube()),
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
