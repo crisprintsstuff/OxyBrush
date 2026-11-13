@@ -588,16 +588,21 @@ fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride
     (sdf, filled)
 }
 
+/// Dual contouring of the regular grid, with a vertex per piece of surface
+/// in each cell so close surfaces aren't pinched together (the same rules
+/// as the VDB engine: `oxy_vdb::volume_to_mesh::cell_pieces`), then any
+/// pinch left (a tunnel through a cell) split.
 fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    use glam::IVec3;
+    use oxy_vdb::volume_to_mesh::{NO_VERTEX, cell_edge, cell_pieces, has_ambiguous_face};
     let d = grid.dims;
     let cell_count_x = d.x - 1;
     let cell_count_y = d.y - 1;
-    // Vertex per sign-changing cell, computed in parallel per z-slab.
+    // Vertices per sign-changing cell, computed in parallel per z-slab.
     let corners: [UVec3; 8] =
         std::array::from_fn(|c| UVec3::new(c as u32 & 1, (c as u32 >> 1) & 1, (c as u32 >> 2) & 1));
-    const EDGES: [(usize, usize); 12] =
-        [(0, 1), (2, 3), (4, 5), (6, 7), (0, 2), (1, 3), (4, 6), (5, 7), (0, 4), (1, 5), (2, 6), (3, 7)];
-    let slabs: Vec<Vec<(u64, Vec3)>> = (0..d.z - 1)
+    type Cell = (u64, oxy_vdb::volume_to_mesh::CellPieces, bool);
+    let slabs: Vec<Vec<Cell>> = (0..d.z - 1)
         .into_par_iter()
         .map(|k| {
             let mut out = Vec::new();
@@ -611,17 +616,12 @@ fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
                     if neg == 0 || neg == 8 {
                         continue;
                     }
-                    let mut sum = Vec3::ZERO;
-                    let mut n = 0;
-                    for (a, b) in EDGES {
-                        if (v[a] < 0.0) != (v[b] < 0.0) {
-                            let t = v[a] / (v[a] - v[b]);
-                            sum += corners[a].as_vec3().lerp(corners[b].as_vec3(), t);
-                            n += 1;
-                        }
+                    let mut pieces = cell_pieces(&v, |_, _| true);
+                    let origin = grid.point(i, j, k);
+                    for p in &mut pieces.points[..pieces.count as usize] {
+                        *p = origin + *p * grid.h;
                     }
-                    let p = grid.point(i, j, k) + sum / n as f32 * grid.h;
-                    out.push((cell_key(i, j, k), p));
+                    out.push((cell_key(i, j, k), pieces, has_ambiguous_face(&v)));
                 }
             }
             out
@@ -629,17 +629,24 @@ fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
         .collect();
 
     let mut positions = Vec::new();
-    let mut index: HashMap<u64, u32> = HashMap::new();
+    let mut index: HashMap<u64, (u32, [u8; 12])> = HashMap::new();
+    let mut suspect: Vec<bool> = Vec::new();
     for slab in slabs {
-        for (key, p) in slab {
-            index.insert(key, positions.len() as u32);
-            positions.push(p);
+        for (key, pieces, ambiguous) in slab {
+            index.insert(key, (positions.len() as u32, pieces.edges));
+            let n = pieces.count as usize;
+            suspect.extend(std::iter::repeat_n(ambiguous, n));
+            positions.extend_from_slice(&pieces.points[..n]);
         }
     }
 
-    // One quad per sign-changing grid edge, joining the 4 cells around it.
+    // One quad per sign-changing grid edge, joining the 4 cells around it,
+    // each through the vertex of its piece that crosses this edge.
     let mut triangles = Vec::new();
-    let cell = |i: u32, j: u32, k: u32| index.get(&cell_key(i, j, k)).copied();
+    let cell = |i: u32, j: u32, k: u32, edge: usize| {
+        let (first, map) = index.get(&cell_key(i, j, k))?;
+        (map[edge] != NO_VERTEX).then(|| first + map[edge] as u32)
+    };
     for k in 1..d.z - 1 {
         for j in 1..d.y - 1 {
             for i in 1..d.x - 1 {
@@ -657,12 +664,17 @@ fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
                     if (v0 < 0.0) == (v1 < 0.0) {
                         continue;
                     }
+                    let step = IVec3::new((ni - i) as i32, (nj - j) as i32, (nk - k) as i32);
                     // The four cells sharing this edge, in a consistent cycle.
-                    let quad = match axis {
-                        0 => [cell(i, j - 1, k - 1), cell(i, j, k - 1), cell(i, j, k), cell(i, j - 1, k)],
-                        1 => [cell(i - 1, j, k - 1), cell(i - 1, j, k), cell(i, j, k), cell(i, j, k - 1)],
-                        _ => [cell(i - 1, j - 1, k), cell(i, j - 1, k), cell(i, j, k), cell(i - 1, j, k)],
+                    let offsets = match axis {
+                        0 => [IVec3::new(0, -1, -1), IVec3::new(0, 0, -1), IVec3::ZERO, IVec3::new(0, -1, 0)],
+                        1 => [IVec3::new(-1, 0, -1), IVec3::new(-1, 0, 0), IVec3::ZERO, IVec3::new(0, 0, -1)],
+                        _ => [IVec3::new(-1, -1, 0), IVec3::new(0, -1, 0), IVec3::ZERO, IVec3::new(-1, 0, 0)],
                     };
+                    let quad = offsets.map(|o| {
+                        let c = IVec3::new(i as i32, j as i32, k as i32) + o;
+                        cell(c.x as u32, c.y as u32, c.z as u32, cell_edge(-o, step))
+                    });
                     let [Some(a), Some(b), Some(c), Some(e)] = quad else { continue };
                     // Orient so normals point from inside (negative) to outside.
                     let (a, b, c, e) = if v0 < 0.0 { (a, b, c, e) } else { (a, e, c, b) };
@@ -680,6 +692,10 @@ fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
             }
         }
     }
+    oxy_mesh::topo::split_pinched_edges_among(&mut positions, &mut triangles, Some(&suspect));
+    // Specks under two voxels across (a corner joined only through a cell's
+    // middle) can't be part of the model: drop them.
+    oxy_mesh::topo::drop_specks(&mut positions, &mut triangles, 2.0 * grid.h);
     (positions, triangles)
 }
 
@@ -790,6 +806,58 @@ mod tests {
     /// Two overlapping spheres in one mesh, as Join or the Insert brush
     /// make them; with `tied`, one sliver triangle joins them into one
     /// connected surface, as when a fold is sculpted through the model.
+    /// Separate pieces of the result (by shared points).
+    fn pieces(m: &Mesh) -> usize {
+        let mut parent: Vec<u32> = (0..m.vertex_count() as u32).collect();
+        fn root(p: &mut [u32], mut x: u32) -> u32 {
+            while p[x as usize] != x {
+                p[x as usize] = p[p[x as usize] as usize];
+                x = p[x as usize];
+            }
+            x
+        }
+        for t in &m.triangles {
+            for &v in &t[1..] {
+                let (a, b) = (root(&mut parent, t[0]), root(&mut parent, v));
+                parent[a as usize] = b;
+            }
+        }
+        (0..m.vertex_count() as u32).filter(|&v| root(&mut parent, v) == v).count()
+    }
+
+    #[test]
+    fn parts_a_voxel_apart_stay_apart_and_clean() {
+        // Two long blocks side by side with a gap of about one voxel, at an
+        // angle to the grid, like two fingers: the old dual contouring
+        // pinched the two surfaces into shared edges along the gap (four
+        // triangles on one edge), joining them.
+        let turn = glam::Quat::from_rotation_z(0.5) * glam::Quat::from_rotation_y(0.3);
+        let block = |x: f32| {
+            let c = primitives::cube(8, 1.0).to_data();
+            let positions = c.positions.iter().map(|p| turn * (*p * Vec3::new(0.3, 2.0, 0.3) + Vec3::X * x)).collect();
+            (positions, c.triangles)
+        };
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            for gap in [1.2f32, 1.6, 2.0] {
+                let res = 64;
+                let h = 2.2 / res as f32;
+                let (pa, ta): (Vec<Vec3>, Vec<[u32; 3]>) = block(0.0);
+                let (pb, tb): (Vec<Vec3>, Vec<[u32; 3]>) = block(0.3 + gap * h);
+                let mut d = oxy_mesh::MeshData { positions: pa, triangles: ta, ..Default::default() };
+                let n = d.positions.len() as u32;
+                d.positions.extend(pb);
+                d.triangles.extend(tb.iter().map(|t| t.map(|i| i + n)));
+                let two = Mesh::from_data(d);
+                let out =
+                    voxel_remesh(&[&two], RemeshOptions { resolution: res, engine, ..Default::default() }).unwrap();
+                let report = oxy_mesh::topo::check_manifold(&out);
+                assert_eq!(report.non_manifold_edge_count, 0, "{engine:?}, gap {gap} voxels: pinched edges");
+                assert_eq!(report.boundary_edge_count, 0, "{engine:?}, gap {gap} voxels: holes");
+                assert_eq!(pieces(&out), 2, "{engine:?}, gap {gap} voxels: the blocks stay apart");
+            }
+        }
+    }
+
     fn joined_spheres(tied: bool) -> Mesh {
         let a = primitives::icosphere(4, 1.0).to_data();
         let mut d = a.clone();
