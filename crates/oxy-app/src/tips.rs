@@ -145,7 +145,9 @@ commands! {
     SymY => "Toggle Y symmetry", "", "Mirror strokes up and down.";
     SymZ => "Toggle Z symmetry", "", "Mirror strokes front and back.";
     RaiseCarve => "Raise / carve", "", "Switch between adding clay and carving it away.";
-    Frame => "Frame scene", "F", "Fit the whole scene in the view.";
+    Frame => "Frame scene", "F, Ctrl+0", "Fit the whole scene in the view.";
+    ZoomIn => "Zoom in", "Ctrl+=", "Zoom the view in, towards the middle (also Ctrl+plus, or the mouse wheel).";
+    ZoomOut => "Zoom out", "Ctrl+-", "Zoom the view out from the middle (or the mouse wheel).";
     Front => "Front view", "Numpad 1", "Look at the front of the model.";
     Right => "Right view", "Numpad 3", "Look at the right side of the model.";
     Top => "Top view", "Numpad 7", "Look down at the model.";
@@ -234,6 +236,8 @@ impl Cmd {
             Cmd::GizmoRotate => CommandId::GizmoRotate,
             Cmd::GizmoScale => CommandId::GizmoScale,
             Cmd::Frame => CommandId::Frame,
+            Cmd::ZoomIn => CommandId::ZoomIn,
+            Cmd::ZoomOut => CommandId::ZoomOut,
             Cmd::Front => CommandId::ViewFront,
             Cmd::Back => CommandId::ViewBack,
             Cmd::Left => CommandId::ViewLeft,

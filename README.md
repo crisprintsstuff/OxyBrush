@@ -208,7 +208,8 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `[` `]` and `-` `=` | Radius and strength |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
 | `X` | Toggle X symmetry |
-| `F` / Alt+`F` | Frame the active piece / all pieces |
+| `F` (or Ctrl+`0`) / Alt+`F` | Frame the active piece / all pieces |
+| Ctrl+`+` / Ctrl+`-` | Zoom the view in / out (Ctrl+`=` works too); the interface size is View > Theme > Size |
 | Ctrl+D | Add subdivision level |
 | `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |

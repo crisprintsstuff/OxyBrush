@@ -145,7 +145,13 @@ impl App {
         let settings = loaded.unwrap_or_default();
         Self {
             gfx: None,
-            egui_ctx: egui::Context::default(),
+            egui_ctx: {
+                let ctx = egui::Context::default();
+                // Ctrl+plus/minus/0 are OxyBrush's view zoom and frame keys;
+                // the interface size is View > Theme > Size, not a key.
+                ctx.options_mut(|o| o.zoom_with_keyboard = false);
+                ctx
+            },
             editor: {
                 let mut e = Editor::default();
                 // Automated runs (CI screenshots) don't touch the user's autosave folder.

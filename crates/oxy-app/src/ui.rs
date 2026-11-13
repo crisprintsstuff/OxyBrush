@@ -584,6 +584,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
                     ed.frame();
                 }
+                if tips::button_km(ui, &ed.keymap, "Zoom in", Cmd::ZoomIn).clicked() {
+                    ed.zoom_view(1.0);
+                }
+                if tips::button_km(ui, &ed.keymap, "Zoom out", Cmd::ZoomOut).clicked() {
+                    ed.zoom_view(-1.0);
+                }
                 // Long groups live in submenus so the menu fits on small screens.
                 tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
                     if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
