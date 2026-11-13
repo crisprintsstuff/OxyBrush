@@ -188,6 +188,7 @@ impl Editor {
             return;
         };
         let c = (b.min + b.max) * 0.5;
+        self.kept_pivot_of = None;
         self.custom_gizmo_pivot = match choice {
             PivotChoice::Auto => None,
             PivotChoice::BoundsCenter => Some(c),
