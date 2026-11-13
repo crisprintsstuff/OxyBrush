@@ -342,6 +342,11 @@ pub struct Settings {
     /// Closing the transform gizmo (Done, another tool) puts back changes
     /// not applied with Apply. Off: closing keeps everything.
     pub gizmo_done_reverts: bool,
+    /// Brush size on the model instead of on screen, for all brushes.
+    pub radius_on_model: bool,
+    /// The brush size on the model (world units), with `radius_on_model`
+    /// and `remember_brushes` on; 0 when not saved.
+    pub brush_radius_world: f32,
     /// In-app plugins' panel settings, by `<plugin folder>/<param id>`: one
     /// value, or three for a color (RFC 0013).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
@@ -839,6 +844,8 @@ impl Default for Settings {
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: false,
+            radius_on_model: false,
+            brush_radius_world: 0.0,
             plugin_params: Default::default(),
             window: None,
             show_brush_names: true,
@@ -977,6 +984,8 @@ impl Settings {
         ) + &format!("remember_brushes = {}\n", self.remember_brushes)
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
+            + &format!("radius_on_model = {}\n", self.radius_on_model)
+            + &format!("brush_radius_world = {}\n", self.brush_radius_world)
             + &self
                 .plugin_params
                 .iter()
@@ -1198,6 +1207,11 @@ impl Settings {
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
+                "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
+                "brush_radius_world" => {
+                    s.brush_radius_world =
+                        v.parse::<f32>().ok().filter(|r| r.is_finite() && *r >= 0.0).unwrap_or(s.brush_radius_world)
+                }
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
@@ -1459,6 +1473,8 @@ mod tests {
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: true,
+            radius_on_model: true,
+            brush_radius_world: 0.125,
             plugin_params: [
                 ("displace/amount".to_string(), vec![2.5]),
                 ("tint/color".to_string(), vec![0.25, 0.5, 1.0]),

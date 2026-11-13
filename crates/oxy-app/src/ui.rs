@@ -2240,15 +2240,7 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.separator();
     let size_label = "Size";
     ui.label(RichText::new(size_label).weak());
-    tips::hover(
-        ui.add(crate::widgets::Bar(
-            egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
-                .logarithmic(true)
-                .max_decimals(0)
-                .trailing_fill(true),
-        )),
-        Cmd::Radius.tip(),
-    );
+    tips::hover(ui.add(crate::widgets::Bar(size_slider(ed).trailing_fill(true))), Cmd::Radius.tip());
     let shift_smooth = ed.brush_roles().shift;
     let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
     let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
@@ -2305,12 +2297,7 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
 
                         ui.label(RichText::new("Size").weak().small());
                         tips::hover(
-                            ui.add(crate::widgets::Bar(
-                                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0)
-                                    .logarithmic(true)
-                                    .max_decimals(0)
-                                    .trailing_fill(true),
-                            )),
+                            ui.add(crate::widgets::Bar(size_slider(ed).trailing_fill(true))),
                             Cmd::Radius.tip(),
                         );
 
@@ -2413,9 +2400,7 @@ fn pointer_slider(ctx: &egui::Context, ed: &mut Editor) {
                     };
                     ui.label(RichText::new(title).strong());
                     let slider = match ps.kind {
-                        SliderKind::Size => {
-                            egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0)
-                        }
+                        SliderKind::Size => size_slider(ed),
                         SliderKind::Strength => egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2),
                         SliderKind::PaintStrength => {
                             egui::Slider::new(ed.strength_mut(BrushKind::Paint), 0.01..=1.0).max_decimals(2)
@@ -3116,6 +3101,17 @@ fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
     } else if set {
         ed.set_gizmo_numeric();
         ed.sync_gizmo_numeric();
+    }
+}
+
+/// The brush Size slider: points on screen, or world units on the model
+/// when the size is on the model (Brush > Size).
+fn size_slider(ed: &mut Editor) -> egui::Slider<'_> {
+    if ed.radius_on_model {
+        let range = ed.world_radius_range();
+        egui::Slider::new(&mut ed.brush_radius_world, range).logarithmic(true).max_decimals(3)
+    } else {
+        egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).max_decimals(0)
     }
 }
 
@@ -4169,12 +4165,18 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     ui.add_space(2.0);
     egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Radius");
-        tips::hover(
-            ui.add(crate::widgets::Bar(
-                egui::Slider::new(&mut ed.brush_radius_pt, 2.0..=400.0).logarithmic(true).suffix(" pt"),
-            )),
-            Cmd::Radius.tip(),
-        );
+        let suffix = if ed.radius_on_model { " u" } else { " pt" };
+        tips::hover(ui.add(crate::widgets::Bar(size_slider(ed).suffix(suffix))), Cmd::Radius.tip());
+        ui.end_row();
+        ui.label("Size");
+        ui.horizontal(|ui| {
+            let mut on_model = ed.radius_on_model;
+            tips::hover(ui.selectable_value(&mut on_model, false, "On screen"), plain::SIZE_ON_SCREEN);
+            tips::hover(ui.selectable_value(&mut on_model, true, "On the model"), plain::SIZE_ON_MODEL);
+            if on_model != ed.radius_on_model {
+                ed.set_radius_on_model(on_model);
+            }
+        });
         ui.end_row();
         let shift_smooth = ed.brush_roles().shift;
         let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };

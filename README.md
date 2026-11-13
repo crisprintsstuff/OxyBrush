@@ -206,7 +206,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+M | Mask the face group under the cursor |
 | Ctrl+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
-| `[` `]` and `-` `=` | Radius and strength |
+| `[` `]` and `-` `=` | Radius and strength (the radius is on screen, or on the model with Brush settings > Size > On the model) |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
 | `X` | Toggle X symmetry |
 | `F` (or Ctrl+`0`) / Alt+`F` | Frame the active piece / all pieces |
