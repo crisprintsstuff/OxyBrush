@@ -780,6 +780,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::wasm_plugins::panels(ui.ctx(), ed);
     crate::tube_ui::window(ui.ctx(), ed);
     crate::retopo_ui::window(ui.ctx(), ed);
+    crate::polyedit_ui::window(ui.ctx(), ed);
     crate::primitive_ui::window(ui.ctx(), ed);
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
@@ -815,6 +816,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::wasm_plugins::overlays(ui, ed, canvas);
     crate::tube_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
+    crate::polyedit_ui::overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -3146,6 +3148,13 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
+    if let Some(pe) = ed.poly_edit.as_ref() {
+        let what = if pe.action == crate::polyedit::FaceAction::Delete { "click" } else { "drag" };
+        return format!(
+            "Poly Edit: {what} a face to {} it · drag empty space: orbit · Esc: done",
+            pe.action.label().to_lowercase()
+        );
+    }
     if ed.retopo.is_some() {
         let m = ed.active_modifiers();
         return match (m.ctrl, m.shift) {
@@ -3421,6 +3430,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if tips::button(ui, "Retopology (draw quads)…", Cmd::Retopology).clicked() {
         ed.start_retopo();
+    }
+    if tips::button(ui, "Poly Edit (model polygons)…", Cmd::PolyEdit).clicked() {
+        ed.start_poly_edit();
     }
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
@@ -5351,7 +5363,7 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
 }
 
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
-    if !ed.pointer_in_canvas() || ed.retopo.is_some() {
+    if !ed.pointer_in_canvas() || ed.retopo.is_some() || ed.poly_edit.is_some() {
         return;
     }
     let Some(p) = ed.pointer else { return };

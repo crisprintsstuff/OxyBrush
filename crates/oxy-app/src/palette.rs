@@ -130,6 +130,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
         cmd(
             ed,
+            Cmd::PolyEdit,
+            "polygon modeling box extrude inset bevel low poly hard surface faces",
+            Editor::start_poly_edit,
+        ),
+        cmd(
+            ed,
             Cmd::DeformWindow,
             "deformation bend twist taper skew inflate polish relax noise spherize squeeze flatten sag",
             |e| e.show_deform = true,

@@ -15,6 +15,8 @@ mod lights_ui;
 mod matcaps;
 mod palette;
 mod plugins;
+mod polyedit;
+mod polyedit_ui;
 mod pose;
 mod presets;
 mod primitive_ui;

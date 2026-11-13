@@ -652,6 +652,8 @@ pub enum Drag {
     Gizmo(Box<GizmoDrag>),
     /// A drag in the retopology tool (RFC 0012).
     Retopo(Box<crate::retopo::RetopoDrag>),
+    /// A drag in the Poly Edit tool (RFC 0018).
+    PolyEdit(Box<crate::polyedit::PolyDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -1071,6 +1073,8 @@ pub struct Editor {
     pub tube_into: Option<u64>,
     /// The retopology tool, while its window is open (RFC 0012).
     pub retopo: Option<crate::retopo::Retopo>,
+    /// The Poly Edit tool, while its window is open (RFC 0018).
+    pub poly_edit: Option<crate::polyedit::PolyEdit>,
     /// The last (surface, retopology piece) pair, to continue it.
     pub retopo_last: Option<(u64, u64)>,
     /// Tab is held (retopology: Tab+drag extends a border edge).
@@ -1357,6 +1361,7 @@ impl Default for Editor {
             tube_armed: false,
             tube_into: None,
             retopo: None,
+            poly_edit: None,
             retopo_last: None,
             tab_held: false,
             extract_preview: None,
@@ -2016,7 +2021,7 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
-        if self.retopo_pointer_down(p) {
+        if self.retopo_pointer_down(p) || self.poly_pointer_down(p) {
             return;
         }
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
@@ -2707,7 +2712,7 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
-        if self.tube_pointer_moved(pos) || self.retopo_pointer_moved(pos) {
+        if self.tube_pointer_moved(pos) || self.retopo_pointer_moved(pos) || self.poly_pointer_moved(pos) {
             return true;
         }
         if let Drag::Stroke { hold: Some(h), .. } = &mut self.drag {
@@ -2724,7 +2729,11 @@ impl Editor {
         match &mut self.drag {
             Drag::None => false,
             // Handled by `tube_pointer_moved` / `retopo_pointer_moved` above.
-            Drag::TubeDraw { .. } | Drag::TubePoint { .. } | Drag::TubeRadius { .. } | Drag::Retopo(_) => true,
+            Drag::TubeDraw { .. }
+            | Drag::TubePoint { .. }
+            | Drag::TubeRadius { .. }
+            | Drag::Retopo(_)
+            | Drag::PolyEdit(_) => true,
             Drag::Orbit => {
                 self.orbit_by(delta);
                 true
@@ -2998,7 +3007,7 @@ impl Editor {
 
     pub fn pointer_up(&mut self) {
         self.flush_drag();
-        if self.tube_pointer_up() || self.retopo_pointer_up() {
+        if self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
             return;
         }
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
@@ -3087,6 +3096,10 @@ impl Editor {
         }
         if matches!(self.drag, Drag::Retopo(_)) {
             self.retopo_cancel_drag();
+            return;
+        }
+        if matches!(self.drag, Drag::PolyEdit(_)) {
+            self.poly_cancel_drag();
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {

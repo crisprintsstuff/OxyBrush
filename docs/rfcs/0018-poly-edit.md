@@ -1,6 +1,6 @@
 # RFC 0018: Poly Edit, a click-and-drag polygon modeling tool
 
-Status: proposed
+Status: accepted; phase A in progress (step 0 and step A1 landed)
 
 ## Summary
 
@@ -225,7 +225,7 @@ triangle ranges. No work is added to the sculpting per-dab path.
 
 | Step | What | Rough size |
 |---|---|---|
-| 0 | Cage: n-gons, face groups, creases, `PLYC`, validity check, split `cage.rs` | 1 PR |
+| 0 | Cage: n-gons, face groups, `PLYC`, validity check (creases moved to B, where they are first used; the `cage.rs` split deferred) | with A1 |
 | A1 | Tool shell: hover picking, reach preview, window, undo, symmetry; Extrude, Inset, Delete, Move | 1 PR |
 | A2 | Remaining phase A actions; Edit as polygons; docs; tester release | 1 PR |
 | B | Bevel, Bridge, Split, Spin, Equalize, Crease | 1–2 PRs |

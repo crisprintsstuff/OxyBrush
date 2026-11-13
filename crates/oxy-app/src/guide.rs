@@ -182,6 +182,18 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
 Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge + remesh in the Pieces panel, which fuses the visible pieces into one surface with a voxel remesh; Join keeps them as they are, in one piece.",
     },
     Topic {
+        title: "Poly Edit (model polygons)",
+        keywords: "poly edit polygon modeling box extrude inset move delete faces reach loop group flat island hard surface low poly",
+        body: "Mesh > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\n\
+- Point at a face: the faces the action would change light up in orange (red for Delete).\n\
+- Extrude: drag to pull them out with walls around them (or push them in). Touching faces move out as one block; tick Each face on its own to extrude them separately.\n\
+- Inset: drag right to put a rim of faces inside their edges; further for a wider rim.\n\
+- Move: drag to slide them along their normals; the faces around stretch to follow. Delete: click to remove them, leaving a hole.\n\
+- Reach spreads the action: This face, Face loop (across the edge nearest the pointer), Face group, Face group (this island), Flat region (facing the same way within 5°) or Island (everything connected). Extruded caps, walls and inset rims get new face groups, so the next action can reach them by group.\n\
+- Mirror across X does the same to the matching faces on the other side.\n\n\
+Each drag is one undo step; Escape during a drag cancels it, and Escape otherwise (or Done) closes the tool. Drag empty space to orbit. Edge and point actions, bevel and bridge are coming next.",
+    },
+    Topic {
         title: "Retopology",
         keywords: "retopology retopo quads low poly topology draw game animation edge loop relax pin lock",
         body: "Mesh > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
