@@ -942,6 +942,14 @@ pub struct Editor {
     pub undo_per_piece: bool,
     /// Closing the gizmo puts back changes not applied (Preferences).
     pub gizmo_done_reverts: bool,
+    /// The gizmo's pivot moves to the mask edge / centre of what's unmasked
+    /// after every change (on by default). Off, it is found once per piece
+    /// and then stays where it is.
+    pub gizmo_pivot_follows: bool,
+    /// The piece whose pivot was kept in place (with following off): the
+    /// kept pivot is `custom_gizmo_pivot`; None when that is a pivot you
+    /// placed yourself (or there is none).
+    pub(crate) kept_pivot_of: Option<u64>,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window's size, position and state, kept up to date by the
@@ -1322,6 +1330,8 @@ impl Default for Editor {
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: false,
+            gizmo_pivot_follows: true,
+            kept_pivot_of: None,
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
@@ -1739,6 +1749,7 @@ impl Editor {
             remember_brushes: self.remember_brushes,
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
+            gizmo_pivot_follows: self.gizmo_pivot_follows,
             radius_on_model: self.radius_on_model,
             living_strokes: self.living.enabled,
             living_budget_mb: self.living.budget_mb,
@@ -1964,6 +1975,7 @@ impl Editor {
         self.remember_brushes = s.remember_brushes;
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
+        self.gizmo_pivot_follows = s.gizmo_pivot_follows;
         self.radius_on_model = s.radius_on_model;
         self.living.enabled = s.living_strokes;
         self.living.budget_mb = s.living_budget_mb;
@@ -3094,6 +3106,7 @@ impl Editor {
                 g.current = t;
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot + t.translate);
+                    self.kept_pivot_of = None;
                     if mode == GizmoMode::Rotate {
                         self.custom_gizmo_rotation = Some(t.linear * g.rotation);
                     }
@@ -3192,6 +3205,7 @@ impl Editor {
             }
             Drag::GizmoSnapOrCarve { hit, .. } => {
                 self.custom_gizmo_pivot = Some(hit.point);
+                self.kept_pivot_of = None;
                 self.gizmo_pivot = None;
                 self.status = "Gizmo pivot snapped to surface point".into();
             }
@@ -5810,8 +5824,24 @@ impl Editor {
         e
     }
 
+    /// Turn following the mask on or off. Turning it on lets go of a pivot
+    /// kept in place (a pivot you placed yourself stays).
+    pub fn set_gizmo_pivot_follows(&mut self, on: bool) {
+        self.gizmo_pivot_follows = on;
+        if on && self.kept_pivot_of.take().is_some() {
+            self.custom_gizmo_pivot = None;
+            self.gizmo_pivot = None;
+        }
+        self.status = if on {
+            "Gizmo pivot follows the mask".into()
+        } else {
+            "Gizmo pivot stays put when the mask changes".into()
+        };
+    }
+
     /// Reset custom gizmo pivot and orientation to the unmasked geometry centre.
     pub fn reset_gizmo_pivot(&mut self) {
+        self.kept_pivot_of = None;
         self.custom_gizmo_pivot = None;
         self.custom_gizmo_rotation = None;
         self.gizmo_pivot = None;
@@ -5825,6 +5855,7 @@ impl Editor {
         let x = ref_axis.cross(z).normalize();
         let y = z.cross(x).normalize();
         self.custom_gizmo_pivot = Some(point);
+        self.kept_pivot_of = None;
         self.custom_gizmo_rotation = Some(Mat3::from_cols(x, y, z));
         self.gizmo_pivot = None;
         self.status = "Gizmo aligned to surface normal".into();
@@ -6022,8 +6053,24 @@ impl Editor {
     /// The gizmo pivot when not dragging: the one you placed, or the mask
     /// edge / centre of what moves (cached per edit).
     pub(crate) fn gizmo_base_pivot(&mut self) -> Option<Vec3> {
+        let id = self.scene.active().id;
+        // A pivot kept for another piece doesn't apply to this one.
+        if self.kept_pivot_of.is_some_and(|k| k != id) {
+            self.custom_gizmo_pivot = None;
+            self.kept_pivot_of = None;
+        }
         if let Some(p) = self.custom_gizmo_pivot {
             return Some(p);
+        }
+        if !self.gizmo_pivot_follows {
+            // Found once, then kept: masking more or less doesn't move it.
+            let mesh = &self.scene.active().mesh;
+            let p = pose::pivot(mesh, &pose::weights(mesh));
+            if p.is_some() {
+                self.custom_gizmo_pivot = p;
+                self.kept_pivot_of = Some(id);
+            }
+            return p;
         }
         let key = (self.scene.active().id, self.history.revision(), self.scene.active().mesh.vertex_count());
         match self.gizmo_pivot {
@@ -9514,6 +9561,45 @@ mod tests {
     }
 
     #[test]
+    fn gizmo_pivot_can_stay_put_when_the_mask_changes() {
+        let mut e = editor();
+        e.gizmo = Some(GizmoMode::Move);
+        let mask_x_above = |e: &mut Editor, x: f32| {
+            let piece = e.scene.active_mut();
+            let mut d = piece.mesh.to_data();
+            d.mask = d.positions.iter().map(|p| if p.x > x { 1.0 } else { 0.0 }).collect();
+            piece.mesh = Mesh::from_data(d);
+            // A mask edit is a new history step, which drops the cached pivot.
+            e.gizmo_pivot = None;
+        };
+        // Following (the default): the pivot moves to the new mask edge.
+        assert!(e.gizmo_pivot_follows);
+        mask_x_above(&mut e, 0.0);
+        let a = e.gizmo_base_pivot().unwrap();
+        mask_x_above(&mut e, -0.5);
+        let b = e.gizmo_base_pivot().unwrap();
+        assert!((a.x - b.x).abs() > 0.15, "followed the mask: {a} -> {b}");
+        // Off: it stays where it was found, however the mask changes.
+        e.set_gizmo_pivot_follows(false);
+        let kept = e.gizmo_base_pivot().unwrap();
+        mask_x_above(&mut e, 0.5);
+        assert_eq!(e.gizmo_base_pivot().unwrap(), kept);
+        e.clear_mask();
+        assert_eq!(e.gizmo_base_pivot().unwrap(), kept);
+        // Picking "Mask edge / centre" in the Pivot menu finds it again, now.
+        e.set_gizmo_pivot(crate::gizmo_ops::PivotChoice::Auto);
+        let again = e.gizmo_base_pivot().unwrap();
+        assert!(again.distance(kept) > 0.1, "re-found at the centre: {kept} -> {again}");
+        // Another piece gets its own pivot.
+        e.add_primitive("torus");
+        let other = e.gizmo_base_pivot().unwrap();
+        assert!(other.distance(again) > 1e-3 || e.scene.active().mesh.bounds().center().distance(other) < 0.2);
+        // On again: following resumes.
+        e.set_gizmo_pivot_follows(true);
+        assert!(e.custom_gizmo_pivot.is_none());
+    }
+
+    #[test]
     fn remesh_shell_is_an_option_with_a_thickness() {
         let mut e = editor();
         e.replace_document(Scene::new(Piece::new("Sheet", primitives::plane(8, 2.0))), None);
@@ -9758,6 +9844,7 @@ mod tests {
         let mut s = Settings {
             undo_per_piece: true,
             gizmo_done_reverts: true,
+            gizmo_pivot_follows: false,
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: true,

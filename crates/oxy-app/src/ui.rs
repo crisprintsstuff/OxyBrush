@@ -1144,6 +1144,16 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         "Closing the gizmo puts back changes not applied",
         "On: Done (or closing the transform gizmo any other way) puts back what you moved, turned or scaled since the gizmo opened or since the last Apply, like Cancel; Redo brings it back. Off: closing the gizmo keeps everything, and Cancel puts changes back.",
     );
+    let mut follows = ed.gizmo_pivot_follows;
+    tips::check_plain(
+        ui,
+        &mut follows,
+        "Gizmo pivot follows the mask",
+        "On: after each change the transform gizmo's pivot moves to the edge of the mask, or the centre of what moves. Off: it's placed there once and then stays put while you mask and unmask, until you move it (Alt+drag, Ctrl+click) or pick a pivot in the Pivot menu. Also in the gizmo bar's Pivot menu.",
+    );
+    if follows != ed.gizmo_pivot_follows {
+        ed.set_gizmo_pivot_follows(follows);
+    }
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(
@@ -2991,6 +3001,14 @@ fn gizmo_pivot_menu(ui: &mut Ui, ed: &mut Editor) {
                 ed.set_gizmo_pivot(c);
                 ui.close();
             }
+        }
+        let mut follows = ed.gizmo_pivot_follows;
+        if ui
+            .checkbox(&mut follows, "Follow the mask")
+            .on_hover_text("On: after each change the pivot moves to the edge of the mask (or the centre of what moves). Off: it stays where it is until you move it or pick a pivot here.")
+            .changed()
+        {
+            ed.set_gizmo_pivot_follows(follows);
         }
         ui.label(RichText::new("Ctrl+click the model: pivot on the surface, axes along its normal").weak().small());
         ui.label(RichText::new("Alt+drag a handle: move the pivot only").weak().small());
