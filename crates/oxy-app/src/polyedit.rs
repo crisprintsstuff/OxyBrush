@@ -203,6 +203,10 @@ pub struct PolyEdit {
     pub last: [Option<f32>; 3],
     /// Crease weight the Crease actions set, 0 to 1.
     pub crease_weight: f32,
+    /// Bevel: rows of faces across the bevel, and its profile from 0 (flat)
+    /// to 1 (round).
+    pub bevel_segments: u32,
+    pub bevel_profile: f32,
     /// Smooth preview levels (0: off), and the subdivided mesh shown for
     /// the cage it was made from.
     pub smooth_preview: u32,
@@ -331,6 +335,8 @@ impl Editor {
             pending: None,
             last: [None; 3],
             crease_weight: 1.0,
+            bevel_segments: 1,
+            bevel_profile: 0.5,
             smooth_preview: 0,
             smooth: None,
             smooth_shown: 0,
@@ -662,10 +668,38 @@ impl Editor {
             };
             pe.pending = None;
             let (segments, twist) = (pe.bridge_segments, pe.bridge_twist);
+            // With Mirror on, the mirror images of the two faces (found by
+            // their points, which bridging doesn't renumber) bridge too.
+            let mirrored = self.poly_mirror().and_then(|(cx, tol)| {
+                let other = |f: usize| polyedit::with_mirror(&cage, &[f], cx, tol).into_iter().find(|&g| g != f);
+                let (ma, mb) = (other(first)?, other(face)?);
+                let key = |f: usize| {
+                    let mut k = cage.faces[f].corners.clone();
+                    k.sort_unstable();
+                    k
+                };
+                (![first, face].contains(&ma) && ![first, face].contains(&mb)).then(|| (key(ma), key(mb)))
+            });
             match polyshape::bridge_faces(&mut cage, first, face, segments, twist) {
-                Ok(made) => {
+                Ok(mut made) => {
+                    if let Some((ka, kb)) = mirrored {
+                        let find = |c: &Cage, k: &Vec<u32>| {
+                            c.faces.iter().position(|f| {
+                                let mut x = f.corners.clone();
+                                x.sort_unstable();
+                                &x == k
+                            })
+                        };
+                        // Mirrored, the faces run the other way round: the
+                        // twist goes the other way too.
+                        if let (Some(ma), Some(mb)) = (find(&cage, &ka), find(&cage, &kb))
+                            && let Ok(more) = polyshape::bridge_faces(&mut cage, ma, mb, segments, -twist)
+                        {
+                            made.extend(more);
+                        }
+                    }
                     self.poly_commit("Poly Edit: bridge", before_mesh, before_cage, cage);
-                    self.status = format!("Bridged the two faces with {} new faces", made.len());
+                    self.status = format!("Bridged with {} new faces", made.len());
                 }
                 Err(why) => self.status = format!("Bridge: {why}"),
             }
@@ -689,7 +723,10 @@ impl Editor {
         let mut slide = match action {
             FaceAction::Extrude => polyedit::extrude(&mut cage, &faces, each).0,
             FaceAction::Inset => polyedit::inset(&mut cage, &faces, each).0,
-            FaceAction::Bevel => polyshape::bevel_faces(&mut cage, &faces, each).0,
+            FaceAction::Bevel => {
+                let pe = self.poly_edit.as_ref().expect("checked");
+                polyshape::bevel_faces_with(&mut cage, &faces, each, pe.bevel_segments, pe.bevel_profile).0
+            }
             _ => polyedit::move_faces(&cage, &faces),
         };
         if action != FaceAction::Move && !self.poly_rebuild(i, cage, &mut slide) {
@@ -732,7 +769,9 @@ impl Editor {
                 self.poly_drag_meta(1, Some((-0.98, 0.98)));
             }
             EdgeAction::Bevel => {
-                let (mut slide, made) = polyshape::bevel_edges(&mut cage, &edges);
+                let (segments, profile) =
+                    self.poly_edit.as_ref().map_or((1, 0.0), |pe| (pe.bevel_segments, pe.bevel_profile));
+                let (mut slide, made) = polyshape::bevel_edges_with(&mut cage, &edges, segments, profile);
                 if made.is_empty() {
                     self.status = "Bevel: point at an edge between two faces".into();
                     return;
@@ -871,12 +910,21 @@ impl Editor {
                     return;
                 };
                 pe.pending = None;
+                // With Mirror on, the mirror images of the two points too
+                // (splitting doesn't renumber points).
+                let mirrored = self.poly_mirror().and_then(|(cx, tol)| {
+                    let (a, b) =
+                        (polyedit::mirror_point(&cage, first, cx, tol)?, polyedit::mirror_point(&cage, v, cx, tol)?);
+                    (a != first || b != v).then_some((a, b))
+                });
                 if polyshape::split_face(&mut cage, first, v).is_none() {
                     self.status = "Split face: the two points must be on one face, not next to each other".into();
                     return;
                 }
+                let both = mirrored.is_some_and(|(a, b)| polyshape::split_face(&mut cage, a, b).is_some());
                 self.poly_commit("Poly Edit: split face", before_mesh, before_cage, cage);
-                self.status = "Split the face in two".into();
+                self.status =
+                    if both { "Split the face and its mirror image".into() } else { "Split the face in two".into() };
             }
             PointAction::Crease => {
                 let ids: Vec<u32> = points.iter().map(|&(v, _)| v).collect();
@@ -1704,5 +1752,76 @@ mod tests {
         assert!(e.poly_edit.is_none());
         assert_eq!(e.scene.active().mesh.triangle_count(), 6 * 16 * 2);
         assert!(e.preview_in_place().is_none());
+    }
+
+    #[test]
+    fn bevel_rows_and_profile_reach_the_tool() {
+        let mut e = editor();
+        e.start_poly_edit();
+        let pe = e.poly_edit.as_mut().unwrap();
+        (pe.edge_action, pe.bevel_segments, pe.bevel_profile) = (EdgeAction::Bevel, 3, 1.0);
+        let (_, _, _, edge_px) = front_corner_and_edge(&e);
+        drag(&mut e, edge_px, edge_px + Vec2::new(25.0, 0.0));
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 6 + 3, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+        e.undo();
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Bevel;
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -40.0));
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 6 + 4 * 3, "{}", e.status);
+        polyedit::validate(&c).unwrap();
+    }
+
+    #[test]
+    fn split_and_bridge_follow_mirror() {
+        // Four small boxes: two above each other on each side of x = 0.
+        let boxes: Vec<Vec3> = vec![
+            Vec3::new(1.0, 0.6, 0.0),
+            Vec3::new(1.0, -0.6, 0.0),
+            Vec3::new(-1.0, 0.6, 0.0),
+            Vec3::new(-1.0, -0.6, 0.0),
+        ];
+        let mut data = oxy_mesh::MeshData::default();
+        for o in &boxes {
+            let b = oxy_mesh::primitives::cube(1, 0.5).to_data();
+            let n = data.positions.len() as u32;
+            data.positions.extend(b.positions.iter().map(|p| *p + *o));
+            data.triangles.extend(b.triangles.iter().map(|t| t.map(|i| i + n)));
+        }
+        let mut e = editor();
+        e.scene = oxy_doc::Scene::new(oxy_doc::Piece::new("Boxes", Mesh::from_data(data)));
+        e.start_poly_edit();
+        e.poly_edit.as_mut().unwrap().mirror = true;
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 24);
+        // The +X boxes' facing faces: the upper box's bottom and the lower one's top.
+        let face_at = |c: &Cage, at: Vec3| {
+            (0..c.faces.len()).min_by(|&a, &b| {
+                polyedit::face_center(c, a).distance(at).total_cmp(&polyedit::face_center(c, b).distance(at))
+            })
+        };
+        let (top, bottom) =
+            (face_at(&c, Vec3::new(1.0, 0.35, 0.0)).unwrap(), face_at(&c, Vec3::new(1.0, -0.35, 0.0)).unwrap());
+        let pe = e.poly_edit.as_mut().unwrap();
+        (pe.action, pe.bridge_segments) = (FaceAction::Bridge, 2);
+        pe.pending = Some(Pending::BridgeFrom(top));
+        let edge = [c.faces[bottom].corners[0], c.faces[bottom].corners[1]];
+        e.poly_face_down(Vec2::ZERO, bottom, edge);
+        let c = cage(&e).clone();
+        polyedit::validate(&c).unwrap();
+        // Both sides bridged: 24 − 4 removed + 2 × 8 tube faces.
+        assert_eq!(c.faces.len(), 24 - 4 + 16, "{}", e.status);
+        e.undo();
+        // Split a face on the +X side corner to corner: its mirror image splits too.
+        let c = cage(&e).clone();
+        let side = face_at(&c, Vec3::new(1.25, 0.6, 0.0)).unwrap();
+        let k = c.faces[side].corners.clone();
+        e.poly_edit.as_mut().unwrap().point_action = PointAction::Split;
+        e.poly_edit.as_mut().unwrap().pending = Some(Pending::SplitFrom(k[0]));
+        e.poly_point_down(Vec2::ZERO, k[2]);
+        let c = cage(&e).clone();
+        polyedit::validate(&c).unwrap();
+        assert_eq!(c.faces.len(), 26, "{}", e.status);
     }
 }

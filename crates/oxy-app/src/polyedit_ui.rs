@@ -72,6 +72,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.end_row();
                 }
             });
+            if pe.action == FaceAction::Bevel || pe.edge_action == EdgeAction::Bevel {
+                bevel_options(ui, pe);
+            }
             if let Some(Pending::BridgeFrom(_)) = pe.pending {
                 ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
             }
@@ -317,4 +320,16 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
             painter.line_segment([pa, pb], Stroke::new(2.0, REACH_EDGE));
         }
     }
+}
+
+/// Bevel rows and profile, for both face and edge bevels.
+fn bevel_options(ui: &mut egui::Ui, pe: &mut crate::polyedit::PolyEdit) {
+    ui.horizontal(|ui| {
+        ui.label("Bevel rows");
+        ui.add(egui::DragValue::new(&mut pe.bevel_segments).range(1..=16))
+            .on_hover_text("Rows of faces across a bevel (face and edge Bevel); more rows make a smoother round");
+        ui.label("Profile");
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut pe.bevel_profile, 0.0..=1.0).max_decimals(2)))
+            .on_hover_text("0: flat, a straight cut across the corner. 1: round. Needs two or more rows to show.");
+    });
 }

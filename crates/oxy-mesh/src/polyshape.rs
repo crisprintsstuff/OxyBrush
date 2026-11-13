@@ -88,6 +88,24 @@ fn fan(c: &Cage, de: &HashMap<(u32, u32), usize>, faces_at: &[usize], v: u32) ->
 /// RETURNS: the points to slide and the new faces (strips and corners, in
 /// one new face group).
 pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
+    bevel_edges_with(c, edges, 1, 0.0)
+}
+
+/// [`bevel_edges`] with `segments` rows of faces across each bevel and a
+/// `profile` from 0 (flat, a chamfer) to 1 (round).
+///
+/// The rows hang between lines of points at each end of a bevelled edge,
+/// running from the point on one side to the point on the other. Point `t`
+/// of the way along such a line starts at the old corner and slides along
+/// `(1 − t)·dP + t·dQ` (flat) or `(1 − t)²·dP + t²·dQ` (round: a quadratic
+/// curve whose middle control point is the old corner, so the rows bow out
+/// towards where the edge was), blended by `profile`, where `dP` and `dQ`
+/// are the two side points' directions. Lines are shared by the strips
+/// and corner faces that meet at an end. Where a lone bevelled edge ends at
+/// a point that stays, an end face closes the rows against it.
+pub fn bevel_edges_with(c: &mut Cage, edges: &[[u32; 2]], segments: u32, profile: f32) -> (Slide, Vec<usize>) {
+    let segments = segments.clamp(1, 64);
+    let profile = profile.clamp(0.0, 1.0);
     let de = directed_edges(c);
     let adj = Adjacency::new(c);
     let selected: HashSet<[u32; 2]> = edges
@@ -120,6 +138,10 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
     let mut inserts: Vec<(usize, u32, u32, bool)> = Vec::new();
     let mut drops: Vec<(usize, u32)> = Vec::new();
     let mut kept_end: HashSet<u32> = HashSet::new();
+    // Dropped ends: (face, nq, np, old point), to fill in the line between.
+    let mut dropped_lines: Vec<(usize, u32, u32, u32)> = Vec::new();
+    // Patches as fan-ordered side points, with their corner.
+    let mut patch_rings: Vec<(Vec<u32>, u32)> = Vec::new();
     for v in ends {
         let (order, closed) = fan(c, &de, &faces_at[&v], v);
         let is_sel = |a: u32, b: u32| selected.contains(&edge_key(a, b));
@@ -162,6 +184,7 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
             inserts.push((hq, v, nq, true));
             if hp == hq {
                 drops.push((hp, v));
+                dropped_lines.push((hp, nq, np, v));
             } else {
                 kept_end.insert(v);
             }
@@ -233,10 +256,14 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
         if closed && bevelled_here >= 3 {
             // Strips run each gap from one sector's point to the next in fan
             // order; the corner face runs them the other way.
-            let mut patch: Vec<u32> = points.iter().rev().copied().collect();
-            patch.dedup();
-            if patch.len() >= 3 && patch.first() != patch.last() {
-                patches.push(patch);
+            if segments == 1 {
+                let mut patch: Vec<u32> = points.iter().rev().copied().collect();
+                patch.dedup();
+                if patch.len() >= 3 && patch.first() != patch.last() {
+                    patches.push(patch);
+                }
+            } else {
+                patch_rings.push((points.clone(), v));
             }
         }
     }
@@ -259,11 +286,75 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
     }
     let group = new_group(c);
     let mut made = Vec::new();
+    // Each side point's slide direction (an old point that stays has none).
+    let dirs: HashMap<u32, Vec3> = slide.verts.iter().copied().zip(slide.dir.iter().copied()).collect();
+    // The points between side points p and q at corner v, from p to q.
+    let mut lines: HashMap<(u32, u32, u32), Vec<u32>> = HashMap::new();
+    let mut between = |c: &mut Cage, slide: &mut Slide, p: u32, q: u32, v: u32| -> Vec<u32> {
+        if segments == 1 || p == q {
+            return Vec::new();
+        }
+        if let Some(l) = lines.get(&(q, p, v)) {
+            return l.iter().rev().copied().collect();
+        }
+        if let Some(l) = lines.get(&(p, q, v)) {
+            return l.clone();
+        }
+        let (dp, dq) = (dirs.get(&p).copied().unwrap_or(Vec3::ZERO), dirs.get(&q).copied().unwrap_or(Vec3::ZERO));
+        let at = c.positions[v as usize];
+        let line: Vec<u32> = (1..segments)
+            .map(|i| {
+                let t = i as f32 / segments as f32;
+                let flat = dp * (1.0 - t) + dq * t;
+                let round = dp * (1.0 - t) * (1.0 - t) + dq * t * t;
+                let new = c.add_vertex(at);
+                slide.push(c, new, flat.lerp(round, profile));
+                new
+            })
+            .collect();
+        lines.insert((p, q, v), line.clone());
+        line
+    };
     let mut sorted: Vec<[u32; 2]> = selected.into_iter().collect();
     sorted.sort_unstable();
     for [a, b] in sorted {
         let (Some(&f), Some(&g)) = (de.get(&(a, b)), de.get(&(b, a))) else { continue };
         let m = |face: usize, v: u32| corner_of.get(&(face, v)).copied().unwrap_or(v);
+        if segments > 1 {
+            // Lines at each end, from f's side point to g's.
+            let mut la = vec![m(f, a)];
+            la.extend(between(c, &mut slide, m(f, a), m(g, a), a));
+            la.push(m(g, a));
+            let mut lb = vec![m(f, b)];
+            lb.extend(between(c, &mut slide, m(f, b), m(g, b), b));
+            lb.push(m(g, b));
+            for i in 0..la.len() - 1 {
+                let mut row = vec![lb[i], la[i], la[i + 1], lb[i + 1]];
+                row.dedup();
+                while row.len() > 1 && row.first() == row.last() {
+                    row.pop();
+                }
+                if row.len() >= 3 {
+                    c.faces.push(Face::with_group(row, group));
+                    made.push(c.faces.len() - 1);
+                }
+            }
+            // End faces against an old point that stays: the strip runs the
+            // line at a from f's side to g's, and at b the other way.
+            if kept_end.contains(&a) {
+                let mut cap: Vec<u32> = la.iter().rev().copied().collect();
+                cap.push(a);
+                c.faces.push(Face::with_group(cap, group));
+                made.push(c.faces.len() - 1);
+            }
+            if kept_end.contains(&b) {
+                let mut cap = lb.clone();
+                cap.push(b);
+                c.faces.push(Face::with_group(cap, group));
+                made.push(c.faces.len() - 1);
+            }
+            continue;
+        }
         // f runs a -> b, g runs b -> a; at an end whose old point stays,
         // the strip goes through it.
         let mut strip = vec![m(f, b), m(f, a)];
@@ -283,6 +374,31 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
             made.push(c.faces.len() - 1);
         }
     }
+    // Corner faces with segments: the lines round the corner, reversed.
+    for (points, v) in patch_rings {
+        let mut ring = Vec::new();
+        for j in 0..points.len() {
+            let (p, q) = (points[j], points[(j + 1) % points.len()]);
+            ring.push(p);
+            ring.extend(between(c, &mut slide, p, q, v));
+        }
+        ring.reverse();
+        ring.dedup();
+        if ring.len() >= 3 && ring.first() != ring.last() {
+            patches.push(ring);
+        }
+    }
+    // A dropped end: the face that took both side points takes the line
+    // between them too, the other way round to the strip.
+    for (face, nq, np, v) in dropped_lines {
+        let line = between(c, &mut slide, nq, np, v);
+        let k = &mut c.faces[face].corners;
+        if let Some(i) = k.iter().position(|&x| x == nq) {
+            for (j, &x) in line.iter().enumerate() {
+                k.insert(i + 1 + j, x);
+            }
+        }
+    }
     for patch in patches {
         c.faces.push(Face::with_group(patch, group));
         made.push(c.faces.len() - 1);
@@ -295,6 +411,17 @@ pub fn bevel_edges(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
 /// `each`, every face on its own. RETURNS: the points to slide and the new
 /// wall faces.
 pub fn bevel_faces(c: &mut Cage, faces: &[usize], each: bool) -> (Slide, Vec<usize>) {
+    bevel_faces_with(c, faces, each, 1, 0.0)
+}
+
+/// [`bevel_faces`] with `segments` rings of wall and a `profile` from 0
+/// (flat: a straight 45° chamfer) to 1 (round: a quarter circle). Ring `k`
+/// of `n` sits out along the normal by `sin θ` and in from the edges by
+/// `1 − cos θ` (θ = 90°·k/n) times the amount when round, `k/n` both ways
+/// when flat. The cap is the last ring.
+pub fn bevel_faces_with(c: &mut Cage, faces: &[usize], each: bool, segments: u32, profile: f32) -> (Slide, Vec<usize>) {
+    let segments = segments.clamp(1, 64);
+    let profile = profile.clamp(0.0, 1.0);
     let regions: Vec<Vec<usize>> = if each { faces.iter().map(|&f| vec![f]).collect() } else { vec![faces.to_vec()] };
     // Inward direction of each outline point, per region, before the extrude.
     let mut inward: HashMap<u32, Vec3> = HashMap::new();
@@ -322,18 +449,33 @@ pub fn bevel_faces(c: &mut Cage, faces: &[usize], each: bool) -> (Slide, Vec<usi
             inward.insert(v, m / cos);
         }
     }
-    let before = c.positions.len() as u32;
-    let (mut slide, made) = crate::polyedit::extrude(c, faces, each);
-    // The cap's outline points are copies made by the extrude, in the
-    // order of the originals; find each copy's original by position.
-    for (i, &v) in slide.verts.iter().enumerate() {
-        if v < before {
-            continue;
+    let originals: Vec<(Vec3, Vec3)> = inward.iter().map(|(&o, &d)| (c.positions[o as usize], d)).collect();
+    let inward_at = |at: Vec3| originals.iter().find(|(p, _)| p.distance_squared(at) <= 1e-12).map(|(_, d)| *d);
+    // One extrude per ring; each leaves the ring before where it was and
+    // moves on with a fresh copy of the outline, so a point's ring is the
+    // last extrude that slid it.
+    let mut ring_of: HashMap<u32, (u32, Vec3, Vec3)> = HashMap::new();
+    let mut made = Vec::new();
+    for k in 1..=segments {
+        let (step, walls) = crate::polyedit::extrude(c, faces, each);
+        made.extend(walls);
+        for (i, &v) in step.verts.iter().enumerate() {
+            ring_of.insert(v, (k, step.start[i], step.dir[i]));
         }
-        let at = slide.start[i];
-        if let Some((_, d)) = inward.iter().find(|(o, _)| c.positions[**o as usize].distance_squared(at) <= 1e-12) {
-            slide.dir[i] += *d;
-        }
+    }
+    let mut slide = Slide::default();
+    let mut verts: Vec<u32> = ring_of.keys().copied().collect();
+    verts.sort_unstable();
+    for v in verts {
+        let (k, at, normal) = ring_of[&v];
+        let theta = std::f32::consts::FRAC_PI_2 * k as f32 / segments as f32;
+        let flat = k as f32 / segments as f32;
+        let out = flat + (theta.sin() - flat) * profile;
+        let inn = flat + ((1.0 - theta.cos()) - flat) * profile;
+        let d = normal * out + inward_at(at).unwrap_or(Vec3::ZERO) * inn;
+        slide.verts.push(v);
+        slide.start.push(at);
+        slide.dir.push(d);
     }
     (slide, made)
 }
@@ -780,6 +922,81 @@ mod tests {
         validate(&c).unwrap();
         tidy(&mut c);
         assert_eq!(euler(&c), 1);
+    }
+
+    #[test]
+    fn bevel_edges_with_segments_and_a_round_profile() {
+        // One cube edge, three rows, round: the middle row bows out
+        // towards where the edge was.
+        let corner = Vec3::new(0.5, 0.5, -0.5);
+        let mut flat = cube();
+        let (s_flat, made) = bevel_edges_with(&mut flat, &[[2, 6]], 3, 0.0);
+        validate(&flat).unwrap();
+        assert_eq!(made.len(), 3, "three rows");
+        assert_eq!(euler(&flat), 2);
+        let mut round = cube();
+        let (s_round, _) = bevel_edges_with(&mut round, &[[2, 6]], 3, 1.0);
+        validate(&round).unwrap();
+        s_flat.apply(&mut flat, 0.2);
+        s_round.apply(&mut round, 0.2);
+        validate(&round).unwrap();
+        // The point a third of the way across the bevel at the corner
+        // (new points are numbered the same in both).
+        let nearest = |c: &Cage| {
+            let used = c.used();
+            (8..c.positions.len())
+                .filter(|&v| used[v])
+                .map(|v| c.positions[v].distance(corner))
+                .fold(f32::MAX, f32::min)
+        };
+        assert!(nearest(&round) < nearest(&flat) - 0.01, "round sits nearer the old edge");
+        // Every cube edge, two rows each: the corners get six-sided faces.
+        let mut all = cube();
+        let edges = all.edges();
+        let (slide, made) = bevel_edges_with(&mut all, &edges, 2, 0.5);
+        validate(&all).unwrap();
+        assert_eq!(made.len(), 12 * 2 + 8);
+        assert_eq!(all.faces.iter().filter(|f| f.len() == 6).count(), 8);
+        assert_eq!(euler(&all), 2);
+        slide.apply(&mut all, 0.1);
+        validate(&all).unwrap();
+        // A lone inner edge on a grid (its ends stay): rows plus end faces.
+        let mut g = grid(3);
+        let at = |i: u32, j: u32| j * 4 + i;
+        let (slide, made) = bevel_edges_with(&mut g, &[[at(1, 1), at(2, 1)]], 3, 1.0);
+        validate(&g).unwrap();
+        assert_eq!(made.len(), 3 + 2);
+        slide.apply(&mut g, 0.3);
+        tidy(&mut g);
+        assert_eq!(euler(&g), 1);
+        // A chain to the border, two rows.
+        let mut g = grid(3);
+        let edges: Vec<[u32; 2]> = (0..3).map(|j| [at(1, j), at(1, j + 1)]).collect();
+        let (_, made) = bevel_edges_with(&mut g, &edges, 2, 1.0);
+        validate(&g).unwrap();
+        assert_eq!(made.len(), 6);
+        tidy(&mut g);
+        assert_eq!(euler(&g), 1);
+    }
+
+    #[test]
+    fn bevel_faces_with_rings() {
+        let mut c = cube();
+        let (slide, made) = bevel_faces_with(&mut c, &[1], false, 3, 1.0);
+        validate(&c).unwrap();
+        assert_eq!(made.len(), 12, "four walls per ring");
+        slide.apply(&mut c, 0.1);
+        validate(&c).unwrap();
+        // The cap ends where a one-ring bevel puts it.
+        for &v in corners(&c.faces[1]) {
+            let p = c.positions[v as usize];
+            assert!((p.z - 0.6).abs() < 1e-5 && (p.x.abs() - 0.4).abs() < 1e-5, "{p}");
+        }
+        // The first ring of a round bevel goes out more than in (30°).
+        let first: Vec<Vec3> =
+            slide.verts.iter().zip(&slide.dir).filter(|(_, d)| (d.z - 0.5).abs() < 1e-3).map(|(_, d)| *d).collect();
+        assert!(!first.is_empty(), "a ring at sin 30° out");
+        assert!(first.iter().all(|d| d.x.abs() < 0.2), "{first:?}");
     }
 
     #[test]
