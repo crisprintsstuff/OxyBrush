@@ -57,6 +57,7 @@ cargo run --release -p oxy-sculpt --example dab_timing     # brush performance
 cargo run --release -p oxy-sculpt --example wire_timing    # Curve Move bind/deform performance
 cargo run --release -p oxy-topo --example topo_timing      # remesh/decimate performance
 cargo run --release -p oxy-mesh --example multires_timing  # mesh build / subdivision level performance
+cargo run --release -p oxy-mesh --example deform_timing    # Deform window drag update cost on a large plane
 cargo run --release -p oxy-mesh --example dyntopo_timing   # dynamic detail refine cost by mesh size
 cargo run --release -p oxy-mesh --example memory_use       # mesh memory per triangle, by part
 cargo run --release -p oxy-mesh --example dyntopo_quality  # dynamic detail triangle quality on a stroke

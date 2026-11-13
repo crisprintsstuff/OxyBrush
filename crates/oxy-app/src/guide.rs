@@ -117,7 +117,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         body: "Masked areas (shown darker or tinted) are protected from brushes. Hold Ctrl and paint to mask; add Alt to unmask.\n\n\
 - Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso. With symmetry on, the mirrored area is masked too.\n\
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
-- Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it.\n\
+- Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it. Mask > Fill masks everything. Invert and Fill work on what's visible: hidden parts keep their mask.\n\
 - The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically. Mask border masks the edge of an open surface or of what's left visible after hiding part of it; Mask group borders masks the lines where face groups meet. Grow the mask to widen either.\n\
 - Split masked moves the masked part into a new piece (Invert first to split off the unmasked part). Extract mask… makes a new shell from the masked area and leaves the piece whole.",
     },
@@ -151,7 +151,8 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         title: "Posing and the transform gizmo",
         keywords: "gizmo move rotate scale pose transform mask",
         body: "Press T to show the gizmo (T again cycles move, rotate, scale, off). Drag an axis handle, or the centre handle to move in the screen plane, spin around the view or scale evenly. Esc during a drag cancels it.\n\n\
-Masked parts stay put and partly masked parts move partly, so a soft mask edge bends smoothly: mask the body, leave an arm unmasked, and rotate it at the shoulder. The pivot sits on the edge of the mask.",
+Masked parts stay put and partly masked parts move partly, so a soft mask edge bends smoothly: mask the body, leave an arm unmasked, and rotate it at the shoulder. The pivot sits on the edge of the mask.\n\n\
+The fields under the gizmo show how far it has moved, turned or scaled since the gizmo opened, and follow along while you drag. To land on an exact value, type it and press Enter: typing 2 in Scale makes it twice the size it started at. Apply keeps the changes and counts from zero again; Cancel puts them back. Done closes the gizmo, and like Cancel it puts back anything you didn't apply (Redo brings it back). Operators (mirror, put on the ground, centre at origin) are applied at once.",
     },
     Topic {
         title: "Bending with Curve Move",

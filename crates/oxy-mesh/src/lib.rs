@@ -1535,6 +1535,40 @@ impl Mesh {
         }
     }
 
+    /// Replace every position at once (same topology) and bring normals and
+    /// bounds up to date. For whole-piece edits such as the Deform window:
+    /// much faster than [`Mesh::update_after_move`] with every vertex,
+    /// because each face normal is worked out once instead of once per
+    /// corner, and there's no de-duplication to do. Bounds come out exact.
+    ///
+    /// PRECONDITION: `positions.len() == self.vertex_count()`.
+    pub fn replace_positions(&mut self, positions: Vec<Vec3>) {
+        assert_eq!(positions.len(), self.positions.len());
+        self.positions = positions;
+        self.edits += 1;
+        let pos = &self.positions;
+        let face: Vec<Vec3> = self
+            .triangles
+            .par_iter()
+            .map(|&[a, b, c]| {
+                let (a, b, c) = (pos[a as usize], pos[b as usize], pos[c as usize]);
+                (b - a).cross(c - a)
+            })
+            .collect();
+        let vt = &self.vertex_triangles;
+        self.normals.par_iter_mut().enumerate().for_each(|(v, n)| {
+            let sum: Vec3 = vt.get(v).iter().map(|&t| face[t as usize]).sum();
+            *n = sum.try_normalize().unwrap_or(Vec3::Z);
+        });
+        drop(face);
+        let boxes: Vec<Aabb> = (0..self.chunks.len()).into_par_iter().map(|c| self.chunk_bounds(c)).collect();
+        for (c, b) in boxes.into_iter().enumerate() {
+            self.chunks[c].aabb = b;
+            self.loose_bounds[c] = false;
+        }
+        self.dirty.iter_mut().for_each(|d| *d = true);
+    }
+
     /// Recompute exact bounds for chunks that were only grown (call at the
     /// end of a stroke, so later strokes and ray casts test tight boxes).
     pub fn tighten_bounds(&mut self) {
@@ -1943,6 +1977,26 @@ fn triangulate_cap(poly: &[u32], positions: &[Vec3], normal: Vec3, triangles: &m
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn replace_positions_matches_moving_every_point() {
+        let mut a = crate::primitives::icosphere(3, 1.0);
+        let mut b = a.clone();
+        let moved: Vec<glam::Vec3> =
+            a.positions.iter().map(|p| glam::Vec3::new(p.x * 2.0 + p.y * 0.3, p.y, p.z - p.x * p.x)).collect();
+        b.positions = moved.clone();
+        let all: Vec<u32> = (0..b.vertex_count() as u32).collect();
+        b.update_after_move(&all);
+        b.tighten_bounds();
+        a.replace_positions(moved);
+        assert_eq!(a.positions, b.positions);
+        for (x, y) in a.normals.iter().zip(&b.normals) {
+            assert!((*x - *y).length() < 1e-5, "{x} vs {y}");
+        }
+        for (x, y) in a.chunks.iter().zip(&b.chunks) {
+            assert!((x.aabb.min - y.aabb.min).length() < 1e-6 && (x.aabb.max - y.aabb.max).length() < 1e-6);
+        }
+    }
+
     use super::*;
 
     #[test]
