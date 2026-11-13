@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Quad and UV spheres** (Pieces > + Add > Sphere): the sphere window has a **Kind** choice. **Quads** (now the default there) is a cube pushed out into a ball: even quads all over, no poles, and every quad reads as a quad in Poly Edit and the quad count, with **Divisions per side** to set how many. **UV (rings)** has **Segments around** and **Rings** from pole to pole. **Triangles** is the icosphere it used to be. The quad sphere spaces its points by angle, so the quads at the cube's corners are close in size to the rest (within 2:1 by area). File > New > Sphere is unchanged.
+
 ## [4.0.0-beta.7] - 2026-11-13
 
 ### Added

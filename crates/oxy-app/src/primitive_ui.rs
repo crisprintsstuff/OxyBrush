@@ -41,6 +41,52 @@ impl Shape {
     }
 }
 
+/// How a sphere's surface is divided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SphereKind {
+    /// A cube pushed onto the sphere: even quads, no poles.
+    Quads,
+    /// Rings and segments, with a point at each pole.
+    Rings,
+    /// A subdivided icosahedron: even triangles.
+    Triangles,
+}
+
+impl SphereKind {
+    pub const ALL: [SphereKind; 3] = [SphereKind::Quads, SphereKind::Rings, SphereKind::Triangles];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SphereKind::Quads => "Quads",
+            SphereKind::Rings => "UV (rings)",
+            SphereKind::Triangles => "Triangles",
+        }
+    }
+
+    pub fn tip(self) -> &'static str {
+        match self {
+            SphereKind::Quads => {
+                "A cube pushed out onto the sphere: even quads all over and no poles. Easy to model on with Poly Edit, and it subdivides evenly."
+            }
+            SphereKind::Rings => {
+                "Rings from pole to pole, like lines of latitude and longitude: quads that get thin at the two poles, where they meet in a point."
+            }
+            SphereKind::Triangles => {
+                "A subdivided icosahedron: evenly sized triangles, the same as the starting sphere."
+            }
+        }
+    }
+
+    /// (segments, rows) to start with when switching to this kind.
+    fn defaults(self) -> (u32, u32) {
+        match self {
+            SphereKind::Quads => (4, 0),
+            SphereKind::Rings => (24, 12),
+            SphereKind::Triangles => (3, 0),
+        }
+    }
+}
+
 /// The primitive being set up.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrimitiveParams {
@@ -49,11 +95,14 @@ pub struct PrimitiveParams {
     pub size: f32,
     /// Height (cylinder, cone) or tube radius (torus).
     pub second: f32,
-    /// Segments around (cylinder, cone, torus ring) or divisions per side
-    /// (cube, plane), or subdivisions (sphere).
+    /// Segments around (cylinder, cone, torus ring, UV sphere), divisions
+    /// per side (cube, plane, quad sphere), or subdivisions (triangle sphere).
     pub segments: u32,
-    /// Rows up the side (cylinder, cone) or segments around the tube (torus).
+    /// Rows up the side (cylinder, cone), rings (UV sphere) or segments
+    /// around the tube (torus).
     pub rows: u32,
+    /// How a sphere is divided.
+    pub sphere: SphereKind,
     /// Closed ends (cylinder, cone).
     pub caps: bool,
     /// Voxel-remesh for even triangles, ready to sculpt.
@@ -70,12 +119,13 @@ impl PrimitiveParams {
             second,
             segments,
             rows,
+            sphere: SphereKind::Quads,
             caps: true,
             remesh: false,
             resolution: 110,
         };
         match shape {
-            Shape::Sphere => p(1.0, 0.0, 3, 0),
+            Shape::Sphere => p(1.0, 0.0, 4, 0),
             Shape::Cube => p(1.6, 0.0, 1, 0),
             Shape::Plane => p(2.0, 0.0, 4, 0),
             Shape::Cylinder => p(0.7, 1.8, 24, 1),
@@ -88,7 +138,11 @@ impl PrimitiveParams {
     pub fn mesh(&self) -> Mesh {
         let (s, t) = (self.size.max(1e-3), self.second.max(1e-3));
         match self.shape {
-            Shape::Sphere => primitives::icosphere(self.segments.min(7), s),
+            Shape::Sphere => match self.sphere {
+                SphereKind::Quads => primitives::quad_sphere(self.segments.clamp(1, 256), s),
+                SphereKind::Rings => primitives::uv_sphere(self.segments.clamp(3, 512), self.rows.clamp(2, 256), s),
+                SphereKind::Triangles => primitives::icosphere(self.segments.min(7), s),
+            },
             Shape::Cube => primitives::cube(self.segments.clamp(1, 256), s),
             Shape::Plane => primitives::plane(self.segments.clamp(1, 512), s),
             Shape::Cylinder => primitives::cylinder_with(self.segments.max(3), self.rows.max(1), s, t, self.caps),
@@ -169,10 +223,47 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 };
                 match p.shape {
                     Shape::Sphere => {
-                        slider_f(ui, "Radius", &mut p.size, 10.0);
-                        ui.label("Subdivisions");
-                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 0..=7)));
+                        ui.label("Kind");
+                        ui.horizontal(|ui| {
+                            for kind in SphereKind::ALL {
+                                if ui
+                                    .selectable_label(p.sphere == kind, kind.label())
+                                    .on_hover_text(kind.tip())
+                                    .clicked()
+                                    && p.sphere != kind
+                                {
+                                    p.sphere = kind;
+                                    (p.segments, p.rows) = kind.defaults();
+                                }
+                            }
+                        });
                         ui.end_row();
+                        slider_f(ui, "Radius", &mut p.size, 10.0);
+                        match p.sphere {
+                            SphereKind::Quads => {
+                                ui.label("Divisions per side");
+                                ui.add(crate::widgets::Bar(
+                                    egui::Slider::new(&mut p.segments, 1..=256).logarithmic(true),
+                                ))
+                                .on_hover_text("Quads along each edge of the cube the sphere is made from (6 sides)");
+                                ui.end_row();
+                            }
+                            SphereKind::Rings => {
+                                ui.label("Segments around");
+                                ui.add(crate::widgets::Bar(
+                                    egui::Slider::new(&mut p.segments, 3..=512).logarithmic(true),
+                                ));
+                                ui.end_row();
+                                ui.label("Rings");
+                                ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.rows, 2..=256).logarithmic(true)));
+                                ui.end_row();
+                            }
+                            SphereKind::Triangles => {
+                                ui.label("Subdivisions");
+                                ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 0..=7)));
+                                ui.end_row();
+                            }
+                        }
                     }
                     Shape::Cube | Shape::Plane => {
                         slider_f(ui, "Size", &mut p.size, 20.0);
