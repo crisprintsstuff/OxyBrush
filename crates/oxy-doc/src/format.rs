@@ -26,6 +26,12 @@
 //!   levels' topology is derived by Catmull–Clark subdivision of the base
 //!   polygons. Older readers skip it and load the active level as a plain
 //!   mesh.
+//! - `MRLN` (optional, since 4.0.0-beta.9): which subdivision levels in the
+//!   **preceding** `MRES` or `MRCC` were made without smoothing:
+//!   `count:u32 smooth:u8*count` (one per level, level 0 first; 1 smoothed,
+//!   0 split in place). Written only when some level isn't smoothed. Older
+//!   readers skip it: the levels' points are the same, only edits on a
+//!   lower level then carry the finer levels along as if they were smooth.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -140,6 +146,12 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
                     sections.push((*b"MRCC", b));
                 }
                 None => sections.push((*b"MRES", encode_multires(mr))),
+            }
+            let smooth = mr.level_smooth();
+            if smooth.iter().any(|s| !s) {
+                let mut b = (smooth.len() as u32).to_le_bytes().to_vec();
+                b.extend(smooth.iter().map(|&s| u8::from(s)));
+                sections.push((*b"MRLN", b));
             }
         }
         if let Some(c) = p.symmetry_center {
@@ -348,6 +360,15 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     }
                     Ok(_) => log::warn!("ignoring subdivision levels that don't match piece {:?}", piece.name),
                     Err(e) => log::warn!("ignoring damaged subdivision levels on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"MRLN" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRLN before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let n = r.u32()? as usize;
+                let flags: Vec<bool> = r.take(n)?.iter().map(|&b| b != 0).collect();
+                if !piece.multires.as_mut().is_some_and(|mr| mr.set_level_smooth(&flags)) {
+                    log::warn!("ignoring level smoothing that doesn't match piece {:?}", piece.name);
                 }
             }
             b"MRES" => {

@@ -812,8 +812,11 @@ pub enum JobResult {
 /// A change to the active piece's subdivision levels.
 #[derive(Debug, Clone, Copy)]
 enum LevelChange {
-    /// Go to the top level (if needed) and add one above it.
-    Add,
+    /// Go to the top level (if needed) and add one above it, smoothed or
+    /// split in place.
+    Add {
+        smooth: bool,
+    },
     /// Switch to this level.
     Set(usize),
     DeleteHigher,
@@ -950,6 +953,9 @@ pub struct Editor {
     /// (Catmull–Clark, the default) or triangles (Loop). A piece that has
     /// levels keeps its own.
     pub subdivision_scheme: oxy_mesh::multires::Scheme,
+    /// New subdivision levels (and Subdivide) are smoothed; off: split in
+    /// place, keeping the shape (linear subdivision).
+    pub subdivision_smooth: bool,
     /// The piece whose pivot was kept in place (with following off): the
     /// kept pivot is `custom_gizmo_pivot`; None when that is a pivot you
     /// placed yourself (or there is none).
@@ -1336,6 +1342,7 @@ impl Default for Editor {
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
+            subdivision_smooth: true,
             kept_pivot_of: None,
             plugin_params: Default::default(),
             window_geometry: None,
@@ -1756,6 +1763,7 @@ impl Editor {
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
             subdivision_quads: self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark,
+            subdivision_smooth: self.subdivision_smooth,
             radius_on_model: self.radius_on_model,
             living_strokes: self.living.enabled,
             living_save: self.living.save,
@@ -1983,6 +1991,7 @@ impl Editor {
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
+        self.subdivision_smooth = s.subdivision_smooth;
         self.subdivision_scheme = if s.subdivision_quads {
             oxy_mesh::multires::Scheme::CatmullClark
         } else {
@@ -5102,16 +5111,17 @@ impl Editor {
         let prepared = mr.prepare(&piece.mesh);
         let apply = move |mr: &mut Multires, prepared| -> Option<oxy_mesh::MeshData> {
             match change {
-                LevelChange::Add => {
+                LevelChange::Add { smooth } => {
                     if mr.active() + 1 < mr.level_count() {
                         // Go to the top first; the new level is built from it.
                         let top = mr.level_count() - 1;
                         let data = mr.set_level_prepared(prepared, top);
                         let top_mesh = Mesh::from_data(data);
                         mr.bind(&top_mesh);
-                        Some(mr.add_level(&top_mesh))
+                        let prepared = mr.prepare(&top_mesh);
+                        Some(mr.add_level_prepared_with(prepared, smooth))
                     } else {
-                        Some(mr.add_level_prepared(prepared))
+                        Some(mr.add_level_prepared_with(prepared, smooth))
                     }
                 }
                 LevelChange::Set(target) => Some(mr.set_level_prepared(prepared, target)),
@@ -5180,7 +5190,9 @@ impl Editor {
             );
             return;
         }
-        self.multires_op("Add subdivision level", next, LevelChange::Add);
+        let smooth = self.subdivision_smooth;
+        let label = if smooth { "Add subdivision level" } else { "Add subdivision level (not smoothed)" };
+        self.multires_op(label, next, LevelChange::Add { smooth });
     }
 
     /// Triangles the active piece's next subdivision level would have: four
@@ -5230,8 +5242,12 @@ impl Editor {
         self.multires_op("Delete lower levels", 0, LevelChange::DeleteLower);
     }
 
+    /// Subdivide the active piece once, as a plain mesh (no levels), with
+    /// the chosen kind (quads or triangles): `smooth` rounds it with the
+    /// smoothing rules, otherwise faces are split in place and the shape
+    /// stays exactly as it is.
     pub fn subdivide(&mut self, smooth: bool) {
-        let quads = smooth && self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
+        let quads = self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
         let n = if quads {
             let (q, t) = self.scene.active().mesh.quad_and_triangle_counts();
             8 * q + 6 * t
@@ -5245,16 +5261,12 @@ impl Editor {
             );
             return;
         }
-        let mesh = if quads {
-            // One quad level, kept as a plain mesh.
-            let piece = self.scene.active();
-            let mut mr = self.new_level_stack(piece);
-            let mesh = Mesh::from_data(mr.add_level(&piece.mesh));
-            mr.bind(&mesh);
-            mesh
-        } else {
-            topo::subdivide(&self.scene.active().mesh, if smooth { 1 } else { 0 })
-        };
+        // One level of a level stack, kept as a plain mesh.
+        let piece = self.scene.active();
+        let mut mr = self.new_level_stack(piece);
+        let prepared = mr.prepare(&piece.mesh);
+        let mesh = Mesh::from_data(mr.add_level_prepared_with(prepared, smooth));
+        mr.bind(&mesh);
         self.replace_active_mesh(if smooth { "Smooth subdivide" } else { "Subdivide" }, mesh);
         self.status = format!("Subdivided: {} triangles", self.scene.active().mesh.triangle_count());
     }
@@ -8468,6 +8480,7 @@ mod tests {
     #[test]
     fn subdivision_triangle_ceiling() {
         let mut e = editor();
+        e.subdivision_scheme = oxy_mesh::multires::Scheme::Loop;
         e.max_triangles = 1000;
         let before_tris = e.scene.active().mesh.triangle_count();
         e.subdivide(false);
@@ -9491,6 +9504,61 @@ mod tests {
     }
 
     #[test]
+    fn levels_and_subdivide_without_smoothing_keep_the_shape() {
+        use oxy_mesh::multires::Scheme;
+        let corners = |e: &Editor| {
+            let b = e.scene.active().mesh.bounds();
+            (b.max - b.min, e.scene.active().mesh.positions.iter().map(|p| p.length()).fold(0.0, f32::max))
+        };
+        for scheme in [Scheme::CatmullClark, Scheme::Loop] {
+            let mut e = editor();
+            e.add_primitive("cube");
+            wait_job(&mut e);
+            e.subdivision_scheme = scheme;
+            let before = corners(&e);
+            // A level without smoothing: same box, corners where they were.
+            e.subdivision_smooth = false;
+            e.add_level();
+            wait_job(&mut e);
+            assert!(
+                e.history.undo_labels().any(|l| l.contains("not smoothed")),
+                "{:?}",
+                e.history.undo_labels().collect::<Vec<_>>()
+            );
+            let after = corners(&e);
+            assert!((after.0 - before.0).abs().max_element() < 1e-5, "{scheme:?}: {before:?} vs {after:?}");
+            assert!((after.1 - before.1).abs() < 1e-5, "{scheme:?}: the corners stay");
+            // A smoothed level on top rounds it off.
+            e.subdivision_smooth = true;
+            e.add_level();
+            wait_job(&mut e);
+            assert!(corners(&e).1 < before.1 - 1e-3, "{scheme:?}");
+            // Saved and opened again, each level keeps how it was made: going
+            // down to level 2 and back gives the same points.
+            let bytes = oxy_doc::format::encode(&e.scene_data());
+            assert_eq!(bytes.windows(4).filter(|w| w == b"MRLN").count(), 1);
+            let mut f = editor();
+            f.replace_document(Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap(), None);
+            let i = f.scene.pieces.iter().position(|p| p.multires.is_some()).unwrap();
+            f.scene.set_active(i);
+            assert_eq!(f.scene.active().multires.as_ref().unwrap().level_smooth(), vec![true, false, true]);
+            // Subdivide (single mesh) without smoothing keeps the box too.
+            let mut g = editor();
+            g.add_primitive("cube");
+            wait_job(&mut g);
+            g.subdivision_scheme = scheme;
+            let before = corners(&g);
+            g.subdivide(false);
+            let after = corners(&g);
+            assert!((after.0 - before.0).abs().max_element() < 1e-5 && (after.1 - before.1).abs() < 1e-5);
+            if scheme == Scheme::CatmullClark {
+                let (q, t) = g.scene.active().mesh.quad_and_triangle_counts();
+                assert!(q > 0 && t == 0, "flat quads stay quads");
+            }
+        }
+    }
+
+    #[test]
     fn poly_edit_creases_carry_into_quad_levels() {
         use oxy_mesh::retopo::{Cage, Face};
         // A unit cube made of polygons, as Poly Edit keeps it.
@@ -10037,6 +10105,7 @@ mod tests {
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
             subdivision_quads: false,
+            subdivision_smooth: false,
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: true,
