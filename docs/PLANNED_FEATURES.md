@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.8](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.9](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -92,6 +92,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.9:** subdivision levels made of quads (with a Smooth
+  toggle to split without rounding), Subdivide masked for more resolution
+  on one part, Living strokes groups and saving, a Disc primitive, and a
+  voxel remesh that keeps close fingers and toes apart.
 - **4.0.0-beta.8:** Poly Edit grows up (bevel with rounded rows, bridge,
   edge slide, spin, split, creases and smooth subdivision with a live
   preview), Living strokes' first phase (fade, delete or solo any stroke),
