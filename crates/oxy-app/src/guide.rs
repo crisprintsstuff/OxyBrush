@@ -142,11 +142,12 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     },
     Topic {
         title: "Painting color",
-        keywords: "vertex color paint fill cavity dirt",
+        keywords: "vertex color colour paint fill cavity dirt import obj ply mrgb painted",
         body: "The Paint brush (last in the shelf) colors the surface without changing its shape; Alt erases back to white. Pick a color or swatch in its settings. Alphas, spray and symmetry work as with other brushes.\n\n\
 - Fill paints everything that isn't masked; Fill cavities and Fill peaks paint creases or edges, more where they are deeper or sharper.\n\
 - Clear color returns to unpainted. Use the Pearl or Grey clay material to see true colors.\n\
-- Color is saved in projects and follows subdivision levels; remesh and decimate remove it.",
+- Color is saved in projects, follows subdivision levels, and is kept through remesh and decimate.\n\
+- Painted models from other apps come in with their colors: import an OBJ (colors after each vertex, or the #MRGB comment blocks some sculpting apps write) or a PLY with vertex colors. Nothing needs turning on; paint over them as usual. OBJ, PLY and glTF exports carry the colors back out.",
     },
     Topic {
         title: "Posing and the transform gizmo",

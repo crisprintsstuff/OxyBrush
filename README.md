@@ -44,7 +44,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 - **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
 - **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
 - **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.
-- **Open files:** projects in `.oxb`; import OBJ, STL and ZBrush `.ztl`/`.zpr`; export glTF/GLB, OBJ, STL and PLY.
+- **Open files:** projects in `.oxb`; import OBJ, STL, PLY and ZBrush `.ztl`/`.zpr` (OBJ and PLY with their vertex colors); export glTF/GLB, OBJ, STL and PLY.
 
 ## Download and install
 
@@ -171,7 +171,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 ### Files and pipeline
 
 - **Projects:** `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Autosave** every 2 minutes (adjustable) and **crash recovery** on the next launch.
-- **Import:** OBJ and STL (each object becomes its own piece; broken material files don't stop an import), and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; one Undo keeps the original size.
+- **Import:** OBJ, STL and PLY (each object becomes its own piece; broken material files don't stop an import). Vertex colors come in too: OBJ colors after each vertex (`v x y z r g b`, 0–1 or 0–255) or in `#MRGB` comment blocks, and PLY `red green blue`; and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; one Undo keeps the original size.
 - **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL or binary PLY, one object per piece.
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4 and 1/8 of the triangles), and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting.
 

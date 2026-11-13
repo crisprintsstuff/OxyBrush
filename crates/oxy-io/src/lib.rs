@@ -7,7 +7,7 @@
 //! continuous surface.
 
 use glam::Vec3;
-use oxy_mesh::{Mesh, primitives::weld};
+use oxy_mesh::{Mesh, MeshData, primitives::weld_with_map};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
@@ -17,7 +17,7 @@ mod gltf;
 mod ply;
 mod scene;
 
-pub use ply::write_ply;
+pub use ply::{read_ply, write_ply};
 pub use scene::{ExportPiece, ExportStats, export_pieces, write_atomic};
 
 #[derive(Debug)]
@@ -54,6 +54,7 @@ pub fn import(path: &Path) -> Result<Mesh> {
     match extension(path).as_str() {
         "obj" => import_obj(path),
         "stl" => import_stl(&std::fs::read(path)?),
+        "ply" => import_ply(&std::fs::read(path)?),
         "ztl" | "zpr" => oxy_ztl::import(&std::fs::read(path)?).map_err(Error::Format),
         other => Err(Error::Unsupported(other.to_string())),
     }
@@ -67,6 +68,7 @@ pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
     match extension(path).as_str() {
         "obj" => import_obj_pieces(path, &stem),
         "stl" => Ok(vec![(stem, import_stl(&std::fs::read(path)?)?)]),
+        "ply" => Ok(vec![(stem, import_ply(&std::fs::read(path)?)?)]),
         "ztl" | "zpr" => oxy_ztl::import_pieces(&std::fs::read(path)?).map_err(Error::Format),
         other => Err(Error::Unsupported(other.to_string())),
     }
@@ -87,17 +89,90 @@ fn load_obj_geometry(path: &Path) -> Result<Vec<tobj::Model>> {
         let mut words = line.split_whitespace();
         matches!(words.next(), Some("usemtl" | "mtllib"))
     };
-    let geometry: String = text.lines().filter(|l| !is_material(l)).flat_map(|l| [l, "\n"]).collect();
+    let lines: Vec<&str> = text.lines().filter(|l| !is_material(l)).collect();
+    let geometry = with_comment_colors(&lines);
     let opts = tobj::LoadOptions { triangulate: true, single_index: false, ..Default::default() };
     let (models, _) = tobj::load_obj_buf(&mut geometry.as_bytes(), &opts, |_| Err(tobj::LoadError::OpenFileFailed))
         .map_err(Error::Obj)?;
     Ok(models)
 }
 
+/// Vertex colors stored as `#MRGB` comment blocks (as some sculpting apps
+/// write them; Paul Bourke, "Vertex colour in OBJ files", describes the
+/// layout), moved onto the `v` lines as `v x y z r g b` so the parser reads
+/// them like the common extension and they stay with their vertices
+/// through its renumbering. Returns the text to parse.
+///
+/// ```text
+/// #MRGB <hex>...      one or more lines, after the v lines
+///   per vertex, in v-line order: 8 hex digits MM RR GG BB
+///   MM: mask (not used here), RR GG BB: color 0..255
+/// ```
+///
+/// Ignored (the file reads as before) when the count doesn't match the
+/// number of `v` lines, a digit isn't hex, or `v` lines already have colors.
+fn with_comment_colors(lines: &[&str]) -> String {
+    let mut hex = String::new();
+    for l in lines {
+        if let Some(rest) = l.trim_start().strip_prefix("#MRGB") {
+            hex.extend(rest.chars().filter(|c| !c.is_whitespace()));
+        }
+    }
+    let is_v = |l: &str| l.split_whitespace().next() == Some("v");
+    let v_count = lines.iter().filter(|l| is_v(l)).count();
+    let colors: Option<Vec<[u8; 3]>> =
+        (!hex.is_empty() && hex.len() == v_count * 8 && hex.bytes().all(|b| b.is_ascii_hexdigit())).then(|| {
+            hex.as_bytes()
+                .chunks(8)
+                .map(|c| {
+                    let byte = |i: usize| {
+                        u8::from_str_radix(std::str::from_utf8(&c[i..i + 2]).unwrap_or("ff"), 16).unwrap_or(255)
+                    };
+                    [byte(2), byte(4), byte(6)]
+                })
+                .collect()
+        });
+    let plain_v = lines.iter().filter(|l| is_v(l)).all(|l| l.split_whitespace().count() == 4);
+    let mut out = String::with_capacity(lines.iter().map(|l| l.len() + 1).sum::<usize>() + v_count * 24);
+    let mut k = 0;
+    for l in lines {
+        out.push_str(l);
+        if let Some(colors) = colors.as_ref().filter(|_| plain_v)
+            && is_v(l)
+        {
+            let [r, g, b] = colors[k];
+            out.push_str(&format!(" {} {} {}", r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0));
+            k += 1;
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// A model's vertex colors as sRGB 0..=1, when it has them (written as
+/// 0..1, or as 0..255 by some exporters).
+fn model_colors(m: &tobj::Model) -> Option<Vec<Vec3>> {
+    let c = &m.mesh.vertex_color;
+    if c.is_empty() || c.len() != m.mesh.positions.len() {
+        return None;
+    }
+    let scale = if c.iter().any(|&x| x > 1.0) { 1.0 / 255.0 } else { 1.0 };
+    Some(
+        c.as_chunks::<3>()
+            .0
+            .iter()
+            .map(|&[r, g, b]| (Vec3::new(r, g, b) * scale).clamp(Vec3::ZERO, Vec3::ONE))
+            .collect(),
+    )
+}
+
+/// An OBJ object being gathered: name, points, triangles, per-point colors.
+type Part = (String, Vec<Vec3>, Vec<[u32; 3]>, Vec<Option<Vec3>>);
+
 fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
     let models = load_obj_geometry(path)?;
-    // (name, positions, triangles) in file order, merged by name.
-    let mut parts: Vec<(String, Vec<Vec3>, Vec<[u32; 3]>)> = Vec::new();
+    // (name, positions, triangles, colors) in file order, merged by name.
+    let mut parts: Vec<Part> = Vec::new();
     for m in models {
         if m.mesh.indices.len() < 3 {
             continue;
@@ -107,19 +182,28 @@ fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
         let i = match parts.iter().position(|p| p.0 == name) {
             Some(i) => i,
             None => {
-                parts.push((name, Vec::new(), Vec::new()));
+                parts.push((name, Vec::new(), Vec::new(), Vec::new()));
                 parts.len() - 1
             }
         };
-        let (_, positions, tris) = &mut parts[i];
+        let (_, positions, tris, colors) = &mut parts[i];
         let base = positions.len() as u32;
         positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
         tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
+        push_colors(colors, &m);
     }
     if parts.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
-    parts.into_iter().map(|(name, positions, tris)| Ok((name, finish(positions, tris)?))).collect()
+    parts.into_iter().map(|(name, positions, tris, colors)| Ok((name, finish(positions, tris, colors)?))).collect()
+}
+
+/// Append a model's per-vertex colors (None for each vertex without).
+fn push_colors(colors: &mut Vec<Option<Vec3>>, m: &tobj::Model) {
+    match model_colors(m) {
+        Some(c) => colors.extend(c.into_iter().map(Some)),
+        None => colors.extend(std::iter::repeat_n(None, m.mesh.positions.len() / 3)),
+    }
 }
 
 /// Export one mesh by file extension (`obj`, `stl`, `ply`, `glb`, `gltf`),
@@ -139,21 +223,37 @@ pub fn import_obj(path: &Path) -> Result<Mesh> {
     let models = load_obj_geometry(path)?;
     let mut positions = Vec::new();
     let mut tris = Vec::new();
+    let mut colors = Vec::new();
     for m in models {
         let base = positions.len() as u32;
         positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
         tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
+        push_colors(&mut colors, &m);
     }
-    finish(positions, tris)
+    finish(positions, tris, colors)
 }
 
 pub fn import_stl(bytes: &[u8]) -> Result<Mesh> {
     let positions = if is_ascii_stl(bytes) { parse_ascii_stl(bytes)? } else { parse_binary_stl(bytes)? };
     let tris = (0..positions.len() as u32 / 3).map(|i| [i * 3, i * 3 + 1, i * 3 + 2]).collect();
-    finish(positions, tris)
+    finish(positions, tris, Vec::new())
 }
 
-fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>) -> Result<Mesh> {
+/// Import a PLY file, with its vertex colors when it has them.
+pub fn import_ply(bytes: &[u8]) -> Result<Mesh> {
+    let d = read_ply(bytes).map_err(Error::Format)?;
+    let n = d.positions.len() as u32;
+    if d.triangles.iter().flatten().any(|&i| i >= n) {
+        return Err(Error::Format("a face refers to a missing vertex".into()));
+    }
+    let colors =
+        if d.colors.len() == d.positions.len() { d.colors.into_iter().map(Some).collect() } else { Vec::new() };
+    finish(d.positions, d.triangles, colors)
+}
+
+/// Check, weld and build. `colors` (one per input vertex, or empty) become
+/// the mesh's vertex colors when any vertex has one; the rest are white.
+fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>) -> Result<Mesh> {
     if tris.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
@@ -172,8 +272,24 @@ fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>) -> Result<Mesh> {
     }
     let bounds = oxy_mesh::Aabb::from_points(positions.iter().copied());
     let eps = bounds.extent().max_element().max(1e-6) * 1e-6;
-    let (positions, tris) = weld(positions, tris, eps);
-    Ok(Mesh::new(positions, tris))
+    let (positions, tris, map) = weld_with_map(positions, tris, eps);
+    let color = if colors.len() == map.len() && colors.iter().any(|c| c.is_some()) {
+        let mut out = vec![Vec3::ONE; positions.len()];
+        let mut set = vec![false; positions.len()];
+        for (i, c) in colors.into_iter().enumerate() {
+            let at = map[i] as usize;
+            if let Some(c) = c
+                && !set[at]
+            {
+                out[at] = c;
+                set[at] = true;
+            }
+        }
+        out
+    } else {
+        Vec::new()
+    };
+    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, ..Default::default() }))
 }
 
 fn is_ascii_stl(bytes: &[u8]) -> bool {
@@ -439,6 +555,82 @@ mod tests {
         assert_eq!(import_stl(src).unwrap().triangle_count(), 1);
     }
 
+    /// Import OBJ `text` from a temporary file.
+    fn import_text(name: &str, text: &str) -> Mesh {
+        let dir = std::env::temp_dir().join(format!("oxy-io-color-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.obj");
+        std::fs::write(&path, text).unwrap();
+        let m = import(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        m
+    }
+
+    fn color_at(m: &Mesh, p: Vec3) -> Vec3 {
+        let v = m.positions.iter().position(|q| q.distance(p) < 1e-5).unwrap();
+        m.color[v]
+    }
+
+    #[test]
+    fn obj_vertex_colors_import_in_every_common_form() {
+        let quad = "f 1 2 3 4\n";
+        // v x y z r g b, 0..1.
+        let m = import_text("float", &format!("v 0 0 0 1 0 0\nv 1 0 0 0 1 0\nv 1 1 0 0 0 1\nv 0 1 0 1 1 1\n{quad}"));
+        assert!(m.is_painted());
+        assert_eq!(color_at(&m, Vec3::new(1.0, 0.0, 0.0)), Vec3::new(0.0, 1.0, 0.0));
+        // 0..255.
+        let m = import_text(
+            "bytes",
+            &format!("v 0 0 0 255 0 0\nv 1 0 0 0 255 0\nv 1 1 0 0 0 255\nv 0 1 0 51 51 51\n{quad}"),
+        );
+        assert!((color_at(&m, Vec3::new(0.0, 1.0, 0.0)) - Vec3::splat(0.2)).length() < 1e-6);
+        // #MRGB comment blocks (mask byte first, then red, green, blue), split over two lines.
+        let mrgb =
+            format!("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n#MRGB ffff0000ff00ff00\n#MRGB ff0000ffff336699\n{quad}");
+        let m = import_text("mrgb", &mrgb);
+        assert!(m.is_painted());
+        assert_eq!(color_at(&m, Vec3::ZERO), Vec3::new(1.0, 0.0, 0.0));
+        assert_eq!(color_at(&m, Vec3::new(1.0, 1.0, 0.0)), Vec3::new(0.0, 0.0, 1.0));
+        assert!((color_at(&m, Vec3::new(0.0, 1.0, 0.0)) - Vec3::new(0.2, 0.4, 0.6)).length() < 1e-5);
+        // A block that doesn't match the vertices is ignored; the mesh still loads.
+        let m = import_text("short", &format!("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n#MRGB ffff0000\n{quad}"));
+        assert!(!m.is_painted());
+        assert_eq!(m.triangle_count(), 2);
+        // No colors: unpainted, as before.
+        let m = import_text("plain", &format!("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n{quad}"));
+        assert!(!m.is_painted());
+        // Colors stay with their own piece when objects are kept apart.
+        let dir = std::env::temp_dir().join(format!("oxy-io-color-pieces-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("two.obj");
+        std::fs::write(
+            &path,
+            "o red\nv 0 0 0 1 0 0\nv 1 0 0 1 0 0\nv 0 1 0 1 0 0\nf 1 2 3\n\
+             o blue\nv 5 0 0 0 0 1\nv 6 0 0 0 0 1\nv 5 1 0 0 0 1\nf 4 5 6\n",
+        )
+        .unwrap();
+        let pieces = import_pieces(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(pieces.len(), 2);
+        assert!(pieces[0].1.color.iter().all(|&c| c == Vec3::X));
+        assert!(pieces[1].1.color.iter().all(|&c| c == Vec3::Z));
+    }
+
+    #[test]
+    fn ply_import_brings_its_colors() {
+        let mut m = primitives::icosphere(1, 1.0);
+        m.color = m.positions.iter().map(|p| (*p * 0.5 + Vec3::splat(0.5)).clamp(Vec3::ZERO, Vec3::ONE)).collect();
+        let mut bytes = Vec::new();
+        write_ply(&m, &mut bytes).unwrap();
+        let back = import_ply(&bytes).unwrap();
+        assert_eq!(back.triangle_count(), m.triangle_count());
+        assert!(back.is_painted());
+        for (p, c) in back.positions.iter().zip(&back.color) {
+            let want = (*p * 0.5 + Vec3::splat(0.5)).clamp(Vec3::ZERO, Vec3::ONE);
+            assert!((*c - want).abs().max_element() < 0.01, "{c} vs {want}");
+        }
+    }
+
     #[test]
     fn obj_roundtrip() {
         let m = primitives::cube(3, 1.0);
@@ -475,12 +667,12 @@ mod tests {
         let pos = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
         // Index 5 is out of bounds for 3 vertices
         let bad_tris = vec![[0, 1, 5]];
-        assert!(finish(pos.clone(), bad_tris).is_err());
+        assert!(finish(pos.clone(), bad_tris, Vec::new()).is_err());
 
         // NaN position is rejected
         let nan_pos = vec![Vec3::ZERO, Vec3::new(f32::NAN, 1.0, 0.0), Vec3::Y];
         let good_tris = vec![[0, 1, 2]];
-        assert!(finish(nan_pos, good_tris).is_err());
+        assert!(finish(nan_pos, good_tris, Vec::new()).is_err());
     }
 
     #[test]

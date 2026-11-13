@@ -268,6 +268,13 @@ impl std::hash::Hasher for CellHasher {
 /// then never merged (the 64-division cube that File > New > Cube makes had
 /// 128 open seam edges that way).
 pub fn weld(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    let (out, tris, _) = weld_with_map(positions, tris, epsilon);
+    (out, tris)
+}
+
+/// [`weld`], also returning where each input point went: input point `i`
+/// is output point `map[i]` (for carrying per-point data such as color).
+pub fn weld_with_map(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec3>, Vec<[u32; 3]>, Vec<u32>) {
     let epsilon = epsilon.max(f32::MIN_POSITIVE);
     let inv = 0.5 / epsilon;
     // Each cell's kept points as a linked list: `head` per cell, `next` per point.
@@ -305,7 +312,7 @@ pub fn weld(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, epsilon: f32) -> (Vec<Vec
         })
         .collect();
     let tris = tris.into_iter().map(|t| t.map(|i| remap[i as usize])).collect();
-    (out, tris)
+    (out, tris, remap)
 }
 
 #[cfg(test)]
