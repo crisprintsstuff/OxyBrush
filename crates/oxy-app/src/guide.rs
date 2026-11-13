@@ -150,7 +150,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         title: "Pieces",
         keywords: "objects parts scene add duplicate merge join combine split detach solo",
         body: "A scene can hold several pieces (separate meshes), listed in the Pieces section. Sculpting affects the active piece; Alt+click another piece to make it active.\n\n\
-- + Add opens a window for a sphere, cube, plane, cylinder, cone or torus: set its size and segments (a sphere can be Quads, a cube pushed out into a ball with even quads and no poles; UV, rings from pole to pole; or Triangles, like the starting sphere) (low-poly by default, or tick Even triangles to remesh it for sculpting), then Accept; Duplicate and Mirror duplicate copy the active piece.\n\
+- + Add opens a window for a sphere, cube, plane, cylinder, cone, torus or disc (a flat round plate of quads: an Inner radius above 0 makes a ring, Rings and Segments around set the faces, and Slice keeps only the part between two angles): set its size and segments (a sphere can be Quads, a cube pushed out into a ball with even quads and no poles; UV, rings from pole to pole; or Triangles, like the starting sphere) (low-poly by default, or tick Even triangles to remesh it for sculpting), then Accept; Duplicate and Mirror duplicate copy the active piece.\n\
 - The eye button hides a piece; Alt+S shows only the active one.\n\
 - Join combines the active piece and the other visible pieces into one piece, exactly as they are: nothing is remeshed or welded, and each keeps its own face groups, so you can still hide or select it. Merge + remesh instead fuses them into one closed surface with new, even triangles (a voxel remesh).\n\
 - Mesh > Split masked (also in the Mask menu) moves the masked part of the active piece into a new piece; invert the mask first to split off the unmasked part instead.",
@@ -179,8 +179,9 @@ Size sets how far from the curve the model follows: make the circle cover the pa
     },
     Topic {
         title: "Subdivision levels",
-        keywords: "multires multiresolution detail divide levels",
+        keywords: "multires multiresolution detail divide levels quads catmull clark loop triangles subdivide uv edge loops",
         body: "Ctrl+D adds a subdivision level: four times the triangles, for finer detail. D and Shift+D move up and down between levels. Make broad changes on a low level and fine detail on a high one; the detail follows when you go back up.\n\n\
+Levels are made of quads by default (Catmull–Clark): every polygon becomes quads, so the edge loops of a quad base mesh carry on up and every level exports as quads. A triangle becomes three quads. Choose Triangles (Loop: each triangle becomes four) under Subdivision levels in the Topology panel before adding the first level; a piece keeps the kind its levels were made with. Poly Edit creases stay sharp in the levels. The same choice applies to Mesh > Subdivide.\n\n\
 Remesh and decimate rebuild the mesh, so they remove the levels (undo brings them back).",
     },
     Topic {
