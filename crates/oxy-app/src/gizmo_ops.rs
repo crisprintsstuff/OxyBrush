@@ -389,11 +389,17 @@ impl Editor {
         true
     }
 
-    /// Call every frame: the gizmo was closed (Done, a tool change, its
-    /// shortcut) with changes that weren't applied, so put them back.
+    /// Call every frame. When the gizmo was closed (Done, a tool change,
+    /// its shortcut), its changes are kept; with the "Closing the gizmo puts
+    /// back changes not applied" preference on, the ones not applied are
+    /// put back instead.
     pub fn tick_gizmo_session(&mut self) {
         if self.gizmo.is_none() && self.gizmo_session.is_some() && !matches!(self.drag, crate::editor::Drag::Gizmo(_)) {
-            if self.cancel_gizmo_changes() {
+            if !self.gizmo_done_reverts {
+                self.gizmo_session = None;
+                let uniform = self.gizmo_numeric.uniform;
+                self.gizmo_numeric = Numeric { uniform, ..Numeric::default() };
+            } else if self.cancel_gizmo_changes() {
                 self.status = "Transform not applied, so it was put back (Redo brings it back)".into();
             }
         } else if self.gizmo_session.is_some_and(|s| s.revision != self.history.revision() && s.steps > 0) {
@@ -520,7 +526,20 @@ mod tests {
         assert_eq!(e.scene.active().mesh.positions, start);
         assert!(!e.gizmo_has_changes());
         assert_eq!(e.gizmo_totals(), (Vec3::ZERO, Vec3::ZERO, Vec3::ONE));
-        // Done without Apply puts back too; Apply first keeps it.
+        // By default Done just closes the gizmo and keeps what was done.
+        e.gizmo_numeric.offset = Vec3::Y;
+        e.set_gizmo_numeric();
+        let moved = e.scene.active().mesh.positions.clone();
+        e.gizmo = None;
+        e.tick_gizmo_session();
+        assert_eq!(e.scene.active().mesh.positions, moved, "Done keeps the changes");
+        assert!(e.gizmo_session.is_none());
+        assert_eq!(e.gizmo_totals(), (Vec3::ZERO, Vec3::ZERO, Vec3::ONE), "the fields start from zero next time");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, start);
+        // With the preference on, Done without Apply puts back too; Apply first keeps it.
+        e.gizmo_done_reverts = true;
+        e.toggle_gizmo(GizmoMode::Move);
         e.gizmo_numeric.offset = Vec3::Y;
         e.set_gizmo_numeric();
         e.gizmo = None;

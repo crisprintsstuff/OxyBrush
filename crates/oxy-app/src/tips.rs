@@ -667,8 +667,7 @@ pub mod plain {
     pub const PAN: &str = "Drag to pan. You can also right-drag in the view.";
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
     pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side, or drag to orbit.";
-    pub const GIZMO_DONE: &str =
-        "Close the transform gizmo. Changes you haven't applied are put back, like Cancel (Redo brings them back).";
+    pub const GIZMO_DONE: &str = "Close the transform gizmo; your changes stay. (With Preferences > General > \"Closing the gizmo puts back changes not applied\" on, changes you haven't applied are put back, like Cancel.)";
     pub const GIZMO_SNAP: &str =
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
     pub const GIZMO_APPLY: &str = "Keep the changes made with the gizmo (and any typed values), and count from zero again. \
