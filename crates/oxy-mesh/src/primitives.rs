@@ -54,6 +54,77 @@ pub fn icosphere(subdivisions: u32, radius: f32) -> Mesh {
     Mesh::new(pos.into_iter().map(|p| p * radius).collect(), tris)
 }
 
+/// A cube's faces, half-size `h`: (origin, u axis, v axis) per face,
+/// counter-clockwise when viewed from outside.
+fn cube_faces(h: f32) -> [(Vec3, Vec3, Vec3); 6] {
+    [
+        (Vec3::new(-h, -h, h), Vec3::X, Vec3::Y),
+        (Vec3::new(h, -h, -h), -Vec3::X, Vec3::Y),
+        (Vec3::new(h, -h, h), -Vec3::Z, Vec3::Y),
+        (Vec3::new(-h, -h, -h), Vec3::Z, Vec3::Y),
+        (Vec3::new(-h, h, h), Vec3::X, -Vec3::Z),
+        (Vec3::new(-h, -h, -h), Vec3::X, Vec3::Z),
+    ]
+}
+
+/// Quad sphere: a cube with `divisions`² quads per face (each split into two
+/// triangles), pushed out onto a sphere of `radius`.
+///
+/// Every point gets the same angular spacing across its cube face (the
+/// "equal-angle" mapping: each coordinate `x` in -1..=1 becomes
+/// `tan(x · π/4)` before normalising), so the quads near the cube corners
+/// come out close in size to those in the middle of a face. Unlike the
+/// icosphere, every point has four neighbours except the eight corners,
+/// which have three, and there are no poles as on a UV sphere.
+pub fn quad_sphere(divisions: u32, radius: f32) -> Mesh {
+    let quarter = std::f32::consts::FRAC_PI_4;
+    let onto_sphere =
+        |p: Vec3| Vec3::new((p.x * quarter).tan(), (p.y * quarter).tan(), (p.z * quarter).tan()).normalize();
+    let mut positions = Vec::new();
+    let mut tris = Vec::new();
+    for (o, u, v) in cube_faces(1.0) {
+        let (p, t) = grid(divisions, |a, b| onto_sphere(o + u * (a * 2.0) + v * (b * 2.0)));
+        let base = positions.len() as u32;
+        // `grid` gives each quad as the pair [a, b, c], [a, c, d]. Split it
+        // along the diagonal between its two narrower corners instead: next
+        // to the cube's corners a quad has an angle of up to 120°, and a
+        // diagonal ending there makes a pair that quad detection
+        // (`topo::find_quad_diagonals`) reads as two triangles.
+        for pair in t.as_chunks::<2>().0 {
+            let ([a, b, c], d) = (pair[0], pair[1][2]);
+            let at = |i: u32| p[i as usize];
+            // Cosine of the quad's angle at `v`, between its neighbours.
+            let cos = |prev: u32, v: u32, next: u32| (at(prev) - at(v)).normalize().dot((at(next) - at(v)).normalize());
+            let widest_on_bd = cos(a, b, c).min(cos(c, d, a));
+            let widest_on_ac = cos(d, a, b).min(cos(b, c, d));
+            let split = if widest_on_ac < widest_on_bd { [[a, b, d], [b, c, d]] } else { [[a, b, c], [a, c, d]] };
+            tris.extend(split.map(|t| t.map(|i| i + base)));
+        }
+        positions.extend(p);
+    }
+    let (positions, tris) = weld(positions, tris, 1e-5);
+    Mesh::new(positions.into_iter().map(|p| p * radius).collect(), tris)
+}
+
+/// UV sphere: `segments` around the Y axis and `rings` from pole to pole,
+/// quads everywhere except the triangle fans at the two poles.
+pub fn uv_sphere(segments: u32, rings: u32, radius: f32) -> Mesh {
+    let rings = rings.max(2);
+    let profile: Vec<(f32, f32)> = (0..=rings)
+        .map(|i| {
+            if i == 0 {
+                return (0.0, -radius);
+            }
+            if i == rings {
+                return (0.0, radius);
+            }
+            let a = std::f32::consts::PI * i as f32 / rings as f32 - std::f32::consts::FRAC_PI_2;
+            (radius * a.cos(), radius * a.sin())
+        })
+        .collect();
+    lathe(&profile, segments, false, false)
+}
+
 /// Square grid in the XZ plane, facing +Y.
 pub fn plane(divisions: u32, size: f32) -> Mesh {
     let (p, t) = grid(divisions, |u, v| Vec3::new((u - 0.5) * size, 0.0, (0.5 - v) * size));
@@ -62,19 +133,9 @@ pub fn plane(divisions: u32, size: f32) -> Mesh {
 
 /// Cube with each face divided into `divisions`² quads (as triangles).
 pub fn cube(divisions: u32, size: f32) -> Mesh {
-    let h = size * 0.5;
-    // (origin, u axis, v axis) per face, counter-clockwise when viewed from outside.
-    let faces: [(Vec3, Vec3, Vec3); 6] = [
-        (Vec3::new(-h, -h, h), Vec3::X, Vec3::Y),
-        (Vec3::new(h, -h, -h), -Vec3::X, Vec3::Y),
-        (Vec3::new(h, -h, h), -Vec3::Z, Vec3::Y),
-        (Vec3::new(-h, -h, -h), Vec3::Z, Vec3::Y),
-        (Vec3::new(-h, h, h), Vec3::X, -Vec3::Z),
-        (Vec3::new(-h, -h, -h), Vec3::X, Vec3::Z),
-    ];
     let mut positions = Vec::new();
     let mut tris = Vec::new();
-    for (o, u, v) in faces {
+    for (o, u, v) in cube_faces(size * 0.5) {
         let (p, t) = grid(divisions, |a, b| o + u * (a * size) + v * (b * size));
         let base = positions.len() as u32;
         positions.extend(p);
@@ -369,6 +430,55 @@ mod tests {
     }
 
     #[test]
+    fn quad_sphere_is_a_closed_even_round_ball() {
+        for n in [1, 4, 12] {
+            let m = quad_sphere(n, 2.0);
+            let n = n as usize;
+            assert_eq!(m.vertex_count(), 6 * n * n + 2);
+            assert_eq!(m.triangle_count(), 12 * n * n);
+            let (v, f) = (m.vertex_count() as i64, m.triangle_count() as i64);
+            assert_eq!(v - f * 3 / 2 + f, 2, "closed, genus 0");
+            assert!(m.positions.iter().all(|p| (p.length() - 2.0).abs() < 1e-5));
+            assert!(super::tube_tests::signed_volume(&m) > 0.0, "faces point out");
+        }
+        // Equal-angle spacing: triangles near a cube corner are close in
+        // size to those in the middle of a face (plain normalising gives
+        // more than 5:1).
+        let m = quad_sphere(16, 1.0);
+        let areas: Vec<f32> = m
+            .triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                (b - a).cross(c - a).length()
+            })
+            .collect();
+        let (lo, hi) = areas.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+        assert!(hi / lo < 2.0, "area ratio {}", hi / lo);
+        // Every quad reads back as a quad, the ones at the corners too.
+        for n in [3, 4, 7, 32] {
+            let m = quad_sphere(n, 1.0);
+            let n = n as usize;
+            assert_eq!(crate::topo::quad_and_triangle_counts(&m.positions, &m.triangles), (6 * n * n, 0), "{n}");
+        }
+        let volume = super::tube_tests::signed_volume(&quad_sphere(32, 1.0));
+        assert!((volume - 4.0 / 3.0 * std::f32::consts::PI).abs() < 0.02, "{volume}");
+    }
+
+    #[test]
+    fn uv_sphere_has_poles_rings_and_quads() {
+        let m = uv_sphere(24, 12, 1.5);
+        assert_eq!(m.vertex_count(), 24 * 11 + 2);
+        assert_eq!(m.triangle_count(), 2 * 24 * 10 + 2 * 24);
+        let (v, f) = (m.vertex_count() as i64, m.triangle_count() as i64);
+        assert_eq!(v - f * 3 / 2 + f, 2, "closed, genus 0");
+        assert!(m.positions.iter().all(|p| (p.length() - 1.5).abs() < 1e-5));
+        assert!(super::tube_tests::signed_volume(&m) > 0.0, "faces point out");
+        // A large radius still gets single pole points.
+        assert_eq!(uv_sphere(8, 4, 50.0).vertex_count(), 8 * 3 + 2);
+    }
+
+    #[test]
     fn cylinder_is_closed() {
         let m = cylinder(16, 1.0, 2.0);
         let f = m.triangle_count() as i64;
@@ -581,7 +691,7 @@ pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
 mod tube_tests {
     use super::*;
 
-    fn signed_volume(m: &Mesh) -> f32 {
+    pub(super) fn signed_volume(m: &Mesh) -> f32 {
         m.triangles
             .iter()
             .map(|t| {

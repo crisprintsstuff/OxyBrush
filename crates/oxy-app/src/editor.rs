@@ -8113,6 +8113,32 @@ mod tests {
     }
 
     #[test]
+    fn add_sphere_offers_quads_rings_and_triangles() {
+        use crate::primitive_ui::SphereKind;
+        let mut e = editor();
+        e.open_primitive("sphere");
+        // Quads by default: 6 sides of 4 × 4, read back as all quads.
+        let p = e.primitive_edit.as_ref().unwrap();
+        assert_eq!(p.params.sphere, SphereKind::Quads);
+        assert_eq!(p.preview.quad_and_triangle_counts(), (96, 0));
+        let edit = e.primitive_edit.as_mut().unwrap();
+        edit.params.sphere = SphereKind::Rings;
+        (edit.params.segments, edit.params.rows) = (16, 8);
+        e.update_primitive();
+        // Quads between the rings, a fan of triangles at each pole.
+        assert_eq!(e.primitive_edit.as_ref().unwrap().preview.quad_and_triangle_counts(), (16 * 6, 32));
+        let edit = e.primitive_edit.as_mut().unwrap();
+        (edit.params.sphere, edit.params.segments) = (SphereKind::Triangles, 2);
+        e.update_primitive();
+        assert_eq!(e.primitive_edit.as_ref().unwrap().preview.triangle_count(), 320);
+        e.primitive_edit.as_mut().unwrap().params.sphere = SphereKind::Quads;
+        e.update_primitive();
+        e.accept_primitive();
+        assert_eq!(e.scene.active().name, "Sphere 2");
+        assert_eq!(e.scene.active().mesh.quad_and_triangle_counts(), (6 * 2 * 2, 0));
+    }
+
+    #[test]
     fn add_cylinder_cone_and_torus_pieces() {
         let mut e = editor();
         e.add_primitive("torus");
