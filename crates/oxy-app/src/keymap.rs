@@ -434,6 +434,8 @@ pub enum CommandId {
     DrawMode,
     Frame,
     FrameAll,
+    ZoomIn,
+    ZoomOut,
     ViewFront,
     ViewBack,
     ViewLeft,
@@ -565,8 +567,11 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::GizmoRotate, name: "Transform: rotate", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::GizmoScale, name: "Transform: scale", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::DrawMode, name: "Draw / sculpt mode", group: "Brushes", defaults: &[] },
-    CommandMeta { id: CommandId::Frame, name: "Frame the active piece", group: "View", defaults: &["f"] },
+    CommandMeta { id: CommandId::Frame, name: "Frame the active piece", group: "View", defaults: &["f", "ctrl+0"] },
     CommandMeta { id: CommandId::FrameAll, name: "Frame all pieces", group: "View", defaults: &["alt+f"] },
+    // Ctrl+= is Ctrl+plus without Shift on most keyboards; both work.
+    CommandMeta { id: CommandId::ZoomIn, name: "Zoom in", group: "View", defaults: &["ctrl+=", "ctrl+shift+="] },
+    CommandMeta { id: CommandId::ZoomOut, name: "Zoom out", group: "View", defaults: &["ctrl+-"] },
     CommandMeta { id: CommandId::ViewFront, name: "Front view", group: "View", defaults: &["numpad1"] },
     CommandMeta { id: CommandId::ViewBack, name: "Back view", group: "View", defaults: &[] },
     CommandMeta { id: CommandId::ViewLeft, name: "Left view", group: "View", defaults: &[] },
@@ -1467,6 +1472,8 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::DrawMode => "draw_mode",
         CommandId::Frame => "frame",
         CommandId::FrameAll => "frame_all",
+        CommandId::ZoomIn => "zoom_in",
+        CommandId::ZoomOut => "zoom_out",
         CommandId::ViewFront => "view_front",
         CommandId::ViewBack => "view_back",
         CommandId::ViewLeft => "view_left",
@@ -1839,6 +1846,11 @@ mod tests {
             assert_eq!(map.command_for(chord("ctrl+y")), Some(CommandId::Redo));
             assert_eq!(map.command_for(chord("ctrl+shift+z")), Some(CommandId::Redo));
             assert_eq!(map.command_for(chord("numpad1")), Some(CommandId::ViewFront));
+            // Ctrl+plus/minus zoom the view and Ctrl+0 frames, as in most apps.
+            assert_eq!(map.command_for(chord("ctrl+=")), Some(CommandId::ZoomIn));
+            assert_eq!(map.command_for(chord("ctrl+shift+=")), Some(CommandId::ZoomIn));
+            assert_eq!(map.command_for(chord("ctrl+-")), Some(CommandId::ZoomOut));
+            assert_eq!(map.command_for(chord("ctrl+0")), Some(CommandId::Frame));
             assert_eq!(map.command_for(chord("1")), Some(CommandId::Brush1));
             assert!(map.command_for(chord("f5")).is_none(), "an unused key stays free to bind");
             assert_eq!(map.primary(CommandId::ViewBack), "");
