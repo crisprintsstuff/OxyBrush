@@ -2578,6 +2578,7 @@ dependencies = [
 name = "oxy-cli"
 version = "4.0.0-beta.8"
 dependencies = [
+ "glam",
  "oxy-doc",
  "oxy-io",
  "oxy-mcp",

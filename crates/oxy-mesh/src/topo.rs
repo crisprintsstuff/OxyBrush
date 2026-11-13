@@ -25,6 +25,233 @@ pub fn midpoint_subdivide(positions: &[Vec3], tris: &[[u32; 3]]) -> (Vec<Vec3>, 
     (pos, out)
 }
 
+/// Undo pinches: where two sheets of surface share an edge (four triangles
+/// on one edge, as a mesher makes where two surfaces come within a voxel of
+/// each other), give each sheet its own copy of the edge's two points, so the
+/// sheets are separate surfaces that happen to touch.
+///
+/// Around such an edge the four triangles alternate between bounding the
+/// solid and bounding the outside. Triangles are paired across the solid
+/// (each sheet is the two triangles that hold one solid part between them),
+/// so the parts are kept apart rather than bridged. Then at each end point,
+/// the triangles that are joined through shared edges (and these pairs) keep
+/// the point; every other such group gets a copy.
+///
+/// Where the two sheets also meet around both ends of the edge, pairing
+/// across the solid can't separate them; those edges are then paired across
+/// the outside instead, which leaves a thin web between the parts but a
+/// clean surface.
+///
+/// PRECONDITION: triangles are consistently oriented, outside to the left.
+/// RETURNS: how many points were added. Edges shared by any other number of
+/// triangles are left as they are.
+pub fn split_pinched_edges(positions: &mut Vec<Vec3>, triangles: &mut [[u32; 3]]) -> usize {
+    split_pinched_edges_among(positions, triangles, None)
+}
+
+/// [`split_pinched_edges`], looking only at edges whose two points are
+/// both marked in `suspect` (a mesher knows where pinches can be, which
+/// saves sorting every edge). Points added are not marked.
+pub fn split_pinched_edges_among(
+    positions: &mut Vec<Vec3>,
+    triangles: &mut [[u32; 3]],
+    suspect: Option<&[bool]>,
+) -> usize {
+    let suspect = suspect.map(|s| s.to_vec());
+    let first = split_pinched(positions, triangles, true, suspect.as_deref());
+    first + split_pinched(positions, triangles, false, suspect.as_deref())
+}
+
+fn split_pinched(
+    positions: &mut Vec<Vec3>,
+    triangles: &mut [[u32; 3]],
+    across_solid: bool,
+    suspect: Option<&[bool]>,
+) -> usize {
+    use rayon::prelude::*;
+    let key = |a: u32, b: u32| ((a.min(b) as u64) << 32) | a.max(b) as u64;
+    let marked = |v: u32| suspect.is_none_or(|s| s.get(v as usize).copied().unwrap_or(false));
+    let mut keys: Vec<u64> = triangles
+        .par_iter()
+        .flat_map_iter(|t| {
+            (0..3).filter_map(move |i| {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                (marked(a) && marked(b)).then(|| key(a, b))
+            })
+        })
+        .collect();
+    keys.par_sort_unstable();
+    let mut pinched: Vec<u64> = Vec::new();
+    let mut i = 0;
+    while i < keys.len() {
+        let mut j = i;
+        while j < keys.len() && keys[j] == keys[i] {
+            j += 1;
+        }
+        if j - i == 4 {
+            pinched.push(keys[i]);
+        }
+        i = j;
+    }
+    drop(keys);
+    if pinched.is_empty() {
+        return 0;
+    }
+    let pinched_set: std::collections::HashSet<u64> = pinched.iter().copied().collect();
+    let mut ends: Vec<u32> = pinched.iter().flat_map(|&k| [(k >> 32) as u32, k as u32]).collect();
+    ends.sort_unstable();
+    ends.dedup();
+    // Triangles around each end point.
+    let mut around: HashMap<u32, Vec<u32>> = ends.iter().map(|&v| (v, Vec::new())).collect();
+    for (t, tri) in triangles.iter().enumerate() {
+        for &v in tri {
+            if let Some(list) = around.get_mut(&v) {
+                list.push(t as u32);
+            }
+        }
+    }
+    let mut added = 0;
+    for x in ends {
+        let tris = &around[&x];
+        let n = tris.len();
+        let mut parent: Vec<usize> = (0..n).collect();
+        fn root(p: &mut [usize], mut i: usize) -> usize {
+            while p[i] != i {
+                p[i] = p[p[i]];
+                i = p[i];
+            }
+            i
+        }
+        let join = |p: &mut Vec<usize>, a: usize, b: usize| {
+            let (ra, rb) = (root(p, a), root(p, b));
+            p[ra.max(rb)] = ra.min(rb);
+        };
+        // Triangles (by local index) on each edge from x to y, and whether
+        // they run x→y.
+        let mut by_other: HashMap<u32, Vec<(usize, bool)>> = HashMap::new();
+        for (k, &t) in tris.iter().enumerate() {
+            let tri = triangles[t as usize];
+            let at = tri.iter().position(|&v| v == x).expect("x in its triangle");
+            let (next, prev) = (tri[(at + 1) % 3], tri[(at + 2) % 3]);
+            by_other.entry(next).or_default().push((k, true));
+            by_other.entry(prev).or_default().push((k, false));
+        }
+        for (y, list) in &by_other {
+            match list.len() {
+                2 => join(&mut parent, list[0].0, list[1].0),
+                4 if pinched_set.contains(&key(x, *y)) => {
+                    // Sort around the edge x→y by the angle of each
+                    // triangle's third point.
+                    let (px, py) = (positions[x as usize], positions[*y as usize]);
+                    let d = (py - px).normalize_or_zero();
+                    let u = d.any_orthonormal_vector();
+                    let w = d.cross(u);
+                    let mut sorted: Vec<(f32, usize, bool)> = list
+                        .iter()
+                        .map(|&(k, forward)| {
+                            let tri = triangles[tris[k] as usize];
+                            let third = *tri.iter().find(|&&v| v != x && v != *y).expect("a third point");
+                            let r = positions[third as usize] - px;
+                            (r.dot(w).atan2(r.dot(u)), k, forward)
+                        })
+                        .collect();
+                    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    // The solid lies counter-clockwise of a triangle running
+                    // y→x: pair it with the next one around.
+                    for i in 0..4 {
+                        let (a, b) = (sorted[i], sorted[(i + 1) % 4]);
+                        if (!a.2 && b.2) == across_solid {
+                            join(&mut parent, a.1, b.1);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        // The group of the first triangle keeps x; the others get copies.
+        let mut copy: HashMap<usize, u32> = HashMap::new();
+        let keep = root(&mut parent, 0);
+        for k in 0..n {
+            let r = root(&mut parent, k);
+            if r == keep {
+                continue;
+            }
+            let v = *copy.entry(r).or_insert_with(|| {
+                positions.push(positions[x as usize]);
+                added += 1;
+                positions.len() as u32 - 1
+            });
+            for c in triangles[tris[k] as usize].iter_mut() {
+                if *c == x {
+                    *c = v;
+                }
+            }
+        }
+    }
+    added
+}
+
+/// Remove specks: separate pieces whose bounding box is under `size` on
+/// every axis (a mesher's leftovers, smaller than it can represent), and
+/// the points only they used.
+///
+/// RETURNS: how many pieces were removed.
+pub fn drop_specks(positions: &mut Vec<Vec3>, triangles: &mut Vec<[u32; 3]>, size: f32) -> usize {
+    let n = positions.len();
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    fn root(p: &mut [u32], mut x: u32) -> u32 {
+        while p[x as usize] != x {
+            p[x as usize] = p[p[x as usize] as usize];
+            x = p[x as usize];
+        }
+        x
+    }
+    for t in triangles.iter() {
+        for &v in &t[1..] {
+            let (a, b) = (root(&mut parent, t[0]), root(&mut parent, v));
+            if a != b {
+                parent[a.max(b) as usize] = a.min(b);
+            }
+        }
+    }
+    let mut bounds: HashMap<u32, (Vec3, Vec3)> = HashMap::new();
+    for t in triangles.iter() {
+        let r = root(&mut parent, t[0]);
+        let e = bounds.entry(r).or_insert((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)));
+        for &v in t {
+            e.0 = e.0.min(positions[v as usize]);
+            e.1 = e.1.max(positions[v as usize]);
+        }
+    }
+    let specks: std::collections::HashSet<u32> =
+        bounds.iter().filter(|(_, (lo, hi))| (*hi - *lo).max_element() < size).map(|(&r, _)| r).collect();
+    // Never remove everything.
+    if specks.is_empty() || specks.len() == bounds.len() {
+        return 0;
+    }
+    triangles.retain(|t| !specks.contains(&root(&mut parent, t[0])));
+    // Keep only the points still used, in order.
+    let mut used = vec![false; n];
+    for t in triangles.iter() {
+        for &v in t {
+            used[v as usize] = true;
+        }
+    }
+    let mut new_index = vec![u32::MAX; n];
+    let mut kept = Vec::with_capacity(n);
+    for v in 0..n {
+        if used[v] {
+            new_index[v] = kept.len() as u32;
+            kept.push(positions[v]);
+        }
+    }
+    *positions = kept;
+    for t in triangles.iter_mut() {
+        *t = t.map(|v| new_index[v as usize]);
+    }
+    specks.len()
+}
+
 /// Subdivide only part of a mesh: the triangles marked in `chosen` split
 /// into four, and their neighbours split just enough (in two, or in four)
 /// to meet the new points, so the surface stays closed: red-green
@@ -914,6 +1141,65 @@ mod hole_tests {
         // A closed mesh has nothing to close.
         let mut whole = primitives::icosphere(3, 1.0).to_data();
         assert_eq!(close_holes(&mut whole), 0);
+    }
+
+    /// A tetrahedron with outward-facing triangles.
+    fn tetra(p: [Vec3; 4], ids: [u32; 4]) -> Vec<[u32; 3]> {
+        let c = (p[0] + p[1] + p[2] + p[3]) / 4.0;
+        [[0, 1, 2], [0, 1, 3], [0, 2, 3], [1, 2, 3]]
+            .into_iter()
+            .map(|[a, b, d]| {
+                let n = (p[b] - p[a]).cross(p[d] - p[a]);
+                if n.dot(p[a] - c) > 0.0 { [ids[a], ids[b], ids[d]] } else { [ids[a], ids[d], ids[b]] }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn two_solids_sharing_an_edge_are_split_apart() {
+        // Two tetrahedra touching along the edge 0–1, on opposite sides.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, -1.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(1.0, -1.0, 0.0),
+            Vec3::new(-1.0, 1.0, 0.0),
+            Vec3::new(-1.0, -1.0, 0.0),
+        ];
+        let p = |i: [u32; 4]| i.map(|k| positions[k as usize]);
+        let mut triangles = tetra(p([0, 1, 2, 3]), [0, 1, 2, 3]);
+        triangles.extend(tetra(p([0, 1, 4, 5]), [0, 1, 4, 5]));
+        let mut positions = positions;
+        let before = check_manifold(&Mesh::new(positions.clone(), triangles.clone()));
+        assert_eq!(before.non_manifold_edge_count, 1);
+        let added = split_pinched_edges(&mut positions, &mut triangles);
+        assert_eq!(added, 2, "each end of the shared edge gets a copy");
+        let after = check_manifold(&Mesh::new(positions.clone(), triangles.clone()));
+        assert!(after.is_manifold, "{after:?}");
+        // Each tetrahedron is now its own closed piece: they share no point.
+        let points = |t: &[[u32; 3]]| t.iter().flatten().copied().collect::<std::collections::HashSet<u32>>();
+        assert!(points(&triangles[..4]).is_disjoint(&points(&triangles[4..])));
+        // Nothing to do on a clean mesh.
+        let mut cube = crate::primitives::cube(2, 1.0);
+        assert_eq!(split_pinched_edges(&mut cube.positions, &mut cube.triangles), 0);
+    }
+
+    #[test]
+    fn specks_are_dropped_but_never_everything() {
+        let big = crate::primitives::icosphere(2, 1.0);
+        let small = crate::primitives::icosphere(1, 0.01);
+        let mut positions = big.positions.clone();
+        let mut triangles = big.triangles.clone();
+        let n = positions.len() as u32;
+        positions.extend(small.positions.iter().map(|p| *p + Vec3::X * 3.0));
+        triangles.extend(small.triangles.iter().map(|t| t.map(|i| i + n)));
+        assert_eq!(drop_specks(&mut positions, &mut triangles, 0.05), 1);
+        assert_eq!((positions.len(), triangles.len()), (big.positions.len(), big.triangles.len()));
+        assert!(triangles.iter().flatten().all(|&v| (v as usize) < positions.len()));
+        // A lone small piece is kept.
+        let mut p = small.positions.clone();
+        let mut t = small.triangles.clone();
+        assert_eq!(drop_specks(&mut p, &mut t, 0.05), 0);
     }
 
     #[test]
