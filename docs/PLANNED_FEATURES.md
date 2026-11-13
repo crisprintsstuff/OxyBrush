@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.6](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.7](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -90,6 +90,9 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.7:** Poly Edit (first steps: extrude, inset, edge loops,
+  close holes, weld), brush size on the model, vertex colors from OBJ and
+  PLY imports, live size and position in the transform gizmo.
 - **4.0.0-beta.6:** undo on the active piece only (Ctrl+Alt+Z), and
   reopening the last stroke as a curve, Curve Move curve or tube path.
   These are small first steps toward Living strokes.

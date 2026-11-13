@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.7] - 2026-11-13
+
 ### Added
 - **Vertex colors come in with imports.** OBJ files bring their colors, written after each vertex (`v x y z r g b`, as 0–1 or 0–255) or as `#MRGB` comment blocks (the way some sculpting apps save painted models), and pieces kept apart keep their own colors. Nothing needs turning on: a painted model shows its colors and can be painted over with the Paint brush. Files whose color block doesn't match their vertices import without colors, as before.
 - **PLY import** (File > Open / Import, drag and drop): ASCII and binary PLY files, with their vertex colors (`red green blue`, 0–255 or 0–1). Polygons are split into triangles; other data is skipped.
