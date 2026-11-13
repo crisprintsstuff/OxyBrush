@@ -3171,10 +3171,11 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
     if let Some(pe) = ed.poly_edit.as_ref() {
-        let what = if pe.action == crate::polyedit::FaceAction::Delete { "click" } else { "drag" };
         return format!(
-            "Poly Edit: {what} a face to {} it · drag empty space: orbit · Esc: done",
-            pe.action.label().to_lowercase()
+            "Poly Edit: faces {} · edges {} · points {} · drag empty space: orbit · Esc: done",
+            pe.action.label().to_lowercase(),
+            pe.edge_action.label().to_lowercase(),
+            pe.point_action.label().to_lowercase()
         );
     }
     if ed.retopo.is_some() {

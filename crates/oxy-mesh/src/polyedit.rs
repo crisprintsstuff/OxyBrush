@@ -425,6 +425,337 @@ pub fn remove_unused_points(c: &mut Cage) {
     c.pinned = if pinned.iter().any(|p| *p) { pinned } else { Vec::new() };
 }
 
+/// How far an edge action spreads from the edge it's applied to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeReach {
+    /// Just that edge.
+    One,
+    /// The edge loop through it: on through points with four edges, until
+    /// a pole or a border. On a border, the whole border loop.
+    Loop,
+    /// The edges across its quad ring (each quad's opposite edge).
+    Ring,
+}
+
+impl EdgeReach {
+    pub const ALL: [EdgeReach; 3] = [EdgeReach::One, EdgeReach::Loop, EdgeReach::Ring];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EdgeReach::One => "This edge",
+            EdgeReach::Loop => "Edge loop",
+            EdgeReach::Ring => "Edge ring",
+        }
+    }
+}
+
+/// The edges at each point, as the other end.
+fn point_edges(c: &Cage) -> HashMap<u32, Vec<u32>> {
+    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+    for [a, b] in c.edges() {
+        out.entry(a).or_default().push(b);
+        out.entry(b).or_default().push(a);
+    }
+    out
+}
+
+/// The edges `reach` covers from edge `(a, b)`, as `[low, high]` keys.
+pub fn reach_edges(c: &Cage, a: u32, b: u32, reach: EdgeReach) -> Vec<[u32; 2]> {
+    let adj = Adjacency::new(c);
+    if adj.faces_of_edge(a, b).is_empty() {
+        return Vec::new();
+    }
+    let mut out = match reach {
+        EdgeReach::One => vec![edge_key(a, b)],
+        EdgeReach::Loop if adj.faces_of_edge(a, b).len() == 1 => border_loop(c, &adj, a, b),
+        EdgeReach::Loop => edge_loop(c, &adj, a, b),
+        EdgeReach::Ring => edge_ring(c, &adj, a, b),
+    };
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The edge loop through `(a, b)`: at each end, through a point with
+/// exactly four edges, carry on along the edge that shares no face with
+/// the one we came from.
+fn edge_loop(c: &Cage, adj: &Adjacency, a: u32, b: u32) -> Vec<[u32; 2]> {
+    let pe = point_edges(c);
+    let mut out = HashSet::from([edge_key(a, b)]);
+    for (mut from, mut at) in [(a, b), (b, a)] {
+        while let Some(next) = pe.get(&at) {
+            if next.len() != 4 {
+                break;
+            }
+            let came: HashSet<usize> = adj.faces_of_edge(from, at).iter().copied().collect();
+            if came.len() != 2 {
+                break;
+            }
+            let Some(&w) =
+                next.iter().find(|&&w| w != from && !adj.faces_of_edge(at, w).iter().any(|f| came.contains(f)))
+            else {
+                break;
+            };
+            if !out.insert(edge_key(at, w)) {
+                break;
+            }
+            from = at;
+            at = w;
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The border edges around the hole or open edge that `(a, b)` is on.
+fn border_loop(c: &Cage, adj: &Adjacency, a: u32, b: u32) -> Vec<[u32; 2]> {
+    let border: Vec<[u32; 2]> = c.border_edges();
+    let mut at_point: HashMap<u32, Vec<u32>> = HashMap::new();
+    for [x, y] in &border {
+        at_point.entry(*x).or_default().push(*y);
+        at_point.entry(*y).or_default().push(*x);
+    }
+    let _ = adj;
+    let mut out = HashSet::from([edge_key(a, b)]);
+    let mut queue = vec![a, b];
+    while let Some(v) = queue.pop() {
+        for &w in at_point.get(&v).into_iter().flatten() {
+            if out.insert(edge_key(v, w)) {
+                queue.push(w);
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The edges across the quad ring through `(a, b)`.
+fn edge_ring(c: &Cage, adj: &Adjacency, a: u32, b: u32) -> Vec<[u32; 2]> {
+    let mut out = HashSet::from([edge_key(a, b)]);
+    let mut seen: HashSet<usize> = HashSet::new();
+    for &first in adj.faces_of_edge(a, b) {
+        let (mut e, mut f) = (edge_key(a, b), first);
+        loop {
+            if c.faces[f].len() != 4 || !seen.insert(f) {
+                break;
+            }
+            let q = corners(&c.faces[f]);
+            let Some(i) = (0..4).find(|&i| edge_key(q[i], q[(i + 1) % 4]) == e) else { break };
+            e = edge_key(q[(i + 2) % 4], q[(i + 3) % 4]);
+            out.insert(e);
+            match adj.faces_of_edge(e[0], e[1]).iter().find(|&&g| g != f) {
+                Some(&g) => f = g,
+                None => break,
+            }
+        }
+    }
+    out.into_iter().collect()
+}
+
+/// The point at the mirror image of point `v` across `x = cx`, if any.
+pub fn mirror_point(c: &Cage, v: u32, cx: f32, tol: f32) -> Option<u32> {
+    let p = c.positions[v as usize];
+    let want = Vec3::new(2.0 * cx - p.x, p.y, p.z);
+    let used = c.used();
+    (0..c.positions.len() as u32)
+        .filter(|&w| used[w as usize])
+        .min_by(|&x, &y| {
+            c.positions[x as usize].distance_squared(want).total_cmp(&c.positions[y as usize].distance_squared(want))
+        })
+        .filter(|&w| c.positions[w as usize].distance(want) <= tol)
+}
+
+/// `edges` together with their mirror images across `x = cx`.
+pub fn edges_with_mirror(c: &Cage, edges: &[[u32; 2]], cx: f32, tol: f32) -> Vec<[u32; 2]> {
+    let ek: HashSet<[u32; 2]> = c.edges().into_iter().collect();
+    let mut out: HashSet<[u32; 2]> = edges.iter().copied().collect();
+    for &[a, b] in edges {
+        if let (Some(x), Some(y)) = (mirror_point(c, a, cx, tol), mirror_point(c, b, cx, tol))
+            && ek.contains(&edge_key(x, y))
+        {
+            out.insert(edge_key(x, y));
+        }
+    }
+    let mut v: Vec<[u32; 2]> = out.into_iter().collect();
+    v.sort_unstable();
+    v
+}
+
+/// Insert an edge loop across the quad ring through `(a, b)` at `t`.
+/// Returns the points to slide: sliding by `s` puts the loop at `s`
+/// along the ring (0 at `a`'s side, 1 at `b`'s).
+pub fn insert_loop(c: &mut Cage, a: u32, b: u32, t: f32) -> Slide {
+    let made = c.insert_loop_ends(a, b, t);
+    let mut slide = Slide::default();
+    for (m, from, to) in made {
+        let p = c.positions[from as usize];
+        slide.verts.push(m);
+        slide.start.push(p);
+        slide.dir.push(c.positions[to as usize] - p);
+    }
+    slide
+}
+
+/// Remove `edges`, merging the two faces on each into one (a polygon
+/// with more corners). Border edges, and edges whose two sides are the
+/// same face, are left alone. Points left in the middle of a straight
+/// run of a single face (two edges, nothing else) are dropped. Returns how
+/// many edges were removed.
+pub fn dissolve_edges(c: &mut Cage, edges: &[[u32; 2]]) -> usize {
+    let mut removed = 0;
+    for &[a, b] in edges {
+        let adj = Adjacency::new(c);
+        let fs = adj.faces_of_edge(a, b).to_vec();
+        if fs.len() != 2 || fs[0] == fs[1] {
+            continue;
+        }
+        // The face running a -> b and the one running b -> a.
+        let runs = |f: usize, x: u32, y: u32| {
+            let k = corners(&c.faces[f]);
+            (0..k.len()).any(|i| k[i] == x && k[(i + 1) % k.len()] == y)
+        };
+        let (f, g) = if runs(fs[0], a, b) { (fs[0], fs[1]) } else { (fs[1], fs[0]) };
+        if !runs(f, a, b) || !runs(g, b, a) {
+            continue;
+        }
+        // f from b round to a, then g from a round to b without its ends.
+        let walk = |face: usize, start: u32, end: u32| -> Vec<u32> {
+            let k = corners(&c.faces[face]);
+            let i = k.iter().position(|&v| v == start).unwrap();
+            let mut out = Vec::new();
+            for j in 0..k.len() {
+                let v = k[(i + j) % k.len()];
+                out.push(v);
+                if v == end {
+                    break;
+                }
+            }
+            out
+        };
+        let mut merged = walk(f, b, a);
+        let inner = walk(g, a, b);
+        merged.extend(&inner[1..inner.len() - 1]);
+        // Two faces sharing more than this edge would repeat a corner.
+        let distinct: HashSet<u32> = merged.iter().copied().collect();
+        if distinct.len() != merged.len() || merged.len() < 3 {
+            continue;
+        }
+        let group = c.faces[f].group;
+        c.faces[f] = Face::with_group(merged, group);
+        c.faces.remove(g);
+        removed += 1;
+    }
+    drop_straight_points(c);
+    remove_unused_points(c);
+    removed
+}
+
+/// Drop corners that only two edges meet at, both bordering the same
+/// faces (left over after removing a loop): the faces just lose a corner.
+fn drop_straight_points(c: &mut Cage) {
+    let pe = point_edges(c);
+    let border: HashSet<u32> = c.border_edges().into_iter().flatten().collect();
+    let drop: HashSet<u32> = pe.iter().filter(|(v, e)| e.len() == 2 && !border.contains(v)).map(|(v, _)| *v).collect();
+    if drop.is_empty() {
+        return;
+    }
+    for f in &mut c.faces {
+        if f.corners.iter().filter(|v| !drop.contains(v)).count() >= 3 {
+            f.corners.retain(|v| !drop.contains(v));
+        }
+    }
+}
+
+/// Pull new faces out of border `edges`: each gets a quad whose outer
+/// edge starts on it. Touching border edges share their new points.
+/// Returns the points to slide (outward, across the edge in the plane of
+/// its face) and the new faces, which get a new face group.
+pub fn extrude_border(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
+    let adj = Adjacency::new(c);
+    // Each border edge in the direction its face runs it.
+    let mut directed = Vec::new();
+    for &[a, b] in edges {
+        let fs = adj.faces_of_edge(a, b);
+        if fs.len() != 1 {
+            continue;
+        }
+        let k = corners(&c.faces[fs[0]]);
+        let forward = (0..k.len()).any(|i| k[i] == a && k[(i + 1) % k.len()] == b);
+        directed.push(if forward { (a, b, fs[0]) } else { (b, a, fs[0]) });
+    }
+    let group = new_group(c);
+    let mut out_dir: HashMap<u32, Vec3> = HashMap::new();
+    for &(a, b, f) in &directed {
+        let n = face_normal(c, f);
+        let e = c.positions[b as usize] - c.positions[a as usize];
+        let out = e.cross(n).normalize_or_zero();
+        *out_dir.entry(a).or_default() += out;
+        *out_dir.entry(b).or_default() += out;
+    }
+    let mut copy: HashMap<u32, u32> = HashMap::new();
+    let mut points: Vec<u32> = out_dir.keys().copied().collect();
+    points.sort_unstable();
+    let mut slide = Slide::default();
+    for v in points {
+        let p = c.positions[v as usize];
+        let n = c.add_vertex(p);
+        copy.insert(v, n);
+        slide.push(c, n, out_dir[&v].normalize_or_zero());
+    }
+    let mut made = Vec::new();
+    for (a, b, _) in directed {
+        // The face runs a -> b; the new quad runs b -> a on it.
+        c.faces.push(Face::with_group(vec![b, a, copy[&a], copy[&b]], group));
+        made.push(c.faces.len() - 1);
+    }
+    (slide, made)
+}
+
+/// Close the hole whose border `(a, b)` is on with one face (a polygon
+/// with as many corners as the hole has points), in a new face group.
+/// Returns the new face, or None when `(a, b)` isn't on a closed border.
+pub fn close_hole(c: &mut Cage, a: u32, b: u32) -> Option<usize> {
+    let adj = Adjacency::new(c);
+    let fs = adj.faces_of_edge(a, b);
+    if fs.len() != 1 {
+        return None;
+    }
+    // Next point along the border, in the direction faces run it.
+    let mut next: HashMap<u32, u32> = HashMap::new();
+    for [x, y] in c.border_edges() {
+        let f = adj.faces_of_edge(x, y)[0];
+        let k = corners(&c.faces[f]);
+        let forward = (0..k.len()).any(|i| k[i] == x && k[(i + 1) % k.len()] == y);
+        let (p, q) = if forward { (x, y) } else { (y, x) };
+        if next.insert(p, q).is_some() {
+            return None; // two border runs through one point: ambiguous
+        }
+    }
+    let start = a;
+    let mut ring = vec![start];
+    let mut at = *next.get(&start)?;
+    while at != start {
+        if ring.len() > next.len() {
+            return None;
+        }
+        ring.push(at);
+        at = *next.get(&at)?;
+    }
+    if ring.len() < 3 {
+        return None;
+    }
+    // The faces run the border one way; the new face runs it the other.
+    ring.reverse();
+    let group = new_group(c);
+    c.faces.push(Face::with_group(ring, group));
+    Some(c.faces.len() - 1)
+}
+
+/// Delete `points` and the faces around them, leaving a hole.
+pub fn delete_points(c: &mut Cage, points: &[u32]) {
+    let gone: HashSet<u32> = points.iter().copied().collect();
+    c.faces.retain(|f| !f.corners.iter().any(|v| gone.contains(v)));
+    remove_unused_points(c);
+}
+
 /// A cage for `mesh` as it is, linked to it (no rebuild, so its mask and
 /// vertex color stay): triangle pairs the mesh counts as quads become
 /// quads, the rest stay triangles, and each face takes its triangle's
@@ -692,6 +1023,94 @@ mod tests {
         let cube = cage_from_mesh(&crate::primitives::cube(1, 1.0));
         validate(&cube).unwrap();
         assert_eq!(cube.quad_count(), 6);
+    }
+
+    #[test]
+    fn edge_loops_rings_and_border_loops() {
+        let c = grid(3);
+        // Interior vertical edge between faces 3 and 4: points (1,1)-(1,2).
+        let at = |x: u32, y: u32| y * 4 + x;
+        let lp = reach_edges(&c, at(1, 1), at(1, 2), EdgeReach::Loop);
+        assert_eq!(lp, vec![[at(1, 0), at(1, 1)], [at(1, 1), at(1, 2)], [at(1, 2), at(1, 3)]]);
+        let ring = reach_edges(&c, at(1, 1), at(1, 2), EdgeReach::Ring);
+        assert_eq!(ring.len(), 4, "{ring:?}");
+        // On the border: the whole outline (12 edges).
+        assert_eq!(reach_edges(&c, at(0, 0), at(1, 0), EdgeReach::Loop).len(), 12);
+        // A cube's corners have three edges: a loop stops there, a ring goes round.
+        let cube = cube();
+        assert_eq!(reach_edges(&cube, 0, 1, EdgeReach::Loop).len(), 1);
+        assert_eq!(reach_edges(&cube, 0, 1, EdgeReach::Ring).len(), 4);
+    }
+
+    #[test]
+    fn insert_loop_slides_along_the_ring() {
+        let mut c = grid(2);
+        let at = |x: u32, y: u32| y * 3 + x;
+        let slide = insert_loop(&mut c, at(0, 0), at(1, 0), 0.5);
+        validate(&c).unwrap();
+        assert_eq!(slide.verts.len(), 3);
+        assert_eq!(c.faces.len(), 6);
+        slide.apply(&mut c, 0.25);
+        for &v in &slide.verts {
+            assert!((c.positions[v as usize].x - 0.25).abs() < 1e-5, "{}", c.positions[v as usize]);
+        }
+    }
+
+    #[test]
+    fn dissolving_a_loop_merges_its_faces() {
+        let mut c = grid(2);
+        let at = |x: u32, y: u32| y * 3 + x;
+        let lp = reach_edges(&c, at(1, 0), at(1, 1), EdgeReach::Loop);
+        assert_eq!(lp.len(), 2);
+        assert_eq!(dissolve_edges(&mut c, &lp), 2);
+        validate(&c).unwrap();
+        assert_eq!(c.faces.len(), 2);
+        // The middle point (1,1) had only two edges left and is gone; the
+        // border points (1,0), (1,2) stay as corners.
+        assert_eq!(c.positions.len(), 8);
+        assert!(c.faces.iter().all(|f| f.len() == 5), "{:?}", c.faces);
+        // A border edge isn't removed.
+        let mut g = grid(1);
+        assert_eq!(dissolve_edges(&mut g, &[[0, 1]]), 0);
+    }
+
+    #[test]
+    fn border_edges_extrude_outward_and_holes_close() {
+        let mut c = grid(1);
+        let (slide, made) = extrude_border(&mut c, &[[0, 1]]);
+        validate(&c).unwrap();
+        assert_eq!(made.len(), 1);
+        slide.apply(&mut c, 1.0);
+        for &v in &slide.verts {
+            assert!((c.positions[v as usize].y + 1.0).abs() < 1e-5, "outward is -Y: {}", c.positions[v as usize]);
+        }
+        // The whole outline at once shares corner points.
+        let mut c = grid(1);
+        let all = reach_edges(&c, 0, 1, EdgeReach::Loop);
+        let (slide, made) = extrude_border(&mut c, &all);
+        validate(&c).unwrap();
+        assert_eq!((made.len(), slide.verts.len()), (4, 4));
+        // Delete a cube face and close the hole again.
+        let mut cube = cube();
+        let f = top(&cube);
+        delete_faces(&mut cube, &[f]);
+        let [a, b] = cube.border_edges()[0];
+        let hole = close_hole(&mut cube, a, b).unwrap();
+        validate(&cube).unwrap();
+        assert!(cube.border_edges().is_empty());
+        assert!(face_normal(&cube, hole).z > 0.9, "faces out");
+    }
+
+    #[test]
+    fn deleting_a_point_removes_its_faces() {
+        let mut c = grid(2);
+        delete_points(&mut c, &[4]);
+        validate(&c).unwrap();
+        assert!(c.faces.is_empty() && c.positions.is_empty(), "the middle point touches all four faces");
+        let mut c = grid(2);
+        delete_points(&mut c, &[0]);
+        assert_eq!(c.faces.len(), 3);
+        assert_eq!(mirror_point(&grid(2), 0, 1.0, 1e-4), Some(2));
     }
 
     #[test]
