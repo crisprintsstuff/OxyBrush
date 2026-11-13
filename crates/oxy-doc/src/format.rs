@@ -69,6 +69,12 @@
 //!   `closed:u8 radius_pt:f32 world_per_pt:f32 strength:f32 falloff:u8
 //!   pressure:f32 vertices:u32 triangles:u32`. Older readers skip it, and
 //!   the open curve is lost, as it always was.
+//! - `STRK` (optional, since 4.0.0-beta.9): editable strokes (Living
+//!   strokes, RFC 0017) of the **preceding** `PIEC`, each stored as what it
+//!   changed, so it can still be faded or removed after reopening. See
+//!   `encode_strokes` for the layout. The piece's surface already includes
+//!   every stroke, so older readers skip it and open the project as it
+//!   looks, with the strokes fixed in place.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -179,6 +185,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(c) = &p.curve {
             sections.push((*b"CURV", encode_curve(c)));
+        }
+        if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
+            sections.push((*b"STRK", encode_strokes(st)));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -437,6 +446,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     None => log::warn!("ignoring creases without a cage"),
                 }
             }
+            b"STRK" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STRK before any piece".into()))?;
+                match decode_strokes(&raw, piece.mesh.positions.len()) {
+                    Ok(st) => piece.strokes = Some(st),
+                    Err(e) => log::warn!("ignoring damaged strokes on piece {:?}: {e}", piece.name),
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -448,6 +464,116 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
         return Err(Error::Corrupt("no pieces".into()));
     }
     Ok(scene)
+}
+
+/// `STRK`: a piece's editable strokes. Point numbers are the preceding
+/// `PIEC`'s, sorted within each stroke.
+///
+/// ```text
+/// vcount:u32                         the piece's point count
+/// groups:u32  then per group:  id:u32  name_len:u32  name:utf8  strength:f32  visible:u8
+/// strokes:u32 then per stroke (oldest first):
+///   brush_len:u32  brush:utf8        settings key, e.g. "draw"
+///   made:u64                         seconds since 1970, UTC
+///   strength:f32
+///   flags:u8                         1 = in a group, 2 = has color changes
+///   group:u32                        group id (0 when not in a group)
+///   n:u32  vertex:u32*n  delta:f32*3n  [color:f32*3n]
+/// ```
+fn encode_strokes(st: &crate::SavedStrokes) -> Vec<u8> {
+    let mut b = Vec::new();
+    let u = |b: &mut Vec<u8>, x: u32| b.extend_from_slice(&x.to_le_bytes());
+    let f = |b: &mut Vec<u8>, x: f32| b.extend_from_slice(&x.to_le_bytes());
+    u(&mut b, st.vertices);
+    u(&mut b, st.groups.len() as u32);
+    for g in &st.groups {
+        u(&mut b, g.id);
+        u(&mut b, g.name.len() as u32);
+        b.extend_from_slice(g.name.as_bytes());
+        f(&mut b, g.strength);
+        b.push(u8::from(g.visible));
+    }
+    u(&mut b, st.strokes.len() as u32);
+    for s in &st.strokes {
+        u(&mut b, s.brush.len() as u32);
+        b.extend_from_slice(s.brush.as_bytes());
+        b.extend_from_slice(&s.made.to_le_bytes());
+        f(&mut b, s.strength);
+        let colored = !s.colors.is_empty();
+        b.push(u8::from(s.group.is_some()) | (u8::from(colored) << 1));
+        u(&mut b, s.group.unwrap_or(0));
+        u(&mut b, s.vertices.len() as u32);
+        for &v in &s.vertices {
+            u(&mut b, v);
+        }
+        for d in &s.deltas {
+            d.to_array().into_iter().for_each(|x| f(&mut b, x));
+        }
+        if colored {
+            for c in &s.colors {
+                c.to_array().into_iter().for_each(|x| f(&mut b, x));
+            }
+        }
+    }
+    b
+}
+
+fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let vertices = r.u32()?;
+    if vertices as usize != vertex_count {
+        return Err(Error::Corrupt("strokes saved for a different point count".into()));
+    }
+    let text = |r: &mut Reader| -> Result<String> {
+        let n = r.u32()? as usize;
+        String::from_utf8(r.take(n)?.to_vec()).map_err(|_| Error::Corrupt("text is not UTF-8".into()))
+    };
+    let ng = r.u32()? as usize;
+    r.check(ng, 13)?;
+    let mut groups = Vec::with_capacity(ng);
+    for _ in 0..ng {
+        let id = r.u32()?;
+        let name = text(&mut r)?;
+        let strength = r.f32()?;
+        let visible = r.u8()? != 0;
+        if !strength.is_finite() {
+            return Err(Error::Corrupt("stroke group strength is not a number".into()));
+        }
+        groups.push(crate::SavedStrokeGroup { id, name, strength, visible });
+    }
+    let ns = r.u32()? as usize;
+    r.check(ns, 25)?;
+    let mut strokes = Vec::with_capacity(ns);
+    let vec3 = |r: &mut Reader| -> Result<Vec3> {
+        let v = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        if v.is_finite() { Ok(v) } else { Err(Error::Corrupt("stroke change is not a number".into())) }
+    };
+    for _ in 0..ns {
+        let brush = text(&mut r)?;
+        let made = r.u64()?;
+        let strength = r.f32()?;
+        let flags = r.u8()?;
+        let group = r.u32()?;
+        let n = r.u32()? as usize;
+        r.check(n, 16)?;
+        let vs: Vec<u32> = (0..n).map(|_| r.u32()).collect::<Result<_>>()?;
+        if vs.iter().any(|&v| v as usize >= vertex_count) || vs.windows(2).any(|w| w[0] >= w[1]) {
+            return Err(Error::Corrupt("stroke refers to a missing point".into()));
+        }
+        let deltas: Vec<Vec3> = (0..n).map(|_| vec3(&mut r)).collect::<Result<_>>()?;
+        let colors: Vec<Vec3> = if flags & 2 != 0 {
+            r.check(n, 12)?;
+            (0..n).map(|_| vec3(&mut r)).collect::<Result<_>>()?
+        } else {
+            Vec::new()
+        };
+        if !strength.is_finite() {
+            return Err(Error::Corrupt("stroke strength is not a number".into()));
+        }
+        let group = (flags & 1 != 0).then_some(group).filter(|g| groups.iter().any(|x| x.id == *g));
+        strokes.push(crate::SavedStroke { brush, made, strength, group, vertices: vs, deltas, colors });
+    }
+    Ok(crate::SavedStrokes { vertices, groups, strokes })
 }
 
 fn encode_curve(c: &crate::SavedCurve) -> Vec<u8> {
@@ -755,6 +881,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         cage: None,
         tubes: Vec::new(),
         curve: None,
+        strokes: None,
     })
 }
 
@@ -999,6 +1126,7 @@ mod tests {
                     cage: None,
                     tubes: Vec::new(),
                     curve: None,
+                    strokes: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -1010,6 +1138,7 @@ mod tests {
                     cage: None,
                     tubes: Vec::new(),
                     curve: None,
+                    strokes: None,
                 },
             ],
             active: 1,
@@ -1119,6 +1248,78 @@ mod tests {
         p.cage = Some(q);
         let bytes = encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 0);
+    }
+
+    #[test]
+    fn strokes_roundtrip_renumbered_and_older_readers_skip_them() {
+        use crate::{SavedStroke, SavedStrokeGroup, SavedStrokes};
+        // A mesh as another app would write it: loading reorders its points.
+        let data = primitives::icosphere(3, 1.0).to_data();
+        let n = data.positions.len();
+        let picks: Vec<u32> = vec![0, 5, 17, 300, (n - 1) as u32];
+        let stroke = SavedStroke {
+            brush: "clay".into(),
+            made: 1_700_000_000,
+            strength: 0.5,
+            group: Some(7),
+            vertices: picks.clone(),
+            deltas: picks.iter().map(|&v| Vec3::splat(v as f32)).collect(),
+            colors: Vec::new(),
+        };
+        let painted = SavedStroke {
+            brush: "paint".into(),
+            group: None,
+            colors: picks.iter().map(|&v| Vec3::new(v as f32, 0.0, 1.0)).collect(),
+            ..stroke.clone()
+        };
+        let group = SavedStrokeGroup { id: 7, name: "Wrinkles".into(), strength: 1.25, visible: false };
+        let piece = PieceData {
+            name: "S".into(),
+            visible: true,
+            mesh: data.clone(),
+            multires: None,
+            vertex_map: None,
+            symmetry_center: None,
+            cage: None,
+            tubes: Vec::new(),
+            curve: None,
+            strokes: Some(SavedStrokes {
+                vertices: n as u32,
+                groups: vec![group.clone()],
+                strokes: vec![stroke, painted],
+            }),
+        };
+        let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
+        let decoded = decode(&bytes).unwrap().pieces.remove(0);
+        assert_eq!(decoded.strokes.as_ref().unwrap().groups, vec![group]);
+        let loaded = decoded.into_piece();
+        let st = loaded.strokes.as_ref().expect("strokes loaded");
+        assert_eq!(st.vertices as usize, loaded.mesh.vertex_count());
+        assert_eq!(st.strokes.len(), 2);
+        assert_eq!(st.strokes[0].group, Some(7));
+        assert_eq!(st.strokes[1].group, None);
+        for s in &st.strokes {
+            assert!(s.vertices.windows(2).all(|w| w[0] < w[1]), "sorted");
+            assert_eq!(s.vertices.len(), picks.len());
+            // Each renumbered point is the same point as before, and keeps its change.
+            for (j, &v) in s.vertices.iter().enumerate() {
+                let old = s.deltas[j].x as usize;
+                assert!(loaded.mesh.positions[v as usize].distance(data.positions[old]) < 1e-6);
+                if !s.colors.is_empty() {
+                    assert_eq!(s.colors[j].x, s.deltas[j].x);
+                }
+            }
+        }
+        // Older readers skip the section and keep the surface.
+        let mut old = bytes.clone();
+        let i = old.windows(4).position(|w| w == b"STRK").unwrap();
+        old[i..i + 4].copy_from_slice(b"ZZZZ");
+        assert!(decode(&old).unwrap().pieces.remove(0).into_piece().strokes.is_none());
+        // Strokes made for another point count are dropped, not trusted.
+        let mut bad = decode(&bytes).unwrap().pieces.remove(0);
+        bad.strokes.as_mut().unwrap().vertices += 1;
+        assert!(bad.into_piece().strokes.is_none());
     }
 
     #[test]
@@ -1499,6 +1700,7 @@ mod tests {
                 cage: None,
                 tubes: Vec::new(),
                 curve: None,
+                strokes: None,
             }],
             active: 0,
             alphas: Vec::new(),

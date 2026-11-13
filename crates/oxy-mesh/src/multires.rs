@@ -683,6 +683,13 @@ impl Multires {
         self.level_data(attrs)
     }
 
+    /// For each point of `mesh` (the mesh this stack shows), its number in
+    /// the active level, which is the order [`Multires::export_active`]
+    /// writes points in.
+    pub fn level_indices(&self, mesh: &Mesh) -> Vec<u32> {
+        if self.identity { (0..mesh.vertex_count() as u32).collect() } else { mesh.source_vertices().to_vec() }
+    }
+
     /// Approximate memory use in bytes (for the undo budget).
     pub fn approx_bytes(&self) -> usize {
         self.levels

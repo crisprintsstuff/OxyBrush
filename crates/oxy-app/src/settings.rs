@@ -350,6 +350,8 @@ pub struct Settings {
     pub radius_on_model: bool,
     /// Living strokes (RFC 0017): keep strokes editable. Off by default.
     pub living_strokes: bool,
+    /// Save Living strokes with the project (the `STRK` section).
+    pub living_save: bool,
     /// Memory Living strokes may use, in megabytes.
     pub living_budget_mb: u32,
     /// The brush size on the model (world units), with `radius_on_model`
@@ -857,6 +859,7 @@ impl Default for Settings {
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: false,
+            living_save: true,
             living_budget_mb: crate::living::DEFAULT_BUDGET_MB,
             plugin_params: Default::default(),
             window: None,
@@ -1000,6 +1003,7 @@ impl Settings {
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("radius_on_model = {}\n", self.radius_on_model)
             + &format!("living_strokes = {}\n", self.living_strokes)
+            + &format!("living_save = {}\n", self.living_save)
             + &format!("living_budget_mb = {}\n", self.living_budget_mb)
             + &format!("brush_radius_world = {}\n", self.brush_radius_world)
             + &self
@@ -1227,6 +1231,7 @@ impl Settings {
                 "subdivision" => s.subdivision_quads = v != "triangles",
                 "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
                 "living_strokes" => s.living_strokes = v.parse().unwrap_or(s.living_strokes),
+                "living_save" => s.living_save = v.parse().unwrap_or(s.living_save),
                 "living_budget_mb" => {
                     s.living_budget_mb = v.parse::<u32>().map(|m| m.clamp(16, 8192)).unwrap_or(s.living_budget_mb)
                 }
@@ -1500,6 +1505,7 @@ mod tests {
             radius_on_model: true,
             brush_radius_world: 0.125,
             living_strokes: true,
+            living_save: false,
             living_budget_mb: 512,
             plugin_params: [
                 ("displace/amount".to_string(), vec![2.5]),
