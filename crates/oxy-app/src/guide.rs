@@ -176,8 +176,9 @@ Size sets how far from the curve the model follows: make the circle cover the pa
     },
     Topic {
         title: "Subdivision levels",
-        keywords: "multires multiresolution detail divide levels",
+        keywords: "multires multiresolution detail divide levels quads catmull clark loop triangles subdivide uv edge loops",
         body: "Ctrl+D adds a subdivision level: four times the triangles, for finer detail. D and Shift+D move up and down between levels. Make broad changes on a low level and fine detail on a high one; the detail follows when you go back up.\n\n\
+Levels are made of quads by default (Catmull–Clark): every polygon becomes quads, so the edge loops of a quad base mesh carry on up and every level exports as quads. A triangle becomes three quads. Choose Triangles (Loop: each triangle becomes four) under Subdivision levels in the Topology panel before adding the first level; a piece keeps the kind its levels were made with. Poly Edit creases stay sharp in the levels. The same choice applies to Mesh > Subdivide.\n\n\
 Remesh and decimate rebuild the mesh, so they remove the levels (undo brings them back).",
     },
     Topic {

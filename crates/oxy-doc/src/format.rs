@@ -16,6 +16,16 @@
 //!   is derived by subdividing the base. When present, the preceding
 //!   `PIEC` stores the active level in level order. Older readers skip it
 //!   and simply load the active level as a plain mesh.
+//! - `MRCC` (optional, since 4.0.0-beta.9): quad (Catmull–Clark)
+//!   subdivision levels of the **preceding** `PIEC`, written instead of
+//!   `MRES` for such levels. It starts with exactly `MRES`'s layout (base
+//!   triangles, then every level's positions), followed by the base
+//!   polygons: `faces:u32` then per face `n:u32 corner:u32*n m:u32
+//!   triangle:u32*m` (its corners, and which base triangles make it up),
+//!   then `creases:u32` and per crease `a:u32 b:u32 weight:f32`. Finer
+//!   levels' topology is derived by Catmull–Clark subdivision of the base
+//!   polygons. Older readers skip it and load the active level as a plain
+//!   mesh.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -117,7 +127,14 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
     for p in &scene.pieces {
         sections.push((*b"PIEC", encode_piece(p)));
         if let Some(mr) = &p.multires {
-            sections.push((*b"MRES", encode_multires(mr)));
+            match mr.base_polygons() {
+                Some(base) => {
+                    let mut b = encode_multires(mr);
+                    encode_base_polygons(&mut b, &base);
+                    sections.push((*b"MRCC", b));
+                }
+                None => sections.push((*b"MRES", encode_multires(mr))),
+            }
         }
         if let Some(c) = p.symmetry_center {
             let mut b = Vec::with_capacity(12);
@@ -311,6 +328,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 }
             }
             b"PIEC" => scene.pieces.push(decode_piece(&raw)?),
+            b"MRCC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRCC before any piece".into()))?;
+                match decode_multires_cc(&raw) {
+                    Ok(mr)
+                        if mr.active_triangles() == piece.mesh.triangles.as_slice()
+                            && mr.parts().1[mr.active()].len() == piece.mesh.positions.len() =>
+                    {
+                        piece.multires = Some(mr)
+                    }
+                    Ok(_) => log::warn!("ignoring subdivision levels that don't match piece {:?}", piece.name),
+                    Err(e) => log::warn!("ignoring damaged subdivision levels on piece {:?}: {e}", piece.name),
+                }
+            }
             b"MRES" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRES before any piece".into()))?;
                 let mr = decode_multires(&raw)?;
@@ -750,8 +780,66 @@ fn encode_multires(mr: &Multires) -> Vec<u8> {
     b
 }
 
+/// The polygons that follow the `MRES` layout in `MRCC`.
+fn encode_base_polygons(b: &mut Vec<u8>, base: &oxy_mesh::multires::BasePolygons) {
+    let u = |b: &mut Vec<u8>, x: u32| b.extend_from_slice(&x.to_le_bytes());
+    let faces = base.offsets.len() - 1;
+    u(b, faces as u32);
+    for f in 0..faces {
+        let k = &base.corners[base.offsets[f] as usize..base.offsets[f + 1] as usize];
+        u(b, k.len() as u32);
+        k.iter().for_each(|&c| u(b, c));
+        let t = &base.tris[base.tri_offsets[f] as usize..base.tri_offsets[f + 1] as usize];
+        u(b, t.len() as u32);
+        t.iter().for_each(|&c| u(b, c));
+    }
+    u(b, base.creases.len() as u32);
+    for ([x, y], w) in base.creases {
+        u(b, *x);
+        u(b, *y);
+        b.extend_from_slice(&w.to_le_bytes());
+    }
+}
+
+fn decode_multires_cc(raw: &[u8]) -> Result<Multires> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let (tris, levels, active) = decode_multires_parts(&mut r)?;
+    let faces = r.u32()? as usize;
+    r.check(faces, 16)?;
+    let (mut offsets, mut corners, mut tri_offsets, mut face_tris) = (vec![0u32], Vec::new(), vec![0u32], Vec::new());
+    for _ in 0..faces {
+        let n = r.u32()? as usize;
+        r.check(n, 4)?;
+        for _ in 0..n {
+            corners.push(r.u32()?);
+        }
+        offsets.push(corners.len() as u32);
+        let m = r.u32()? as usize;
+        r.check(m, 4)?;
+        for _ in 0..m {
+            face_tris.push(r.u32()?);
+        }
+        tri_offsets.push(face_tris.len() as u32);
+    }
+    let nc = r.u32()? as usize;
+    r.check(nc, 12)?;
+    let creases = (0..nc).map(|_| Ok(([r.u32()?, r.u32()?], r.f32()?))).collect::<Result<Vec<_>>>()?;
+    let base = oxy_mesh::multires::OwnedBasePolygons { offsets, corners, tri_offsets, tris: face_tris, creases };
+    Multires::from_catmull_clark_parts(tris, base, levels, active)
+        .ok_or_else(|| Error::Corrupt("quad subdivision levels don't match".into()))
+}
+
+/// Base triangles, every level's positions and the active level: the
+/// `MRES` layout, which `MRCC` starts with.
+type MultiresParts = (Vec<[u32; 3]>, Vec<Vec<Vec3>>, usize);
+
 fn decode_multires(raw: &[u8]) -> Result<Multires> {
     let mut r = Reader { data: raw, pos: 0 };
+    let (tris, levels, active) = decode_multires_parts(&mut r)?;
+    Multires::from_parts(tris, levels, active).ok_or_else(|| Error::Corrupt("subdivision levels don't match".into()))
+}
+
+fn decode_multires_parts(r: &mut Reader) -> Result<MultiresParts> {
     let level_count = r.u32()? as usize;
     let active = r.u32()? as usize;
     if level_count == 0 || level_count > 16 || active >= level_count {
@@ -766,7 +854,7 @@ fn decode_multires(raw: &[u8]) -> Result<Multires> {
         r.check(v, 12)?;
         levels.push((0..v).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect::<Result<Vec<_>>>()?);
     }
-    Multires::from_parts(tris, levels, active).ok_or_else(|| Error::Corrupt("subdivision levels don't match".into()))
+    Ok((tris, levels, active))
 }
 
 /// Write atomically: temp file in the same directory, flush, then rename.
@@ -1349,6 +1437,44 @@ mod tests {
         plain.pieces[0].multires = None;
         let old = decode(&encode(&plain)).unwrap();
         assert_eq!(old.pieces[0].mesh.triangles.len(), mr.triangle_count(1));
+    }
+
+    #[test]
+    fn quad_levels_roundtrip_in_mrcc_and_old_readers_skip_them() {
+        use crate::Piece;
+        use oxy_mesh::multires::Scheme;
+        let base = primitives::plane(4, 1.0);
+        assert_eq!(base.quad_and_triangle_counts(), (16, 0));
+        let mut mr = Multires::new_catmull_clark(&base, None);
+        let d = mr.add_level(&base);
+        let mut m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        let d = mr.add_level(&m);
+        m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        m.positions[7] += Vec3::Y * 0.2;
+        let d = mr.set_level(&m, 1);
+        m = oxy_mesh::Mesh::from_data(d);
+        mr.bind(&m);
+        let piece = Piece { multires: Some(mr), ..Piece::new("Sheet", m) };
+        let scene = SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() };
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"MRCC").count(), 1);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"MRES").count(), 0);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back, scene);
+        let restored = back.pieces[0].clone().into_piece();
+        let mr = restored.multires.as_ref().unwrap();
+        assert_eq!((mr.scheme(), mr.level_count(), mr.active()), (Scheme::CatmullClark, 3, 1));
+        assert!(mr.is_bound_to(&restored.mesh));
+        assert_eq!(restored.mesh.quad_and_triangle_counts(), (64, 0), "level 1 is all quads");
+        // An older reader skips MRCC and gets the active level as a plain mesh.
+        let mut old = bytes.clone();
+        let i = old.windows(4).position(|w| w == b"MRCC").unwrap();
+        old[i..i + 4].copy_from_slice(b"ZZZZ");
+        let plain = decode(&old).unwrap();
+        assert!(plain.pieces[0].multires.is_none());
+        assert_eq!(plain.pieces[0].mesh.triangles.len(), 128);
     }
 
     #[test]
