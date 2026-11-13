@@ -176,6 +176,9 @@ impl Editor {
     pub fn start_retopo(&mut self) {
         self.pointer_up();
         self.cancel_tube();
+        if self.poly_edit.is_some() {
+            self.finish_poly_edit();
+        }
         self.gizmo = None;
         let active = self.scene.active();
         let (surface, cage_piece) = if active.cage.as_ref().is_some_and(|c| c.is_linked_to(&active.mesh)) {

@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Poly Edit** (Mesh > Poly Edit (model polygons)…, command palette; [RFC 0018](docs/rfcs/0018-poly-edit.md), first steps): model a low-polygon piece by its faces. Point at a face and the faces the action would change light up; drag to **Extrude** (walls go up around them and they move out as a cap; touching faces move as one block unless **Each face on its own** is on) or **Inset** (a rim of faces inside their edges), drag to **Move** them along their normals, or click to **Delete** them. **Reach** spreads the action from the face under the pointer to its face loop, its face group (all of it or the part touching it), the flat region around it or its whole island, and **Mirror across X** does the same to the other side. Extruded caps and walls, and inset rims, get new face groups so the next action can reach them by group. Each drag is one undo step and Escape cancels it. Opening the tool on a piece makes its polygons from the mesh as it is (triangle pairs that form quads become quads), keeping its mask and color until the first change to its faces; pieces with subdivision levels or more than 400,000 triangles are refused with a note.
+- **Polygons with more than four corners** in the polygon data that Poly Edit and the retopology tool share, triangulated by ear clipping. They're saved in a new `PLYC` project section together with each face's face group; versions without it read the older `CAGE` section, where such faces are stored as triangles.
 - **Fill mask** (Mask menu, Mask section and command palette; bindable in the keymap): masks the whole visible surface in one undo step.
 
 ### Changed

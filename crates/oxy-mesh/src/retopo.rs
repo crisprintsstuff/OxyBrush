@@ -11,8 +11,9 @@
 //! moves the mesh's vertices (a brush, an undo) can be copied back with
 //! [`Cage::sync_from`].
 //!
-//! Faces are counter-clockwise seen from outside. A triangle stores
-//! [`NONE`] as its fourth corner.
+//! Faces are counter-clockwise seen from outside, with three or more
+//! corners: triangles, quads and, for Poly Edit (RFC 0018), n-gons. Each
+//! face carries a face group, which the built mesh's triangles get.
 //!
 //! The editing operations here are pure topology and geometry; snapping to
 //! the sculpted surface is the caller's job.
@@ -21,14 +22,49 @@ use crate::{Mesh, MeshData};
 use glam::Vec3;
 use std::collections::{HashMap, HashSet};
 
-/// The missing fourth corner of a triangle.
+/// The missing fourth corner of a triangle in the `.oxb` `CAGE` section,
+/// which stores every face as four corners.
 pub const NONE: u32 = u32::MAX;
+
+/// A face of the cage: its corners in order (3 or more) and its face group.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Face {
+    pub corners: Vec<u32>,
+    pub group: u32,
+}
+
+impl Face {
+    pub fn new(corners: Vec<u32>) -> Self {
+        Face { corners, group: 0 }
+    }
+
+    pub fn with_group(corners: Vec<u32>, group: u32) -> Self {
+        Face { corners, group }
+    }
+
+    pub fn len(&self) -> usize {
+        self.corners.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.corners.is_empty()
+    }
+
+    /// The four `CAGE` corners of a triangle or quad (`NONE` fourth for a
+    /// triangle); None for an n-gon.
+    pub fn as_quad(&self) -> Option<[u32; 4]> {
+        match self.corners[..] {
+            [a, b, c] => Some([a, b, c, NONE]),
+            [a, b, c, d] => Some([a, b, c, d]),
+            _ => None,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Cage {
     pub positions: Vec<Vec3>,
-    /// Quads `[a, b, c, d]`, or triangles `[a, b, c, NONE]`.
-    pub faces: Vec<[u32; 4]>,
+    pub faces: Vec<Face>,
     /// [`Mesh::topology_version`] of the mesh last built from (or linked
     /// to) this cage. Not saved.
     pub linked: Option<u64>,
@@ -38,12 +74,13 @@ pub struct Cage {
     pub pinned: Vec<bool>,
 }
 
-/// The corners of a face (3 or 4).
-pub fn corners(f: &[u32; 4]) -> &[u32] {
-    if f[3] == NONE { &f[..3] } else { &f[..] }
+/// The corners of a face.
+pub fn corners(f: &Face) -> &[u32] {
+    &f.corners
 }
 
-fn edge_key(a: u32, b: u32) -> [u32; 2] {
+/// An undirected edge as `[low, high]`.
+pub fn edge_key(a: u32, b: u32) -> [u32; 2] {
     [a.min(b), a.max(b)]
 }
 
@@ -63,11 +100,16 @@ impl Cage {
     }
 
     pub fn quad_count(&self) -> usize {
-        self.faces.iter().filter(|f| f[3] != NONE).count()
+        self.faces.iter().filter(|f| f.len() == 4).count()
     }
 
     pub fn triangle_count(&self) -> usize {
-        self.faces.len() - self.quad_count()
+        self.faces.iter().filter(|f| f.len() == 3).count()
+    }
+
+    /// Faces with more than four corners.
+    pub fn ngon_count(&self) -> usize {
+        self.faces.iter().filter(|f| f.len() > 4).count()
     }
 
     /// For each vertex, whether a face uses it.
@@ -160,12 +202,12 @@ impl Cage {
         (self.positions.len() - 1) as u32
     }
 
-    /// Whether `verts` (3 or 4 distinct vertices, in order around the face)
+    /// Whether `verts` (3 or more distinct vertices, in order around the face)
     /// can become a face: not one already, and no edge would get a third
     /// face. Returns the corners in the winding to use: matching the
     /// neighbours across shared edges, or else facing along `outward`.
     pub fn face_winding(&self, verts: &[u32], outward: Vec3) -> Option<Vec<u32>> {
-        if !(3..=4).contains(&verts.len()) || verts.iter().any(|&v| v as usize >= self.positions.len()) {
+        if verts.len() < 3 || verts.iter().any(|&v| v as usize >= self.positions.len()) {
             return None;
         }
         let distinct: HashSet<u32> = verts.iter().copied().collect();
@@ -224,8 +266,7 @@ impl Cage {
     /// Add a face through `verts` (see [`Self::face_winding`]). Returns its index.
     pub fn add_face(&mut self, verts: &[u32], outward: Vec3) -> Option<usize> {
         let w = self.face_winding(verts, outward)?;
-        let f = if w.len() == 3 { [w[0], w[1], w[2], NONE] } else { [w[0], w[1], w[2], w[3]] };
-        self.faces.push(f);
+        self.faces.push(Face::new(w));
         Some(self.faces.len() - 1)
     }
 
@@ -251,7 +292,7 @@ impl Cage {
         self.positions.swap_remove(v as usize);
         if v != last {
             for f in &mut self.faces {
-                for c in f.iter_mut() {
+                for c in f.corners.iter_mut() {
                     if *c == last {
                         *c = v;
                     }
@@ -261,8 +302,8 @@ impl Cage {
     }
 
     /// Merge vertex `gone` into `keep`: faces using `gone` use `keep`
-    /// instead (a quad that ends up with `keep` twice becomes a triangle;
-    /// a triangle that does is removed), and `gone` is removed. Returns the
+    /// instead (a face that ends up with `keep` twice loses a corner; one
+    /// left with fewer than three is removed), and `gone` is removed. Returns the
     /// index `keep` has afterwards.
     pub fn weld(&mut self, keep: u32, gone: u32) -> u32 {
         let n = self.positions.len() as u32;
@@ -276,10 +317,8 @@ impl Cage {
             if c.len() > 1 && c.first() == c.last() {
                 c.pop();
             }
-            match c.len() {
-                4 => faces.push([c[0], c[1], c[2], c[3]]),
-                3 => faces.push([c[0], c[1], c[2], NONE]),
-                _ => {}
+            if c.len() >= 3 {
+                faces.push(Face::with_group(c, f.group));
             }
         }
         // Two faces that became the same face: keep one.
@@ -310,8 +349,8 @@ impl Cage {
         let mut mids: HashMap<[u32; 2], u32> = HashMap::new();
         let mut new_vertices = Vec::new();
         let mut visited: HashSet<usize> = HashSet::new();
-        let mut new_faces: Vec<[u32; 4]> = Vec::new();
-        let mut replaced: HashMap<usize, [u32; 4]> = HashMap::new();
+        let mut new_faces: Vec<Face> = Vec::new();
+        let mut replaced: HashMap<usize, Face> = HashMap::new();
         let mut ends: Vec<([u32; 2], usize)> = Vec::new();
 
         let mut mid = |cage: &mut Cage, u: u32, v: u32, t: f32| -> u32 {
@@ -329,12 +368,12 @@ impl Cage {
                 if !visited.insert(face) {
                     break;
                 }
-                let f = self.faces[face];
-                if f[3] == NONE {
-                    // A triangle ends the ring: split it through the cut.
+                let group = self.faces[face].group;
+                let Some(f) = self.faces[face].as_quad().filter(|q| q[3] != NONE) else {
+                    // A triangle (or an n-gon) ends the ring: split it through the cut.
                     ends.push(([u, v], face));
                     break;
-                }
+                };
                 // Rotate so the entry edge is corners 0-1.
                 let Some(i) = (0..4).find(|&i| edge_key(f[i], f[(i + 1) % 4]) == edge_key(u, v)) else { break };
                 let q = [f[i], f[(i + 1) % 4], f[(i + 2) % 4], f[(i + 3) % 4]];
@@ -342,8 +381,8 @@ impl Cage {
                 let tq = if q[0] == u { tt } else { 1.0 - tt };
                 let m0 = mid(self, q[0], q[1], tq);
                 let m1 = mid(self, q[3], q[2], tq);
-                replaced.insert(face, [q[0], m0, m1, q[3]]);
-                new_faces.push([m0, q[1], q[2], m1]);
+                replaced.insert(face, Face::with_group(vec![q[0], m0, m1, q[3]], group));
+                new_faces.push(Face::with_group(vec![m0, q[1], q[2], m1], group));
                 // Across the opposite edge q3 -> q2.
                 let next = edge_faces.get(&edge_key(q[3], q[2])).and_then(|fs| fs.iter().copied().find(|&g| g != face));
                 match next {
@@ -362,13 +401,21 @@ impl Cage {
         }
         self.faces.extend(new_faces);
         // Triangles at the ends: split into two through the new vertex.
+        // An n-gon at an end just gets the new vertex as an extra corner.
         for ([u, v], fi) in ends {
             let Some(&m) = mids.get(&edge_key(u, v)) else { continue };
-            let f = self.faces[fi];
-            let Some(i) = (0..3).find(|&i| edge_key(f[i], f[(i + 1) % 3]) == edge_key(u, v)) else { continue };
-            let (p, q, r) = (f[i], f[(i + 1) % 3], f[(i + 2) % 3]);
-            self.faces[fi] = [p, m, r, NONE];
-            self.faces.push([m, q, r, NONE]);
+            let f = self.faces[fi].clone();
+            let n = f.len();
+            let Some(i) = (0..n).find(|&i| edge_key(f.corners[i], f.corners[(i + 1) % n]) == edge_key(u, v)) else {
+                continue;
+            };
+            if n == 3 {
+                let (p, q, r) = (f.corners[i], f.corners[(i + 1) % 3], f.corners[(i + 2) % 3]);
+                self.faces[fi] = Face::with_group(vec![p, m, r], f.group);
+                self.faces.push(Face::with_group(vec![m, q, r], f.group));
+            } else {
+                self.faces[fi].corners.insert(i + 1, m);
+            }
         }
         new_vertices
     }
@@ -424,34 +471,57 @@ impl Cage {
         targets.into_iter().map(|(v, _)| v).collect()
     }
 
-    /// Triangles for the faces (quads split along corners 0-2) and the
-    /// quad diagonals, in cage indices.
+    /// Triangles for the faces (quads split along corners 0-2, n-gons by
+    /// ear clipping), the quad diagonals, in cage indices, and each
+    /// triangle's face group.
     pub fn triangulate(&self) -> (Vec<[u32; 3]>, HashSet<[u32; 2]>) {
+        let (tris, diagonals, _) = self.triangulate_with_groups();
+        (tris, diagonals)
+    }
+
+    /// [`Self::triangulate`] plus each triangle's face group.
+    pub fn triangulate_with_groups(&self) -> (Vec<[u32; 3]>, HashSet<[u32; 2]>, Vec<u32>) {
         let mut tris = Vec::with_capacity(self.faces.len() * 2);
+        let mut groups = Vec::with_capacity(self.faces.len() * 2);
         let mut diagonals = HashSet::new();
         for f in &self.faces {
-            tris.push([f[0], f[1], f[2]]);
-            if f[3] != NONE {
-                tris.push([f[0], f[2], f[3]]);
-                diagonals.insert(edge_key(f[0], f[2]));
+            let c = &f.corners;
+            match c.len() {
+                0..=2 => continue,
+                3 => tris.push([c[0], c[1], c[2]]),
+                4 => {
+                    tris.push([c[0], c[1], c[2]]);
+                    tris.push([c[0], c[2], c[3]]);
+                    diagonals.insert(edge_key(c[0], c[2]));
+                }
+                _ => tris.extend(ear_clip(&self.positions, c)),
             }
+            groups.resize(tris.len(), f.group);
         }
-        (tris, diagonals)
+        (tris, diagonals, groups)
     }
 
     /// Build the piece's mesh from the cage and renumber the cage so its
     /// vertex `i` is the mesh's vertex `i` (dots after). None without faces.
     pub fn build_mesh(&mut self) -> Option<Mesh> {
+        self.build_mesh_with_order().map(|(m, _)| m)
+    }
+
+    /// [`Self::build_mesh`], also returning the renumbering: old cage
+    /// vertex `v` is vertex `order[v]` afterwards.
+    pub fn build_mesh_with_order(&mut self) -> Option<(Mesh, Vec<u32>)> {
         if self.faces.is_empty() {
             return None;
         }
-        let (triangles, diagonals) = self.triangulate();
-        let mesh = Mesh::from_data(MeshData { positions: self.positions.clone(), triangles, ..Default::default() });
+        let (triangles, diagonals, groups) = self.triangulate_with_groups();
+        let groups = if groups.iter().all(|&g| g == 0) { Vec::new() } else { groups };
+        let mesh =
+            Mesh::from_data(MeshData { positions: self.positions.clone(), triangles, groups, ..Default::default() });
         let perm = self.adopt_order(mesh.source_vertices());
         let diagonals = diagonals.into_iter().map(|[a, b]| edge_key(perm[a as usize], perm[b as usize])).collect();
         mesh.set_quad_diagonals(diagonals);
         self.linked = Some(mesh.topology_version());
-        Some(mesh)
+        Some((mesh, perm))
     }
 
     /// Renumber so that cage vertex `source[i]` becomes `i`; the others
@@ -485,10 +555,8 @@ impl Cage {
             self.pinned = pinned;
         }
         for f in &mut self.faces {
-            for c in f.iter_mut() {
-                if *c != NONE {
-                    *c = perm[*c as usize];
-                }
+            for c in f.corners.iter_mut() {
+                *c = perm[*c as usize];
             }
         }
         perm
@@ -531,6 +599,58 @@ impl Cage {
         self.linked = Some(mesh.topology_version());
         true
     }
+}
+
+/// Split polygon `poly` (corner indices into `positions`, in order) into
+/// `len - 2` triangles by ear clipping in the polygon's best-fit plane
+/// (Newell normal). Falls back to a fan for degenerate polygons.
+pub fn ear_clip(positions: &[Vec3], poly: &[u32]) -> Vec<[u32; 3]> {
+    let pts: Vec<Vec3> = poly.iter().map(|&v| positions[v as usize]).collect();
+    let n = polygon_normal(&pts);
+    let fan = || (1..poly.len() - 1).map(|i| [poly[0], poly[i], poly[i + 1]]).collect();
+    let Some(n) = n.try_normalize() else { return fan() };
+    // 2D coordinates in the polygon's plane.
+    let u = n.any_orthonormal_vector();
+    let w = n.cross(u);
+    let p2: Vec<glam::Vec2> = pts.iter().map(|p| glam::Vec2::new(p.dot(u), p.dot(w))).collect();
+    let cross = |a: glam::Vec2, b: glam::Vec2, c: glam::Vec2| (b - a).perp_dot(c - a);
+    let mut idx: Vec<usize> = (0..poly.len()).collect();
+    let mut out = Vec::with_capacity(poly.len() - 2);
+    let mut guard = 0;
+    while idx.len() > 3 && guard < poly.len() * poly.len() {
+        guard += 1;
+        let m = idx.len();
+        let mut clipped = false;
+        for k in 0..m {
+            let (ia, ib, ic) = (idx[(k + m - 1) % m], idx[k], idx[(k + 1) % m]);
+            let (a, b, c) = (p2[ia], p2[ib], p2[ic]);
+            if cross(a, b, c) <= 1e-12 {
+                continue; // reflex or flat corner
+            }
+            let inside = idx.iter().any(|&j| {
+                j != ia
+                    && j != ib
+                    && j != ic
+                    && cross(a, b, p2[j]) >= 0.0
+                    && cross(b, c, p2[j]) >= 0.0
+                    && cross(c, a, p2[j]) >= 0.0
+            });
+            if inside {
+                continue;
+            }
+            out.push([poly[ia], poly[ib], poly[ic]]);
+            idx.remove(k);
+            clipped = true;
+            break;
+        }
+        if !clipped {
+            return fan();
+        }
+    }
+    if idx.len() == 3 {
+        out.push([poly[idx[0]], poly[idx[1]], poly[idx[2]]]);
+    }
+    if out.len() != poly.len() - 2 { fan() } else { out }
 }
 
 #[cfg(test)]

@@ -136,6 +136,12 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(cage) = &p.cage {
             sections.push((*b"CAGE", encode_cage(cage)));
+            // Polygons with more than four corners, and face groups, which
+            // `CAGE` can't hold (it keeps n-gons as triangles for older
+            // versions). Only written when there are any.
+            if cage.ngon_count() > 0 || cage.faces.iter().any(|f| f.group != 0) {
+                sections.push((*b"PLYC", encode_poly_faces(cage)));
+            }
             let pinned: Vec<u32> = (0..cage.positions.len() as u32).filter(|&v| cage.is_pinned(v)).collect();
             if !pinned.is_empty() {
                 let mut b = Vec::with_capacity(4 + pinned.len() * 4);
@@ -363,6 +369,16 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring a damaged retopology cage on piece {:?}: {e}", piece.name),
                 }
             }
+            b"PLYC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PLYC before any piece".into()))?;
+                match piece.cage.as_mut() {
+                    Some(cage) => match decode_poly_faces(&raw, cage.positions.len()) {
+                        Ok(faces) => cage.faces = faces,
+                        Err(e) => log::warn!("ignoring damaged cage polygons on piece {:?}: {e}", piece.name),
+                    },
+                    None => log::warn!("ignoring cage polygons without a cage"),
+                }
+            }
             b"PINS" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PINS before any piece".into()))?;
                 let mut r = Reader { data: &raw, pos: 0 };
@@ -540,13 +556,67 @@ fn encode_cage(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
             b.extend_from_slice(&x.to_le_bytes());
         }
     }
-    b.extend_from_slice(&(c.faces.len() as u32).to_le_bytes());
+    // Every face as four corners: triangles end in NONE, n-gons are split
+    // into triangles (a reader that knows `PLYC` gets them back from it).
+    let mut quads: Vec<[u32; 4]> = Vec::with_capacity(c.faces.len());
     for f in &c.faces {
+        match f.as_quad() {
+            Some(q) => quads.push(q),
+            None => quads.extend(
+                oxy_mesh::retopo::ear_clip(&c.positions, &f.corners)
+                    .into_iter()
+                    .map(|[a, b, c]| [a, b, c, oxy_mesh::retopo::NONE]),
+            ),
+        }
+    }
+    b.extend_from_slice(&(quads.len() as u32).to_le_bytes());
+    for f in &quads {
         for i in f {
             b.extend_from_slice(&i.to_le_bytes());
         }
     }
     b
+}
+
+/// `PLYC`: the cage's faces with any number of corners, and their face
+/// groups. When present it replaces the faces read from `CAGE` (the
+/// positions still come from there).
+///
+/// ```text
+/// count:u32  then per face: corners:u32  index:u32 * corners  group:u32
+/// ```
+fn encode_poly_faces(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
+    let mut b = Vec::with_capacity(4 + c.faces.iter().map(|f| 8 + f.len() * 4).sum::<usize>());
+    b.extend_from_slice(&(c.faces.len() as u32).to_le_bytes());
+    for f in &c.faces {
+        b.extend_from_slice(&(f.len() as u32).to_le_bytes());
+        for i in &f.corners {
+            b.extend_from_slice(&i.to_le_bytes());
+        }
+        b.extend_from_slice(&f.group.to_le_bytes());
+    }
+    b
+}
+
+fn decode_poly_faces(raw: &[u8], vertex_count: usize) -> Result<Vec<oxy_mesh::retopo::Face>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let n = r.u32()? as usize;
+    r.check(n, 20)?;
+    let mut faces = Vec::with_capacity(n);
+    for _ in 0..n {
+        let k = r.u32()? as usize;
+        if k < 3 {
+            return Err(Error::Corrupt("cage polygon with fewer than three corners".into()));
+        }
+        r.check(k, 4)?;
+        let corners: Vec<u32> = (0..k).map(|_| r.u32()).collect::<Result<_>>()?;
+        if corners.iter().any(|&i| i as usize >= vertex_count) {
+            return Err(Error::Corrupt("cage polygon refers to a missing vertex".into()));
+        }
+        let group = r.u32()?;
+        faces.push(oxy_mesh::retopo::Face::with_group(corners, group));
+    }
+    Ok(faces)
 }
 
 fn decode_cage(raw: &[u8]) -> Result<oxy_mesh::retopo::Cage> {
@@ -564,7 +634,7 @@ fn decode_cage(raw: &[u8]) -> Result<oxy_mesh::retopo::Cage> {
         if !ok {
             return Err(Error::Corrupt("cage face refers to a missing vertex".into()));
         }
-        faces.push(face);
+        faces.push(oxy_mesh::retopo::Face::new(if face[3] == NONE { face[..3].to_vec() } else { face.to_vec() }));
     }
     if !positions.iter().all(|p| p.is_finite()) {
         return Err(Error::Corrupt("cage has non-finite positions".into()));
@@ -868,6 +938,51 @@ mod tests {
         let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
         assert!(plain.cage.is_none());
         assert_eq!(plain.mesh.triangle_count(), 4);
+    }
+
+    #[test]
+    fn polygons_and_face_groups_roundtrip_and_older_readers_get_triangles() {
+        use crate::Piece;
+        use oxy_mesh::retopo::{Cage, Face};
+        // An L-shaped hexagon (group 4) next to a quad (group 2).
+        let mut cage = Cage::default();
+        for (x, y) in [(0., 0.), (2., 0.), (2., 1.), (1., 1.), (1., 2.), (0., 2.), (3., 0.), (3., 1.)] {
+            cage.add_vertex(Vec3::new(x, y, 0.0));
+        }
+        cage.faces.push(Face::with_group(vec![0, 1, 2, 3, 4, 5], 4));
+        cage.faces.push(Face::with_group(vec![1, 6, 7, 2], 2));
+        let mesh = cage.build_mesh().unwrap();
+        assert_eq!(mesh.triangle_count(), 6);
+        let mut piece = Piece::new("Block", mesh);
+        piece.cage = Some(cage);
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        let c = loaded.cage.as_ref().expect("cage loaded and linked");
+        assert!(c.is_linked_to(&loaded.mesh));
+        assert_eq!(c.ngon_count(), 1);
+        let mut groups: Vec<u32> = c.faces.iter().map(|f| f.group).collect();
+        groups.sort_unstable();
+        assert_eq!(groups, vec![2, 4]);
+        // A version without PLYC reads CAGE: the hexagon as triangles, still
+        // a usable cage of the same mesh.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"PLYC").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
+        let c = plain.cage.as_ref().expect("still a cage");
+        assert!(c.is_linked_to(&plain.mesh));
+        assert_eq!((c.ngon_count(), c.triangle_count(), c.quad_count()), (0, 4, 1));
+        // A plain quad cage writes no PLYC at all (files stay as they were).
+        let mut q = Cage::default();
+        for (x, y) in [(0., 0.), (1., 0.), (1., 1.), (0., 1.)] {
+            q.add_vertex(Vec3::new(x, y, 0.0));
+        }
+        q.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
+        let mut p = Piece::new("Quad", q.build_mesh().unwrap());
+        p.cage = Some(q);
+        let bytes = encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 0);
     }
 
     #[test]

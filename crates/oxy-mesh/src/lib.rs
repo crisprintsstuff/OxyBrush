@@ -13,6 +13,7 @@ pub mod deform;
 pub mod dyntopo;
 pub mod multires;
 
+pub mod polyedit;
 pub mod primitives;
 pub mod retopo;
 pub mod topo;
