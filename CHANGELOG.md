@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Living strokes** (Mesh > Strokes…, command palette; [RFC 0017](docs/rfcs/0017-living-strokes.md), first phase): an option, off by default, that keeps each stroke editable after you make it. Turn it on in Preferences > General or with the button in the Strokes window. The window lists the active piece's strokes, newest first (brush, when, how many points it moved); select one or several (Shift or Ctrl+click) and **fade** it with the Strength slider (0–150%, live while you drag), **Delete** it, or **Solo** it to see it without the strokes made after it. Later strokes keep what they did: a stroke's change is added or taken away, not replayed. Each change is one undo step, and undoing a stroke hides it from the list. A remesh, a subdivision level change, dynamic detail or anything else that changes the triangles keeps the surface and clears ("bakes") the list; so does **Bake all**, and the oldest strokes are baked when the list passes its memory budget (256 MB by default, set in Preferences). Mask strokes aren't listed. Strokes aren't saved with the project yet.
+
 ## [4.0.0-beta.7] - 2026-11-13
 
 ### Added

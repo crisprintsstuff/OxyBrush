@@ -1387,6 +1387,11 @@ impl Mesh {
         self.topology_version
     }
 
+    /// The chunk that owns point `v`.
+    pub fn vertex_chunk_of(&self, v: u32) -> Option<&u32> {
+        self.vertex_chunk.get(v as usize)
+    }
+
     /// Changes whenever the mesh is edited in place (positions, normals,
     /// mask, color: anything that marks a chunk dirty). Together with
     /// [`Self::topology_version`] and [`Self::face_version`] it tells

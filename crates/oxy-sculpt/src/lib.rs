@@ -671,6 +671,11 @@ impl Stroke {
 
     /// Bound each `add_sample` call to approximately `ms` milliseconds by
     /// widening spacing and scaling strength when dabs take longer.
+    /// The brush this stroke uses.
+    pub fn kind(&self) -> BrushKind {
+        self.settings.kind
+    }
+
     pub fn with_budget(mut self, ms: f32) -> Self {
         if ms > 0.0 {
             self.budget = Some(DabBudget::new(ms));

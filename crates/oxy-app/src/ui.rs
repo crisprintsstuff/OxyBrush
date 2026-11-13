@@ -781,6 +781,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
     theme_window(ui.ctx(), ed);
     crate::deform_ui::deform_window(ui.ctx(), ed);
+    crate::living_ui::window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
@@ -1118,6 +1119,23 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         "Undo works on the active piece",
         "On: Undo and Redo (Ctrl+Z) take back changes to the active piece only, even if you changed other pieces since; Edit > Undo in whole scene does the usual undo. Off: Undo takes back the last change anywhere, and Ctrl+Alt+Z undoes on the active piece.",
     );
+    let mut living = ed.living.enabled;
+    tips::check_plain(
+        ui,
+        &mut living,
+        "Living strokes: keep strokes editable",
+        "On: every stroke you make is kept in Mesh > Strokes, where you can fade, delete or solo it later without undoing what came after. Uses memory (see the budget below); a remesh or subdivision level change bakes the list. Off: strokes are final, as usual, and turning it off bakes the list.",
+    );
+    if living != ed.living.enabled {
+        ed.set_living_strokes(living);
+    }
+    if ed.living.enabled {
+        ui.horizontal(|ui| {
+            ui.label("Living strokes memory");
+            ui.add(egui::DragValue::new(&mut ed.living.budget_mb).range(16..=8192).suffix(" MB"))
+                .on_hover_text("When the recorded strokes use more than this, the oldest are baked into the surface.");
+        });
+    }
     tips::check_plain(
         ui,
         &mut ed.gizmo_done_reverts,
@@ -3523,6 +3541,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.separator();
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
+    }
+    if tips::button(ui, "Strokes…", Cmd::LivingStrokes).clicked() {
+        ed.living.show = true;
     }
     if tips::button(ui, "Deform…", Cmd::DeformWindow).clicked() {
         ed.show_deform = true;

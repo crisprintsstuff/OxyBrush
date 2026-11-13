@@ -12,6 +12,8 @@ mod gizmo_ops;
 mod guide;
 mod keymap;
 mod lights_ui;
+mod living;
+mod living_ui;
 mod matcaps;
 mod palette;
 mod plugins;
