@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.8" date="2026-11-13" type="development">
+      <description>
+        <p>Living strokes: an option to keep strokes editable, so any stroke
+        can be faded, deleted or seen on its own later. Poly Edit gains
+        bevels with rounded rows, bridge, edge slide, spin, split face,
+        creases and a live smooth subdivision preview. Human base meshes and
+        quad spheres to start from. The voxel remesh fills models with holes
+        and overlapping parts solid, with an optional Shell.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.7" date="2026-11-13" type="development">
       <description>
         <p>Poly Edit, a new tool for modeling low-polygon pieces by their faces,

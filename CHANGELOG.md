@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.8] - 2026-11-13
+
 ### Added
 - **Poly Edit: rounded bevels.** Face and edge **Bevel** have **Bevel rows** (1 to 16) and a **Profile** from 0 (flat, a straight cut) to 1 (round). Edge bevels round off across their rows, and where three or more bevelled edges meet the corner face follows the rows; face bevels go out in rings that turn from up the wall to across the cap. **Bridge** and **Split face** now follow **Mirror across X** too.
 - **Human base meshes** (File > New > **Human (female)** / **Human (male)**, the Welcome window's **Female** and **Male** cards, Pieces > + Add, command palette): a realistic female and male body to start sculpting from, standing, life size (about 1.65 units tall), 10,570 quads each, with the body parts as face groups (102 of them: arms, legs, fingers, torso…). They're the realistic bodies from Blender's [Human Base Meshes](https://www.blender.org/download/demo/asset-bundles/human-base-meshes/) bundle v1.4.0, released by the Blender Foundation under CC0 1.0, and are credited in Help > About. Their polygons come with them, so the quad count is exact and Poly Edit opens on the real quads. `scripts/blend_meshes.py` (which reads a `.blend` file as data) and the `oxy-cli` `base_mesh` example rebuild them.
