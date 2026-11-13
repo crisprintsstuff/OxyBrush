@@ -1,10 +1,10 @@
 //! The Poly Edit window and the polygons drawn over the viewport (RFC 0018).
 
 use crate::editor::{Drag, Editor};
-use crate::polyedit::{FaceAction, outline_edges};
+use crate::polyedit::{EdgeAction, FaceAction, PointAction, outline_edges};
 use egui::{Color32, RichText, Stroke};
 use glam::Vec2;
-use oxy_mesh::polyedit::{Reach, face_normal};
+use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
 use oxy_mesh::retopo::{corners, ear_clip};
 
 /// Edges are drawn for pieces up to this many faces (beyond that the
@@ -41,8 +41,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
             ui.label(RichText::new(pe.action.help()).weak().small());
-            ui.add_space(4.0);
-            egui::Grid::new("poly_edit_options").num_columns(2).show(ui, |ui| {
+            egui::Grid::new("poly_edit_face_options").num_columns(2).show(ui, |ui| {
                 ui.label("Reach");
                 egui::ComboBox::from_id_salt("poly_reach").selected_text(pe.reach.label()).show_ui(ui, |ui| {
                     for r in Reach::ALL {
@@ -54,6 +53,38 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.checkbox(&mut pe.each, "Each face on its own")
                     .on_hover_text("Extrude and inset every face separately, instead of touching faces as one block");
                 ui.end_row();
+            });
+            ui.add_space(4.0);
+            ui.label(RichText::new("Edges").strong());
+            ui.horizontal_wrapped(|ui| {
+                for a in EdgeAction::ALL {
+                    ui.selectable_value(&mut pe.edge_action, a, a.label()).on_hover_text(a.help());
+                }
+            });
+            ui.label(RichText::new(pe.edge_action.help()).weak().small());
+            if matches!(pe.edge_action, EdgeAction::Delete | EdgeAction::ExtrudeBorder) {
+                ui.horizontal(|ui| {
+                    ui.label("Reach");
+                    egui::ComboBox::from_id_salt("poly_edge_reach").selected_text(pe.edge_reach.label()).show_ui(
+                        ui,
+                        |ui| {
+                            for r in EdgeReach::ALL {
+                                ui.selectable_value(&mut pe.edge_reach, r, r.label());
+                            }
+                        },
+                    );
+                });
+            }
+            ui.add_space(4.0);
+            ui.label(RichText::new("Points").strong());
+            ui.horizontal_wrapped(|ui| {
+                for a in PointAction::ALL {
+                    ui.selectable_value(&mut pe.point_action, a, a.label()).on_hover_text(a.help());
+                }
+            });
+            ui.label(RichText::new(pe.point_action.help()).weak().small());
+            ui.add_space(4.0);
+            egui::Grid::new("poly_edit_options").num_columns(2).show(ui, |ui| {
                 ui.label("Symmetry");
                 ui.checkbox(&mut pe.mirror, "Mirror across X").on_hover_text(
                     "Do the same to the matching faces on the other side of the piece's X symmetry plane",
@@ -62,7 +93,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             });
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Point at a face: what lights up is what the action changes. Drag empty space to orbit.")
+                RichText::new("Point at a face, an edge or a point: what lights up is what its action changes. Drag empty space to orbit.")
                     .weak()
                     .small(),
             );
@@ -91,6 +122,7 @@ fn reach_help(r: Reach) -> &'static str {
 const EDGE: Color32 = Color32::from_rgba_premultiplied(120, 200, 255, 140);
 const REACH_FILL: Color32 = Color32::from_rgba_premultiplied(70, 45, 15, 90);
 const REACH_EDGE: Color32 = Color32::from_rgb(255, 170, 60);
+const DELETE: Color32 = Color32::from_rgb(240, 90, 80);
 const DELETE_FILL: Color32 = Color32::from_rgba_premultiplied(80, 20, 18, 100);
 
 /// The piece's polygon edges (facing the camera) and, under the pointer,
@@ -100,12 +132,14 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         return;
     }
     ed.poly_sync();
-    let Some(action) = ed.poly_edit.as_ref().map(|p| p.action) else { return };
-    let dragging = matches!(ed.drag, Drag::PolyEdit(_));
-    let reach = match (dragging, ed.pointer) {
-        (false, Some(p)) if matches!(ed.drag, Drag::None) => ed.poly_reach_at(p),
-        _ => Vec::new(),
+    if ed.poly_edit.is_none() {
+        return;
+    }
+    let preview = match ed.pointer {
+        Some(p) if matches!(ed.drag, Drag::None) => ed.poly_preview_at(p),
+        _ => crate::polyedit::Preview::default(),
     };
+    let reach = preview.faces.clone();
     let Some(c) = ed.poly_cage() else { return };
     let painter = ui.painter_at(canvas);
     let ppp = ed.pixels_per_point.max(0.1);
@@ -126,10 +160,21 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
             }
         }
     }
+    let hot = if preview.deletes { DELETE } else { REACH_EDGE };
+    for [a, b] in &preview.edges {
+        if let (Some(pa), Some(pb)) = (screen[*a as usize], screen[*b as usize]) {
+            painter.line_segment([pa, pb], Stroke::new(3.0, hot));
+        }
+    }
+    for v in &preview.points {
+        if let Some(pv) = screen[*v as usize] {
+            painter.circle_filled(pv, 5.0, hot);
+        }
+    }
     if reach.is_empty() {
         return;
     }
-    let fill = if action == FaceAction::Delete { DELETE_FILL } else { REACH_FILL };
+    let fill = if preview.deletes { DELETE_FILL } else { REACH_FILL };
     let mut mesh = egui::Mesh::default();
     for &f in reach.iter().filter(|&&f| facing(f)) {
         let k = corners(&c.faces[f]);
