@@ -929,6 +929,11 @@ pub struct Editor {
     /// Surface area of the active piece, cached by (piece, history revision).
     remesh_area: Option<((u64, u64), f32)>,
     pub remesh_adaptivity: f32,
+    /// Remesh into a wall around the surface instead of filling it.
+    pub remesh_shell: bool,
+    /// The wall's thickness (scene units) and side.
+    pub remesh_shell_thickness: f32,
+    pub remesh_shell_side: oxy_topo::ShellSide,
     pub remesh_engine: oxy_topo::RemeshEngine,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
@@ -1310,6 +1315,9 @@ impl Default for Editor {
             remesh_resolution: 128,
             remesh_area: None,
             remesh_adaptivity: 0.0,
+            remesh_shell: false,
+            remesh_shell_thickness: 0.05,
+            remesh_shell_side: oxy_topo::ShellSide::default(),
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
             undo_per_piece: false,
@@ -5240,17 +5248,28 @@ impl Editor {
             }
         };
         let h = self.scene.active().mesh.bounds().extent().max_element() / self.remesh_resolution.max(1) as f32;
-        if h <= 0.0 { 0 } else { (3.0 * area / (h * h)) as usize }
+        // A shell has two surfaces (or a sheet two sides).
+        let walls = if self.remesh_shell { 2.0 } else { 1.0 };
+        if h <= 0.0 { 0 } else { (walls * 3.0 * area / (h * h)) as usize }
     }
 
-    pub fn remesh_active(&mut self) {
-        let mesh = self.scene.active().mesh.clone();
-        let opts = RemeshOptions {
+    /// The remesh settings from the Rebuild section.
+    pub fn remesh_options(&self) -> RemeshOptions {
+        RemeshOptions {
             resolution: self.remesh_resolution,
             smooth_passes: 1,
             adaptivity: self.remesh_adaptivity,
             engine: self.remesh_engine,
-        };
+            shell: self.remesh_shell.then_some(oxy_topo::Shell {
+                thickness: self.remesh_shell_thickness.max(1e-4),
+                side: self.remesh_shell_side,
+            }),
+        }
+    }
+
+    pub fn remesh_active(&mut self) {
+        let mesh = self.scene.active().mesh.clone();
+        let opts = self.remesh_options();
         self.start_job(format!("Remesh ({})", opts.resolution), Vec::new(), move || {
             oxy_topo::voxel_remesh(&[&mesh], opts).map(JobResult::Mesh).map_err(|e| e.to_string())
         });
@@ -5266,12 +5285,7 @@ impl Editor {
         }
         let meshes: Vec<Mesh> = visible.iter().map(|p| p.mesh.clone()).collect();
         let consumed = visible.iter().map(|p| p.id).filter(|&id| id != active).collect();
-        let opts = RemeshOptions {
-            resolution: self.remesh_resolution,
-            smooth_passes: 1,
-            adaptivity: self.remesh_adaptivity,
-            engine: self.remesh_engine,
-        };
+        let opts = self.remesh_options();
         self.start_job(format!("Merge {} pieces", meshes.len()), consumed, move || {
             let refs: Vec<&Mesh> = meshes.iter().collect();
             oxy_topo::voxel_remesh(&refs, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
@@ -9451,6 +9465,29 @@ mod tests {
         e.check_link_topology();
         assert!(e.toast.is_none(), "only once per document");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn remesh_shell_is_an_option_with_a_thickness() {
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Sheet", primitives::plane(8, 2.0))), None);
+        e.remesh_resolution = 48;
+        // Off (the default): an open sheet has nothing to fill, and says so.
+        assert!(!e.remesh_shell);
+        e.remesh_active();
+        wait_job(&mut e);
+        assert!(e.status.contains("Shell"), "{}", e.status);
+        assert_eq!(e.scene.active().mesh.triangle_count(), primitives::plane(8, 2.0).triangle_count());
+        // On: a wall of the thickness set, here all on the front side.
+        e.remesh_shell = true;
+        e.remesh_shell_thickness = 0.2;
+        e.remesh_shell_side = oxy_topo::ShellSide::Outward;
+        e.remesh_active();
+        wait_job(&mut e);
+        let b = e.scene.active().mesh.bounds();
+        assert!((b.extent().y - 0.2).abs() < 0.08 && b.min.y > -0.06, "{:?} {}", b, e.status);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), primitives::plane(8, 2.0).triangle_count());
     }
 
     #[test]

@@ -4616,6 +4616,51 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         });
     }
     ui.horizontal(|ui| {
+        tips::hover(
+            ui.checkbox(&mut ed.remesh_shell, "Shell"),
+            "Make a wall of the thickness below around the surface instead of filling it: an open sheet gets a thickness, a closed model comes out hollow. Off: closed models are filled, and holes are patched first.",
+        );
+        if ed.remesh_shell {
+            tips::hover(
+                ui.add(
+                    egui::DragValue::new(&mut ed.remesh_shell_thickness)
+                        .range(0.0005..=10.0)
+                        .speed(0.002)
+                        .max_decimals(4)
+                        .prefix("Thickness "),
+                ),
+                "Wall thickness, in scene units (the pieces' coordinates; a standard size piece is 2 across). Thinner than a voxel or two needs a higher resolution.",
+            );
+        }
+    });
+    if ed.remesh_shell {
+        ui.horizontal(|ui| {
+            ui.label("Wall");
+            for side in oxy_topo::ShellSide::ALL {
+                tips::hover(
+                    ui.selectable_value(&mut ed.remesh_shell_side, side, side.label()),
+                    match side {
+                        oxy_topo::ShellSide::Outward => {
+                            "The wall goes out from the surface, which stays its inner side"
+                        }
+                        oxy_topo::ShellSide::Both => "Half the wall on each side of the surface",
+                        oxy_topo::ShellSide::Inward => {
+                            "The wall goes in from the surface, which stays its outer side (a hollowed model)"
+                        }
+                    },
+                );
+            }
+        });
+        let h = ed.scene.active().mesh.bounds().extent().max_element() / ed.remesh_resolution.max(1) as f32;
+        if ed.remesh_shell_thickness < 1.5 * h {
+            ui.label(
+                RichText::new("Thinner than about two voxels: raise the resolution for a clean wall")
+                    .small()
+                    .color(ui.visuals().warn_fg_color),
+            );
+        }
+    }
+    ui.horizontal(|ui| {
         ui.label("Engine");
         egui::ComboBox::from_id_salt("remesh_engine")
             .selected_text(match ed.remesh_engine {

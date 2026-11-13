@@ -236,6 +236,35 @@ impl Winding<'_> {
     }
 }
 
+impl Winding<'_> {
+    /// Whether the surface wraps around anything: the winding number just
+    /// inside it (a little against the normal), at up to 2048 triangles
+    /// spread over it, is mostly near 1 for a solid (even with holes) and
+    /// near 0.5 for a sheet, which encloses nothing.
+    pub fn encloses(&self) -> bool {
+        let (positions, triangles) = (self.positions, self.triangles);
+        let step = (triangles.len() / 2048).max(1);
+        let mut w: Vec<f32> = triangles
+            .par_iter()
+            .step_by(step)
+            .filter_map(|t| {
+                let [a, b, c] = t.map(|v| positions[v as usize]);
+                let n = (b - a).cross(c - a);
+                let len = n.length();
+                (len > 0.0).then(|| {
+                    let size = (b - a).length().max((c - b).length()).max((a - c).length());
+                    self.at((a + b + c) / 3.0 - n / len * (size * 1e-3))
+                })
+            })
+            .collect();
+        if w.is_empty() {
+            return false;
+        }
+        w.sort_by(f32::total_cmp);
+        w[w.len() / 2] > 0.7
+    }
+}
+
 /// `flags` grown by `rings` rings of triangles sharing a point.
 pub fn grow_triangles(triangles: &[[u32; 3]], flags: &[bool], rings: usize) -> Vec<bool> {
     let mut flags = flags.to_vec();
