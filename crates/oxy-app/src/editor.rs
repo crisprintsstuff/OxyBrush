@@ -3646,6 +3646,8 @@ impl Editor {
 
     fn primitive(which: &str) -> (String, Mesh) {
         match which {
+            "human_female" => ("Human (female)".into(), base_mesh(HUMAN_FEMALE)),
+            "human_male" => ("Human (male)".into(), base_mesh(HUMAN_MALE)),
             "cube" => ("Cube".into(), primitives::cube(64, 1.6)),
             "plane" => ("Plane".into(), primitives::plane(200, 2.0)),
             // An even grid already: fine enough to sculpt on directly.
@@ -3670,8 +3672,8 @@ impl Editor {
             Pending::Quit => self.quit_now = true,
             Pending::New(which) => {
                 let (name, mesh) = Self::primitive(which);
+                self.status = format!("New document ({})", name.to_lowercase());
                 self.replace_document(Scene::new(Piece::new(name, mesh)), None);
-                self.status = format!("New document ({which})");
             }
             Pending::Close => {
                 let closed = self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -6760,6 +6762,20 @@ struct SplitOff {
     clear_mask: bool,
 }
 
+/// Human base meshes from Blender's Human Base Meshes bundle v1.4.0
+/// (CC0 1.0, blender.org): the realistic female and male bodies, about
+/// 10,600 quads each, with the bundle's face sets as face groups. Built
+/// with `scripts/blend_meshes.py` and the `oxy-cli` `base_mesh` example;
+/// see `crates/oxy-app/assets/base_meshes/README.md`.
+const HUMAN_FEMALE: &[u8] = include_bytes!("../assets/base_meshes/human_female.oxb");
+const HUMAN_MALE: &[u8] = include_bytes!("../assets/base_meshes/human_male.oxb");
+
+/// The mesh of a bundled base-mesh project.
+fn base_mesh(bytes: &[u8]) -> Mesh {
+    let scene = oxy_doc::format::decode(bytes).expect("bundled base meshes are valid projects (tested)");
+    scene.pieces.into_iter().next().expect("one piece").into_piece().mesh
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9457,6 +9473,30 @@ mod tests {
         e.check_link_topology();
         assert!(e.toast.is_none(), "only once per document");
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn human_base_meshes_open_with_their_face_groups() {
+        let mut e = editor();
+        for (which, name) in [("human_female", "Human (female)"), ("human_male", "Human (male)")] {
+            e.perform(Pending::New(which));
+            let p = e.scene.active();
+            assert_eq!(p.name, name);
+            let m = &p.mesh;
+            assert_eq!(m.vertex_count(), 10582);
+            assert_eq!(m.quad_and_triangle_counts(), (10570, 20), "quads stay quads");
+            let mut groups = m.groups().to_vec();
+            groups.sort_unstable();
+            groups.dedup();
+            assert_eq!(groups.len(), 102, "the bundle's face sets");
+            // Standing on the floor, Y up, about life size.
+            let b = m.bounds();
+            assert!(b.min.y.abs() < 0.01 && (1.6..1.7).contains(&b.max.y), "{b:?}");
+            assert!((b.min.x + b.max.x).abs() < 1e-3, "centred on X (symmetry works)");
+        }
+        // And as an extra piece.
+        e.add_primitive("human_female");
+        assert_eq!(e.scene.pieces.len(), 2);
     }
 
     #[test]

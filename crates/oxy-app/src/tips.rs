@@ -68,6 +68,8 @@ commands! {
     NewSphere => "New sphere", "", "Start over with a sphere. You are asked before unsaved work is discarded.";
     NewCube => "New cube", "", "Start over with a cube. You are asked before unsaved work is discarded.";
     NewPlane => "New plane", "", "Start over with a flat plane. You are asked before unsaved work is discarded.";
+    NewHumanFemale => "New human (female)", "", "Start over with a female human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
+    NewHumanMale => "New human (male)", "", "Start over with a male human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
     Undo => "Undo", "Ctrl+Z", "Undo the last change.";
     Redo => "Redo", "Ctrl+Shift+Z", "Put back the last change you undid.";
     LastStrokeAsCurve => "Edit last stroke as curve", "", "Take back the stroke you just made and reopen its path as an editable curve with the same brush: drag its points, change size and strength along it, then Enter applies it. Works on Freehand strokes, right after you make them.";
@@ -78,6 +80,8 @@ commands! {
     AddSphere => "Add sphere piece", "", "Add a sphere as a new piece.";
     AddCube => "Add cube piece", "", "Add a cube as a new piece.";
     AddPlane => "Add plane piece", "", "Add a flat plane as a new piece.";
+    AddHumanFemale => "Add human piece (female)", "", "Add a female human base mesh as a new piece (from Blender's Human Base Meshes, CC0).";
+    AddHumanMale => "Add human piece (male)", "", "Add a male human base mesh as a new piece (from Blender's Human Base Meshes, CC0).";
     AddCylinder => "Add cylinder piece", "", "Add a cylinder as a new piece, with even triangles ready to sculpt.";
     AddCone => "Add cone piece", "", "Add a cone as a new piece, with even triangles ready to sculpt.";
     AddTorus => "Add torus piece", "", "Add a torus (ring) as a new piece.";
