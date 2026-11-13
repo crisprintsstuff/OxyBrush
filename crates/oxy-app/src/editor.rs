@@ -4840,6 +4840,9 @@ impl Editor {
             || self.extract_preview.is_some()
             || self.curve.is_some();
         if !others {
+            if self.poly_smooth_piece().is_some() {
+                return self.poly_smooth_mesh_mut();
+            }
             return self.plugin_preview_mut().map(|(_, m)| m);
         }
         if let Some(t) = &mut self.tube {
@@ -4867,6 +4870,9 @@ impl Editor {
         }
         if self.insert_preview.is_some() || self.extract_preview.is_some() {
             return None;
+        }
+        if let Some(id) = self.poly_smooth_piece() {
+            return Some(id);
         }
         self.wasm_plugins.iter().find_map(|p| p.preview.as_ref().filter(|pv| pv.mesh.is_some()).map(|pv| pv.piece))
     }

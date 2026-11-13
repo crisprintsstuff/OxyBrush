@@ -89,17 +89,19 @@ pub enum EdgeAction {
     Slide,
     Bevel,
     Spin,
+    Crease,
     Delete,
     ExtrudeBorder,
     CloseHole,
 }
 
 impl EdgeAction {
-    pub const ALL: [EdgeAction; 7] = [
+    pub const ALL: [EdgeAction; 8] = [
         EdgeAction::InsertLoop,
         EdgeAction::Slide,
         EdgeAction::Bevel,
         EdgeAction::Spin,
+        EdgeAction::Crease,
         EdgeAction::Delete,
         EdgeAction::ExtrudeBorder,
         EdgeAction::CloseHole,
@@ -111,6 +113,7 @@ impl EdgeAction {
             EdgeAction::Slide => "Slide",
             EdgeAction::Bevel => "Bevel",
             EdgeAction::Spin => "Spin",
+            EdgeAction::Crease => "Crease",
             EdgeAction::Delete => "Delete",
             EdgeAction::ExtrudeBorder => "Extrude border",
             EdgeAction::CloseHole => "Close hole",
@@ -129,6 +132,9 @@ impl EdgeAction {
                 "Drag to cut the edges off: each becomes a strip of faces, wider as you drag. Reach Edge loop bevels a whole loop; where three bevelled edges meet, a corner face fills in."
             }
             EdgeAction::Spin => "Click an edge between two faces to turn it one step within them.",
+            EdgeAction::Crease => {
+                "Click to crease the edges (or their loop or ring, with Reach) at the weight below, so smooth subdivision keeps them sharp; click a creased edge again to clear it."
+            }
             EdgeAction::Delete => {
                 "Click to remove the edges, merging the faces on each side into one larger polygon. Reach Edge loop removes a whole loop. Border edges stay."
             }
@@ -145,16 +151,18 @@ impl EdgeAction {
 pub enum PointAction {
     Move,
     Split,
+    Crease,
     Delete,
 }
 
 impl PointAction {
-    pub const ALL: [PointAction; 3] = [PointAction::Move, PointAction::Split, PointAction::Delete];
+    pub const ALL: [PointAction; 4] = [PointAction::Move, PointAction::Split, PointAction::Crease, PointAction::Delete];
 
     pub fn label(self) -> &'static str {
         match self {
             PointAction::Move => "Move",
             PointAction::Split => "Split face",
+            PointAction::Crease => "Crease",
             PointAction::Delete => "Delete",
         }
     }
@@ -164,6 +172,9 @@ impl PointAction {
             PointAction::Move => "Drag to move the point across the screen; drop it on another point to weld the two.",
             PointAction::Split => {
                 "Click a point, then another point of the same face (not next to it): the face is split in two along a new edge between them."
+            }
+            PointAction::Crease => {
+                "Click a point to crease every edge that meets there at the weight below (a sharp corner after smooth subdivision); click again to clear."
             }
             PointAction::Delete => "Click to delete the point and the faces around it, leaving a hole.",
         }
@@ -190,6 +201,16 @@ pub struct PolyEdit {
     pub pending: Option<Pending>,
     /// The last dragged amount for faces, edges and points, for Repeat.
     pub last: [Option<f32>; 3],
+    /// Crease weight the Crease actions set, 0 to 1.
+    pub crease_weight: f32,
+    /// Smooth preview levels (0: off), and the subdivided mesh shown for
+    /// the cage it was made from.
+    pub smooth_preview: u32,
+    smooth: Option<(Cage, Mesh)>,
+    /// Levels the preview shows (fewer than asked on big cages).
+    pub smooth_shown: u32,
+    /// Levels for Subdivide (smooth) and Smooth and sculpt.
+    pub subdivide_levels: u32,
 }
 
 /// The first pick of a two-click action.
@@ -309,6 +330,11 @@ impl Editor {
             bridge_twist: 0,
             pending: None,
             last: [None; 3],
+            crease_weight: 1.0,
+            smooth_preview: 0,
+            smooth: None,
+            smooth_shown: 0,
+            subdivide_levels: 1,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -472,6 +498,7 @@ impl Editor {
             EdgeAction::InsertLoop => EdgeReach::Ring,
             EdgeAction::CloseHole => EdgeReach::Loop,
             EdgeAction::Spin => EdgeReach::One,
+            EdgeAction::Crease => pe.edge_reach,
             _ => pe.edge_reach,
         };
         let mut edges = polyedit::reach_edges(c, a, b, reach);
@@ -724,6 +751,16 @@ impl Editor {
                 self.poly_start_drag(p, what, slide, Vec2::X, scale, 0.0, false, before_mesh, before_cage);
                 self.poly_drag_meta(1, Some((0.0, f32::INFINITY)));
             }
+            EdgeAction::Crease => {
+                let w = self.poly_edit.as_ref().map_or(1.0, |pe| pe.crease_weight);
+                let n = poly_crease(&mut cage, &edges, w);
+                self.poly_commit("Poly Edit: crease", before_mesh, before_cage, cage);
+                self.status = if n > 0 {
+                    format!("Creased {n} edge(s) at {:.0}%", w * 100.0)
+                } else {
+                    format!("Cleared the crease on {} edge(s)", edges.len())
+                };
+            }
             EdgeAction::Spin => {
                 let n = edges.iter().filter(|&&[x, y]| polyshape::spin_edge(&mut cage, x, y)).count();
                 if n == 0 {
@@ -840,6 +877,19 @@ impl Editor {
                 }
                 self.poly_commit("Poly Edit: split face", before_mesh, before_cage, cage);
                 self.status = "Split the face in two".into();
+            }
+            PointAction::Crease => {
+                let ids: Vec<u32> = points.iter().map(|&(v, _)| v).collect();
+                let edges: Vec<[u32; 2]> =
+                    cage.edges().into_iter().filter(|e| ids.contains(&e[0]) || ids.contains(&e[1])).collect();
+                let w = self.poly_edit.as_ref().map_or(1.0, |pe| pe.crease_weight);
+                let n = poly_crease(&mut cage, &edges, w);
+                self.poly_commit("Poly Edit: crease point", before_mesh, before_cage, cage);
+                self.status = if n > 0 {
+                    format!("Creased {n} edge(s) at the point")
+                } else {
+                    "Cleared the creases at the point".into()
+                };
             }
             PointAction::Delete => {
                 let ids: Vec<u32> = points.iter().map(|&(v, _)| v).collect();
@@ -1089,6 +1139,98 @@ impl Editor {
         // Face and point numbers may have changed.
         if let Some(pe) = self.poly_edit.as_mut() {
             pe.pending = None;
+        }
+    }
+}
+
+/// Crease `edges` at `weight`, or clear them when they all have that weight
+/// already (a second click undoes the first). RETURNS: how many were set.
+fn poly_crease(c: &mut Cage, edges: &[[u32; 2]], weight: f32) -> usize {
+    if edges.iter().all(|&[a, b]| (c.crease(a, b) - weight).abs() < 1e-4) {
+        for &[a, b] in edges {
+            c.set_crease(a, b, 0.0);
+        }
+        return 0;
+    }
+    for &[a, b] in edges {
+        c.set_crease(a, b, weight);
+    }
+    edges.len()
+}
+
+/// Faces Subdivide (smooth) may make, at most.
+pub const MAX_SMOOTH_FACES: usize = 400_000;
+/// Faces the smooth preview shows, at most.
+pub const MAX_PREVIEW_FACES: usize = 100_000;
+
+impl Editor {
+    /// Keep the smooth preview in step with the cage (rebuilt only when the
+    /// cage changed). Called once per frame.
+    pub fn update_poly_smooth(&mut self) {
+        let Some(pe) = self.poly_edit.as_ref() else { return };
+        let cage = if pe.smooth_preview == 0 { None } else { self.poly_cage() };
+        // Fewer levels on bigger cages: the preview is rebuilt on every
+        // drag frame (about 50 ms for 100,000 faces, see `smooth_timing`).
+        let levels = cage.map_or(0, |c| {
+            (1..=pe.smooth_preview)
+                .rev()
+                .find(|&l| oxy_mesh::catmull_clark::face_count(c, l) <= MAX_PREVIEW_FACES)
+                .unwrap_or(0)
+        });
+        let Some(cage) = cage.filter(|_| levels > 0) else {
+            if let Some(pe) = self.poly_edit.as_mut() {
+                pe.smooth = None;
+            }
+            return;
+        };
+        let fresh =
+            pe.smooth.as_ref().is_some_and(|(c, _)| {
+                c.positions == cage.positions && c.faces == cage.faces && c.creases == cage.creases
+            }) && pe.smooth_shown == levels;
+        if fresh {
+            return;
+        }
+        let snapshot = cage.clone();
+        let mesh = oxy_mesh::catmull_clark::subdivide_levels(&snapshot, levels).build_mesh();
+        if let (Some(pe), Some(mesh)) = (self.poly_edit.as_mut(), mesh) {
+            pe.smooth = Some((snapshot, mesh));
+            pe.smooth_shown = levels;
+        }
+    }
+
+    /// The piece shown smoothed, while the preview is on.
+    pub fn poly_smooth_piece(&self) -> Option<u64> {
+        let pe = self.poly_edit.as_ref()?;
+        pe.smooth.as_ref().map(|_| pe.piece)
+    }
+
+    pub fn poly_smooth_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        self.poly_edit.as_mut()?.smooth.as_mut().map(|(_, m)| m)
+    }
+
+    /// Replace the piece's polygons with `levels` levels of smooth
+    /// subdivision (one undo step); with `close`, then close the tool, ready
+    /// to sculpt.
+    pub fn poly_subdivide(&mut self, levels: u32, close: bool) {
+        let Some((_, before_mesh, before_cage)) = self.poly_before() else { return };
+        let Some(cage) = before_cage.clone() else { return };
+        let faces = oxy_mesh::catmull_clark::face_count(&cage, levels);
+        if faces > MAX_SMOOTH_FACES {
+            self.status = format!("Subdivide: {levels} level(s) would make {faces} faces; use fewer levels");
+            return;
+        }
+        let smooth = oxy_mesh::catmull_clark::subdivide_levels(&cage, levels);
+        self.poly_commit("Poly Edit: subdivide (smooth)", before_mesh, before_cage, smooth);
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.smooth = None;
+        }
+        if close {
+            self.finish_poly_edit();
+            self.status = format!(
+                "Subdivided {levels} level(s) into {faces} faces: sculpt away (Ctrl+D adds subdivision levels)"
+            );
+        } else {
+            self.status = format!("Subdivided {levels} level(s): {faces} faces");
         }
     }
 }
@@ -1518,5 +1660,49 @@ mod tests {
         click(&mut e, centre());
         assert!(e.history.can_undo());
         polyedit::validate(cage(&e)).unwrap();
+    }
+
+    #[test]
+    fn crease_preview_and_subdivide() {
+        let mut e = editor();
+        e.start_poly_edit();
+        // Crease an edge, then click it again to clear it.
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Crease;
+        let (corner, corner_px, [a, b], edge_px) = front_corner_and_edge(&e);
+        click(&mut e, edge_px);
+        assert_eq!(cage(&e).crease(a, b), 1.0, "{}", e.status);
+        click(&mut e, edge_px);
+        assert_eq!(cage(&e).crease(a, b), 0.0);
+        e.undo();
+        assert_eq!(cage(&e).crease(a, b), 1.0, "undo brings it back");
+        // A point crease takes every edge at the point.
+        e.poly_edit.as_mut().unwrap().point_action = PointAction::Crease;
+        e.poly_edit.as_mut().unwrap().crease_weight = 0.5;
+        click(&mut e, corner_px);
+        let c = cage(&e).clone();
+        let at_corner: Vec<[u32; 2]> = c.edges().into_iter().filter(|e| e.contains(&corner)).collect();
+        assert_eq!(at_corner.len(), 3);
+        assert!(at_corner.iter().all(|&[x, y]| c.crease(x, y) == 0.5), "{}", e.status);
+        // The smooth preview draws the subdivided surface in the piece's place.
+        assert!(e.preview_in_place().is_none());
+        e.poly_edit.as_mut().unwrap().smooth_preview = 2;
+        e.update_poly_smooth();
+        assert_eq!(e.preview_in_place(), Some(e.scene.active().id));
+        assert_eq!(e.preview_mesh_mut().unwrap().triangle_count(), 6 * 16 * 2);
+        // Subdivide keeps modeling on the smoother polygons (one undo step).
+        e.poly_subdivide(1, false);
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 24);
+        polyedit::validate(&c).unwrap();
+        assert!(!c.live_creases().is_empty(), "creases carry on");
+        e.update_poly_smooth();
+        assert_eq!(e.preview_mesh_mut().unwrap().triangle_count(), 24 * 16 * 2, "the preview follows");
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+        // Smooth and sculpt: subdivided, and the tool closes.
+        e.poly_subdivide(2, true);
+        assert!(e.poly_edit.is_none());
+        assert_eq!(e.scene.active().mesh.triangle_count(), 6 * 16 * 2);
+        assert!(e.preview_in_place().is_none());
     }
 }

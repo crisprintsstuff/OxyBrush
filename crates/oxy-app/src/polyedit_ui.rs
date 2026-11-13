@@ -25,6 +25,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         ed.status = "Poly Edit: cancelled".into();
     }
     let repeat_key = ed.keymap.primary(crate::keymap::CommandId::PolyRepeat);
+    let mut subdivide: Option<(u32, bool)> = None;
     let counts = ed.poly_cage().map(|c| (c.quad_count(), c.triangle_count(), c.ngon_count()));
     let name = ed.poly_edit.as_ref().and_then(|p| ed.scene.index_of(p.piece)).map(|i| ed.scene.pieces[i].name.clone());
     let screen = ctx.content_rect();
@@ -84,7 +85,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.label(RichText::new(pe.edge_action.help()).weak().small());
             if matches!(
                 pe.edge_action,
-                EdgeAction::Delete | EdgeAction::ExtrudeBorder | EdgeAction::Slide | EdgeAction::Bevel
+                EdgeAction::Delete
+                    | EdgeAction::ExtrudeBorder
+                    | EdgeAction::Slide
+                    | EdgeAction::Bevel
+                    | EdgeAction::Crease
             ) {
                 ui.horizontal(|ui| {
                     ui.label("Reach");
@@ -109,6 +114,56 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             if let Some(Pending::SplitFrom(_)) = pe.pending {
                 ui.label(RichText::new("Split face: click the second point (Esc cancels)").color(REACH_EDGE));
             }
+            if pe.edge_action == EdgeAction::Crease || pe.point_action == PointAction::Crease {
+                ui.horizontal(|ui| {
+                    ui.label("Crease weight");
+                    let mut pct = pe.crease_weight * 100.0;
+                    if ui
+                        .add(crate::widgets::Bar(egui::Slider::new(&mut pct, 5.0..=100.0).suffix(" %").max_decimals(0)))
+                        .on_hover_text("100% stays sharp when smoothed; lower weights round off after a level or two")
+                        .changed()
+                    {
+                        pe.crease_weight = pct / 100.0;
+                    }
+                });
+            }
+            ui.add_space(4.0);
+            ui.label(RichText::new("Smooth").strong());
+            ui.horizontal(|ui| {
+                ui.label("Preview");
+                for (n, label) in [(0, "Off"), (1, "1"), (2, "2"), (3, "3")] {
+                    ui.selectable_value(&mut pe.smooth_preview, n, label).on_hover_text(if n == 0 {
+                        "Show the polygons as they are"
+                    } else {
+                        "Show the surface smooth subdivision would make, this many levels, under the polygons you edit"
+                    });
+                }
+            });
+            if pe.smooth_preview > 0 && pe.smooth_shown != pe.smooth_preview {
+                ui.label(
+                    RichText::new(format!("Showing {} level(s): more would be slow on this many faces", pe.smooth_shown))
+                        .weak()
+                        .small(),
+                );
+            }
+            ui.horizontal(|ui| {
+                ui.label("Levels");
+                ui.add(egui::DragValue::new(&mut pe.subdivide_levels).range(1..=4));
+                if ui
+                    .button("Subdivide (smooth)")
+                    .on_hover_text("Replace the polygons with their smooth subdivision (each face becomes quads; creases stay sharp), and keep modeling")
+                    .clicked()
+                {
+                    subdivide = Some((pe.subdivide_levels, false));
+                }
+                if ui
+                    .button("Smooth and sculpt")
+                    .on_hover_text("Subdivide smoothly and close Poly Edit, ready to sculpt the result")
+                    .clicked()
+                {
+                    subdivide = Some((pe.subdivide_levels, true));
+                }
+            });
             ui.add_space(4.0);
             egui::Grid::new("poly_edit_options").num_columns(2).show(ui, |ui| {
                 ui.label("Symmetry");
@@ -138,7 +193,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 .on_hover_text("Close Poly Edit (Esc). Your changes stay; undo takes them back.")
                 .clicked();
         });
-    if done {
+    if let Some((levels, close)) = subdivide {
+        ed.poly_subdivide(levels, close);
+    } else if done {
         ed.finish_poly_edit();
     }
 }
@@ -195,6 +252,13 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
             if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
                 painter.line_segment([pa, pb], Stroke::new(1.0, EDGE));
             }
+        }
+    }
+    // Creased edges, thicker, with their weight in the color's strength.
+    for ([a, b], w) in c.live_creases() {
+        if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
+            let alpha = (110.0 + 145.0 * w) as u8;
+            painter.line_segment([pa, pb], Stroke::new(2.5, Color32::from_rgba_unmultiplied(200, 120, 255, alpha)));
         }
     }
     let hot = if preview.deletes { DELETE } else { REACH_EDGE };
