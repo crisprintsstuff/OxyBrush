@@ -116,14 +116,70 @@ impl Editor {
     /// Bounds of the vertices the gizmo moves (unmasked, visible).
     fn moving_bounds(&self) -> Option<oxy_mesh::Aabb> {
         let mesh = &self.scene.active().mesh;
-        let w = pose::weights(mesh);
         let mut b = oxy_mesh::Aabb::EMPTY;
-        for (v, &wv) in w.iter().enumerate() {
-            if wv > 0.0 {
+        for v in 0..mesh.vertex_count() {
+            // Same rule as `pose::weights`: hidden or fully masked points stay.
+            if !mesh.is_vertex_hidden(v as u32) && mesh.mask[v] < 1.0 {
                 b.grow(mesh.positions[v]);
             }
         }
         (!b.is_empty()).then_some(b)
+    }
+
+    /// The world-axis bounds of what the gizmo moves (the unmasked, visible
+    /// part of the active piece), for the bar's absolute Size and Centre.
+    /// Measured again only when the piece changes.
+    pub fn gizmo_absolute_bounds(&mut self) -> Option<oxy_mesh::Aabb> {
+        let p = self.scene.active();
+        let key = (p.id, p.mesh.topology_version(), p.mesh.face_version(), p.mesh.edit_version());
+        if let Some((k, b)) = self.gizmo_bounds_cache
+            && k == key
+        {
+            return b;
+        }
+        let b = self.moving_bounds();
+        self.gizmo_bounds_cache = Some((key, b));
+        b
+    }
+
+    /// Scale what the gizmo moves, about the gizmo pivot along the world
+    /// axes, so its size becomes `size` (world units). Axes with no size
+    /// (a flat piece) are left alone. One undo step, counted in the bar's
+    /// totals so Cancel puts it back.
+    pub fn set_gizmo_size(&mut self, size: Vec3) -> bool {
+        let Some(b) = self.gizmo_absolute_bounds() else { return false };
+        let now = b.max - b.min;
+        let f =
+            Vec3::from_array(std::array::from_fn(
+                |a| {
+                    if now[a] > 1e-6 && size[a] > 1e-6 { size[a] / now[a] } else { 1.0 }
+                },
+            ));
+        if (f - Vec3::ONE).abs().max_element() < 1e-6 {
+            return false;
+        }
+        let t = Transform { linear: Mat3::from_diagonal(f), translate: Vec3::ZERO };
+        self.apply_and_record("Set size", t)
+    }
+
+    /// Move what the gizmo moves so the middle of its bounding box is at
+    /// `centre`. One undo step, counted like [`Self::set_gizmo_size`].
+    pub fn set_gizmo_centre(&mut self, centre: Vec3) -> bool {
+        let Some(b) = self.gizmo_absolute_bounds() else { return false };
+        let d = centre - (b.min + b.max) * 0.5;
+        if d.length() < 1e-7 {
+            return false;
+        }
+        self.apply_and_record("Set position", Transform { linear: Mat3::IDENTITY, translate: d })
+    }
+
+    fn apply_and_record(&mut self, label: &str, t: Transform) -> bool {
+        let Some(pivot) = self.gizmo_base_pivot() else { return false };
+        if !self.apply_gizmo_transform(label, t) {
+            return false;
+        }
+        self.gizmo_session_record(pivot, &t);
+        true
     }
 
     pub fn set_gizmo_pivot(&mut self, choice: PivotChoice) {
@@ -542,6 +598,35 @@ mod tests {
         e.undo();
         e.tick_gizmo_session();
         assert!(e.gizmo_session.is_none());
+    }
+
+    #[test]
+    fn absolute_size_and_centre_are_measured_and_can_be_typed() {
+        let mut e = editor();
+        let start = e.scene.active().mesh.positions.clone();
+        let b = e.gizmo_absolute_bounds().unwrap();
+        let size = b.max - b.min;
+        assert!((size - bounds(&e).extent()).length() < 1e-5, "the whole piece without a mask");
+        // Exactly 3 units tall, the other sides as they were.
+        assert!(e.set_gizmo_size(Vec3::new(size.x, 3.0, size.z)));
+        let now = e.gizmo_absolute_bounds().unwrap();
+        assert!(((now.max - now.min) - Vec3::new(size.x, 3.0, size.z)).length() < 1e-4, "{:?}", now.max - now.min);
+        // Centre exactly at (1, 2, 3).
+        assert!(e.set_gizmo_centre(Vec3::new(1.0, 2.0, 3.0)));
+        let now = e.gizmo_absolute_bounds().unwrap();
+        assert!(((now.min + now.max) * 0.5 - Vec3::new(1.0, 2.0, 3.0)).length() < 1e-4);
+        // Each is one undo step, and both count in the bar: Cancel puts them back.
+        assert!(e.gizmo_has_changes());
+        assert!(e.cancel_gizmo_changes());
+        assert_eq!(e.scene.active().mesh.positions, start);
+        // With a mask, the size is that of the unmasked part.
+        let m = &mut e.scene.active_mut().mesh;
+        for v in 0..m.vertex_count() {
+            m.mask[v] = if m.positions[v].y < 0.0 { 1.0 } else { 0.0 };
+        }
+        m.mark_all_dirty();
+        let half = e.gizmo_absolute_bounds().unwrap();
+        assert!(half.min.y > -1e-4 && (half.max.y - size.y * 0.5).abs() < 0.05, "{half:?}");
     }
 
     #[test]

@@ -842,6 +842,9 @@ pub(crate) struct CursorPlane {
     pub radius: f32,
 }
 
+/// A piece and the versions of its mesh: equal keys mean an unchanged mesh.
+pub(crate) type MeshKey = (u64, u64, u64, u64);
+
 /// Wheel steps one Zoom in / Zoom out key press is worth (each about 10%).
 pub const KEY_ZOOM_STEPS: f32 = 2.0;
 
@@ -1116,6 +1119,9 @@ pub struct Editor {
     pub gizmo: Option<GizmoMode>,
     /// Cached gizmo pivot, keyed by (piece id, history revision, vertex count).
     pub(crate) gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
+    /// Bounds of what the gizmo moves, keyed by (piece, topology, faces,
+    /// edits), for the bar's absolute Size and Centre.
+    pub(crate) gizmo_bounds_cache: Option<(MeshKey, Option<oxy_mesh::Aabb>)>,
     /// Snap gizmo drags to steps (also while Shift is held).
     pub gizmo_snap: bool,
     pub gizmo_snap_steps: pose::Snap,
@@ -1387,6 +1393,7 @@ impl Default for Editor {
             request_load_matcap: false,
             paint_color: Vec3::new(0.75, 0.22, 0.18),
             gizmo: None,
+            gizmo_bounds_cache: None,
             gizmo_pivot: None,
             gizmo_snap: false,
             gizmo_snap_steps: pose::Snap::DEFAULT,

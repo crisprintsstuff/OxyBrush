@@ -673,6 +673,8 @@ pub mod plain {
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
     pub const GIZMO_APPLY: &str = "Keep the changes made with the gizmo (and any typed values), and count from zero again. \
         The fields show the total since the gizmo opened or the last Apply; type a value and press Enter to make it exactly that.";
+    pub const GIZMO_SIZE: &str = "The size of what the gizmo moves along the world X, Y and Z axes, in scene units (Mesh > 3D Print Tools shows millimetres). Type a value and press Enter to make it exactly that, scaled about the pivot; with Even on, the other sides follow in proportion.";
+    pub const GIZMO_CENTRE: &str = "Where the middle of what the gizmo moves is, in world coordinates. Type a value and press Enter to move it exactly there.";
     pub const GIZMO_CANCEL: &str =
         "Put back everything changed with the gizmo since it opened or since the last Apply. Redo brings it back.";
     pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
@@ -873,6 +875,8 @@ pub mod plain {
         AXIS_GIZMO,
         GIZMO_DONE,
         GIZMO_CANCEL,
+        GIZMO_SIZE,
+        GIZMO_CENTRE,
         GIZMO_SNAP,
         GIZMO_APPLY,
         PLUGINS_MENU,
