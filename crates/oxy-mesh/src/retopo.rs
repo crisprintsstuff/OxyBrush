@@ -343,6 +343,13 @@ impl Cage {
     /// the ring). The ring stops at borders and triangles; a triangle at
     /// an end is split so no T-junction is left. Returns the new vertices.
     pub fn insert_loop(&mut self, a: u32, b: u32, t: f32) -> Vec<u32> {
+        self.insert_loop_ends(a, b, t).into_iter().map(|(m, _, _)| m).collect()
+    }
+
+    /// [`Self::insert_loop`], returning each new vertex with the edge it
+    /// cuts, oriented so the vertex is at `from + (to - from) * t`: moving
+    /// all of them along their edges by the same fraction slides the loop.
+    pub fn insert_loop_ends(&mut self, a: u32, b: u32, t: f32) -> Vec<(u32, u32, u32)> {
         let t = t.clamp(0.02, 0.98);
         let edge_faces = self.edge_faces();
         let Some(start) = edge_faces.get(&edge_key(a, b)) else { return Vec::new() };
@@ -353,17 +360,19 @@ impl Cage {
         let mut replaced: HashMap<usize, Face> = HashMap::new();
         let mut ends: Vec<([u32; 2], usize)> = Vec::new();
 
-        let mut mid = |cage: &mut Cage, u: u32, v: u32, t: f32| -> u32 {
+        // `flip`: the cut is `t` from `v` rather than from `u`.
+        let mut mid = |cage: &mut Cage, u: u32, v: u32, flip: bool| -> u32 {
             *mids.entry(edge_key(u, v)).or_insert_with(|| {
-                let p = cage.positions[u as usize].lerp(cage.positions[v as usize], t);
+                let (from, to) = if flip { (v, u) } else { (u, v) };
+                let p = cage.positions[from as usize].lerp(cage.positions[to as usize], t);
                 let id = cage.add_vertex(p);
-                new_vertices.push(id);
+                new_vertices.push((id, from, to));
                 id
             })
         };
 
         for &first in start.clone().iter() {
-            let (mut u, mut v, mut tt, mut face) = (a, b, t, first);
+            let (mut u, mut v, mut flip, mut face) = (a, b, false, first);
             loop {
                 if !visited.insert(face) {
                     break;
@@ -378,7 +387,7 @@ impl Cage {
                 let Some(i) = (0..4).find(|&i| edge_key(f[i], f[(i + 1) % 4]) == edge_key(u, v)) else { break };
                 let q = [f[i], f[(i + 1) % 4], f[(i + 2) % 4], f[(i + 3) % 4]];
                 // Carry `t` in the direction q0 -> q1.
-                let tq = if q[0] == u { tt } else { 1.0 - tt };
+                let tq = if q[0] == u { flip } else { !flip };
                 let m0 = mid(self, q[0], q[1], tq);
                 let m1 = mid(self, q[3], q[2], tq);
                 replaced.insert(face, Face::with_group(vec![q[0], m0, m1, q[3]], group));
@@ -389,7 +398,7 @@ impl Cage {
                     Some(g) => {
                         u = q[3];
                         v = q[2];
-                        tt = tq;
+                        flip = tq;
                         face = g;
                     }
                     None => break,

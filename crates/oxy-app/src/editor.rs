@@ -842,6 +842,9 @@ pub(crate) struct CursorPlane {
     pub radius: f32,
 }
 
+/// Wheel steps one Zoom in / Zoom out key press is worth (each about 10%).
+pub const KEY_ZOOM_STEPS: f32 = 2.0;
+
 pub struct Editor {
     pub scene: Scene,
     pub history: History,
@@ -3375,6 +3378,12 @@ impl Editor {
             }
             None => self.status = "Point at a face group on the active piece first".into(),
         }
+    }
+
+    /// Zoom the view in (positive) or out by keyboard steps, towards the
+    /// middle of the viewport. Not affected by the wheel settings.
+    pub fn zoom_view(&mut self, steps: f32) {
+        self.camera.zoom(steps * KEY_ZOOM_STEPS);
     }
 
     pub fn scroll(&mut self, steps: f32) {
@@ -6291,6 +6300,14 @@ impl Editor {
                 self.frame_active();
                 E::None
             }
+            C::ZoomIn => {
+                self.zoom_view(1.0);
+                E::None
+            }
+            C::ZoomOut => {
+                self.zoom_view(-1.0);
+                E::None
+            }
             C::FrameAll => {
                 self.frame();
                 E::None
@@ -7258,6 +7275,21 @@ mod tests {
         let g = e.scene.active().mesh.groups();
         assert!(g.iter().all(|&x| x == g[0]) && g[0] != bottom);
         assert!(e.status.starts_with("Group visible"), "{}", e.status);
+    }
+
+    #[test]
+    fn zoom_keys_move_the_view_not_the_interface() {
+        let mut e = Editor::for_tests();
+        let (d0, scale) = (e.camera.distance, e.ui_scale);
+        e.perform_command(CommandId::ZoomIn);
+        assert!(e.camera.distance < d0, "closer");
+        e.perform_command(CommandId::ZoomOut);
+        assert!((e.camera.distance - d0).abs() < 1e-4 * d0, "back where it was");
+        // The wheel's invert setting is for the wheel only.
+        e.keymap.invert_wheel_zoom = true;
+        e.perform_command(CommandId::ZoomIn);
+        assert!(e.camera.distance < d0);
+        assert_eq!(e.ui_scale, scale);
     }
 
     #[test]

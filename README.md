@@ -40,7 +40,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 - **Subdivision levels and dynamic detail:** sculpt broad shapes low and fine detail high, or build up a plain sphere as you go.
 - **Pieces:** many objects per scene, with voxel remesh, booleans, Join, Split, Symmetrize and decimation.
 - **Retopology:** draw a clean quad mesh over a sculpt and project the detail onto it.
-- **Poly Edit (first steps):** model a low-polygon piece by its faces: extrude, inset, move or delete them, one face or a whole loop, group or region at a time.
+- **Poly Edit (first steps):** model a low-polygon piece by its faces, edges and points: extrude, inset, insert edge loops, close holes, weld points, and more.
 - **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
 - **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
 - **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.
@@ -136,7 +136,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 - **Decimate:** reduces triangles while keeping the shape, open borders, face-group borders and vertex color (1.3M → 131k triangles in about 0.7 s on 4 cores).
 - **Symmetrize** (Mesh > Symmetrize): makes a piece symmetric after the fact. It keeps one half, replaces the other with its mirror image and welds the seam (any axis, either side).
 - **Retopology** (Mesh > Retopology): draw a clean quad mesh over a sculpt. Click to place points on the surface, Shift+click to make quads, Tab+drag a border edge to extend, Ctrl+click an edge to add a loop, Shift+drag to relax (Alt+click pins points so relax leaves them). The result is a new piece that exports as quads; **Subdivide and project** gives it levels that carry the sculpt's detail ([RFC 0012](docs/rfcs/0012-retopology.md)).
-- **Poly Edit** (Mesh > Poly Edit, [RFC 0018](docs/rfcs/0018-poly-edit.md), first steps): model a low-polygon piece (a primitive, a retopology mesh, anything up to 400,000 triangles) by its faces. Point at a face to see what the action would change, then drag to **extrude** or **inset** it, drag to **move** it along its normal, or click to **delete** it. **Reach** spreads the action to the face loop, the face group, the flat region around it or the whole island; touching faces extrude as one block (or each on its own); Mirror across X does the other side too. Each drag is one undo step; Escape cancels. Faces with more than four corners are kept and saved. Edge and point actions, bevel and bridge come next.
+- **Poly Edit** (Mesh > Poly Edit, [RFC 0018](docs/rfcs/0018-poly-edit.md), first steps): model a low-polygon piece (a primitive, a retopology mesh, anything up to 400,000 triangles) by pointing at a face, an edge or a point; what its action would change lights up. Each kind has its own action, so there is no mode to switch. **Faces:** drag to **extrude** or **inset**, drag to **move** along the normal, click to **delete**; **Reach** spreads it to the face loop, the face group, the flat region or the island. **Edges:** click to **insert an edge loop** (drag to slide it), **delete** edges or a whole loop (merging faces), drag a border edge to **extrude** it, click one to **close the hole**. **Points:** drag to **move** one (drop it on another to **weld** them), or **delete** it. Mirror across X does the other side too. Each change is one undo step; Escape cancels a drag. Polygons with more than four corners are kept and saved. Bevel and bridge come next.
 - **Mesh repair:** Close holes, Delete hidden, and a Topology Diagnostics window that finds open edges, non-manifold edges and degenerate triangles.
 
 ### Pieces, masks and groups
@@ -209,7 +209,8 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `[` `]` and `-` `=` | Radius and strength |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
 | `X` | Toggle X symmetry |
-| `F` / Alt+`F` | Frame the active piece / all pieces |
+| `F` (or Ctrl+`0`) / Alt+`F` | Frame the active piece / all pieces |
+| Ctrl+`+` / Ctrl+`-` | Zoom the view in / out (Ctrl+`=` works too); the interface size is View > Theme > Size |
 | Ctrl+D | Add subdivision level |
 | `D` / Shift+D | Subdivision level up / down |
 | Ctrl+R | Voxel remesh |

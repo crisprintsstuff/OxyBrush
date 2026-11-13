@@ -584,6 +584,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Frame scene", Cmd::Frame).clicked() {
                     ed.frame();
                 }
+                if tips::button_km(ui, &ed.keymap, "Zoom in", Cmd::ZoomIn).clicked() {
+                    ed.zoom_view(1.0);
+                }
+                if tips::button_km(ui, &ed.keymap, "Zoom out", Cmd::ZoomOut).clicked() {
+                    ed.zoom_view(-1.0);
+                }
                 // Long groups live in submenus so the menu fits on small screens.
                 tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
                     if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
@@ -3171,10 +3177,11 @@ fn orientation_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
 /// What the modifier keys currently do, shown at the right of the status bar.
 pub fn context_hint(ed: &Editor) -> String {
     if let Some(pe) = ed.poly_edit.as_ref() {
-        let what = if pe.action == crate::polyedit::FaceAction::Delete { "click" } else { "drag" };
         return format!(
-            "Poly Edit: {what} a face to {} it · drag empty space: orbit · Esc: done",
-            pe.action.label().to_lowercase()
+            "Poly Edit: faces {} · edges {} · points {} · drag empty space: orbit · Esc: done",
+            pe.action.label().to_lowercase(),
+            pe.edge_action.label().to_lowercase(),
+            pe.point_action.label().to_lowercase()
         );
     }
     if ed.retopo.is_some() {
