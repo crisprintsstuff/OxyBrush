@@ -198,7 +198,7 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
     },
     Topic {
         title: "Poly Edit (model polygons)",
-        keywords: "poly edit polygon modeling box extrude inset bevel chamfer bridge slide spin split equalize repeat move delete faces edges points edge loop insert close hole weld reach group flat island hard surface low poly",
+        keywords: "poly edit polygon modeling box extrude inset bevel chamfer bridge slide spin split equalize repeat crease smooth subdivide catmull clark subdivision surface sharp move delete faces edges points edge loop insert close hole weld reach group flat island hard surface low poly",
         body: "Mesh > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\n\
 - Point at a face: the faces the action would change light up in orange (red for Delete).\n\
 - Extrude: drag to pull them out with walls around them (or push them in). Touching faces move out as one block; tick Each face on its own to extrude them separately.\n\
@@ -210,6 +210,7 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
 - Mirror across X does the same to the matching faces on the other side.\n\n\
 - Edges: point near an edge and it lights up instead. Insert loop: click to cut a new loop across the quads (the edges it will cut light up), or drag along the edge to slide it first. Delete: remove the edge (or its loop or ring, with Reach), merging the faces on each side. Extrude border: drag an edge of a hole or open surface outwards (Reach Edge loop takes the whole border). Close hole: click a hole's edge to fill it with one face. Slide: drag across an edge (or its loop) to move it along the edges beside it. Bevel: drag to cut the edges off into strips of faces; where three bevelled edges meet, a corner face fills in. Spin: click to turn an edge one step within its two faces.\n\
 - Points: point at a corner. Move: drag it across the screen, and drop it on another point to weld the two. Delete: remove it and the faces around it. Split face: click a point, then another of the same face, to cut the face in two between them.\n\n\
+Smooth: Crease (for edges, or for every edge at a point) marks edges to stay sharp when the model is smoothed, at the Crease weight (100% stays sharp; lower rounds off after a level or two); click again to clear. Creased edges show in purple. Preview 1–3 shows the smooth surface under your polygons as you work. Subdivide (smooth) turns the polygons into that surface (all quads) and keeps modeling; Smooth and sculpt does the same and closes Poly Edit, ready to sculpt (Ctrl+D then adds subdivision levels).\n\n\
 Y repeats the last action, with the same amount, on whatever is under the pointer. Each change is one undo step; Escape during a drag cancels it, and Escape otherwise (or Done) closes the tool. Drag empty space to orbit.",
     },
     Topic {

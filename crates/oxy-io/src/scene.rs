@@ -222,7 +222,7 @@ mod tests {
             Vec3::new(1.5, 0.0, 0.87),
             Vec3::new(1.5, 1.0, 0.87),
         ];
-        let mut cage = oxy_mesh::retopo::Cage { positions, faces: Vec::new(), linked: None, pinned: Vec::new() };
+        let mut cage = oxy_mesh::retopo::Cage { positions, ..Default::default() };
         cage.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
         cage.add_face(&[1, 4, 5, 2], Vec3::Z).unwrap();
         cage.positions[3].z = 1.5; // twist the first quad hard: the guess makes this two triangles

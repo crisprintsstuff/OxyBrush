@@ -1,6 +1,6 @@
 # RFC 0018: Poly Edit, a click-and-drag polygon modeling tool
 
-Status: accepted; phases A and B landed (creases moved to phase C, where smooth subdivision first uses them)
+Status: accepted; phases A, B and C landed (bevel segments and profile remain)
 
 ## Summary
 
@@ -180,6 +180,12 @@ after every operation in tests.
 - **Hand off to sculpting.** **Done > Subdivide and sculpt** builds a
   multires stack from the smoothed mesh. The current stack is Loop-based,
   so a Catmull–Clark first level feeds it.
+  *As landed:* **Smooth and sculpt** replaces the polygons with N
+  Catmull–Clark levels and closes the tool; Ctrl+D then adds Loop levels
+  on top. **Subdivide (smooth)** does the same without closing, to keep
+  modeling. Crease weights (0 to 1) are sharpness `4 × weight`, weight 1
+  sharp at every level, saved in a skippable `CRSE` section; borders are
+  sharp and an open sheet's corners stay put.
 
 ### 5. Code layout
 
@@ -231,7 +237,7 @@ triangle ranges. No work is added to the sculpting per-dab path.
 | A1 | Tool shell: hover picking, reach preview, window, undo, symmetry; Extrude, Inset, Delete, Move | 1 PR |
 | A2 | Remaining phase A actions; Edit as polygons; docs; tester release | 1 PR |
 | B | Bevel, Bridge, Split, Spin, Equalize (and phase A's Slide and Repeat) | landed |
-| C | Creases, Catmull–Clark with creases, preview, hand-off to sculpting | 1 PR |
+| C | Creases, Catmull–Clark with creases, preview, hand-off to sculpting | landed |
 
 ## Alternatives considered
 
