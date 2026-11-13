@@ -151,6 +151,11 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
                 }
                 sections.push((*b"PINS", b));
             }
+            // Crease weights for smooth subdivision (Poly Edit), if any.
+            let creases = cage.live_creases();
+            if !creases.is_empty() {
+                sections.push((*b"CRSE", encode_creases(&creases)));
+            }
         }
         if !p.tubes.is_empty() {
             sections.push((*b"TUBE", encode_tubes(&p.tubes)));
@@ -392,6 +397,16 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     (Err(e), _) => log::warn!("ignoring damaged pinned points on piece {:?}: {e}", piece.name),
                 }
             }
+            b"CRSE" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("CRSE before any piece".into()))?;
+                match piece.cage.as_mut() {
+                    Some(cage) => match decode_creases(&raw, cage.positions.len()) {
+                        Ok(list) => list.into_iter().for_each(|([a, b], w)| cage.set_crease(a, b, w)),
+                        Err(e) => log::warn!("ignoring damaged creases on piece {:?}: {e}", piece.name),
+                    },
+                    None => log::warn!("ignoring creases without a cage"),
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -598,6 +613,39 @@ fn encode_poly_faces(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
     b
 }
 
+/// `CRSE`: crease weights of cage edges, for smooth subdivision. Point
+/// numbers are the cage's (as in `CAGE`); weights run from 0 (smooth) to 1
+/// (sharp). Versions without it read the cage without creases.
+///
+/// ```text
+/// count:u32  then per crease: a:u32  b:u32  weight:f32
+/// ```
+fn encode_creases(list: &[([u32; 2], f32)]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(4 + list.len() * 12);
+    b.extend_from_slice(&(list.len() as u32).to_le_bytes());
+    for ([x, y], w) in list {
+        b.extend_from_slice(&x.to_le_bytes());
+        b.extend_from_slice(&y.to_le_bytes());
+        b.extend_from_slice(&w.to_le_bytes());
+    }
+    b
+}
+
+fn decode_creases(raw: &[u8], vertex_count: usize) -> Result<Vec<([u32; 2], f32)>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let n = r.u32()? as usize;
+    r.check(n, 12)?;
+    (0..n)
+        .map(|_| {
+            let (a, b, w) = (r.u32()?, r.u32()?, r.f32()?);
+            if a as usize >= vertex_count || b as usize >= vertex_count || !w.is_finite() {
+                return Err(Error::Corrupt("crease refers to a missing point".into()));
+            }
+            Ok(([a, b], w))
+        })
+        .collect()
+}
+
 fn decode_poly_faces(raw: &[u8], vertex_count: usize) -> Result<Vec<oxy_mesh::retopo::Face>> {
     let mut r = Reader { data: raw, pos: 0 };
     let n = r.u32()? as usize;
@@ -639,7 +687,7 @@ fn decode_cage(raw: &[u8]) -> Result<oxy_mesh::retopo::Cage> {
     if !positions.iter().all(|p| p.is_finite()) {
         return Err(Error::Corrupt("cage has non-finite positions".into()));
     }
-    Ok(oxy_mesh::retopo::Cage { positions, faces, linked: None, pinned: Vec::new() })
+    Ok(oxy_mesh::retopo::Cage { positions, faces, ..Default::default() })
 }
 
 fn decode_piece(raw: &[u8]) -> Result<PieceData> {
@@ -983,6 +1031,40 @@ mod tests {
         p.cage = Some(q);
         let bytes = encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"PLYC").count(), 0);
+    }
+
+    #[test]
+    fn creases_roundtrip_and_older_readers_skip_them() {
+        use crate::Piece;
+        use oxy_mesh::retopo::Cage;
+        let mut q = Cage::default();
+        for (x, y) in [(0., 0.), (1., 0.), (1., 1.), (0., 1.), (2., 0.), (2., 1.)] {
+            q.add_vertex(Vec3::new(x, y, 0.0));
+        }
+        q.add_face(&[0, 1, 2, 3], Vec3::Z).unwrap();
+        q.add_face(&[1, 4, 5, 2], Vec3::Z).unwrap();
+        q.set_crease(1, 2, 0.75);
+        // A crease on an edge that's gone isn't saved.
+        q.creases.insert([0, 5], 1.0);
+        let mut p = Piece::new("Two", q.build_mesh().unwrap());
+        let at = |c: &Cage, x: f32, y: f32| {
+            (0..c.positions.len() as u32)
+                .find(|&v| c.positions[v as usize].distance(Vec3::new(x, y, 0.0)) < 1e-6)
+                .unwrap()
+        };
+        p.cage = Some(q);
+        let bytes = encode(&SceneData { pieces: vec![p.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"CRSE").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        let c = loaded.cage.as_ref().unwrap();
+        assert!(c.is_linked_to(&loaded.mesh));
+        assert_eq!(c.live_creases().len(), 1);
+        assert_eq!(c.crease(at(c, 1.0, 0.0), at(c, 1.0, 1.0)), 0.75);
+        let mut old = bytes.clone();
+        let i = old.windows(4).position(|w| w == b"CRSE").unwrap();
+        old[i..i + 4].copy_from_slice(b"ZZZZ");
+        let plain = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert!(plain.cage.unwrap().creases.is_empty());
     }
 
     #[test]

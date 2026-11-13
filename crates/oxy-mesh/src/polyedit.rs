@@ -444,6 +444,7 @@ pub fn remove_unused_points(c: &mut Cage) {
     }
     c.positions = positions;
     c.pinned = if pinned.iter().any(|p| *p) { pinned } else { Vec::new() };
+    c.remap_creases(|v| map.get(v as usize).copied().filter(|&m| m != u32::MAX));
 }
 
 /// How far an edge action spreads from the edge it's applied to.
@@ -822,7 +823,7 @@ pub fn cage_from_mesh(mesh: &crate::Mesh) -> Cage {
             None => faces.push(Face::with_group(tri.to_vec(), group)),
         }
     }
-    Cage { positions: mesh.positions.clone(), faces, linked: Some(mesh.topology_version()), pinned: Vec::new() }
+    Cage { positions: mesh.positions.clone(), faces, linked: Some(mesh.topology_version()), ..Default::default() }
 }
 
 /// Check the cage's INVARIANT (see the module docs). Returns what's wrong.

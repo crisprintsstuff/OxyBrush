@@ -72,6 +72,11 @@ pub struct Cage {
     /// every edit (shorter means the rest aren't pinned). Relax leaves
     /// them where they are; they can still be moved by hand.
     pub pinned: Vec<bool>,
+    /// Crease weight of edges (`[low, high]` point pairs), 0 (smooth) to 1
+    /// (sharp), used by smooth subdivision ([`crate::catmull_clark`]).
+    /// Renumbered with the points through every edit; entries for edges
+    /// that no longer exist are ignored.
+    pub creases: std::collections::BTreeMap<[u32; 2], f32>,
 }
 
 /// The corners of a face.
@@ -175,6 +180,47 @@ impl Cage {
             self.pinned[v as usize] = on;
             if !on && !self.pinned.iter().any(|p| *p) {
                 self.pinned.clear();
+            }
+        }
+    }
+
+    /// The crease weight of edge `a`-`b` (0 when not creased).
+    pub fn crease(&self, a: u32, b: u32) -> f32 {
+        self.creases.get(&edge_key(a, b)).copied().unwrap_or(0.0)
+    }
+
+    /// Set the crease weight of edge `a`-`b`, clamped to 0..=1; 0 removes it.
+    pub fn set_crease(&mut self, a: u32, b: u32, weight: f32) {
+        let w = weight.clamp(0.0, 1.0);
+        if w <= 0.0 {
+            self.creases.remove(&edge_key(a, b));
+        } else {
+            self.creases.insert(edge_key(a, b), w);
+        }
+    }
+
+    /// Creases on edges that exist, for saving and drawing.
+    pub fn live_creases(&self) -> Vec<([u32; 2], f32)> {
+        if self.creases.is_empty() {
+            return Vec::new();
+        }
+        let edges: HashSet<[u32; 2]> = self.edges().into_iter().collect();
+        self.creases.iter().filter(|(e, _)| edges.contains(*e)).map(|(e, w)| (*e, *w)).collect()
+    }
+
+    /// Renumber the creases' points with `f` (None drops the crease); two
+    /// that land on one edge keep the larger weight.
+    pub fn remap_creases(&mut self, f: impl Fn(u32) -> Option<u32>) {
+        if self.creases.is_empty() {
+            return;
+        }
+        let old = std::mem::take(&mut self.creases);
+        for ([a, b], w) in old {
+            if let (Some(x), Some(y)) = (f(a), f(b))
+                && x != y
+            {
+                let e = self.creases.entry(edge_key(x, y)).or_insert(0.0);
+                *e = e.max(w);
             }
         }
     }
@@ -289,6 +335,12 @@ impl Cage {
         if !self.pinned.is_empty() {
             self.pinned.swap_remove(v as usize);
         }
+        // swap_remove: the last point takes v's number.
+        self.remap_creases(|x| match x {
+            x if x == v => None,
+            x if x == last => Some(v),
+            x => Some(x),
+        });
         self.positions.swap_remove(v as usize);
         if v != last {
             for f in &mut self.faces {
@@ -333,6 +385,7 @@ impl Cage {
         if self.is_pinned(gone) {
             self.set_pinned(keep, true);
         }
+        self.remap_creases(|x| Some(if x == gone { keep } else { x }));
         let last = n - 1;
         self.remove_vertex(gone);
         if keep == last { gone } else { keep }
@@ -424,6 +477,14 @@ impl Cage {
                 self.faces.push(Face::with_group(vec![m, q, r], f.group));
             } else {
                 self.faces[fi].corners.insert(i + 1, m);
+            }
+        }
+        // A creased edge that was cut stays creased on both halves.
+        for &(m, from, to) in &new_vertices {
+            let w = self.crease(from, to);
+            if w > 0.0 {
+                self.set_crease(from, m, w);
+                self.set_crease(m, to, w);
             }
         }
         new_vertices
@@ -568,6 +629,7 @@ impl Cage {
                 *c = perm[*c as usize];
             }
         }
+        self.remap_creases(|x| perm.get(x as usize).copied());
         perm
     }
 

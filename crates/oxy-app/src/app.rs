@@ -618,6 +618,7 @@ impl App {
         ed.update_curve();
         ed.update_tube();
         ed.update_primitive();
+        ed.update_poly_smooth();
         ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
         let previewing = ed.insert_preview.is_some()

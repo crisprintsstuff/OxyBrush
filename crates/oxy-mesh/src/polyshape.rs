@@ -682,7 +682,7 @@ mod tests {
             .into_iter()
             .map(|k| Face::new(k.to_vec()))
             .collect();
-        Cage { positions, faces, linked: None, pinned: Vec::new() }
+        Cage { positions, faces, ..Default::default() }
     }
 
     /// An `n` × `n` grid of quads in the XZ plane facing +Y.
@@ -700,7 +700,7 @@ mod tests {
                 faces.push(Face::new(vec![at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)]));
             }
         }
-        Cage { positions, faces, linked: None, pinned: Vec::new() }
+        Cage { positions, faces, ..Default::default() }
     }
 
     fn euler(c: &Cage) -> i64 {

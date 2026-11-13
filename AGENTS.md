@@ -61,6 +61,7 @@ cargo run --release -p oxy-mesh --example deform_timing    # Deform window drag 
 cargo run --release -p oxy-mesh --example dyntopo_timing   # dynamic detail refine cost by mesh size
 cargo run --release -p oxy-mesh --example memory_use       # mesh memory per triangle, by part
 cargo run --release -p oxy-mesh --example dyntopo_quality  # dynamic detail triangle quality on a stroke
+cargo run --release -p oxy-mesh --example smooth_timing    # Poly Edit smooth preview (Catmull–Clark) cost
 cargo run --release -p oxy-render --example shading_timing # viewport passes on your GPU
 cargo build --profile dist -p oxy-app                      # stripped release binary as shipped
 ```
