@@ -15,6 +15,7 @@ pub enum Shape {
     Cylinder,
     Cone,
     Torus,
+    Disc,
 }
 
 impl Shape {
@@ -25,6 +26,7 @@ impl Shape {
             "cylinder" => Shape::Cylinder,
             "cone" => Shape::Cone,
             "torus" => Shape::Torus,
+            "disc" => Shape::Disc,
             _ => Shape::Sphere,
         }
     }
@@ -37,6 +39,7 @@ impl Shape {
             Shape::Cylinder => "Cylinder",
             Shape::Cone => "Cone",
             Shape::Torus => "Torus",
+            Shape::Disc => "Disc",
         }
     }
 }
@@ -91,16 +94,22 @@ impl SphereKind {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PrimitiveParams {
     pub shape: Shape,
-    /// Radius (sphere, cylinder, cone, torus ring) or edge length (cube, plane).
+    /// Radius (sphere, cylinder, cone, torus ring, disc) or edge length (cube, plane).
     pub size: f32,
-    /// Height (cylinder, cone) or tube radius (torus).
+    /// Height (cylinder, cone), tube radius (torus) or inner radius (disc,
+    /// 0 for no hole).
     pub second: f32,
     /// Segments around (cylinder, cone, torus ring, UV sphere), divisions
     /// per side (cube, plane, quad sphere), or subdivisions (triangle sphere).
     pub segments: u32,
-    /// Rows up the side (cylinder, cone), rings (UV sphere) or segments
-    /// around the tube (torus).
+    /// Rows up the side (cylinder, cone), rings (UV sphere, disc) or
+    /// segments around the tube (torus).
     pub rows: u32,
+    /// Keep only part of the circle (disc), from and to these angles in
+    /// degrees.
+    pub slice: bool,
+    pub slice_from: f32,
+    pub slice_to: f32,
     /// How a sphere is divided.
     pub sphere: SphereKind,
     /// Closed ends (cylinder, cone).
@@ -120,6 +129,9 @@ impl PrimitiveParams {
             segments,
             rows,
             sphere: SphereKind::Quads,
+            slice: false,
+            slice_from: 0.0,
+            slice_to: 180.0,
             caps: true,
             remesh: false,
             resolution: 110,
@@ -131,13 +143,31 @@ impl PrimitiveParams {
             Shape::Cylinder => p(0.7, 1.8, 24, 1),
             Shape::Cone => p(0.8, 1.8, 24, 1),
             Shape::Torus => p(0.75, 0.3, 32, 12),
+            Shape::Disc => p(1.0, 0.0, 32, 2),
         }
     }
 
     /// The shape as set (before any remesh).
     pub fn mesh(&self) -> Mesh {
+        self.build().0
+    }
+
+    /// The shape, and its polygons when it's made of them (the disc), so
+    /// Poly Edit and quad subdivision see its quads and centre triangles.
+    pub fn build(&self) -> (Mesh, Option<oxy_mesh::retopo::Cage>) {
+        if self.shape == Shape::Disc {
+            let slice = self.slice.then_some((self.slice_from, self.slice_to));
+            let (mesh, cage) = primitives::disc(
+                self.size.max(1e-3),
+                self.second.max(0.0),
+                self.rows.clamp(1, 1000),
+                self.segments.clamp(3, 1000),
+                slice,
+            );
+            return (mesh, Some(cage));
+        }
         let (s, t) = (self.size.max(1e-3), self.second.max(1e-3));
-        match self.shape {
+        let mesh = match self.shape {
             Shape::Sphere => match self.sphere {
                 SphereKind::Quads => primitives::quad_sphere(self.segments.clamp(1, 256), s),
                 SphereKind::Rings => primitives::uv_sphere(self.segments.clamp(3, 512), self.rows.clamp(2, 256), s),
@@ -148,13 +178,17 @@ impl PrimitiveParams {
             Shape::Cylinder => primitives::cylinder_with(self.segments.max(3), self.rows.max(1), s, t, self.caps),
             Shape::Cone => primitives::cone_with(self.segments.max(3), self.rows.max(1), s, t, self.caps),
             Shape::Torus => primitives::torus(self.segments.max(3), self.rows.max(3), s, t.min(s * 0.99)),
-        }
+            Shape::Disc => unreachable!("built above"),
+        };
+        (mesh, None)
     }
 }
 
 pub struct PrimitiveEdit {
     pub params: PrimitiveParams,
     pub preview: Mesh,
+    /// The preview's polygons, if it's made of them (linked to `preview`).
+    cage: Option<oxy_mesh::retopo::Cage>,
     built: Option<PrimitiveParams>,
 }
 
@@ -163,8 +197,8 @@ impl Editor {
     /// cylinder, cone, torus).
     pub fn open_primitive(&mut self, which: &str) {
         let params = PrimitiveParams::new(Shape::from_key(which));
-        let preview = params.mesh();
-        self.primitive_edit = Some(PrimitiveEdit { built: Some(params.clone()), params, preview });
+        let (preview, cage) = params.build();
+        self.primitive_edit = Some(PrimitiveEdit { built: Some(params.clone()), params, preview, cage });
         self.status = "Set the shape, then Accept (Enter) to add it".into();
     }
 
@@ -172,7 +206,7 @@ impl Editor {
         if let Some(p) = &mut self.primitive_edit
             && p.built.as_ref() != Some(&p.params)
         {
-            p.preview = p.params.mesh();
+            (p.preview, p.cage) = p.params.build();
             p.built = Some(p.params.clone());
         }
     }
@@ -194,7 +228,9 @@ impl Editor {
         } else {
             let name = self.scene.unique_name(&name);
             let tris = p.preview.triangle_count();
-            self.add_piece(Piece::new(name.clone(), p.preview), &format!("Add {name}"));
+            let mut piece = Piece::new(name.clone(), p.preview);
+            piece.cage = p.cage;
+            self.add_piece(piece, &format!("Add {name}"));
             self.status = format!("Added {name} ({tris} triangles)");
         }
     }
@@ -283,6 +319,37 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         ui.label("Ends");
                         ui.checkbox(&mut p.caps, if p.shape == Shape::Cone { "Closed base" } else { "Closed caps" });
                         ui.end_row();
+                    }
+                    Shape::Disc => {
+                        slider_f(ui, "Outer radius", &mut p.size, 10.0);
+                        ui.label("Inner radius");
+                        let max = p.size * 0.99;
+                        p.second = p.second.min(max);
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.second, 0.0..=max)))
+                            .on_hover_text("Above 0 makes a ring: a disc with a round hole in the middle.");
+                        ui.end_row();
+                        ui.label("Rings");
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.rows, 1..=256).logarithmic(true)))
+                            .on_hover_text("Rows of faces from the middle (or the hole) out to the rim.");
+                        ui.end_row();
+                        ui.label("Segments around");
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.segments, 3..=512).logarithmic(true)))
+                            .on_hover_text("Faces around the circle (or around the slice).");
+                        ui.end_row();
+                        ui.label("Slice");
+                        ui.checkbox(&mut p.slice, "Only part of the circle").on_hover_text(
+                            "Keep only the part between two angles, like a slice of pie (or of a ring).",
+                        );
+                        ui.end_row();
+                        if p.slice {
+                            ui.label("From");
+                            ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.slice_from, 0.0..=360.0).suffix("°")));
+                            ui.end_row();
+                            ui.label("To");
+                            ui.add(crate::widgets::Bar(egui::Slider::new(&mut p.slice_to, 0.0..=360.0).suffix("°")))
+                                .on_hover_text("Counter-clockwise from From, seen from above. From 0° is along +X.");
+                            ui.end_row();
+                        }
                     }
                     Shape::Torus => {
                         slider_f(ui, "Ring radius", &mut p.size, 10.0);

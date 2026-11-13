@@ -8288,6 +8288,37 @@ mod tests {
     }
 
     #[test]
+    fn disc_window_adds_a_piece_with_its_polygons() {
+        let mut e = editor();
+        e.open_primitive("disc");
+        {
+            let p = &mut e.primitive_edit.as_mut().unwrap().params;
+            p.second = 0.3; // a ring
+            p.rows = 2;
+            p.segments = 12;
+            p.slice = true;
+            p.slice_from = 0.0;
+            p.slice_to = 270.0;
+        }
+        e.update_primitive();
+        e.accept_primitive();
+        let piece = e.scene.active();
+        assert_eq!(piece.name, "Disc");
+        let cage = piece.current_cage().expect("the disc keeps its polygons");
+        assert_eq!(cage.faces.len(), 24);
+        assert!(cage.faces.iter().all(|f| f.len() == 4));
+        assert_eq!(piece.mesh.quad_and_triangle_counts(), (24, 0));
+        // A quad level reads them: four quads each.
+        e.add_level();
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.quad_and_triangle_counts(), (96, 0));
+        e.undo();
+        // Undo takes the level back; another undo removes the disc.
+        e.undo();
+        assert!(e.scene.pieces.iter().all(|p| p.name != "Disc"));
+    }
+
+    #[test]
     fn add_cylinder_cone_and_torus_pieces() {
         let mut e = editor();
         e.add_primitive("torus");
