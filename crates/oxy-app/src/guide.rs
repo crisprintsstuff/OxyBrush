@@ -124,7 +124,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Face groups and hiding",
         keywords: "polygroups groups visibility hide show isolate",
-        body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from what's visible (Ctrl+W), from the mask, or from loose parts (Groups menu).\n\n\
+        body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from the mask (Ctrl+W; with nothing masked it groups what's visible), from what's visible, or from loose parts (Groups menu).\n\n\
 - Ctrl+Shift+click a group to show only it; Ctrl+Shift+click empty space to show everything.\n\
 - Ctrl+Shift+drag shows only what's inside the selection; add Alt to hide it instead.\n\
 - Hidden faces are not sculpted or exported. Mesh > Delete hidden removes them for good, and Mesh > Split hidden moves them into a piece of their own.\n\

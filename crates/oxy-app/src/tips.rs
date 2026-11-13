@@ -113,8 +113,8 @@ commands! {
     SymmetrizeNegX => "Symmetrize: −X onto +X", "", "Make this piece symmetric: keep the −X half (away from the axis gizmo's red X), replace the other half with its mirror image, and weld the two along the middle. Uses the piece's symmetry centre. One undo step.";
     SplitMasked => "Split masked", "", "Move the masked part of this piece into a new piece, and keep the unmasked part in this one. Invert the mask first to split off the unmasked part instead. Both parts come out unmasked.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
-    GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
-    GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
+    GroupVisible => "Group visible", "", "Give the visible faces their own face group.";
+    GroupFromMask => "Group from mask", "Ctrl+W", "Give the masked faces their own face group. With nothing masked, Ctrl+W groups the visible faces instead.";
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
     InvertVisibility => "Invert visibility", "", "Swap which faces are hidden.";
@@ -257,6 +257,7 @@ impl Cmd {
             Cmd::LevelDown => CommandId::LevelDown,
             Cmd::Remesh => CommandId::Remesh,
             Cmd::GroupVisible => CommandId::GroupVisible,
+            Cmd::GroupFromMask => CommandId::GroupFromMask,
             Cmd::Guide => CommandId::Guide,
             Cmd::Preferences => CommandId::Preferences,
             _ => return None,

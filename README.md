@@ -204,6 +204,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
 | `L` | Rectangle / lasso selection |
 | Ctrl+M | Mask the face group under the cursor |
+| Ctrl+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
 | `[` `]` and `-` `=` | Radius and strength |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
