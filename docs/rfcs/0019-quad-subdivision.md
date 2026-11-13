@@ -77,6 +77,19 @@ hidden when all its quads are.
 sharpness `4 × weight`, one less per level. **Delete lower levels** gives the
 new base the creases its edges have at that level.
 
+## Without smoothing
+
+A **Smooth** toggle (on by default, saved as `subdivision_smooth`) decides
+how the next level, or Mesh > Subdivide, is made. Off, faces are only split:
+old points stay, new points sit at the middle of each edge (and, for quads,
+at the centre of each face), so the shape doesn't change at all. This is
+linear subdivision, for hard-surface pieces or for adding resolution
+without softening forms. Each level remembers how it was made, and its
+detail is measured against that rule, so a lower-level edit carries a split
+level along linearly. Which levels weren't smoothed is saved in `MRLN`
+(`count:u32 smooth:u8*count`), written only when some level isn't smoothed;
+older versions skip it and read the same points.
+
 ## Saving
 
 A new skippable section, `MRCC`, replaces `MRES` for quad levels. It starts

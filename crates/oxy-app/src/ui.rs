@@ -3570,7 +3570,7 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     ui.separator();
     if tips::button(ui, "Subdivide (single mesh)", Cmd::SubdivideOnce).clicked() {
-        ed.subdivide(true);
+        ed.subdivide(ed.subdivision_smooth);
     }
     subdivision_kind(ui, ed);
     ui.separator();
@@ -4721,7 +4721,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.remesh_active();
         }
         if tips::button(ui, "Subdivide once", Cmd::SubdivideOnce).clicked() {
-            ed.subdivide(true);
+            ed.subdivide(ed.subdivision_smooth);
         }
     });
     ui.horizontal(|ui| {
@@ -5815,6 +5815,14 @@ fn subdivision_kind(ui: &mut egui::Ui, ed: &mut Editor) {
         if tris.clicked() {
             ed.subdivision_scheme = Scheme::Loop;
         }
+    });
+    ui.horizontal(|ui| {
+        tips::check_plain(
+            ui,
+            &mut ed.subdivision_smooth,
+            "Smooth",
+            "On: new levels and Subdivide round the surface off (Catmull–Clark or Loop). Off: faces are only split, with new points at the middle of edges and faces, so the shape stays exactly as it is: for hard-surface pieces, or to add resolution without softening. Each level keeps how it was made.",
+        );
     });
 }
 

@@ -202,6 +202,11 @@ struct Level {
     refinement: Option<Refinement>,
     /// The level's polygons (Catmull–Clark stacks only).
     polys: Option<Polys>,
+    /// Made with the smoothing rules (Loop or Catmull–Clark); false: split
+    /// without smoothing (new points at edge middles and face centres, old
+    /// points left where they are), which keeps the shape as it was.
+    /// Always true for level 0.
+    smooth: bool,
 }
 
 /// Per-level copies of mask, face groups and visibility, in level order.
@@ -255,6 +260,7 @@ impl Multires {
                 details: Vec::new(),
                 refinement: None,
                 polys: None,
+                smooth: true,
             }],
             creases: Vec::new(),
             active: 0,
@@ -435,13 +441,41 @@ impl Multires {
         &self.levels[0].positions
     }
 
-    /// Subdivided positions of level `k − 1`, in level `k` order.
+    /// Subdivided positions of level `k − 1`, in level `k` order, by the
+    /// rules level `k` was made with (smooth or not).
     fn smooth_from(&self, k: usize) -> Vec<Vec3> {
         let prev = &self.levels[k - 1];
+        let smooth = self.levels[k].smooth;
         match self.levels[k].refinement.as_ref().expect("levels above 0 have a refinement") {
-            Refinement::Loop(r) => loop_positions(&prev.positions, r),
-            Refinement::Cc(r) => cc_positions(&prev.positions, prev.polys.as_ref().expect("quad level"), r),
+            Refinement::Loop(r) if smooth => loop_positions(&prev.positions, r),
+            Refinement::Loop(r) => {
+                let p = &prev.positions;
+                p.iter().copied().chain(r.edges.iter().map(|e| (p[e.a as usize] + p[e.b as usize]) * 0.5)).collect()
+            }
+            Refinement::Cc(r) if smooth => cc_positions(&prev.positions, prev.polys.as_ref().expect("quad level"), r),
+            Refinement::Cc(r) => linear_cc_positions(&prev.positions, prev.polys.as_ref().expect("quad level"), r),
         }
+    }
+
+    /// Whether each level was made with smoothing (level 0: true).
+    pub fn level_smooth(&self) -> Vec<bool> {
+        self.levels.iter().map(|l| l.smooth).collect()
+    }
+
+    /// Say which levels were made with smoothing (as saved), and work out
+    /// their detail again. Returns false, changing nothing, if `smooth`
+    /// doesn't have one entry per level.
+    pub fn set_level_smooth(&mut self, smooth: &[bool]) -> bool {
+        if smooth.len() != self.levels.len() {
+            return false;
+        }
+        for (k, &flag) in smooth.iter().enumerate().skip(1) {
+            self.levels[k].smooth = flag;
+            let base = self.smooth_from(k);
+            let lvl = &mut self.levels[k];
+            lvl.details = lvl.positions.iter().zip(&base).map(|(p, s)| *p - *s).collect();
+        }
+        true
     }
 
     /// The crease sharpness of level `k`'s edges, as a lookup.
@@ -455,31 +489,48 @@ impl Multires {
         }
     }
 
-    /// Level `top + 1` made from level `top`.
-    fn refine_level(&self, top: usize) -> Level {
+    /// Level `top + 1` made from level `top`, smoothed or not.
+    fn refine_level(&self, top: usize, smooth: bool) -> Level {
         let lvl = &self.levels[top];
-        match &lvl.polys {
+        let mut level = match &lvl.polys {
             None => {
                 let (triangles, refinement) = refine(&lvl.triangles, lvl.positions.len());
-                let positions = loop_positions(&lvl.positions, &refinement);
-                let details = vec![Vec3::ZERO; positions.len()];
-                Level { triangles, positions, details, refinement: Some(Refinement::Loop(refinement)), polys: None }
+                Level {
+                    triangles,
+                    positions: Vec::new(),
+                    details: Vec::new(),
+                    refinement: Some(Refinement::Loop(refinement)),
+                    polys: None,
+                    smooth,
+                }
             }
             Some(polys) => {
                 let sharp = self.sharpness_of(top);
                 let (quads, refinement) = refine_cc(polys, lvl.positions.len(), &*sharp);
-                let positions = cc_positions(&lvl.positions, polys, &refinement);
-                let details = vec![Vec3::ZERO; positions.len()];
                 let triangles = quads.par_iter().flat_map_iter(|&[a, b, c, d]| [[a, b, c], [a, c, d]]).collect();
                 Level {
                     triangles,
-                    positions,
-                    details,
+                    positions: Vec::new(),
+                    details: Vec::new(),
                     refinement: Some(Refinement::Cc(refinement)),
                     polys: Some(Polys::Quads(quads)),
+                    smooth,
                 }
             }
-        }
+        };
+        let prev = &lvl.positions;
+        level.positions = match level.refinement.as_ref().expect("just made") {
+            Refinement::Loop(r) if smooth => loop_positions(prev, r),
+            Refinement::Loop(r) => prev
+                .iter()
+                .copied()
+                .chain(r.edges.iter().map(|e| (prev[e.a as usize] + prev[e.b as usize]) * 0.5))
+                .collect(),
+            Refinement::Cc(r) if smooth => cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
+            Refinement::Cc(r) => linear_cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
+        };
+        level.details = vec![Vec3::ZERO; level.positions.len()];
+        level
     }
 
     /// Add a finer level on top. The active level must be the top one.
@@ -507,9 +558,23 @@ impl Multires {
 
     /// `add_level` from a `prepare`d state.
     pub fn add_level_prepared(&mut self, prepared: Prepared) -> MeshData {
+        self.add_level_prepared_with(prepared, true)
+    }
+
+    /// Add a level on top without smoothing (see [`Self::add_level_prepared_with`]).
+    pub fn add_level_linear(&mut self, mesh: &Mesh) -> MeshData {
+        let prepared = self.prepare(mesh);
+        self.add_level_prepared_with(prepared, false)
+    }
+
+    /// `add_level` from a `prepare`d state, `smooth` or not: without
+    /// smoothing the new level is split in place (new points at edge
+    /// middles and face centres) and keeps the shape exactly; later edits
+    /// on lower levels carry it along the same way.
+    pub fn add_level_prepared_with(&mut self, prepared: Prepared, smooth: bool) -> MeshData {
         assert_eq!(self.active, self.levels.len() - 1, "add levels from the top level");
         let attrs = prepared.0;
-        let level = self.refine_level(self.levels.len() - 1);
+        let level = self.refine_level(self.levels.len() - 1, smooth);
         self.levels.push(level);
         let attrs = self.attributes_up(self.levels.len() - 1, attrs);
         self.active = self.levels.len() - 1;
@@ -729,6 +794,7 @@ impl Multires {
             details: Vec::new(),
             refinement: None,
             polys: None,
+            smooth: true,
         }];
         for pos in it {
             let prev = levels.last()?;
@@ -744,6 +810,7 @@ impl Multires {
                 details,
                 refinement: Some(Refinement::Loop(refinement)),
                 polys: None,
+                smooth: true,
             });
         }
         Some(Self { scheme: Scheme::Loop, levels, creases: Vec::new(), active, bound_topology: 0, identity: false })
@@ -819,6 +886,7 @@ impl Multires {
                 details: Vec::new(),
                 refinement: None,
                 polys: Some(Polys::Mixed { offsets, corners, tri_offsets, tris }),
+                smooth: true,
             }],
             creases,
             active,
@@ -826,7 +894,7 @@ impl Multires {
             identity: false,
         };
         for pos in it {
-            let mut level = m.refine_level(m.levels.len() - 1);
+            let mut level = m.refine_level(m.levels.len() - 1, true);
             if pos.len() != level.positions.len() {
                 return None;
             }
@@ -1173,6 +1241,18 @@ fn cc_positions(prev: &[Vec3], polys: &Polys, r: &CcRefinement) -> Vec<Vec3> {
         let rule = if count == 2 && fs.len() > 1 { (others[0] + 6.0 * p + others[1]) / 8.0 } else { p };
         *o = if s >= 1.0 { rule } else { smooth.lerp(rule, s) };
     });
+    out
+}
+
+/// Catmull–Clark topology without smoothing: old points stay, edge points
+/// at edge middles, face points at face centres.
+fn linear_cc_positions(prev: &[Vec3], polys: &Polys, r: &CcRefinement) -> Vec<Vec3> {
+    let mut out = prev.to_vec();
+    out.extend(r.edges.iter().map(|e| (prev[e.a as usize] + prev[e.b as usize]) * 0.5));
+    out.extend((0..polys.len()).map(|f| {
+        let k = polys.corners(f);
+        k.iter().map(|&v| prev[v as usize]).sum::<Vec3>() / k.len() as f32
+    }));
     out
 }
 
@@ -1879,5 +1959,44 @@ mod level_switch_tests {
         assert_eq!(base.offsets.len() - 1, 24);
         assert_eq!(base.creases.len(), 2, "the crease's two halves");
         assert!(base.creases.iter().all(|&(_, w)| w == 1.0));
+    }
+
+    #[test]
+    fn levels_without_smoothing_split_in_place_and_follow_lower_edits() {
+        for quads in [true, false] {
+            let mut cage = cube_cage();
+            let base = cage.build_mesh().unwrap();
+            let mut mr = if quads { Multires::new_catmull_clark(&base, None) } else { Multires::new(&base) };
+            let d = mr.add_level_linear(&base);
+            let m1 = rebuild_q(&mut mr, d);
+            assert_eq!(mr.level_smooth(), vec![true, false]);
+            // Same box, every point on its surface.
+            let b = m1.bounds();
+            assert!((b.max - Vec3::splat(0.5)).abs().max_element() < 1e-6);
+            assert!(m1.positions.iter().all(|p| (p.abs().max_element() - 0.5).abs() < 1e-6), "on the faces");
+            if quads {
+                assert_eq!(m1.quad_and_triangle_counts(), (24, 0));
+            }
+            // Move a base corner: the linear level follows linearly, with its
+            // detail kept.
+            let mut m1 = m1;
+            m1.positions[0] += Vec3::splat(0.01); // detail on level 1
+            let with_detail = m1.positions.clone();
+            let d = mr.set_level(&m1, 0);
+            let mut m0 = rebuild_q(&mut mr, d);
+            m0.positions[3] += Vec3::Y * 0.2;
+            let moved = m0.positions[3];
+            let d = mr.set_level(&m0, 1);
+            let back = rebuild_q(&mut mr, d);
+            let i = back.positions.iter().position(|p| p.distance(moved) < 1e-6);
+            assert!(i.is_some(), "the old point is still a point of the linear level, moved");
+            let changed = back.positions.iter().zip(&with_detail).filter(|(a, b)| a.distance(**b) > 1e-6).count();
+            assert!(changed > 1 && changed < back.vertex_count(), "only the points around the corner move");
+            // Flags survive set_level_smooth, and a wrong count is refused.
+            let mut copy = mr.clone();
+            assert!(copy.set_level_smooth(&[true, false]));
+            assert!(copy == mr);
+            assert!(!copy.set_level_smooth(&[true]));
+        }
     }
 }
