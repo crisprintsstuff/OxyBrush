@@ -531,6 +531,39 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
                     ed.redo();
                 }
+                let reopen = ed.can_reopen_last_stroke();
+                tips::menu(ui, "Last stroke", plain::LAST_STROKE, |ui| {
+                    use crate::editor::LastStrokeAs as As;
+                    if tips::button_on_km(ui, &ed.keymap, reopen, "Edit as curve", Cmd::LastStrokeAsCurve).clicked() {
+                        ed.reopen_last_stroke(As::Curve);
+                    }
+                    if tips::button_on(ui, reopen, "Use as Curve Move curve", Cmd::LastStrokeAsCurveMove).clicked() {
+                        ed.reopen_last_stroke(As::CurveMove);
+                    }
+                    if tips::button_on(ui, reopen, "Use as tube path", Cmd::LastStrokeAsTube).clicked() {
+                        ed.reopen_last_stroke(As::Tube);
+                    }
+                });
+                if ed.undo_per_piece {
+                    // Ctrl+Z works on the active piece; the whole-scene undo stays reachable here.
+                    if ui.add_enabled(ed.history.can_undo(), egui::Button::new("Undo in whole scene")).clicked() {
+                        ed.undo_scene();
+                    }
+                    if ui.add_enabled(ed.history.can_redo(), egui::Button::new("Redo in whole scene")).clicked() {
+                        ed.redo_scene();
+                    }
+                } else {
+                    if tips::button_on_km(ui, &ed.keymap, ed.history.can_undo(), "Undo on this piece", Cmd::UndoPiece)
+                        .clicked()
+                    {
+                        ed.undo_piece();
+                    }
+                    if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo on this piece", Cmd::RedoPiece)
+                        .clicked()
+                    {
+                        ed.redo_piece();
+                    }
+                }
                 ui.separator();
                 if tips::button_km(ui, &ed.keymap, "Command palette…", Cmd::Palette).clicked() {
                     ed.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
@@ -1070,6 +1103,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         &mut ed.remember_brushes,
         "Remember brush settings between sessions",
         "On: the brush you were using, with its size, falloff, stroke and alpha, and every brush's strength, come back the next time OxyBrush starts. Off: every session starts with the default brushes. Saved brush presets are kept either way.",
+    );
+    tips::check_plain(
+        ui,
+        &mut ed.undo_per_piece,
+        "Undo works on the active piece",
+        "On: Undo and Redo (Ctrl+Z) take back changes to the active piece only, even if you changed other pieces since; Edit > Undo in whole scene does the usual undo. Off: Undo takes back the last change anywhere, and Ctrl+Alt+Z undoes on the active piece.",
     );
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
     surface_cursor_checkbox(ui, ed);
@@ -4503,7 +4542,21 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn history_section(ui: &mut Ui, ed: &mut Editor) {
-    let undo: Vec<String> = ed.history.undo_labels().map(str::to_owned).collect();
+    let id = ed.scene.active().id;
+    let piece_only = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique("history_piece_only"))).unwrap_or(false);
+    let mut only = piece_only;
+    tips::hover(
+        ui.checkbox(&mut only, format!("Only {}", ed.scene.active().name)),
+        "Show only the changes to the active piece. Ctrl+Alt+Z undoes those one by one.",
+    );
+    if only != piece_only {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique("history_piece_only"), only));
+    }
+    let undo: Vec<String> = if only {
+        ed.history.undo_labels_for(id).into_iter().filter(|(_, t)| *t).map(|(l, _)| l.to_owned()).collect()
+    } else {
+        ed.history.undo_labels().map(str::to_owned).collect()
+    };
     let redo: Vec<String> = ed.history.redo_labels().map(str::to_owned).collect();
     if undo.is_empty() && redo.is_empty() {
         ui.label(RichText::new("No history yet").weak());

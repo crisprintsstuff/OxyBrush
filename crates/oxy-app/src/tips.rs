@@ -70,6 +70,11 @@ commands! {
     NewPlane => "New plane", "", "Start over with a flat plane. You are asked before unsaved work is discarded.";
     Undo => "Undo", "Ctrl+Z", "Undo the last change.";
     Redo => "Redo", "Ctrl+Shift+Z", "Put back the last change you undid.";
+    LastStrokeAsCurve => "Edit last stroke as curve", "", "Take back the stroke you just made and reopen its path as an editable curve with the same brush: drag its points, change size and strength along it, then Enter applies it. Works on Freehand strokes, right after you make them.";
+    LastStrokeAsCurveMove => "Use last stroke as Curve Move curve", "", "Take back the stroke you just made and use its path as a Curve Move curve, to bend and move the part along it.";
+    LastStrokeAsTube => "Use last stroke as tube path", "", "Take back the stroke you just made and draw a tube along its path, added to the same piece. Shape it, then Enter adds it.";
+    UndoPiece => "Undo on this piece", "Ctrl+Alt+Z", "Undo the last change to the active piece only, even if you changed other pieces since.";
+    RedoPiece => "Redo on this piece", "Ctrl+Alt+Shift+Z", "Put back the last change to the active piece that you undid, leaving other pieces as they are.";
     AddSphere => "Add sphere piece", "", "Add a sphere as a new piece.";
     AddCube => "Add cube piece", "", "Add a cube as a new piece.";
     AddPlane => "Add plane piece", "", "Add a flat plane as a new piece.";
@@ -213,6 +218,9 @@ impl Cmd {
             Cmd::Export => CommandId::Export,
             Cmd::Undo => CommandId::Undo,
             Cmd::Redo => CommandId::Redo,
+            Cmd::UndoPiece => CommandId::UndoPiece,
+            Cmd::LastStrokeAsCurve => CommandId::LastStrokeAsCurve,
+            Cmd::RedoPiece => CommandId::RedoPiece,
             Cmd::Palette => CommandId::CommandPalette,
             Cmd::FindBrush => CommandId::BrushFinder,
             Cmd::QuickMenu => CommandId::QuickMenu,
@@ -623,6 +631,7 @@ pub mod plain {
     #[allow(dead_code)]
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";
     pub const UI_SCALE: &str = "Make the whole interface larger or smaller.";
+    pub const LAST_STROKE: &str = "Reopen the Freehand stroke you just made: as an editable curve, as a Curve Move curve, or as a tube path. The stroke is taken back first.";
     pub const DEFORM_AXIS: &str = "Which axes this deformer uses. Several can be on at once.";
     pub const DEFORM_MIRROR: &str =
         "Flip the whole piece across the X, Y or Z plane through its middle. Needs no mask and nothing hidden.";
@@ -830,6 +839,7 @@ pub mod plain {
         HIGH_CONTRAST,
         UI_SCALE,
         DEFORM_AXIS,
+        LAST_STROKE,
         DEFORM_MIRROR,
         DEFORM_USE_MASK,
         SLIDER_SIZE,

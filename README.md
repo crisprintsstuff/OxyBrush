@@ -115,7 +115,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
   - **Tools:** Mask, Paint (vertex color), Insert Primitives (sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
 
   Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options. **Shift** smooths, and holding it while dragging changes the smoothing strength on the fly.
-- **Strokes:** a stabilizer for smooth lines, Freehand, Line, Stamp and **Curve** stroke modes, spray, and a pressure curve. A Curve stroke stays editable after you draw it: drag, add or remove points, change size and strength per point, close it into a loop, and see the result live before you Accept ([RFC 0004](docs/rfcs/0004-curve-stroke.md)). In Freehand mode, hold still mid-stroke to turn it into a curve.
+- **Strokes:** a stabilizer for smooth lines, Freehand, Line, Stamp and **Curve** stroke modes, spray, and a pressure curve. A Curve stroke stays editable after you draw it: drag, add or remove points, change size and strength per point, close it into a loop, and see the result live before you Accept ([RFC 0004](docs/rfcs/0004-curve-stroke.md)). In Freehand mode, hold still mid-stroke to turn it into a curve. **Edit > Last stroke** reopens the stroke you just made as an editable curve, or uses its path for a Curve Move curve or a tube.
 - **Deform window** (Mesh > Deform…): whole-piece deformers that respect the mask: move, rotate, scale, bend, S-bend, skew, S-skew, three kinds of flatten, twist, taper, squeeze, perspective and sag; noise, inflate and spherize; and smooth, polish (plain, keeping detail, group edges or sharp edges) and relax. Drag a bar to see the result live and let go to apply it; repeat it on this piece or on all others. Also Fit to standard size, Mirror and Symmetrize ([RFC 0016](docs/rfcs/0016-deform-window.md)).
 - **Curve Move:** draw a curve along an arm or a tail, then drag its points. The part bends and stretches to follow, like a simple rig; masks protect what shouldn't move, and symmetry moves both sides ([RFC 0005](docs/rfcs/0005-curve-move.md)).
 - **Tubes:** drag a path from the model or empty space to get a tube along it, shape its points and thickness, and edit it again later ([RFC 0009](docs/rfcs/0009-tube-tool.md)).
@@ -176,7 +176,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 - **Menus:** File, Edit, Pieces, Mesh, Groups, Mask, View, Plugins and Help, a toolbar with Raise/Carve, size, strength, symmetry and subdivision levels, and a view strip beside the viewport with toggles for the mask, face groups, shading, wireframe and floor grid.
 - **Command palette (Ctrl+K)** for any command, brush, recent file or guide topic; a **brush finder (Space)**; and a searchable **offline guide (F2)**.
 - **Accessibility:** interface scale from 75 to 300%, a high-contrast theme, a full mouse-only workflow, and screen-reader labels.
-- **Undo/redo** covers strokes, topology changes, face groups, visibility and pieces, within a memory budget.
+- **Undo/redo** covers strokes, topology changes, face groups, visibility and pieces, within a memory budget. **Undo on this piece** (Ctrl+Alt+Z) takes back the active piece's last change even if you changed other pieces since; turn on **Preferences > General > Undo works on the active piece** to make that what Ctrl+Z does. The History section can show just the active piece's changes.
 - **Optional updates:** off by default. **Preferences > Updates** can tell you about new versions or download them in the background; installing always waits for you, and downloads are checksum-verified. Only GitHub is contacted, and nothing about you or your work is sent ([details](docs/rfcs/0002-updates.md)). Flatpak installs update through Flatpak.
 
 ### Plugins
@@ -214,6 +214,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `Shift`+drag a gizmo handle | Snap to steps (0.1, 15°, 10 %) |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
+| Ctrl+Alt+Z, Ctrl+Alt+Shift+Z | Undo, redo on the active piece only |
 | Right click / hold `Q` | Quick menu at the cursor (size, strength, Raise/Carve) |
 | Alt with Grab / Snake Hook | Move along the surface normal |
 | Middle-drag on a panel | Scroll the panel |

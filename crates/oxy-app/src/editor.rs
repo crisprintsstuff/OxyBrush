@@ -90,6 +90,33 @@ pub struct HoldWatch {
     pub still_since: std::time::Instant,
 }
 
+/// The last freehand stroke, so it can be reopened as a curve, a Curve Move
+/// curve or a tube path (Edit > Last stroke): its path in canvas pixels and
+/// the camera it was drawn with, and the undo step it made.
+#[derive(Debug, Clone)]
+pub struct LastStroke {
+    pub piece: u64,
+    /// The history revision right after the stroke: reopening it is only
+    /// offered while nothing has changed since.
+    pub revision: u64,
+    pub kind: BrushKind,
+    pub invert: bool,
+    pub path: Vec<Vec2>,
+    pub size: Vec2,
+    pub camera: Camera,
+}
+
+/// What to turn the last stroke into (Edit > Last stroke).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastStrokeAs {
+    /// The same brush along an editable curve.
+    Curve,
+    /// A Curve Move curve along the stroke's path.
+    CurveMove,
+    /// A tube along the stroke's path.
+    Tube,
+}
+
 /// A curve stroke being adjusted (see [`StrokeMode::Curve`]). The brush is
 /// applied along a smooth curve through `points` to a copy of the piece,
 /// drawn in its place; the piece itself and the undo history are only
@@ -883,6 +910,9 @@ pub struct Editor {
     pub remesh_engine: oxy_topo::RemeshEngine,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
+    /// Ctrl+Z (Undo and Redo) works on the active piece only, instead of
+    /// the whole scene.
+    pub undo_per_piece: bool,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window's size, position and state, kept up to date by the
@@ -1019,6 +1049,8 @@ pub struct Editor {
     /// A held stroke waiting for Yes / No (with `hold_to_curve_ask`); the
     /// stroke stays applied, unrecorded, until answered.
     pub hold_offer: Option<HoldWatch>,
+    /// The last freehand stroke, for Edit > Last stroke.
+    pub last_stroke: Option<LastStroke>,
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
@@ -1240,6 +1272,7 @@ impl Default for Editor {
             remesh_adaptivity: 0.0,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
+            undo_per_piece: false,
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
@@ -1314,6 +1347,7 @@ impl Default for Editor {
             hold_to_curve: true,
             hold_to_curve_ask: false,
             hold_offer: None,
+            last_stroke: None,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
@@ -1649,6 +1683,7 @@ impl Editor {
                 Vec::new()
             },
             remember_brushes: self.remember_brushes,
+            undo_per_piece: self.undo_per_piece,
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
@@ -1864,6 +1899,7 @@ impl Editor {
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
         self.remember_brushes = s.remember_brushes;
+        self.undo_per_piece = s.undo_per_piece;
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
@@ -2163,7 +2199,9 @@ impl Editor {
                 || kind == BrushKind::SnakeHook
                 || kind == BrushKind::Smooth
                 || self.brush_roles().ctrl);
-        let hold = (self.hold_to_curve && curve_capable && dyn_topo.is_none()).then(|| {
+        // The path is kept for every such stroke: holding still turns it into a
+        // curve (with the setting on), and Edit > Last stroke can reopen it.
+        let hold = (curve_capable && dyn_topo.is_none()).then(|| {
             Box::new(HoldWatch { kind, invert, path: vec![p], still_at: p, still_since: std::time::Instant::now() })
         });
         self.drag =
@@ -2265,11 +2303,22 @@ impl Editor {
 
     /// End a stroke: one undo step, either the usual chunk snapshots or,
     /// when dynamic detail changed the mesh, the whole mesh before it.
-    fn finish_stroke(&mut self, dyn_topo: Option<Box<DynStroke>>) {
+    fn finish_stroke(&mut self, dyn_topo: Option<Box<DynStroke>>, hold: Option<Box<HoldWatch>>) {
+        let before = self.history.revision();
         match dyn_topo {
             Some(d) if d.changed => self.history.record_topology(d.label, d.piece, d.before, None),
             _ => self.history.commit(),
         }
+        // Remember the stroke's path, so Edit > Last stroke can reopen it.
+        self.last_stroke = hold.filter(|_| self.history.revision() != before).map(|h| LastStroke {
+            piece: self.scene.active().id,
+            revision: self.history.revision(),
+            kind: h.kind,
+            invert: h.invert,
+            path: h.path.iter().map(|&p| self.canvas_local(p)).collect(),
+            size: self.canvas_size(),
+            camera: self.camera,
+        });
     }
 
     /// A pen is drawing right now, so its pressure is live.
@@ -2960,7 +3009,7 @@ impl Editor {
         self.snap_orbit = None;
         self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { dyn_topo, .. } => self.finish_stroke(dyn_topo),
+            Drag::Stroke { dyn_topo, hold, .. } => self.finish_stroke(dyn_topo, hold),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -3041,7 +3090,7 @@ impl Editor {
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { dyn_topo, .. } => self.finish_stroke(dyn_topo),
+            Drag::Stroke { dyn_topo, hold, .. } => self.finish_stroke(dyn_topo, hold),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -3300,7 +3349,79 @@ impl Editor {
         }
     }
 
+    /// Undo: the whole scene's last change, or with Preferences > General >
+    /// "Undo works on the active piece" on, the active piece's last change.
     pub fn undo(&mut self) {
+        if self.undo_per_piece { self.undo_piece() } else { self.undo_scene() }
+    }
+
+    /// Redo, following the same choice as [`Self::undo`].
+    pub fn redo(&mut self) {
+        if self.undo_per_piece { self.redo_piece() } else { self.redo_scene() }
+    }
+
+    /// Undo the last change to the active piece only, skipping changes to
+    /// other pieces (see `History::undo_piece`).
+    pub fn undo_piece(&mut self) {
+        if !self.prepare_undo(true) {
+            return;
+        }
+        let id = self.scene.active().id;
+        let name = self.scene.active().name.clone();
+        self.status = match self.history.undo_piece(&mut self.scene, id) {
+            Ok(Some(l)) => format!("Undid {l} on {name}"),
+            Ok(None) if self.history.can_undo() => format!(
+                "Nothing more to undo on {name} by itself. Changes that added pieces (Join, Duplicate, Split…) are undone with Undo in whole scene."
+            ),
+            Ok(None) => format!("Nothing to undo on {name}"),
+            Err(b) => format!(
+                "Can't undo {} on {name} alone: it also changed other pieces, and later changes came after it. Use Undo in whole scene.",
+                b.label
+            ),
+        };
+    }
+
+    /// Redo the last undone change to the active piece only.
+    pub fn redo_piece(&mut self) {
+        if !self.prepare_undo(false) {
+            return;
+        }
+        let id = self.scene.active().id;
+        let name = self.scene.active().name.clone();
+        self.status = match self.history.redo_piece(&mut self.scene, id) {
+            Ok(Some(l)) => format!("Redid {l} on {name}"),
+            Ok(None) => format!("Nothing to redo on {name}"),
+            Err(b) => format!(
+                "Can't redo {} on {name} alone: it also changes other pieces. Use Redo in whole scene.",
+                b.label
+            ),
+        };
+    }
+
+    /// What every undo and redo does first: answer open questions and step
+    /// through open tools. False when that handled it, or a job is running.
+    fn prepare_undo(&mut self, undo: bool) -> bool {
+        self.answer_hold_offer(false);
+        if if undo { self.curve_undo() } else { self.curve_redo() } {
+            return false;
+        }
+        if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
+            self.cancel_tube();
+        }
+        if undo && self.retopo_undo_draft_point() {
+            return false;
+        }
+        self.pointer_up();
+        if self.job.is_some() {
+            self.status =
+                format!("Wait for the running operation to finish before {}", if undo { "undoing" } else { "redoing" });
+            return false;
+        }
+        true
+    }
+
+    /// Undo the last change in the whole scene, whichever piece it was on.
+    pub fn undo_scene(&mut self) {
         // An unanswered "edit as a curve?" keeps the stroke, which this undoes.
         self.answer_hold_offer(false);
         // While a curve is open, undo steps through its edits.
@@ -3327,7 +3448,8 @@ impl Editor {
         };
     }
 
-    pub fn redo(&mut self) {
+    /// Redo the last undone change in the whole scene.
+    pub fn redo_scene(&mut self) {
         self.answer_hold_offer(false);
         if self.curve_redo() {
             return;
@@ -3871,51 +3993,122 @@ impl Editor {
     /// Turn a drawn path (physical px) into an editable curve stroke on the
     /// active piece.
     fn begin_curve(&mut self, kind: BrushKind, invert: bool, path: &[Vec2]) {
+        let local: Vec<Vec2> = path.iter().map(|&p| self.canvas_local(p)).collect();
+        let Some(points) = self.curve_points(&self.camera.clone(), self.canvas_size(), &local, kind) else { return };
+        self.begin_curve_points(kind, invert, points);
+    }
+
+    /// Control points on the active piece for a path drawn in canvas pixels
+    /// with `camera`: simplified, raycast onto the surface (or through the
+    /// middle of the part for a centred Curve Move curve). None, with a
+    /// status message where useful, when the path doesn't make a curve.
+    fn curve_points(
+        &mut self,
+        camera: &Camera,
+        size: Vec2,
+        path: &[Vec2],
+        kind: BrushKind,
+    ) -> Option<Vec<(Vec3, Vec3)>> {
         let tol = 6.0 * self.pixels_per_point.max(0.5);
         let mut screen = simplify_path(path, tol, 16);
         if screen.len() == 1 {
             // A click: a short curve isn't useful; nothing to do.
-            return;
+            return None;
         }
         if screen.len() == 2 && screen[0].distance(screen[1]) < tol {
-            return;
+            return None;
         }
         // Long straight drags still get a middle point to bend.
         if screen.len() == 2 {
             screen.insert(1, screen[0].lerp(screen[1], 0.5));
         }
-        let size = self.canvas_size();
         let mesh = &self.scene.active().mesh;
-        let points: Vec<(Vec3, Vec3)> = screen
-            .iter()
-            .filter_map(|&p| {
-                let (o, d) = self.camera.ray(self.canvas_local(p), size);
-                mesh.raycast(o, d).map(|h| (h.point, facing(h.normal, d)))
-            })
-            .collect();
+        let rays: Vec<(Vec3, Vec3)> = screen.iter().map(|&p| camera.ray(p, size)).collect();
+        let points: Vec<(Vec3, Vec3)> =
+            rays.iter().filter_map(|&(o, d)| mesh.raycast(o, d).map(|h| (h.point, facing(h.normal, d)))).collect();
         if points.len() < 2 {
             self.status = "Draw the curve on the model".into();
-            return;
+            return None;
         }
-        let moving = kind == BrushKind::CurveMove;
-        let points = if moving && self.curve_move_centred {
+        if kind == BrushKind::CurveMove && self.curve_move_centred {
             // Through the middle of the part: halfway between where the view
             // ray enters the surface and where it leaves it again.
-            screen
-                .iter()
-                .zip(&points)
-                .map(|(&p, &(q, n))| {
-                    let (_, d) = self.camera.ray(self.canvas_local(p), size);
-                    let eps = mesh.bounds().extent().max_element() * 1e-4;
-                    match mesh.raycast(q + d * eps, d) {
+            let eps = mesh.bounds().extent().max_element() * 1e-4;
+            let hits = rays.iter().filter(|&&(o, d)| mesh.raycast(o, d).is_some());
+            return Some(
+                hits.zip(&points)
+                    .map(|(&(_, d), &(q, n))| match mesh.raycast(q + d * eps, d) {
                         Some(exit) => ((q + exit.point) * 0.5, n),
                         None => (q, n),
-                    }
-                })
-                .collect()
-        } else {
-            points
-        };
+                    })
+                    .collect(),
+            );
+        }
+        Some(points)
+    }
+
+    /// Whether Edit > Last stroke can reopen the last stroke: it was a
+    /// freehand stroke on the active piece and nothing has changed since.
+    pub fn can_reopen_last_stroke(&self) -> bool {
+        self.last_stroke.as_ref().is_some_and(|l| {
+            l.piece == self.scene.active().id && l.revision == self.history.revision() && self.job.is_none()
+        })
+    }
+
+    /// Take the last stroke back and reopen its path as an editable curve
+    /// with the same brush, a Curve Move curve, or a tube (Edit > Last
+    /// stroke). The path is projected with the camera it was drawn with, so
+    /// turning the view since doesn't matter.
+    pub fn reopen_last_stroke(&mut self, what: LastStrokeAs) {
+        if !self.can_reopen_last_stroke() {
+            self.status =
+                "Only the last freehand stroke can be reopened, right after you make it (before anything else changes)"
+                    .into();
+            return;
+        }
+        let Some(last) = self.last_stroke.take() else { return };
+        self.cancel_curve();
+        self.cancel_tube();
+        self.undo_scene();
+        match what {
+            LastStrokeAs::Curve | LastStrokeAs::CurveMove => {
+                let kind = if what == LastStrokeAs::CurveMove { BrushKind::CurveMove } else { last.kind };
+                let Some(points) = self.curve_points(&last.camera, last.size, &last.path, kind) else {
+                    self.redo_scene();
+                    self.status = "That stroke is too short to make a curve".into();
+                    return;
+                };
+                if what == LastStrokeAs::CurveMove {
+                    self.brush_kind = BrushKind::CurveMove;
+                }
+                let invert = what == LastStrokeAs::Curve && last.invert;
+                self.begin_curve_points(kind, invert, points);
+                if what == LastStrokeAs::Curve {
+                    self.status = format!(
+                        "{} stroke reopened as a curve: drag its points, then Enter applies it",
+                        last.kind.label()
+                    );
+                }
+            }
+            LastStrokeAs::Tube => {
+                let points: Vec<Vec3> = self
+                    .curve_points(&last.camera, last.size, &last.path, last.kind)
+                    .map(|ps| ps.into_iter().map(|(p, _)| p).collect())
+                    .unwrap_or_default();
+                if points.len() < 2 {
+                    self.redo_scene();
+                    self.status = "That stroke is too short to make a tube".into();
+                    return;
+                }
+                let radius = (self.world_radius(points[0], self.brush_radius_pt) * 0.5).max(1e-3);
+                self.open_tube(points, radius, Some(last.piece));
+            }
+        }
+    }
+
+    /// Open an editable curve stroke through `points` on the active piece.
+    fn begin_curve_points(&mut self, kind: BrushKind, invert: bool, points: Vec<(Vec3, Vec3)>) {
+        let moving = kind == BrushKind::CurveMove;
         let rest = if moving { points.clone() } else { Vec::new() };
         let piece = self.scene.active();
         let mut preview = piece.mesh.clone();
@@ -4056,7 +4249,7 @@ impl Editor {
     /// has been still, as a fraction of the hold time (for the cursor).
     pub fn hold_progress(&self, now: std::time::Instant) -> Option<f32> {
         match &self.drag {
-            Drag::Stroke { hold: Some(h), .. } if self.hold_reaches(h) => {
+            Drag::Stroke { hold: Some(h), .. } if self.hold_to_curve && self.hold_reaches(h) => {
                 Some(now.saturating_duration_since(h.still_since).as_secs_f32() / HOLD_TO_CURVE.as_secs_f32())
             }
             _ => None,
@@ -4075,7 +4268,8 @@ impl Editor {
     /// extends and reshapes it. True if it did.
     pub fn tick_hold(&mut self, now: std::time::Instant) -> bool {
         let Drag::Stroke { hold: Some(h), .. } = &self.drag else { return false };
-        if now.saturating_duration_since(h.still_since) < HOLD_TO_CURVE || !self.hold_reaches(h) {
+        if !self.hold_to_curve || now.saturating_duration_since(h.still_since) < HOLD_TO_CURVE || !self.hold_reaches(h)
+        {
             return false;
         }
         let Drag::Stroke { hold: Some(h), .. } = std::mem::replace(&mut self.drag, Drag::None) else {
@@ -5907,6 +6101,18 @@ impl Editor {
                 self.redo();
                 E::None
             }
+            C::UndoPiece => {
+                self.undo_piece();
+                E::None
+            }
+            C::LastStrokeAsCurve => {
+                self.reopen_last_stroke(LastStrokeAs::Curve);
+                E::None
+            }
+            C::RedoPiece => {
+                self.redo_piece();
+                E::None
+            }
             C::CommandPalette => {
                 self.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
                 E::None
@@ -6968,6 +7174,61 @@ mod tests {
         e.scene.active_mut().mesh.set_groups(groups);
         e.mask_group_borders();
         assert!(e.status.starts_with("Mask group borders:"), "{}", e.status);
+    }
+
+    /// Move vertex 0 of piece `i` by `d` as one undo step.
+    fn nudge_piece(e: &mut Editor, i: usize, label: &str, d: Vec3) {
+        let id = e.scene.pieces[i].id;
+        e.history.begin(label, id, &e.scene.pieces[i].mesh);
+        e.history.touch(&e.scene.pieces[i].mesh, 0);
+        let mesh = &mut e.scene.pieces[i].mesh;
+        mesh.positions[0] += d;
+        mesh.update_after_move(&[0]);
+        e.history.commit();
+    }
+
+    #[test]
+    fn undo_on_this_piece_skips_the_others_and_the_setting_makes_it_the_default() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        let head = 0;
+        e.scene.set_active(head);
+        let (h0, t0) = (e.scene.pieces[0].mesh.positions[0], e.scene.pieces[1].mesh.positions[0]);
+        nudge_piece(&mut e, 0, "Head stroke", Vec3::X);
+        nudge_piece(&mut e, 1, "Hat stroke", Vec3::Y);
+        // The normal undo takes back the hat; on this piece, the head.
+        e.undo_piece();
+        assert_eq!(e.scene.pieces[0].mesh.positions[0], h0, "{}", e.status);
+        assert_eq!(e.scene.pieces[1].mesh.positions[0], t0 + Vec3::Y, "the hat keeps its stroke");
+        assert!(e.status.starts_with("Undid Head stroke on"), "{}", e.status);
+        e.undo_piece();
+        assert!(e.status.starts_with("Nothing more to undo on"), "{}", e.status);
+        e.redo_piece();
+        assert_eq!(e.scene.pieces[0].mesh.positions[0], h0 + Vec3::X);
+        // With the setting on, plain Undo works on the active piece.
+        e.undo_per_piece = true;
+        e.undo();
+        assert_eq!(e.scene.pieces[0].mesh.positions[0], h0);
+        assert_eq!(e.scene.pieces[1].mesh.positions[0], t0 + Vec3::Y);
+        // And the whole-scene undo is still there.
+        e.undo_scene();
+        assert_eq!(e.scene.pieces[1].mesh.positions[0], t0);
+        // A change that also changed other pieces, with newer changes after
+        // it, is refused: Join removed the head, then the hat was sculpted.
+        e.undo_per_piece = false;
+        e.redo_scene();
+        e.join_visible();
+        let joined = e.scene.active_index();
+        nudge_piece(&mut e, joined, "Joined stroke", Vec3::Z);
+        e.undo_piece();
+        assert!(e.status.starts_with("Undid Joined stroke"), "{}", e.status);
+        e.undo_piece();
+        assert!(
+            e.status.starts_with("Nothing more to undo on"),
+            "the join itself needs the whole-scene undo: {}",
+            e.status
+        );
+        assert_eq!(e.scene.pieces.len(), 1, "nothing changed");
     }
 
     #[test]
@@ -8145,6 +8406,68 @@ mod tests {
         assert_eq!(e.scene.active().mesh.positions, before);
     }
 
+    /// A freehand stroke across the sphere, then the view turned.
+    fn stroke_then_turn(e: &mut Editor) -> Vec<Vec3> {
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer = Some(Vec2::new(330.0, 320.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=30 {
+            e.pointer_moved(Vec2::new(330.0 + i as f32 * 3.0, 320.0 - (i as f32 * 0.2).sin() * 20.0));
+        }
+        e.pointer_up();
+        assert_ne!(e.scene.active().mesh.positions, before, "the stroke sculpted");
+        e.camera.yaw += 0.7;
+        before
+    }
+
+    #[test]
+    fn the_last_stroke_reopens_as_a_curve_curve_move_or_tube() {
+        let mut e = editor();
+        e.hold_to_curve = false; // works without hold-to-curve too
+        // As a curve with the same brush, placed where it was drawn although
+        // the view has turned since.
+        let before = stroke_then_turn(&mut e);
+        assert!(e.can_reopen_last_stroke());
+        e.reopen_last_stroke(LastStrokeAs::Curve);
+        assert_eq!(e.scene.active().mesh.positions, before, "the stroke was taken back");
+        let c = e.curve.as_ref().expect("a curve");
+        assert_eq!(c.kind, BrushKind::Draw);
+        assert!(c.points.len() >= 3);
+        // Its points are on the surface where the stroke went: the front of
+        // the sphere at the old view (z > 0), not where the new view looks.
+        assert!(c.points.iter().all(|(p, _)| p.z > 0.3), "{:?}", c.points.iter().map(|p| p.0).collect::<Vec<_>>());
+        e.accept_curve();
+        assert_ne!(e.scene.active().mesh.positions, before, "Enter applies it");
+        assert!(!e.can_reopen_last_stroke(), "a curve isn't a freehand stroke");
+        e.undo_scene();
+        // As a Curve Move curve.
+        e.camera.yaw = 0.0;
+        stroke_then_turn(&mut e);
+        e.reopen_last_stroke(LastStrokeAs::CurveMove);
+        assert_eq!(e.curve.as_ref().map(|c| c.kind), Some(BrushKind::CurveMove));
+        assert_eq!(e.brush_kind, BrushKind::CurveMove);
+        e.cancel_curve();
+        // As a tube, into the same piece.
+        e.brush_kind = BrushKind::Draw;
+        e.camera.yaw = 0.0;
+        stroke_then_turn(&mut e);
+        let id = e.scene.active().id;
+        e.reopen_last_stroke(LastStrokeAs::Tube);
+        let t = e.tube.as_ref().expect("a tube");
+        assert_eq!(t.into, Some(id));
+        assert!(t.points.len() >= 2);
+        e.cancel_tube();
+        // Only right after the stroke: anything in between stops it.
+        e.camera.yaw = 0.0;
+        stroke_then_turn(&mut e);
+        e.invert_mask();
+        assert!(!e.can_reopen_last_stroke());
+        let pos = e.scene.active().mesh.positions.clone();
+        e.reopen_last_stroke(LastStrokeAs::Curve);
+        assert!(e.curve.is_none() && e.status.starts_with("Only the last freehand stroke"), "{}", e.status);
+        assert_eq!(e.scene.active().mesh.positions, pos, "nothing changed");
+    }
+
     #[test]
     fn holding_still_turns_a_freehand_stroke_into_a_curve() {
         let mut e = editor();
@@ -8943,6 +9266,7 @@ mod tests {
     fn settings_round_trip_through_the_editor() {
         use crate::settings::{Settings, UiLayout};
         let mut s = Settings {
+            undo_per_piece: true,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,

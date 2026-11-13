@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Undo on this piece** (Ctrl+Alt+Z, redo Ctrl+Alt+Shift+Z, Edit menu and command palette): takes back the last change to the active piece only, even if you changed other pieces since. **Preferences > General > Undo works on the active piece** makes that what Ctrl+Z does, with **Edit > Undo in whole scene** for the usual undo. A change that also changed other pieces (Join, Merge, Split…) is only undone this way when nothing came after it; otherwise the status bar explains why. The History section can show only the active piece's changes.
+- **Edit > Last stroke:** reopen the Freehand stroke you just made as an editable curve with the same brush (**Edit as curve**, also a keymap command), or use its path as a **Curve Move curve** or a **tube path**. The stroke is taken back first, and its path is placed where it was drawn even if the view has turned since. Works right after the stroke, whether or not hold-to-curve is on.
+
 ## [4.0.0-beta.5] - 2026-11-12
 
 ### Added
