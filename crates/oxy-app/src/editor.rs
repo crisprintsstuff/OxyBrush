@@ -918,6 +918,8 @@ pub struct Editor {
     /// Ctrl+Z (Undo and Redo) works on the active piece only, instead of
     /// the whole scene.
     pub undo_per_piece: bool,
+    /// Closing the gizmo puts back changes not applied (Preferences).
+    pub gizmo_done_reverts: bool,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window's size, position and state, kept up to date by the
@@ -1285,6 +1287,7 @@ impl Default for Editor {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
             undo_per_piece: false,
+            gizmo_done_reverts: false,
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
@@ -1699,6 +1702,7 @@ impl Editor {
             },
             remember_brushes: self.remember_brushes,
             undo_per_piece: self.undo_per_piece,
+            gizmo_done_reverts: self.gizmo_done_reverts,
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
@@ -1915,6 +1919,7 @@ impl Editor {
         self.remesh_engine = s.remesh_engine;
         self.remember_brushes = s.remember_brushes;
         self.undo_per_piece = s.undo_per_piece;
+        self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
@@ -9442,6 +9447,7 @@ mod tests {
         use crate::settings::{Settings, UiLayout};
         let mut s = Settings {
             undo_per_piece: true,
+            gizmo_done_reverts: true,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,

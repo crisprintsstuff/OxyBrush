@@ -1118,6 +1118,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         "Undo works on the active piece",
         "On: Undo and Redo (Ctrl+Z) take back changes to the active piece only, even if you changed other pieces since; Edit > Undo in whole scene does the usual undo. Off: Undo takes back the last change anywhere, and Ctrl+Alt+Z undoes on the active piece.",
     );
+    tips::check_plain(
+        ui,
+        &mut ed.gizmo_done_reverts,
+        "Closing the gizmo puts back changes not applied",
+        "On: Done (or closing the transform gizmo any other way) puts back what you moved, turned or scaled since the gizmo opened or since the last Apply, like Cancel; Redo brings it back. Off: closing the gizmo keeps everything, and Cancel puts changes back.",
+    );
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(
