@@ -342,6 +342,8 @@ pub struct Settings {
     /// Closing the transform gizmo (Done, another tool) puts back changes
     /// not applied with Apply. Off: closing keeps everything.
     pub gizmo_done_reverts: bool,
+    /// The gizmo pivot moves to the unmasked part after each change.
+    pub gizmo_pivot_follows: bool,
     /// Brush size on the model instead of on screen, for all brushes.
     pub radius_on_model: bool,
     /// Living strokes (RFC 0017): keep strokes editable. Off by default.
@@ -848,6 +850,7 @@ impl Default for Settings {
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: false,
+            gizmo_pivot_follows: true,
             radius_on_model: false,
             brush_radius_world: 0.0,
             living_strokes: false,
@@ -990,6 +993,7 @@ impl Settings {
         ) + &format!("remember_brushes = {}\n", self.remember_brushes)
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
+            + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
             + &format!("radius_on_model = {}\n", self.radius_on_model)
             + &format!("living_strokes = {}\n", self.living_strokes)
             + &format!("living_budget_mb = {}\n", self.living_budget_mb)
@@ -1215,6 +1219,7 @@ impl Settings {
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
+                "gizmo_pivot_follows" => s.gizmo_pivot_follows = v.parse().unwrap_or(s.gizmo_pivot_follows),
                 "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
                 "living_strokes" => s.living_strokes = v.parse().unwrap_or(s.living_strokes),
                 "living_budget_mb" => {
@@ -1485,6 +1490,7 @@ mod tests {
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: true,
+            gizmo_pivot_follows: false,
             radius_on_model: true,
             brush_radius_world: 0.125,
             living_strokes: true,
