@@ -120,6 +120,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::AddCylinder, "pieces primitive tube", |e| e.open_primitive("cylinder")),
         cmd(ed, Cmd::AddCone, "pieces primitive", |e| e.open_primitive("cone")),
         cmd(ed, Cmd::AddTorus, "pieces primitive ring donut", |e| e.open_primitive("torus")),
+        cmd(ed, Cmd::AddDisc, "pieces primitive disc disk circle round plate washer ring slice pie", |e| {
+            e.open_primitive("disc")
+        }),
         cmd(ed, Cmd::AddTube, "pieces tube pipe horn tentacle curve path sweep", |e| e.start_tube()),
         cmd(ed, Cmd::EditTube, "pieces tube edit change reshape again path thickness", |e| e.edit_tube()),
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
