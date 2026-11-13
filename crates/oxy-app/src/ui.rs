@@ -3569,6 +3569,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.delete_lower_levels();
     }
     ui.separator();
+    if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
+        ed.subdivide_masked();
+    }
     if tips::button(ui, "Subdivide (single mesh)", Cmd::SubdivideOnce).clicked() {
         ed.subdivide(ed.subdivision_smooth);
     }
@@ -3995,6 +3998,9 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     }
     if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
         ed.split_masked();
+    }
+    if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
+        ed.subdivide_masked();
     }
     ui.separator();
     if tips::hover(ui.button("Blur"), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {

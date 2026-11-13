@@ -25,6 +25,149 @@ pub fn midpoint_subdivide(positions: &[Vec3], tris: &[[u32; 3]]) -> (Vec<Vec3>, 
     (pos, out)
 }
 
+/// Subdivide only part of a mesh: the triangles marked in `chosen` split
+/// into four, and their neighbours split just enough (in two, or in four)
+/// to meet the new points, so the surface stays closed: red-green
+/// refinement (Bank, Sherman & Weiser 1983). A neighbour that would have
+/// two of its edges split is split into four too, which keeps triangles
+/// well shaped; that can spread the area by a little.
+///
+/// New points sit at edge middles, or with `smooth` on the interpolating
+/// butterfly rule (Dyn, Levin & Gregory, "A butterfly subdivision scheme
+/// for surface interpolation with tension control", ACM TOG 1990), which
+/// curves them with the surface while every old point stays where it was,
+/// so the rest of the mesh doesn't move. Edges at a border, or whose
+/// neighbourhood is incomplete, use the middle.
+///
+/// Mask and color of new points are the average of the edge's ends; new
+/// triangles keep their triangle's face group and visibility.
+///
+/// RETURNS: the new mesh data, or None if nothing is chosen.
+pub fn subdivide_where(data: &crate::MeshData, chosen: &[bool], smooth: bool) -> Option<crate::MeshData> {
+    let tris = &data.triangles;
+    if !chosen.iter().any(|&c| c) {
+        return None;
+    }
+    let key = |a: u32, b: u32| (a.min(b), a.max(b));
+    // Triangles around each point (CSR), so the work stays near the chosen
+    // area instead of hashing every edge of the mesh.
+    let n = data.positions.len();
+    let mut offsets = vec![0u32; n + 1];
+    for tri in tris {
+        for &v in tri {
+            offsets[v as usize + 1] += 1;
+        }
+    }
+    for i in 0..n {
+        offsets[i + 1] += offsets[i];
+    }
+    let mut cursor = offsets.clone();
+    let mut around = vec![0u32; tris.len() * 3];
+    for (t, tri) in tris.iter().enumerate() {
+        for &v in tri {
+            around[cursor[v as usize] as usize] = t as u32;
+            cursor[v as usize] += 1;
+        }
+    }
+    let at = |v: u32| &around[offsets[v as usize] as usize..offsets[v as usize + 1] as usize];
+    // The triangles on edge a b.
+    let on_edge = |a: u32, b: u32| at(a).iter().copied().filter(move |&t| tris[t as usize].contains(&b));
+    // The third point of the triangle with directed edge a → b.
+    let opposite = |a: u32, b: u32| -> Option<u32> {
+        at(a).iter().find_map(|&t| {
+            let tri = tris[t as usize];
+            let i = tri.iter().position(|&v| v == a)?;
+            (tri[(i + 1) % 3] == b).then_some(tri[(i + 2) % 3])
+        })
+    };
+    let edges_of = |t: usize| {
+        let tri = tris[t];
+        [key(tri[0], tri[1]), key(tri[1], tri[2]), key(tri[2], tri[0])]
+    };
+    // Grow the red set until every other triangle has at most one split edge.
+    let mut red: Vec<bool> = (0..tris.len()).map(|t| chosen.get(t).copied().unwrap_or(false)).collect();
+    let mut split: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    let mut queue: Vec<(u32, u32)> = Vec::new();
+    for t in (0..tris.len()).filter(|&t| red[t]) {
+        for e in edges_of(t) {
+            if split.insert(e) {
+                queue.push(e);
+            }
+        }
+    }
+    while let Some((a, b)) = queue.pop() {
+        // A neighbour across a newly split edge may now have two.
+        for t in on_edge(a, b).collect::<Vec<_>>() {
+            let t = t as usize;
+            if red[t] {
+                continue;
+            }
+            let es = edges_of(t);
+            if es.iter().filter(|e| split.contains(e)).count() >= 2 {
+                red[t] = true;
+                for e in es {
+                    if split.insert(e) {
+                        queue.push(e);
+                    }
+                }
+            }
+        }
+    }
+    let p = &data.positions;
+    let mut out = data.clone();
+    let mut mid: HashMap<(u32, u32), u32> = HashMap::new();
+    let mut ordered: Vec<(u32, u32)> = split.into_iter().collect();
+    ordered.sort_unstable();
+    for (a, b) in ordered {
+        let middle = (p[a as usize] + p[b as usize]) * 0.5;
+        let butterfly = || -> Option<Vec3> {
+            if on_edge(a, b).count() != 2 {
+                return None;
+            }
+            let c = opposite(a, b)?;
+            let d = opposite(b, a)?;
+            let wings = [opposite(a, c)?, opposite(c, b)?, opposite(d, a)?, opposite(b, d)?];
+            let e: Vec3 = wings.iter().map(|&w| p[w as usize]).sum();
+            Some(middle + (p[c as usize] + p[d as usize]) * 0.125 - e * 0.0625)
+        };
+        let pos = if smooth { butterfly().unwrap_or(middle) } else { middle };
+        let v = out.positions.len() as u32;
+        out.positions.push(pos);
+        if !data.mask.is_empty() {
+            out.mask.push((data.mask[a as usize] + data.mask[b as usize]) * 0.5);
+        }
+        if !data.color.is_empty() {
+            out.color.push((data.color[a as usize] + data.color[b as usize]) * 0.5);
+        }
+        mid.insert((a, b), v);
+    }
+    let m = |a: u32, b: u32| mid.get(&key(a, b)).copied();
+    let (mut triangles, mut groups, mut hidden) = (Vec::new(), Vec::new(), Vec::new());
+    for (t, &[a, b, c]) in tris.iter().enumerate() {
+        let new: Vec<[u32; 3]> = match (m(a, b), m(b, c), m(c, a)) {
+            (Some(ab), Some(bc), Some(ca)) => vec![[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]],
+            (Some(ab), None, None) => vec![[a, ab, c], [ab, b, c]],
+            (None, Some(bc), None) => vec![[a, b, bc], [a, bc, c]],
+            (None, None, Some(ca)) => vec![[a, b, ca], [ca, b, c]],
+            (None, None, None) => vec![[a, b, c]],
+            _ => unreachable!("a triangle with two split edges was made red"),
+        };
+        for tri in new {
+            triangles.push(tri);
+            groups.push(data.groups.get(t).copied().unwrap_or(0));
+            hidden.push(data.hidden.get(t).copied().unwrap_or(false));
+        }
+    }
+    out.triangles = triangles;
+    if !data.groups.is_empty() {
+        out.groups = groups;
+    }
+    if !data.hidden.is_empty() {
+        out.hidden = hidden;
+    }
+    Some(out)
+}
+
 /// Subdivide a mesh once, then apply `smooth_passes` of Laplacian smoothing
 /// (a cheap stand-in for a true smooth subdivision scheme). Masks are carried over.
 pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
@@ -771,5 +914,39 @@ mod hole_tests {
         // A closed mesh has nothing to close.
         let mut whole = primitives::icosphere(3, 1.0).to_data();
         assert_eq!(close_holes(&mut whole), 0);
+    }
+
+    #[test]
+    fn subdivide_where_splits_only_the_chosen_part_and_stays_closed() {
+        let sphere = crate::primitives::icosphere(2, 1.0);
+        let data = sphere.to_data();
+        // The top cap.
+        let chosen: Vec<bool> =
+            data.triangles.iter().map(|t| t.iter().all(|&v| data.positions[v as usize].y > 0.6)).collect();
+        let picked = chosen.iter().filter(|&&c| c).count();
+        for smooth in [false, true] {
+            let out = subdivide_where(&data, &chosen, smooth).unwrap();
+            let m = Mesh::from_data(out.clone());
+            assert!(check_manifold(&m).is_manifold, "closed, no cracks ({smooth})");
+            // At least the chosen ones became four each; the bottom is untouched.
+            assert!(out.triangles.len() >= data.triangles.len() + 3 * picked);
+            let low = |d: &crate::MeshData| {
+                d.triangles.iter().filter(|t| t.iter().all(|&v| d.positions[v as usize].y < -0.2)).count()
+            };
+            assert_eq!(low(&out), low(&data), "the far side isn't split");
+            // Old points never move.
+            assert_eq!(&out.positions[..data.positions.len()], &data.positions[..]);
+            let r = |d: &crate::MeshData, from: usize| {
+                d.positions[from..].iter().map(|p| p.length()).fold(f32::MAX, f32::min)
+            };
+            if smooth {
+                // The butterfly curves new points out towards the sphere.
+                let flat = subdivide_where(&data, &chosen, false).unwrap();
+                assert!(r(&out, data.positions.len()) > r(&flat, data.positions.len()));
+            }
+            assert_eq!(out.groups.len(), out.triangles.len());
+            assert_eq!(out.mask.len(), out.positions.len());
+        }
+        assert!(subdivide_where(&data, &vec![false; data.triangles.len()], true).is_none());
     }
 }

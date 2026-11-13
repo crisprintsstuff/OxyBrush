@@ -135,6 +135,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it. Mask > Fill masks everything. Invert and Fill work on what's visible: hidden parts keep their mask.\n\
 - The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically. Mask border masks the edge of an open surface or of what's left visible after hiding part of it; Mask group borders masks the lines where face groups meet. Grow the mask to widen either.\n\
+- Subdivide masked (Mask and Mesh menus) adds resolution only where you mask: the masked triangles split into four, their neighbours just enough to keep the surface closed. Ctrl+M on a face group (or Groups > Group by islands first, for an imported model whose parts are one piece) masks one part, like a single feather. Smooth (Topology > Subdivision levels) curves the new points with the surface; existing points never move. Repeat it for finer still.\n\
 - Split masked moves the masked part into a new piece (Invert first to split off the unmasked part). Extract mask… makes a new shell from the masked area and leaves the piece whole.",
     },
     Topic {

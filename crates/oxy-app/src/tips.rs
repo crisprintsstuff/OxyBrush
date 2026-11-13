@@ -192,6 +192,7 @@ commands! {
     GrowMask => "Grow mask", "", "Spread the mask outward by one ring of vertices.";
     ShrinkMask => "Shrink mask", "", "Pull the mask inward by one ring of vertices.";
     SubdivideOnce => "Subdivide (single mesh)", "", "Smooth-subdivide the mesh once. This removes existing subdivision levels.";
+    SubdivideMasked => "Subdivide masked", "", "Split only the masked triangles into four, for more resolution where you need it (a feather, a face) without subdividing the whole piece. Their neighbours are split just enough to keep the surface closed. Smooth on curves the new points with the surface; existing points never move. Removes existing subdivision levels.";
     PaintBrush => "Paint brush", "", "Switch to the Paint brush and color the surface without moving it.";
     Back => "Back view", "", "Look at the back of the model.";
     Left => "Left view", "", "Look at the left side of the model.";

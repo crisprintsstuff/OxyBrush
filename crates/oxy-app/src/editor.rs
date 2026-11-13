@@ -5271,6 +5271,42 @@ impl Editor {
         self.status = format!("Subdivided: {} triangles", self.scene.active().mesh.triangle_count());
     }
 
+    /// Subdivide only the masked part of the active piece (triangles whose
+    /// corners are masked at least half on average, and visible), with its
+    /// border blended in; smoothed with the Smooth toggle. One undo step;
+    /// removes subdivision levels, like Subdivide.
+    pub fn subdivide_masked(&mut self) {
+        let mesh = &self.scene.active().mesh;
+        let data = mesh.to_data();
+        let chosen: Vec<bool> = data
+            .triangles
+            .iter()
+            .enumerate()
+            .map(|(t, tri)| {
+                let m: f32 = tri.iter().map(|&v| data.mask.get(v as usize).copied().unwrap_or(0.0)).sum::<f32>() / 3.0;
+                m >= 0.5 && !data.hidden.get(t).copied().unwrap_or(false)
+            })
+            .collect();
+        let picked = chosen.iter().filter(|&&c| c).count();
+        if picked == 0 {
+            self.status = "Nothing masked to subdivide: mask the part that needs more resolution first (Ctrl+M masks a face group)".into();
+            return;
+        }
+        if self.max_triangles > 0 && data.triangles.len() + 3 * picked > self.max_triangles {
+            self.status = format!(
+                "Subdividing the masked part would make over {} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
+                data.triangles.len() + 3 * picked,
+                self.max_triangles
+            );
+            return;
+        }
+        let Some(out) = oxy_mesh::topo::subdivide_where(&data, &chosen, self.subdivision_smooth) else { return };
+        let before = data.triangles.len();
+        let after = out.triangles.len();
+        self.replace_active_mesh("Subdivide masked", Mesh::from_data(out));
+        self.status = format!("Subdivided the masked part: {before} → {after} triangles");
+    }
+
     /// Fill every hole (open boundary) in the active piece with a smooth
     /// patch, one undo step.
     pub fn close_holes(&mut self) {
@@ -8488,6 +8524,47 @@ mod tests {
         assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 0.0));
         e.undo();
         assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0));
+    }
+
+    #[test]
+    fn subdivide_masked_adds_resolution_only_where_masked() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.clone();
+        e.subdivide_masked();
+        assert!(e.status.contains("Nothing masked"));
+        assert_eq!(e.scene.active().mesh.triangle_count(), before.triangle_count());
+        // Mask the top cap, like Ctrl+M on a feather.
+        let mask: Vec<f32> = before.positions.iter().map(|p| if p.y > 0.8 { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+        let edge_len = |m: &Mesh, top: bool| {
+            let (mut sum, mut n) = (0.0, 0);
+            for t in &m.triangles {
+                let p = t.map(|v| m.positions[v as usize]);
+                if p.iter().all(|q| (q.y > 0.9) == top && (q.y < -0.9) != top) {
+                    sum += p[0].distance(p[1]);
+                    n += 1;
+                }
+            }
+            sum / n.max(1) as f32
+        };
+        let (top0, bottom0) = (edge_len(&before, true), edge_len(&before, false));
+        e.subdivide_masked();
+        let after = e.scene.active().mesh.clone();
+        assert!(after.triangle_count() > before.triangle_count());
+        assert!(e.status.contains("Subdivided the masked part"), "{}", e.status);
+        assert!(oxy_mesh::topo::check_manifold(&after).is_manifold, "closed");
+        assert!(edge_len(&after, true) < top0 * 0.6, "finer on top");
+        assert!((edge_len(&after, false) - bottom0).abs() < 1e-5, "unchanged at the bottom");
+        // The new points are masked too, so it can be repeated.
+        assert!(
+            after.mask.iter().filter(|&&m| m > 0.5).count() > before.positions.iter().filter(|p| p.y > 0.8).count()
+        );
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), before.triangle_count());
+        // A triangle limit stops it.
+        e.max_triangles = before.triangle_count() + 10;
+        e.subdivide_masked();
+        assert!(e.status.contains("limit"), "{}", e.status);
     }
 
     #[test]
