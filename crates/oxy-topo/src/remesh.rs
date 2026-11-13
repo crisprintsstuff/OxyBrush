@@ -6,7 +6,8 @@
 //!    the nearest distance and triangle id, packed into one `u64`).
 //! 2. Sign: band cells use the nearest triangle's normal; a flood fill from
 //!    the grid border marks the outside, so everything enclosed is inside.
-//!    Open meshes (nothing enclosed) fall back to a thin shell.
+//!    Surfaces with holes have them patched first (see `patched`). With [`RemeshOptions::shell`], the signed distance is folded
+//!    into a wall of the chosen thickness and side instead of being filled.
 //!    Where parts of one mesh overlap (a primitive added into a piece, two
 //!    pieces joined, a fold sculpted through the model), voxels next to the
 //!    triangles buried inside the solid are signed by winding number
@@ -43,11 +44,68 @@ pub struct RemeshOptions {
     pub adaptivity: f32,
     /// Which volumetric engine to use.
     pub engine: RemeshEngine,
+    /// Make a wall of this thickness around the surface instead of filling
+    /// it (None: closed surfaces are filled, holes closed).
+    pub shell: Option<Shell>,
 }
 
 impl Default for RemeshOptions {
     fn default() -> Self {
-        Self { resolution: 128, smooth_passes: 1, adaptivity: 0.0, engine: RemeshEngine::Vdb }
+        Self { resolution: 128, smooth_passes: 1, adaptivity: 0.0, engine: RemeshEngine::Vdb, shell: None }
+    }
+}
+
+/// A wall around the surface, for a remesh that makes a shell.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Shell {
+    /// Wall thickness, in scene units.
+    pub thickness: f32,
+    pub side: ShellSide,
+}
+
+/// Which side of the surface the shell's wall goes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShellSide {
+    /// Out from the surface (it stays the inside of the wall).
+    Outward,
+    /// Half on each side.
+    #[default]
+    Both,
+    /// In from the surface (it stays the outside of the wall: a hollowed model).
+    Inward,
+}
+
+impl ShellSide {
+    pub const ALL: [ShellSide; 3] = [ShellSide::Outward, ShellSide::Both, ShellSide::Inward];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShellSide::Outward => "Outward",
+            ShellSide::Both => "Both sides",
+            ShellSide::Inward => "Inward",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ShellSide::Outward => "outward",
+            ShellSide::Both => "both",
+            ShellSide::Inward => "inward",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.key() == k)
+    }
+
+    /// The shell's signed distance, from the surface's signed distance `d`
+    /// (negative inside): negative in the wall.
+    fn fold(self, d: f32, thickness: f32) -> f32 {
+        match self {
+            ShellSide::Outward => (-d).max(d - thickness),
+            ShellSide::Both => d.abs() - thickness * 0.5,
+            ShellSide::Inward => d.max(-d - thickness),
+        }
     }
 }
 
@@ -64,11 +122,13 @@ pub struct VdbRemeshOptions {
     pub smooth_passes: u32,
     /// Surface offset dilation (>0) or erosion (<0).
     pub offset: f32,
+    /// See [`RemeshOptions::shell`].
+    pub shell: Option<Shell>,
 }
 
 impl Default for VdbRemeshOptions {
     fn default() -> Self {
-        Self { voxel_size: None, resolution: 128, adaptivity: 0.0, smooth_passes: 1, offset: 0.0 }
+        Self { voxel_size: None, resolution: 128, adaptivity: 0.0, smooth_passes: 1, offset: 0.0, shell: None }
     }
 }
 
@@ -76,6 +136,8 @@ impl Default for VdbRemeshOptions {
 pub enum RemeshError {
     Empty,
     NoSurface,
+    /// Nothing to fill: an open sheet, with Shell off.
+    NotClosed,
 }
 
 impl std::fmt::Display for RemeshError {
@@ -83,6 +145,9 @@ impl std::fmt::Display for RemeshError {
         match self {
             RemeshError::Empty => write!(f, "nothing to remesh"),
             RemeshError::NoSurface => write!(f, "remesh produced no surface (try a higher resolution)"),
+            RemeshError::NotClosed => {
+                write!(f, "this surface doesn't enclose anything to fill: turn on Shell to give it a thickness")
+            }
         }
     }
 }
@@ -114,18 +179,21 @@ impl Grid {
 /// Vertex color, mask and face groups carry over from `meshes` (see
 /// [`crate::transfer_attributes`]).
 pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, RemeshError> {
+    let copies = patched(meshes, opts.shell)?;
+    let filled: Vec<&Mesh> = meshes.iter().zip(&copies).map(|(m, c)| c.as_ref().unwrap_or(m)).collect();
     let mut out = match opts.engine {
         RemeshEngine::Vdb => vdb_remesh(
-            meshes,
+            &filled,
             VdbRemeshOptions {
                 voxel_size: None,
                 resolution: opts.resolution,
                 adaptivity: opts.adaptivity,
                 smooth_passes: opts.smooth_passes,
                 offset: 0.0,
+                shell: opts.shell,
             },
         ),
-        RemeshEngine::RegularGrid => regular_grid_remesh(meshes, opts),
+        RemeshEngine::RegularGrid => regular_grid_remesh(&filled, opts),
     }?;
     crate::transfer_attributes(meshes, &mut out);
     Ok(out)
@@ -143,35 +211,96 @@ pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, Remes
 /// across the lines where the surface crosses itself), get their side from
 /// the winding number instead ([`crate::winding`]). `None` when nothing is
 /// buried, which costs one winding query per 8 triangles.
-fn with_sign_override<R>(
-    positions: &[Vec3],
-    triangles: &[[u32; 3]],
-    f: impl FnOnce(Option<&oxy_vdb::SignOverride>) -> R,
-) -> R {
+fn with_sign_override<R>(positions: &[Vec3], triangles: &[[u32; 3]], f: impl FnOnce(&oxy_vdb::Signing) -> R) -> R {
     let winding = crate::winding::Winding::new(positions, triangles);
     let buried = winding.buried();
     if !buried.contains(&true) {
-        return f(None);
+        return f(&oxy_vdb::Signing { thin_wall_if_open: false, ..Default::default() });
     }
     let suspect = crate::winding::grow_triangles(triangles, &buried, 2);
     let inside = |p: Vec3| winding.at(p) > 0.5;
-    f(Some(&oxy_vdb::SignOverride { suspect: &suspect, inside: &inside }))
+    f(&oxy_vdb::Signing {
+        sign: Some(oxy_vdb::SignOverride { suspect: &suspect, inside: &inside }),
+        thin_wall_if_open: false,
+    })
 }
 
-/// The union of `meshes` as one narrow-band level set.
-fn union_level_set(meshes: &[&Mesh], h: f32) -> Option<oxy_vdb::VdbFloatGrid> {
+/// Without a shell, a mesh with holes has them patched first (as Mesh >
+/// Close holes does), on a copy: a fill from outside would leak in through
+/// them and leave only a thin wall around the surface. A surface that
+/// encloses nothing (a sheet; see [`crate::winding::Winding::encloses`])
+/// can't be filled.
+///
+/// RETURNS: per mesh, its patched copy (None: use it as it is).
+fn patched(meshes: &[&Mesh], shell: Option<Shell>) -> Result<Vec<Option<Mesh>>, RemeshError> {
+    meshes
+        .iter()
+        .map(|m| {
+            if shell.is_some() || m.triangle_count() == 0 || !is_open(&m.triangles) {
+                return Ok(None);
+            }
+            if !crate::winding::Winding::new(&m.positions, &m.triangles).encloses() {
+                return Err(RemeshError::NotClosed);
+            }
+            let mut data = m.to_data();
+            oxy_mesh::topo::close_holes(&mut data);
+            Ok(Some(Mesh::from_data(data)))
+        })
+        .collect()
+}
+
+/// Whether the mesh has holes (or is an open surface): some edge belongs to
+/// one triangle only. Edges are packed into `u64`s and sorted in parallel,
+/// which is several times faster than a hash map on a million triangles.
+fn is_open(triangles: &[[u32; 3]]) -> bool {
+    let mut edges: Vec<u64> = triangles
+        .par_iter()
+        .flat_map_iter(|t| {
+            (0..3).map(move |i| {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                ((a.min(b) as u64) << 32) | a.max(b) as u64
+            })
+        })
+        .collect();
+    edges.par_sort_unstable();
+    let n = edges.len();
+    (0..n).into_par_iter().any(|i| {
+        let e = edges[i];
+        (i == 0 || edges[i - 1] != e) && (i + 1 == n || edges[i + 1] != e)
+    })
+}
+
+/// Fold a solid's level set into a shell of `shell`'s thickness and side.
+fn fold_shell(grid: &mut oxy_vdb::VdbFloatGrid, shell: Shell) {
+    let bg = grid.background;
+    grid.leaves.par_iter_mut().for_each(|(_, leaf)| {
+        for o in 0..oxy_vdb::LEAF_VOXELS {
+            let v = shell.side.fold(leaf.values[o], shell.thickness).clamp(-bg, bg);
+            leaf.values[o] = v;
+            if v.abs() < bg {
+                leaf.mask.set_on(o);
+            }
+        }
+    });
+}
+
+/// The union of `meshes` as one narrow-band level set. Without a shell,
+/// open meshes have their holes closed; with one, the band is wide enough
+/// for the wall.
+fn union_level_set(meshes: &[&Mesh], h: f32, shell: Option<Shell>) -> Result<oxy_vdb::VdbFloatGrid, RemeshError> {
+    let half_width = shell.map_or(3.5, |s| (s.thickness / h + 3.0).max(3.5));
     let mut combined: Option<oxy_vdb::VdbFloatGrid> = None;
     for m in meshes {
         let (positions, triangles) = (&m.positions, &m.triangles);
         if triangles.is_empty() {
             continue;
         }
-        let grid = with_sign_override(positions, triangles, |sign| {
+        let grid = with_sign_override(positions, triangles, |signing| {
             oxy_vdb::mesh_to_level_set_signed(
                 positions,
                 triangles,
-                oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width: 3.5 },
-                sign,
+                oxy_vdb::MeshToVolumeOptions { voxel_size: h, half_width },
+                signing,
             )
         });
         match &mut combined {
@@ -179,7 +308,7 @@ fn union_level_set(meshes: &[&Mesh], h: f32) -> Option<oxy_vdb::VdbFloatGrid> {
             None => combined = Some(grid),
         }
     }
-    combined
+    combined.ok_or(RemeshError::Empty)
 }
 
 /// Sparse OpenVDB-style hierarchical voxel remeshing.
@@ -194,7 +323,19 @@ pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, Reme
         (bounds.extent().max_element() / res as f32).max(1e-5)
     });
 
-    let mut grid = union_level_set(meshes, h).ok_or(RemeshError::Empty)?;
+    let mut grid = union_level_set(meshes, h, opts.shell)?;
+    match opts.shell {
+        Some(shell) => fold_shell(&mut grid, Shell { thickness: shell.thickness.max(h * 0.5), ..shell }),
+        None => {
+            let filled = grid
+                .leaves
+                .par_iter()
+                .any(|(_, leaf)| (0..oxy_vdb::LEAF_VOXELS).any(|o| leaf.mask.is_set(o) && leaf.values[o] < 0.0));
+            if !filled {
+                return Err(RemeshError::NotClosed);
+            }
+        }
+    }
 
     if opts.offset.abs() > 1e-5 {
         oxy_vdb::offset(&mut grid, opts.offset);
@@ -231,8 +372,8 @@ pub fn boolean_mesh(
         (extent.max_element() / 128.0).max(1e-5)
     });
 
-    let mut target_grid = union_level_set(&[target], h).ok_or(RemeshError::Empty)?;
-    let tool_grid = union_level_set(&[tool], h).ok_or(RemeshError::Empty)?;
+    let mut target_grid = union_level_set(&[target], h, None)?;
+    let tool_grid = union_level_set(&[tool], h, None)?;
 
     oxy_vdb::csg_operation(&mut target_grid, &tool_grid, op);
 
@@ -265,7 +406,9 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
     }
     let res = opts.resolution.clamp(8, MAX_RESOLUTION);
     let h = (bounds.extent().max_element() / res as f32).max(1e-6);
-    let pad = 3.0;
+    // The band must reach past a shell's wall.
+    let band = opts.shell.map_or(2.0 * h, |s| s.thickness.max(h * 0.5) + 2.0 * h);
+    let pad = (band / h).ceil() + 1.0;
     let origin = bounds.min - Vec3::splat(pad * h);
     let dims = ((bounds.extent() / h).ceil() + Vec3::splat(2.0 * pad + 1.0)).as_uvec3();
     let grid = Grid { origin, h, dims };
@@ -279,8 +422,20 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
         if tris.is_empty() {
             continue;
         }
-        let part = with_sign_override(positions, triangles, |sign| mesh_sdf(&grid, &tris, sign));
+        let (part, filled) =
+            with_sign_override(positions, triangles, |signing| mesh_sdf(&grid, &tris, signing.sign.as_ref(), band));
+        // A surface with holes whose fill reaches nothing (it leaks out, or
+        // it's a sheet) can't be filled. (`voxel_remesh` patches holes
+        // first; this is for direct callers.) A closed surface thinner than
+        // the band is trusted: its sides come from the triangles' normals.
+        if opts.shell.is_none() && !filled && is_open(triangles) {
+            return Err(RemeshError::NotClosed);
+        }
         sdf.par_iter_mut().zip(part.par_iter()).for_each(|(a, &b)| *a = a.min(b));
+    }
+    if let Some(shell) = opts.shell {
+        let t = shell.thickness.max(h * 0.5);
+        sdf.par_iter_mut().for_each(|v| *v = shell.side.fold(*v, t).min(band));
     }
 
     // 3. Surface nets.
@@ -299,10 +454,10 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
 }
 
 /// Narrow-band signed distance for one triangle soup (band-clamped).
-fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride>) -> Vec<f32> {
+/// RETURNS: the distances, and whether any space beyond the band was enclosed.
+fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride>, band: f32) -> (Vec<f32>, bool) {
     let (origin, h, dims) = (grid.origin, grid.h, grid.dims);
     // 1. Narrow-band distance + nearest triangle.
-    let band = 2.0 * h;
     let cells: Vec<AtomicU64> = (0..grid.len()).map(|_| AtomicU64::new(u64::MAX)).collect();
     tris.par_iter().enumerate().for_each(|(ti, t)| {
         let lo = ((t[0].min(t[1]).min(t[2]) - Vec3::splat(band) - origin) / h).ceil().max(Vec3::ZERO).as_uvec3();
@@ -408,6 +563,11 @@ fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride
         }
     }
 
+    // Filled: some space the fill could pass through (beyond the band, or
+    // on a triangle's outer side) wasn't reached from outside. (A sheet's
+    // back side is only band, which used to count as enclosed, so a sheet
+    // came out as a slab two voxels thick.)
+    let filled = outside.par_iter().zip(passable.par_iter()).any(|(&o, &p)| !o && p);
     let enclosed = outside.iter().any(|&o| !o);
     if enclosed {
         sdf.par_iter_mut().zip(outside.par_iter()).for_each(|(v, &o)| {
@@ -416,12 +576,16 @@ fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride
             }
         });
     } else {
-        // Open surface: extract a thin shell around it.
-        let shell = 0.75 * h;
-        sdf.par_iter_mut().for_each(|v| *v -= shell);
+        // An open sheet (only reached with a shell, which folds it): each
+        // side of it by its nearest triangle's normal.
+        sdf.par_iter_mut().zip(passable.par_iter()).for_each(|(v, &out)| {
+            if !out {
+                *v = -*v;
+            }
+        });
     }
 
-    sdf
+    (sdf, filled)
 }
 
 fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
@@ -717,11 +881,79 @@ mod tests {
     }
 
     #[test]
-    fn open_plane_becomes_shell() {
+    fn an_open_sheet_needs_a_shell_and_gets_its_thickness() {
         let p = primitives::plane(10, 2.0);
-        let r = voxel_remesh(&[&p], RemeshOptions { resolution: 32, smooth_passes: 0, ..Default::default() }).unwrap();
-        assert!(r.triangle_count() > 100);
-        assert!(r.bounds().extent().y < 0.3);
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            let opts = RemeshOptions { resolution: 64, smooth_passes: 0, engine, ..Default::default() };
+            let Err(err) = voxel_remesh(&[&p], opts) else { panic!("{engine:?}: an open sheet was filled") };
+            assert_eq!(err, RemeshError::NotClosed, "{engine:?}");
+            // Both sides: a slab 0.2 thick, centred on the plane (y = 0).
+            let both = Shell { thickness: 0.2, side: ShellSide::Both };
+            let r = voxel_remesh(&[&p], RemeshOptions { shell: Some(both), ..opts }).unwrap();
+            let b = r.bounds();
+            assert!((b.extent().y - 0.2).abs() < 0.06, "{engine:?}: {}", b.extent().y);
+            assert!(b.min.y.abs() - 0.1 < 0.04 && (b.min.y + b.max.y).abs() < 0.04, "{engine:?}: centred");
+            assert_eq!(euler(&r), 2, "{engine:?}: one closed slab");
+            // Outward: on the plane's front (its normal is +Y).
+            let out = Shell { thickness: 0.2, side: ShellSide::Outward };
+            let b = voxel_remesh(&[&p], RemeshOptions { shell: Some(out), ..opts }).unwrap().bounds();
+            assert!(b.min.y > -0.05 && (b.max.y - 0.2).abs() < 0.05, "{engine:?}: {:?}", (b.min.y, b.max.y));
+        }
+    }
+
+    #[test]
+    fn holes_are_closed_without_a_shell() {
+        // A sphere with a cap cut off remeshes as a whole ball (it used to
+        // come out as a thin hollow wall).
+        let d = primitives::icosphere(4, 1.0).to_data();
+        let triangles: Vec<[u32; 3]> = d
+            .triangles
+            .iter()
+            .copied()
+            .filter(|t| t.iter().map(|&v| d.positions[v as usize].y).sum::<f32>() / 3.0 < 0.8)
+            .collect();
+        let n = triangles.len();
+        let m = Mesh::new(d.positions.clone(), triangles);
+        assert!(n < 5120, "a hole was cut");
+        let ball = 4.0 / 3.0 * std::f32::consts::PI;
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            let r = voxel_remesh(&[&m], RemeshOptions { resolution: 96, engine, ..Default::default() }).unwrap();
+            if engine == RemeshEngine::Vdb {
+                assert_eq!(euler(&r), 2, "{engine:?}");
+            } else {
+                // The older engine can leave a speck of a few points where
+                // the patch meets the rim; the surface itself is one piece.
+                assert!(euler(&r) <= 4, "{engine:?}: {}", euler(&r));
+            }
+            let v = volume(&r);
+            // The cap above y = 0.8 is closed (nearly flat), so a little less than a ball.
+            assert!(v > ball * 0.9 && v < ball * 1.02, "{engine:?}: volume {v}");
+        }
+    }
+
+    #[test]
+    fn a_shell_of_a_closed_model_is_hollow() {
+        let s = primitives::icosphere(4, 1.0);
+        let pi43 = 4.0 / 3.0 * std::f32::consts::PI;
+        for (side, outer, inner) in
+            [(ShellSide::Inward, 1.0f32, 0.8f32), (ShellSide::Outward, 1.2, 1.0), (ShellSide::Both, 1.1, 0.9)]
+        {
+            for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+                let opts = RemeshOptions {
+                    resolution: 96,
+                    engine,
+                    shell: Some(Shell { thickness: 0.2, side }),
+                    ..Default::default()
+                };
+                let r = voxel_remesh(&[&s], opts).unwrap();
+                assert_eq!(euler(&r), 4, "{side:?} {engine:?}: an outer and an inner surface");
+                let want = pi43 * (outer.powi(3) - inner.powi(3));
+                let v = volume(&r);
+                assert!((v - want).abs() / want < 0.08, "{side:?} {engine:?}: volume {v}, want {want}");
+                let far = r.positions.iter().map(|p| p.length()).fold(0.0f32, f32::max);
+                assert!((far - outer).abs() < 0.04, "{side:?} {engine:?}: outer radius {far}");
+            }
+        }
     }
 
     #[test]
