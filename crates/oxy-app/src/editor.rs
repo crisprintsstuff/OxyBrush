@@ -6530,6 +6530,10 @@ impl Editor {
                 self.fill_mask();
                 E::None
             }
+            C::PolyRepeat => {
+                self.poly_repeat();
+                E::None
+            }
             C::MaskGroup => {
                 self.mask_group_under_pointer();
                 E::None

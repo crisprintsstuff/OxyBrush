@@ -208,20 +208,41 @@ pub struct Slide {
     pub verts: Vec<u32>,
     pub start: Vec<Vec3>,
     pub dir: Vec<Vec3>,
+    /// Directions for a negative amount, when they differ (edge slide goes
+    /// towards one side or the other); empty means `-dir`.
+    pub back: Vec<Vec3>,
 }
 
 impl Slide {
-    fn push(&mut self, c: &Cage, v: u32, dir: Vec3) {
+    pub(crate) fn push(&mut self, c: &Cage, v: u32, dir: Vec3) {
         self.verts.push(v);
         self.start.push(c.positions[v as usize]);
         self.dir.push(dir);
     }
 
-    /// Place every point at `start + dir * amount`.
+    /// Place every point at `start + dir * amount` (`start + back * -amount`
+    /// for a negative amount, when `back` is set).
     pub fn apply(&self, c: &mut Cage, amount: f32) {
-        for ((&v, &s), &d) in self.verts.iter().zip(&self.start).zip(&self.dir) {
-            c.positions[v as usize] = s + d * amount;
+        for (i, ((&v, &s), &d)) in self.verts.iter().zip(&self.start).zip(&self.dir).enumerate() {
+            c.positions[v as usize] = match self.back.get(i) {
+                Some(&b) if amount < 0.0 => s - b * amount,
+                _ => s + d * amount,
+            };
         }
+    }
+
+    /// Add `other`'s points (both from one edit, numbered in the same cage).
+    pub fn extend(&mut self, other: Slide) {
+        let had_back = !self.back.is_empty() || !other.back.is_empty();
+        if had_back {
+            let pad = |s: &Slide| if s.back.is_empty() { s.dir.iter().map(|d| -*d).collect() } else { s.back.clone() };
+            let mut back = pad(self);
+            back.extend(pad(&other));
+            self.back = back;
+        }
+        self.verts.extend(other.verts);
+        self.start.extend(other.start);
+        self.dir.extend(other.dir);
     }
 
     pub fn is_empty(&self) -> bool {
