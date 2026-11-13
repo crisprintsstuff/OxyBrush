@@ -184,7 +184,7 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
     },
     Topic {
         title: "Poly Edit (model polygons)",
-        keywords: "poly edit polygon modeling box extrude inset move delete faces reach loop group flat island hard surface low poly",
+        keywords: "poly edit polygon modeling box extrude inset move delete faces edges points edge loop insert close hole weld reach group flat island hard surface low poly",
         body: "Mesh > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\n\
 - Point at a face: the faces the action would change light up in orange (red for Delete).\n\
 - Extrude: drag to pull them out with walls around them (or push them in). Touching faces move out as one block; tick Each face on its own to extrude them separately.\n\
@@ -192,7 +192,9 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
 - Move: drag to slide them along their normals; the faces around stretch to follow. Delete: click to remove them, leaving a hole.\n\
 - Reach spreads the action: This face, Face loop (across the edge nearest the pointer), Face group, Face group (this island), Flat region (facing the same way within 5°) or Island (everything connected). Extruded caps, walls and inset rims get new face groups, so the next action can reach them by group.\n\
 - Mirror across X does the same to the matching faces on the other side.\n\n\
-Each drag is one undo step; Escape during a drag cancels it, and Escape otherwise (or Done) closes the tool. Drag empty space to orbit. Edge and point actions, bevel and bridge are coming next.",
+- Edges: point near an edge and it lights up instead. Insert loop: click to cut a new loop across the quads (the edges it will cut light up), or drag along the edge to slide it first. Delete: remove the edge (or its loop or ring, with Reach), merging the faces on each side. Extrude border: drag an edge of a hole or open surface outwards (Reach Edge loop takes the whole border). Close hole: click a hole's edge to fill it with one face.\n\
+- Points: point at a corner. Move: drag it across the screen, and drop it on another point to weld the two. Delete: remove it and the faces around it.\n\n\
+Each change is one undo step; Escape during a drag cancels it, and Escape otherwise (or Done) closes the tool. Drag empty space to orbit. Bevel and bridge are coming next.",
     },
     Topic {
         title: "Retopology",
