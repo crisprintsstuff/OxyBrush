@@ -587,6 +587,8 @@ impl App {
             self.applied_matcap = Some(want);
         }
         ed.poll_job();
+        ed.deform_poll();
+        ed.tick_gizmo_session();
         ed.tick_autosave();
         ed.updater.tick(crate::updates::now_secs());
         // Agent calls run after the user's finished job and before the mesh is uploaded.
@@ -1287,7 +1289,10 @@ impl ApplicationHandler for App {
         self.persist_settings(false);
         // Wake up regularly to finish background jobs, pending settings,
         // autosave and a waiting agent even when the window is idle.
-        let mut wait = if self.editor.job.is_some()
+        let mut wait = if self.editor.deform_busy() {
+            // A deform preview is catching up: look for it often.
+            Duration::from_millis(15)
+        } else if self.editor.job.is_some()
             || self.shot_reply.is_some()
             || self.editor.updater.busy()
             || self.plugin_process.is_some()

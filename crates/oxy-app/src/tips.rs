@@ -117,7 +117,8 @@ commands! {
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
     InvertVisibility => "Invert visibility", "", "Swap which faces are hidden.";
-    InvertMask => "Invert mask", "Ctrl+Shift+I", "Swap masked and unmasked areas. Also Ctrl+click on empty space.";
+    InvertMask => "Invert mask", "Ctrl+Shift+I", "Swap masked and unmasked areas of the visible surface (hidden parts keep their mask). Also Ctrl+click on empty space.";
+    FillMask => "Fill mask", "", "Mask the whole visible surface (hidden parts keep their mask). Then unmask where you want to sculpt, or Invert to clear it.";
     ClearMask => "Clear mask", "Alt+M", "Remove the mask so the whole surface can be sculpted. Also Ctrl+drag a box around empty space.";
     ExtractMask => "Extract mask", "", "Create a new piece from the masked area, with optional thickness.";
     BlurMask => "Blur mask", "", "Soften the edge of the mask.";
@@ -247,6 +248,7 @@ impl Cmd {
             Cmd::ShowMask => CommandId::ShowMask,
             Cmd::ClearMask => CommandId::ClearMask,
             Cmd::InvertMask => CommandId::InvertMask,
+            Cmd::FillMask => CommandId::FillMask,
             Cmd::MaskGroup => CommandId::MaskGroup,
             Cmd::Solo => CommandId::Solo,
             Cmd::AddLevel => CommandId::AddLevel,
@@ -660,11 +662,14 @@ pub mod plain {
     pub const PAN: &str = "Drag to pan. You can also right-drag in the view.";
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
     pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side, or drag to orbit.";
-    pub const GIZMO_DONE: &str = "Hide the transform gizmo.";
+    pub const GIZMO_DONE: &str =
+        "Close the transform gizmo. Changes you haven't applied are put back, like Cancel (Redo brings them back).";
     pub const GIZMO_SNAP: &str =
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
-    pub const GIZMO_APPLY: &str =
-        "Apply the typed values about the pivot, along the gizmo's axes, as one undo step (Enter in a field too).";
+    pub const GIZMO_APPLY: &str = "Keep the changes made with the gizmo (and any typed values), and count from zero again. \
+        The fields show the total since the gizmo opened or the last Apply; type a value and press Enter to make it exactly that.";
+    pub const GIZMO_CANCEL: &str =
+        "Put back everything changed with the gizmo since it opened or since the last Apply. Redo brings it back.";
     pub const PLUGINS_MENU: &str = "Run installed plugins, install add-ons and manage plugins.";
     pub const GIZMO_MASKED: &str = "Masked parts stay put. A soft mask edge bends instead of tearing.";
     pub const PIECE_HIDE: &str = "Hide this piece. Hidden pieces are not sculpted or exported.";
@@ -862,6 +867,7 @@ pub mod plain {
         ZOOM,
         AXIS_GIZMO,
         GIZMO_DONE,
+        GIZMO_CANCEL,
         GIZMO_SNAP,
         GIZMO_APPLY,
         PLUGINS_MENU,

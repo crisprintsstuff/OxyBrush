@@ -945,6 +945,9 @@ pub struct Editor {
     pub show_deform: bool,
     pub deform: crate::deform_ui::DeformSettings,
     pub deform_drag: Option<crate::deform_ui::DeformDrag>,
+    /// Pieces with more points than this are previewed in the background
+    /// while a deformer is dragged (lowered in tests).
+    pub deform_background_above: usize,
     pub deform_last: Option<crate::deform_ui::LastDeform>,
     pub theme_tab: ThemeTab,
     /// Wireframe settings window (opacity, color picker, presets).
@@ -1111,6 +1114,8 @@ pub struct Editor {
     pub gizmo_snap_steps: pose::Snap,
     /// Values typed into the gizmo bar's Numeric section.
     pub gizmo_numeric: crate::gizmo_ops::Numeric,
+    /// Gizmo changes not applied yet (the bar's live totals; Cancel).
+    pub gizmo_session: Option<crate::gizmo_ops::GizmoSession>,
     /// User-customized gizmo pivot point (repositioned via Alt-drag or Ctrl-click snap).
     pub custom_gizmo_pivot: Option<Vec3>,
     /// User-customized gizmo rotation / orientation basis.
@@ -1289,6 +1294,7 @@ impl Default for Editor {
             show_deform: false,
             deform: Default::default(),
             deform_drag: None,
+            deform_background_above: crate::deform_ui::BACKGROUND_ABOVE,
             deform_last: None,
             theme_tab: ThemeTab::Themes,
             show_wireframe: false,
@@ -1377,6 +1383,7 @@ impl Default for Editor {
             gizmo_snap: false,
             gizmo_snap_steps: pose::Snap::DEFAULT,
             gizmo_numeric: crate::gizmo_ops::Numeric::default(),
+            gizmo_session: None,
             custom_gizmo_pivot: None,
             custom_gizmo_rotation: None,
             palette: None,
@@ -2971,6 +2978,16 @@ impl Editor {
         true
     }
 
+    /// The gizmo drag in progress, as `(pivot, transform so far)`, so the
+    /// gizmo bar can show it live. None when not dragging a handle (or only
+    /// moving the pivot).
+    pub(crate) fn gizmo_drag_step(&self) -> Option<(Vec3, pose::Transform)> {
+        match &self.drag {
+            Drag::Gizmo(g) if !g.reposition_pivot => Some((g.pivot, g.current)),
+            _ => None,
+        }
+    }
+
     /// Flush any queued gizmo drag transform before drawing a frame.
     pub fn flush_gizmo(&mut self) -> bool {
         let queued = match &mut self.drag {
@@ -3028,7 +3045,11 @@ impl Editor {
                             g.weights.iter().enumerate().filter_map(|(v, &w)| (w > 0.0).then_some(v as u32)).collect();
                         mesh.update_after_move(&moved);
                     }
+                    let before = self.history.revision();
                     self.history.commit();
+                    if self.history.revision() != before {
+                        self.gizmo_session_record(g.pivot, &g.current);
+                    }
                 }
             }
             Drag::GizmoSnapOrMask { hit, .. } => {
@@ -5840,8 +5861,14 @@ impl Editor {
         let is_alt = m.alt || self.modifiers.alt;
 
         // Ctrl + Gizmo Drag: duplicate unmasked geometry
-        if is_ctrl && !self.duplicate_unmasked_geometry() {
-            return true;
+        if is_ctrl {
+            let before = self.history.revision();
+            if !self.duplicate_unmasked_geometry() {
+                return true;
+            }
+            if self.history.revision() != before {
+                self.gizmo_session_note_step();
+            }
         }
 
         let mode = self.gizmo.unwrap_or(GizmoMode::Move);
@@ -6027,8 +6054,27 @@ impl Editor {
         self.status = format!("{label}: {n} points masked");
     }
 
+    /// Swap masked and unmasked on the visible surface. Hidden points keep
+    /// their mask, so hiding part of a piece and inverting works on the
+    /// visible part only.
     pub fn invert_mask(&mut self) {
-        self.edit_mask("Invert mask", |m| 1.0 - m);
+        self.edit_visible_mask("Invert mask", |m| 1.0 - m);
+    }
+
+    /// Mask the whole visible surface (hidden points keep their mask).
+    pub fn fill_mask(&mut self) {
+        self.edit_visible_mask("Fill mask", |_| 1.0);
+    }
+
+    /// Change the mask of every visible point with `f`, as one undo step.
+    fn edit_visible_mask(&mut self, label: &str, f: impl Fn(f32) -> f32) {
+        self.edit_mesh_mask(label, |mesh| {
+            for v in 0..mesh.vertex_count() {
+                if !mesh.is_vertex_hidden(v as u32) {
+                    mesh.mask[v] = f(mesh.mask[v]);
+                }
+            }
+        });
     }
 
     pub fn clear_mask(&mut self) {
@@ -6291,6 +6337,10 @@ impl Editor {
             }
             C::InvertMask => {
                 self.invert_mask();
+                E::None
+            }
+            C::FillMask => {
+                self.fill_mask();
                 E::None
             }
             C::MaskGroup => {
@@ -7141,6 +7191,32 @@ mod tests {
         e.symmetrize(0, true);
         assert!(e.job.is_none());
         assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
+    }
+
+    #[test]
+    fn invert_and_fill_mask_leave_hidden_parts_alone() {
+        let mut e = Editor::for_tests();
+        let hidden: Vec<bool> = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.2)).collect()
+        };
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        let n = e.scene.active().mesh.vertex_count();
+        let hidden_v: Vec<bool> = (0..n).map(|v| e.scene.active().mesh.is_vertex_hidden(v as u32)).collect();
+        assert!(hidden_v.contains(&true) && hidden_v.contains(&false));
+        e.invert_mask();
+        let m = &e.scene.active().mesh;
+        for (v, &h) in hidden_v.iter().enumerate() {
+            assert_eq!(m.mask[v], if h { 0.0 } else { 1.0 }, "point {v}");
+        }
+        e.clear_mask();
+        e.fill_mask();
+        let m = &e.scene.active().mesh;
+        for (v, &h) in hidden_v.iter().enumerate() {
+            assert_eq!(m.mask[v], if h { 0.0 } else { 1.0 }, "point {v}");
+        }
+        e.undo();
+        assert!(e.scene.active().mesh.mask.iter().all(|&m| m == 0.0), "one undo step");
     }
 
     #[test]

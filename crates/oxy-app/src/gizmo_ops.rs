@@ -4,7 +4,7 @@
 
 use crate::editor::Editor;
 use crate::pose::{self, Transform};
-use glam::{Mat3, Vec3};
+use glam::{Mat3, Quat, Vec3};
 
 /// Values typed into the gizmo bar, in the gizmo's own axes.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -21,6 +21,55 @@ impl Default for Numeric {
     fn default() -> Self {
         Numeric { offset: Vec3::ZERO, degrees: Vec3::ZERO, scale: Vec3::ONE, uniform: true }
     }
+}
+
+/// Changes made with the gizmo since it was opened (or since the last
+/// Apply): what the gizmo bar's fields show, live, and what Cancel or
+/// Done (without Apply) puts back.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GizmoSession {
+    pub piece: u64,
+    /// The pivot when the session started: the totals are about it.
+    pub pivot: Vec3,
+    /// The gizmo axes when the session started.
+    pub basis: Mat3,
+    /// The total change as a world-space map `x -> linear * x + shift`.
+    pub linear: Mat3,
+    pub shift: Vec3,
+    /// Undo steps the session added (all newest in the history).
+    pub steps: usize,
+    /// History revision after the session's last step. If the history moved
+    /// on since (a stroke, an undo), the session's steps are no longer the
+    /// newest and the changes are kept.
+    pub revision: u64,
+}
+
+impl GizmoSession {
+    /// The total change in the gizmo's axes, as the bar shows it.
+    pub fn totals(&self) -> (Vec3, Vec3, Vec3) {
+        let b = self.basis;
+        let moved = self.linear * self.pivot + self.shift - self.pivot;
+        let offset = b.transpose() * moved;
+        let m = b.transpose() * self.linear * b;
+        let scale = Vec3::new(m.x_axis.length(), m.y_axis.length(), m.z_axis.length());
+        let rot = Mat3::from_cols(m.x_axis / scale.x, m.y_axis / scale.y, m.z_axis / scale.z);
+        let degrees = if rot.determinant() > 0.0 && scale.min_element() > 1e-8 {
+            let (z, y, x) = Quat::from_mat3(&rot).normalize().to_euler(glam::EulerRot::ZYX);
+            Vec3::new(x, y, z) * (180.0 / std::f32::consts::PI)
+        } else {
+            Vec3::ZERO
+        };
+        (offset, clean(degrees), scale)
+    }
+}
+
+fn close(a: Vec3, b: Vec3) -> bool {
+    (a - b).abs().max_element() < 1e-4
+}
+
+/// Drop rounding noise (-0.0000001 shows as -0).
+fn clean(v: Vec3) -> Vec3 {
+    v.map(|x| if x.abs() < 1e-4 { 0.0 } else { x })
 }
 
 /// Where the gizmo pivot goes.
@@ -165,16 +214,192 @@ impl Editor {
         true
     }
 
-    /// Apply the typed values (gizmo bar, Numeric) and reset them.
-    pub fn apply_gizmo_numeric(&mut self) {
+    /// Note a gizmo change of `t` about `pivot` (a handle drag or typed
+    /// values) in the session, starting one if needed.
+    pub(crate) fn gizmo_session_record(&mut self, pivot: Vec3, t: &Transform) {
+        let piece = self.scene.active().id;
+        if self.gizmo_session.is_some_and(|s| s.piece != piece) {
+            self.gizmo_session = None;
+        }
+        let basis = self.gizmo_basis();
+        let s = self.gizmo_session.get_or_insert(GizmoSession {
+            piece,
+            pivot,
+            basis,
+            linear: Mat3::IDENTITY,
+            shift: Vec3::ZERO,
+            steps: 0,
+            revision: 0,
+        });
+        // This step as a world map: x -> L x + (pivot - L pivot + translate).
+        let shift = pivot - t.linear * pivot + t.translate;
+        s.linear = t.linear * s.linear;
+        s.shift = t.linear * s.shift + shift;
+        s.steps += 1;
+        s.revision = self.history.revision();
+    }
+
+    /// One-click operators (Mirror, ground, origin) are applied at once, and
+    /// keep what was dragged before them too.
+    fn keep_gizmo_changes(&mut self) {
+        self.gizmo_session = None;
+        let uniform = self.gizmo_numeric.uniform;
+        self.gizmo_numeric = Numeric { uniform, ..Numeric::default() };
+    }
+
+    /// Note an undo step that's part of the session but moves nothing
+    /// (Ctrl+drag's duplicate), so Cancel takes it back too.
+    pub(crate) fn gizmo_session_note_step(&mut self) {
+        self.gizmo_session_record(Vec3::ZERO, &Transform::IDENTITY);
+    }
+
+    /// The session's totals for the bar: `(offset, degrees, scale)` in the
+    /// gizmo's axes, zero (scale one) when nothing has changed.
+    /// A handle drag in progress counts too, so the fields follow it live.
+    pub fn gizmo_totals(&self) -> (Vec3, Vec3, Vec3) {
+        let piece = self.scene.active().id;
+        let mut s = match self.gizmo_session {
+            Some(s) if s.piece == piece && s.steps > 0 => s,
+            _ => GizmoSession {
+                piece,
+                pivot: Vec3::ZERO,
+                basis: self.gizmo_basis(),
+                linear: Mat3::IDENTITY,
+                shift: Vec3::ZERO,
+                steps: 0,
+                revision: 0,
+            },
+        };
+        if let Some((pivot, t)) = self.gizmo_drag_step() {
+            if s.steps == 0 {
+                s.pivot = pivot;
+            }
+            let shift = pivot - t.linear * pivot + t.translate;
+            s.linear = t.linear * s.linear;
+            s.shift = t.linear * s.shift + shift;
+            s.steps += 1;
+        }
+        if s.steps == 0 { (Vec3::ZERO, Vec3::ZERO, Vec3::ONE) } else { s.totals() }
+    }
+
+    /// Whether the gizmo has changes that Apply would keep and Cancel put back.
+    pub fn gizmo_has_changes(&self) -> bool {
+        let piece = self.scene.active().id;
+        self.gizmo_session.is_some_and(|s| s.piece == piece && s.steps > 0 && s.revision == self.history.revision())
+    }
+
+    /// Show the session's totals in the bar's fields.
+    pub fn sync_gizmo_numeric(&mut self) {
+        let (offset, degrees, scale) = self.gizmo_totals();
+        self.gizmo_numeric = Numeric { offset, degrees, scale, uniform: self.gizmo_numeric.uniform };
+    }
+
+    /// Move what the gizmo moves so the session's totals become the typed
+    /// values (gizmo bar, Enter): typing 2 into Scale makes it twice the size
+    /// it was when the gizmo opened, however far it was dragged since. One
+    /// undo step; not applied yet (Apply keeps it, Cancel puts it back).
+    pub fn set_gizmo_numeric(&mut self) -> bool {
         let n = self.gizmo_numeric;
         if n.scale.cmple(Vec3::ZERO).any() {
             self.status = "Scale must be above 0 (use Mirror to flip)".into();
+            return false;
+        }
+        let Some(pivot) = self.gizmo_base_pivot() else {
+            self.status = "Nothing to move: everything is masked or hidden".into();
+            return false;
+        };
+        let piece = self.scene.active().id;
+        let (start_pivot, basis, linear, shift) = match self.gizmo_session {
+            Some(s) if s.piece == piece && s.steps > 0 => (s.pivot, s.basis, s.linear, s.shift),
+            _ => (pivot, self.gizmo_basis(), Mat3::IDENTITY, Vec3::ZERO),
+        };
+        // The wanted total, as a world map about the session's pivot.
+        let want = pose::numeric_transform(basis, n.offset, n.degrees, n.scale);
+        let want_linear = want.linear;
+        let want_shift = start_pivot - want.linear * start_pivot + want.translate;
+        // The step that takes the current total to it: want ∘ current⁻¹.
+        if linear.determinant().abs() < 1e-12 {
+            return false;
+        }
+        let inv = linear.inverse();
+        let step_linear = want_linear * inv;
+        let step_shift = want_shift - step_linear * shift;
+        // As a transform about the gizmo pivot.
+        let t = Transform { linear: step_linear, translate: step_shift + step_linear * pivot - pivot };
+        let identity =
+            (t.linear - Mat3::IDENTITY).to_cols_array().iter().all(|x| x.abs() < 1e-6) && t.translate.length() < 1e-6;
+        if identity {
+            return false;
+        }
+        if !self.apply_gizmo_transform("Transform (typed values)", t) {
+            return false;
+        }
+        if self.gizmo_session.is_none_or(|s| s.piece != piece || s.steps == 0) {
+            // Start the session where the typed values were measured from.
+            self.gizmo_session = Some(GizmoSession {
+                piece,
+                pivot: start_pivot,
+                basis,
+                linear: Mat3::IDENTITY,
+                shift: Vec3::ZERO,
+                steps: 0,
+                revision: 0,
+            });
+        }
+        if let Some(s) = self.gizmo_session.as_mut() {
+            s.linear = want_linear;
+            s.shift = want_shift;
+            s.steps += 1;
+            s.revision = self.history.revision();
+        }
+        true
+    }
+
+    /// Apply (gizmo bar): use the typed values if they were changed, then
+    /// keep everything and count from zero again.
+    pub fn apply_gizmo_numeric(&mut self) {
+        let (offset, degrees, scale) = self.gizmo_totals();
+        let n = self.gizmo_numeric;
+        let typed = !(close(n.offset, offset) && close(n.degrees, degrees) && close(n.scale, scale));
+        if typed && !self.set_gizmo_numeric() && n.scale.cmple(Vec3::ZERO).any() {
             return;
         }
-        let t = pose::numeric_transform(self.gizmo_basis(), n.offset, n.degrees, n.scale);
-        if self.apply_gizmo_transform("Transform (typed values)", t) {
-            self.gizmo_numeric = Numeric { uniform: n.uniform, ..Numeric::default() };
+        let kept = self.gizmo_has_changes();
+        self.gizmo_session = None;
+        self.gizmo_numeric = Numeric { uniform: n.uniform, ..Numeric::default() };
+        if kept {
+            self.status = "Transform applied".into();
+        }
+    }
+
+    /// Cancel (gizmo bar): put back everything changed since the gizmo
+    /// opened or since the last Apply. It's undone, so Redo brings it back.
+    /// False when there's nothing to put back.
+    pub fn cancel_gizmo_changes(&mut self) -> bool {
+        let Some(s) = self.gizmo_session.take() else { return false };
+        let uniform = self.gizmo_numeric.uniform;
+        self.gizmo_numeric = Numeric { uniform, ..Numeric::default() };
+        if s.steps == 0 || s.revision != self.history.revision() || self.scene.active().id != s.piece {
+            return false;
+        }
+        for _ in 0..s.steps {
+            self.undo_scene();
+        }
+        self.status = "Transform put back (Redo brings it back)".into();
+        true
+    }
+
+    /// Call every frame: the gizmo was closed (Done, a tool change, its
+    /// shortcut) with changes that weren't applied, so put them back.
+    pub fn tick_gizmo_session(&mut self) {
+        if self.gizmo.is_none() && self.gizmo_session.is_some() && !matches!(self.drag, crate::editor::Drag::Gizmo(_)) {
+            if self.cancel_gizmo_changes() {
+                self.status = "Transform not applied, so it was put back (Redo brings it back)".into();
+            }
+        } else if self.gizmo_session.is_some_and(|s| s.revision != self.history.revision() && s.steps > 0) {
+            // Something else changed the history (a stroke, an undo): what
+            // the gizmo did is part of it now, so it's kept.
+            self.gizmo_session = None;
         }
     }
 
@@ -183,7 +408,9 @@ impl Editor {
         let u = self.gizmo_basis().col(axis).normalize_or(Vec3::X);
         let linear = Mat3::IDENTITY - Mat3::from_cols(u * u.x, u * u.y, u * u.z) * 2.0;
         let name = ["X", "Y", "Z"][axis];
-        self.apply_gizmo_transform(&format!("Mirror {name}"), Transform { linear, translate: Vec3::ZERO });
+        if self.apply_gizmo_transform(&format!("Mirror {name}"), Transform { linear, translate: Vec3::ZERO }) {
+            self.keep_gizmo_changes();
+        }
     }
 
     /// Move what the gizmo moves so its lowest point sits on Y = 0.
@@ -193,7 +420,9 @@ impl Editor {
             return;
         };
         let t = Transform { translate: Vec3::new(0.0, -b.min.y, 0.0), ..Transform::IDENTITY };
-        self.apply_gizmo_transform("Put on the ground", t);
+        if self.apply_gizmo_transform("Put on the ground", t) {
+            self.keep_gizmo_changes();
+        }
     }
 
     /// Move what the gizmo moves so its bounding box is centred on the origin.
@@ -203,7 +432,9 @@ impl Editor {
             return;
         };
         let t = Transform { translate: -(b.min + b.max) * 0.5, ..Transform::IDENTITY };
-        self.apply_gizmo_transform("Centre at origin", t);
+        if self.apply_gizmo_transform("Centre at origin", t) {
+            self.keep_gizmo_changes();
+        }
     }
 }
 
@@ -251,6 +482,66 @@ mod tests {
         e.gizmo_numeric.scale = Vec3::new(0.0, 1.0, 1.0);
         e.apply_gizmo_numeric();
         assert_eq!(e.scene.active().mesh.positions, p);
+    }
+
+    #[test]
+    fn the_fields_show_totals_typing_sets_them_and_cancel_or_done_puts_back() {
+        let mut e = editor();
+        let start = e.scene.active().mesh.positions.clone();
+        let c0 = {
+            let b = bounds(&e);
+            (b.min + b.max) * 0.5
+        };
+        // Two moves (as two drags would): the fields show the total.
+        let t = Transform { linear: Mat3::IDENTITY, translate: Vec3::new(0.5, 0.0, 0.0) };
+        for _ in 0..2 {
+            let pivot = e.gizmo_base_pivot().unwrap();
+            assert!(e.apply_gizmo_transform("Move", t));
+            e.gizmo_session_record(pivot, &t);
+        }
+        e.sync_gizmo_numeric();
+        assert!((e.gizmo_numeric.offset - Vec3::X).length() < 1e-4, "{}", e.gizmo_numeric.offset);
+        assert!(e.gizmo_has_changes());
+        // Typing a total moves it to exactly that.
+        e.gizmo_numeric.offset = Vec3::new(3.0, 0.0, 0.0);
+        assert!(e.set_gizmo_numeric());
+        let b = bounds(&e);
+        assert!(((b.min + b.max) * 0.5 - c0 - Vec3::new(3.0, 0.0, 0.0)).length() < 1e-3);
+        e.sync_gizmo_numeric();
+        assert!((e.gizmo_numeric.offset.x - 3.0).abs() < 1e-4);
+        // Scale: typing 2 doubles the size it had when the gizmo opened.
+        e.gizmo_numeric.scale = Vec3::splat(2.0);
+        assert!(e.set_gizmo_numeric());
+        e.sync_gizmo_numeric();
+        assert!((e.gizmo_numeric.scale - Vec3::splat(2.0)).length() < 1e-4, "{}", e.gizmo_numeric.scale);
+        assert!((e.gizmo_numeric.offset.x - 3.0).abs() < 1e-3, "the move is kept: {}", e.gizmo_numeric.offset);
+        // Cancel puts it all back (and Redo would bring it back).
+        assert!(e.cancel_gizmo_changes());
+        assert_eq!(e.scene.active().mesh.positions, start);
+        assert!(!e.gizmo_has_changes());
+        assert_eq!(e.gizmo_totals(), (Vec3::ZERO, Vec3::ZERO, Vec3::ONE));
+        // Done without Apply puts back too; Apply first keeps it.
+        e.gizmo_numeric.offset = Vec3::Y;
+        e.set_gizmo_numeric();
+        e.gizmo = None;
+        e.tick_gizmo_session();
+        assert_eq!(e.scene.active().mesh.positions, start, "Done without Apply is a cancel");
+        assert!(e.status.contains("put back"), "{}", e.status);
+        e.toggle_gizmo(GizmoMode::Move);
+        e.gizmo_numeric.offset = Vec3::Y;
+        e.apply_gizmo_numeric();
+        let applied = e.scene.active().mesh.positions.clone();
+        assert_ne!(applied, start);
+        e.gizmo = None;
+        e.tick_gizmo_session();
+        assert_eq!(e.scene.active().mesh.positions, applied, "applied changes are kept");
+        // Changes followed by something else (an undo here) are left alone.
+        e.toggle_gizmo(GizmoMode::Move);
+        e.gizmo_numeric.offset = Vec3::Y;
+        e.set_gizmo_numeric();
+        e.undo();
+        e.tick_gizmo_session();
+        assert!(e.gizmo_session.is_none());
     }
 
     #[test]

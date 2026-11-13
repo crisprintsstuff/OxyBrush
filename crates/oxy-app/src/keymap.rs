@@ -449,6 +449,7 @@ pub enum CommandId {
     ShowMask,
     ClearMask,
     InvertMask,
+    FillMask,
     MaskGroup,
     Solo,
     AddLevel,
@@ -581,6 +582,7 @@ const COMMANDS: &[CommandMeta] = &[
     CommandMeta { id: CommandId::ShowMask, name: "Show / hide mask", group: "Mask and mesh", defaults: &["m"] },
     CommandMeta { id: CommandId::ClearMask, name: "Clear mask", group: "Mask and mesh", defaults: &["alt+m"] },
     CommandMeta { id: CommandId::InvertMask, name: "Invert mask", group: "Mask and mesh", defaults: &["ctrl+shift+i"] },
+    CommandMeta { id: CommandId::FillMask, name: "Fill mask", group: "Mask and mesh", defaults: &[] },
     CommandMeta { id: CommandId::MaskGroup, name: "Mask face group", group: "Mask and mesh", defaults: &["ctrl+m"] },
     CommandMeta { id: CommandId::Solo, name: "Solo piece / show all", group: "Mask and mesh", defaults: &["alt+s"] },
     CommandMeta {
@@ -1480,6 +1482,7 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::ShowMask => "show_mask",
         CommandId::ClearMask => "clear_mask",
         CommandId::InvertMask => "invert_mask",
+        CommandId::FillMask => "fill_mask",
         CommandId::MaskGroup => "mask_group",
         CommandId::Solo => "solo",
         CommandId::AddLevel => "add_level",

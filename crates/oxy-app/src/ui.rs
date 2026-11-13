@@ -3030,35 +3030,47 @@ fn gizmo_ops_menu(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
-/// Typed values for the current gizmo mode, applied with Apply (or Enter).
+/// The current gizmo mode's totals since the gizmo opened (or the last
+/// Apply), updated live while dragging. Type a value and press Enter to make
+/// the total exactly that; Apply keeps the changes, Cancel puts them back.
 fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
+    // Show the live totals unless a field is being edited.
+    let editing_id = ui.scope_id().with("gizmo_numeric_editing");
+    let editing = ui.data(|d| d.get_temp::<bool>(editing_id)).unwrap_or(false);
+    if !editing {
+        ed.sync_gizmo_numeric();
+    }
+    let mut set = false;
     let mut apply = false;
+    let mut cancel = false;
+    let mut any_editing = false;
     ui.horizontal(|ui| {
         let n = &mut ed.gizmo_numeric;
         let mut field = |ui: &mut Ui, v: &mut f32, speed: f64, suffix: &str, label: &str, color: Color32| {
             ui.label(RichText::new(label).color(color).strong());
             let r = ui.add(egui::DragValue::new(v).speed(speed).max_decimals(3).suffix(suffix));
-            if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                apply = true;
+            any_editing |= r.has_focus() || r.dragged();
+            if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || r.drag_stopped() {
+                set = true;
             }
             r.changed()
         };
         let names = ["X", "Y", "Z"];
         match mode {
             GizmoMode::Move => {
-                ui.label(RichText::new("Move by").weak());
+                ui.label(RichText::new("Moved").weak());
                 for a in 0..3 {
                     field(ui, &mut n.offset[a], 0.01, "", names[a], AXIS_COLORS[a]);
                 }
             }
             GizmoMode::Rotate => {
-                ui.label(RichText::new("Turn by").weak());
+                ui.label(RichText::new("Turned").weak());
                 for a in 0..3 {
                     field(ui, &mut n.degrees[a], 0.5, "°", names[a], AXIS_COLORS[a]);
                 }
             }
             GizmoMode::Scale => {
-                ui.label(RichText::new("Scale by").weak());
+                ui.label(RichText::new("Scaled").weak());
                 if n.uniform {
                     let mut v = n.scale.x;
                     if field(ui, &mut v, 0.01, "×", "XYZ", Color32::from_gray(220)) {
@@ -3074,12 +3086,22 @@ fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
                 }
             }
         }
+        let changes = ed.gizmo_has_changes();
         if tips::hover(ui.button("Apply"), plain::GIZMO_APPLY).clicked() {
             apply = true;
         }
+        if tips::hover(ui.add_enabled(changes, egui::Button::new("Cancel")), plain::GIZMO_CANCEL).clicked() {
+            cancel = true;
+        }
     });
+    ui.data_mut(|d| d.insert_temp(editing_id, any_editing && !set));
     if apply {
         ed.apply_gizmo_numeric();
+    } else if cancel {
+        ed.cancel_gizmo_changes();
+    } else if set {
+        ed.set_gizmo_numeric();
+        ed.sync_gizmo_numeric();
     }
 }
 
@@ -3817,6 +3839,9 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button_km(ui, &ed.keymap, "Invert", Cmd::InvertMask).clicked() {
         ed.invert_mask();
     }
+    if tips::button_km(ui, &ed.keymap, "Fill", Cmd::FillMask).clicked() {
+        ed.fill_mask();
+    }
     if tips::button_km(ui, &ed.keymap, "Clear", Cmd::ClearMask).clicked() {
         ed.clear_mask();
     }
@@ -4524,6 +4549,9 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
         }
         if tips::button(ui, "Invert mask", Cmd::InvertMask).clicked() {
             ed.invert_mask();
+        }
+        if tips::button(ui, "Fill mask", Cmd::FillMask).clicked() {
+            ed.fill_mask();
         }
         if tips::button(ui, "Clear mask", Cmd::ClearMask).clicked() {
             ed.clear_mask();
