@@ -1098,6 +1098,8 @@ pub struct Editor {
     pub tube_into: Option<u64>,
     /// The retopology tool, while its window is open (RFC 0012).
     pub retopo: Option<crate::retopo::Retopo>,
+    /// Living strokes (RFC 0017): recorded strokes and the Strokes panel.
+    pub living: crate::living::Living,
     /// The Poly Edit tool, while its window is open (RFC 0018).
     pub poly_edit: Option<crate::polyedit::PolyEdit>,
     /// The last (surface, retopology piece) pair, to continue it.
@@ -1398,6 +1400,7 @@ impl Default for Editor {
             tube_into: None,
             retopo: None,
             poly_edit: None,
+            living: crate::living::Living::new(),
             retopo_last: None,
             tab_held: false,
             extract_preview: None,
@@ -1729,6 +1732,8 @@ impl Editor {
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
             radius_on_model: self.radius_on_model,
+            living_strokes: self.living.enabled,
+            living_budget_mb: self.living.budget_mb,
             brush_radius_world: if self.radius_on_model && self.remember_brushes {
                 self.brush_radius_world
             } else {
@@ -1952,6 +1957,8 @@ impl Editor {
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.radius_on_model = s.radius_on_model;
+        self.living.enabled = s.living_strokes;
+        self.living.budget_mb = s.living_budget_mb;
         // A remembered size on the model; otherwise the first frame measures
         // one from the on-screen size.
         self.brush_radius_world = s.brush_radius_world;
@@ -2361,11 +2368,16 @@ impl Editor {
 
     /// End a stroke: one undo step, either the usual chunk snapshots or,
     /// when dynamic detail changed the mesh, the whole mesh before it.
-    fn finish_stroke(&mut self, dyn_topo: Option<Box<DynStroke>>, hold: Option<Box<HoldWatch>>) {
+    fn finish_stroke(&mut self, kind: BrushKind, dyn_topo: Option<Box<DynStroke>>, hold: Option<Box<HoldWatch>>) {
         let before = self.history.revision();
         match dyn_topo {
             Some(d) if d.changed => self.history.record_topology(d.label, d.piece, d.before, None),
-            _ => self.history.commit(),
+            _ => {
+                self.history.commit();
+                if self.history.revision() != before {
+                    self.living_record(kind);
+                }
+            }
         }
         // Remember the stroke's path, so Edit > Last stroke can reopen it.
         self.last_stroke = hold.filter(|_| self.history.revision() != before).map(|h| LastStroke {
@@ -3141,7 +3153,7 @@ impl Editor {
         self.snap_orbit = None;
         self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { dyn_topo, hold, .. } => self.finish_stroke(dyn_topo, hold),
+            Drag::Stroke { stroke, dyn_topo, hold, .. } => self.finish_stroke(stroke.kind(), dyn_topo, hold),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -3230,7 +3242,7 @@ impl Editor {
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { dyn_topo, hold, .. } => self.finish_stroke(dyn_topo, hold),
+            Drag::Stroke { stroke, dyn_topo, hold, .. } => self.finish_stroke(stroke.kind(), dyn_topo, hold),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -3514,7 +3526,11 @@ impl Editor {
         }
         let id = self.scene.active().id;
         let name = self.scene.active().name.clone();
-        self.status = match self.history.undo_piece(&mut self.scene, id) {
+        let result = self.history.undo_piece(&mut self.scene, id);
+        if matches!(result, Ok(Some(_))) {
+            self.living_after_undo_redo();
+        }
+        self.status = match result {
             Ok(Some(l)) => format!("Undid {l} on {name}"),
             Ok(None) if self.history.can_undo() => format!(
                 "Nothing more to undo on {name} by itself. Changes that added pieces (Join, Duplicate, Split…) are undone with Undo in whole scene."
@@ -3534,7 +3550,11 @@ impl Editor {
         }
         let id = self.scene.active().id;
         let name = self.scene.active().name.clone();
-        self.status = match self.history.redo_piece(&mut self.scene, id) {
+        let result = self.history.redo_piece(&mut self.scene, id);
+        if matches!(result, Ok(Some(_))) {
+            self.living_after_undo_redo();
+        }
+        self.status = match result {
             Ok(Some(l)) => format!("Redid {l} on {name}"),
             Ok(None) => format!("Nothing to redo on {name}"),
             Err(b) => format!(
@@ -3588,7 +3608,11 @@ impl Editor {
             self.status = "Wait for the running operation to finish before undoing".into();
             return;
         }
-        self.status = match self.history.undo(&mut self.scene) {
+        let result = self.history.undo(&mut self.scene);
+        if result.is_some() {
+            self.living_after_undo_redo();
+        }
+        self.status = match result {
             Some(l) => format!("Undid {l}"),
             None => "Nothing to undo".into(),
         };
@@ -3608,7 +3632,11 @@ impl Editor {
             self.status = "Wait for the running operation to finish before redoing".into();
             return;
         }
-        self.status = match self.history.redo(&mut self.scene) {
+        let result = self.history.redo(&mut self.scene);
+        if result.is_some() {
+            self.living_after_undo_redo();
+        }
+        self.status = match result {
             Some(l) => format!("Redid {l}"),
             None => "Nothing to redo".into(),
         };
@@ -4633,6 +4661,7 @@ impl Editor {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
         }
         self.history.commit();
+        self.living_record(c.kind);
         self.status = format!("Applied curve stroke ({})", c.kind.label());
     }
 
@@ -9644,6 +9673,8 @@ mod tests {
             gizmo_done_reverts: true,
             radius_on_model: false,
             brush_radius_world: 0.0,
+            living_strokes: true,
+            living_budget_mb: 300,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,

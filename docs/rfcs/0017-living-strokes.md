@@ -1,6 +1,6 @@
 # RFC 0017: Living strokes
 
-Status: proposed
+Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 (groups, saving) still to do
 
 ## Summary
 
@@ -178,6 +178,12 @@ example, fade every stroke in a group.
 - Should the panel also list mask strokes? Proposed: no; masks are cheap to
   redo and would crowd the list.
 - Default memory budget: proposed 256 MB, adjustable in Preferences.
+
+Decided for phase 1: one record per symmetric stroke, mask strokes not
+listed, a 256 MB budget adjustable in Preferences. Living strokes is an
+option, **off by default** (Preferences > General, or the button in the
+Strokes window), so people who don't use it pay no memory for it; turning
+it off bakes the list.
 
 ## Not included
 

@@ -103,6 +103,18 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         body: "X symmetry is on by default: strokes on one side are mirrored to the other, and so are mask boxes and lassos. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.\n\nSymmetry mirrors new strokes; it doesn't fix a model whose sides already differ. For that, Mesh > Symmetrize keeps one half (for example +X onto −X: the +X side is where the axis gizmo's red X points), replaces the other half with its mirror image and welds the two along the middle, about the piece's centre. It's one undo step and removes subdivision levels.",
     },
     Topic {
+        title: "Living strokes",
+        keywords: "strokes edit past fade delete solo layer strength history bake",
+        body: "Living strokes keeps each stroke editable after you make it. It's off by default: turn it on in Preferences > General, or open Mesh > Strokes… and click Turn on Living strokes. Strokes made before turning it on aren't listed.\n\n\
+- The Strokes window lists the active piece's strokes, newest first. Click one to select it; Shift or Ctrl+click selects several.\n\
+- Strength fades the selected strokes from 0% (gone) to 150% (exaggerated), live while you drag.\n\
+- Delete takes their change off the surface; Solo shows them without the strokes made after them until you click Show all.\n\
+- Later strokes keep what they did: a stroke's change is added or taken away, not replayed, so a stroke smoothed over later can look different when faded.\n\
+- Every change is an undo step. Undoing a stroke hides it from the list, and redo brings it back.\n\
+- A remesh, a subdivision level change, dynamic detail or anything else that changes the triangles keeps the surface and clears the list (it's baked). Bake all does that by hand; the oldest strokes are baked when the list passes its memory budget (Preferences).\n\
+- Mask strokes aren't listed, and strokes aren't saved with the project yet.",
+    },
+    Topic {
         title: "Deform window",
         keywords: "deform bend twist taper skew flatten squeeze sag inflate spherize noise polish relax smooth unify",
         body: "Mesh > Deform… changes the whole piece at once: bend, twist, taper, skew, flatten, squeeze, sag, inflate, spherize, noise, smooth, polish, relax and more.\n\n\

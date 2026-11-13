@@ -134,6 +134,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             "polygon modeling box extrude inset bevel low poly hard surface faces",
             Editor::start_poly_edit,
         ),
+        cmd(ed, Cmd::LivingStrokes, "living strokes layers history fade delete solo edit past stroke", |e| {
+            e.living.show = true
+        }),
         cmd(
             ed,
             Cmd::DeformWindow,

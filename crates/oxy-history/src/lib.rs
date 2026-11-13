@@ -218,6 +218,9 @@ pub struct PieceUndoBlocked {
 }
 
 struct Entry {
+    /// Unique for the life of the history, so other state (Living strokes)
+    /// can follow an entry through undo and redo.
+    id: u64,
     label: String,
     change: Change,
 }
@@ -237,6 +240,10 @@ pub struct History {
     budget_bytes: usize,
     /// Incremented on every recorded change, undo and redo.
     revision: u64,
+    /// The id the next entry gets.
+    next_id: u64,
+    /// The entry the last undo or redo moved, and whether it was undone.
+    last_moved: Option<(u64, bool)>,
 }
 
 impl Default for History {
@@ -247,7 +254,48 @@ impl Default for History {
 
 impl History {
     pub fn new(budget_bytes: usize) -> Self {
-        Self { undo: VecDeque::new(), redo: Vec::new(), pending: None, budget_bytes, revision: 0 }
+        Self {
+            undo: VecDeque::new(),
+            redo: Vec::new(),
+            pending: None,
+            budget_bytes,
+            revision: 0,
+            next_id: 1,
+            last_moved: None,
+        }
+    }
+
+    /// The id of the newest undoable entry.
+    pub fn newest_id(&self) -> Option<u64> {
+        self.undo.back().map(|e| e.id)
+    }
+
+    /// The entry the last undo or redo moved: `(id, undone)`.
+    pub fn last_moved(&self) -> Option<(u64, bool)> {
+        self.last_moved
+    }
+
+    /// Whether entry `id` can still be redone.
+    pub fn can_redo_id(&self, id: u64) -> bool {
+        self.redo.iter().any(|e| e.id == id)
+    }
+
+    /// Whether entry `id` is on the undo list.
+    pub fn can_undo_id(&self, id: u64) -> bool {
+        self.undo.iter().any(|e| e.id == id)
+    }
+
+    /// For the newest entry, when it's an in-place edit of piece `piece`'s
+    /// points: each chunk it changed, with the positions (and colors, when
+    /// recorded) from before the change. None otherwise.
+    #[allow(clippy::type_complexity)]
+    pub fn newest_chunks_before(&self, piece: u64) -> Option<Vec<(u32, &[Vec3], &[Vec3])>> {
+        match &self.undo.back()?.change {
+            Change::Chunks { piece: p, snaps } if *p == piece => {
+                Some(snaps.iter().map(|s| (s.chunk, s.positions.as_slice(), s.color.as_slice())).collect())
+            }
+            _ => None,
+        }
     }
 
     /// Changes whenever the document changes; useful for "unsaved" tracking.
@@ -391,7 +439,9 @@ impl History {
 
     fn push(&mut self, label: String, change: Change) {
         self.redo.clear();
-        self.undo.push_back(Entry { label, change });
+        let id = self.next_id;
+        self.next_id += 1;
+        self.undo.push_back(Entry { id, label, change });
         self.revision += 1;
         self.enforce_budget();
     }
@@ -452,6 +502,7 @@ impl History {
         let mut e = self.undo.pop_back()?;
         e.change.swap(scene);
         let label = e.label.clone();
+        self.last_moved = Some((e.id, true));
         self.redo.push(e);
         self.revision += 1;
         Some(label)
@@ -470,6 +521,7 @@ impl History {
         let mut e = self.undo.remove(i).expect("index found above");
         e.change.swap(scene);
         let label = e.label.clone();
+        self.last_moved = Some((e.id, true));
         self.redo.push(e);
         self.revision += 1;
         Ok(Some(label))
@@ -485,6 +537,7 @@ impl History {
         let mut e = self.redo.remove(i);
         e.change.swap(scene);
         let label = e.label.clone();
+        self.last_moved = Some((e.id, false));
         self.undo.push_back(e);
         self.revision += 1;
         self.enforce_budget();
@@ -501,6 +554,7 @@ impl History {
         let mut e = self.redo.pop()?;
         e.change.swap(scene);
         let label = e.label.clone();
+        self.last_moved = Some((e.id, false));
         self.undo.push_back(e);
         self.revision += 1;
         Some(label)
