@@ -124,7 +124,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Face groups and hiding",
         keywords: "polygroups groups visibility hide show isolate",
-        body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from what's visible (Ctrl+W), from the mask, or from loose parts (Groups menu).\n\n\
+        body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from the mask (Ctrl+W; with nothing masked it groups what's visible), from what's visible, or from loose parts (Groups menu).\n\n\
 - Ctrl+Shift+click a group to show only it; Ctrl+Shift+click empty space to show everything.\n\
 - Ctrl+Shift+drag shows only what's inside the selection; add Alt to hide it instead.\n\
 - Hidden faces are not sculpted or exported. Mesh > Delete hidden removes them for good, and Mesh > Split hidden moves them into a piece of their own.\n\
@@ -152,7 +152,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         keywords: "gizmo move rotate scale pose transform mask",
         body: "Press T to show the gizmo (T again cycles move, rotate, scale, off). Drag an axis handle, or the centre handle to move in the screen plane, spin around the view or scale evenly. Esc during a drag cancels it.\n\n\
 Masked parts stay put and partly masked parts move partly, so a soft mask edge bends smoothly: mask the body, leave an arm unmasked, and rotate it at the shoulder. The pivot sits on the edge of the mask.\n\n\
-The fields under the gizmo show how far it has moved, turned or scaled since the gizmo opened, and follow along while you drag. To land on an exact value, type it and press Enter: typing 2 in Scale makes it twice the size it started at. The second row shows the actual Size and Centre of what the gizmo moves, along the world axes (Mesh > 3D Print Tools shows the size in millimetres). Type a size or a centre and press Enter to set it exactly; with Even on, the other sides of the size follow in proportion. Apply keeps the changes and counts from zero again; Cancel puts them back. Done closes the gizmo, and like Cancel it puts back anything you didn't apply (Redo brings it back). Operators (mirror, put on the ground, centre at origin) are applied at once.",
+The fields under the gizmo show how far it has moved, turned or scaled since the gizmo opened, and follow along while you drag. To land on an exact value, type it and press Enter: typing 2 in Scale makes it twice the size it started at. The second row shows the actual Size and Centre of what the gizmo moves, along the world axes (Mesh > 3D Print Tools shows the size in millimetres). Type a size or a centre and press Enter to set it exactly; with Even on, the other sides of the size follow in proportion. Apply keeps the changes and counts from zero again; Cancel puts them back. Done closes the gizmo and keeps your changes. If you'd rather Done put back anything you didn't apply, like Cancel, turn on Preferences > General > Closing the gizmo puts back changes not applied (Redo brings changes back either way). Operators (mirror, put on the ground, centre at origin) are applied at once.",
     },
     Topic {
         title: "Bending with Curve Move",

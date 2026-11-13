@@ -144,7 +144,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 - **Pieces:** many meshes per scene: add, duplicate, mirror-duplicate, delete, rename, show/hide, solo; Alt+click a piece to make it active. **Join** combines the visible pieces exactly as they are (each keeps its face groups); **Merge + remesh** fuses them into one closed surface. Split a piece by face groups, into loose parts, by its hidden faces or by its mask (**Split masked**).
 - **Masking and selection:** paint a mask with Ctrl, or box or lasso it (following symmetry); mask by cavity, peaks or face group, or mask the border of the visible surface or the lines where face groups meet; blur, sharpen, grow, shrink or invert it. **Extract mask…** turns the masked area into a shell piece with live preview of its thickness.
 - **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, and a group color overlay.
-- **Transform gizmo (T):** move, rotate or scale a piece. With a mask, only the unmasked part moves and a soft mask edge bends smoothly, which makes it a quick posing tool. It snaps with Shift and has pivot choices and operators (mirror, put on the ground, centre at origin). Its fields show the move, turn or scale live while you drag; type a value and press Enter to land exactly on it. A second row shows the actual **size** and **centre** of what it moves (along the world axes), also live; type a size or a position to set it exactly (with Even on, the other sides follow in proportion). **Apply** keeps the changes; **Cancel**, or **Done** without Apply, puts them back (Redo brings them back).
+- **Transform gizmo (T):** move, rotate or scale a piece. With a mask, only the unmasked part moves and a soft mask edge bends smoothly, which makes it a quick posing tool. It snaps with Shift and has pivot choices and operators (mirror, put on the ground, centre at origin). Its fields show the move, turn or scale live while you drag; type a value and press Enter to land exactly on it. A second row shows the actual **size** and **centre** of what it moves (along the world axes), also live; type a size or a position to set it exactly (with Even on, the other sides follow in proportion). **Apply** keeps the changes and counts from zero again; **Cancel** puts them back (Redo brings them back); **Done** closes the gizmo and keeps them, unless Preferences > General > *Closing the gizmo puts back changes not applied* is on.
 
 ### Color and viewport
 
@@ -204,6 +204,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
 | `L` | Rectangle / lasso selection |
 | Ctrl+M | Mask the face group under the cursor |
+| Ctrl+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
 | `[` `]` and `-` `=` | Radius and strength |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |

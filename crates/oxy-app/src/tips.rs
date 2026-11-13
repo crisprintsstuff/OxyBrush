@@ -113,8 +113,8 @@ commands! {
     SymmetrizeNegX => "Symmetrize: −X onto +X", "", "Make this piece symmetric: keep the −X half (away from the axis gizmo's red X), replace the other half with its mirror image, and weld the two along the middle. Uses the piece's symmetry centre. One undo step.";
     SplitMasked => "Split masked", "", "Move the masked part of this piece into a new piece, and keep the unmasked part in this one. Invert the mask first to split off the unmasked part instead. Both parts come out unmasked.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
-    GroupVisible => "Group visible", "Ctrl+W", "Give the visible faces their own face group.";
-    GroupFromMask => "Group from mask", "", "Give the unmasked faces their own face group.";
+    GroupVisible => "Group visible", "", "Give the visible faces their own face group.";
+    GroupFromMask => "Group from mask", "Ctrl+W", "Give the masked faces their own face group. With nothing masked, Ctrl+W groups the visible faces instead.";
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
     InvertVisibility => "Invert visibility", "", "Swap which faces are hidden.";
@@ -261,6 +261,7 @@ impl Cmd {
             Cmd::LevelDown => CommandId::LevelDown,
             Cmd::Remesh => CommandId::Remesh,
             Cmd::GroupVisible => CommandId::GroupVisible,
+            Cmd::GroupFromMask => CommandId::GroupFromMask,
             Cmd::Guide => CommandId::Guide,
             Cmd::Preferences => CommandId::Preferences,
             _ => return None,
@@ -667,8 +668,7 @@ pub mod plain {
     pub const PAN: &str = "Drag to pan. You can also right-drag in the view.";
     pub const ZOOM: &str = "Drag up or down to zoom. You can also use the mouse wheel.";
     pub const AXIS_GIZMO: &str = "Click an axis end to view the model from that side, or drag to orbit.";
-    pub const GIZMO_DONE: &str =
-        "Close the transform gizmo. Changes you haven't applied are put back, like Cancel (Redo brings them back).";
+    pub const GIZMO_DONE: &str = "Close the transform gizmo; your changes stay. (With Preferences > General > \"Closing the gizmo puts back changes not applied\" on, changes you haven't applied are put back, like Cancel.)";
     pub const GIZMO_SNAP: &str =
         "Snap gizmo drags to steps (set them in Pivot). Holding Shift while dragging snaps too.";
     pub const GIZMO_APPLY: &str = "Keep the changes made with the gizmo (and any typed values), and count from zero again. \

@@ -921,6 +921,8 @@ pub struct Editor {
     /// Ctrl+Z (Undo and Redo) works on the active piece only, instead of
     /// the whole scene.
     pub undo_per_piece: bool,
+    /// Closing the gizmo puts back changes not applied (Preferences).
+    pub gizmo_done_reverts: bool,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window's size, position and state, kept up to date by the
@@ -1291,6 +1293,7 @@ impl Default for Editor {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
             undo_per_piece: false,
+            gizmo_done_reverts: false,
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
@@ -1706,6 +1709,7 @@ impl Editor {
             },
             remember_brushes: self.remember_brushes,
             undo_per_piece: self.undo_per_piece,
+            gizmo_done_reverts: self.gizmo_done_reverts,
             plugin_params: self.plugin_params.clone(),
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
@@ -1922,6 +1926,7 @@ impl Editor {
         self.remesh_engine = s.remesh_engine;
         self.remember_brushes = s.remember_brushes;
         self.undo_per_piece = s.undo_per_piece;
+        self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.plugin_params = s.plugin_params.clone();
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
@@ -5621,6 +5626,21 @@ impl Editor {
     // ---- faces and masks ----
 
     /// Apply a face group / visibility edit to the active piece, undoably.
+    /// Ctrl+W: give the masked faces their own face group, or, with
+    /// nothing visible masked, every visible face (one undo step either way).
+    pub fn group_from_mask_or_visible(&mut self) {
+        let mesh = &self.scene.active().mesh;
+        let masked = (0..mesh.triangle_count())
+            .any(|t| !mesh.hidden()[t] && mesh.triangles[t].iter().all(|&v| mesh.mask[v as usize] > 0.5));
+        if masked {
+            self.edit_faces("Group from mask", Mesh::group_from_mask);
+            self.status = "Group from mask: the masked faces are a new face group".into();
+        } else {
+            self.edit_faces("Group visible", Mesh::group_visible);
+            self.status = "Group visible: nothing is masked, so the visible faces are a new face group".into();
+        }
+    }
+
     pub fn edit_faces(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
         self.pointer_up();
         let piece = self.scene.active_mut();
@@ -6406,6 +6426,10 @@ impl Editor {
             }
             C::GroupVisible => {
                 self.edit_faces("Group visible", oxy_mesh::Mesh::group_visible);
+                E::None
+            }
+            C::GroupFromMask => {
+                self.group_from_mask_or_visible();
                 E::None
             }
             C::Guide => {
@@ -7228,6 +7252,41 @@ mod tests {
         e.symmetrize(0, true);
         assert!(e.job.is_none());
         assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
+    }
+
+    #[test]
+    fn ctrl_w_groups_the_mask_or_else_what_is_visible() {
+        let mut e = Editor::for_tests();
+        assert_eq!(
+            e.keymap.command_for(crate::keymap::Chord::parse("ctrl+w").unwrap()),
+            Some(CommandId::GroupFromMask)
+        );
+        // A mask on the top half: just those faces get a new group.
+        {
+            let m = &mut e.scene.active_mut().mesh;
+            for v in 0..m.vertex_count() {
+                m.mask[v] = if m.positions[v].y > 0.2 { 1.0 } else { 0.0 };
+            }
+        }
+        e.perform_command(CommandId::GroupFromMask);
+        let m = &e.scene.active().mesh;
+        let top: Vec<u32> = (0..m.triangle_count())
+            .filter(|&t| m.triangles[t].iter().all(|&v| m.positions[v as usize].y > 0.2))
+            .map(|t| m.groups()[t])
+            .collect();
+        let bottom = m.groups()[(0..m.triangle_count())
+            .find(|&t| m.triangles[t].iter().all(|&v| m.positions[v as usize].y < 0.0))
+            .unwrap()];
+        assert!(top.iter().all(|&g| g == top[0]) && top[0] != bottom, "masked faces in their own group");
+        assert!(e.status.starts_with("Group from mask"), "{}", e.status);
+        e.undo();
+        assert!(e.scene.active().mesh.groups().iter().all(|&g| g == bottom), "one undo step");
+        // Nothing masked: everything visible becomes one new group.
+        e.clear_mask();
+        e.perform_command(CommandId::GroupFromMask);
+        let g = e.scene.active().mesh.groups();
+        assert!(g.iter().all(|&x| x == g[0]) && g[0] != bottom);
+        assert!(e.status.starts_with("Group visible"), "{}", e.status);
     }
 
     #[test]
@@ -9395,6 +9454,7 @@ mod tests {
         use crate::settings::{Settings, UiLayout};
         let mut s = Settings {
             undo_per_piece: true,
+            gizmo_done_reverts: true,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,
