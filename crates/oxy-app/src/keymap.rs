@@ -17,7 +17,16 @@ use std::path::{Path, PathBuf};
 
 /// File format this build writes. Higher versions are still read: known
 /// fields apply, and everything else is preserved in [`Keymap::extra`].
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
+
+/// Default bindings that changed, by the file version that still had them:
+/// a command still bound exactly to its old default moves to the new one
+/// (someone who chose their own key keeps it).
+const OLD_DEFAULTS: &[(u32, CommandId, &[&str])] = &[
+    // Version 2: Ctrl+W became Group from mask (with nothing masked it
+    // still groups what's visible).
+    (1, CommandId::GroupVisible, &["ctrl+w"]),
+];
 
 /// Extension for an exported keymap, without the dot.
 pub const EXTENSION: &str = "oxkeys";
@@ -1369,6 +1378,34 @@ impl Keymap {
                 extra.push(line);
             }
         }
+        // Bindings still on an old default move to the new one.
+        let shortcuts = map.shortcuts;
+        for &(upto, id, old) in OLD_DEFAULTS {
+            let old: Vec<Chord> = parse_chords(old);
+            if version <= upto
+                && replaced_bind.contains(&id)
+                && map.chords(id) == old.as_slice()
+                && let Some(chords) = map.chords_mut(id)
+            {
+                *chords = parse_chords(command_defaults(id, shortcuts));
+            }
+        }
+        // A command the file doesn't mention (new in this version) takes its
+        // default keys only where the file doesn't use them for something else.
+        let taken: Vec<Chord> = map
+            .commands
+            .iter()
+            .filter(|(id, _)| replaced_bind.contains(id))
+            .flat_map(|(_, c)| c.iter().copied())
+            .collect();
+        for (id, chords) in map.commands.iter_mut() {
+            if !replaced_bind.contains(id) {
+                chords.retain(|c| !taken.contains(c));
+            }
+        }
+        if version < VERSION {
+            map.version = VERSION;
+        }
         map.extra = extra;
         map
     }
@@ -1838,6 +1875,37 @@ mod tests {
     }
 
     #[test]
+    fn older_keymap_files_move_to_new_defaults_but_keep_chosen_keys() {
+        // A version-1 file saved with the old default (Ctrl+W = Group visible).
+        let old = Keymap::builtin(Preset::OxyBrush)
+            .to_text()
+            .replace("version = 2", "version = 1")
+            .replace("bind.group_from_mask = ctrl+w\n", "");
+        let old = old.replace("bind.group_visible =\n", "bind.group_visible = ctrl+w\n");
+        assert!(old.contains("bind.group_visible = ctrl+w"));
+        let map = Keymap::from_text(&old);
+        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::GroupFromMask));
+        assert!(map.chords(CommandId::GroupVisible).is_empty());
+        assert!(map.conflicts().is_empty());
+        assert_eq!(map.version, VERSION);
+        // Someone who moved Group visible to their own key keeps it.
+        let mine = old.replace("bind.group_visible = ctrl+w", "bind.group_visible = ctrl+shift+w");
+        let map = Keymap::from_text(&mine);
+        assert_eq!(map.command_for(chord("ctrl+shift+w")), Some(CommandId::GroupVisible));
+        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::GroupFromMask));
+        // A command the file doesn't mention doesn't take a key the file
+        // uses for something else (here Remesh moved to Ctrl+W).
+        let other = old
+            .replace("bind.group_visible = ctrl+w", "bind.group_visible =")
+            .replace("bind.remesh = ctrl+r", "bind.remesh = ctrl+w")
+            .replace("version = 1", "version = 2");
+        let other = Keymap::from_text(&other);
+        assert_eq!(other.command_for(chord("ctrl+w")), Some(CommandId::Remesh));
+        assert!(other.chords(CommandId::GroupFromMask).is_empty());
+        assert!(other.conflicts().is_empty(), "{:?}", other.conflicts());
+    }
+
+    #[test]
     fn builtin_presets_have_no_conflicts_and_keep_current_keys() {
         for preset in Preset::ALL {
             let map = Keymap::builtin(preset);
@@ -1901,7 +1969,7 @@ mod tests {
     #[test]
     fn roundtrip_keeps_custom_bindings_and_unknown_lines() {
         let mut map = Keymap::builtin(Preset::MmbOrbit);
-        map.version = 1;
+        map.version = VERSION;
         map.set_chord(CommandId::ViewFront, Some(0), chord("f5"));
         map.use_ctrl_carve();
         map.extra.push("future_option = 3".into());
