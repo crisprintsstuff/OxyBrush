@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Changed
+- **Ctrl+W is Group from mask**, as in other sculpting apps: the masked faces become a new face group, and with nothing masked it groups the visible faces as before. Group visible keeps its place in the Groups menu and can be given its own key in the keymap. The Group from mask tooltip said "unmasked faces"; it's the masked ones.
 - **Ctrl+plus and Ctrl+minus zoom the view, not the interface** (Cmd on macOS, as with the other shortcuts). They used to resize the whole interface, a default of the interface toolkit that bypassed View > Theme > Size; now they are the new **Zoom in** / **Zoom out** commands (View menu, command palette, rebindable in the keymap; Ctrl+= works for zoom in too, without Shift). **Ctrl+0** frames the active piece, like F. The interface size is set only in View > Theme > Size.
 
 ### Added

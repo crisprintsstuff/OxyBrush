@@ -3569,7 +3569,7 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button_km(ui, &ed.keymap, "Group visible", Cmd::GroupVisible).clicked() {
         ed.edit_faces("Group visible", Mesh::group_visible);
     }
-    if tips::button(ui, "Group from mask", Cmd::GroupFromMask).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Group from mask", Cmd::GroupFromMask).clicked() {
         ed.edit_faces("Group from mask", Mesh::group_from_mask);
     }
     if tips::button(ui, "Group by islands", Cmd::GroupIslands).clicked() {
