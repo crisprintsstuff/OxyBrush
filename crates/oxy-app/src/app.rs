@@ -875,11 +875,12 @@ impl App {
                 let mut dialog = rfd::AsyncFileDialog::new()
                     .add_filter(
                         "OxyBrush project or mesh",
-                        &["oxb", "obj", "stl", "ztl", "zpr", "OXB", "OBJ", "STL", "ZTL", "ZPR"],
+                        &["oxb", "obj", "stl", "ply", "ztl", "zpr", "OXB", "OBJ", "STL", "PLY", "ZTL", "ZPR"],
                     )
                     .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
+                    .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])
                     .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
@@ -891,9 +892,10 @@ impl App {
                     return;
                 }
                 let mut dialog = rfd::AsyncFileDialog::new()
-                    .add_filter("Meshes", &["obj", "stl", "ztl", "zpr", "OBJ", "STL", "ZTL", "ZPR"])
+                    .add_filter("Meshes", &["obj", "stl", "ply", "ztl", "zpr", "OBJ", "STL", "PLY", "ZTL", "ZPR"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
+                    .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])
                     .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
