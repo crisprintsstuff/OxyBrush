@@ -9,6 +9,7 @@ mod protocol;
 mod session;
 pub mod state;
 mod stroke;
+pub mod strokes;
 mod tools;
 mod transport;
 mod view;
@@ -25,6 +26,7 @@ pub trait Host: Send {
 pub use protocol::{Identity, ServerState, handle_message};
 pub use session::HeadlessSession;
 pub use stroke::{MaskOp, Space, StrokeParams, apply_samples, build_samples, primitive};
+pub use strokes::{StrokeOp, parse_stroke_op};
 pub use tools::{Action, CameraSet, ToolResult, brush_from_name, is_read_only, parse_action};
 pub use transport::{
     Control, Loopback, forward_message, new_token, parse_attach, read_frame, serve_loopback, serve_stdio,

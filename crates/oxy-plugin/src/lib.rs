@@ -12,10 +12,11 @@
 //! edits it wants as data ([`RunResult`]); the app applies them through
 //! its normal undo history. Overlays return lines to draw.
 //!
-//! # Host API, version 3 (module `oxybrush`)
+//! # Host API, version 4 (module `oxybrush`)
 //!
-//! Versions 2 and 3 add the rows marked *(2)* and *(3)* (RFC 0013);
-//! plugins written for an earlier version (`"api": 1` or `2`) keep working
+//! Versions 2, 3 and 4 add the rows marked *(2)*, *(3)* and *(4)* (RFC 0013;
+//! 4 is Living strokes, RFC 0017); plugins written for an earlier version
+//! (`"api": 1`, `2` or `3`) keep working
 //! unchanged. The full guide is in `docs/plugins/`.
 //!
 //! All values are `i32` or `f32`; pointers and lengths are byte offsets
@@ -50,6 +51,8 @@
 //! | `write_mesh(piece, pos_ptr, vcount, tri_ptr, tcount) -> i32` *(3)* | `edit_topology` | new vertices and triangles for the piece; later writes to it in the same command use the new counts, and `write_positions` is refused |
 //! | `param_color(index, ptr) -> i32` *(3)* | — | a color param's value as three `f32` (sRGB 0..=1) |
 //! | `progress(fraction: f32) -> i32` *(3)* | — | report 0..=1 progress; returns 1 once the user asked to stop (the command's edits are then dropped) |
+//! | `strokes_state(ptr, cap) -> i32` *(4)* | `read_scene` | the active piece's living strokes and groups as JSON (as the agent's `list_strokes`); writes up to `cap` bytes, returns the full length |
+//! | `stroke_command(ptr, len) -> i32` *(4)* | `edit_strokes` | queue a Strokes window action as UTF-8 JSON, e.g. `{"op": "set_strength", "strokes": [3], "strength": 0.5}`; returns its index, or [`ERR_COUNT`] if it isn't a JSON object with an `"op"`. Applied after the command, in order, each as one undo step |
 //!
 //! All of one command's edits to a piece (positions, mask, colors, face
 //! groups, visibility, a new mesh) become one undo step; the new pieces of
@@ -111,7 +114,7 @@ use wasmi::{
 };
 
 /// Host API version this build implements (`"api"` in the manifest).
-pub const API_VERSION: u32 = 3;
+pub const API_VERSION: u32 = 4;
 /// Oldest host API version this build still runs.
 pub const API_MIN: u32 = 1;
 /// The capability is not in the manifest.
@@ -147,6 +150,8 @@ pub struct Capabilities {
     pub add_pieces: bool,
     /// API 3: replace a piece's vertices and triangles (`write_mesh`).
     pub edit_topology: bool,
+    /// API 4: change living strokes (`stroke_command`).
+    pub edit_strokes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -253,6 +258,7 @@ impl Manifest {
                 Some("overlay") => caps.overlay = true,
                 Some("add_pieces") => caps.add_pieces = true,
                 Some("edit_topology") => caps.edit_topology = true,
+                Some("edit_strokes") => caps.edit_strokes = true,
                 other => return Err(format!("{name}: unknown capability {other:?}")),
             }
         }
@@ -380,6 +386,9 @@ pub struct Snapshot {
     pub active: usize,
     /// RFC 0007 `scene_state` JSON (empty without `read_scene`).
     pub scene_json: String,
+    /// API 4. The active piece's living strokes as JSON (empty without
+    /// `read_scene`).
+    pub strokes_json: String,
 }
 
 /// What a command asked for.
@@ -400,6 +409,8 @@ pub struct RunResult {
     pub hidden: Vec<(usize, Vec<bool>)>,
     /// API 3. New vertices and triangles for pieces (`write_mesh`).
     pub meshes: Vec<(usize, NewMesh)>,
+    /// API 4. Strokes window actions (JSON), in call order.
+    pub stroke_commands: Vec<String>,
     /// API 3. The user asked the command to stop: apply nothing.
     pub cancelled: bool,
     pub log: Vec<String>,
@@ -462,6 +473,9 @@ pub struct NewPiece {
     pub positions: Vec<Vec3>,
     pub triangles: Vec<[u32; 3]>,
 }
+
+/// Most `stroke_command`s one command may queue.
+pub const MAX_STROKE_COMMANDS: usize = 1000;
 
 /// Most vertices or triangles one `add_piece` may create.
 pub const MAX_NEW_ELEMENTS: usize = 4_000_000;
@@ -730,6 +744,48 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
             return ERR_MEMORY;
         }
         json.len() as i32
+    })
+    .map_err(e)?;
+    // ---- API 4 ----
+    l.func_wrap("oxybrush", "strokes_state", |mut caller: Caller<'_, CallState>, ptr: i32, cap: i32| -> i32 {
+        let st = caller.data();
+        if st.in_overlay {
+            return ERR_CONTEXT;
+        }
+        if !st.caps.read_scene {
+            return ERR_DENIED;
+        }
+        let json = st.snap.strokes_json.clone().into_bytes();
+        let n = json.len().min(cap.max(0) as usize);
+        if n > 0 && !write_bytes(&mut caller, ptr, &json[..n]) {
+            return ERR_MEMORY;
+        }
+        json.len() as i32
+    })
+    .map_err(e)?;
+    l.func_wrap("oxybrush", "stroke_command", |mut caller: Caller<'_, CallState>, ptr: i32, len: i32| -> i32 {
+        let st = caller.data();
+        if st.in_overlay {
+            return ERR_CONTEXT;
+        }
+        if !st.caps.edit_strokes {
+            return ERR_DENIED;
+        }
+        if st.result.stroke_commands.len() >= MAX_STROKE_COMMANDS {
+            return ERR_COUNT;
+        }
+        let len = (len.max(0) as usize).min(64 * 1024);
+        let Some(bytes) = read_bytes(&caller, ptr, len) else { return ERR_MEMORY };
+        // Checked for shape here; what it asks is checked when applied.
+        let ok = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .is_some_and(|v| v.get("op").is_some_and(serde_json::Value::is_string));
+        if !ok {
+            return ERR_COUNT;
+        }
+        let out = &mut caller.data_mut().result.stroke_commands;
+        out.push(String::from_utf8_lossy(&bytes).into_owned());
+        out.len() as i32 - 1
     })
     .map_err(e)?;
     // ---- API 2 ----

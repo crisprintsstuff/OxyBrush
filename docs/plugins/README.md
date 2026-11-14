@@ -313,3 +313,4 @@ with a message.
 | 1 | 3.0.2-beta | read positions, triangles and mask; write positions; scene JSON; overlay lines; sliders |
 | 2 | 3.0.3-beta | normals and colors; write mask and colors; add pieces; commands in the palette |
 | 3 | 3.0.7-beta | face groups and hidden faces; replace a piece's mesh (`edit_topology`); live preview; toggles, choices, colors, labels and step sliders; `param_color`; progress and Stop; remembered settings |
+| 4 | unreleased | living strokes: read the list (`strokes_state`) and run Strokes window actions (`stroke_command`, capability `edit_strokes`) |

@@ -154,6 +154,9 @@ impl HeadlessSession {
                 ToolResult::ok(crate::state::changes_json(events, cursor, truncated).to_string())
             }
             Action::GetGeometry { id, index, name, fields } => self.get_geometry(id, index, name, fields),
+            Action::ListStrokes | Action::EditStrokes(_) => ToolResult::error(
+                "living strokes are kept by the desktop app: attach to OxyBrush (oxybrush-cli mcp --attach) to use them",
+            ),
             Action::Screenshot => {
                 ToolResult::error("viewport screenshots need the OxyBrush desktop app (this session is headless)")
             }

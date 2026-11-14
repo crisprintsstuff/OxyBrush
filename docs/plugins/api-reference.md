@@ -1,8 +1,8 @@
 # Plugin host API reference
 
 An in-app plugin imports these functions from the module **`oxybrush`**.
-This is API version 3, which adds the rows marked *(3)*, along with *(2)*
-from API 2. Older plugins keep working unchanged.
+This is API version 4, which adds the rows marked *(4)*, along with *(3)*
+and *(2)* from earlier versions. Older plugins keep working unchanged.
 
 ## Conventions
 
@@ -111,6 +111,49 @@ becomes active.
 | Function | |
 |---|---|
 | `scene_state(ptr, cap) -> i32` | the scene as JSON: pieces, their versions, the camera; writes up to `cap` bytes and returns the full length (call with `cap` 0 to size a buffer) |
+
+### Living strokes: `read_scene`, `edit_strokes` *(4)*
+
+| Function | Needs | |
+|---|---|---|
+| `strokes_state(ptr, cap) -> i32` | `read_scene` | the active piece's [living strokes](../rfcs/0017-living-strokes.md) and stroke groups as JSON; writes up to `cap` bytes and returns the full length |
+| `stroke_command(ptr, len) -> i32` | `edit_strokes` | queue one Strokes window action, as UTF-8 JSON; returns its index, or `ERR_COUNT` if it isn't a JSON object with an `"op"` (at most 1,000 a command) |
+
+`strokes_state` returns the same JSON as the agent's `list_strokes`:
+
+```json
+{"enabled": true, "piece": {"id": 1, "name": "Head"},
+ "strokes": [{"id": 3, "brush": "draw", "made": "14:02", "points": 41,
+              "strength": 1.0, "group": 1}],
+ "groups": [{"id": 1, "name": "Wrinkles", "strength": 0.6, "visible": true,
+             "strokes": [3]}],
+ "solo": null, "memory_mb": 1.2, "budget_mb": 256}
+```
+
+`enabled` is false (and the lists empty) while Living strokes is off in
+Settings. Actions name strokes and groups by those ids:
+
+```json
+{"op": "set_strength", "strokes": [3, 4], "strength": 0.5}
+{"op": "delete", "strokes": [3]}
+{"op": "solo", "strokes": [3]}            {"op": "show_all"}
+{"op": "keep_unmasked", "strokes": [3]}
+{"op": "group", "strokes": [3, 4], "name": "Wrinkles"}
+{"op": "add_to_group", "strokes": [5], "group": 1}
+{"op": "remove_from_group", "strokes": [5]}
+{"op": "group_strength", "group": 1, "strength": 0.6}
+{"op": "group_visible", "group": 1, "visible": false}
+{"op": "rename_group", "group": 1, "name": "Scales"}
+{"op": "merge_groups", "from": 2, "into": 1}
+{"op": "ungroup", "group": 1}
+{"op": "delete_group", "group": 1}
+{"op": "bake"}
+```
+
+Strengths run from 0 to 1.5 (150%). Actions are applied after the command's
+mesh writes, in the order queued, each as its own undo step. One that names
+an unknown id or changes nothing is skipped, and the status bar shows the
+first reason.
 
 ### Overlay: `overlay`
 
