@@ -983,7 +983,7 @@ impl Editor {
     pub fn poly_repeat(&mut self) {
         let Some(p) = self.pointer else { return };
         if self.poly_edit.is_none() {
-            self.status = "Repeat works in Poly Edit (Mesh > Poly Edit)".into();
+            self.status = "Repeat works in Poly Edit (Tools > Poly Edit)".into();
             return;
         }
         if !matches!(self.drag, Drag::None) {

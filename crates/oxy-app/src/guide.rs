@@ -102,12 +102,13 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Symmetry",
         keywords: "mirror x y z radial",
-        body: "X symmetry is on by default: strokes on one side are mirrored to the other, and so are mask boxes and lassos. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.\n\nSymmetry mirrors new strokes; it doesn't fix a model whose sides already differ. For that, Mesh > Symmetrize keeps one half (for example +X onto −X: the +X side is where the axis gizmo's red X points), replaces the other half with its mirror image and welds the two along the middle, about the piece's centre. It's one undo step and removes subdivision levels.",
+        body: "X symmetry is on by default: strokes on one side are mirrored to the other, and so are mask boxes and lassos. Toggle it with X or in the toolbar; Y and Z are in the Symmetry section, together with radial symmetry (repeat a stroke around an axis, for wheels, flowers or ornaments).\n\nEach piece mirrors about its own centre, chosen from its shape when it's imported or opened; a model built around the origin keeps the origin. If mirroring lands in the wrong place (say, after moving the whole piece), click Recentre in the Symmetry section. Turning a mirror on briefly outlines its plane.\n\nSymmetry mirrors new strokes; it doesn't fix a model whose sides already differ. For that, Tools > Symmetrize keeps one half (for example +X onto −X: the +X side is where the axis gizmo's red X points), replaces the other half with its mirror image and welds the two along the middle, about the piece's centre. It's one undo step and removes subdivision levels.",
     },
     Topic {
         title: "Living strokes",
         keywords: "strokes edit past fade delete solo layer layers group groups mask unmasked strength history bake save mirror copy split side shape keys morph targets export gltf",
-        body: "Living strokes keeps each stroke editable after you make it. It's off by default: turn it on in Preferences > General, or open Mesh > Strokes… and click Turn on Living strokes. Strokes made before turning it on aren't listed.\n\n\
+        body: "Living strokes keeps each stroke editable after you make it. It's off by default: turn it on in Preferences > General, or with Turn on Living strokes in the right panel's Layers section. Strokes made before turning it on aren't listed.\n\
+- The Layers section in the right panel is where you work with layers while you sculpt: Sculpt into and + New layer, then each layer with its eye, strength slider and … menu. Its Strokes… button opens the full list of strokes, for work on single strokes.\n\n\
 - The Strokes window lists the active piece's strokes, newest first. Click one to select it; Shift or Ctrl+click selects several.\n\
 - Strength fades the selected strokes from 0% (gone) to 150% (exaggerated), live while you drag.\n\
 - Delete takes their change off the surface; Solo shows them without the strokes made after them until you click Show all.\n\
@@ -126,7 +127,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Deform window",
         keywords: "deform bend twist taper skew flatten squeeze sag inflate spherize noise polish relax smooth unify",
-        body: "Mesh > Deform… changes the whole piece at once: bend, twist, taper, skew, flatten, squeeze, sag, inflate, spherize, noise, smooth, polish, relax and more.\n\n\
+        body: "Tools > Deform… changes the whole piece at once: bend, twist, taper, skew, flatten, squeeze, sag, inflate, spherize, noise, smooth, polish, relax and more.\n\n\
 - Drag a bar left or right to see the result on the model; let go to apply it as one undo step. The bar springs back, so another drag adds more. Escape while dragging cancels.\n\
 - X, Y and Z next to each bar pick the axes it uses.\n\
 - Masked parts stay put. Turn off Use mask to deform the whole visible piece.\n\
@@ -215,7 +216,7 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
     Topic {
         title: "Poly Edit (model polygons)",
         keywords: "poly edit polygon modeling box extrude inset bevel chamfer bridge slide spin split equalize repeat crease smooth subdivide catmull clark subdivision surface sharp move delete faces edges points edge loop insert close hole weld reach group flat island hard surface low poly",
-        body: "Mesh > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\n\
+        body: "Tools > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\n\
 - Point at a face: the faces the action would change light up in orange (red for Delete).\n\
 - Extrude: drag to pull them out with walls around them (or push them in). Touching faces move out as one block; tick Each face on its own to extrude them separately.\n\
 - Inset: drag right to put a rim of faces inside their edges; further for a wider rim.\n\
@@ -232,7 +233,7 @@ Y repeats the last action, with the same amount, on whatever is under the pointe
     Topic {
         title: "Retopology",
         keywords: "retopology retopo quads low poly topology draw game animation edge loop relax pin lock",
-        body: "Mesh > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
+        body: "Tools > Retopology (draw quads)… draws a new, light mesh of quads over the active piece (the surface). Every point you place lands on the surface.\n\n\
 - Click to place a point. Drag a point, edge or face to slide it along the surface; drop a point on another to weld them.\n\
 - Hold Shift: the quad the nearest points make shows in green (a triangle in purple). Shift+click makes it. Shift+drag relaxes the points under the cursor.\n\
 - Tab+drag a border edge to pull out a new quad. Ctrl+click an edge to insert an edge loop across it. Ctrl+Shift+click deletes a point or face.\n\

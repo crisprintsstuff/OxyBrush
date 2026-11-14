@@ -626,7 +626,10 @@ pub mod plain {
     pub const FILE: &str = "Projects and meshes: new, open, save, import and export.";
     pub const EDIT: &str = "Undo, redo, command palette, and preferences.";
     pub const PIECES: &str = "Add, copy, split and merge the meshes in the scene.";
-    pub const MESH: &str = "Subdivision levels, remesh, decimate, color and the transform gizmo.";
+    pub const MESH: &str =
+        "Resolution and repair: subdivision levels, remesh, decimate, booleans, close holes, split and diagnostics.";
+    pub const TOOLS: &str =
+        "Tools that shape a piece: Deform, the transform gizmo, Symmetrize, Poly Edit, Retopology and vertex color.";
     pub const GROUPS: &str = "Face groups, and which faces are hidden.";
     pub const MASK: &str = "Protect parts of the surface from brushes.";
     pub const VIEW: &str = "Camera, shading and materials.";
@@ -818,6 +821,7 @@ pub mod plain {
     pub const SELECTION_RECT: &str = "The selection is a rectangle.";
     pub const PAINT_COLOR: &str = "Color the Paint brush uses. Hold Alt while painting to erase.";
     pub const SECTION_PIECES: &str = "Meshes in this scene. The highlighted row is the one you sculpt.";
+    pub const SECTION_LAYERS: &str = "Sculpt layers of the active piece (with Living strokes on): pick the layer new strokes go into, fade, hide or delete a whole layer, and open the full stroke list.";
     pub const SECTION_BRUSH: &str = "Size, strength and the options for the current brush.";
     pub const SECTION_STROKE: &str = "How a drag becomes dabs: freehand, a straight line, or one stamp.";
     pub const SECTION_ALPHA: &str = "A grayscale image that shapes each dab.";

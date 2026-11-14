@@ -308,7 +308,7 @@ impl Editor {
             self.living.clear();
             self.status = format!("Living strokes off; {n} stroke(s) baked into the surface");
         } else {
-            self.status = "Living strokes on: new strokes stay editable in Mesh > Strokes".into();
+            self.status = "Living strokes on: new strokes stay editable: see the Layers section".into();
         }
     }
 
