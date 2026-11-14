@@ -166,7 +166,7 @@ server-sent-events stream; use `--attach` for clients that require one.
 | `changes` | Events since a cursor (`piece_added`, `geometry_changed`, `camera_changed`, …). Call without `since` to get a cursor; `timeout_ms` (≤ 10000) waits for the next change |
 | `get_geometry` | Writes a piece's arrays (positions, normals, indices, and on request colors, mask, groups, hidden) to a binary `OXYG` file in a temporary folder and returns its path and layout |
 | `list_strokes` | The active piece's living strokes and stroke groups (ids, brush, strength, group), or `enabled: false` while Living strokes is off. Desktop app only |
-| `edit_strokes` | One Strokes window action by `op`: `set_strength`, `delete`, `solo`, `show_all`, `keep_unmasked`, `group`, `add_to_group`, `remove_from_group`, `group_strength`, `group_visible`, `rename_group`, `merge_groups`, `ungroup`, `delete_group`, `bake`. Same JSON as the plugin API's [`stroke_command`](plugins/api-reference.md#living-strokes-read_scene-edit_strokes-4). Desktop app only |
+| `edit_strokes` | One Strokes window action by `op`: `set_strength`, `delete`, `solo`, `show_all`, `keep_unmasked`, `group`, `add_to_group`, `remove_from_group`, `group_strength`, `group_visible`, `rename_group`, `merge_groups`, `ungroup`, `delete_group`, `bake`, `mirror`, `split_by_side`. Same JSON as the plugin API's [`stroke_command`](plugins/api-reference.md#living-strokes-read_scene-edit_strokes-4). Desktop app only |
 
 `stroke` points are `[x, y]` in viewport pixels (top-left origin) or
 `[x, y, z]` in world units. Take a screenshot first when working in the

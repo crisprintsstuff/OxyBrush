@@ -4223,15 +4223,38 @@ impl Editor {
     /// Export visible pieces combined into one mesh file.
     /// Export the visible pieces (hidden faces left out). glTF/GLB and OBJ
     /// keep pieces as separate objects; STL and PLY merge them.
+    ///
+    /// glTF/GLB carry each piece's living stroke groups as shape keys
+    /// (morph targets), so the layers can be dialled in Blender or a game
+    /// engine; the file shows the surface as it is now.
     pub fn export(&mut self, path: &Path) {
-        let pieces: Vec<oxy_io::ExportPiece> = self
-            .scene
-            .pieces
+        self.living_sync();
+        let gltf = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("glb") || e.eq_ignore_ascii_case("gltf"));
+        let visible: Vec<&Piece> = self.scene.pieces.iter().filter(|p| p.visible).collect();
+        let shaped: Vec<Option<(oxy_mesh::Mesh, Vec<oxy_io::ExportShape>)>> =
+            visible.iter().map(|p| if gltf { self.living_export_shapes(p) } else { None }).collect();
+        let mut keys = 0;
+        let pieces: Vec<oxy_io::ExportPiece> = visible
             .iter()
-            .filter(|p| p.visible)
-            .map(|p| oxy_io::ExportPiece { name: &p.name, mesh: &p.mesh })
+            .zip(&shaped)
+            .map(|(p, s)| match s {
+                Some((base, shapes)) => {
+                    keys += shapes.len();
+                    oxy_io::ExportPiece { shapes: shapes.clone(), ..oxy_io::ExportPiece::new(&p.name, base) }
+                }
+                None => oxy_io::ExportPiece::new(&p.name, &p.mesh),
+            })
             .collect();
         self.status = match oxy_io::export_pieces(&pieces, path) {
+            Ok(s) if keys > 0 => format!(
+                "Exported {} ({} pieces, {} triangles, {keys} stroke group(s) as shape keys)",
+                path.display(),
+                s.pieces,
+                s.triangles
+            ),
             Ok(s) => format!("Exported {} ({} pieces, {} triangles)", path.display(), s.pieces, s.triangles),
             Err(e) => format!("Export failed: {e}"),
         };

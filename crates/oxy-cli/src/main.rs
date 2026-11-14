@@ -295,7 +295,7 @@ fn save(pieces: &[Piece], out: &Path, input: &Path) -> Result<String, String> {
         let scene = SceneData { pieces: pieces.iter().map(Piece::to_data).collect(), active: 0, alphas: Vec::new() };
         format::save(&scene, out).map_err(|e| format!("{}: {e}", out.display()))?;
     } else {
-        let list: Vec<ExportPiece> = pieces.iter().map(|p| ExportPiece { name: &p.name, mesh: &p.mesh }).collect();
+        let list: Vec<ExportPiece> = pieces.iter().map(|p| ExportPiece::new(&p.name, &p.mesh)).collect();
         oxy_io::export_pieces(&list, out).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     Ok(format!("wrote {} ({} piece(s), {tris} triangles)", out.display(), pieces.len()))

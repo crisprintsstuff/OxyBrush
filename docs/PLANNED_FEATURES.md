@@ -46,8 +46,10 @@ What to expect:
 - **Strokes are saved with the project,** and older versions of OxyBrush still
   open the file.
 
-It will arrive in steps: first the panel with fade, delete and solo, then
-groups and saving, then extras like copying a stroke to the other side.
+It arrived in steps: first the panel with fade, delete and solo, then
+groups and saving, then extras: copying a stroke to the other side,
+splitting a symmetric stroke into one per side, and exporting groups as
+shape keys in glTF.
 The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 **Questions for you:**

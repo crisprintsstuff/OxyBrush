@@ -104,13 +104,16 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     },
     Topic {
         title: "Living strokes",
-        keywords: "strokes edit past fade delete solo layer layers group groups mask unmasked strength history bake save",
+        keywords: "strokes edit past fade delete solo layer layers group groups mask unmasked strength history bake save mirror copy split side shape keys morph targets export gltf",
         body: "Living strokes keeps each stroke editable after you make it. It's off by default: turn it on in Preferences > General, or open Mesh > Strokes… and click Turn on Living strokes. Strokes made before turning it on aren't listed.\n\n\
 - The Strokes window lists the active piece's strokes, newest first. Click one to select it; Shift or Ctrl+click selects several.\n\
 - Strength fades the selected strokes from 0% (gone) to 150% (exaggerated), live while you drag.\n\
 - Delete takes their change off the surface; Solo shows them without the strokes made after them until you click Show all.\n\
 - Keep only where unmasked takes part of a stroke away: mask the part you don't want, select the stroke, press it, then clear the mask.\n\
 - Group puts the selected strokes in a named group, used like a sculpt layer: its box shows or hides them all, its slider sets their strength together. Click a group's name to select its strokes, double-click to rename it; its … menu merges it into another group, ungroups it (the strokes keep how they look) or deletes its strokes. Add to group moves strokes into a group, where they take its strength.\n\
+- Mirror copy puts the selected strokes on the other side of the piece's symmetry plane (X, or Y or Z from the box next to it), as new strokes you can fade on their own. Each point lands on the point nearest its mirror position, so it works where the piece is symmetric.\n\
+- Split by side turns a stroke made with symmetry on into one stroke per side, so you can fade or delete just the left wrinkle. Nothing on the model moves.\n\
+- Exporting to glTF or GLB writes each group as a shape key (morph target) named after it, on the piece without the groups: in Blender or a game engine the groups are sliders. Hidden groups are in the file at 0. Other formats get the surface as you see it.\n\
 - Later strokes keep what they did: a stroke's change is added or taken away, not replayed, so a stroke smoothed over later can look different when faded.\n\
 - Every change is an undo step. Undoing a stroke hides it from the list, and redo brings it back.\n\
 - A remesh, a subdivision level change, dynamic detail or anything else that changes the triangles keeps the surface and clears the list (it's baked). Bake all does that by hand; the oldest strokes are baked when the list passes its memory budget (Preferences).\n\

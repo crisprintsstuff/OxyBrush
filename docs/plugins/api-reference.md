@@ -148,9 +148,13 @@ Settings. Actions name strokes and groups by those ids:
 {"op": "ungroup", "group": 1}
 {"op": "delete_group", "group": 1}
 {"op": "bake"}
+{"op": "mirror", "strokes": [3], "axis": "x"}
+{"op": "split_by_side", "strokes": [3], "axis": "x"}
 ```
 
-Strengths run from 0 to 1.5 (150%). Actions are applied after the command's
+`mirror` adds the strokes' mirror image across the piece's symmetry plane
+as new strokes; `split_by_side` makes each stroke that changed both sides
+one stroke per side. `axis` is `"x"` (default), `"y"` or `"z"`. Strengths run from 0 to 1.5 (150%). Actions are applied after the command's
 mesh writes, in the order queued, each as its own undo step. One that names
 an unknown id or changes nothing is skipped, and the status bar shows the
 first reason.

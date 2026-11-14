@@ -414,7 +414,7 @@ pub fn tool_defs() -> Vec<Value> {
         ),
         tool(
             "edit_strokes",
-            "Change the active piece's living strokes like the Strokes window, as one undo step: op set_strength (strokes, strength 0..1.5), delete, solo, show_all, keep_unmasked (take the stroke away where the model is masked), group (strokes, optional name), add_to_group (strokes, group), remove_from_group, group_strength (group, strength), group_visible (group, visible), rename_group (group, name), merge_groups (from, into), ungroup, delete_group (group), bake (fix them all in place). Ids come from list_strokes.",
+            "Change the active piece's living strokes like the Strokes window, as one undo step: op set_strength (strokes, strength 0..1.5), delete, solo, show_all, keep_unmasked (take the stroke away where the model is masked), group (strokes, optional name), add_to_group (strokes, group), remove_from_group, group_strength (group, strength), group_visible (group, visible), rename_group (group, name), merge_groups (from, into), ungroup, delete_group (group), bake (fix them all in place), mirror (strokes, optional axis x/y/z: copy them to the other side of the symmetry plane as new strokes), split_by_side (strokes, optional axis: one stroke per side). Ids come from list_strokes.",
             &json!({
                 "op": {"type": "string"},
                 "strokes": {"type": "array", "items": {"type": "integer"}},
@@ -423,7 +423,8 @@ pub fn tool_defs() -> Vec<Value> {
                 "visible": {"type": "boolean"},
                 "name": {"type": "string"},
                 "from": {"type": "integer"},
-                "into": {"type": "integer"}
+                "into": {"type": "integer"},
+                "axis": {"type": "string", "enum": ["x", "y", "z"]}
             }),
             &["op"],
         ),
