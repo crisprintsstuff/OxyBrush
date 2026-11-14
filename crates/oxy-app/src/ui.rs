@@ -4498,46 +4498,49 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             }
         });
         ui.end_row();
-        let shift_smooth = ed.brush_roles().shift;
-        let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
-        let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
-        ui.label(strength_label);
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2))),
-            if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
-        );
-        ui.end_row();
-        ui.label("Falloff");
-        tips::hover(
-            egui::ComboBox::from_id_salt("falloff")
-                .selected_text(ed.falloff.label())
-                .show_ui(ui, |ui| {
-                    for f in Falloff::ALL {
-                        tips::hover(ui.selectable_value(&mut ed.falloff, f, f.label()), tips::falloff_tip(f));
-                    }
-                })
-                .response,
-            plain::FALLOFF,
-        );
-        ui.end_row();
-        ui.label("Focal shift");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2))),
-            plain::FOCAL_SHIFT,
-        );
-        ui.end_row();
-        ui.label("Spacing");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0).max_decimals(2))),
-            plain::SPACING,
-        );
-        ui.end_row();
-        ui.label("Auto smooth");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0).max_decimals(2))),
-            plain::AUTO_SMOOTH,
-        );
-        ui.end_row();
+        // Paint Groups paints whole faces: strength and the dab settings don't apply.
+        if ed.brush_kind != BrushKind::PaintGroups {
+            let shift_smooth = ed.brush_roles().shift;
+            let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
+            let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+            ui.label(strength_label);
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2))),
+                if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
+            );
+            ui.end_row();
+            ui.label("Falloff");
+            tips::hover(
+                egui::ComboBox::from_id_salt("falloff")
+                    .selected_text(ed.falloff.label())
+                    .show_ui(ui, |ui| {
+                        for f in Falloff::ALL {
+                            tips::hover(ui.selectable_value(&mut ed.falloff, f, f.label()), tips::falloff_tip(f));
+                        }
+                    })
+                    .response,
+                plain::FALLOFF,
+            );
+            ui.end_row();
+            ui.label("Focal shift");
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2))),
+                plain::FOCAL_SHIFT,
+            );
+            ui.end_row();
+            ui.label("Spacing");
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0).max_decimals(2))),
+                plain::SPACING,
+            );
+            ui.end_row();
+            ui.label("Auto smooth");
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0).max_decimals(2))),
+                plain::AUTO_SMOOTH,
+            );
+            ui.end_row();
+        }
         if ed.brush_kind.uses_gravity() {
             ui.label("Gravity");
             let k = ed.brush_kind;
@@ -4583,7 +4586,9 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             ui.end_row();
         }
     });
-    tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
+    if ed.brush_kind != BrushKind::PaintGroups {
+        tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
+    }
     tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
     tips::check_plain(ui, &mut ed.front_faces_only, "Front faces only", plain::FRONT_FACES);
     if ed.brush_kind == BrushKind::Paint {

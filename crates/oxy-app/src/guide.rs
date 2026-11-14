@@ -147,8 +147,9 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     },
     Topic {
         title: "Face groups and hiding",
-        keywords: "polygroups groups visibility hide show isolate",
+        keywords: "polygroups groups visibility hide show isolate paint groups brush",
         body: "Face groups split a piece into named regions, shown as colors when G is on. Make them from the mask (Ctrl+W; with nothing masked it groups what's visible), from what's visible, or from loose parts (Groups menu).\n\n\
+- The Paint Groups brush (in the brush shelf, after Paint) paints them directly: each stroke makes a new group, and Alt+stroke grows the group you start on. Symmetry and Front faces only apply, hidden faces are left alone, the surface never moves, and each stroke is one undo step. It turns the group colors on while you paint.\n\
 - Ctrl+Shift+click a group to show only it; Ctrl+Shift+click empty space to show everything.\n\
 - Ctrl+Shift+drag shows only what's inside the selection; add Alt to hide it instead.\n\
 - Hidden faces are not sculpted or exported. Mesh > Delete hidden removes them for good, and Mesh > Split hidden moves them into a piece of their own.\n\

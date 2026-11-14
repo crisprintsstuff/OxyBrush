@@ -9,6 +9,7 @@ mod bridge;
 mod deform_ui;
 mod editor;
 mod gizmo_ops;
+mod group_paint;
 mod guide;
 mod instances;
 mod instances_ui;

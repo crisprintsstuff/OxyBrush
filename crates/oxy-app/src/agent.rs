@@ -598,6 +598,9 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
         return err;
     }
     let kind = ed.brush_kind;
+    if kind == oxy_sculpt::BrushKind::PaintGroups {
+        return ToolResult::error("The Paint Groups brush isn't available to agents: it paints face groups, not the surface. Pick another brush.".to_string());
+    }
     let view = editor_view(ed);
     let samples = match build_samples(&ed.scene.active().mesh, &view, kind, space, points, pressure) {
         Ok(samples) => samples,

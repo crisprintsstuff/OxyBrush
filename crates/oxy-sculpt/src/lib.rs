@@ -37,6 +37,9 @@ pub enum BrushKind {
     Mask,
     /// Paints vertex color instead of moving the surface.
     Paint,
+    /// Paints face groups: each stroke makes a new group (Alt: grows the
+    /// group where the stroke starts). Not a dab brush: the app drives it.
+    PaintGroups,
     Polish,
     PlanarTrim,
     TopoMove,
@@ -166,7 +169,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 27] = [
+    pub const ALL: [BrushKind; 28] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -194,6 +197,7 @@ impl BrushKind {
         BrushKind::CutAway,
         BrushKind::Mask,
         BrushKind::Paint,
+        BrushKind::PaintGroups,
     ];
 
     /// Brushes that cut or clamp geometry along a screen-projected plane.
@@ -210,6 +214,7 @@ impl BrushKind {
                 self,
                 BrushKind::Mask
                     | BrushKind::Paint
+                    | BrushKind::PaintGroups
                     | BrushKind::CurveMove
                     | BrushKind::InsertPrimitive
                     | BrushKind::Tube
@@ -252,6 +257,7 @@ impl BrushKind {
             BrushKind::CurveMove => "Curve Move",
             BrushKind::Mask => "Mask",
             BrushKind::Paint => "Paint",
+            BrushKind::PaintGroups => "Paint Groups",
             BrushKind::Polish => "Polish",
             BrushKind::PlanarTrim => "Planar Trim",
             BrushKind::TopoMove => "Topological Move",
@@ -278,6 +284,7 @@ impl BrushKind {
             | BrushKind::CurveMove
             | BrushKind::InsertPrimitive
             | BrushKind::Tube
+            | BrushKind::PaintGroups
             | BrushKind::PlaneClip
             | BrushKind::LineSplit
             | BrushKind::CutAway => 1.0,
@@ -1533,6 +1540,7 @@ fn target_positions(
                 | BrushKind::CurveMove
                 | BrushKind::Mask
                 | BrushKind::Paint
+                | BrushKind::PaintGroups
                 | BrushKind::Layer
                 | BrushKind::InsertPrimitive
                 | BrushKind::Tube
