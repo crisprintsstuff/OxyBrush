@@ -218,6 +218,20 @@ impl Choice for QuickBar {
 }
 
 /// Stable file key for a brush (independent of its display label).
+/// `key:value, key:value` per brush, dropping unknown brushes and values
+/// outside `range`.
+fn parse_brush_values(v: &str, range: std::ops::RangeInclusive<f32>) -> Vec<(BrushKind, f32)> {
+    v.split(',')
+        .filter_map(|e| {
+            let (k, x) = e.trim().split_once(':')?;
+            let k = oxy_sculpt::preset::legacy_kind_key(k.trim());
+            let kind = BrushKind::ALL.into_iter().find(|b| brush_key(*b) == k)?;
+            let x: f32 = x.trim().parse().ok()?;
+            (x.is_finite() && range.contains(&x)).then_some((kind, x))
+        })
+        .collect()
+}
+
 pub fn brush_key(k: BrushKind) -> &'static str {
     match k {
         BrushKind::Draw => "draw",
@@ -374,6 +388,8 @@ pub struct Settings {
     pub brush: Option<oxy_sculpt::BrushPreset>,
     /// Each brush's strength (brushes keep their own).
     pub brush_strengths: Vec<(BrushKind, f32)>,
+    /// Each brush's Gravity, where it isn't 0 (with `remember_brushes`).
+    pub brush_gravity: Vec<(BrushKind, f32)>,
     /// Save `brush` and `brush_strengths` on exit and restore them at
     /// start. Off (the default) starts every session with the default
     /// brushes.
@@ -899,6 +915,7 @@ impl Default for Settings {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             brush: None,
             brush_strengths: Vec::new(),
+            brush_gravity: Vec::new(),
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: false,
@@ -1075,6 +1092,18 @@ impl Settings {
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
+            + &if self.brush_gravity.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "brush_gravity = {}\n",
+                    self.brush_gravity
+                        .iter()
+                        .map(|(k, v)| format!("{}:{v}", brush_key(*k)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }
             + &if self.brush_strengths.is_empty() {
                 String::new()
             } else {
@@ -1332,18 +1361,8 @@ impl Settings {
                     }
                 }
                 "brush" => s.brush = oxy_sculpt::BrushPreset::from_code(v).ok(),
-                "brush_strengths" => {
-                    s.brush_strengths = v
-                        .split(',')
-                        .filter_map(|e| {
-                            let (k, x) = e.trim().split_once(':')?;
-                            let k = oxy_sculpt::preset::legacy_kind_key(k.trim());
-                            let kind = BrushKind::ALL.into_iter().find(|b| brush_key(*b) == k)?;
-                            let x: f32 = x.trim().parse().ok()?;
-                            (x.is_finite() && (0.0..=4.0).contains(&x)).then_some((kind, x))
-                        })
-                        .collect();
-                }
+                "brush_strengths" => s.brush_strengths = parse_brush_values(v, 0.0..=4.0),
+                "brush_gravity" => s.brush_gravity = parse_brush_values(v, 0.0..=1.0),
                 "remesh_engine" => {
                     s.remesh_engine = match v {
                         "regular_grid" => oxy_topo::RemeshEngine::RegularGrid,
@@ -1565,6 +1584,7 @@ mod tests {
                 ..oxy_sculpt::BrushPreset::new("Last brush", BrushKind::ClayStrips)
             }),
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
+            brush_gravity: vec![(BrushKind::Clay, 0.5)],
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: true,

@@ -177,6 +177,21 @@ impl BrushKind {
         matches!(self, BrushKind::PlaneClip | BrushKind::LineSplit | BrushKind::CutAway)
     }
 
+    /// Brushes that sculpt with dabs and so can have Gravity: not the
+    /// grab-like ones, Mask, Paint, or the tools that place or cut.
+    pub fn uses_gravity(self) -> bool {
+        !(self.is_grab_like()
+            || self.is_curve_cut()
+            || matches!(
+                self,
+                BrushKind::Mask
+                    | BrushKind::Paint
+                    | BrushKind::CurveMove
+                    | BrushKind::InsertPrimitive
+                    | BrushKind::Tube
+            ))
+    }
+
     /// Brushes that move a captured region with the pointer instead of dabbing.
     pub fn is_grab_like(self) -> bool {
         matches!(
@@ -251,6 +266,13 @@ impl BrushKind {
     }
 }
 
+/// The direction Gravity pulls: world down (OxyBrush's Y axis is up).
+pub const GRAVITY_DOWN: Vec3 = Vec3::NEG_Y;
+
+/// How far Gravity 1 sags the middle of one pass of a stroke, as a share of
+/// the brush radius (see `Stroke::sag`).
+const GRAVITY_PER_PASS: f32 = 0.3;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrushSettings {
     pub kind: BrushKind,
@@ -272,6 +294,11 @@ pub struct BrushSettings {
     pub front_faces_only: bool,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
+    /// Gravity: the surface under the brush also sags downward (world -Y)
+    /// as the stroke goes, 0..=1, for draping and hanging folds. At 1 one
+    /// full-pressure pass sags the middle of the stroke about a third of
+    /// the radius.
+    pub gravity: f32,
     /// Random scatter of dab position, rotation and strength, 0..=1.
     pub spray: f32,
     /// Noise brush: features per brush radius.
@@ -295,6 +322,7 @@ impl Default for BrushSettings {
             pressure_radius: false,
             front_faces_only: true,
             auto_smooth: 0.0,
+            gravity: 0.0,
             spray: 0.0,
             noise_scale: 3.0,
             crease_pinch: 0.3,
@@ -466,6 +494,10 @@ struct Dab {
     /// Camera forward direction (zero when unknown), for brushes that
     /// interpret screen drags.
     view: Vec3,
+    /// Gravity: how far a point at full weight also sags, and which way
+    /// (zero when off). Added to the brush's own move, so it costs nothing
+    /// extra per dab.
+    sag: Vec3,
 }
 
 /// Pull `drag` (a movement in the view plane) onto `normal`: its length
@@ -501,6 +533,9 @@ impl Dab {
             tangent: m * self.tangent,
             bitangent: m * self.bitangent,
             view: m * self.view,
+            // A mirror copy pulls along its image of down, so mirrored
+            // strokes stay mirror images.
+            sag: m * self.sag,
             ..*self
         }
     }
@@ -870,8 +905,26 @@ impl Stroke {
             tangent,
             bitangent,
             view: self.view,
+            sag: self.sag(radius, strength),
         };
         dab.rotated(self.alpha.as_ref().map_or(0.0, |a| a.rotation))
+    }
+
+    /// Gravity's sag for a dab of `radius` and (pressure-scaled) `strength`:
+    /// toward world down. Scaled by the dab spacing, so it adds up by the
+    /// length of the stroke, not by how many dabs land on a point: one pass
+    /// at Gravity 1 and full pressure sags the middle of the stroke about a
+    /// third of the radius (a point under the middle gets about 2/spacing
+    /// dabs at an average weight of about a half). Brush strength doesn't
+    /// change it; pen pressure does.
+    fn sag(&self, radius: f32, strength: f32) -> Vec3 {
+        let g = self.settings.gravity.clamp(0.0, 1.0);
+        if g <= 0.0 || !self.settings.kind.uses_gravity() {
+            return Vec3::ZERO;
+        }
+        let pressure = (strength / self.settings.strength.max(1e-6)).clamp(0.0, 1.0);
+        let spacing = (self.settings.spacing * self.spacing_scale()).clamp(0.01, 2.0);
+        GRAVITY_DOWN * (radius * GRAVITY_PER_PASS * spacing * g * pressure)
     }
 
     fn apply_dab(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
@@ -944,6 +997,7 @@ impl Stroke {
                     touch,
                 );
                 self.auto_smooth_dab(mesh, &dab, touch);
+                self.layer_gravity(mesh, &dab, touch);
             }
             return;
         }
@@ -952,10 +1006,42 @@ impl Stroke {
         }
     }
 
+    /// Gravity for Layer, whose kernel sets heights from the stroke's start
+    /// rather than moving points: the sag goes on top, as its own pass. (The
+    /// other brushes add it to their own move; see `Dab::sag`.)
+    fn layer_gravity(&mut self, mesh: &mut Mesh, dab: &Dab, touch: &mut dyn FnMut(&Mesh, u32)) {
+        if self.settings.kind != BrushKind::Layer || dab.sag == Vec3::ZERO {
+            return;
+        }
+        // Brush-shaped weights, without the alpha.
+        let shape = BrushSettings { kind: BrushKind::Draw, ..self.settings };
+        let (chunks, affected) = gather_affected(mesh, &shape, dab, None);
+        if affected.is_empty() {
+            return;
+        }
+        for &c in &chunks {
+            touch(mesh, c);
+        }
+        let mut moved = Vec::with_capacity(affected.len());
+        for &(v, w) in &affected {
+            mesh.positions[v as usize] += dab.sag * w;
+            moved.push(v);
+        }
+        mesh.update_after_move(&moved);
+        // Later dabs set Layer's heights from where each point started:
+        // move that start too, so the sag adds up along the stroke.
+        for &(v, w) in &affected {
+            if let Some(e) = self.layer.vertices.get_mut(&v) {
+                e.0 += dab.sag * w;
+            }
+        }
+    }
+
     fn auto_smooth_dab(&mut self, mesh: &mut Mesh, dab: &Dab, touch: &mut dyn FnMut(&Mesh, u32)) {
         let kind = self.settings.kind;
         if self.settings.auto_smooth > 0.0 && !matches!(kind, BrushKind::Smooth | BrushKind::Mask | BrushKind::Paint) {
-            let smooth = Dab { strength: self.settings.auto_smooth, ..*dab };
+            // The smoothing pass doesn't sag again (`sag` is the brush's).
+            let smooth = Dab { strength: self.settings.auto_smooth, sag: Vec3::ZERO, ..*dab };
             let smooth_settings = BrushSettings { kind: BrushKind::Smooth, ..self.settings };
             apply_kernel(mesh, &smooth_settings, false, &smooth, None, self.paint, &mut self.layer, touch);
         }
@@ -1430,7 +1516,7 @@ fn target_positions(
                 | BrushKind::LineSplit
                 | BrushKind::CutAway => p,
             };
-            (v, np)
+            (v, np + dab.sag * w)
         })
         .collect()
 }
@@ -1463,7 +1549,7 @@ fn blend_snake_hook(
         let scale = dab.strength.min(1.0);
         for &(v, w) in &affected {
             let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0));
-            e.0 += drag * (scale * w);
+            e.0 += drag * (scale * w) + dab.sag * w;
             e.1 += w;
             e.2 = e.2.max(w);
         }
@@ -1669,6 +1755,88 @@ mod tests {
         let mut s = Stroke::new(BrushSettings::default(), Symmetry::default(), false);
         s.add_sample(&mut mesh, top_sample(), &mut |_, _| {});
         assert_eq!(before, mesh.positions);
+    }
+
+    /// A short stroke across the side of a sphere (on +X), facing +X.
+    fn side_stroke(settings: BrushSettings, sym: Symmetry) -> (Mesh, Mesh) {
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let before = mesh.clone();
+        let mut s = Stroke::new(settings, sym, false);
+        for i in 0..8 {
+            let z = -0.2 + i as f32 * 0.05;
+            let p = Vec3::new(1.0, 0.0, z).normalize();
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 1.0 }, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    #[test]
+    fn gravity_sags_the_stroke_downward() {
+        let base = BrushSettings { radius: 0.3, strength: 0.5, ..Default::default() };
+        let (b, plain) = side_stroke(base, Symmetry::default());
+        let (_, heavy) = side_stroke(BrushSettings { gravity: 1.0, ..base }, Symmetry::default());
+        // Gravity off: exactly the brush as before.
+        let (_, off) = side_stroke(BrushSettings { gravity: 0.0, ..base }, Symmetry::default());
+        assert_eq!(plain.positions, off.positions);
+        // On: the touched points end lower than without it, never higher,
+        // and points far from the stroke don't move.
+        let sum_y = |m: &Mesh| m.positions.iter().map(|p| p.y).sum::<f32>();
+        assert!(sum_y(&heavy) < sum_y(&plain) - 0.01, "{} vs {}", sum_y(&heavy), sum_y(&plain));
+        for ((p0, p1), p2) in b.positions.iter().zip(&plain.positions).zip(&heavy.positions) {
+            assert!(p2.y <= p1.y + 1e-4, "a point rose: {p1} -> {p2}");
+            if p0.distance(Vec3::X) > 0.7 {
+                assert_eq!(p0, p2, "far point moved");
+            }
+        }
+        // Mask protects it too.
+        let mut mesh = primitives::icosphere(4, 1.0);
+        mesh.mask.iter_mut().for_each(|m| *m = 1.0);
+        let before = mesh.positions.clone();
+        let mut s = Stroke::new(BrushSettings { gravity: 1.0, ..base }, Symmetry::default(), false);
+        s.add_sample(&mut mesh, StrokeSample { position: Vec3::X, normal: Vec3::X, pressure: 1.0 }, &mut |_, _| {});
+        assert_eq!(before, mesh.positions);
+        // Lighter pen pressure, less sag.
+        let sag = |pressure: f32| {
+            let mut mesh = primitives::icosphere(4, 1.0);
+            let s0 = sum_y(&mesh);
+            let mut s = Stroke::new(
+                BrushSettings { gravity: 1.0, kind: BrushKind::Smooth, ..base },
+                Symmetry::default(),
+                false,
+            );
+            s.add_sample(&mut mesh, StrokeSample { position: Vec3::X, normal: Vec3::X, pressure }, &mut |_, _| {});
+            s0 - sum_y(&mesh)
+        };
+        assert!(sag(0.3) < sag(1.0) * 0.5, "{} vs {}", sag(0.3), sag(1.0));
+    }
+
+    #[test]
+    fn gravity_keeps_mirrored_strokes_symmetric_and_skips_mask_and_paint() {
+        let base = BrushSettings { radius: 0.3, strength: 0.5, gravity: 1.0, ..Default::default() };
+        let (_, m) = side_stroke(base, Symmetry { x: true, ..Default::default() });
+        // X mirror: down stays down on both sides, and the result is mirrored.
+        let b = m.bounds();
+        assert!((b.max.x + b.min.x).abs() < 1e-3, "{b:?}");
+        let low = |side: f32| m.positions.iter().filter(|p| p.x * side > 0.8).map(|p| p.y).fold(f32::MAX, f32::min);
+        assert!((low(1.0) - low(-1.0)).abs() < 1e-3, "{} vs {}", low(1.0), low(-1.0));
+        // Mask and Paint brushes never move points, gravity or not.
+        for kind in [BrushKind::Mask, BrushKind::Paint] {
+            let (b, a) = side_stroke(BrushSettings { kind, ..base }, Symmetry::default());
+            assert_eq!(b.positions, a.positions, "{kind:?}");
+        }
+        // Layer (its own pass) and mirrored Snake Hook and Pinch (blended
+        // copies) sag too, and stay mirror images.
+        let sum_y = |m: &Mesh| m.positions.iter().map(|p| p.y).sum::<f32>();
+        for kind in [BrushKind::Layer, BrushKind::SnakeHook, BrushKind::Pinch] {
+            let sym = Symmetry { x: true, ..Default::default() };
+            let (_, plain) = side_stroke(BrushSettings { kind, gravity: 0.0, ..base }, sym);
+            let (_, heavy) = side_stroke(BrushSettings { kind, ..base }, sym);
+            assert!(sum_y(&heavy) < sum_y(&plain) - 1e-3, "{kind:?}: {} vs {}", sum_y(&heavy), sum_y(&plain));
+            let b = heavy.bounds();
+            assert!((b.max.x + b.min.x).abs() < 1e-3, "{kind:?} {b:?}");
+        }
+        assert!(!BrushKind::Grab.uses_gravity() && !BrushKind::Mask.uses_gravity());
+        assert!(BrushKind::Draw.uses_gravity() && BrushKind::SnakeHook.uses_gravity());
     }
 
     #[test]

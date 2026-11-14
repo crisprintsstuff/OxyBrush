@@ -4413,6 +4413,15 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Auto smooth");
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0))), plain::AUTO_SMOOTH);
         ui.end_row();
+        if ed.brush_kind.uses_gravity() {
+            ui.label("Gravity");
+            let k = ed.brush_kind;
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(ed.gravity_mut(k), 0.0..=1.0).max_decimals(2))),
+                plain::GRAVITY,
+            );
+            ui.end_row();
+        }
         if ed.brush_kind == BrushKind::Grab {
             ui.label("Grab through");
             tips::check_plain(ui, &mut ed.grab_through, "Whole depth", plain::GRAB_THROUGH);
