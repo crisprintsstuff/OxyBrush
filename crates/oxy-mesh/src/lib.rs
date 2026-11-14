@@ -21,7 +21,7 @@ pub mod retopo;
 pub mod topo;
 
 pub use aabb::Aabb;
-pub use glam::Vec3;
+pub use glam::{Vec2, Vec3};
 
 use adjacency::Csr;
 use rayon::prelude::*;
@@ -101,9 +101,35 @@ pub struct MeshData {
     pub hidden: Vec<bool>,
     /// Per vertex color (sRGB, 0..=1); empty means unpainted (white).
     pub color: Vec<Vec3>,
+    /// Texture coordinates per triangle corner (RFC 0020), so a point on a
+    /// UV seam can have a different UV in each of its faces. Empty: no UVs.
+    /// A length other than the triangle count (an operation that added
+    /// triangles without UVs) drops them.
+    pub uv: Vec<[Vec2; 3]>,
 }
 
 impl MeshData {
+    /// Keep only the triangles where `keep[t]`, with their face groups,
+    /// visibility and UVs (points stay; unused ones are dropped on build).
+    pub fn retain_triangles(&mut self, keep: &[bool]) {
+        fn retain<T>(v: &mut Vec<T>, keep: &[bool]) {
+            if v.len() == keep.len() {
+                let mut k = keep.iter();
+                v.retain(|_| *k.next().unwrap_or(&true));
+            }
+        }
+        retain(&mut self.triangles, keep);
+        retain(&mut self.groups, keep);
+        retain(&mut self.hidden, keep);
+        retain(&mut self.uv, keep);
+    }
+
+    /// Reverse every triangle's winding (and its corner UVs with it).
+    pub fn flip_winding(&mut self) {
+        self.triangles.iter_mut().for_each(|t| t.swap(1, 2));
+        self.uv.iter_mut().for_each(|u| u.swap(1, 2));
+    }
+
     /// Put several meshes side by side in one, unchanged: no welding, no
     /// remeshing. Every part keeps its triangles, mask, visibility and vertex
     /// color, and its face groups move up past the previous parts' so no two
@@ -112,6 +138,7 @@ impl MeshData {
     pub fn join(parts: &[MeshData]) -> MeshData {
         let mut out = MeshData::default();
         let painted = parts.iter().any(|p| !p.color.is_empty());
+        let mapped = parts.iter().any(|p| !p.uv.is_empty() && p.uv.len() == p.triangles.len());
         let mut group_offset = 0u32;
         for p in parts {
             let base = out.positions.len() as u32;
@@ -133,6 +160,13 @@ impl MeshData {
                     out.color.extend_from_slice(&p.color);
                 } else {
                     out.color.extend(std::iter::repeat_n(WHITE, nv));
+                }
+            }
+            if mapped {
+                if p.uv.len() == nt {
+                    out.uv.extend_from_slice(&p.uv);
+                } else {
+                    out.uv.extend(std::iter::repeat_n([Vec2::ZERO; 3], nt));
                 }
             }
             let groups: Vec<u32> = if p.groups.len() == nt { p.groups.clone() } else { vec![0; nt] };
@@ -159,6 +193,8 @@ pub struct Mesh {
     groups: Vec<u32>,
     /// Per-triangle hidden flag.
     hidden: Vec<bool>,
+    /// UVs per triangle corner; empty when the mesh has none.
+    uv: Vec<[Vec2; 3]>,
     /// A vertex is hidden when all of its triangles are hidden.
     vertex_hidden: Vec<bool>,
     face_version: u64,
@@ -191,7 +227,8 @@ impl Mesh {
     /// Build from [`MeshData`]. Triangles and vertices are reordered for
     /// locality; per-triangle and per-vertex attributes follow them.
     pub fn from_data(data: MeshData) -> Self {
-        let MeshData { positions, triangles, mask, groups, hidden, color } = data;
+        let MeshData { positions, triangles, mask, groups, hidden, color, uv } = data;
+        let uv = (uv.len() == triangles.len()).then_some(uv);
         let mask = (mask.len() == positions.len()).then_some(mask);
         // Valid triangles (no repeated or out-of-range corners), keyed by the
         // Morton code of their centroid for a spatial sort. Sorting packed
@@ -220,6 +257,8 @@ impl Mesh {
             source_triangle.par_iter().map(|&i| groups.get(i as usize).copied().unwrap_or(0)).collect();
         let hidden: Vec<bool> =
             source_triangle.par_iter().map(|&i| hidden.get(i as usize).copied().unwrap_or(false)).collect();
+        let uv: Vec<[Vec2; 3]> =
+            uv.map_or(Vec::new(), |uv| source_triangle.par_iter().map(|&i| uv[i as usize]).collect());
 
         // Assign vertex ownership in chunk order and renumber.
         let chunk_count = triangles.len().div_ceil(CHUNK_TRIANGLES).max(1);
@@ -272,6 +311,7 @@ impl Mesh {
             color: new_color,
             groups,
             hidden,
+            uv,
             vertex_hidden: Vec::new(),
             face_version: 0,
             source_vertex,
@@ -313,7 +353,20 @@ impl Mesh {
             groups: self.groups.clone(),
             hidden: self.hidden.clone(),
             color: if self.is_painted() { self.color.clone() } else { Vec::new() },
+            uv: self.uv.clone(),
         }
+    }
+
+    // ---- UVs (RFC 0020) ----
+
+    /// UVs per triangle corner, in this mesh's triangle order; empty when
+    /// the mesh has none.
+    pub fn uvs(&self) -> &[[Vec2; 3]] {
+        &self.uv
+    }
+
+    pub fn has_uvs(&self) -> bool {
+        !self.uv.is_empty()
     }
 
     // ---- vertex color ----
@@ -637,10 +690,7 @@ impl Mesh {
     pub fn delete_hidden(&self) -> Mesh {
         let mut d = self.to_data();
         let keep: Vec<bool> = d.hidden.iter().map(|&h| !h).collect();
-        let mut k = keep.iter();
-        d.triangles.retain(|_| *k.next().unwrap_or(&true));
-        let mut k = keep.iter();
-        d.groups.retain(|_| *k.next().unwrap_or(&true));
+        d.retain_triangles(&keep);
         d.hidden.clear();
         Mesh::from_data(d)
     }
@@ -666,16 +716,7 @@ impl Mesh {
             let area_sq = (pb - pa).cross(pc - pa).length_squared();
             keep.push(area_sq >= 1e-12);
         }
-        let mut k = keep.iter();
-        d.triangles.retain(|_| *k.next().unwrap_or(&true));
-        let mut k = keep.iter();
-        if !d.groups.is_empty() {
-            d.groups.retain(|_| *k.next().unwrap_or(&true));
-        }
-        let mut k = keep.iter();
-        if !d.hidden.is_empty() {
-            d.hidden.retain(|_| *k.next().unwrap_or(&true));
-        }
+        d.retain_triangles(&keep);
         let removed = before - d.triangles.len();
         if removed > 0 {
             *self = Mesh::from_data(d);
@@ -791,6 +832,7 @@ impl Mesh {
                 triangles: front_tris,
                 mask: vec![0.0; n_verts],
                 color: front_colors,
+                uv: Vec::new(),
                 groups: vec![0; n_tris],
                 hidden: vec![false; n_tris],
             });
@@ -845,6 +887,7 @@ impl Mesh {
             triangles,
             mask: vec![0.0; total_verts],
             color,
+            uv: Vec::new(),
             groups,
             hidden: vec![false; total_tris],
         })
@@ -1321,6 +1364,9 @@ impl Mesh {
             out.triangles.push(tri);
             out.groups.push(self.groups[t]);
             out.hidden.push(self.hidden[t]);
+            if let Some(uv) = self.uv.get(t) {
+                out.uv.push(*uv);
+            }
         }
         out
     }
@@ -2005,6 +2051,65 @@ mod tests {
     }
 
     use super::*;
+
+    /// A UV for corner `p` of a triangle with centre `c`: different in
+    /// every face (so seams are real) and independent of point order.
+    fn uv_of(p: Vec3, c: Vec3) -> Vec2 {
+        Vec2::new(c.x * 10.0 + p.y, c.z * 10.0 + p.x)
+    }
+
+    fn with_uvs(mut d: MeshData) -> MeshData {
+        d.uv = d
+            .triangles
+            .iter()
+            .map(|t| {
+                let p = t.map(|v| d.positions[v as usize]);
+                let c = (p[0] + p[1] + p[2]) / 3.0;
+                p.map(|q| uv_of(q, c))
+            })
+            .collect();
+        d
+    }
+
+    fn uvs_follow_corners(m: &Mesh) -> bool {
+        m.has_uvs()
+            && m.triangles.iter().zip(m.uvs()).all(|(t, uv)| {
+                let p = t.map(|v| m.positions[v as usize]);
+                let c = (p[0] + p[1] + p[2]) / 3.0;
+                (0..3).all(|k| uv[k].distance(uv_of(p[k], c)) < 1e-5)
+            })
+    }
+
+    #[test]
+    fn uvs_stay_on_their_corners_through_rebuilds_and_edits() {
+        let d = with_uvs(primitives::cube(4, 1.0).to_data());
+        let m = Mesh::from_data(d);
+        assert!(uvs_follow_corners(&m), "reordered with their triangles");
+        assert!(uvs_follow_corners(&Mesh::from_data(m.to_data())), "to_data and back");
+        // Removing triangles keeps the rest's UVs.
+        let mut hidden = vec![false; m.triangle_count()];
+        hidden.iter_mut().step_by(3).for_each(|h| *h = true);
+        let mut h = m.clone();
+        h.set_hidden(hidden);
+        let deleted = h.delete_hidden();
+        assert!(deleted.triangle_count() < m.triangle_count() && uvs_follow_corners(&deleted));
+        let part = Mesh::from_data(m.extract(|t| t % 2 == 0));
+        assert!(uvs_follow_corners(&part));
+        // Flipping the winding flips the corner UVs with it.
+        let mut f = m.to_data();
+        f.flip_winding();
+        assert!(uvs_follow_corners(&Mesh::from_data(f)));
+        // Joining keeps each part's UVs; a part without gets zeros.
+        let plain = primitives::icosphere(1, 0.5).to_data();
+        let j = Mesh::from_data(MeshData::join(&[m.to_data(), plain]));
+        assert!(j.has_uvs() && j.uvs().len() == j.triangle_count());
+        // An operation that adds triangles without UVs drops them.
+        let mut grown = m.to_data();
+        grown.triangles.push([0, 1, 2]);
+        assert!(!Mesh::from_data(grown).has_uvs());
+        // Meshes without UVs pay nothing.
+        assert!(primitives::cube(4, 1.0).uvs().is_empty());
+    }
 
     #[test]
     fn vertex_color_survives_reorder_subdivision_and_levels() {

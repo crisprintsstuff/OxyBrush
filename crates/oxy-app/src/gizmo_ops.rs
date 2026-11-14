@@ -245,7 +245,7 @@ impl Editor {
             let piece = self.scene.active_mut();
             let mut data = piece.mesh.to_data();
             data.positions.iter_mut().for_each(|p| *p = t.apply(pivot, *p));
-            data.triangles.iter_mut().for_each(|tri| tri.swap(1, 2));
+            data.flip_winding();
             let id = piece.id;
             let prev = std::mem::replace(&mut piece.mesh, oxy_mesh::Mesh::from_data(data));
             let prev_multires = piece.multires.take();
