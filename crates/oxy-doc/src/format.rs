@@ -32,6 +32,10 @@
 //!   0 split in place). Written only when some level isn't smoothed. Older
 //!   readers skip it: the levels' points are the same, only edits on a
 //!   lower level then carry the finer levels along as if they were smooth.
+//! - `MATL` (optional, since 4.0.0-beta.10): the matcap of the
+//!   **preceding** `PIEC` when it isn't the scene's, as UTF-8 text:
+//!   `preset:KEY` or `custom:NAME`. Older readers skip it and show the piece
+//!   with the scene's matcap.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -197,6 +201,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(c) = &p.curve {
             sections.push((*b"CURV", encode_curve(c)));
+        }
+        if let Some(m) = &p.material {
+            sections.push((*b"MATL", m.as_bytes().to_vec()));
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
             sections.push((*b"STRK", encode_strokes(st)));
@@ -465,6 +472,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                         Err(e) => log::warn!("ignoring damaged creases on piece {:?}: {e}", piece.name),
                     },
                     None => log::warn!("ignoring creases without a cage"),
+                }
+            }
+            b"MATL" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MATL before any piece".into()))?;
+                match String::from_utf8(raw.clone()) {
+                    Ok(m) if !m.is_empty() && m.len() <= 512 => piece.material = Some(m),
+                    _ => log::warn!("ignoring a damaged material on piece {:?}", piece.name),
                 }
             }
             b"STRK" => {
@@ -903,6 +917,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         tubes: Vec::new(),
         curve: None,
         strokes: None,
+        material: None,
     })
 }
 
@@ -1148,6 +1163,7 @@ mod tests {
                     tubes: Vec::new(),
                     curve: None,
                     strokes: None,
+                    material: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -1160,6 +1176,7 @@ mod tests {
                     tubes: Vec::new(),
                     curve: None,
                     strokes: None,
+                    material: None,
                 },
             ],
             active: 1,
@@ -1309,6 +1326,7 @@ mod tests {
                 groups: vec![group.clone()],
                 strokes: vec![stroke, painted],
             }),
+            material: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
@@ -1722,6 +1740,7 @@ mod tests {
                 tubes: Vec::new(),
                 curve: None,
                 strokes: None,
+                material: None,
             }],
             active: 0,
             alphas: Vec::new(),
@@ -1777,5 +1796,23 @@ mod tests {
             std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).filter(|e| e.file_name() != "scene.oxb").collect();
         assert!(leftovers.is_empty());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn piece_material_roundtrips_and_older_readers_skip_it() {
+        use crate::Piece;
+        let mut p = Piece::new("Jade", primitives::icosphere(1, 1.0));
+        p.material = Some("preset:jade".into());
+        let q = Piece::new("Plain", primitives::icosphere(1, 1.0));
+        let bytes = encode(&SceneData { pieces: vec![p.to_data(), q.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"MATL").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[0].material.as_deref(), Some("preset:jade"));
+        assert_eq!(back.pieces[1].material, None);
+        assert_eq!(back.pieces[0].clone().into_piece().material.as_deref(), Some("preset:jade"));
+        let mut old = bytes.clone();
+        let i = old.windows(4).position(|w| w == b"MATL").unwrap();
+        old[i..i + 4].copy_from_slice(b"ZZZZ");
+        assert_eq!(decode(&old).unwrap().pieces[0].material, None);
     }
 }

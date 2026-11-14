@@ -26,6 +26,10 @@ pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// View normal (xyz) and linear depth (w) for the screen-space shading passes.
 const NORMAL_DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
 const AO_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+/// Matcaps a scene can show besides its own (layer 0): one per distinct
+/// material given to a piece (see [`DrawItem::material`]).
+pub const MATERIAL_SLOTS: u32 = 8;
+
 /// Matcap texture size; custom matcaps are resampled to this.
 pub const MATCAP_SIZE: u32 = 256;
 
@@ -76,6 +80,8 @@ struct PostUniforms {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PieceUniforms {
     flags: [f32; 4],
+    /// x: matcap layer (0 the scene's).
+    material: [f32; 4],
 }
 
 /// Viewport backdrop: a soft radial gradient, or one flat color.
@@ -238,6 +244,9 @@ pub struct DrawItem {
     /// extract being adjusted): drawn with a blue glaze so it reads as a
     /// preview rather than part of the model.
     pub preview: bool,
+    /// Which matcap the piece is shown with: 0 the scene's, 1 to
+    /// [`MATERIAL_SLOTS`] one set with [`Viewport::set_material_slot`].
+    pub material: u32,
 }
 
 struct GpuMesh {
@@ -374,7 +383,8 @@ impl ViewportRenderer {
 
         let matcap = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("oxy matcap"),
-            size: wgpu::Extent3d { width: MATCAP_SIZE, height: MATCAP_SIZE, depth_or_array_layers: 1 },
+            // Layer 0: the scene's matcap; then one per piece material slot.
+            size: wgpu::Extent3d { width: MATCAP_SIZE, height: MATCAP_SIZE, depth_or_array_layers: 1 + MATERIAL_SLOTS },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -408,7 +418,7 @@ impl ViewportRenderer {
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
                         sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        view_dimension: wgpu::TextureViewDimension::D2,
+                        view_dimension: wgpu::TextureViewDimension::D2Array,
                         multisampled: false,
                     },
                     count: None,
@@ -453,7 +463,10 @@ impl ViewportRenderer {
                 },
             ],
         });
-        let matcap_view = matcap.create_view(&Default::default());
+        let matcap_view = matcap.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array),
+            ..Default::default()
+        });
         let shadow_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("oxy shadow sampler"),
             mag_filter: wgpu::FilterMode::Linear,
@@ -858,9 +871,25 @@ impl ViewportRenderer {
 
     /// Use an image as the matcap: `MATCAP_SIZE`² RGBA8 sRGB pixels.
     pub fn set_matcap_pixels(&mut self, queue: &wgpu::Queue, pixels: &[u8]) {
+        self.write_matcap_layer(queue, 0, pixels);
+    }
+
+    /// Put a matcap in material slot `slot` (1 to [`MATERIAL_SLOTS`]), for
+    /// pieces drawn with that [`DrawItem::material`].
+    pub fn set_material_slot(&mut self, queue: &wgpu::Queue, slot: u32, pixels: &[u8]) {
+        assert!((1..=MATERIAL_SLOTS).contains(&slot), "material slot out of range");
+        self.write_matcap_layer(queue, slot, pixels);
+    }
+
+    fn write_matcap_layer(&mut self, queue: &wgpu::Queue, layer: u32, pixels: &[u8]) {
         assert_eq!(pixels.len(), (MATCAP_SIZE * MATCAP_SIZE * 4) as usize, "matcap must be MATCAP_SIZE² RGBA");
         queue.write_texture(
-            self.matcap.as_image_copy(),
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.matcap,
+                mip_level: 0,
+                origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                aspect: wgpu::TextureAspect::All,
+            },
             pixels,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(MATCAP_SIZE * 4), rows_per_image: None },
             wgpu::Extent3d { width: MATCAP_SIZE, height: MATCAP_SIZE, depth_or_array_layers: 1 },
@@ -1188,7 +1217,8 @@ impl ViewportRenderer {
                     if settings.wireframe { 1.0 } else { 0.0 },
                     settings.wireframe_opacity,
                 ];
-                queue.write_buffer(&gpu.piece_uniforms, 0, bytemuck::bytes_of(&PieceUniforms { flags }));
+                let material = [item.material.min(MATERIAL_SLOTS) as f32, 0.0, 0.0, 0.0];
+                queue.write_buffer(&gpu.piece_uniforms, 0, bytemuck::bytes_of(&PieceUniforms { flags, material }));
             }
         }
 

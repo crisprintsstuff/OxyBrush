@@ -65,7 +65,7 @@ pub enum Step {
     /// A piece was inserted at `index`.
     Inserted { index: usize },
     /// `piece` was removed from `index`.
-    Removed { index: usize, piece: Piece },
+    Removed { index: usize, piece: Box<Piece> },
     /// The piece's mesh and retopology cage were replaced; these are the old ones.
     Cage { piece: u64, previous: Mesh, previous_cage: Option<Cage> },
 }
@@ -77,7 +77,7 @@ impl From<Step> for Change {
                 Change::Topology { piece, mesh: Box::new(previous), multires: previous_multires.map(Box::new) }
             }
             Step::Inserted { index } => Change::Piece { index, piece: None },
-            Step::Removed { index, piece } => Change::Piece { index, piece: Some(Box::new(piece)) },
+            Step::Removed { index, piece } => Change::Piece { index, piece: Some(piece) },
             Step::Cage { piece, previous, previous_cage } => {
                 Change::Cage { piece, mesh: Box::new(previous), cage: previous_cage.map(Box::new) }
             }
@@ -646,7 +646,7 @@ mod tests {
             "Merge",
             vec![
                 Step::Topology { piece: a, previous, previous_multires: None },
-                Step::Removed { index: 1, piece: removed },
+                Step::Removed { index: 1, piece: Box::new(removed) },
             ],
         );
         // Newest overall: allowed, and B comes back.
@@ -859,7 +859,7 @@ mod tests {
         h.record_compound(
             "Merge",
             vec![
-                Step::Removed { index: 1, piece: removed },
+                Step::Removed { index: 1, piece: Box::new(removed) },
                 Step::Topology { piece: id0, previous: prev, previous_multires: None },
             ],
         );

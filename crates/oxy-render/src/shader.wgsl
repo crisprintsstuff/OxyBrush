@@ -51,10 +51,12 @@ struct Lighting {
 struct Piece {
     // x: show face groups, y: 1 = active piece
     flags: vec4<f32>,
+    // x: matcap layer (0: the scene's matcap, 1+: a piece material)
+    material: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
-@group(0) @binding(1) var matcap_tex: texture_2d<f32>;
+@group(0) @binding(1) var matcap_tex: texture_2d_array<f32>;
 @group(0) @binding(2) var matcap_sampler: sampler;
 @group(0) @binding(3) var shadow_maps: texture_depth_2d_array;
 @group(0) @binding(4) var shadow_sampler: sampler_comparison;
@@ -233,7 +235,7 @@ fn fs_main(
     }
     let uv = vec2<f32>(n.x * 0.49 + 0.5, 0.5 - n.y * 0.49);
     // Sampled in uniform control flow either way, then replaced when lit.
-    var color = textureSample(matcap_tex, matcap_sampler, uv).rgb;
+    var color = textureSample(matcap_tex, matcap_sampler, uv, i32(piece.material.x + 0.5)).rgb;
     if (u.lighting.params.x > 0.5) {
         color = lit_color(n, i.view_pos, i.world_pos, i.world_normal, front);
     }

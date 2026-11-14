@@ -547,7 +547,7 @@ impl Editor {
                 } else {
                     // No faces left: the piece goes; its loose points stay as the draft.
                     let piece = self.scene.pieces.remove(i);
-                    self.history.record(label, Step::Removed { index: i, piece });
+                    self.history.record(label, Step::Removed { index: i, piece: Box::new(piece) });
                     let r = self.retopo.as_mut().unwrap();
                     r.cage_piece = None;
                     cage.linked = None;

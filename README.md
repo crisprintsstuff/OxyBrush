@@ -150,7 +150,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 ### Color and viewport
 
 - **Vertex color:** a Paint brush (Alt erases; works with alphas and symmetry), and fills for the whole piece, its cavities or its peaks, all respecting the mask. Color is kept through subdivision, remesh, booleans and decimate, and exported in glTF/GLB, PLY and OBJ.
-- **Materials:** five built-in matcaps, or load your own (PNG or JPEG), previewed live as you hover. **Ambient occlusion and cavity shading** make folds and pores read clearly; **flat shading** shows every polygon.
+- **Materials:** six built-in matcaps, or load your own (PNG or JPEG), previewed live as you hover. Give a piece **its own material** (For: *piece* only, in the material picker) to tell parts apart; it's saved with the project. **Ambient occlusion and cavity shading** make folds and pores read clearly; **flat shading** shows every polygon.
 - **Lights and shadows:** switch the viewport to up to four lights (sun, point or spot) with soft shadows, in **View > Shading > Light the viewport** and **Lights…** ([RFC 0008](docs/rfcs/0008-viewport-lights.md)).
 - **Wireframe and floor grid:** a wireframe overlay (Shift+W) in a color of your choice, and a floor grid that follows the model's size and position.
 - **Camera:** a focal length from 15 to 200 mm (35 mm equivalent), orthographic view, numpad side views, and an axis gizmo you click to snap to a side or drag to orbit.

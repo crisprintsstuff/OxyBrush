@@ -154,6 +154,7 @@ mod tests {
                 tubes: Vec::new(),
                 curve: None,
                 strokes: None,
+                material: None,
             }],
             active: 0,
             alphas: Vec::new(),

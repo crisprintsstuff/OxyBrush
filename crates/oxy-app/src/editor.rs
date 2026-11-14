@@ -1150,6 +1150,15 @@ pub struct Editor {
     pub custom_matcap: Option<usize>,
     /// Live matcap preview while hovering a material tile or menu item; None when not hovering.
     pub preview_matcap: Option<(MatcapPreset, Option<usize>)>,
+    /// The material pickers set the active piece's own material instead of
+    /// the scene's.
+    pub material_for_piece: bool,
+    /// A material being hovered in a picker for the active piece (its key,
+    /// see [`Editor::material_key_preset`]); reset every frame.
+    pub preview_piece_material: Option<String>,
+    /// A piece's material changed since the last save (it has no undo step,
+    /// like a piece's name).
+    pieces_unsaved: bool,
     /// Library folder for custom matcaps; None in automated runs.
     pub matcap_dir: Option<PathBuf>,
     /// Set by the UI to ask the platform layer for a matcap file dialog.
@@ -1443,6 +1452,9 @@ impl Default for Editor {
             custom_matcaps: Vec::new(),
             custom_matcap: None,
             preview_matcap: None,
+            material_for_piece: false,
+            preview_piece_material: None,
+            pieces_unsaved: false,
             matcap_dir: None,
             request_load_matcap: false,
             paint_color: Vec3::new(0.75, 0.22, 0.18),
@@ -1585,7 +1597,7 @@ impl Editor {
     }
 
     pub fn is_modified(&self) -> bool {
-        self.history.revision() != self.saved_revision || self.alphas_unsaved
+        self.history.revision() != self.saved_revision || self.alphas_unsaved || self.pieces_unsaved
     }
 
     pub fn title(&self) -> String {
@@ -3745,6 +3757,7 @@ impl Editor {
         self.saved_revision = self.history.revision();
         self.autosaved_revision = self.saved_revision;
         self.alphas_unsaved = false;
+        self.pieces_unsaved = false;
         self.path = path;
         self.link = None;
         self.bridge = None;
@@ -3960,7 +3973,7 @@ impl Editor {
             let symmetry_center = original.symmetry_center.map(|c| c * factor);
             let scaled = Piece { symmetry_center, ..Piece::new(original.name.clone(), mesh) };
             let original = std::mem::replace(&mut self.scene.pieces[index], scaled);
-            steps.push(Step::Removed { index, piece: original });
+            steps.push(Step::Removed { index, piece: Box::new(original) });
             steps.push(Step::Inserted { index });
         }
         self.history.record_compound("Fit import to scene", steps);
@@ -3994,6 +4007,109 @@ impl Editor {
     }
 
     /// Name of the material in use.
+    /// A piece material key for a built-in matcap (saved in `MATL`).
+    pub fn material_key_preset(m: MatcapPreset) -> String {
+        format!("preset:{}", crate::settings::matcap_key(m))
+    }
+
+    /// A piece material key for a loaded matcap.
+    pub fn material_key_custom(name: &str) -> String {
+        format!("custom:{name}")
+    }
+
+    /// What a piece material key shows: a built-in matcap, or the pixels of
+    /// a loaded one. None if it names a loaded matcap that isn't here (the
+    /// piece then shows the scene's material).
+    pub fn resolve_material(&self, key: &str) -> Option<Result<MatcapPreset, std::sync::Arc<Vec<u8>>>> {
+        if let Some(k) = key.strip_prefix("preset:") {
+            return MatcapPreset::ALL.into_iter().find(|&m| crate::settings::matcap_key(m) == k).map(Ok);
+        }
+        let name = key.strip_prefix("custom:")?;
+        self.custom_matcaps.iter().find(|m| m.name == name).map(|m| Err(m.pixels.clone()))
+    }
+
+    /// Give the active piece its own material (None: back to the scene's).
+    pub fn set_piece_material(&mut self, key: Option<String>) {
+        let piece = self.scene.active_mut();
+        if piece.material == key {
+            return;
+        }
+        piece.material = key;
+        let name = piece.name.clone();
+        self.pieces_unsaved = true;
+        self.status = match self.scene.active().material.clone() {
+            Some(k) => format!("{name} now shows {}", self.material_name(&k)),
+            None => format!("{name} shows the scene's material again"),
+        };
+    }
+
+    /// A readable name for a material key.
+    pub fn material_name(&self, key: &str) -> String {
+        match self.resolve_material(key) {
+            Some(Ok(m)) => m.label().to_owned(),
+            _ => key.strip_prefix("custom:").unwrap_or(key).to_owned(),
+        }
+    }
+
+    /// A picker chose a built-in matcap: for the scene, or for the active
+    /// piece when the picker is set to it.
+    pub fn choose_matcap(&mut self, m: MatcapPreset) {
+        if self.material_for_piece {
+            self.set_piece_material(Some(Self::material_key_preset(m)));
+        } else {
+            self.matcap = m;
+            self.custom_matcap = None;
+        }
+    }
+
+    /// A picker chose loaded matcap `i` (see [`Self::choose_matcap`]).
+    pub fn choose_custom_matcap(&mut self, i: usize) {
+        if self.material_for_piece {
+            if let Some(m) = self.custom_matcaps.get(i) {
+                self.set_piece_material(Some(Self::material_key_custom(&m.name.clone())));
+            }
+        } else {
+            self.custom_matcap = Some(i);
+        }
+    }
+
+    /// A picker is hovering a built-in matcap: preview it where it would go.
+    pub fn preview_choice(&mut self, m: MatcapPreset) {
+        if self.material_for_piece {
+            self.preview_piece_material = Some(Self::material_key_preset(m));
+        } else {
+            self.preview_matcap = Some((m, None));
+        }
+    }
+
+    /// A picker is hovering loaded matcap `i`.
+    pub fn preview_custom_choice(&mut self, i: usize) {
+        if self.material_for_piece {
+            self.preview_piece_material = self.custom_matcaps.get(i).map(|m| Self::material_key_custom(&m.name));
+        } else {
+            self.preview_matcap = Some((self.matcap, Some(i)));
+        }
+    }
+
+    /// Whether a picker should show built-in matcap `m` as chosen.
+    pub fn is_chosen_matcap(&self, m: MatcapPreset) -> bool {
+        if self.material_for_piece {
+            self.scene.active().material.as_deref() == Some(Self::material_key_preset(m).as_str())
+        } else {
+            self.custom_matcap.is_none() && self.matcap == m
+        }
+    }
+
+    /// Whether a picker should show loaded matcap `i` as chosen.
+    pub fn is_chosen_custom_matcap(&self, i: usize) -> bool {
+        if self.material_for_piece {
+            let key = self.custom_matcaps.get(i).map(|m| Self::material_key_custom(&m.name));
+            key.is_some() && self.scene.active().material == key
+        } else {
+            self.custom_matcap == Some(i)
+        }
+    }
+
     pub fn material_label(&self) -> String {
         match self.custom_matcap.and_then(|i| self.custom_matcaps.get(i)) {
             Some(m) => m.name.clone(),
@@ -4012,6 +4128,7 @@ impl Editor {
                 self.path = Some(path.clone());
                 self.saved_revision = self.history.revision();
                 self.alphas_unsaved = false;
+                self.pieces_unsaved = false;
                 self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
@@ -5039,7 +5156,7 @@ impl Editor {
         let piece = self.scene.pieces.remove(index);
         self.status = format!("Deleted {}", piece.name);
         self.scene.set_active(index.saturating_sub(1));
-        self.history.record("Delete piece", Step::Removed { index, piece });
+        self.history.record("Delete piece", Step::Removed { index, piece: Box::new(piece) });
     }
 
     /// Show only the active piece; if already solo, show all pieces.
@@ -5667,7 +5784,7 @@ impl Editor {
             steps.push(Step::Inserted { index: index + 1 + k });
         }
         let removed = self.scene.pieces.remove(index);
-        steps.push(Step::Removed { index, piece: removed });
+        steps.push(Step::Removed { index, piece: Box::new(removed) });
         self.scene.set_active(index);
         self.history.record_compound(format!("Split by {what}"), steps);
         self.status = format!("Split into {count} pieces by {what}");
@@ -5744,7 +5861,7 @@ impl Editor {
             steps.push(Step::Inserted { index: index + 1 + k });
         }
         let removed = self.scene.pieces.remove(index);
-        steps.push(Step::Removed { index, piece: removed });
+        steps.push(Step::Removed { index, piece: Box::new(removed) });
         // Parts come in key order, so the part that stays (key 0) now sits
         // where the original was; it stays active.
         self.scene.set_active(index);
@@ -5791,7 +5908,7 @@ impl Editor {
         for &i in joined.iter().rev() {
             let index = if i > active { i + 1 } else { i };
             let removed = self.scene.pieces.remove(index);
-            steps.push(Step::Removed { index, piece: removed });
+            steps.push(Step::Removed { index, piece: Box::new(removed) });
         }
         if let Some(i) = self.scene.index_of(id) {
             self.scene.set_active(i);
@@ -5872,7 +5989,7 @@ impl Editor {
                 for id in &job.consumed {
                     if let Some(i) = self.scene.index_of(*id) {
                         let piece = self.scene.pieces.remove(i);
-                        steps.push(Step::Removed { index: i, piece });
+                        steps.push(Step::Removed { index: i, piece: Box::new(piece) });
                     }
                 }
                 let target_index = self.scene.index_of(job.target).unwrap_or(target_index);
@@ -8596,6 +8713,44 @@ mod tests {
         e.max_triangles = before.triangle_count() + 10;
         e.subdivide_masked();
         assert!(e.status.contains("limit"), "{}", e.status);
+    }
+
+    #[test]
+    fn a_piece_can_have_its_own_material() {
+        use oxy_render::MatcapPreset;
+        let mut e = editor();
+        e.add_primitive("cube");
+        wait_job(&mut e);
+        let cube = e.scene.active().id;
+        // Picking for the whole scene changes the scene's matcap only.
+        e.choose_matcap(MatcapPreset::GreyClay);
+        assert_eq!(e.matcap, MatcapPreset::GreyClay);
+        assert!(e.scene.pieces.iter().all(|p| p.material.is_none()));
+        e.saved_revision = e.history.revision(); // as if just saved
+        assert!(!e.is_modified(), "a scene matcap is a preference, not part of the project");
+        // Picking for the active piece gives it its own.
+        e.material_for_piece = true;
+        e.choose_matcap(MatcapPreset::Jade);
+        assert_eq!(e.matcap, MatcapPreset::GreyClay, "the scene keeps its matcap");
+        assert_eq!(e.scene.active().material.as_deref(), Some("preset:jade"));
+        assert!(e.is_chosen_matcap(MatcapPreset::Jade) && !e.is_chosen_matcap(MatcapPreset::GreyClay));
+        assert!(e.is_modified(), "a piece material is unsaved work");
+        assert!(matches!(e.resolve_material("preset:jade"), Some(Ok(MatcapPreset::Jade))));
+        assert!(e.resolve_material("custom:missing").is_none());
+        // Hovering previews on the piece only.
+        e.preview_choice(MatcapPreset::Bronze);
+        assert_eq!(e.preview_piece_material.as_deref(), Some("preset:bronze"));
+        assert!(e.preview_matcap.is_none());
+        // Saved and reopened.
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        let mut f = editor();
+        f.replace_document(Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap(), None);
+        let i = f.scene.pieces.iter().position(|p| p.material.is_some()).unwrap();
+        assert_eq!(f.scene.pieces[i].material.as_deref(), Some("preset:jade"));
+        assert!(!f.is_modified());
+        // And back to the scene's.
+        e.set_piece_material(None);
+        assert!(e.scene.get_mut(cube).unwrap().material.is_none());
     }
 
     #[test]
