@@ -1,6 +1,6 @@
 # RFC 0017: Living strokes
 
-Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 landed except the plugin/MCP surface: groups as layers, mask out, saving (`STRK`)
+Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 landed: groups as layers, mask out, saving (`STRK`), and the plugin/MCP surface (plugin API 4 `strokes_state`/`stroke_command`, agent tools `list_strokes`/`edit_strokes`)
 
 ## Summary
 
@@ -149,6 +149,14 @@ A project setting can turn off saving strokes, to keep files small.
 The plugin API and the MCP server get read access to the stroke list (id,
 brush, size, group) and the panel actions as commands, so a script can, for
 example, fade every stroke in a group.
+
+As built: one JSON command language serves both (`oxy_mcp::StrokeOp`),
+acting on the active piece and naming strokes and groups by the ids the
+list reports. Plugins read with `strokes_state` (`read_scene`) and queue
+commands with `stroke_command` (new capability `edit_strokes`, API 4); they
+run after the command's mesh writes, each an undo step labelled with the
+plugin. The agent uses `list_strokes` and `edit_strokes`, labelled `Agent:`.
+The headless `oxybrush-cli mcp` session has no living strokes and says so.
 
 ## Performance
 

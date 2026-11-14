@@ -28,7 +28,7 @@ or more than it asked for.
 | Field | Required | |
 |---|---|---|
 | `name` | yes | Shown in the Plugins menu, panel title and undo history |
-| `api` | yes | The host API version it was written for: 1, 2 or 3 |
+| `api` | yes | The host API version it was written for: 1 to 4 |
 | `version` | no | Your plugin's own version (for you and people sharing it) |
 | `description` | no | One or two sentences, shown in menus and the panel |
 | `capabilities` | no | What it may do (below); none by default |
@@ -44,7 +44,8 @@ or more than it asked for.
 | `edit_mesh` | writing a piece's positions, mask, colors, face groups and hidden faces | 1 (more in 2 and 3) |
 | `edit_topology` | replacing a piece's vertices and triangles (`write_mesh`); this can discard detail and subdivision levels, so it's separate | 3 |
 | `add_pieces` | creating new pieces | 2 |
-| `read_scene` | the scene as JSON: pieces, versions, camera | 1 |
+| `read_scene` | the scene as JSON: pieces, versions, camera; the active piece's living strokes (`strokes_state`, 4) | 1 |
+| `edit_strokes` | Strokes window actions on living strokes: strength, groups, delete, bake (`stroke_command`) | 4 |
 | `overlay` | drawing lines over the viewport from `overlay()` | 1 |
 
 Settings > Plugins shows them in words ("reads meshes", "changes

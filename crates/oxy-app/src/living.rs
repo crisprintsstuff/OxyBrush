@@ -950,6 +950,162 @@ impl Editor {
     }
 }
 
+impl Editor {
+    /// The active piece's living strokes and groups as JSON: what the
+    /// agent's `list_strokes` and the plugin API's `strokes_state` report.
+    pub fn living_json(&mut self) -> serde_json::Value {
+        use serde_json::json;
+        self.living_sync();
+        let piece = self.scene.active();
+        let strokes: Vec<serde_json::Value> = self
+            .living
+            .listed(piece.id)
+            .iter()
+            .map(|s| {
+                json!({
+                    "id": s.id,
+                    "brush": crate::settings::brush_key(s.brush),
+                    "made": s.made.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+                    "points": s.vertices.len(),
+                    "strength": s.strength,
+                    "group": s.group,
+                })
+            })
+            .collect();
+        let groups: Vec<serde_json::Value> = self
+            .living
+            .groups_of(piece.id)
+            .iter()
+            .map(|g| {
+                json!({
+                    "id": g.id,
+                    "name": g.name,
+                    "strength": g.strength,
+                    "visible": g.visible,
+                    "strokes": self.living.members(g.id),
+                })
+            })
+            .collect();
+        json!({
+            "enabled": self.living.enabled,
+            "piece": {"id": piece.id, "name": piece.name},
+            "strokes": strokes,
+            "groups": groups,
+            "solo": self.living.solo.is_some(),
+            "memory_mb": self.living.bytes() as f64 / (1024.0 * 1024.0),
+            "budget_mb": self.living.budget_mb,
+        })
+    }
+
+    /// Run a Strokes window action given as a command (the agent's
+    /// `edit_strokes`, a plugin's `stroke_command`) on the active piece.
+    /// RETURNS: the status message, or why nothing changed.
+    pub fn living_command(&mut self, op: oxy_mcp::StrokeOp) -> Result<String, String> {
+        use oxy_mcp::StrokeOp as Op;
+        if !self.living.enabled {
+            return Err("Living strokes is off: turn it on in Preferences > General first".into());
+        }
+        self.living_sync();
+        let pid = self.scene.active().id;
+        let listed: BTreeSet<u64> = self.living.listed(pid).iter().map(|s| s.id).collect();
+        let pick = |ids: &[u64]| -> Result<BTreeSet<u64>, String> {
+            match ids.iter().find(|id| !listed.contains(id)) {
+                Some(id) => Err(format!("no stroke {id} on the active piece (see list_strokes)")),
+                None => Ok(ids.iter().copied().collect()),
+            }
+        };
+        let group_ok = |l: &Living, g: u32| -> Result<(), String> {
+            match l.group(g) {
+                Some(x) if x.piece == pid => Ok(()),
+                _ => Err(format!("no stroke group {g} on the active piece (see list_strokes)")),
+            }
+        };
+        let before = self.history.revision();
+        match op {
+            Op::SetStrength { strokes, strength } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_set_strength(strength);
+            }
+            Op::Delete { strokes } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_delete_selected();
+            }
+            Op::Solo { strokes } => {
+                if self.living.solo.is_some() {
+                    return Err("strokes are already soloed: show_all first".into());
+                }
+                self.living.selected = pick(&strokes)?;
+                self.living_toggle_solo();
+            }
+            Op::ShowAll => {
+                if self.living.solo.is_none() {
+                    return Err("nothing is soloed".into());
+                }
+                self.living_toggle_solo();
+            }
+            Op::KeepUnmasked { strokes } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_keep_unmasked();
+            }
+            Op::Group { strokes, name } => {
+                self.living.selected = pick(&strokes)?;
+                let Some(g) = self.living_group_selected() else { return Err(self.status.clone()) };
+                if let Some(name) = name {
+                    self.living_rename_group(g, &name);
+                }
+                return Ok(format!("{} (group {g})", self.status));
+            }
+            Op::AddToGroup { strokes, group } => {
+                group_ok(&self.living, group)?;
+                self.living.selected = pick(&strokes)?;
+                self.living_add_selected_to_group(group);
+            }
+            Op::RemoveFromGroup { strokes } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_remove_selected_from_group();
+            }
+            Op::GroupStrength { group, strength } => {
+                group_ok(&self.living, group)?;
+                self.living_set_group_strength(group, strength);
+            }
+            Op::GroupVisible { group, visible } => {
+                group_ok(&self.living, group)?;
+                if self.living.group(group).is_some_and(|g| g.visible != visible) {
+                    self.living_toggle_group(group);
+                }
+            }
+            Op::RenameGroup { group, name } => {
+                group_ok(&self.living, group)?;
+                self.living_rename_group(group, &name);
+            }
+            Op::MergeGroups { from, into } => {
+                group_ok(&self.living, from)?;
+                group_ok(&self.living, into)?;
+                if from == into {
+                    return Err("a group can't be merged into itself".into());
+                }
+                self.living_merge_group(from, into);
+            }
+            Op::Ungroup { group } => {
+                group_ok(&self.living, group)?;
+                self.living_ungroup(group);
+            }
+            Op::DeleteGroup { group } => {
+                group_ok(&self.living, group)?;
+                self.living_delete_group(group);
+            }
+            Op::Bake => {
+                self.living_bake_active();
+                return Ok(self.status.clone());
+            }
+        }
+        if self.history.revision() == before {
+            return Err(format!("nothing changed: {}", self.status));
+        }
+        Ok(self.status.clone())
+    }
+}
+
 /// Move strokes `ids` into `group` (None: out of any group), folding their
 /// old group's factor into their own strength so they look the same.
 fn fold_and_move(l: &mut Living, ids: &[u64], group: Option<u32>) {

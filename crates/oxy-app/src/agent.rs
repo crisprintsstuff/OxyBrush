@@ -265,6 +265,17 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
         Action::SceneState => Apply::Done(ToolResult::ok(oxy_mcp::state::scene_state(&doc_state(ed)).to_string())),
         // Answered by the listener thread (see `Bridge::call_tool`).
         Action::Changes { .. } => Apply::Done(ToolResult::error("changes is answered by the listener")),
+        Action::ListStrokes => Apply::Done(ToolResult::ok(ed.living_json().to_string())),
+        Action::EditStrokes(op) => {
+            let before = ed.history.revision();
+            match ed.living_command(op) {
+                Ok(text) => {
+                    tag(ed, before);
+                    Apply::Done(ToolResult::ok(text))
+                }
+                Err(e) => Apply::Done(ToolResult::error(e)),
+            }
+        }
         Action::GetGeometry { id, index, name, fields } => {
             let i = match oxy_mcp::state::find_piece(&ed.scene, id, index, name.as_deref()) {
                 Ok(i) => i,
@@ -685,6 +696,71 @@ mod tests {
         ed.pixels_per_point = 1.0;
         ed.camera.frame(ed.scene.bounds());
         ed
+    }
+
+    #[test]
+    fn an_agent_lists_and_edits_living_strokes() {
+        use crate::editor::PointerButton;
+        use glam::Vec2;
+        let call = |ed: &mut Editor, name: &str, args: serde_json::Value| match apply(ed, name, &args) {
+            Apply::Done(r) => r,
+            _ => panic!("{name} should finish immediately"),
+        };
+        let mut ed = editor();
+        ed.symmetry.x = false;
+        // Off: the list says so and edits are refused.
+        let off: serde_json::Value =
+            serde_json::from_str(&call(&mut ed, "list_strokes", serde_json::json!({})).text).unwrap();
+        assert_eq!(off["enabled"], false);
+        let r = call(&mut ed, "edit_strokes", serde_json::json!({"op": "bake"}));
+        assert!(r.is_error && r.text.contains("off"), "{}", r.text);
+        ed.living.enabled = true;
+        for y in [290.0, 310.0] {
+            ed.pointer = Some(Vec2::new(330.0, y));
+            ed.pointer_down(PointerButton::Primary);
+            for i in 1..=30 {
+                ed.pointer_moved(Vec2::new(330.0 + i as f32 * 4.0, y));
+            }
+            ed.pointer_up();
+        }
+        let list: serde_json::Value =
+            serde_json::from_str(&call(&mut ed, "list_strokes", serde_json::json!({})).text).unwrap();
+        let ids: Vec<u64> = list["strokes"].as_array().unwrap().iter().map(|s| s["id"].as_u64().unwrap()).collect();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(list["strokes"][0]["brush"], "draw");
+        // Fade one: an undo step labelled as the agent's.
+        let r = call(
+            &mut ed,
+            "edit_strokes",
+            serde_json::json!({"op": "set_strength", "strokes": [ids[1]], "strength": 0.5}),
+        );
+        assert!(!r.is_error, "{}", r.text);
+        assert!(ed.history.undo_labels().last().unwrap().starts_with("Agent:"));
+        // Group both, named, and hide the group.
+        let r = call(&mut ed, "edit_strokes", serde_json::json!({"op": "group", "strokes": ids, "name": "Pass"}));
+        assert!(!r.is_error && r.text.contains("group"), "{}", r.text);
+        let list: serde_json::Value =
+            serde_json::from_str(&call(&mut ed, "list_strokes", serde_json::json!({})).text).unwrap();
+        let group = &list["groups"][0];
+        assert_eq!(group["name"], "Pass");
+        assert_eq!(group["strokes"].as_array().unwrap().len(), 2);
+        let gid = group["id"].as_u64().unwrap();
+        let r =
+            call(&mut ed, "edit_strokes", serde_json::json!({"op": "group_visible", "group": gid, "visible": false}));
+        assert!(!r.is_error, "{}", r.text);
+        assert!(!ed.living.group(gid as u32).unwrap().visible);
+        // Bad ids and bad commands say why and change nothing.
+        let rev = ed.history.revision();
+        for bad in [
+            serde_json::json!({"op": "delete", "strokes": [999]}),
+            serde_json::json!({"op": "ungroup", "group": 999}),
+            serde_json::json!({"op": "fly"}),
+            serde_json::json!({"op": "show_all"}),
+        ] {
+            let r = call(&mut ed, "edit_strokes", bad.clone());
+            assert!(r.is_error, "{bad}: {}", r.text);
+        }
+        assert_eq!(ed.history.revision(), rev);
     }
 
     #[test]

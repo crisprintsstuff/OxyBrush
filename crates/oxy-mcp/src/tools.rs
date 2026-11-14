@@ -117,6 +117,10 @@ pub enum Action {
         since: Option<u64>,
         timeout_ms: u32,
     },
+    /// The active piece's living strokes and their groups (RFC 0017).
+    ListStrokes,
+    /// A Strokes window action (see [`crate::strokes`]).
+    EditStrokes(crate::strokes::StrokeOp),
     /// A piece's arrays as an `OXYG` file.
     GetGeometry {
         id: Option<u64>,
@@ -142,7 +146,14 @@ pub struct CameraSet {
 pub fn is_read_only(name: &str) -> bool {
     matches!(
         name,
-        "scene_info" | "list_pieces" | "piece_info" | "screenshot" | "scene_state" | "changes" | "get_geometry"
+        "scene_info"
+            | "list_pieces"
+            | "piece_info"
+            | "screenshot"
+            | "scene_state"
+            | "changes"
+            | "get_geometry"
+            | "list_strokes"
     )
 }
 
@@ -224,6 +235,8 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
             since: opt_u64(args, "since")?,
             timeout_ms: opt_u32(args, "timeout_ms")?.unwrap_or(0),
         }),
+        "list_strokes" => Ok(Action::ListStrokes),
+        "edit_strokes" => crate::strokes::parse_stroke_op(args).map(Action::EditStrokes),
         "get_geometry" => {
             let fields = match args.get("fields") {
                 None | Some(Value::Null) => None,
@@ -393,6 +406,27 @@ fn tool(name: &str, description: &str, properties: &Value, required: &[&str]) ->
 pub fn tool_defs() -> Vec<Value> {
     let none = json!({});
     vec![
+        tool(
+            "list_strokes",
+            "Living strokes (desktop app only): whether recording is on, and the active piece's editable strokes (id, brush, when made, points moved, strength, group) and groups (id, name, strength, visible, stroke ids), newest stroke first.",
+            &none,
+            &[],
+        ),
+        tool(
+            "edit_strokes",
+            "Change the active piece's living strokes like the Strokes window, as one undo step: op set_strength (strokes, strength 0..1.5), delete, solo, show_all, keep_unmasked (take the stroke away where the model is masked), group (strokes, optional name), add_to_group (strokes, group), remove_from_group, group_strength (group, strength), group_visible (group, visible), rename_group (group, name), merge_groups (from, into), ungroup, delete_group (group), bake (fix them all in place). Ids come from list_strokes.",
+            &json!({
+                "op": {"type": "string"},
+                "strokes": {"type": "array", "items": {"type": "integer"}},
+                "strength": {"type": "number"},
+                "group": {"type": "integer"},
+                "visible": {"type": "boolean"},
+                "name": {"type": "string"},
+                "from": {"type": "integer"},
+                "into": {"type": "integer"}
+            }),
+            &["op"],
+        ),
         tool(
             "scene_info",
             "Describe the open document: path, whether it has unsaved changes, the active piece, brush, symmetry, camera and viewport size. Screen-space stroke points are pixels in that viewport (top-left origin).",

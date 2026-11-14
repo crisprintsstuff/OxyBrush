@@ -335,6 +335,8 @@ impl Editor {
             plugin.manifest.commands.get(command).map_or("?", |c| c.label.as_str())
         );
         let pieces: Vec<u64> = self.scene.pieces.iter().map(|p| p.id).collect();
+        // Read before the snapshot borrows the scene.
+        let strokes_json = if caps.read_scene { self.living_json().to_string() } else { String::new() };
         let snap = Snapshot {
             pieces: if caps.read_mesh {
                 self.scene
@@ -361,6 +363,7 @@ impl Editor {
             } else {
                 String::new()
             },
+            strokes_json,
         };
         // Pieces it may edit are locked while it runs (a preview edits
         // nothing until Accept).
@@ -540,10 +543,34 @@ impl Editor {
             self.history.record_compound(format!("{label} (new pieces)"), steps);
             applied += added;
         }
+        // Strokes window actions, in order, each its own undo step labelled
+        // with the plugin.
+        let mut stroke_errors = Vec::new();
+        for text in std::mem::take(&mut result.stroke_commands) {
+            let before = self.history.revision();
+            let outcome = serde_json::from_str::<serde_json::Value>(&text)
+                .map_err(|e| e.to_string())
+                .and_then(|v| oxy_mcp::parse_stroke_op(&v))
+                .and_then(|op| self.living_command(op));
+            match outcome {
+                Ok(_) => {
+                    let recorded = self.history.revision().saturating_sub(before) as usize;
+                    if recorded > 0 {
+                        self.history.prefix_recent_undo(&format!("{label}: "), recorded);
+                    }
+                    applied += 1;
+                }
+                Err(e) => stroke_errors.push(e),
+            }
+        }
+        for e in &stroke_errors {
+            log::warn!("{label}: stroke command: {e}");
+        }
         let said = result.log.last().cloned();
         let took = secs.map_or(String::new(), |s| format!(" in {s:.1} s"));
         self.status = match (said, applied, skipped) {
             (_, _, s) if s > 0 => format!("{label}: {s} edit(s) skipped (the piece changed or was deleted)"),
+            _ if !stroke_errors.is_empty() => format!("{label}: {}", stroke_errors[0]),
             (Some(msg), _, _) => format!("{}: {msg}", label.trim_start_matches("Plugin: ")),
             (None, 0, _) => format!("{label}: done{took}"),
             (None, n, _) => format!("{label}: changed {n} piece(s){took}"),
@@ -1039,5 +1066,42 @@ pub fn overlays(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
             let [r, g, bl, al] = l.rgba.to_be_bytes();
             painter.line_segment([a, b], Stroke::new(2.0, Color32::from_rgba_unmultiplied(r, g, bl, al)));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::editor::PointerButton;
+    use glam::Vec2;
+
+    #[test]
+    fn plugin_stroke_commands_apply_in_order_under_the_plugin_label() {
+        let mut ed = Editor::for_tests();
+        ed.symmetry.x = false;
+        ed.living.enabled = true;
+        ed.pointer = Some(Vec2::new(330.0, 300.0));
+        ed.pointer_down(PointerButton::Primary);
+        for i in 1..=30 {
+            ed.pointer_moved(Vec2::new(330.0 + i as f32 * 4.0, 300.0));
+        }
+        ed.pointer_up();
+        let id = ed.living_json()["strokes"][0]["id"].as_u64().unwrap();
+        let result = RunResult {
+            stroke_commands: vec![
+                format!(r#"{{"op":"set_strength","strokes":[{id}],"strength":0.25}}"#),
+                r#"{"op":"delete","strokes":[999]}"#.to_owned(),
+            ],
+            ..Default::default()
+        };
+        let before = ed.history.revision();
+        ed.apply_plugin_result("Plugin: Fade", &[], result, None);
+        // The good command made one undo step under the plugin's name; the
+        // bad one changed nothing and its reason is in the status line.
+        assert_eq!(ed.history.revision(), before + 1);
+        assert!(ed.history.undo_labels().last().unwrap().starts_with("Plugin: Fade: "));
+        assert!(ed.status.contains("999"), "{}", ed.status);
+        let s = &ed.living_json()["strokes"][0];
+        assert!((s["strength"].as_f64().unwrap() - 0.25).abs() < 1e-6);
     }
 }

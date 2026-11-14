@@ -19,6 +19,7 @@ fn snapshot() -> Snapshot {
         triangle_counts: vec![1],
         active: 0,
         scene_json: "{\"pieces\":1}".into(),
+        strokes_json: "{\"strokes\":[]}".into(),
     }
 }
 
@@ -36,7 +37,10 @@ fn manifest_parses_and_rejects_bad_ones() {
     assert!(!m.capabilities.read_scene);
     assert_eq!(m.commands[0].label, "Squash");
     assert_eq!(m.params[0].default, 0.3);
-    assert!(Manifest::parse(r#"{"name":"X","api":4}"#).unwrap_err().contains("API 4"));
+    assert!(Manifest::parse(r#"{"name":"X","api":5}"#).unwrap_err().contains("API 5"));
+    assert!(
+        Manifest::parse(r#"{"name":"X","api":4,"capabilities":["edit_strokes"]}"#).unwrap().capabilities.edit_strokes
+    );
     assert!(Manifest::parse(r#"{"name":"X","api":0}"#).is_err());
     assert!(Manifest::parse(r#"{"name":"X","api":2,"capabilities":["add_pieces"]}"#).unwrap().capabilities.add_pieces);
     assert!(Manifest::parse(r#"{"name":"X","api":1,"capabilities":["network"]}"#).unwrap_err().contains("unknown"));
@@ -252,6 +256,7 @@ fn cube_snapshot() -> Snapshot {
         triangle_counts: vec![12],
         active: 0,
         scene_json: String::new(),
+        strokes_json: String::new(),
     }
 }
 
@@ -692,6 +697,7 @@ fn grid_snapshot(n: usize) -> Snapshot {
         triangle_counts: vec![nt],
         active: 0,
         scene_json: String::new(),
+        strokes_json: String::new(),
     }
 }
 
@@ -714,6 +720,7 @@ fn octahedron_snapshot() -> Snapshot {
         triangle_counts: vec![8],
         active: 0,
         scene_json: String::new(),
+        strokes_json: String::new(),
     }
 }
 
@@ -866,6 +873,7 @@ fn fill_holes_caps_an_opening_without_moving_the_surface() {
         triangle_counts: vec![before_tris.len()],
         active: 0,
         scene_json: String::new(),
+        strokes_json: String::new(),
     };
     p.params[0] = 128.0;
     p.params[1] = 1.0;
@@ -990,4 +998,36 @@ fn showcase_plugins_stop_before_writing() {
             l = r.log
         );
     }
+}
+
+#[test]
+fn stroke_commands_are_queued_and_checked_for_shape() {
+    // API 4: read the strokes JSON, queue one good command, and have a
+    // malformed one and an over-long read refused.
+    let wat = r#"(module
+        (import "oxybrush" "strokes_state" (func $ss (param i32 i32) (result i32)))
+        (import "oxybrush" "stroke_command" (func $sc (param i32 i32) (result i32)))
+        (memory (export "memory") 1)
+        (data (i32.const 100) "{\"op\":\"set_strength\",\"strokes\":[3],\"strength\":0.5}")
+        (data (i32.const 200) "not json")
+        (data (i32.const 220) "{\"strokes\":[3]}")
+        (func (export "run") (param $command i32)
+          (if (i32.ne (call $ss (i32.const 300) (i32.const 64)) (i32.const 14)) (then unreachable))
+          (if (i32.ne (call $sc (i32.const 100) (i32.const 50)) (i32.const 0)) (then unreachable))
+          (if (i32.ne (call $sc (i32.const 200) (i32.const 8)) (i32.const -4)) (then unreachable))
+          (if (i32.ne (call $sc (i32.const 220) (i32.const 15)) (i32.const -4)) (then unreachable))))"#;
+    let manifest = r#"{"name":"S","api":4,"capabilities":["read_scene","edit_strokes"],"commands":[{"id":"go"}]}"#;
+    let mut p = plugin(manifest, wat).unwrap();
+    let r = p.run(0, snapshot()).unwrap();
+    assert_eq!(r.stroke_commands, vec![r#"{"op":"set_strength","strokes":[3],"strength":0.5}"#.to_string()]);
+    // Without the capability, stroke_command is refused.
+    let denied = r#"(module
+        (import "oxybrush" "stroke_command" (func $sc (param i32 i32) (result i32)))
+        (memory (export "memory") 1)
+        (data (i32.const 100) "{\"op\":\"bake\"}")
+        (func (export "run") (param $command i32)
+          (if (i32.ne (call $sc (i32.const 100) (i32.const 13)) (i32.const -1)) (then unreachable))))"#;
+    let manifest = r#"{"name":"S","api":4,"capabilities":[],"commands":[{"id":"go"}]}"#;
+    let r = plugin(manifest, denied).unwrap().run(0, snapshot()).unwrap();
+    assert!(r.stroke_commands.is_empty());
 }
