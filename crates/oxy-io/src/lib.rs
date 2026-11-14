@@ -14,6 +14,7 @@ use std::path::Path;
 
 pub mod bridge;
 mod gltf;
+mod meshopt;
 mod ply;
 mod scene;
 

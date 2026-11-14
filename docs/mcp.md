@@ -151,7 +151,7 @@ server-sent-events stream; use `--attach` for clients that require one.
 | `open` | Open an `.oxb` (needs `discard: true` if the document is dirty) or import a mesh |
 | `save` | Atomic project save. Path optional once the document has one |
 | `import` | Add meshes as pieces (one undo step) |
-| `export` | glTF/GLB, OBJ, STL or PLY. Refuses to overwrite the project or an opened input. glTF/GLB follow Preferences > General > Compress glTF/GLB exports |
+| `export` | glTF/GLB, OBJ, STL or PLY. Refuses to overwrite the project or an opened input. glTF/GLB follow the glTF compression setting (File menu, Preferences > General) |
 | `add_primitive` | `sphere`, `cube` or `plane` |
 | `select_brush` | Any built-in brush, by name or key (`draw`, `clay_strips`, …) |
 | `set_brush` | `size` (same units as the size slider) and `strength` (0–1) |

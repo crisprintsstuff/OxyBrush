@@ -43,28 +43,108 @@ pub enum GltfCompression {
     None,
     /// `KHR_mesh_quantization`: 16-bit positions, 8-bit normals and colors.
     Quantized,
+    /// Quantized, then `EXT_meshopt_compression` on every buffer view
+    /// (see [`crate::meshopt`]): points renumbered in the order triangles
+    /// first use them, vertex data delta-coded, triangles mostly a byte
+    /// each. Needs a reader with a meshopt decoder (three.js, Babylon.js,
+    /// Blender 3.x+ and most engines have one).
+    Meshopt,
+}
+
+impl GltfCompression {
+    pub const ALL: [GltfCompression; 3] = [GltfCompression::None, GltfCompression::Quantized, GltfCompression::Meshopt];
+
+    /// The name in settings files and on the command line.
+    pub fn key(self) -> &'static str {
+        match self {
+            GltfCompression::None => "none",
+            GltfCompression::Quantized => "quantize",
+            GltfCompression::Meshopt => "meshopt",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|c| c.key() == key || (key == "quantized" && *c == GltfCompression::Quantized))
+    }
+
+    /// For menus.
+    pub fn label(self) -> &'static str {
+        match self {
+            GltfCompression::None => "None (largest, read everywhere)",
+            GltfCompression::Quantized => "Quantized (about half)",
+            GltfCompression::Meshopt => "Meshopt (smallest)",
+        }
+    }
+}
+
+/// What a buffer view holds, for meshopt.
+enum Kind<'a> {
+    /// Vertex data: elements of this many bytes.
+    Vertices(usize),
+    /// A triangle list, stored with this many bytes an index.
+    Triangles(&'a [u32], usize),
 }
 
 /// The binary buffer and its views, each 4-byte aligned.
 struct Bin {
     data: Vec<u8>,
     views: Vec<Value>,
+    /// Compress views with meshopt (buffer 1 is then the uncompressed
+    /// layout, a placeholder with no data).
+    meshopt: bool,
+    fallback_len: usize,
 }
 
 impl Bin {
     /// Append `bytes` as a buffer view (with `stride` for vertex data laid
     /// out with padding). RETURNS: the view's index.
-    fn view(&mut self, bytes: &[u8], target: u32, stride: Option<usize>) -> usize {
+    fn view(&mut self, bytes: &[u8], target: u32, stride: Option<usize>, kind: Kind) -> usize {
         while !self.data.len().is_multiple_of(4) {
             self.data.push(0);
         }
-        let mut v = json!({"buffer": 0, "byteOffset": self.data.len(), "byteLength": bytes.len(), "target": target});
+        let mut v = if self.meshopt {
+            let (encoded, elem, count, mode) = match kind {
+                Kind::Vertices(elem) => {
+                    let count = bytes.len() / elem;
+                    (crate::meshopt::encode_attributes(bytes, count, elem), elem, count, "ATTRIBUTES")
+                }
+                Kind::Triangles(indices, elem) => {
+                    (crate::meshopt::encode_triangles(indices), elem, indices.len(), "TRIANGLES")
+                }
+            };
+            self.fallback_len = self.fallback_len.next_multiple_of(4);
+            let v = json!({"buffer": 1, "byteOffset": self.fallback_len, "byteLength": bytes.len(), "target": target,
+                "extensions": {"EXT_meshopt_compression": {"buffer": 0, "byteOffset": self.data.len(),
+                    "byteLength": encoded.len(), "byteStride": elem, "count": count, "mode": mode}}});
+            self.fallback_len += bytes.len();
+            self.data.extend_from_slice(&encoded);
+            v
+        } else {
+            let v = json!({"buffer": 0, "byteOffset": self.data.len(), "byteLength": bytes.len(), "target": target});
+            self.data.extend_from_slice(bytes);
+            v
+        };
         if let Some(stride) = stride {
             v["byteStride"] = json!(stride);
         }
-        self.data.extend_from_slice(bytes);
         self.views.push(v);
         self.views.len() - 1
+    }
+}
+
+/// `g` with its points in the order its triangles first use them (and its
+/// triangles renumbered), for meshopt.
+fn first_use(g: &Geometry) -> Geometry {
+    let (order, triangles) = crate::meshopt::first_use_order(g.positions.len(), &g.triangles);
+    let pick = |v: &[glam::Vec3]| order.iter().map(|&o| v[o as usize]).collect::<Vec<_>>();
+    Geometry {
+        name: g.name.clone(),
+        positions: pick(&g.positions),
+        normals: pick(&g.normals),
+        triangles,
+        colors: g.colors.as_ref().map(|c| pick(c)),
+        diagonals: Default::default(),
+        shapes: g.shapes.iter().map(|(n, d, w)| (n.clone(), pick(d), *w)).collect(),
     }
 }
 
@@ -83,10 +163,13 @@ fn shorts3(v: impl Iterator<Item = [u16; 3]>) -> Vec<u8> {
 
 /// JSON document and binary buffer for the pieces.
 fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompression) -> (Value, Vec<u8>) {
-    let quantized = compression == GltfCompression::Quantized;
-    let mut bin = Bin { data: Vec::new(), views: Vec::new() };
+    let quantized = compression != GltfCompression::None;
+    let meshopt = compression == GltfCompression::Meshopt;
+    let mut bin = Bin { data: Vec::new(), views: Vec::new(), meshopt, fallback_len: 0 };
     let (mut accessors, mut meshes, mut nodes) = (Vec::new(), Vec::new(), Vec::new());
     for (i, g) in geoms.iter().enumerate() {
+        let reordered = meshopt.then(|| first_use(g));
+        let g = reordered.as_ref().unwrap_or(g);
         let (min, max) = bounds(&g.positions);
         // The grid: point = translation + scale * q, q in 0..=65535.
         let scale = if quantized { ((max - min).max_element() / 65535.0).max(f32::MIN_POSITIVE) } else { 1.0 };
@@ -96,11 +179,16 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
         if quantized {
             let qs: Vec<glam::Vec3> = g.positions.iter().map(|p| q(*p)).collect();
             let (qmin, qmax) = bounds(&qs);
-            let v = bin.view(&shorts3(qs.iter().map(|p| p.to_array().map(|c| c as u16))), ARRAY_BUFFER, Some(8));
+            let v = bin.view(
+                &shorts3(qs.iter().map(|p| p.to_array().map(|c| c as u16))),
+                ARRAY_BUFFER,
+                Some(8),
+                Kind::Vertices(8),
+            );
             accessors.push(json!({"bufferView": v, "componentType": UNSIGNED_SHORT, "count": qs.len(), "type": "VEC3",
                                   "min": qmin.to_array(), "max": qmax.to_array()}));
         } else {
-            let v = bin.view(&floats(&g.positions), ARRAY_BUFFER, None);
+            let v = bin.view(&floats(&g.positions), ARRAY_BUFFER, None, Kind::Vertices(12));
             accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": g.positions.len(), "type": "VEC3",
                                   "min": min.to_array(), "max": max.to_array()}));
         }
@@ -115,11 +203,11 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
                     [b(n.x), b(n.y), b(n.z), 0]
                 })
                 .collect();
-            let v = bin.view(&bytes, ARRAY_BUFFER, Some(4));
+            let v = bin.view(&bytes, ARRAY_BUFFER, Some(4), Kind::Vertices(4));
             accessors.push(json!({"bufferView": v, "componentType": BYTE, "normalized": true,
                                   "count": g.normals.len(), "type": "VEC3"}));
         } else {
-            let v = bin.view(&floats(&g.normals), ARRAY_BUFFER, None);
+            let v = bin.view(&floats(&g.normals), ARRAY_BUFFER, None, Kind::Vertices(12));
             accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": g.normals.len(), "type": "VEC3"}));
         }
         // Indices: 16-bit when they fit and compressing.
@@ -129,7 +217,8 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
         } else {
             g.triangles.iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
         };
-        let iv = bin.view(&idx, ELEMENT_ARRAY_BUFFER, None);
+        let flat: Vec<u32> = if meshopt { g.triangles.iter().flatten().copied().collect() } else { Vec::new() };
+        let iv = bin.view(&idx, ELEMENT_ARRAY_BUFFER, None, Kind::Triangles(&flat, if small { 2 } else { 4 }));
         accessors.push(json!({"bufferView": iv, "componentType": if small { UNSIGNED_SHORT } else { UNSIGNED_INT },
                               "count": g.triangles.len() * 3, "type": "SCALAR"}));
         let mut attributes = json!({"POSITION": base, "NORMAL": base + 1});
@@ -145,11 +234,11 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
                         [b(c.x), b(c.y), b(c.z), 0]
                     })
                     .collect();
-                let v = bin.view(&bytes, ARRAY_BUFFER, Some(4));
+                let v = bin.view(&bytes, ARRAY_BUFFER, Some(4), Kind::Vertices(4));
                 accessors.push(json!({"bufferView": v, "componentType": UNSIGNED_BYTE, "normalized": true,
                                       "count": linear.len(), "type": "VEC3"}));
             } else {
-                let v = bin.view(&floats(&linear), ARRAY_BUFFER, None);
+                let v = bin.view(&floats(&linear), ARRAY_BUFFER, None, Kind::Vertices(12));
                 accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": linear.len(), "type": "VEC3"}));
             }
             attributes["COLOR_0"] = json!(accessors.len() - 1);
@@ -168,6 +257,7 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
                         &shorts3(qd.iter().map(|d| d.to_array().map(|c| c as i16 as u16))),
                         ARRAY_BUFFER,
                         Some(8),
+                        Kind::Vertices(8),
                     );
                     accessors.push(json!({"bufferView": v, "componentType": SHORT, "count": qd.len(), "type": "VEC3",
                                           "min": dmin.to_array(), "max": dmax.to_array()}));
@@ -175,7 +265,7 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
                     // Floats, in the same (node-scaled) space as the positions.
                     let d: Vec<glam::Vec3> = deltas.iter().map(|d| *d / scale).collect();
                     let (dmin, dmax) = bounds(&d);
-                    let v = bin.view(&floats(&d), ARRAY_BUFFER, None);
+                    let v = bin.view(&floats(&d), ARRAY_BUFFER, None, Kind::Vertices(12));
                     accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": d.len(), "type": "VEC3",
                                           "min": dmin.to_array(), "max": dmax.to_array()}));
                 }
@@ -201,6 +291,13 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
     if let Some(uri) = buffer_uri.map(|prefix| format!("{prefix}{}", base64(&bin.data))) {
         buffer["uri"] = json!(uri);
     }
+    let mut buffers = vec![buffer];
+    if meshopt {
+        // The uncompressed layout: no data, only its size (spec, "Fallback
+        // buffers"); index 1 so it isn't taken for the GLB binary chunk.
+        buffers.push(json!({"byteLength": bin.fallback_len.next_multiple_of(4),
+            "extensions": {"EXT_meshopt_compression": {"fallback": true}}}));
+    }
     let mut doc = json!({
         "asset": {"version": "2.0", "generator": format!("OxyBrush {}", env!("CARGO_PKG_VERSION"))},
         "scene": 0,
@@ -209,11 +306,16 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
         "meshes": meshes,
         "accessors": accessors,
         "bufferViews": bin.views,
-        "buffers": [buffer],
+        "buffers": buffers,
     });
-    if quantized {
-        doc["extensionsUsed"] = json!(["KHR_mesh_quantization"]);
-        doc["extensionsRequired"] = json!(["KHR_mesh_quantization"]);
+    let used: Vec<&str> = match compression {
+        GltfCompression::None => vec![],
+        GltfCompression::Quantized => vec!["KHR_mesh_quantization"],
+        GltfCompression::Meshopt => vec!["KHR_mesh_quantization", "EXT_meshopt_compression"],
+    };
+    if !used.is_empty() {
+        doc["extensionsUsed"] = json!(used);
+        doc["extensionsRequired"] = json!(used);
     }
     (doc, bin.data)
 }
@@ -496,5 +598,69 @@ mod tests {
         let prim = &doc["meshes"][0]["primitives"][0];
         let col = read_accessor(&doc, &bin, prim["attributes"]["COLOR_0"].as_u64().unwrap() as usize, 3);
         assert!((col[0][0] - srgb_to_linear(0.8)).abs() < 1.0 / 255.0);
+    }
+
+    #[test]
+    fn meshopt_glb_decodes_to_the_quantized_mesh() {
+        use crate::meshopt::decode;
+        let mut a = primitives::icosphere(4, 1.0);
+        a.color = vec![glam::Vec3::new(0.2, 0.6, 0.9); a.positions.len()];
+        let g = [visible_geometry(&ExportPiece::new("A", &a))];
+        let q = write_glb(&g, GltfCompression::Quantized);
+        let m = write_glb(&g, GltfCompression::Meshopt);
+        assert!(m.len() * 100 < q.len() * 50, "{} vs {} bytes", m.len(), q.len());
+        let (doc, bin) = split_glb(&m);
+        assert_eq!(doc["extensionsRequired"], json!(["KHR_mesh_quantization", "EXT_meshopt_compression"]));
+        assert_eq!(doc["buffers"][1]["extensions"]["EXT_meshopt_compression"]["fallback"], json!(true));
+        assert!(doc["buffers"][1].get("uri").is_none());
+        // Decode every view into the fallback layout, as a reader would.
+        let mut fallback = vec![0u8; doc["buffers"][1]["byteLength"].as_u64().unwrap() as usize];
+        for v in doc["bufferViews"].as_array().unwrap() {
+            let e = &v["extensions"]["EXT_meshopt_compression"];
+            assert_eq!(v["buffer"], json!(1));
+            let (off, len) = (e["byteOffset"].as_u64().unwrap() as usize, e["byteLength"].as_u64().unwrap() as usize);
+            let (count, stride) = (e["count"].as_u64().unwrap() as usize, e["byteStride"].as_u64().unwrap() as usize);
+            assert_eq!(v["byteLength"].as_u64().unwrap() as usize, count * stride);
+            let src = &bin[off..off + len];
+            let out: Vec<u8> = match e["mode"].as_str().unwrap() {
+                "ATTRIBUTES" => decode::attributes(src, count, stride),
+                "TRIANGLES" => {
+                    let idx = decode::triangles(src, count);
+                    if stride == 2 {
+                        idx.iter().flat_map(|i| (*i as u16).to_le_bytes()).collect()
+                    } else {
+                        idx.iter().flat_map(|i| i.to_le_bytes()).collect()
+                    }
+                }
+                other => panic!("mode {other}"),
+            };
+            let at = v["byteOffset"].as_u64().unwrap() as usize;
+            fallback[at..at + out.len()].copy_from_slice(&out);
+        }
+        // The same triangles, in world units, as the quantized file.
+        let tris = |doc: &Value, data: &[u8]| -> Vec<[[i64; 3]; 3]> {
+            let prim = &doc["meshes"][0]["primitives"][0];
+            let pos = read_accessor(doc, data, prim["attributes"]["POSITION"].as_u64().unwrap() as usize, 3);
+            let idx = read_accessor(doc, data, prim["indices"].as_u64().unwrap() as usize, 1);
+            let mut t: Vec<[[i64; 3]; 3]> = idx
+                .chunks(3)
+                .map(|c| {
+                    let p = |i: &Vec<f32>| {
+                        let v = &pos[i[0] as usize];
+                        [v[0] as i64, v[1] as i64, v[2] as i64]
+                    };
+                    let mut r = [p(&c[0]), p(&c[1]), p(&c[2])];
+                    // Start at the smallest corner, keeping the winding.
+                    let m = (0..3).min_by_key(|&k| r[k]).unwrap();
+                    r.rotate_left(m);
+                    r
+                })
+                .collect();
+            t.sort();
+            t
+        };
+        let (qdoc, qbin) = split_glb(&q);
+        assert_eq!(tris(&doc, &fallback), tris(&qdoc, &qbin));
+        assert_eq!(doc["nodes"][0]["translation"], qdoc["nodes"][0]["translation"]);
     }
 }

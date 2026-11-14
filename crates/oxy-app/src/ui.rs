@@ -518,8 +518,11 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
-                ui.checkbox(&mut ed.gltf_compress, "Compress glTF/GLB")
-                    .on_hover_text("Smaller .glb and .gltf exports: 16-bit positions, 8-bit normals and colors (KHR_mesh_quantization), about half the size for pieces up to 65,535 points. Blender, three.js and most engines read them; a few older importers don't. Also in Preferences > General.");
+                ui.menu_button(format!("glTF compression: {}", ed.gltf_compression.key()), |ui| {
+                    gltf_compression_choice(ui, ed);
+                })
+                .response
+                .on_hover_text("How .glb and .gltf exports are compressed. Also in Preferences > General.");
                 ui.separator();
                 if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
                     ed.request_run_script = true;
@@ -1144,12 +1147,8 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
             "On: the strokes stay editable after you save, close and open the project again (they make the file bigger, about 16 bytes per point each stroke moved). Off: projects are saved with the strokes fixed in place.",
         );
     }
-    tips::check_plain(
-        ui,
-        &mut ed.gltf_compress,
-        "Compress glTF/GLB exports",
-        "On: File > Export to .glb or .gltf stores positions as 16-bit and normals and colors as 8-bit (the glTF extension KHR_mesh_quantization), about half the file size for pieces up to 65,535 points. The difference isn't visible at normal sizes. Blender, three.js and most engines read these files; a few older importers don't. Off: full 32-bit precision, readable everywhere.",
-    );
+    ui.label("glTF/GLB export compression");
+    ui.indent("gltf_compression", |ui| gltf_compression_choice(ui, ed));
     tips::check_plain(
         ui,
         &mut ed.gizmo_done_reverts,
@@ -5874,6 +5873,23 @@ fn subdivision_kind(ui: &mut egui::Ui, ed: &mut Editor) {
             "On: new levels and Subdivide round the surface off (Catmull–Clark or Loop). Off: faces are only split, with new points at the middle of edges and faces, so the shape stays exactly as it is: for hard-surface pieces, or to add resolution without softening. Each level keeps how it was made.",
         );
     });
+}
+
+/// The glTF/GLB export compression choices, each with what it means.
+fn gltf_compression_choice(ui: &mut Ui, ed: &mut Editor) {
+    use oxy_io::GltfCompression as C;
+    for c in C::ALL {
+        let tip = match c {
+            C::None => "Full 32-bit precision, readable by every glTF reader.",
+            C::Quantized => {
+                "16-bit positions, 8-bit normals and colors (the glTF extension KHR_mesh_quantization): about half the size for pieces up to 65,535 points, about three quarters for bigger ones. The difference isn't visible. Blender, three.js and most engines read these; a few older importers don't."
+            }
+            C::Meshopt => {
+                "Quantized, then compressed with meshopt (the glTF extension EXT_meshopt_compression): usually a fifth of the uncompressed size or less, with nothing further lost. Needs a reader with a meshopt decoder: three.js, Babylon.js, recent Blender and most engines have one."
+            }
+        };
+        ui.radio_value(&mut ed.gltf_compression, c, c.label()).on_hover_text(tip);
+    }
 }
 
 #[cfg(test)]
