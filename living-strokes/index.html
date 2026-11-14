@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Living Strokes — OxyBrush</title>
+  <meta name="description" content="Living strokes in OxyBrush: every sculpting stroke stays editable. Fade, delete, mask out, mirror or group any past stroke without undoing later work, and export groups as shape keys.">
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&family=Outfit:wght@400;600;800&display=swap" rel="stylesheet">
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@1.59.0/dist/umd/lucide.min.js"></script>
+
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace'],
+            display: ['Outfit', 'sans-serif'],
+          },
+          colors: {
+            oxy: {
+                pink: '#ec4899',
+                purple: '#a855f7',
+                blue: '#3b82f6',
+                dark: '#050505'
+            },
+            // Kept for semantic text highlights in changelogs
+            accent: {
+              cyan: '#38bdf8',
+              emerald: '#34d399',
+              violet: '#a78bfa',
+              amber: '#fbbf24'
+            }
+          }
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body {
+        background-color: #050505;
+        color: #f8fafc;
+        overflow-x: hidden;
+    }
+
+    /* Fluid Gradient Blobs */
+    @keyframes blob {
+        0% { transform: translate(0px, 0px) scale(1); }
+        33% { transform: translate(50px, -50px) scale(1.1); }
+        66% { transform: translate(-20px, 40px) scale(0.9); }
+        100% { transform: translate(0px, 0px) scale(1); }
+    }
+    
+    .animate-blob { animation: blob 10s infinite; }
+    .animation-delay-2000 { animation-delay: 2s; }
+    .animation-delay-4000 { animation-delay: 4s; }
+    .animation-delay-6000 { animation-delay: 6s; }
+
+    /* Glassmorphism Utilities */
+    .glass {
+        background: rgba(255, 255, 255, 0.03);
+        backdrop-filter: blur(20px);
+        -webkit-backdrop-filter: blur(20px);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+    }
+    
+    .glass-card:hover {
+        background: rgba(255, 255, 255, 0.06);
+        border: 1px solid rgba(236, 72, 153, 0.3);
+        box-shadow: 0 0 40px rgba(168, 85, 247, 0.15);
+        transform: translateY(-5px);
+    }
+    
+    .glass-card {
+        transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    /* Text Gradients */
+    .text-gradient {
+        background: linear-gradient(135deg, #ec4899 0%, #a855f7 50%, #3b82f6 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+
+    /* Brush Specific Styles */
+    .clay-gradient { background: radial-gradient(circle at 35% 35%, #e09f80 0%, #b86b4b 55%, #632d18 100%); }
+    .matcap-pearl { background: radial-gradient(circle at 30% 30%, #ffffff 0%, #cbd5e1 45%, #475569 85%, #1e293b 100%); }
+    .matcap-obsidian { background: radial-gradient(circle at 35% 30%, #64748b 0%, #1e293b 50%, #020617 100%); }
+    .matcap-bronze { background: radial-gradient(circle at 30% 30%, #fde047 0%, #b45309 60%, #451a03 100%); }
+    
+    /* Scrollbars */
+    ::-webkit-scrollbar { width: 10px; height: 10px; }
+    ::-webkit-scrollbar-track { background: #050505; }
+    ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 9999px; }
+    ::-webkit-scrollbar-thumb:hover { background: rgba(236, 72, 153, 0.5); }
+  </style>
+</head>
+<body class="antialiased selection:bg-oxy-pink selection:text-white flex flex-col min-h-screen">
+  <a href="#main" class="sr-only focus:not-sr-only focus:fixed focus:top-4 focus:left-4 focus:z-50 focus:px-4 focus:py-2 focus:rounded-full focus:bg-white focus:text-black focus:font-semibold focus:text-sm">Skip to content</a>
+
+  <!-- Ambient Background Elements -->
+  <div class="fixed inset-0 overflow-hidden pointer-events-none z-0">
+      <div class="absolute top-[-10%] left-[-10%] w-[500px] h-[500px] bg-oxy-pink/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob"></div>
+      <div class="absolute top-[20%] right-[-10%] w-[600px] h-[600px] bg-oxy-purple/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob animation-delay-2000"></div>
+      <div class="absolute bottom-[-20%] left-[20%] w-[700px] h-[700px] bg-oxy-blue/20 rounded-full mix-blend-screen filter blur-[120px] animate-blob animation-delay-4000"></div>
+  </div>
+
+  <!-- Navigation (links point back to the home page: this page lives one folder down) -->
+  <header class="fixed w-full z-40 top-0 transition-all duration-300 glass border-x-0 border-t-0 border-b border-white/5">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 h-20 flex items-center justify-between">
+
+      <a href="../" class="flex items-center gap-3 group">
+        <div class="w-10 h-10 rounded-full bg-gradient-to-br from-oxy-pink to-oxy-blue p-[2px] shadow-lg">
+          <div class="w-full h-full bg-[#050505] rounded-full flex items-center justify-center text-white group-hover:text-oxy-pink transition-colors">
+            <i data-lucide="box" class="w-5 h-5"></i>
+          </div>
+        </div>
+        <span class="font-display font-bold text-xl tracking-wide text-white">OxyBrush</span>
+      </a>
+
+      <nav class="hidden lg:flex items-center gap-8 text-xs font-medium font-sans text-slate-300">
+        <a href="../#latest-highlights" class="hover:text-oxy-pink transition-colors">What's new</a>
+        <a href="../#features" class="hover:text-oxy-purple transition-colors">Sculpting System</a>
+        <a href="./" aria-current="page" class="text-white flex items-center gap-1.5">
+          <span class="w-1.5 h-1.5 rounded-full bg-oxy-pink"></span>
+          <span>Living Strokes</span>
+        </a>
+        <a href="../#brushes" class="hover:text-oxy-blue transition-colors">Brushes</a>
+        <a href="../#performance" class="hover:text-white transition-colors">Performance</a>
+        <a href="../#changelog" class="hover:text-oxy-purple transition-colors">Changelog</a>
+      </nav>
+
+      <div class="flex items-center gap-3">
+        <a href="../#downloads" class="px-5 py-2.5 rounded-full bg-gradient-to-r from-oxy-pink to-oxy-purple hover:opacity-90 text-white font-semibold text-xs transition-all flex items-center gap-1.5 shadow-lg">
+          <i data-lucide="download" class="w-4 h-4"></i>
+          <span>Download</span>
+        </a>
+        <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="p-2.5 rounded-full glass hover:bg-white/10 text-slate-300 hover:text-white transition-all group" title="GitHub repository" aria-label="OxyBrush on GitHub">
+          <svg class="w-4 h-4 group-hover:scale-110 transition-transform" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M6.766 11.328c-2.063-.25-3.516-1.734-3.516-3.656 0-.781.281-1.625.75-2.188-.203-.515-.172-1.609.063-2.062.625-.078 1.468.25 1.968.703.594-.187 1.219-.281 1.985-.281.765 0 1.39.094 1.953.265.484-.437 1.344-.765 1.969-.687.218.422.25 1.515.046 2.047.5.593.766 1.39.766 2.203 0 1.922-1.453 3.375-3.547 3.64.531.344.89 1.094.89 1.954v1.625c0 .468.391.734.86.547C13.781 14.359 16 11.53 16 8.03 16 3.61 12.406 0 7.984 0 3.563 0 0 3.61 0 8.031a7.88 7.88 0 0 0 5.172 7.422c.422.156.828-.125.828-.547v-1.25c-.219.094-.5.156-.75.156-1.031 0-1.64-.562-2.078-1.609-.172-.422-.36-.672-.719-.719-.187-.015-.25-.093-.25-.187 0-.188.313-.328.625-.328.453 0 .844.281 1.25.86.313.452.64.655 1.031.655s.641-.14 1-.5c.266-.265.47-.5.657-.656"></path></svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main id="main" tabindex="-1" class="flex-grow relative z-10 pt-20 focus:outline-none">
+
+    <!-- Hero -->
+    <section class="py-20 md:py-28 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
+        <div>
+          <div class="inline-flex items-center gap-2 px-3 py-1 rounded-full glass text-xs font-mono text-slate-300 mb-6">
+            <span class="w-1.5 h-1.5 rounded-full bg-oxy-pink"></span>
+            Feature · RFC 0017
+          </div>
+          <h1 class="text-5xl md:text-6xl font-display font-extrabold tracking-tight text-white mb-6">
+            <span class="text-gradient">Living Strokes</span><br>Every stroke stays editable.
+          </h1>
+          <p class="text-lg text-slate-400 leading-relaxed mb-8 max-w-xl">
+            Reach back to a stroke you made twenty minutes ago and fade it, delete it, or take part of it away, without undoing anything you did after it. Group strokes after the fact and use the groups like sculpt layers you never had to plan for.
+          </p>
+          <div class="flex flex-wrap gap-4">
+            <a href="../#downloads" class="px-7 py-3.5 rounded-full bg-white hover:bg-slate-200 text-black font-semibold transition-all flex items-center gap-2 shadow-xl">
+              <i data-lucide="download" class="w-4 h-4"></i> Get OxyBrush
+            </a>
+            <a href="#get-started" class="px-7 py-3.5 rounded-full glass hover:bg-white/10 text-white font-semibold transition-all flex items-center gap-2">
+              <i data-lucide="play" class="w-4 h-4"></i> Try it in a minute
+            </a>
+          </div>
+        </div>
+        <figure class="glass rounded-3xl p-3 shadow-2xl">
+          <img src="../docs/images/living-strokes-panel.jpg" width="850" height="640" class="rounded-2xl w-full h-auto" alt="The Strokes window next to a sculpted sphere: a group called Brow pass at 70%, four strokes listed with their brushes, and the selected Draw stroke faded to 45%.">
+          <figcaption class="text-xs text-slate-500 font-mono px-2 pt-3">Mesh &gt; Strokes…: a group used as a layer at 70%, and one stroke faded to 45%.</figcaption>
+        </figure>
+      </div>
+    </section>
+
+    <!-- Before / after -->
+    <section class="py-24 border-b border-white/5">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6">
+        <div class="text-center mb-14">
+          <div class="text-sm font-bold text-oxy-pink uppercase tracking-widest mb-3">Not undo</div>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-6">Take out the second stroke. Keep the third.</h2>
+          <p class="text-slate-400 text-lg max-w-2xl mx-auto">
+            Undo can only go back in order. Living strokes lets you pick any stroke in the list and change just that one: here the middle stroke is deleted, and the brow made before it and the crease made after it stay exactly as they were.
+          </p>
+        </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <figure class="glass rounded-3xl p-3">
+            <img src="../docs/images/living-strokes-fade-a.jpg" width="400" height="400" loading="lazy" class="rounded-2xl w-full h-auto" alt="A sphere with four strokes: a brow ridge, a raised band below it, a crease and two bumps.">
+            <figcaption class="text-sm text-slate-400 px-2 pt-3"><span class="text-white font-semibold">Before:</span> four strokes, made in order.</figcaption>
+          </figure>
+          <figure class="glass rounded-3xl p-3">
+            <img src="../docs/images/living-strokes-fade-b.jpg" width="400" height="400" loading="lazy" class="rounded-2xl w-full h-auto" alt="The same sphere with the raised band gone and the other three strokes unchanged.">
+            <figcaption class="text-sm text-slate-400 px-2 pt-3"><span class="text-white font-semibold">After:</span> the second stroke at 0%. The others didn't move.</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- What you can do -->
+    <section class="py-24 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6">
+        <div class="text-center mb-16">
+          <div class="text-sm font-bold text-oxy-purple uppercase tracking-widest mb-3">The Strokes window</div>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-6">What you can do with a past stroke</h2>
+          <p class="text-slate-400 text-lg max-w-2xl mx-auto">Select one or several strokes in the list (Shift or Ctrl+click), then:</p>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-pink mb-4"><i data-lucide="sliders-horizontal" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Fade it, 0 to 150%</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">Drag the strength and watch the model change live. 0% hides the stroke without losing it; 150% exaggerates it.</p>
+          </div>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-purple mb-4"><i data-lucide="trash-2" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Delete it</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">Its change comes off the surface; everything sculpted after it stays.</p>
+          </div>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-blue mb-4"><i data-lucide="eye" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Solo it</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">See the selected strokes on their own, without the strokes that came after, until you click Show all.</p>
+          </div>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-pink mb-4"><i data-lucide="eraser" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Keep only where unmasked</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">Mask the half of a stroke you don't want, press it, clear the mask: that part of the stroke is gone.</p>
+          </div>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-purple mb-4"><i data-lucide="layers" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Group into layers</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">Put strokes in a named group ("Wrinkle pass", "Scales") with its own strength slider and show/hide box. Rename, merge or ungroup at any time.</p>
+          </div>
+          <div class="glass glass-card p-8 rounded-3xl">
+            <div class="w-10 h-10 rounded-2xl glass flex items-center justify-center text-oxy-blue mb-4"><i data-lucide="undo-2" class="w-5 h-5"></i></div>
+            <h3 class="font-display font-bold text-lg text-white mb-2">Undo it all</h3>
+            <p class="text-sm text-slate-400 leading-relaxed">Every change in the Strokes window is an undo step. Undoing a stroke takes it off the list; redo brings it back.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Mirror / split / export -->
+    <section class="py-24 border-b border-white/5">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 grid grid-cols-1 lg:grid-cols-2 gap-14 items-center">
+        <div>
+          <div class="text-sm font-bold text-oxy-blue uppercase tracking-widest mb-3">New in 4.0.0-beta.10</div>
+          <h2 class="text-4xl font-display font-extrabold text-white tracking-tight mb-6">Forgot symmetry? Mirror the stroke.</h2>
+          <ul class="space-y-5 text-slate-400">
+            <li class="flex gap-3"><i data-lucide="flip-horizontal-2" class="w-5 h-5 text-oxy-pink shrink-0 mt-0.5"></i><span><span class="text-white font-semibold">Mirror copy</span> puts the selected strokes on the other side of the piece's symmetry plane (X, Y or Z), as new strokes you can fade on their own. It works where the model is symmetric.</span></li>
+            <li class="flex gap-3"><i data-lucide="split" class="w-5 h-5 text-oxy-purple shrink-0 mt-0.5"></i><span><span class="text-white font-semibold">Split by side</span> turns a stroke made with symmetry on into one stroke per side, so you can fade or delete just the left wrinkle. Nothing on the model moves.</span></li>
+            <li class="flex gap-3"><i data-lucide="package" class="w-5 h-5 text-oxy-blue shrink-0 mt-0.5"></i><span><span class="text-white font-semibold">Groups as shape keys:</span> export to glTF or GLB and each group becomes a shape key named after it, so your layers are sliders in Blender or a game engine. Hidden groups are in the file at 0.</span></li>
+          </ul>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <figure class="glass rounded-3xl p-3">
+            <img src="../docs/images/living-strokes-mirror-a.jpg" width="400" height="400" loading="lazy" class="rounded-2xl w-full h-auto" alt="A sphere with strokes on one side only: a ridge, a crease and a bump.">
+            <figcaption class="text-xs text-slate-400 px-2 pt-3">Sculpted with symmetry off.</figcaption>
+          </figure>
+          <figure class="glass rounded-3xl p-3">
+            <img src="../docs/images/living-strokes-mirror-b.jpg" width="400" height="400" loading="lazy" class="rounded-2xl w-full h-auto" alt="The same sphere after Mirror copy: the ridge, crease and bump appear on both sides.">
+            <figcaption class="text-xs text-slate-400 px-2 pt-3">After Mirror copy (X).</figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- How it works -->
+    <section class="py-24 border-b border-white/5">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6">
+        <div class="text-center mb-14">
+          <div class="text-sm font-bold text-oxy-purple uppercase tracking-widest mb-3">How it works</div>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight">Like layers, not time travel</h2>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 text-slate-400 leading-relaxed">
+          <div class="glass p-8 rounded-3xl">
+            <h3 class="font-display font-bold text-lg text-white mb-3">What a stroke remembers</h3>
+            <p>When a stroke finishes, OxyBrush keeps what it changed: how far it moved each point (and the color it painted). The surface is the base plus every stroke's change times its strength, so fading a stroke moves only its own points. That's as fast as a brush dab, even on a million-triangle model.</p>
+          </div>
+          <div class="glass p-8 rounded-3xl">
+            <h3 class="font-display font-bold text-lg text-white mb-3">What it doesn't do</h3>
+            <p>Later strokes aren't replayed. If you smoothed over a stroke and then fade it, the smoothing stays what it was. That's how sculpt layers behave in other tools, and it keeps every change instant and predictable.</p>
+          </div>
+          <div class="glass p-8 rounded-3xl">
+            <h3 class="font-display font-bold text-lg text-white mb-3">When strokes get fixed in place</h3>
+            <p>Anything that rebuilds the triangles (voxel remesh, dynamic detail, decimate, booleans, changing subdivision levels) keeps the surface as it is and clears the list, and OxyBrush tells you. <span class="text-white">Bake all</span> does the same by hand. Mask strokes aren't listed.</p>
+          </div>
+          <div class="glass p-8 rounded-3xl">
+            <h3 class="font-display font-bold text-lg text-white mb-3">Memory and saving</h3>
+            <p>A typical stroke takes tens of kilobytes. The list has a memory budget (256 MB by default, in Preferences); past it, the oldest strokes are fixed in place. Strokes and groups are saved with the project, and older versions of OxyBrush still open the file.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Get started -->
+    <section id="get-started" class="py-24 border-b border-white/5">
+      <div class="max-w-4xl mx-auto px-4 sm:px-6">
+        <div class="text-center mb-14">
+          <div class="text-sm font-bold text-oxy-pink uppercase tracking-widest mb-3">Get started</div>
+          <h2 class="text-4xl md:text-5xl font-display font-extrabold text-white tracking-tight mb-6">Try it in a minute</h2>
+          <p class="text-slate-400 text-lg">Living strokes is off by default, so people who don't use it pay no memory for it.</p>
+        </div>
+        <ol class="space-y-4">
+          <li class="glass rounded-2xl p-6 flex gap-5 items-start"><span class="font-display font-extrabold text-2xl text-gradient">1</span><span class="text-slate-300">Turn it on: <span class="text-white">Preferences &gt; General &gt; Living strokes</span>, or open <span class="text-white">Mesh &gt; Strokes…</span> and click <span class="text-white">Turn on Living strokes</span>.</span></li>
+          <li class="glass rounded-2xl p-6 flex gap-5 items-start"><span class="font-display font-extrabold text-2xl text-gradient">2</span><span class="text-slate-300">Sculpt three or four strokes on a sphere with any brushes.</span></li>
+          <li class="glass rounded-2xl p-6 flex gap-5 items-start"><span class="font-display font-extrabold text-2xl text-gradient">3</span><span class="text-slate-300">Open <span class="text-white">Mesh &gt; Strokes…</span> (also in the command palette), click the second stroke and drag <span class="text-white">Strength</span> to 0%. The strokes you made after it stay.</span></li>
+          <li class="glass rounded-2xl p-6 flex gap-5 items-start"><span class="font-display font-extrabold text-2xl text-gradient">4</span><span class="text-slate-300">Shift+click two strokes, press <span class="text-white">Group</span>, and use the group's slider and box like a layer.</span></li>
+        </ol>
+        <p class="text-center text-sm text-slate-500 mt-8">The in-app guide (Help &gt; Guide, topic "Living strokes") covers every button.</p>
+      </div>
+    </section>
+
+    <!-- For developers -->
+    <section class="py-24">
+      <div class="max-w-5xl mx-auto px-4 sm:px-6 grid grid-cols-1 md:grid-cols-2 gap-10 items-center">
+        <div>
+          <div class="text-sm font-bold text-oxy-blue uppercase tracking-widest mb-3">For scripts and agents</div>
+          <h2 class="text-3xl font-display font-extrabold text-white tracking-tight mb-5">Every action, as JSON</h2>
+          <p class="text-slate-400 leading-relaxed mb-6">In-app plugins (API 4) read the strokes with <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white text-sm">strokes_state</code> and run any Strokes window action with <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white text-sm">stroke_command</code>. A local AI agent gets the same through the MCP tools <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white text-sm">list_strokes</code> and <code class="bg-white/10 px-1 py-0.5 rounded font-mono text-white text-sm">edit_strokes</code>. Each change is an undo step labelled with who made it.</p>
+          <div class="flex flex-wrap gap-4 text-sm font-medium">
+            <a class="text-oxy-blue hover:text-oxy-pink transition-colors" href="https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/plugins/api-reference.md" target="_blank" rel="noopener noreferrer">Plugin API reference →</a>
+            <a class="text-oxy-blue hover:text-oxy-pink transition-colors" href="https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/mcp.md" target="_blank" rel="noopener noreferrer">MCP tools →</a>
+            <a class="text-oxy-blue hover:text-oxy-pink transition-colors" href="https://github.com/crisprintsstuff/OxyBrush/blob/main/docs/rfcs/0017-living-strokes.md" target="_blank" rel="noopener noreferrer">Design (RFC 0017) →</a>
+          </div>
+        </div>
+        <pre class="glass rounded-3xl p-6 text-xs font-mono text-slate-300 overflow-x-auto leading-relaxed"><code><span class="text-slate-500">// fade a group to 60%</span>
+{"op": "group_strength", "group": 1, "strength": 0.6}
+
+<span class="text-slate-500">// copy strokes to the other side</span>
+{"op": "mirror", "strokes": [3, 4], "axis": "x"}
+
+<span class="text-slate-500">// one stroke per side</span>
+{"op": "split_by_side", "strokes": [7]}</code></pre>
+      </div>
+    </section>
+
+  </main>
+
+  <footer class="relative z-10 border-t border-white/10 bg-[#050505]/80 backdrop-blur-lg pt-12 pb-12">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center">
+          <div class="flex flex-wrap justify-center gap-6 mb-8">
+              <a href="../" class="text-slate-400 hover:text-oxy-pink transition-colors text-sm font-medium">Home</a>
+              <a href="../#downloads" class="text-slate-400 hover:text-oxy-purple transition-colors text-sm font-medium">Download</a>
+              <a href="https://github.com/crisprintsstuff/OxyBrush/blob/main/CHANGELOG.md" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-blue transition-colors text-sm font-medium">Changelog</a>
+              <a href="https://github.com/crisprintsstuff/OxyBrush" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-pink transition-colors text-sm font-medium">GitHub</a>
+              <a href="https://discord.gg/Vfm7Km7xvG" target="_blank" rel="noopener noreferrer" class="text-slate-400 hover:text-oxy-purple transition-colors text-sm font-medium">Discord</a>
+          </div>
+          <p class="text-slate-600 text-xs font-mono">
+              &copy; <span id="year">2026</span> Oxytocin Labs. OxyBrush created by crisprintsstuff.
+          </p>
+      </div>
+  </footer>
+
+  <script>
+    // Progressive enhancement only: without JavaScript or the icon CDN the page still reads fine.
+    if (window.lucide) lucide.createIcons();
+    const year = document.getElementById('year');
+    if (year) year.textContent = new Date().getFullYear();
+  </script>
+</body>
+</html>
