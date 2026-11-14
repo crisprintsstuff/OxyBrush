@@ -181,6 +181,7 @@ commands! {
     Guide => "Guide", "F2", "Open the built-in guide. It works offline.";
     Welcome => "Welcome screen", "", "Open the welcome window.";
     CheckUpdates => "Check for updates…", "", "Look for a new version. Nothing about you or your work is sent.";
+    Revert => "Revert to saved", "", "Reload the project as you last saved it, dropping the changes since then. You are asked first.";
     CloseProject => "Close project", "", "Close this project and go back to the start screen. You are asked to save unsaved work first.";
     Quit => "Quit", "", "Close OxyBrush. You are asked before unsaved work is discarded.";
     Radius => "Brush radius", "[ and ]", "Brush size: on screen in points, or on the model in scene units (Brush settings > Size).";
@@ -778,6 +779,8 @@ pub mod plain {
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
+    pub const REVERT_CONFIRM: &str =
+        "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
     pub const ORBIT_AROUND: &str = "What orbiting turns around. Cursor: the surface under the pointer where you start the orbit (from empty space, the nearest part of the model), so you can turn around any spot you point at. Last stroke: where your last stroke ended. Centre of the view: the middle, as framing (F) sets it. With Cursor or Last stroke, that point stays put on screen while you orbit; F goes back to the middle until the next stroke or orbit.";
     pub const DYN_LEVELS: &str = "Not working on this piece: it has subdivision levels, which dynamic detail would remove. Keep this level only turns the level you see into the piece's mesh (undo brings the levels back).";
     pub const KEEP_LEVEL: &str = "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail and other tools that change the triangles work on it. One undo step.";

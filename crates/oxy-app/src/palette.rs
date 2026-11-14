@@ -480,6 +480,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.updater.check(crate::updates::now_secs());
             }
         }),
+        cmd(ed, Cmd::Revert, "revert reload saved discard changes undo all file", Editor::revert),
         cmd(ed, Cmd::CloseProject, "close project document file", |e| e.request(Pending::Close)),
         cmd(ed, Cmd::Quit, "exit close", |e| e.request(Pending::Quit)),
     ]
