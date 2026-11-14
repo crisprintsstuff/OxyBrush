@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Quad sphere and UV sphere in the Insert Primitive brush**, next to the geodesic sphere: the same two spheres as Pieces > + Add, coming in as quads (good for subdivision levels) or rings.
 - **Booleans in the Pieces panel:** a Boolean row under Join and Merge + remesh picks the piece to combine with and offers **Subtract**, **Add** and **Overlap**, so you don't have to dig three menus deep. Mesh > Boolean is still there.
 - **Layers in the right panel:** a **Layers** section under Pieces shows the active piece's sculpt layers while you work: Sculpt into and + New layer, then each layer with its eye, strength and … menu, and **Strokes…** for the full stroke list. It replaces Mesh > Strokes…; with Living strokes off, it offers to turn it on.
 - **View > Shading > Show vertex color** (also in Tools > Vertex color and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.
@@ -16,6 +17,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Interface consistency pass.** The 3D print and Topology diagnostics windows now look and read like the rest of the app (plain labels in a grid, theme colors for warnings, tooltips on every control, and a Measure again button), and both are in the command palette. Menu items, window titles and Preferences headings use the same sentence case everywhere ("3D print…", "Topology diagnostics…", "AI agent"), and the Boolean menu says what each choice does ("Subtract it", "Add it (union)", "Keep only the overlap"). Brush and topology sliders show two decimals, as the quick bar does.
 
 ### Fixed
+- **The gizmo pivot stays put after Insert Primitive** when "Gizmo pivot follows the mask" is off. Inserting a shape masks what was there, and the pivot jumped to the new shape anyway; Ctrl+drag duplicating had the same problem.
 - **3D print: the wall check no longer overwrites your paint for good.** Check walls painted thin areas red straight into the piece's vertex color, with no undo; it is now an undo step ("Mark thin walls"), so Undo brings the paint back.
 - **3D print: the wall check's threshold and Hollow's wall thickness are separate.** They shared one value (with different ranges), so setting one changed the other.
 - **Topology diagnostics no longer slows the app while open:** it checked the whole mesh on every frame; now only when the triangles change.
