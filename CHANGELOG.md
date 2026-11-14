@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.10] - 2026-11-14
+
 ### Added
 - **A material per piece** (material picker and View > Material: **For: Whole scene | *piece* only**): give the active piece its own matcap, built-in or one you loaded, to tell parts apart (a jade eye, a bronze armour plate) while the rest shows the scene's material. Hovering previews it on that piece only, **Use the scene's material** puts it back, and it's saved with the project in a new `MATL` section (older versions skip it and show the scene's material). Up to 8 different piece materials show at once; a loaded matcap that isn't on this computer falls back to the scene's. With viewport lights on, every piece uses the lit surface as before. The picker now stays open until you click outside it.
 - **Living strokes for plugins and agents** ([RFC 0017](docs/rfcs/0017-living-strokes.md), end of phase 2). Plugins (API 4) read the active piece's strokes and groups with `strokes_state` and run any Strokes window action with `stroke_command` (new capability `edit_strokes`), for example fading every stroke in a group; each action is one undo step under the plugin's name. The agent (MCP) gets `list_strokes` and `edit_strokes` with the same JSON, labelled `Agent:` in the history. See the [API reference](docs/plugins/api-reference.md) and [docs/mcp.md](docs/mcp.md).
