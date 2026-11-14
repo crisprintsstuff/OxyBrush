@@ -1202,6 +1202,11 @@ pub struct Editor {
     pub agent_token: String,
     /// An authenticated agent has spoken in the last few seconds.
     pub agent_connected: bool,
+    /// The prefix for the undo steps of the MCP call being applied: "Agent: ",
+    /// or "Plugin: <name>: " for a Python plugin (set by its listener).
+    pub agent_label: String,
+    /// The Python plugin running now, by name, for the status bar.
+    pub plugin_running: Option<String>,
     /// Set by the Disconnect button; the app rotates the token and clears it.
     pub agent_disconnect: bool,
     /// Discovered Python plugins.
@@ -1476,6 +1481,8 @@ impl Default for Editor {
             agent_endpoint: String::new(),
             agent_token: String::new(),
             agent_connected: false,
+            agent_label: oxy_mcp::AGENT_LABEL.to_owned(),
+            plugin_running: None,
             agent_disconnect: false,
             plugins: crate::plugins::discover_plugins(),
             request_run_script: false,

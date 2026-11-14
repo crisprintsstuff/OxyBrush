@@ -89,6 +89,10 @@ pub struct Inbox {
     pending_job: Option<Sender<ToolResult>>,
     changes: Arc<oxy_mcp::state::SharedChanges>,
     pub endpoint: String,
+    /// What the undo steps of this listener's edits start with: "Agent: "
+    /// for an outside agent, "Plugin: <name>: " for a Python plugin's own
+    /// listener, so the history says who made each change.
+    label: String,
 }
 
 impl Inbox {
@@ -101,7 +105,27 @@ impl Inbox {
         let bridge = Bridge { tx, closing: Arc::clone(&closing), wake, changes: Arc::clone(&changes) };
         let server = oxy_mcp::serve_loopback(oxy_mcp::Identity::oxybrush(), Box::new(bridge), Arc::clone(&control))?;
         let endpoint = server.endpoint.clone();
-        Ok(Self { rx, server: Some(server), control, closing, held: None, pending_job: None, changes, endpoint })
+        Ok(Self {
+            rx,
+            server: Some(server),
+            control,
+            closing,
+            held: None,
+            pending_job: None,
+            changes,
+            endpoint,
+            label: AGENT_LABEL.to_owned(),
+        })
+    }
+
+    /// A listener of its own for one run of a Python plugin: its own port
+    /// and token (so the plugin can't be mistaken for an outside agent, and
+    /// running it doesn't turn on Settings > Local AI agent), with its
+    /// edits labelled "Plugin: <name>: ".
+    pub fn for_plugin(name: &str, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+        let mut inbox = Self::listen(wake)?;
+        inbox.label = format!("Plugin: {name}: ");
+        Ok(inbox)
     }
 
     pub fn token(&self) -> String {
@@ -147,7 +171,10 @@ impl Inbox {
                 return None;
             }
             log::debug!("agent tool {}", env.name);
-            match apply(ed, &env.name, &env.args) {
+            ed.agent_label.clone_from(&self.label);
+            let applied = apply(ed, &env.name, &env.args);
+            ed.agent_label = AGENT_LABEL.to_owned();
+            match applied {
                 Apply::Done(result) => {
                     let _ = env.reply.send(result);
                 }
@@ -340,10 +367,11 @@ fn background(ed: &mut Editor, start: impl FnOnce(&mut Editor)) -> Apply {
     }
     start(ed);
     if ed.job.is_some() {
+        let prefix = ed.agent_label.clone();
         if let Some(job) = ed.job.as_mut()
-            && !job.label.starts_with(AGENT_LABEL)
+            && !job.label.starts_with(&prefix)
         {
-            job.label.insert_str(0, AGENT_LABEL);
+            job.label.insert_str(0, &prefix);
         }
         Apply::PendingJob
     } else {
@@ -355,7 +383,8 @@ fn background(ed: &mut Editor, start: impl FnOnce(&mut Editor)) -> Apply {
 fn tag(ed: &mut Editor, before: u64) {
     let recorded = ed.history.revision().saturating_sub(before) as usize;
     if recorded > 0 {
-        ed.history.prefix_recent_undo(AGENT_LABEL, recorded);
+        let prefix = ed.agent_label.clone();
+        ed.history.prefix_recent_undo(&prefix, recorded);
     }
 }
 
@@ -606,7 +635,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
     };
     let paint = kind == oxy_sculpt::BrushKind::Paint || ed.scene.active().mesh.is_painted();
     let piece_id = ed.scene.active().id;
-    let label = format!("{AGENT_LABEL}{}", kind.label());
+    let label = format!("{}{}", ed.agent_label, kind.label());
     let piece = ed.scene.active_mut();
     ed.history.begin_with(&label, piece_id, &piece.mesh, paint);
     let history = &mut ed.history;

@@ -23,8 +23,13 @@ Also see:
   call.
 
 Python scripts are a different kind of plugin. They run as a separate
-program over the local agent server, and are covered in the Python plugin
-guide.
+program and talk to OxyBrush over MCP, like a local AI agent, but on a
+connection of their own: each run gets its own loopback listener and
+token, closed when the script ends. Running one doesn't turn on
+Settings > Local AI agent; the status bar shows "Plugin '*name*' running",
+and its edits are undo steps labelled `Plugin: <name>: …` rather than
+`Agent: …`. The script finds the connection in `OXYBRUSH_MCP_ENDPOINT` and
+`OXYBRUSH_MCP_TOKEN` (the Python SDK's `oxybrush.attach()` reads them).
 
 ## Using plugins
 

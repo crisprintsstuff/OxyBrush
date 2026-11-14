@@ -91,6 +91,8 @@ pub struct App {
     shot_reply: Option<std::sync::mpsc::Sender<oxy_mcp::ToolResult>>,
     /// Running Python plugin process.
     plugin_process: Option<crate::plugins::PluginProcess>,
+    /// The running Python plugin's own MCP listener (not the agent's).
+    plugin_inbox: Option<crate::agent::Inbox>,
     /// When egui requested a delayed repaint (e.g. for hover tooltips).
     egui_repaint_at: Option<Instant>,
     /// Active multi-touch points for gestures and tablet input.
@@ -228,6 +230,7 @@ impl App {
             agent: None,
             shot_reply: None,
             plugin_process: None,
+            plugin_inbox: None,
             egui_repaint_at: None,
             touches: std::collections::HashMap::new(),
             touch_two_finger_start: None,
@@ -299,12 +302,13 @@ impl App {
 
     /// Apply one queued agent call. A screenshot is answered after the viewport is drawn.
     fn poll_agent(&mut self) {
-        if self.shot_reply.is_some() {
-            return;
-        }
-        let Some(agent) = &mut self.agent else { return };
-        if let Some(reply) = agent.poll(&mut self.editor) {
-            self.shot_reply = Some(reply);
+        for inbox in [self.agent.as_mut(), self.plugin_inbox.as_mut()].into_iter().flatten() {
+            if self.shot_reply.is_some() {
+                return;
+            }
+            if let Some(reply) = inbox.poll(&mut self.editor) {
+                self.shot_reply = Some(reply);
+            }
         }
     }
 
@@ -315,6 +319,8 @@ impl App {
             Ok(Ok(stdout)) => {
                 let name = proc.name.clone();
                 self.plugin_process = None;
+                self.plugin_inbox = None;
+                self.editor.plugin_running = None;
                 if stdout.is_empty() {
                     self.editor.status = format!("Plugin '{name}' finished");
                 } else {
@@ -325,6 +331,8 @@ impl App {
             Ok(Err(stderr)) => {
                 let name = proc.name.clone();
                 self.plugin_process = None;
+                self.plugin_inbox = None;
+                self.editor.plugin_running = None;
                 // For Python exceptions and tracebacks, the meaningful diagnostic
                 // (e.g. `AttributeError: ...`) is on the last non-empty line of stderr.
                 let err_msg = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim();
@@ -334,35 +342,40 @@ impl App {
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 self.plugin_process = None;
+                self.plugin_inbox = None;
+                self.editor.plugin_running = None;
             }
         }
     }
 
-    /// Execute a Python plugin script against the local agent server.
+    /// Run a Python plugin. It talks to OxyBrush over MCP like an agent,
+    /// but on a listener of its own, opened for this run and closed when it
+    /// ends: running a plugin doesn't turn on Settings > Local AI agent,
+    /// the status bar names the plugin, and its edits are labelled with it.
     fn run_python_script(&mut self, path: &std::path::Path) {
         if self.plugin_process.is_some() {
             self.editor.status = "Another plugin is already running".into();
             return;
         }
-        if self.agent.is_none() {
-            self.editor.agent_enabled = true;
-            self.sync_agent();
-        }
-        let (endpoint, token) = if let Some(agent) = &self.agent {
-            (agent.endpoint.clone(), agent.token())
-        } else {
-            self.editor.status = "Could not start local agent server for Python script".into();
-            return;
-        };
         let Some(proxy) = self.proxy.clone() else { return };
-        let wake = Arc::new(move || {
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             let _ = proxy.send_event(());
         });
-        match crate::plugins::run_plugin(path, &endpoint, &token, wake) {
+        let name = crate::plugins::plugin_name(path);
+        let inbox = match crate::agent::Inbox::for_plugin(&name, Arc::clone(&wake)) {
+            Ok(inbox) => inbox,
+            Err(e) => {
+                self.editor.status = format!("Could not start plugin '{name}': {e}");
+                return;
+            }
+        };
+        match crate::plugins::run_plugin(path, &inbox.endpoint, &inbox.token(), wake) {
             Ok(proc) => {
-                let name = proc.name.clone();
+                // The status bar shows "Plugin '…' running" until it ends.
+                self.editor.status.clear();
+                self.editor.plugin_running = Some(proc.name.clone());
                 self.plugin_process = Some(proc);
-                self.editor.status = format!("Running plugin '{name}'…");
+                self.plugin_inbox = Some(inbox);
             }
             Err(e) => {
                 self.editor.status = format!("Failed to run plugin: {e}");
@@ -604,10 +617,12 @@ impl App {
         ed.tick_autosave();
         ed.updater.tick(crate::updates::now_secs());
         // Agent calls run after the user's finished job and before the mesh is uploaded.
-        if self.shot_reply.is_none()
-            && let Some(reply) = self.agent.as_mut().and_then(|agent| agent.poll(ed))
-        {
-            self.shot_reply = Some(reply);
+        for inbox in [self.agent.as_mut(), self.plugin_inbox.as_mut()].into_iter().flatten() {
+            if self.shot_reply.is_none()
+                && let Some(reply) = inbox.poll(ed)
+            {
+                self.shot_reply = Some(reply);
+            }
         }
         let title = ed.title();
         if self.applied_title != title {
