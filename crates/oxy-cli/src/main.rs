@@ -30,16 +30,17 @@ USAGE:
 
 Inputs:  .oxb project (visible pieces), .obj, .stl
 Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
-Any command writing .glb/.gltf takes --compress quantize: 16-bit positions and
-8-bit normals (KHR_mesh_quantization), about half the size for pieces up to
-65,535 points; readers must support the extension (Blender, three.js do).
+Any command writing .glb/.gltf takes --compress meshopt|quantize|none:
+  quantize  16-bit positions, 8-bit normals (KHR_mesh_quantization), about half
+  meshopt   quantized + EXT_meshopt_compression, usually a fifth or less
+Readers must support the extension (three.js, Babylon.js, Blender do).
 
 `mcp` writes the protocol to stdout. Do not mix it with other commands.
 It refuses to attach to anything but 127.0.0.1 or localhost. See docs/mcp.md.
 
 Examples:
   oxybrush-cli convert head.oxb head.glb
-  oxybrush-cli convert head.oxb head-small.glb --compress quantize
+  oxybrush-cli convert head.oxb head-small.glb --compress meshopt
   oxybrush-cli decimate scan.stl scan-light.obj --keep 10
   oxybrush-cli lod hero.oxb out/hero --levels 4        writes out/hero_LOD0.glb ... out/hero_LOD4.glb
 ";
@@ -287,16 +288,15 @@ fn map_meshes(pieces: Vec<Piece>, f: impl Fn(&Mesh) -> Result<Mesh, String>) -> 
     pieces.into_iter().map(|p| Ok(Piece::new(p.name.clone(), f(&p.mesh)?))).collect()
 }
 
-/// `--compress quantize`: glTF/GLB outputs use `KHR_mesh_quantization`.
+/// `--compress meshopt|quantize|none`: how glTF/GLB outputs are compressed.
 fn export_options(args: &[String]) -> Result<oxy_io::ExportOptions, String> {
     let gltf = match flag_str(args, "--compress") {
         None => oxy_io::GltfCompression::None,
-        Some("quantize" | "quantized") => oxy_io::GltfCompression::Quantized,
-        Some("none") => oxy_io::GltfCompression::None,
-        Some(other) => return Err(format!("--compress takes `quantize` or `none`, not `{other}`")),
+        Some(v) => oxy_io::GltfCompression::from_key(v)
+            .ok_or_else(|| format!("--compress takes `meshopt`, `quantize` or `none`, not `{v}`"))?,
     };
     if args.iter().any(|a| a == "--compress") && flag_str(args, "--compress").is_none() {
-        return Err("--compress needs `quantize` or `none`".into());
+        return Err("--compress needs `meshopt`, `quantize` or `none`".into());
     }
     Ok(oxy_io::ExportOptions { gltf })
 }
@@ -364,6 +364,10 @@ mod tests {
         assert!(!plain.windows(21).any(|w| w == b"KHR_mesh_quantization"));
         let e = run(&args(&["convert", &d("in.oxb"), &d("x.glb"), "--compress", "zip"])).unwrap_err();
         assert!(e.contains("quantize"), "{e}");
+        assert!(run(&args(&["convert", &d("in.oxb"), &d("tiny.glb"), "--compress", "meshopt"])).is_ok());
+        let tiny = std::fs::read(d("tiny.glb")).unwrap();
+        assert!(tiny.len() < small.len(), "{} vs {}", tiny.len(), small.len());
+        assert!(tiny.windows(23).any(|w| w == b"EXT_meshopt_compression"));
         // OBJ round trip, then decimate to a percentage.
         let msg = run(&args(&["decimate", &d("out.obj"), &d("light.stl"), "--keep", "25%"])).unwrap();
         assert!(msg.contains("light.stl"), "{msg}");
