@@ -467,7 +467,7 @@ pub fn tool_defs() -> Vec<Value> {
         ),
         tool(
             "import",
-            "Import a mesh as one or more pieces (one undo step). Does not replace the document. Local paths only.",
+            "Import a mesh file (glTF/GLB, OBJ, STL, PLY) as one or more pieces (one undo step). Does not replace the document. Local paths only.",
             &json!({"path": {"type": "string"}}),
             &["path"],
         ),

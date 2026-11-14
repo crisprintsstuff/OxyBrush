@@ -300,19 +300,37 @@ pub(crate) fn first_use_order(vertex_count: usize, triangles: &[[u32; 3]]) -> (V
     (order, tris)
 }
 
-#[cfg(test)]
+/// Decoders for all three modes and the filters (spec, Appendices A and
+/// B), for importing glTF files compressed by any meshopt encoder. Every
+/// read is bounds-checked: a malformed file gives an error, never a panic.
 pub(crate) mod decode {
-    //! Decoders written from the same specification, for tests only.
+    type R<T> = Result<T, String>;
 
     fn unzigzag8(v: u8) -> u8 {
         if v & 1 != 0 { !(v >> 1) } else { v >> 1 }
     }
 
-    pub fn attributes(src: &[u8], count: usize, stride: usize) -> Vec<u8> {
-        assert_eq!(src[0], 0xa0);
+    fn byte(src: &[u8], at: &mut usize) -> R<u8> {
+        let b = *src.get(*at).ok_or("meshopt data ends early")?;
+        *at += 1;
+        Ok(b)
+    }
+
+    /// Mode 0.
+    pub fn attributes(src: &[u8], count: usize, stride: usize) -> R<Vec<u8>> {
+        if !(4..=256).contains(&stride) || !stride.is_multiple_of(4) {
+            return Err(format!("meshopt: byteStride {stride} isn't allowed for attributes"));
+        }
+        if src.first() != Some(&0xa0) {
+            return Err("meshopt: unsupported attribute stream version".into());
+        }
         let tail = stride.max(32);
+        if src.len() < 1 + tail {
+            return Err("meshopt attribute data is too short".into());
+        }
+        let body_end = src.len() - tail;
         let baseline = &src[src.len() - stride..];
-        let mut out = vec![0u8; count * stride];
+        let mut out = vec![0u8; count.checked_mul(stride).ok_or("meshopt: count too large")?];
         let mut prev = baseline.to_vec();
         let mut at = 1;
         let max_block = ((8192 / stride) & !15).min(256);
@@ -321,8 +339,12 @@ pub(crate) mod decode {
             let n = (count - start).min(max_block);
             let groups = n.div_ceil(16);
             for (k, p0) in prev.iter_mut().enumerate() {
-                let header = &src[at..at + groups.div_ceil(4)];
-                at += groups.div_ceil(4);
+                let hlen = groups.div_ceil(4);
+                if at + hlen > body_end {
+                    return Err("meshopt attribute data ends early".into());
+                }
+                let header = src[at..at + hlen].to_vec();
+                at += hlen;
                 let mut p = *p0;
                 for g in 0..groups {
                     let mode = (header[g / 4] >> ((g % 4) * 2)) & 3;
@@ -330,6 +352,9 @@ pub(crate) mod decode {
                     match mode {
                         0 => {}
                         3 => {
+                            if at + 16 > body_end {
+                                return Err("meshopt attribute data ends early".into());
+                            }
                             d.copy_from_slice(&src[at..at + 16]);
                             at += 16;
                         }
@@ -338,14 +363,19 @@ pub(crate) mod decode {
                             let sentinel = (1u8 << bits) - 1;
                             let packed = 16 * bits / 8;
                             let per = 8 / bits;
+                            if at + packed > body_end {
+                                return Err("meshopt attribute data ends early".into());
+                            }
                             for (i, x) in d.iter_mut().enumerate() {
-                                let byte = src[at + i / per];
-                                let shift = 8 - bits * (i % per + 1);
-                                *x = (byte >> shift) & sentinel;
+                                let b = src[at + i / per];
+                                *x = (b >> (8 - bits * (i % per + 1))) & sentinel;
                             }
                             at += packed;
                             for x in d.iter_mut() {
                                 if *x == sentinel {
+                                    if at >= body_end {
+                                        return Err("meshopt attribute data ends early".into());
+                                    }
                                     *x = src[at];
                                     at += 1;
                                 }
@@ -354,43 +384,50 @@ pub(crate) mod decode {
                     }
                     for (i, x) in d.iter().enumerate() {
                         let e = g * 16 + i;
-                        p = p.wrapping_add(unzigzag8(*x));
                         if e < n {
+                            p = p.wrapping_add(unzigzag8(*x));
                             out[(start + e) * stride + k] = p;
                         }
-                    }
-                    // Padding elements past `n` don't carry over.
-                    if g == groups - 1 {
-                        p = out[(start + n - 1) * stride + k];
                     }
                 }
                 *p0 = p;
             }
             start += n;
         }
-        assert_eq!(src.len() - at, tail, "the data ends where the tail starts");
-        out
+        if at != body_end {
+            return Err("meshopt attribute data has the wrong length".into());
+        }
+        Ok(out)
     }
 
-    fn varint(src: &[u8], at: &mut usize) -> u32 {
+    fn varint(src: &[u8], at: &mut usize) -> R<u32> {
         let mut v = 0u32;
-        let mut shift = 0;
-        loop {
-            let b = src[*at];
-            *at += 1;
+        for shift in (0..35).step_by(7) {
+            let b = byte(src, at)?;
             v |= u32::from(b & 0x7f) << shift;
             if b & 0x80 == 0 {
-                return v;
+                return Ok(v);
             }
-            shift += 7;
         }
+        Err("meshopt: bad varint".into())
     }
 
-    pub fn triangles(src: &[u8], index_count: usize) -> Vec<u32> {
-        assert_eq!(src[0], 0xe1);
+    /// Mode 1.
+    pub fn triangles(src: &[u8], index_count: usize) -> R<Vec<u32>> {
+        if src.first() != Some(&0xe1) {
+            return Err("meshopt: unsupported triangle stream version".into());
+        }
+        if !index_count.is_multiple_of(3) {
+            return Err("meshopt: triangle count isn't a multiple of 3".into());
+        }
         let tri_count = index_count / 3;
-        let aux = &src[src.len() - 16..];
+        if src.len() < 1 + tri_count + 16 {
+            return Err("meshopt triangle data is too short".into());
+        }
+        let data_end = src.len() - 16;
+        let aux = &src[data_end..];
         let codes = &src[1..1 + tri_count];
+        let data = &src[..data_end];
         let mut at = 1 + tri_count;
         let (mut next, mut last) = (0u32, 0u32);
         let mut edges = [(0u32, 0u32); 16];
@@ -398,11 +435,11 @@ pub(crate) mod decode {
         let mut verts = [0u32; 16];
         let mut vo = 0usize;
         let mut out = Vec::with_capacity(index_count);
-        let explicit = |at: &mut usize, last: &mut u32| -> u32 {
-            let v = varint(src, at);
-            let delta = if v & 1 != 0 { !(v >> 1) } else { v >> 1 } as i32;
-            *last = last.wrapping_add(delta as u32);
-            *last
+        let explicit = |at: &mut usize, last: &mut u32| -> R<u32> {
+            let v = varint(data, at)?;
+            let delta = if v & 1 != 0 { !(v >> 1) } else { v >> 1 };
+            *last = last.wrapping_add(delta);
+            Ok(*last)
         };
         for &code in codes {
             let (hi, lo) = (code >> 4, code & 15);
@@ -412,14 +449,14 @@ pub(crate) mod decode {
                 let mut push_v = true;
                 let z = match lo {
                     0 => {
-                        next += 1;
-                        next - 1
+                        next = next.wrapping_add(1);
+                        next.wrapping_sub(1)
                     }
                     0xd | 0xe => {
                         last = if lo == 0xd { last.wrapping_sub(1) } else { last.wrapping_add(1) };
                         last
                     }
-                    0xf => explicit(&mut at, &mut last),
+                    0xf => explicit(&mut at, &mut last)?,
                     y => {
                         push_v = false;
                         verts[(vo + 15 - y as usize) & 15]
@@ -438,31 +475,30 @@ pub(crate) mod decode {
                 let (z, w, first_next) = if lo < 14 {
                     (aux[lo as usize] >> 4, aux[lo as usize] & 15, true)
                 } else {
-                    let zw = src[at];
-                    at += 1;
+                    let zw = byte(data, &mut at)?;
                     if zw == 0 {
                         next = 0;
                     }
                     (zw >> 4, zw & 15, lo == 0xe)
                 };
                 a = if first_next {
-                    next += 1;
-                    next - 1
+                    next = next.wrapping_add(1);
+                    next.wrapping_sub(1)
                 } else {
-                    explicit(&mut at, &mut last)
+                    explicit(&mut at, &mut last)?
                 };
-                let read = |q: u8, at: &mut usize, next: &mut u32, last: &mut u32| -> u32 {
-                    match q {
+                let read = |q: u8, at: &mut usize, next: &mut u32, last: &mut u32| -> R<u32> {
+                    Ok(match q {
                         0 => {
-                            *next += 1;
-                            *next - 1
+                            *next = next.wrapping_add(1);
+                            next.wrapping_sub(1)
                         }
-                        15 if lo >= 14 => explicit(at, last),
+                        15 if lo >= 14 => explicit(at, last)?,
                         q => verts[(vo + 16 - q as usize) & 15],
-                    }
+                    })
                 };
-                b = read(z, &mut at, &mut next, &mut last);
-                c = read(w, &mut at, &mut next, &mut last);
+                b = read(z, &mut at, &mut next, &mut last)?;
+                c = read(w, &mut at, &mut next, &mut last)?;
                 for e in [(b, a), (c, b), (a, c)] {
                     edges[eo] = e;
                     eo = (eo + 1) & 15;
@@ -480,8 +516,99 @@ pub(crate) mod decode {
             }
             out.extend([a, b, c]);
         }
-        assert_eq!(at, src.len() - 16, "the data is read exactly");
-        out
+        if at != data_end {
+            return Err("meshopt triangle data has the wrong length".into());
+        }
+        Ok(out)
+    }
+
+    /// Mode 2.
+    pub fn indices(src: &[u8], count: usize) -> R<Vec<u32>> {
+        if src.first() != Some(&0xd1) {
+            return Err("meshopt: unsupported index stream version".into());
+        }
+        if src.len() < 5 {
+            return Err("meshopt index data is too short".into());
+        }
+        let data = &src[..src.len() - 4];
+        let mut at = 1;
+        let mut last = [0u32; 2];
+        let mut out = Vec::with_capacity(count);
+        for _ in 0..count {
+            let v = varint(data, &mut at)?;
+            let base = (v & 1) as usize;
+            let delta = if v & 2 != 0 { !(v >> 2) } else { v >> 2 };
+            last[base] = last[base].wrapping_add(delta);
+            out.push(last[base]);
+        }
+        if at != data.len() {
+            return Err("meshopt index data has the wrong length".into());
+        }
+        Ok(out)
+    }
+
+    /// Apply a filter (Appendix B) in place to decoded attribute data.
+    pub fn filter(data: &mut [u8], stride: usize, filter: &str) -> R<()> {
+        match filter {
+            "NONE" => Ok(()),
+            "OCTAHEDRAL" if stride == 4 || stride == 8 => {
+                let wide = stride == 8;
+                for e in data.chunks_exact_mut(stride) {
+                    let get = |i: usize| -> f32 {
+                        if wide { i16::from_le_bytes([e[2 * i], e[2 * i + 1]]) as f32 } else { e[i] as i8 as f32 }
+                    };
+                    let one = get(2);
+                    if one == 0.0 {
+                        continue;
+                    }
+                    let (mut x, mut y) = (get(0) / one, get(1) / one);
+                    let z = 1.0 - x.abs() - y.abs();
+                    let t = z.min(0.0);
+                    x -= t.copysign(x);
+                    y -= t.copysign(y);
+                    let len = (x * x + y * y + z * z).sqrt().max(f32::MIN_POSITIVE);
+                    let max = if wide { 32767.0 } else { 127.0 };
+                    let q = [x / len, y / len, z / len].map(|c| (c * max).round());
+                    for (i, c) in q.iter().enumerate() {
+                        if wide {
+                            e[2 * i..2 * i + 2].copy_from_slice(&(*c as i16).to_le_bytes());
+                        } else {
+                            e[i] = *c as i8 as u8;
+                        }
+                    }
+                }
+                Ok(())
+            }
+            "QUATERNION" if stride == 8 => {
+                for e in data.as_chunks_mut::<8>().0 {
+                    let g = |i: usize| i16::from_le_bytes([e[2 * i], e[2 * i + 1]]);
+                    let range = std::f32::consts::FRAC_1_SQRT_2;
+                    let one = (g(3) | 3) as f32;
+                    let (x, y, z) = (g(0) as f32 / one * range, g(1) as f32 / one * range, g(2) as f32 / one * range);
+                    let w = (1.0 - x * x - y * y - z * z).max(0.0).sqrt();
+                    let m = (g(3) & 3) as usize;
+                    let mut o = [0i16; 4];
+                    o[(m + 1) % 4] = (x * 32767.0).round() as i16;
+                    o[(m + 2) % 4] = (y * 32767.0).round() as i16;
+                    o[(m + 3) % 4] = (z * 32767.0).round() as i16;
+                    o[m] = (w * 32767.0).round() as i16;
+                    for (i, v) in o.iter().enumerate() {
+                        e[2 * i..2 * i + 2].copy_from_slice(&v.to_le_bytes());
+                    }
+                }
+                Ok(())
+            }
+            "EXPONENTIAL" if stride.is_multiple_of(4) => {
+                for e in data.as_chunks_mut::<4>().0 {
+                    let v = i32::from_le_bytes([e[0], e[1], e[2], e[3]]);
+                    let (exp, m) = (v >> 24, (v << 8) >> 8);
+                    let f = (m as f32) * 2f32.powi(exp);
+                    e.copy_from_slice(&f.to_le_bytes());
+                }
+                Ok(())
+            }
+            other => Err(format!("meshopt filter {other} with byteStride {stride} isn't supported")),
+        }
     }
 }
 
@@ -514,7 +641,7 @@ mod tests {
                     }
                 }
                 let enc = encode_attributes(&data, count, stride);
-                assert_eq!(decode::attributes(&enc, count, stride), data, "stride {stride}, count {count}");
+                assert_eq!(decode::attributes(&enc, count, stride).unwrap(), data, "stride {stride}, count {count}");
             }
         }
     }
@@ -540,7 +667,7 @@ mod tests {
         let (_, tris) = first_use_order(m.positions.len(), &m.triangles);
         let flat: Vec<u32> = tris.iter().flatten().copied().collect();
         let enc = encode_triangles(&flat);
-        let back = decode::triangles(&enc, flat.len());
+        let back = decode::triangles(&enc, flat.len()).unwrap();
         assert!(same_triangles(&flat, &back));
         let per_tri = (enc.len() - 17) as f32 / tris.len() as f32;
         assert!(per_tri < 2.0, "{per_tri} bytes a triangle");
@@ -549,7 +676,7 @@ mod tests {
         let mut odd: Vec<u32> = vec![5, 9, 1000, 1000, 9, 5, 0, 1, 2, 2, 1, 70000, 3, 0, 2, 4_000_000_000, 7, 8];
         odd.extend(flat.iter().rev().take(300));
         let enc = encode_triangles(&odd);
-        assert!(same_triangles(&odd, &decode::triangles(&enc, odd.len())));
+        assert!(same_triangles(&odd, &decode::triangles(&enc, odd.len()).unwrap()));
         // The tail table meets the spec's limits.
         assert_eq!(&CODEAUX[14..], [0, 0]);
         assert!(CODEAUX.iter().all(|b| b >> 4 != 0xf && b & 15 != 0xf));
