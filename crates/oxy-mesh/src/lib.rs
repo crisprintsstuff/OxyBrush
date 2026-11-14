@@ -216,6 +216,10 @@ pub struct Mesh {
     /// Counts in-place edits (anything that marks a chunk for re-upload).
     edits: u64,
     quad_cache: std::sync::OnceLock<(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>)>,
+    /// Edges inside polygons of more than four corners (between the
+    /// triangles an n-gon was split into), when the mesh was built from
+    /// polygons. Like quad diagonals, a wireframe leaves them out.
+    ngon_edges: std::sync::OnceLock<std::sync::Arc<std::collections::HashSet<[u32; 2]>>>,
 }
 
 impl Mesh {
@@ -329,6 +333,7 @@ impl Mesh {
             stamp: 0,
             edits: 0,
             quad_cache: std::sync::OnceLock::new(),
+            ngon_edges: std::sync::OnceLock::new(),
         };
         mesh.recompute_all_normals();
         let bounds: Vec<Aabb> = (0..mesh.chunks.len()).into_par_iter().map(|c| mesh.chunk_bounds(c)).collect();
@@ -1395,6 +1400,30 @@ impl Mesh {
     /// export are exact. No effect once the quads were already worked out.
     pub fn set_quad_diagonals(&self, diagonals: std::collections::HashSet<[u32; 2]>) {
         let _ = self.quad_cache.set((diagonals.len(), std::sync::Arc::new(diagonals)));
+    }
+
+    /// Say which edges lie inside n-gons (polygons of five or more
+    /// corners) the mesh was built from, as `[low, high]` point pairs, so a
+    /// wireframe shows the polygons and not how they were split. No effect
+    /// once set.
+    pub fn set_ngon_edges(&self, edges: std::collections::HashSet<[u32; 2]>) {
+        let _ = self.ngon_edges.set(std::sync::Arc::new(edges));
+    }
+
+    /// Edges inside n-gons (see [`Self::set_ngon_edges`]); empty if the
+    /// mesh wasn't built from polygons.
+    pub fn ngon_edges(&self) -> &std::collections::HashSet<[u32; 2]> {
+        static EMPTY: std::sync::OnceLock<std::collections::HashSet<[u32; 2]>> = std::sync::OnceLock::new();
+        match self.ngon_edges.get() {
+            Some(e) => e,
+            None => EMPTY.get_or_init(Default::default),
+        }
+    }
+
+    /// Whether a wireframe should leave out edge `[low, high]`: a quad's
+    /// diagonal or an edge inside an n-gon.
+    pub fn is_inner_edge(&self, edge: [u32; 2]) -> bool {
+        self.quad_diagonals_ref().contains(&edge) || self.ngon_edges().contains(&edge)
     }
 
     fn get_quad_cache(&self) -> &(usize, std::sync::Arc<std::collections::HashSet<[u32; 2]>>) {

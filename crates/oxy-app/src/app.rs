@@ -708,6 +708,9 @@ impl App {
         let mut items = Vec::new();
         // The retopology tool draws its piece as an overlay, on top of the surface.
         let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece);
+        // Poly Edit shows the piece's polygon edges as a depth-tested
+        // wireframe, so the surface in front hides the edges behind it.
+        let poly_wire = ed.poly_wire_piece();
         for p in ed.scene.pieces.iter_mut() {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
@@ -718,6 +721,7 @@ impl App {
                     preview: false,
                     material,
                     instances: None,
+                    wireframe: Some(p.id) == poly_wire,
                 });
             }
         }
@@ -735,6 +739,7 @@ impl App {
                 preview: false,
                 material: slot_of(d.source),
                 instances: Some(d.key),
+                wireframe: false,
             });
         }
         self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
@@ -749,6 +754,7 @@ impl App {
                 preview: curve_piece.is_none(),
                 material,
                 instances: None,
+                wireframe: false,
             });
         }
 
