@@ -145,7 +145,43 @@ fn first_use(g: &Geometry) -> Geometry {
         colors: g.colors.as_ref().map(|c| pick(c)),
         diagonals: Default::default(),
         shapes: g.shapes.iter().map(|(n, d, w)| (n.clone(), pick(d), *w)).collect(),
+        uvs: g.uvs.clone(),
     }
+}
+
+/// `g` with a point of its own for each different UV a point has in its
+/// faces (glTF keeps one UV per point), copying its position, normal,
+/// color and shape-key changes. After this, every corner of a point has
+/// the same UV. Pieces without UVs are returned unchanged.
+fn split_seams(g: &Geometry) -> Option<Geometry> {
+    let uvs = g.uvs.as_ref()?;
+    let mut index: std::collections::HashMap<(u32, [u32; 2]), u32> = std::collections::HashMap::new();
+    let mut source: Vec<u32> = Vec::with_capacity(g.positions.len());
+    let triangles = g
+        .triangles
+        .iter()
+        .zip(uvs)
+        .map(|(t, uv)| {
+            std::array::from_fn(|k| {
+                let key = (t[k], [uv[k].x.to_bits(), uv[k].y.to_bits()]);
+                *index.entry(key).or_insert_with(|| {
+                    source.push(t[k]);
+                    source.len() as u32 - 1
+                })
+            })
+        })
+        .collect();
+    let pick = |v: &[glam::Vec3]| source.iter().map(|&o| v[o as usize]).collect::<Vec<_>>();
+    Some(Geometry {
+        name: g.name.clone(),
+        positions: pick(&g.positions),
+        normals: pick(&g.normals),
+        triangles,
+        colors: g.colors.as_ref().map(|c| pick(c)),
+        diagonals: Default::default(),
+        shapes: g.shapes.iter().map(|(n, d, w)| (n.clone(), pick(d), *w)).collect(),
+        uvs: Some(uvs.clone()),
+    })
 }
 
 fn floats(v: &[glam::Vec3]) -> Vec<u8> {
@@ -168,6 +204,8 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
     let mut bin = Bin { data: Vec::new(), views: Vec::new(), meshopt, fallback_len: 0 };
     let (mut accessors, mut meshes, mut nodes) = (Vec::new(), Vec::new(), Vec::new());
     for (i, g) in geoms.iter().enumerate() {
+        let split = split_seams(g);
+        let g = split.as_ref().unwrap_or(g);
         let reordered = meshopt.then(|| first_use(g));
         let g = reordered.as_ref().unwrap_or(g);
         let (min, max) = bounds(&g.positions);
@@ -242,6 +280,20 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>, compression: GltfCompre
                 accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": linear.len(), "type": "VEC3"}));
             }
             attributes["COLOR_0"] = json!(accessors.len() - 1);
+        }
+        // TEXCOORD_0: each point's UV (the same at all its corners, after
+        // split_seams), with V flipped to glTF's downward V.
+        if let Some(corners) = &g.uvs {
+            let mut per_point = vec![glam::Vec2::ZERO; g.positions.len()];
+            for (t, uv) in g.triangles.iter().zip(corners) {
+                for k in 0..3 {
+                    per_point[t[k] as usize] = glam::Vec2::new(uv[k].x, 1.0 - uv[k].y);
+                }
+            }
+            let bytes: Vec<u8> = per_point.iter().flat_map(|p| p.to_array()).flat_map(f32::to_le_bytes).collect();
+            let v = bin.view(&bytes, ARRAY_BUFFER, None, Kind::Vertices(8));
+            accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": per_point.len(), "type": "VEC2"}));
+            attributes["TEXCOORD_0"] = json!(accessors.len() - 1);
         }
         let mut primitive = json!({"attributes": attributes, "indices": base + 2, "mode": 4});
         let mut mesh = json!({"name": g.name});

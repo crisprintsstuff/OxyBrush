@@ -8,7 +8,7 @@
 //! continuous surface.
 
 use glam::Vec3;
-use oxy_mesh::{Mesh, MeshData, primitives::weld_with_map};
+use oxy_mesh::{Mesh, MeshData, Vec2, primitives::weld_with_map};
 use std::fmt;
 use std::io::{self, Write};
 use std::path::Path;
@@ -65,18 +65,8 @@ pub fn import(path: &Path) -> Result<Mesh> {
         // One mesh: every piece of the file merged.
         "glb" | "gltf" => {
             let pieces = gltf_import::import_pieces(path, "Imported")?;
-            let mut data = MeshData::default();
-            for (_, m) in pieces {
-                let d = m.to_data();
-                let base = data.positions.len() as u32;
-                data.positions.extend(d.positions);
-                data.triangles.extend(d.triangles.iter().map(|t| t.map(|v| v + base)));
-                if !d.color.is_empty() || !data.color.is_empty() {
-                    data.color.resize(base as usize, Vec3::ONE);
-                    data.color.extend(if d.color.is_empty() { vec![Vec3::ONE; m.vertex_count()] } else { d.color });
-                }
-            }
-            Ok(Mesh::from_data(data))
+            let parts: Vec<MeshData> = pieces.iter().map(|(_, m)| m.to_data()).collect();
+            Ok(Mesh::from_data(MeshData::join(&parts)))
         }
         other => Err(Error::Unsupported(other.to_string())),
     }
@@ -190,7 +180,7 @@ fn model_colors(m: &tobj::Model) -> Option<Vec<Vec3>> {
 }
 
 /// An OBJ object being gathered: name, points, triangles, per-point colors.
-type Part = (String, Vec<Vec3>, Vec<[u32; 3]>, Vec<Option<Vec3>>);
+type Part = (String, Vec<Vec3>, Vec<[u32; 3]>, Vec<Option<Vec3>>, Vec<[Vec2; 3]>);
 
 fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
     let models = load_obj_geometry(path)?;
@@ -205,20 +195,44 @@ fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
         let i = match parts.iter().position(|p| p.0 == name) {
             Some(i) => i,
             None => {
-                parts.push((name, Vec::new(), Vec::new(), Vec::new()));
+                parts.push((name, Vec::new(), Vec::new(), Vec::new(), Vec::new()));
                 parts.len() - 1
             }
         };
-        let (_, positions, tris, colors) = &mut parts[i];
+        let (_, positions, tris, colors, uvs) = &mut parts[i];
         let base = positions.len() as u32;
+        let before = tris.len();
         positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
         tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
         push_colors(colors, &m);
+        push_uvs(uvs, before, tris.len(), &m);
     }
     if parts.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
-    parts.into_iter().map(|(name, positions, tris, colors)| Ok((name, finish(positions, tris, colors)?))).collect()
+    parts
+        .into_iter()
+        .map(|(name, positions, tris, colors, uvs)| Ok((name, finish(positions, tris, colors, uvs)?)))
+        .collect()
+}
+
+/// Append a model's UVs per triangle corner (`vt`, by each corner's own
+/// texture index), filling with zeros the triangles of earlier models
+/// that had none when this one has some, so the list stays aligned with
+/// the triangles. `before..after` are this model's triangles.
+fn push_uvs(uvs: &mut Vec<[Vec2; 3]>, before: usize, after: usize, m: &tobj::Model) {
+    let tc = &m.mesh.texcoords;
+    let ti = &m.mesh.texcoord_indices;
+    let has = !tc.is_empty() && ti.len() == m.mesh.indices.len();
+    if !has && uvs.is_empty() {
+        return;
+    }
+    uvs.resize(before, [Vec2::ZERO; 3]);
+    if has {
+        let uv = |k: u32| tc.get(2 * k as usize..2 * k as usize + 2).map_or(Vec2::ZERO, |c| Vec2::new(c[0], c[1]));
+        uvs.extend(ti.as_chunks::<3>().0.iter().map(|t| t.map(uv)));
+    }
+    uvs.resize(after, [Vec2::ZERO; 3]);
 }
 
 /// Append a model's per-vertex colors (None for each vertex without).
@@ -247,19 +261,22 @@ pub fn import_obj(path: &Path) -> Result<Mesh> {
     let mut positions = Vec::new();
     let mut tris = Vec::new();
     let mut colors = Vec::new();
+    let mut uvs = Vec::new();
     for m in models {
         let base = positions.len() as u32;
+        let before = tris.len();
         positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
         tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
         push_colors(&mut colors, &m);
+        push_uvs(&mut uvs, before, tris.len(), &m);
     }
-    finish(positions, tris, colors)
+    finish(positions, tris, colors, uvs)
 }
 
 pub fn import_stl(bytes: &[u8]) -> Result<Mesh> {
     let positions = if is_ascii_stl(bytes) { parse_ascii_stl(bytes)? } else { parse_binary_stl(bytes)? };
     let tris = (0..positions.len() as u32 / 3).map(|i| [i * 3, i * 3 + 1, i * 3 + 2]).collect();
-    finish(positions, tris, Vec::new())
+    finish(positions, tris, Vec::new(), Vec::new())
 }
 
 /// Import a PLY file, with its vertex colors when it has them.
@@ -271,12 +288,14 @@ pub fn import_ply(bytes: &[u8]) -> Result<Mesh> {
     }
     let colors =
         if d.colors.len() == d.positions.len() { d.colors.into_iter().map(Some).collect() } else { Vec::new() };
-    finish(d.positions, d.triangles, colors)
+    finish(d.positions, d.triangles, colors, Vec::new())
 }
 
 /// Check, weld and build. `colors` (one per input vertex, or empty) become
 /// the mesh's vertex colors when any vertex has one; the rest are white.
-fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>) -> Result<Mesh> {
+/// `uvs` (one per triangle, or empty) stay on the corners, so welding the
+/// points a UV seam split keeps each face's UVs.
+fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>, uvs: Vec<[Vec2; 3]>) -> Result<Mesh> {
     if tris.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
@@ -312,7 +331,8 @@ fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>) 
     } else {
         Vec::new()
     };
-    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, ..Default::default() }))
+    let uv = if uvs.len() == tris.len() { uvs } else { Vec::new() };
+    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, uv, ..Default::default() }))
 }
 
 fn is_ascii_stl(bytes: &[u8]) -> bool {
@@ -382,7 +402,38 @@ pub fn write_obj(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
     for n in &mesh.normals {
         writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
     }
-    write_obj_faces_with_diagonals(&mesh.positions, &mesh.triangles, 1, Some(mesh.quad_diagonals_ref()), w)
+    let (list, corners) = dedupe_uvs(mesh.uvs());
+    for uv in &list {
+        writeln!(w, "vt {} {}", uv.x, uv.y)?;
+    }
+    let uvs = mesh.has_uvs().then_some(ObjUvs { corners: &corners, base: 1 });
+    write_obj_faces_with_diagonals(&mesh.positions, &mesh.triangles, 1, Some(mesh.quad_diagonals_ref()), uvs, w)
+}
+
+/// UV indices for OBJ faces: per triangle, each corner's `vt` number
+/// (0-based within `uvs`), and the number of the first `vt` line.
+pub(crate) struct ObjUvs<'a> {
+    pub corners: &'a [[u32; 3]],
+    pub base: u32,
+}
+
+/// The unique UVs of `corner_uvs` (per triangle corner) and each corner's
+/// index into them, for `vt` lines.
+pub(crate) fn dedupe_uvs(corner_uvs: &[[Vec2; 3]]) -> (Vec<Vec2>, Vec<[u32; 3]>) {
+    let mut index: std::collections::HashMap<[u32; 2], u32> = std::collections::HashMap::new();
+    let mut list = Vec::new();
+    let corners = corner_uvs
+        .iter()
+        .map(|t| {
+            t.map(|uv| {
+                *index.entry([uv.x.to_bits(), uv.y.to_bits()]).or_insert_with(|| {
+                    list.push(uv);
+                    list.len() as u32 - 1
+                })
+            })
+        })
+        .collect();
+    (list, corners)
 }
 
 pub(crate) fn write_obj_faces_with_diagonals(
@@ -390,6 +441,7 @@ pub(crate) fn write_obj_faces_with_diagonals(
     triangles: &[[u32; 3]],
     base: u32,
     diagonals: Option<&std::collections::HashSet<[u32; 2]>>,
+    uvs: Option<ObjUvs>,
     w: &mut impl Write,
 ) -> io::Result<()> {
     let owned;
@@ -400,10 +452,43 @@ pub(crate) fn write_obj_faces_with_diagonals(
             &owned
         }
     };
+    // `vt` number of point `v` in triangle `t` (1-based), if any.
+    let vt = |t: usize, v: u32| -> Option<u32> {
+        let u = uvs.as_ref()?;
+        let k = triangles[t].iter().position(|&x| x == v)?;
+        Some(u.corners[t][k] + u.base)
+    };
+    let corner = |t: usize, v: u32| -> String {
+        let a = v + base;
+        match vt(t, v) {
+            Some(tv) => format!("{a}/{tv}/{a}"),
+            None => format!("{a}//{a}"),
+        }
+    };
+    let tri_line = |t: usize| -> String {
+        let [a, b, c] = triangles[t].map(|v| corner(t, v));
+        format!("f {a} {b} {c}")
+    };
+    // A quad from triangles t1 and t2 sharing edge (u, v), in t1's winding.
+    // None when a UV seam runs along the shared edge.
+    let quad_line = |t1: usize, t2: usize, u: u32, v: u32| -> Option<String> {
+        if vt(t1, u) != vt(t2, u) || vt(t1, v) != vt(t2, v) {
+            return None;
+        }
+        let a1 = triangles[t1];
+        let b = a1.iter().copied().find(|&x| x != u && x != v)?;
+        let d = triangles[t2].iter().copied().find(|&x| x != u && x != v)?;
+        let (q0, q1, q2, q3) = if (a1[0] == u && a1[1] == b) || (a1[1] == u && a1[2] == b) || (a1[2] == u && a1[0] == b)
+        {
+            (u, b, v, d)
+        } else {
+            (v, b, u, d)
+        };
+        Some(format!("f {} {} {} {}", corner(t1, q0), corner(t1, q1), corner(t1, q2), corner(t2, q3)))
+    };
     if diagonals.is_empty() {
-        for t in triangles {
-            let [a, b, c] = t.map(|v| v + base);
-            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+        for t in 0..triangles.len() {
+            writeln!(w, "{}", tri_line(t))?;
         }
         return Ok(());
     }
@@ -412,33 +497,14 @@ pub(crate) fn write_obj_faces_with_diagonals(
     // Pass 1: consecutive pairs sharing a quad diagonal
     if triangles.len() >= 2 {
         for i in (0..triangles.len() - 1).step_by(2) {
-            let t1 = triangles[i];
-            let t2 = triangles[i + 1];
-            let mut shared = [0u32; 2];
-            let mut count = 0;
-            for &v in &t1 {
-                if t2.contains(&v) {
-                    if count < 2 {
-                        shared[count] = v;
-                    }
-                    count += 1;
-                }
-            }
-            if count == 2 {
+            let (t1, t2) = (triangles[i], triangles[i + 1]);
+            let shared: Vec<u32> = t1.iter().copied().filter(|v| t2.contains(v)).collect();
+            if shared.len() == 2 {
                 let key = [shared[0].min(shared[1]), shared[0].max(shared[1])];
-                if diagonals.contains(&key) {
-                    let u = shared[0];
-                    let v = shared[1];
-                    let b = t1.iter().copied().find(|&x| x != u && x != v).unwrap();
-                    let d = t2.iter().copied().find(|&x| x != u && x != v).unwrap();
-                    let (q0, q1, q2, q3) =
-                        if (t1[0] == u && t1[1] == b) || (t1[1] == u && t1[2] == b) || (t1[2] == u && t1[0] == b) {
-                            (u, b, v, d)
-                        } else {
-                            (v, b, u, d)
-                        };
-                    let [a, b, c, d] = [q0 + base, q1 + base, q2 + base, q3 + base];
-                    writeln!(w, "f {a}//{a} {b}//{b} {c}//{c} {d}//{d}")?;
+                if diagonals.contains(&key)
+                    && let Some(line) = quad_line(i, i + 1, shared[0], shared[1])
+                {
+                    writeln!(w, "{line}")?;
                     used[i] = true;
                     used[i + 1] = true;
                 }
@@ -457,18 +523,10 @@ pub(crate) fn write_obj_faces_with_diagonals(
             let key = [u.min(v), u.max(v)];
             if diagonals.contains(&key) {
                 if let Some(&other) = edge_map.get(&key) {
-                    if !used[other] {
-                        let t2 = triangles[other];
-                        let b = t.iter().copied().find(|&x| x != u && x != v).unwrap();
-                        let d = t2.iter().copied().find(|&x| x != u && x != v).unwrap();
-                        let (q0, q1, q2, q3) =
-                            if (t[0] == u && t[1] == b) || (t[1] == u && t[2] == b) || (t[2] == u && t[0] == b) {
-                                (u, b, v, d)
-                            } else {
-                                (v, b, u, d)
-                            };
-                        let [a, b, c, d] = [q0 + base, q1 + base, q2 + base, q3 + base];
-                        writeln!(w, "f {a}//{a} {b}//{b} {c}//{c} {d}//{d}")?;
+                    if !used[other]
+                        && let Some(line) = quad_line(i, other, u, v)
+                    {
+                        writeln!(w, "{line}")?;
                         used[i] = true;
                         used[other] = true;
                         edge_map.remove(&key);
@@ -482,10 +540,9 @@ pub(crate) fn write_obj_faces_with_diagonals(
     }
 
     // Remaining standalone triangles
-    for (i, t) in triangles.iter().enumerate() {
-        if !used[i] {
-            let [a, b, c] = t.map(|v| v + base);
-            writeln!(w, "f {a}//{a} {b}//{b} {c}//{c}")?;
+    for (i, done) in used.iter().enumerate() {
+        if !done {
+            writeln!(w, "{}", tri_line(i))?;
         }
     }
     Ok(())
@@ -690,12 +747,12 @@ mod tests {
         let pos = vec![Vec3::ZERO, Vec3::X, Vec3::Y];
         // Index 5 is out of bounds for 3 vertices
         let bad_tris = vec![[0, 1, 5]];
-        assert!(finish(pos.clone(), bad_tris, Vec::new()).is_err());
+        assert!(finish(pos.clone(), bad_tris, Vec::new(), Vec::new()).is_err());
 
         // NaN position is rejected
         let nan_pos = vec![Vec3::ZERO, Vec3::new(f32::NAN, 1.0, 0.0), Vec3::Y];
         let good_tris = vec![[0, 1, 2]];
-        assert!(finish(nan_pos, good_tris, Vec::new()).is_err());
+        assert!(finish(nan_pos, good_tris, Vec::new(), Vec::new()).is_err());
     }
 
     #[test]

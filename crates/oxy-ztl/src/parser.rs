@@ -444,7 +444,8 @@ pub fn parse_pieces(data: &[u8]) -> Result<Vec<(String, Mesh)>, String> {
         }
 
         let mesh_data =
-            MeshData { positions, triangles, groups, mask: Vec::new(), hidden: Vec::new(), color: Vec::new() };
+            // No UVs: none are decoded from ZBrush files (no lesson covers them).
+            MeshData { positions, triangles, groups, mask: Vec::new(), hidden: Vec::new(), color: Vec::new(), uv: Vec::new() };
 
         let mesh = Mesh::from_data(mesh_data);
         out_pieces.push((subtool.name, mesh));
@@ -491,6 +492,7 @@ pub fn parse_single_mesh(data: &[u8]) -> Result<Mesh, String> {
             mask: Vec::new(),
             hidden: Vec::new(),
             color: Vec::new(),
+            uv: Vec::new(),
         }))
     }
 }
