@@ -177,7 +177,20 @@ pub struct Living {
     pub renaming: Option<(u32, String)>,
     /// The axis Mirror copy and Split by side use (0 = X).
     pub side_axis: usize,
+    /// The layer new strokes go into (sculpt layers made ahead of time).
+    pub target: Option<Target>,
     drag_from: Option<DragFrom>,
+}
+
+/// Where new strokes go: a sculpt layer chosen before sculpting.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Target {
+    /// An existing group, by id.
+    Group(u32),
+    /// A layer that doesn't exist yet: it's made, with this name on this
+    /// piece, by the first stroke that goes into it (an empty group isn't
+    /// kept, so it can't be made sooner).
+    New { piece: u64, name: String },
 }
 
 /// Default memory budget for recorded strokes.
@@ -278,6 +291,7 @@ impl Living {
         self.solo = None;
         self.drag_from = None;
         self.renaming = None;
+        self.target = None;
     }
 }
 
@@ -356,7 +370,84 @@ impl Editor {
             group: None,
             applied: 1.0,
         });
+        self.living_record_into_target(piece_id);
         self.living_enforce_budget();
+    }
+
+    /// The newest record goes into the target layer, if one is chosen for
+    /// this piece. The layer's strength applies to it like to the rest of
+    /// the layer, so the surface settles to the stroke times the layer's
+    /// strength. That move is part of the stroke's own undo step: undo
+    /// swaps the chunks it snapshotted before the stroke with what's there
+    /// now, so redo brings back the settled surface.
+    fn living_record_into_target(&mut self, piece_id: u64) {
+        let gid = match self.living.target.clone() {
+            Some(Target::Group(g)) => match self.living.group(g) {
+                Some(grp) if grp.piece == piece_id => g,
+                _ => return,
+            },
+            Some(Target::New { piece, name }) if piece == piece_id => {
+                let g = self.living.next_group;
+                self.living.next_group += 1;
+                self.living.groups.push(StrokeGroup { id: g, piece, name, strength: 1.0, visible: true });
+                self.living.target = Some(Target::Group(g));
+                g
+            }
+            _ => return,
+        };
+        let Some(grp) = self.living.group(gid).cloned() else { return };
+        if !grp.visible {
+            self.living.note = Some(format!(
+                "{} is hidden, so the stroke wasn't put in it: show the layer to sculpt into it",
+                grp.name
+            ));
+            return;
+        }
+        let Some(i) = self.scene.index_of(piece_id) else { return };
+        let Some(s) = self.living.strokes.last_mut() else { return };
+        s.group = Some(gid);
+        let t = s.strength * grp.strength;
+        if (t - s.applied).abs() > 1e-6 {
+            let mesh = &mut self.scene.pieces[i].mesh;
+            add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
+            s.applied = t;
+            mesh.update_after_move(&s.vertices);
+            if !s.colors.is_empty() {
+                mesh.mark_all_dirty();
+            }
+        }
+    }
+
+    /// Choose the layer new strokes go into: an existing group, a new one
+    /// (made by the first stroke), or none.
+    pub fn living_set_target(&mut self, target: Option<Target>) {
+        self.living.target = target;
+        self.status = match &self.living.target {
+            Some(Target::Group(g)) => {
+                format!("New strokes go into {}", self.living.group(*g).map_or("the layer", |g| g.name.as_str()))
+            }
+            Some(Target::New { name, .. }) => format!("New strokes go into a new layer, {name}"),
+            None => "New strokes go into no layer".into(),
+        };
+    }
+
+    /// A new layer for the active piece to sculpt into: "Layer N".
+    pub fn living_new_layer(&mut self) {
+        let piece = self.scene.active().id;
+        let name = (1..)
+            .map(|n| format!("Layer {n}"))
+            .find(|name| !self.living.groups.iter().any(|g| g.piece == piece && g.name == *name))
+            .expect("a free name");
+        self.living_set_target(Some(Target::New { piece, name }));
+    }
+
+    /// The layer new strokes on the active piece go into, by name.
+    pub fn living_target_name(&self) -> Option<String> {
+        let piece = self.scene.active().id;
+        match self.living.target.as_ref()? {
+            Target::Group(g) => self.living.group(*g).filter(|g| g.piece == piece).map(|g| g.name.clone()),
+            Target::New { piece: p, name } => (*p == piece).then(|| name.clone()),
+        }
     }
 
     /// After an undo or redo: follow the entry it moved.
@@ -410,6 +501,11 @@ impl Editor {
         self.living.edits.retain(|e| self.history.can_undo_id(e.entry) || self.history.can_redo_id(e.entry));
         let strokes = &self.living.strokes;
         self.living.groups.retain(|g| strokes.iter().any(|s| s.group == Some(g.id)));
+        if let Some(Target::Group(g)) = self.living.target
+            && self.living.group(g).is_none()
+        {
+            self.living.target = None;
+        }
         let ids: BTreeSet<u64> = self.living.strokes.iter().map(|s| s.id).collect();
         self.living.selected.retain(|id| ids.contains(id));
         if let Some(solo) = &self.living.solo
@@ -984,6 +1080,9 @@ impl Editor {
         self.living_end_drag();
         let pid = self.scene.active().id;
         let n = self.living.listed(pid).len();
+        if self.living_target_name().is_some() {
+            self.living.target = None;
+        }
         self.living.strokes.retain(|s| s.piece != pid);
         self.living.groups.retain(|g| g.piece != pid);
         self.living.selected.clear();
@@ -1184,6 +1283,7 @@ impl Editor {
             "strokes": strokes,
             "groups": groups,
             "solo": self.living.solo.is_some(),
+            "sculpt_into": self.living_target_name(),
             "memory_mb": self.living.bytes() as f64 / (1024.0 * 1024.0),
             "budget_mb": self.living.budget_mb,
         })
@@ -1297,6 +1397,18 @@ impl Editor {
                 if self.history.revision() != before {
                     return Ok(format!("{} (new strokes {made:?})", self.status));
                 }
+            }
+            Op::SculptInto { group, new } => {
+                // Not an undo step: it only says where the next strokes go.
+                match (group, new) {
+                    (Some(g), _) => {
+                        group_ok(&self.living, g)?;
+                        self.living_set_target(Some(Target::Group(g)));
+                    }
+                    (None, Some(name)) => self.living_set_target(Some(Target::New { piece: pid, name })),
+                    (None, None) => self.living_set_target(None),
+                }
+                return Ok(self.status.clone());
             }
             Op::SplitBySide { strokes, axis } => {
                 self.living.selected = pick(&strokes)?;
@@ -1945,5 +2057,76 @@ mod tests {
         e.export(&dir.join("m.obj"));
         assert!(!e.status.contains("shape keys"), "{}", e.status);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_layer_made_before_sculpting_takes_the_new_strokes() {
+        let mut e = editor();
+        let pid = e.scene.active().id;
+        let base = positions(&e);
+        e.living_new_layer();
+        assert_eq!(e.living_target_name().as_deref(), Some("Layer 1"));
+        assert!(e.living.groups_of(pid).is_empty(), "the layer appears with the first stroke");
+        stroke(&mut e, 290.0);
+        stroke(&mut e, 310.0);
+        let layer = e.living.groups_of(pid)[0].id;
+        assert_eq!(e.living.group(layer).unwrap().name, "Layer 1");
+        assert_eq!(e.living.members(layer).len(), 2, "both strokes went in");
+        let full = positions(&e);
+        // The layer works like any group: at 0 the surface is the base.
+        e.living_set_group_strength(layer, 0.0);
+        assert!(close(&positions(&e), &base));
+        // No layer: new strokes stay out of it.
+        e.living_set_group_strength(layer, 1.0);
+        assert!(close(&positions(&e), &full));
+        e.living_set_target(None);
+        stroke(&mut e, 330.0);
+        assert_eq!(e.living.strokes.last().unwrap().group, None);
+    }
+
+    #[test]
+    fn a_stroke_into_a_layer_at_half_settles_to_half_and_undoes_cleanly() {
+        let mut e = editor();
+        stroke(&mut e, 290.0);
+        let first = e.living.strokes[0].id;
+        e.living.selected = [first].into();
+        let g = e.living_group_selected().unwrap();
+        e.living_set_group_strength(g, 0.5);
+        let before = positions(&e);
+        e.living_set_target(Some(Target::Group(g)));
+        stroke(&mut e, 320.0);
+        let s = e.living.strokes.last().unwrap().clone();
+        assert_eq!(s.group, Some(g));
+        assert!((s.applied - 0.5).abs() < 1e-6);
+        // Half of what the stroke did is on the surface; nothing else moved.
+        let mut want = before.clone();
+        for (j, &v) in s.vertices.iter().enumerate() {
+            want[v as usize] += s.deltas[j] * 0.5;
+        }
+        let now = positions(&e);
+        assert!(close(&now, &want), "the stroke settles to half");
+        // One undo step: undo takes all of it off, redo puts the half back.
+        e.undo();
+        assert!(close(&positions(&e), &before));
+        e.redo();
+        assert!(close(&positions(&e), &now));
+        // A hidden layer doesn't take strokes, and says so.
+        e.living_toggle_group(g);
+        stroke(&mut e, 340.0);
+        assert_eq!(e.living.strokes.last().unwrap().group, None);
+        assert!(e.living.note.as_deref().is_some_and(|n| n.contains("hidden")));
+    }
+
+    #[test]
+    fn the_target_is_forgotten_with_its_layer() {
+        let mut e = editor();
+        e.living_new_layer();
+        stroke(&mut e, 300.0);
+        let pid = e.scene.active().id;
+        assert!(e.living_target_name().is_some());
+        e.living_bake_active();
+        e.living_sync();
+        assert!(e.living.target.is_none());
+        assert!(e.living.groups_of(pid).is_empty());
     }
 }

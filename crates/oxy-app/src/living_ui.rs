@@ -54,6 +54,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label(RichText::new(note).weak().small());
             }
             ui.add_space(2.0);
+            sculpt_into(ui, ed, pid);
             groups(ui, ed, pid);
             let shift_or_ctrl = ui.input(|i| i.modifiers.shift || i.modifiers.command);
             egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
@@ -292,4 +293,45 @@ fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
 
 fn plural(n: usize, what: &str) -> String {
     if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
+/// "Sculpt into": the layer new strokes go into, chosen before sculpting.
+fn sculpt_into(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
+    use crate::living::Target;
+    let current = ed.living_target_name();
+    let layers: Vec<(u32, String, bool)> =
+        ed.living.groups_of(pid).iter().map(|g| (g.id, g.name.clone(), g.visible)).collect();
+    ui.horizontal(|ui| {
+        ui.label("Sculpt into");
+        let shown = current.clone().unwrap_or_else(|| "No layer".into());
+        egui::ComboBox::from_id_salt("living_sculpt_into")
+            .selected_text(shown)
+            .width(140.0)
+            .show_ui(ui, |ui| {
+                if ui.selectable_label(current.is_none(), "No layer").clicked() {
+                    ed.living_set_target(None);
+                }
+                for (gid, name, visible) in &layers {
+                    let label = if *visible { name.clone() } else { format!("{name} (hidden)") };
+                    let on = ed.living.target == Some(Target::Group(*gid));
+                    if ui.selectable_label(on, label).clicked() {
+                        ed.living_set_target(Some(Target::Group(*gid)));
+                    }
+                }
+            })
+            .response
+            .on_hover_text("The layer new strokes go into, so you can make a layer before sculpting on it. The layer's strength and eye apply to new strokes too: on a layer at 50%, a stroke settles to half when you let go.");
+        if ui
+            .button("+ New layer")
+            .on_hover_text("Start a new layer and sculpt into it: it appears with your first stroke.")
+            .clicked()
+        {
+            ed.living_new_layer();
+        }
+    });
+    if let Some(name) = &current
+        && !ed.living.groups_of(pid).iter().any(|g| g.name == *name)
+    {
+        ui.label(RichText::new(format!("{name} appears with your next stroke.")).weak().small());
+    }
 }

@@ -22,6 +22,7 @@
 //! {"op": "bake"}
 //! {"op": "mirror", "strokes": [3], "axis": "x"}       axis optional, x by default
 //! {"op": "split_by_side", "strokes": [3], "axis": "x"}
+//! {"op": "sculpt_into", "group": 1}   {"op": "sculpt_into", "new": "Wrinkles"}   {"op": "sculpt_into"}
 //! ```
 
 use serde_json::Value;
@@ -87,6 +88,12 @@ pub enum StrokeOp {
     SplitBySide {
         strokes: Vec<u64>,
         axis: usize,
+    },
+    /// The layer new strokes go into: a group, a new layer by name (made
+    /// by the first stroke), or none.
+    SculptInto {
+        group: Option<u32>,
+        new: Option<String>,
     },
 }
 
@@ -158,6 +165,14 @@ pub fn parse_stroke_op(v: &Value) -> Result<StrokeOp, String> {
         "bake" => StrokeOp::Bake,
         "mirror" => StrokeOp::Mirror { strokes: strokes()?, axis: axis()? },
         "split_by_side" => StrokeOp::SplitBySide { strokes: strokes()?, axis: axis()? },
+        "sculpt_into" => {
+            let new = v.get("new").and_then(Value::as_str).map(str::trim).filter(|n| !n.is_empty());
+            let group = if v.get("group").is_some() { Some(group("group")?) } else { None };
+            if group.is_some() && new.is_some() {
+                return Err("\"sculpt_into\" takes \"group\" or \"new\", not both".into());
+            }
+            StrokeOp::SculptInto { group, new: new.map(|n| n.chars().take(80).collect()) }
+        }
         other => return Err(format!("unknown stroke command \"{other}\"")),
     })
 }
@@ -179,6 +194,14 @@ mod tests {
         );
         assert_eq!(parse_stroke_op(&json!({"op": "bake"})).unwrap(), StrokeOp::Bake);
         assert_eq!(
+            parse_stroke_op(&json!({"op": "sculpt_into", "new": " Wrinkles "})).unwrap(),
+            StrokeOp::SculptInto { group: None, new: Some("Wrinkles".into()) }
+        );
+        assert_eq!(
+            parse_stroke_op(&json!({"op": "sculpt_into"})).unwrap(),
+            StrokeOp::SculptInto { group: None, new: None }
+        );
+        assert_eq!(
             parse_stroke_op(&json!({"op": "mirror", "strokes": [2]})).unwrap(),
             StrokeOp::Mirror { strokes: vec![2], axis: 0 }
         );
@@ -199,6 +222,7 @@ mod tests {
             (json!({"op": "rename_group", "group": 1}), "needs a \"name\""),
             (json!({"op": "group_visible", "group": 1}), "visible"),
             (json!({"op": "mirror", "strokes": [1], "axis": "w"}), "axis"),
+            (json!({"op": "sculpt_into", "group": 1, "new": "A"}), "not both"),
         ] {
             let e = parse_stroke_op(&bad).unwrap_err();
             assert!(e.contains(why), "{bad}: {e}");
