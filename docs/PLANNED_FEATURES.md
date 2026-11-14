@@ -88,6 +88,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
   so the security warnings on first launch go away.
 
 ### Working with other apps
+- **Gaussian splats** (scans from capture apps): open one as a reference
+  next to your sculpt, turn it into a mesh with its colors, sculpt the
+  splats by sculpting a mesh they're bound to, and send them to Blender
+  and back ([RFC 0021](rfcs/0021-gaussian-splats.md), proposed).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
 ## Recently shipped (for context)
