@@ -518,6 +518,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
+                ui.checkbox(&mut ed.gltf_compress, "Compress glTF/GLB")
+                    .on_hover_text("Smaller .glb and .gltf exports: 16-bit positions, 8-bit normals and colors (KHR_mesh_quantization), about half the size for pieces up to 65,535 points. Blender, three.js and most engines read them; a few older importers don't. Also in Preferences > General.");
                 ui.separator();
                 if tips::button(ui, "Run Python script…", Cmd::RunScript).clicked() {
                     ed.request_run_script = true;
@@ -1142,6 +1144,12 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
             "On: the strokes stay editable after you save, close and open the project again (they make the file bigger, about 16 bytes per point each stroke moved). Off: projects are saved with the strokes fixed in place.",
         );
     }
+    tips::check_plain(
+        ui,
+        &mut ed.gltf_compress,
+        "Compress glTF/GLB exports",
+        "On: File > Export to .glb or .gltf stores positions as 16-bit and normals and colors as 8-bit (the glTF extension KHR_mesh_quantization), about half the file size for pieces up to 65,535 points. The difference isn't visible at normal sizes. Blender, three.js and most engines read these files; a few older importers don't. Off: full 32-bit precision, readable everywhere.",
+    );
     tips::check_plain(
         ui,
         &mut ed.gizmo_done_reverts,

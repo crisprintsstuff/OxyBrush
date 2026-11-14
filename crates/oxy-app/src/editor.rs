@@ -1205,6 +1205,8 @@ pub struct Editor {
     /// The prefix for the undo steps of the MCP call being applied: "Agent: ",
     /// or "Plugin: <name>: " for a Python plugin (set by its listener).
     pub agent_label: String,
+    /// Compress glTF/GLB exports (Preferences > General).
+    pub gltf_compress: bool,
     /// The Python plugin running now, by name, for the status bar.
     pub plugin_running: Option<String>,
     /// Set by the Disconnect button; the app rotates the token and clears it.
@@ -1482,6 +1484,7 @@ impl Default for Editor {
             agent_token: String::new(),
             agent_connected: false,
             agent_label: oxy_mcp::AGENT_LABEL.to_owned(),
+            gltf_compress: false,
             plugin_running: None,
             agent_disconnect: false,
             plugins: crate::plugins::discover_plugins(),
@@ -1787,6 +1790,7 @@ impl Editor {
             living_strokes: self.living.enabled,
             living_save: self.living.save,
             living_budget_mb: self.living.budget_mb,
+            gltf_compress: self.gltf_compress,
             brush_radius_world: if self.radius_on_model && self.remember_brushes {
                 self.brush_radius_world
             } else {
@@ -2020,6 +2024,7 @@ impl Editor {
         self.living.enabled = s.living_strokes;
         self.living.save = s.living_save;
         self.living.budget_mb = s.living_budget_mb;
+        self.gltf_compress = s.gltf_compress;
         // A remembered size on the model; otherwise the first frame measures
         // one from the on-screen size.
         self.brush_radius_world = s.brush_radius_world;
@@ -4255,7 +4260,11 @@ impl Editor {
                 None => oxy_io::ExportPiece::new(&p.name, &p.mesh),
             })
             .collect();
-        self.status = match oxy_io::export_pieces(&pieces, path) {
+        let options = oxy_io::ExportOptions {
+            gltf: if self.gltf_compress { oxy_io::GltfCompression::Quantized } else { oxy_io::GltfCompression::None },
+        };
+        let compressed = gltf && self.gltf_compress;
+        self.status = match oxy_io::export_pieces_with(&pieces, path, options) {
             Ok(s) if keys > 0 => format!(
                 "Exported {} ({} pieces, {} triangles, {keys} stroke group(s) as shape keys)",
                 path.display(),
@@ -4265,6 +4274,9 @@ impl Editor {
             Ok(s) => format!("Exported {} ({} pieces, {} triangles)", path.display(), s.pieces, s.triangles),
             Err(e) => format!("Export failed: {e}"),
         };
+        if compressed && self.status.starts_with("Exported") {
+            self.status.insert_str(self.status.len() - 1, ", compressed");
+        }
     }
 
     /// Start a background autosave if one is due. Call once per frame.
@@ -10373,6 +10385,7 @@ mod tests {
             living_strokes: true,
             living_save: false,
             living_budget_mb: 300,
+            gltf_compress: true,
             layout: UiLayout::Touch,
             ui_scale: 1.25,
             high_contrast: true,

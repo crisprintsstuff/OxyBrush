@@ -30,12 +30,16 @@ USAGE:
 
 Inputs:  .oxb project (visible pieces), .obj, .stl
 Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
+Any command writing .glb/.gltf takes --compress quantize: 16-bit positions and
+8-bit normals (KHR_mesh_quantization), about half the size for pieces up to
+65,535 points; readers must support the extension (Blender, three.js do).
 
 `mcp` writes the protocol to stdout. Do not mix it with other commands.
 It refuses to attach to anything but 127.0.0.1 or localhost. See docs/mcp.md.
 
 Examples:
   oxybrush-cli convert head.oxb head.glb
+  oxybrush-cli convert head.oxb head-small.glb --compress quantize
   oxybrush-cli decimate scan.stl scan-light.obj --keep 10
   oxybrush-cli lod hero.oxb out/hero --levels 4        writes out/hero_LOD0.glb ... out/hero_LOD4.glb
 ";
@@ -74,6 +78,7 @@ fn main() -> ExitCode {
 fn run(args: &[String]) -> Result<String, String> {
     let Some(cmd) = args.first() else { return Ok(USAGE.to_string()) };
     let pos: Vec<&str> = positional(&args[1..]);
+    let export = export_options(args)?;
     let need = |n: usize| -> Result<(), String> {
         if pos.len() == n { Ok(()) } else { Err(format!("`{cmd}` takes {n} file argument(s) (see usage)")) }
     };
@@ -103,7 +108,7 @@ fn run(args: &[String]) -> Result<String, String> {
         "convert" => {
             need(2)?;
             let pieces = load(Path::new(pos[0]))?;
-            save(&pieces, Path::new(pos[1]), Path::new(pos[0]))
+            save(&pieces, Path::new(pos[1]), Path::new(pos[0]), export)
         }
         "remesh" => {
             need(2)?;
@@ -113,7 +118,7 @@ fn run(args: &[String]) -> Result<String, String> {
             let pieces = map_meshes(load(Path::new(pos[0]))?, |m| {
                 oxy_topo::voxel_remesh(&[m], opts).map_err(|e| e.to_string())
             })?;
-            save(&pieces, Path::new(pos[1]), Path::new(pos[0]))
+            save(&pieces, Path::new(pos[1]), Path::new(pos[0]), export)
         }
         "decimate" => {
             need(2)?;
@@ -128,7 +133,7 @@ fn run(args: &[String]) -> Result<String, String> {
                 .max(4)
             };
             let pieces = map_meshes(load(Path::new(pos[0]))?, |m| Ok(oxy_topo::decimate(m, target(m))))?;
-            save(&pieces, Path::new(pos[1]), Path::new(pos[0]))
+            save(&pieces, Path::new(pos[1]), Path::new(pos[0]), export)
         }
         "lod" => {
             need(2)?;
@@ -143,7 +148,7 @@ fn run(args: &[String]) -> Result<String, String> {
                     current = map_meshes(current, |m| Ok(oxy_topo::decimate(m, (m.triangle_count() / 2).max(32))))?;
                 }
                 let out = PathBuf::from(format!("{prefix}_LOD{level}.{ext}"));
-                save(&current, &out, input)?;
+                save(&current, &out, input, export)?;
                 let tris: usize = current.iter().map(|p| p.mesh.triangle_count()).sum();
                 written.push(format!("  {} ({tris} triangles)", out.display()));
             }
@@ -194,7 +199,7 @@ fn run(args: &[String]) -> Result<String, String> {
                         if by_parts { format!("{} part {}", p.name, k + 1) } else { format!("{} group {key}", p.name) };
                     let out = dir.join(format!("{}.{ext}", file_stem(&label)));
                     let piece = Piece::new(label, Mesh::from_data(data));
-                    save(std::slice::from_ref(&piece), &out, input)?;
+                    save(std::slice::from_ref(&piece), &out, input, export)?;
                     written.push(format!("  {}", out.display()));
                 }
             }
@@ -282,7 +287,21 @@ fn map_meshes(pieces: Vec<Piece>, f: impl Fn(&Mesh) -> Result<Mesh, String>) -> 
     pieces.into_iter().map(|p| Ok(Piece::new(p.name.clone(), f(&p.mesh)?))).collect()
 }
 
-fn save(pieces: &[Piece], out: &Path, input: &Path) -> Result<String, String> {
+/// `--compress quantize`: glTF/GLB outputs use `KHR_mesh_quantization`.
+fn export_options(args: &[String]) -> Result<oxy_io::ExportOptions, String> {
+    let gltf = match flag_str(args, "--compress") {
+        None => oxy_io::GltfCompression::None,
+        Some("quantize" | "quantized") => oxy_io::GltfCompression::Quantized,
+        Some("none") => oxy_io::GltfCompression::None,
+        Some(other) => return Err(format!("--compress takes `quantize` or `none`, not `{other}`")),
+    };
+    if args.iter().any(|a| a == "--compress") && flag_str(args, "--compress").is_none() {
+        return Err("--compress needs `quantize` or `none`".into());
+    }
+    Ok(oxy_io::ExportOptions { gltf })
+}
+
+fn save(pieces: &[Piece], out: &Path, input: &Path, opts: oxy_io::ExportOptions) -> Result<String, String> {
     if same_file(out, input) {
         return Err(format!("refusing to overwrite the input file {}", input.display()));
     }
@@ -296,7 +315,7 @@ fn save(pieces: &[Piece], out: &Path, input: &Path) -> Result<String, String> {
         format::save(&scene, out).map_err(|e| format!("{}: {e}", out.display()))?;
     } else {
         let list: Vec<ExportPiece> = pieces.iter().map(|p| ExportPiece::new(&p.name, &p.mesh)).collect();
-        oxy_io::export_pieces(&list, out).map_err(|e| format!("{}: {e}", out.display()))?;
+        oxy_io::export_pieces_with(&list, out, opts).map_err(|e| format!("{}: {e}", out.display()))?;
     }
     Ok(format!("wrote {} ({} piece(s), {tris} triangles)", out.display(), pieces.len()))
 }
@@ -337,6 +356,14 @@ mod tests {
         assert!(info.contains("2 piece(s)") && info.contains("Head: 1280 triangles"), "{info}");
         assert!(run(&args(&["convert", &d("in.oxb"), &d("out.glb")])).unwrap().contains("2 piece(s)"));
         assert!(run(&args(&["convert", &d("in.oxb"), &d("out.obj")])).is_ok());
+        // Compressed glTF: smaller, and it says which extension it needs.
+        assert!(run(&args(&["convert", &d("in.oxb"), &d("small.glb"), "--compress", "quantize"])).is_ok());
+        let (plain, small) = (std::fs::read(d("out.glb")).unwrap(), std::fs::read(d("small.glb")).unwrap());
+        assert!(small.len() * 10 < plain.len() * 6, "{} vs {}", small.len(), plain.len());
+        assert!(small.windows(21).any(|w| w == b"KHR_mesh_quantization"));
+        assert!(!plain.windows(21).any(|w| w == b"KHR_mesh_quantization"));
+        let e = run(&args(&["convert", &d("in.oxb"), &d("x.glb"), "--compress", "zip"])).unwrap_err();
+        assert!(e.contains("quantize"), "{e}");
         // OBJ round trip, then decimate to a percentage.
         let msg = run(&args(&["decimate", &d("out.obj"), &d("light.stl"), "--keep", "25%"])).unwrap();
         assert!(msg.contains("light.stl"), "{msg}");
