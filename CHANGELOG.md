@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Sculpt layers made ahead of time** (Mesh > Strokes…, with Living strokes on): **Sculpt into** picks the layer new strokes go into, and **+ New layer** starts one, so you can make a "Wrinkles" layer first and sculpt on it, instead of grouping strokes afterwards. New strokes follow the layer's strength and eye: on a layer at 50% a stroke settles to half when you let go, and the whole layer still fades, hides and exports as a shape key like any group. A hidden layer doesn't take strokes. Plugins and agents can choose it too (`sculpt_into`).
+
 ### Changed
 - **Python plugins say they're plugins.** A Python plugin used to run through the local AI agent connection, so running one turned on Settings > Local AI agent (and left it on), the status bar said "Agent connected", and its edits were labelled "Agent:". Each run now gets a connection of its own (this computer only, a new token each time, closed when the script ends): the agent setting stays as you left it, the status bar shows **Plugin '*name*' running**, and its edits are undo steps named after it (**Plugin: *name*: …**).
 

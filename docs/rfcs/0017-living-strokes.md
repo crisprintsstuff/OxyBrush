@@ -204,6 +204,16 @@ As built for phase 3:
   group's strokes at their strengths times the group's. Its weight is 1, or
   0 for a hidden group, so the file shows what the viewport shows. Color
   changes stay in the base. OBJ, STL and PLY get the surface as shown.
+- **Sculpt layers made ahead of time** (after phase 3): "Sculpt into"
+  picks the group new strokes go into, or "+ New layer" starts one that
+  the first stroke creates (empty groups aren't kept). A stroke recorded
+  into a layer takes the layer's strength like the rest of it, so the
+  surface settles to the stroke times the layer's strength when the
+  stroke ends. That move happens inside the stroke's own undo step: undo
+  swaps the chunks snapshotted before the stroke with what's there now,
+  so redo brings back the settled surface. A hidden layer doesn't take
+  strokes (they'd vanish as they're made); the stroke stays out of it and
+  a note says why.
 - **Exact replay is not built.** It needs every stroke's dab inputs kept,
   and replaying all later strokes through the brush engine after an edit,
   which interacts with undo snapshots, dynamic detail and symmetry. The
