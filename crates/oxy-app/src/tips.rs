@@ -162,6 +162,10 @@ commands! {
     GroupColors => "Face group colors", "G", "Show face groups as colors, or the normal material.";
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
+    InactiveGrey => "Inactive pieces: grey out", "", "Show the pieces you aren't sculpting desaturated and a little darker.";
+    InactiveDarken => "Inactive pieces: darken", "", "Show the pieces you aren't sculpting darker, keeping their colors and materials.";
+    InactiveTint => "Inactive pieces: tint", "", "Show the pieces you aren't sculpting tinted with a color (View > Inactive pieces sets it).";
+    InactiveOff => "Inactive pieces: as they are", "", "Show every piece in its true material and colors, active or not.";
     ShowVertexColor => "Show vertex color on / off", "", "Show the model's vertex color (painted, or imported from OBJ, PLY or glTF) over the material, or hide it to judge the form in plain clay. Hiding only changes the view: the colors are kept, saved and exported. Painting shows them again.";
     DynDetail => "Dynamic detail on / off", "", "Sculpting brushes add triangles where they need more detail and remove ones that have become too small, so you can build a shape from a simple sphere without remeshing.";
     LightViewport => "Light the viewport on / off", "", "Shade the model with lights (and shadows) instead of the material. Set them up in View > Shading > Lights.";
@@ -810,6 +814,10 @@ pub mod plain {
     pub const PRINT_SPLIT: &str = "Cut the active piece in two along the plane, with pins on one side and matching holes on the other, so the parts line up when glued.";
     pub const CLEAN_DEGENERATE: &str =
         "Remove triangles that use the same point twice. They have no area and can upset exports and printing.";
+    pub const INACTIVE_PIECES: &str = "How the pieces you aren't sculpting are shown, so the active one stands out: greyed out, darker, tinted with a color, or as they are (Off), to see every piece in its own material.";
+    pub const INACTIVE_STRENGTH: &str =
+        "How strongly inactive pieces are greyed out, darkened or tinted. 0 shows them as they are.";
+    pub const INACTIVE_COLOR: &str = "The color inactive pieces are tinted with.";
     pub const ORBIT_AROUND: &str = "What orbiting turns around. Cursor: the surface under the pointer where you start the orbit (from empty space, the nearest part of the model), so you can turn around any spot you point at. Last stroke: where your last stroke ended. Centre of the view: the middle, as framing (F) sets it. With Cursor or Last stroke, that point stays put on screen while you orbit; F goes back to the middle until the next stroke or orbit.";
     pub const DYN_LEVELS: &str = "Not working on this piece: it has subdivision levels, which dynamic detail would remove. Keep this level only turns the level you see into the piece's mesh (undo brings the levels back).";
     pub const KEEP_LEVEL: &str = "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail and other tools that change the triangles work on it. One undo step.";

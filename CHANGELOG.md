@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **View > Inactive pieces:** choose how the pieces you aren't sculpting are shown: **Grey out** (as before), **Darken** (their own materials and colors, just darker), **Tint** with a color you pick, or **Off**, to see every piece in its true material, which matters now that each piece can have its own. A Strength slider sets how much; it's remembered between sessions and in the command palette.
 - **Booleans in the Pieces panel:** a Boolean row under Join and Merge + remesh picks the piece to combine with and offers **Subtract**, **Add** and **Overlap**, so you don't have to dig three menus deep. Mesh > Boolean is still there.
 - **Layers in the right panel:** a **Layers** section under Pieces shows the active piece's sculpt layers while you work: Sculpt into and + New layer, then each layer with its eye, strength and … menu, and **Strokes…** for the full stroke list. It replaces Mesh > Strokes…; with Living strokes off, it offers to turn it on.
 - **View > Shading > Show vertex color** (also in Tools > Vertex color and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.

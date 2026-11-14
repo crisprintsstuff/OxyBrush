@@ -1786,6 +1786,9 @@ impl Editor {
             update_skip: self.updater.skip.clone(),
             flat_shading: self.view.flat_shading,
             show_vertex_color: self.view.show_vertex_color,
+            inactive_look: self.view.inactive_look,
+            inactive_strength: self.view.inactive_strength,
+            inactive_color: self.view.inactive_color,
             wireframe: self.view.wireframe,
             wireframe_opacity: self.view.wireframe_opacity,
             wireframe_color: self.view.wireframe_color,
@@ -2030,6 +2033,9 @@ impl Editor {
         self.updater.skip = s.update_skip.clone();
         self.view.flat_shading = s.flat_shading;
         self.view.show_vertex_color = s.show_vertex_color;
+        self.view.inactive_look = s.inactive_look;
+        self.view.inactive_strength = s.inactive_strength;
+        self.view.inactive_color = s.inactive_color;
         self.view.wireframe = s.wireframe;
         self.view.wireframe_opacity = s.wireframe_opacity;
         self.view.wireframe_color = s.wireframe_color;
@@ -11043,6 +11049,9 @@ mod tests {
             update_skip: "1.2.3".into(),
             flat_shading: true,
             show_vertex_color: false,
+            inactive_look: oxy_render::InactiveLook::Tint,
+            inactive_strength: 0.3,
+            inactive_color: [0.8, 0.1, 0.1],
             wireframe: true,
             wireframe_opacity: 0.8,
             wireframe_color: [0.2, 0.22, 0.25],
@@ -11123,6 +11132,8 @@ mod tests {
         assert_eq!(e.layout, UiLayout::Touch);
         assert!(e.view.flat_shading);
         assert!(!e.view.show_vertex_color);
+        assert_eq!(e.view.inactive_look, oxy_render::InactiveLook::Tint);
+        assert_eq!((e.view.inactive_strength, e.view.inactive_color), (0.3, [0.8, 0.1, 0.1]));
     }
 
     #[test]
