@@ -20,6 +20,8 @@
 //! {"op": "ungroup", "group": 1}
 //! {"op": "delete_group", "group": 1}
 //! {"op": "bake"}
+//! {"op": "mirror", "strokes": [3], "axis": "x"}       axis optional, x by default
+//! {"op": "split_by_side", "strokes": [3], "axis": "x"}
 //! ```
 
 use serde_json::Value;
@@ -27,21 +29,65 @@ use serde_json::Value;
 /// One Strokes window action.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StrokeOp {
-    SetStrength { strokes: Vec<u64>, strength: f32 },
-    Delete { strokes: Vec<u64> },
-    Solo { strokes: Vec<u64> },
+    SetStrength {
+        strokes: Vec<u64>,
+        strength: f32,
+    },
+    Delete {
+        strokes: Vec<u64>,
+    },
+    Solo {
+        strokes: Vec<u64>,
+    },
     ShowAll,
-    KeepUnmasked { strokes: Vec<u64> },
-    Group { strokes: Vec<u64>, name: Option<String> },
-    AddToGroup { strokes: Vec<u64>, group: u32 },
-    RemoveFromGroup { strokes: Vec<u64> },
-    GroupStrength { group: u32, strength: f32 },
-    GroupVisible { group: u32, visible: bool },
-    RenameGroup { group: u32, name: String },
-    MergeGroups { from: u32, into: u32 },
-    Ungroup { group: u32 },
-    DeleteGroup { group: u32 },
+    KeepUnmasked {
+        strokes: Vec<u64>,
+    },
+    Group {
+        strokes: Vec<u64>,
+        name: Option<String>,
+    },
+    AddToGroup {
+        strokes: Vec<u64>,
+        group: u32,
+    },
+    RemoveFromGroup {
+        strokes: Vec<u64>,
+    },
+    GroupStrength {
+        group: u32,
+        strength: f32,
+    },
+    GroupVisible {
+        group: u32,
+        visible: bool,
+    },
+    RenameGroup {
+        group: u32,
+        name: String,
+    },
+    MergeGroups {
+        from: u32,
+        into: u32,
+    },
+    Ungroup {
+        group: u32,
+    },
+    DeleteGroup {
+        group: u32,
+    },
     Bake,
+    /// Copy the strokes to the other side of the piece's symmetry plane
+    /// (axis 0 = X, 1 = Y, 2 = Z), as new strokes.
+    Mirror {
+        strokes: Vec<u64>,
+        axis: usize,
+    },
+    /// Split each stroke into one per side of the symmetry plane.
+    SplitBySide {
+        strokes: Vec<u64>,
+        axis: usize,
+    },
 }
 
 /// Strength range the Strokes window allows (0 to 150%).
@@ -79,6 +125,15 @@ pub fn parse_stroke_op(v: &Value) -> Result<StrokeOp, String> {
             _ => Ok(None),
         }
     };
+    let axis = || -> Result<usize, String> {
+        match v.get("axis").map(|a| a.as_str().map(str::to_ascii_lowercase)) {
+            None => Ok(0),
+            Some(Some(a)) if a == "x" => Ok(0),
+            Some(Some(a)) if a == "y" => Ok(1),
+            Some(Some(a)) if a == "z" => Ok(2),
+            _ => Err(format!("\"{op}\" takes \"axis\": \"x\", \"y\" or \"z\"")),
+        }
+    };
     Ok(match op {
         "set_strength" => StrokeOp::SetStrength { strokes: strokes()?, strength: strength()? },
         "delete" => StrokeOp::Delete { strokes: strokes()? },
@@ -101,6 +156,8 @@ pub fn parse_stroke_op(v: &Value) -> Result<StrokeOp, String> {
         "ungroup" => StrokeOp::Ungroup { group: group("group")? },
         "delete_group" => StrokeOp::DeleteGroup { group: group("group")? },
         "bake" => StrokeOp::Bake,
+        "mirror" => StrokeOp::Mirror { strokes: strokes()?, axis: axis()? },
+        "split_by_side" => StrokeOp::SplitBySide { strokes: strokes()?, axis: axis()? },
         other => return Err(format!("unknown stroke command \"{other}\"")),
     })
 }
@@ -122,6 +179,14 @@ mod tests {
         );
         assert_eq!(parse_stroke_op(&json!({"op": "bake"})).unwrap(), StrokeOp::Bake);
         assert_eq!(
+            parse_stroke_op(&json!({"op": "mirror", "strokes": [2]})).unwrap(),
+            StrokeOp::Mirror { strokes: vec![2], axis: 0 }
+        );
+        assert_eq!(
+            parse_stroke_op(&json!({"op": "split_by_side", "strokes": [2], "axis": "Z"})).unwrap(),
+            StrokeOp::SplitBySide { strokes: vec![2], axis: 2 }
+        );
+        assert_eq!(
             parse_stroke_op(&json!({"op": "merge_groups", "from": 2, "into": 1})).unwrap(),
             StrokeOp::MergeGroups { from: 2, into: 1 }
         );
@@ -133,6 +198,7 @@ mod tests {
             (json!({"op": "set_strength", "strokes": [1], "strength": 3}), "outside"),
             (json!({"op": "rename_group", "group": 1}), "needs a \"name\""),
             (json!({"op": "group_visible", "group": 1}), "visible"),
+            (json!({"op": "mirror", "strokes": [1], "axis": "w"}), "axis"),
         ] {
             let e = parse_stroke_op(&bad).unwrap_err();
             assert!(e.contains(why), "{bad}: {e}");

@@ -337,13 +337,8 @@ impl HeadlessSession {
         if let Err(e) = self.refuse(path) {
             return ToolResult::error(e);
         }
-        let pieces: Vec<ExportPiece<'_>> = self
-            .scene
-            .pieces
-            .iter()
-            .filter(|p| p.visible)
-            .map(|p| ExportPiece { name: &p.name, mesh: &p.mesh })
-            .collect();
+        let pieces: Vec<ExportPiece<'_>> =
+            self.scene.pieces.iter().filter(|p| p.visible).map(|p| ExportPiece::new(&p.name, &p.mesh)).collect();
         if pieces.is_empty() {
             return ToolResult::error("nothing visible to export");
         }
