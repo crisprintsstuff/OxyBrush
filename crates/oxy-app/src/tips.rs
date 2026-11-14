@@ -183,6 +183,8 @@ commands! {
     Welcome => "Welcome screen", "", "Open the welcome window.";
     CheckUpdates => "Check for updates…", "", "Look for a new version. Nothing about you or your work is sent.";
     Revert => "Revert to saved", "", "Reload the project as you last saved it, dropping the changes since then. You are asked first.";
+    PrintTools => "3D print…", "", "Size, volume and weight for printing, a wall thickness check, hollowing with drain holes, and splitting into parts with alignment pins.";
+    Diagnostics => "Topology diagnostics…", "", "Count open edges, non-manifold edges and degenerate triangles on the active piece, and remove the degenerate ones.";
     CloseProject => "Close project", "", "Close this project and go back to the start screen. You are asked to save unsaved work first.";
     Quit => "Quit", "", "Close OxyBrush. You are asked before unsaved work is discarded.";
     Radius => "Brush radius", "[ and ]", "Brush size: on screen in points, or on the model in scene units (Brush settings > Size).";
@@ -783,6 +785,27 @@ pub mod plain {
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
     pub const REVERT_CONFIRM: &str =
         "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
+    pub const BOOLEAN_MENU: &str = "Combine the active piece with another one through a voxel remesh: subtract it, add it, or keep only where they overlap.";
+    pub const BOOLEAN_WITH: &str =
+        "What to do with this piece and the active one. The result replaces the active piece; the other piece stays.";
+    pub const BOOLEAN_SUBTRACT: &str = "Cut this piece's shape out of the active piece.";
+    pub const BOOLEAN_UNION: &str = "Fuse this piece's shape into the active piece, as one closed surface.";
+    pub const BOOLEAN_INTERSECT: &str = "Keep only the part of the active piece that is inside this piece.";
+    pub const PRINT_SCALE: &str =
+        "How many millimeters one scene unit is when printed. Sizes, volume and weights below follow it.";
+    pub const PRINT_MEASURE: &str = "Measure the active piece again (after sculpting, or after switching pieces).";
+    pub const PRINT_MIN_WALL: &str =
+        "The thinnest wall your printer and material can hold. The check marks anything thinner.";
+    pub const PRINT_CHECK_WALLS: &str = "Measure how thick the piece is at every point of its surface and report what's below the thinnest wall. Thin parts are masked so you can see them.";
+    pub const PRINT_HOLLOW_WALL: &str = "How thick the shell is after hollowing.";
+    pub const PRINT_DRAIN_COUNT: &str = "Holes in the bottom of the shell, so resin can drain out. 0 leaves it closed.";
+    pub const PRINT_DRAIN_RADIUS: &str = "The size of each drain hole.";
+    pub const PRINT_HOLLOW: &str = "Make the active piece a shell of the wall thickness above, with drain holes, through a voxel remesh. Undo brings it back.";
+    pub const PRINT_CUT_AT: &str = "Where the cut goes along the chosen axis, in scene units.";
+    pub const PRINT_CLEARANCE: &str = "The gap left around each pin so the parts fit together after printing.";
+    pub const PRINT_SPLIT: &str = "Cut the active piece in two along the plane, with pins on one side and matching holes on the other, so the parts line up when glued.";
+    pub const CLEAN_DEGENERATE: &str =
+        "Remove triangles that use the same point twice. They have no area and can upset exports and printing.";
     pub const ORBIT_AROUND: &str = "What orbiting turns around. Cursor: the surface under the pointer where you start the orbit (from empty space, the nearest part of the model), so you can turn around any spot you point at. Last stroke: where your last stroke ended. Centre of the view: the middle, as framing (F) sets it. With Cursor or Last stroke, that point stays put on screen while you orbit; F goes back to the middle until the next stroke or orbit.";
     pub const DYN_LEVELS: &str = "Not working on this piece: it has subdivision levels, which dynamic detail would remove. Keep this level only turns the level you see into the piece's mesh (undo brings the levels back).";
     pub const KEEP_LEVEL: &str = "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail and other tools that change the triangles work on it. One undo step.";

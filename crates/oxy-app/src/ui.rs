@@ -915,145 +915,155 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
         return;
     }
     let mut open = ed.show_print_dialog;
-    egui::Window::new("3D Print Tools").open(&mut open).default_width(360.0).resizable(true).show(ctx, |ui| {
-        ui.vertical(|ui| {
-            ui.heading("Physical Scale & Metrics");
-            ui.horizontal(|ui| {
-                ui.label("Unit scale:");
-                if ui
-                    .add(crate::widgets::Bar(
-                        egui::Slider::new(&mut ed.print_scale_mm_per_unit, 0.1..=100.0).suffix(" mm/unit"),
-                    ))
-                    .changed()
-                {
-                    ed.update_print_dimensions();
-                }
-            });
-
-            if ed.print_dimensions_cache.is_none() {
+    egui::Window::new("3D print").open(&mut open).default_width(360.0).resizable(true).show(ctx, |ui| {
+        let (good, warn) = (good_color(ui), ui.visuals().warn_fg_color);
+        let busy = ed.job.is_some();
+        ui.label(RichText::new("Size").strong());
+        egui::Grid::new("print_size").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Scale");
+            if tips::hover(
+                ui.add(crate::widgets::Bar(
+                    egui::Slider::new(&mut ed.print_scale_mm_per_unit, 0.1..=100.0).suffix(" mm per unit"),
+                )),
+                plain::PRINT_SCALE,
+            )
+            .changed()
+            {
                 ed.update_print_dimensions();
             }
-
-            if let Some(dims) = &ed.print_dimensions_cache {
-                ui.label(format!(
-                    "Dimensions: {:.1} × {:.1} × {:.1} mm",
-                    dims.size_mm.x, dims.size_mm.y, dims.size_mm.z
-                ));
-                ui.label(format!("Volume: {:.2} cm³  |  Area: {:.1} cm²", dims.volume_cm3, dims.surface_area_cm2));
-                if dims.is_watertight {
-                    ui.colored_label(egui::Color32::from_rgb(80, 200, 100), "✔ Watertight manifold (Print Ready)");
-                } else {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 150, 40),
-                        "⚠ Mesh has open boundaries or non-manifold edges",
-                    );
-                }
-                ui.label(format!(
-                    "Resin weight: ~{:.1} g  |  PLA weight: ~{:.1} g",
-                    dims.resin_weight_grams, dims.pla_weight_grams
-                ));
+            ui.end_row();
+        });
+        if ed.print_dimensions_cache.is_none() {
+            ed.update_print_dimensions();
+        }
+        if let Some(dims) = &ed.print_dimensions_cache {
+            ui.label(format!("{:.1} × {:.1} × {:.1} mm", dims.size_mm.x, dims.size_mm.y, dims.size_mm.z));
+            ui.label(
+                RichText::new(format!(
+                    "Volume {:.2} cm³ · surface {:.1} cm² · about {:.1} g of resin or {:.1} g of PLA",
+                    dims.volume_cm3, dims.surface_area_cm2, dims.resin_weight_grams, dims.pla_weight_grams
+                ))
+                .weak()
+                .small(),
+            );
+            if dims.is_watertight {
+                ui.colored_label(good, "Closed surface: ready to print");
+            } else {
+                ui.colored_label(warn, "Open edges or non-manifold edges: close holes before printing");
             }
+        }
+        if tips::hover(ui.small_button("Measure again"), plain::PRINT_MEASURE).clicked() {
+            ed.update_print_dimensions();
+        }
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            ui.heading("Wall-Thickness Check");
-            ui.horizontal(|ui| {
-                ui.label("Min wall thickness:");
+        ui.separator();
+        ui.label(RichText::new("Wall thickness check").strong());
+        egui::Grid::new("print_walls").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Thinnest wall");
+            tips::hover(
                 ui.add(crate::widgets::Bar(
                     egui::Slider::new(&mut ed.print_wall_thickness_mm, 0.5..=10.0).suffix(" mm"),
-                ));
-            });
-            if ui.button("Analyze Wall Thickness").clicked() {
-                ed.analyze_print_wall_thickness();
+                )),
+                plain::PRINT_MIN_WALL,
+            );
+            ui.end_row();
+        });
+        if tips::hover(ui.add_enabled(!busy, egui::Button::new("Check walls")), plain::PRINT_CHECK_WALLS).clicked() {
+            ed.analyze_print_wall_thickness();
+        }
+        if let Some(rep) = &ed.wall_thickness_report {
+            if rep.thin_ratio > 0.0 {
+                ui.colored_label(
+                    warn,
+                    format!(
+                        "{:.1}% of the surface is thinner than {:.1} mm (thinnest {:.2} mm)",
+                        rep.thin_ratio * 100.0,
+                        ed.print_wall_thickness_mm,
+                        rep.min_thickness_mm
+                    ),
+                );
+            } else {
+                ui.colored_label(good, format!("Every wall is at least {:.1} mm", ed.print_wall_thickness_mm));
             }
-            if let Some(rep) = &ed.wall_thickness_report {
-                if rep.thin_ratio > 0.0 {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(230, 80, 60),
-                        format!(
-                            "⚠ {:.1}% of surface is below {:.1} mm (min: {:.2} mm)",
-                            rep.thin_ratio * 100.0,
-                            ed.print_wall_thickness_mm,
-                            rep.min_thickness_mm
-                        ),
-                    );
-                } else {
-                    ui.colored_label(
-                        egui::Color32::from_rgb(80, 200, 100),
-                        format!("✔ All walls meet or exceed {:.1} mm threshold", ed.print_wall_thickness_mm),
-                    );
-                }
-            }
+        }
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            ui.heading("Hollowing & Drain Holes");
-            ui.horizontal(|ui| {
-                ui.label("Wall thickness:");
+        ui.separator();
+        ui.label(RichText::new("Hollow").strong());
+        egui::Grid::new("print_hollow").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Wall");
+            tips::hover(
                 ui.add(crate::widgets::Bar(
-                    egui::Slider::new(&mut ed.print_wall_thickness_mm, 1.0..=8.0).suffix(" mm"),
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Drain hole radius:");
+                    egui::Slider::new(&mut ed.print_hollow_thickness_mm, 1.0..=8.0).suffix(" mm"),
+                )),
+                plain::PRINT_HOLLOW_WALL,
+            );
+            ui.end_row();
+            ui.label("Drain holes");
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4))),
+                plain::PRINT_DRAIN_COUNT,
+            );
+            ui.end_row();
+            ui.label("Hole radius");
+            tips::hover(
                 ui.add(crate::widgets::Bar(
                     egui::Slider::new(&mut ed.print_drain_hole_radius_mm, 1.0..=10.0).suffix(" mm"),
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Drain holes:");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_drain_hole_count, 0..=4)));
-            });
-            let busy = ed.job.is_some();
-            if ui.add_enabled(!busy, egui::Button::new("Hollow mesh (voxel)")).clicked() {
-                ed.hollow_active_piece();
-            }
+                )),
+                plain::PRINT_DRAIN_RADIUS,
+            );
+            ui.end_row();
+        });
+        if tips::hover(ui.add_enabled(!busy, egui::Button::new("Hollow")), plain::PRINT_HOLLOW).clicked() {
+            ed.hollow_active_piece();
+        }
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
-
-            ui.heading("Split with Alignment Keys");
+        ui.separator();
+        ui.label(RichText::new("Split with alignment pins").strong());
+        let bounds = ed.scene.active().mesh.bounds();
+        let (min_val, max_val) = match ed.print_split_axis {
+            oxy_topo::SplitAxis::X => (bounds.min.x, bounds.max.x),
+            oxy_topo::SplitAxis::Y => (bounds.min.y, bounds.max.y),
+            oxy_topo::SplitAxis::Z => (bounds.min.z, bounds.max.z),
+        };
+        egui::Grid::new("print_split").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Cut across");
             ui.horizontal(|ui| {
-                ui.label("Cut Axis:");
                 ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::X, "X");
                 ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::Y, "Y");
                 ui.selectable_value(&mut ed.print_split_axis, oxy_topo::SplitAxis::Z, "Z");
             });
-            let bounds = ed.scene.active().mesh.bounds();
-            let (min_val, max_val) = match ed.print_split_axis {
-                oxy_topo::SplitAxis::X => (bounds.min.x, bounds.max.x),
-                oxy_topo::SplitAxis::Y => (bounds.min.y, bounds.max.y),
-                oxy_topo::SplitAxis::Z => (bounds.min.z, bounds.max.z),
-            };
-            ui.horizontal(|ui| {
-                ui.label("Plane Position:");
+            ui.end_row();
+            ui.label("Cut at");
+            tips::hover(
                 ui.add(crate::widgets::Bar(
                     egui::Slider::new(&mut ed.print_split_offset, min_val..=max_val).max_decimals(2),
-                ));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Pin Radius:");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_radius_mm, 1.0..=10.0).suffix(" mm")));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Pin Height:");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_height_mm, 2.0..=20.0).suffix(" mm")));
-            });
-            ui.horizontal(|ui| {
-                ui.label("Pin Clearance:");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_clearance_mm, 0.05..=1.0).suffix(" mm")));
-            });
-            if ui.add_enabled(!busy, egui::Button::new("Split into Interlocking Parts")).clicked() {
-                ed.split_active_piece_with_keys();
-            }
+                )),
+                plain::PRINT_CUT_AT,
+            );
+            ui.end_row();
+            ui.label("Pin radius");
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_radius_mm, 1.0..=10.0).suffix(" mm")));
+            ui.end_row();
+            ui.label("Pin height");
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_pin_height_mm, 2.0..=20.0).suffix(" mm")));
+            ui.end_row();
+            ui.label("Clearance");
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.print_clearance_mm, 0.05..=1.0).suffix(" mm"))),
+                plain::PRINT_CLEARANCE,
+            );
+            ui.end_row();
         });
+        if tips::hover(ui.add_enabled(!busy, egui::Button::new("Split")), plain::PRINT_SPLIT).clicked() {
+            ed.split_active_piece_with_keys();
+        }
     });
     ed.show_print_dialog = open;
+}
+
+/// The color for "all good" messages, readable in light and dark themes.
+fn good_color(ui: &Ui) -> Color32 {
+    if ui.visuals().dark_mode { Color32::from_rgb(110, 200, 120) } else { Color32::from_rgb(30, 130, 50) }
 }
 
 fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
@@ -1061,44 +1071,49 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
         return;
     }
     let mut open = ed.show_diagnostics;
-    egui::Window::new("Mesh Topology Diagnostics").open(&mut open).default_width(340.0).resizable(false).show(
-        ctx,
-        |ui| {
-            ui.vertical(|ui| {
-                let active = ed.scene.active();
-                ui.heading(format!("Diagnostics: {}", active.name));
-                ui.add_space(4.0);
-
-                let v_count = active.mesh.vertex_count();
-                let t_count = active.mesh.triangle_count();
-                ui.label(format!("Vertices: {v_count}  |  Triangles: {t_count}"));
-
-                let report = ed.check_manifold();
-                ui.add_space(6.0);
-
-                if report.is_manifold {
-                    ui.colored_label(egui::Color32::from_rgb(80, 220, 100), "✔ 2-Manifold Watertight Surface");
-                } else {
-                    ui.colored_label(egui::Color32::from_rgb(240, 140, 40), "⚠ Non-Manifold / Boundary Seams Present");
-                }
-
-                ui.add_space(4.0);
-                ui.label(format!("Boundary edges: {}", report.boundary_edge_count));
-                ui.label(format!("Non-manifold edges: {}", report.non_manifold_edge_count));
-                ui.label(format!("Degenerate triangles: {}", report.degenerate_triangle_count));
-
-                ui.add_space(8.0);
-                if ui.button("Clean Degenerate Triangles").clicked() {
-                    ed.clean_mesh();
-                }
-            });
-        },
-    );
+    let report = ed.manifold_report();
+    egui::Window::new("Topology diagnostics").open(&mut open).default_width(340.0).resizable(false).show(ctx, |ui| {
+        let (good, warn) = (good_color(ui), ui.visuals().warn_fg_color);
+        let active = ed.scene.active();
+        ui.label(RichText::new(&active.name).strong());
+        ui.label(
+            RichText::new(format!("{} points, {} triangles", active.mesh.vertex_count(), active.mesh.triangle_count()))
+                .weak()
+                .small(),
+        );
+        ui.add_space(4.0);
+        if report.is_manifold {
+            ui.colored_label(good, "Closed surface: no open or non-manifold edges");
+        } else {
+            ui.colored_label(warn, "Open or non-manifold edges");
+        }
+        egui::Grid::new("diagnostics").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+            ui.label("Open edges");
+            ui.label(report.boundary_edge_count.to_string());
+            ui.end_row();
+            ui.label("Non-manifold edges");
+            ui.label(report.non_manifold_edge_count.to_string());
+            ui.end_row();
+            ui.label("Degenerate triangles");
+            ui.label(report.degenerate_triangle_count.to_string());
+            ui.end_row();
+        });
+        ui.add_space(6.0);
+        let can_clean = report.degenerate_triangle_count > 0;
+        if tips::hover(
+            ui.add_enabled(can_clean, egui::Button::new("Remove degenerate triangles")),
+            plain::CLEAN_DEGENERATE,
+        )
+        .clicked()
+        {
+            ed.clean_mesh();
+        }
+    });
     ed.show_diagnostics = open;
 }
 
 fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("General & Workflow");
+    ui.heading("General");
     ui.label(RichText::new("Interface layout, arrangement, and default sculpting behavior.").weak().small());
     ui.add_space(6.0);
 
@@ -1264,7 +1279,7 @@ fn settings_interface_tab(ui: &mut Ui, ed: &mut Editor) {
 
 fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
     let mut remove = None;
-    ui.heading("Plugins & Scripting");
+    ui.heading("Plugins");
     ui.label(RichText::new("Extend OxyBrush with custom Python scripts and add-ons.").weak().small());
     ui.add_space(6.0);
 
@@ -1338,7 +1353,7 @@ fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn settings_keymap_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("Keymap & Navigation");
+    ui.heading("Keymap");
     ui.label(RichText::new("Configure mouse orbit, pan, zoom, and keyboard shortcuts.").weak().small());
     ui.add_space(6.0);
 
@@ -1387,7 +1402,7 @@ fn settings_keymap_tab(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn settings_agent_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("Local AI Agent");
+    ui.heading("AI agent");
     ui.label(
         RichText::new("Connect external AI coding and agent tools via local MCP server (127.0.0.1).").weak().small(),
     );
@@ -1422,7 +1437,7 @@ fn settings_agent_tab(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn settings_updates_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("Software Updates");
+    ui.heading("Updates");
     ui.label(RichText::new(format!("Installed version: OxyBrush {}", env!("CARGO_PKG_VERSION"))).weak().small());
     ui.add_space(6.0);
 
@@ -2163,7 +2178,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     }
     if ed.brush_kind == BrushKind::InsertPrimitive {
         ui.add_space(6.0);
-        ui.label(RichText::new("Insert Shape").strong().small());
+        ui.label(RichText::new("Insert shape").strong().small());
         ui.horizontal_wrapped(|ui| {
             for shape in oxy_sculpt::InsertShape::ALL {
                 if ui.selectable_label(ed.insert_shape == shape, shape.label()).clicked() {
@@ -2485,16 +2500,25 @@ fn pointer_slider(ctx: &egui::Context, ed: &mut Editor) {
 /// The quick controls floating over the center of the viewport, close to
 /// where you sculpt.
 fn floating_quick_bar(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
-    let (pivot, pos) = match ed.quick_bar {
-        QuickBar::ViewportBottom => (egui::Align2::CENTER_BOTTOM, canvas.center_bottom() - egui::vec2(0.0, 12.0)),
-        _ => (egui::Align2::CENTER_TOP, canvas.center_top() + egui::vec2(0.0, 10.0)),
+    // At the top, keep clear of the axis gizmo in the top-right corner
+    // (84 points and its margin, see `orientation_gizmo`); on a narrow
+    // viewport (the Touch layout's large controls) the bar wraps onto a
+    // second row instead of running under the gizmo and the view strip.
+    let top = ed.quick_bar != QuickBar::ViewportBottom;
+    let room = if top { canvas.with_max_x(canvas.max.x - 104.0) } else { canvas };
+    let (pivot, pos) = if top {
+        (egui::Align2::CENTER_TOP, room.center_top() + egui::vec2(0.0, 10.0))
+    } else {
+        (egui::Align2::CENTER_BOTTOM, room.center_bottom() - egui::vec2(0.0, 12.0))
     };
-    egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).show(ctx, |ui| {
+    let max_width = (room.width() - 40.0).max(200.0);
+    egui::Area::new(egui::Id::unique("quick_bar")).pivot(pivot).fixed_pos(pos).constrain_to(room).show(ctx, |ui| {
         egui::Frame::popup(ui.style())
             .corner_radius(widgets::rounding(10.0))
             .inner_margin(egui::Margin::symmetric(10, 6))
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
+                ui.set_max_width(max_width);
+                ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().slider_width = if ed.layout == UiLayout::Touch { 180.0 } else { 140.0 };
                     quick_controls(ui, ed);
                 });
@@ -2943,7 +2967,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                         gizmo_ops_menu(ui, ed);
                         if (ed.custom_gizmo_pivot.is_some() || ed.custom_gizmo_rotation.is_some())
                             && tips::hover(
-                                ui.button("Reset Pivot"),
+                                ui.button("Reset pivot"),
                                 "Reset the gizmo pivot and orientation back to the unmasked center",
                             )
                             .clicked()
@@ -3437,7 +3461,7 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                 ui.label(format!("{}… {:.0} s", job.label, job.started.elapsed().as_secs_f32()));
             }
             if let Some(e) = &ed.autosaver.last_error {
-                ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
+                ui.colored_label(ui.visuals().error_fg_color, format!("Autosave failed: {e}"));
             }
             let accent = ed.accent_color();
             if let Some(name) = &ed.plugin_running {
@@ -3656,24 +3680,24 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
-    tips::menu(ui, "Boolean (voxel)", "Voxel boolean tools: union, difference, intersection", |ui| {
+    tips::menu(ui, "Boolean", plain::BOOLEAN_MENU, |ui| {
         let other_pieces: Vec<(u64, String)> =
             ed.scene.pieces.iter().filter(|p| p.id != ed.scene.active().id).map(|p| (p.id, p.name.clone())).collect();
         if other_pieces.is_empty() {
-            ui.label(RichText::new("Needs at least 2 pieces in the scene").weak());
+            ui.label(RichText::new("Needs a second piece").weak());
         } else {
             for (id, name) in other_pieces {
-                let label = format!("With \"{name}\"");
-                tips::menu(ui, &label, "Choose Boolean operation with this piece", |ui| {
-                    if ui.button("Difference (Subtract from active)").clicked() {
+                let label = format!("With {name}");
+                tips::menu(ui, &label, plain::BOOLEAN_WITH, |ui| {
+                    if tips::hover(ui.button("Subtract it"), plain::BOOLEAN_SUBTRACT).clicked() {
                         ed.boolean_operation(id, oxy_topo::BooleanOp::Difference);
                         ui.close();
                     }
-                    if ui.button("Union (Weld into active)").clicked() {
+                    if tips::hover(ui.button("Add it (union)"), plain::BOOLEAN_UNION).clicked() {
                         ed.boolean_operation(id, oxy_topo::BooleanOp::Union);
                         ui.close();
                     }
-                    if ui.button("Intersection (Common volume)").clicked() {
+                    if tips::hover(ui.button("Keep only the overlap"), plain::BOOLEAN_INTERSECT).clicked() {
                         ed.boolean_operation(id, oxy_topo::BooleanOp::Intersection);
                         ui.close();
                     }
@@ -3681,21 +3705,11 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     });
-    if tips::hover(
-        ui.button("3D Print Tools..."),
-        "Open 3D print preparation tools (scale, volume, wall thickness, hollowing, split with keys)",
-    )
-    .clicked()
-    {
+    if tips::button(ui, "3D print…", Cmd::PrintTools).clicked() {
         ed.show_print_dialog = true;
         ed.update_print_dimensions();
     }
-    if tips::hover(
-        ui.button("Topology Diagnostics..."),
-        "Inspect mesh manifold topology, boundary seams, and clean degenerate triangles",
-    )
-    .clicked()
-    {
+    if tips::button(ui, "Topology diagnostics…", Cmd::Diagnostics).clicked() {
         ed.show_diagnostics = true;
     }
     ui.separator();
@@ -4384,7 +4398,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
         ui.label(strength_label);
         tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0))),
+            ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2))),
             if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
         );
         ui.end_row();
@@ -4408,10 +4422,16 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         );
         ui.end_row();
         ui.label("Spacing");
-        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0))), plain::SPACING);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0).max_decimals(2))),
+            plain::SPACING,
+        );
         ui.end_row();
         ui.label("Auto smooth");
-        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0))), plain::AUTO_SMOOTH);
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0).max_decimals(2))),
+            plain::AUTO_SMOOTH,
+        );
         ui.end_row();
         if ed.brush_kind.uses_gravity() {
             ui.label("Gravity");
@@ -4738,7 +4758,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ui.horizontal(|ui| {
             ui.label("Adaptivity");
             tips::hover(
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.remesh_adaptivity, 0.0..=1.0))),
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.remesh_adaptivity, 0.0..=1.0).max_decimals(2))),
                 "Simplifies flat planar areas while keeping high-curvature areas dense",
             );
         });
@@ -5005,7 +5025,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             );
             ui.add_space(8.0);
             ui.horizontal(|ui| {
-                if ui.button("Save As…").clicked() {
+                if ui.button("Save as…").clicked() {
                     ed.save_error = None;
                     *action = Some(UiAction::SaveAs);
                 }

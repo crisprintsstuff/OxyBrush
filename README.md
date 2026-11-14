@@ -97,7 +97,7 @@ OxyBrush remembers your window, layout, arrangement, brush order, theme, materia
 
 - **OxyCharacter:** OxyCharacter opens its character in OxyBrush as a project with a `character.oxb.oxylink.json` file next to it. OxyBrush shows **Linked to OxyCharacter** in the top bar; sculpt, add pieces, then click it (or **File > Send back to OxyCharacter**) to send the result back. Sculpted changes to `OxyCharacter Body` return as a morph and new pieces as accessories. To keep the body a morph, use subdivision levels rather than operations that change its topology (remesh, decimate, Boolean, split, delete hidden); OxyBrush warns you once if you do.
 - **Blender:** the OxyBrush Bridge add-on sends meshes from Blender to OxyBrush and back ([RFC 0010](docs/rfcs/0010-blender-bridge.md)). It hasn't been tested inside Blender yet.
-- **An AI agent on your computer** (off unless you turn it on): **Preferences > AI Agent** lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
+- **An AI agent on your computer** (off unless you turn it on): **Preferences > AI agent** lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).
 
 ## Help test OxyBrush
 
@@ -139,7 +139,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 - **Symmetrize** (Mesh > Symmetrize): makes a piece symmetric after the fact. It keeps one half, replaces the other with its mirror image and welds the seam (any axis, either side).
 - **Retopology** (Mesh > Retopology): draw a clean quad mesh over a sculpt. Click to place points on the surface, Shift+click to make quads, Tab+drag a border edge to extend, Ctrl+click an edge to add a loop, Shift+drag to relax (Alt+click pins points so relax leaves them). The result is a new piece that exports as quads; **Subdivide and project** gives it levels that carry the sculpt's detail ([RFC 0012](docs/rfcs/0012-retopology.md)).
 - **Poly Edit** (Mesh > Poly Edit, [RFC 0018](docs/rfcs/0018-poly-edit.md), first steps): model a low-polygon piece (a primitive, a retopology mesh, anything up to 400,000 triangles) by pointing at a face, an edge or a point; what its action would change lights up. Each kind has its own action, so there is no mode to switch. **Faces:** drag to **extrude** or **inset**, drag to **move** along the normal, click to **delete**; **Reach** spreads it to the face loop, the face group, the flat region or the island. **Edges:** click to **insert an edge loop** (drag to slide it), **delete** edges or a whole loop (merging faces), drag a border edge to **extrude** it, click one to **close the hole**. **Points:** drag to **move** one (drop it on another to **weld** them), or **delete** it. Mirror across X does the other side too. Each change is one undo step; Escape cancels a drag. Polygons with more than four corners are kept and saved. **Shaping:** **bevel** faces (a chamfered extrude) or edges (with corner faces where three meet), flat or rounded over several rows, **bridge** two faces with a tube (rows and twist), **slide** an edge or loop along its neighbours, **spin** an edge, **split** a face between two points, and **equalize** the spacing of points along the surface. **Y** repeats the last action, with the same amount, on what's under the pointer. **Smooth:** crease edges or points (with a weight), preview the smooth subdivided surface live under the polygons, then **Subdivide (smooth)** to keep modeling on it or **Smooth and sculpt** to hand it to the brushes (Catmull–Clark with semi-sharp creases).
-- **Mesh repair:** Close holes, Delete hidden, and a Topology Diagnostics window that finds open edges, non-manifold edges and degenerate triangles.
+- **Mesh repair:** Close holes, Delete hidden, and a Topology diagnostics window (Mesh > Topology diagnostics…) that finds open edges, non-manifold edges and degenerate triangles.
 
 ### Pieces, masks and groups
 
@@ -158,7 +158,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### 3D printing
 
-**Mesh > 3D Print Tools…** shows real-world size in millimetres, surface area and volume, checks that the mesh is closed, and estimates resin and filament weight. It also has:
+**Mesh > 3D print…** shows real-world size in millimetres, surface area and volume, checks that the mesh is closed, and estimates resin and filament weight. It also has:
 - **Wall thickness:** finds walls that are too thin and paints them red/orange on the model.
 - **Hollowing:** hollows a piece with a chosen wall thickness and adds drain holes.
 - **Split for printing:** cuts a piece along X, Y or Z into parts with registration pins and matching sockets (0.2 mm clearance).
@@ -229,7 +229,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Middle-drag on a panel | Scroll the panel |
 | Ctrl+K | Command palette |
 | Space | Find a brush by name |
-| `Ctrl+,` | Preferences window (General, Pen & tablet, Interface, Plugins, Keymap, AI Agent, Updates) |
+| `Ctrl+,` | Preferences window (General, Pen & tablet, Interface, Plugins, Keymap, AI agent, Updates) |
 | `F1` / `F2` | Full shortcut list / built-in guide |
 
 These are the OxyBrush preset. **Preferences > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit or Right-drag orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.

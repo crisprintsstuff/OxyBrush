@@ -553,7 +553,7 @@ impl SettingsTab {
             SettingsTab::Interface => "Interface",
             SettingsTab::Plugins => "Plugins",
             SettingsTab::Keymap => "Keymap",
-            SettingsTab::Agent => "AI Agent",
+            SettingsTab::Agent => "AI agent",
             SettingsTab::Updates => "Updates",
         }
     }
@@ -1285,6 +1285,10 @@ pub struct Editor {
     pub show_print_dialog: bool,
     /// Mesh topology diagnostics dialog visibility.
     pub show_diagnostics: bool,
+    /// The diagnostics window's last report, for (piece, topology version):
+    /// checking a large mesh on every frame was slow, and the report only
+    /// changes with the triangles.
+    diagnostics_cache: Option<((u64, u64), oxy_mesh::topo::ManifoldReport)>,
     /// Unit scale: millimeters per world unit.
     pub print_scale_mm_per_unit: f32,
     /// The power-of-ten scale given to the first import that was far out of
@@ -1292,8 +1296,12 @@ pub struct Editor {
     /// later import into the same document so parts from one source still
     /// fit together. Cleared when another document is opened or started.
     pub import_scale: Option<f32>,
-    /// Minimum wall thickness in millimeters for 3D printing and hollowing.
+    /// The thinnest wall the 3D print check accepts, in millimeters.
     pub print_wall_thickness_mm: f32,
+    /// The wall Hollow leaves, in millimeters. Separate from the check's
+    /// threshold: they used to share one value, so setting one silently
+    /// changed the other.
+    pub print_hollow_thickness_mm: f32,
     /// Radius of drain holes in millimeters.
     pub print_drain_hole_radius_mm: f32,
     /// Number of bottom drain holes.
@@ -1542,9 +1550,11 @@ impl Default for Editor {
             extract_smooth: 2,
             show_print_dialog: false,
             show_diagnostics: false,
+            diagnostics_cache: None,
             print_scale_mm_per_unit: 10.0,
             import_scale: None,
             print_wall_thickness_mm: 2.0,
+            print_hollow_thickness_mm: 2.0,
             print_drain_hole_radius_mm: 2.5,
             print_drain_hole_count: 1,
             print_split_axis: oxy_topo::SplitAxis::Y,
@@ -5854,27 +5864,32 @@ impl Editor {
             self.print_wall_thickness_mm * 5.0,
         );
 
-        let mut color = piece.mesh.color.clone();
-        if color.len() != piece.mesh.vertex_count() {
-            color = vec![Vec3::ONE; piece.mesh.vertex_count()];
+        // Thin points are painted red (redder where thinner), as an undo
+        // step: it changes the vertex color, which may hold the user's paint.
+        let threshold = self.print_wall_thickness_mm;
+        let thin: Vec<(usize, f32)> = rep
+            .vertex_thickness_mm
+            .iter()
+            .enumerate()
+            .filter(|&(_, &t)| t < threshold)
+            .map(|(i, &t)| (i, (t / threshold).clamp(0.0, 1.0)))
+            .collect();
+        if !thin.is_empty() {
+            self.edit_color("Mark thin walls", |m| {
+                for &(i, severity) in &thin {
+                    if let Some(c) = m.color.get_mut(i) {
+                        *c = Vec3::new(1.0, severity * 0.4, 0.0);
+                    }
+                }
+            });
         }
-
-        for (i, &t) in rep.vertex_thickness_mm.iter().enumerate() {
-            if t < self.print_wall_thickness_mm {
-                let severity = (t / self.print_wall_thickness_mm).clamp(0.0, 1.0);
-                color[i] = Vec3::new(1.0, severity * 0.4, 0.0);
-            }
-        }
-
-        let piece_mut = self.scene.active_mut();
-        piece_mut.mesh.color = color;
-        piece_mut.mesh.mark_all_dirty();
-
         self.status = format!(
-            "Wall thickness analysis: Min {:.2} mm, Avg {:.2} mm. {:.1}% thin surface.",
+            "Walls: thinnest {:.2} mm, average {:.2} mm; {:.1}% of the surface is thinner than {:.1} mm{}",
             rep.min_thickness_mm,
             rep.avg_thickness_mm,
-            rep.thin_ratio * 100.0
+            rep.thin_ratio * 100.0,
+            threshold,
+            if thin.is_empty() { "" } else { " (marked in red; Undo removes the marks)" }
         );
         self.wall_thickness_report = Some(rep);
     }
@@ -5884,7 +5899,7 @@ impl Editor {
         let active = self.scene.active();
         let mesh = active.mesh.clone();
         let bounds = mesh.bounds();
-        let wall_th = self.print_wall_thickness_mm;
+        let wall_th = self.print_hollow_thickness_mm;
         let scale = self.print_scale_mm_per_unit;
         let r_hole = self.print_drain_hole_radius_mm;
         let n_holes = self.print_drain_hole_count;
@@ -6728,6 +6743,21 @@ impl Editor {
     /// Run a 2-manifold topology check on the active piece.
     pub fn check_manifold(&self) -> oxy_mesh::topo::ManifoldReport {
         oxy_mesh::topo::check_manifold(&self.scene.active().mesh)
+    }
+
+    /// The active piece's topology report, computed again only when its
+    /// triangles have changed (or another piece is active).
+    pub fn manifold_report(&mut self) -> oxy_mesh::topo::ManifoldReport {
+        let piece = self.scene.active();
+        let key = (piece.id, piece.mesh.topology_version());
+        match &self.diagnostics_cache {
+            Some((k, r)) if *k == key => r.clone(),
+            _ => {
+                let r = self.check_manifold();
+                self.diagnostics_cache = Some((key, r.clone()));
+                r
+            }
+        }
     }
 
     /// Clean zero-area and degenerate triangles on the active piece, undoably.
@@ -7865,6 +7895,36 @@ mod tests {
         assert_eq!(next.gravity(BrushKind::Clay), 0.6);
         assert_eq!(next.gravity(BrushKind::Smooth), 0.2);
         assert_eq!(next.gravity(BrushKind::Draw), 0.0);
+    }
+
+    #[test]
+    fn wall_check_marks_are_undoable_and_keep_the_paint() {
+        let mut e = editor();
+        // Paint the piece, then check its walls with a threshold so high
+        // that every point is "thin".
+        e.edit_color("Fill color", |m| m.fill_color(Vec3::new(0.0, 0.0, 1.0), 1.0));
+        let painted = e.scene.active().mesh.color.clone();
+        e.print_scale_mm_per_unit = 1.0;
+        e.print_wall_thickness_mm = 10.0;
+        e.analyze_print_wall_thickness();
+        assert_ne!(e.scene.active().mesh.color, painted, "thin points are marked");
+        assert_eq!(e.history.undo_labels().last(), Some("Mark thin walls"));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.color, painted, "Undo puts the paint back");
+        // The check's threshold and Hollow's wall are separate settings.
+        e.print_hollow_thickness_mm = 3.0;
+        assert_eq!(e.print_wall_thickness_mm, 10.0);
+    }
+
+    #[test]
+    fn diagnostics_report_is_cached_until_the_triangles_change() {
+        let mut e = editor();
+        let first = e.manifold_report();
+        assert_eq!(e.manifold_report(), first);
+        let key = e.diagnostics_cache.as_ref().unwrap().0;
+        e.subdivide(true);
+        let _ = e.manifold_report();
+        assert_ne!(e.diagnostics_cache.as_ref().unwrap().0, key, "new triangles, new report");
     }
 
     #[test]
