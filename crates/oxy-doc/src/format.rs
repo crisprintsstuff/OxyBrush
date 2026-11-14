@@ -72,6 +72,14 @@
 //!   caps:u8 mirror:u8 mirror_x:f32 group:u32 triangles:u32
 //!   fingerprint:f32*3`. Older readers skip it; the tubes stay ordinary
 //!   triangles.
+//! - `TUBX` (optional, since 4.0.0-beta.11): the shape of the tubes in the
+//!   **preceding** `TUBE`, in the same order: `count:u32` then per tube
+//!   `style:u8` (0 tube, 1 braid) `twist:f32 coil_size:f32 coil_turns:f32
+//!   spread:f32 braid_turns:f32 triangles:u32`. Written only when some tube
+//!   is twisted, coiled or braided. Such a tube's `TUBE` entry has
+//!   `triangles` 0 and its real count is here, so an older reader, which
+//!   skips `TUBX`, never matches it and keeps it as ordinary triangles
+//!   instead of reopening it as a plain tube.
 //! - `CURV` (optional, since 3.0.6): a Curve Move curve (RFC 0005) that was
 //!   open on the **preceding** `PIEC` when it was saved; the piece itself is
 //!   saved without the curve's bend. `n:u32` then `points:f32*6n` (position
@@ -198,6 +206,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if !p.tubes.is_empty() {
             sections.push((*b"TUBE", encode_tubes(&p.tubes)));
+            if p.tubes.iter().any(|t| !t.shape.is_plain()) {
+                sections.push((*b"TUBX", encode_tube_shapes(&p.tubes)));
+            }
         }
         if let Some(c) = &p.curve {
             sections.push((*b"CURV", encode_curve(c)));
@@ -424,6 +435,21 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 match decode_tubes(&raw) {
                     Ok(t) => piece.tubes = t,
                     Err(e) => log::warn!("ignoring damaged tube recipes on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"TUBX" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("TUBX before any piece".into()))?;
+                match decode_tube_shapes(&raw) {
+                    Ok(shapes) if shapes.len() == piece.tubes.len() => {
+                        for (t, (shape, triangles)) in piece.tubes.iter_mut().zip(shapes) {
+                            if !shape.is_plain() {
+                                t.shape = shape;
+                                t.triangles = triangles;
+                            }
+                        }
+                    }
+                    Ok(_) => log::warn!("ignoring tube shapes that don't match the tubes of piece {:?}", piece.name),
+                    Err(e) => log::warn!("ignoring damaged tube shapes on piece {:?}: {e}", piece.name),
                 }
             }
             b"CURV" => {
@@ -716,7 +742,8 @@ fn encode_tubes(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
         b.push(t.mirror as u8);
         f(&mut b, t.mirror_x);
         u(&mut b, t.group);
-        u(&mut b, t.triangles);
+        // Shaped tubes: the real count is in TUBX (see the header).
+        u(&mut b, if t.shape.is_plain() { t.triangles } else { 0 });
         for x in t.fingerprint.to_array() {
             f(&mut b, x);
         }
@@ -749,10 +776,68 @@ fn decode_tubes(raw: &[u8]) -> Result<Vec<crate::TubeRecipe>> {
         if !ok {
             return Err(Error::Corrupt("invalid tube recipe".into()));
         }
-        out.push(crate::TubeRecipe { points, radii, sides, caps, mirror, mirror_x, group, triangles, fingerprint });
+        out.push(crate::TubeRecipe {
+            points,
+            radii,
+            sides,
+            caps,
+            mirror,
+            mirror_x,
+            shape: Default::default(),
+            group,
+            triangles,
+            fingerprint,
+        });
     }
     Ok(out)
 }
+
+fn encode_tube_shapes(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(4 + tubes.len() * 25);
+    b.extend_from_slice(&(tubes.len() as u32).to_le_bytes());
+    for t in tubes {
+        let s = &t.shape;
+        b.push(s.braid as u8);
+        for x in [s.twist, s.coil_size, s.coil_turns, s.spread, s.braid_turns] {
+            b.extend_from_slice(&x.to_le_bytes());
+        }
+        b.extend_from_slice(&t.triangles.to_le_bytes());
+    }
+    b
+}
+
+fn decode_tube_shapes(raw: &[u8]) -> Result<Vec<(oxy_mesh::primitives::TubeShape, u32)>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, 25)?;
+    (0..count)
+        .map(|_| {
+            let style = r.u8()?;
+            let [twist, coil_size, coil_turns, spread, braid_turns] =
+                [r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?];
+            let triangles = r.u32()?;
+            let shape = oxy_mesh::primitives::TubeShape {
+                twist,
+                coil_size,
+                coil_turns,
+                braid: style == 1,
+                spread,
+                braid_turns,
+            };
+            let ok = style <= 1
+                && [twist, coil_size, coil_turns, spread, braid_turns].iter().all(|x| x.is_finite())
+                && (0.0..=MAX_TUBE_SHAPE).contains(&coil_size)
+                && (0.0..=1.0).contains(&spread)
+                && [twist, coil_turns, braid_turns].iter().all(|x| x.abs() <= MAX_TUBE_SHAPE);
+            if ok { Ok((shape, triangles)) } else { Err(Error::Corrupt("invalid tube shape".into())) }
+        })
+        .collect()
+}
+
+/// Bound on a tube's twist, coil and braid numbers in a file: far past
+/// what the Tube window offers, but keeps a damaged file from asking for a
+/// mesh too fine to build.
+const MAX_TUBE_SHAPE: f32 = 1000.0;
 
 fn encode_cage(c: &oxy_mesh::retopo::Cage) -> Vec<u8> {
     let mut b = Vec::with_capacity(8 + c.positions.len() * 12 + c.faces.len() * 16);
@@ -1539,6 +1624,7 @@ mod tests {
             caps: true,
             mirror: true,
             mirror_x: 0.25,
+            shape: Default::default(),
             group: 0,
             triangles,
             fingerprint,
@@ -1559,6 +1645,54 @@ mod tests {
         let at = old.windows(4).position(|w| w == b"TUBE").unwrap();
         old[at..at + 4].copy_from_slice(b"ZZZZ");
         assert!(decode(&old).unwrap().pieces[0].tubes.is_empty());
+        assert!(!bytes.windows(4).any(|w| w == b"TUBX"), "plain tubes need no TUBX");
+    }
+
+    #[test]
+    fn tube_shapes_roundtrip_and_older_readers_dont_reopen_them_plain() {
+        use crate::{Piece, TubeRecipe, group_fingerprint};
+        use oxy_mesh::primitives::TubeShape;
+        let points = vec![Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0)];
+        let radii = vec![0.3, 0.3];
+        let shape =
+            TubeShape { twist: 0.5, coil_size: 1.5, coil_turns: 2.0, braid: true, spread: 0.4, braid_turns: 3.0 };
+        let mesh = primitives::tube_shaped(&points, &radii, 12, true, shape);
+        let (triangles, fingerprint) = group_fingerprint(&mesh, 0);
+        let mut piece = Piece::new("Braid", mesh);
+        let recipe = TubeRecipe {
+            points,
+            radii,
+            sides: 12,
+            caps: true,
+            mirror: false,
+            mirror_x: 0.0,
+            shape,
+            group: 0,
+            triangles,
+            fingerprint,
+        };
+        piece.tubes.push(recipe.clone());
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"TUBX").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(loaded.tubes, vec![recipe]);
+        assert!(loaded.tube_recipe().is_some());
+        // A reader without TUBX gets the plain recipe, which doesn't match
+        // the braid's triangles: the braid stays ordinary triangles.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"TUBX").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let piece = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert!(piece.tubes[0].shape.is_plain());
+        assert!(piece.tube_recipe().is_none(), "an older reader must not reopen a braid as a plain tube");
+        // Damaged numbers are refused rather than built.
+        let mut bad = encode_tube_shapes(&[TubeRecipe {
+            shape: TubeShape { coil_turns: f32::NAN, ..shape },
+            ..piece.tubes[0].clone()
+        }]);
+        assert!(decode_tube_shapes(&bad).is_err());
+        bad.truncate(10);
+        assert!(decode_tube_shapes(&bad).is_err());
     }
 
     #[test]

@@ -5,6 +5,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Tube Twist, Spin and Braid** (in the Tube window, for the Tube brush and Pieces > + Add > Tube):
+  - **Twist** turns the tube's cross-section (or a braid) along its length.
+  - **Spin** coils the tube around its path like a spring, with a coil size (in tube thicknesses) and the number of turns.
+  - **Braid** makes three round strands woven over and under each other along the path, inside the tube's thickness. **Spread** goes from tight (the strands touch) to loose (a strand's width of gap), and **Turn** sets how many weaves; the strands are sized so they never pass through each other, whatever the weave.
+  - They combine (a braid can coil), stay editable with Edit tube…, and are saved with the project in a new `TUBX` section. Older versions open such tubes as ordinary mesh rather than as plain tubes. The next tube starts with the last shape used.
 - **Compressed glTF/GLB export** (File > **glTF compression** under Export, or Preferences > General; `oxybrush-cli … --compress meshopt|quantize|none`; none by default):
   - **Quantized** stores positions as 16-bit, normals and colors as 8-bit, and indices as 16-bit for pieces up to 65,535 points (the standard extension `KHR_mesh_quantization`): about half the size for pieces of that size, three quarters for bigger ones.
   - **Meshopt** quantizes, then compresses every buffer with `EXT_meshopt_compression`, nothing further lost: points renumbered in the order the triangles first use them, vertex data delta-coded, triangles mostly a byte each. A tester's 45k-triangle character went from 1.08 MB to 0.27 MB (25%), the same remeshed to 164k triangles from 3.95 MB to 0.88 MB (22%). The encoder is written from the published specification; meshoptimizer's own decoder reads the files back to exactly the same triangles and shape keys.

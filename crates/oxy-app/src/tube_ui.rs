@@ -67,6 +67,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label("Ends");
                 ui.checkbox(&mut tube.caps, "Rounded caps");
                 ui.end_row();
+                shape_rows(ui, &mut tube.shape);
                 ui.label("Mirror");
                 ui.checkbox(&mut tube.mirror, "Also across the X mirror plane");
                 ui.end_row();
@@ -101,6 +102,61 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         ed.cancel_tube();
     } else if accept {
         ed.accept_tube();
+    }
+}
+
+/// Twist, Spin and Braid rows of the Tube window's grid.
+fn shape_rows(ui: &mut egui::Ui, shape: &mut oxy_mesh::primitives::TubeShape) {
+    use crate::widgets::Bar;
+    ui.label("Twist")
+        .on_hover_text("Turns of the cross-section along the whole tube (most visible with few sides or a braid)");
+    ui.add(Bar(egui::Slider::new(&mut shape.twist, -8.0..=8.0).step_by(0.05).suffix(" turns")));
+    ui.end_row();
+    ui.label("Spin").on_hover_text("Coil the tube around its path like a spring");
+    let mut spin = shape.coil_size > 0.0;
+    if ui.checkbox(&mut spin, "Coil around the path").changed() {
+        if spin {
+            shape.coil_size = 2.0;
+            if shape.coil_turns == 0.0 {
+                shape.coil_turns = 6.0;
+            }
+        } else {
+            shape.coil_size = 0.0;
+        }
+    }
+    ui.end_row();
+    if spin {
+        ui.label("   Coil size").on_hover_text("The coil's radius, in tube thicknesses");
+        ui.add(Bar(egui::Slider::new(&mut shape.coil_size, 0.05..=20.0).logarithmic(true)));
+        ui.end_row();
+        ui.label("   Coil turns").on_hover_text("Turns of the coil along the whole path; negative winds the other way");
+        ui.add(Bar(egui::Slider::new(&mut shape.coil_turns, -100.0..=100.0).step_by(0.25)));
+        ui.end_row();
+    }
+    ui.label("Style");
+    ui.horizontal(|ui| {
+        ui.selectable_value(&mut shape.braid, false, "Tube");
+        if ui
+            .selectable_value(&mut shape.braid, true, "Braid")
+            .on_hover_text("Three round strands woven along the path")
+            .changed()
+            && shape.braid_turns == 0.0
+        {
+            shape.braid_turns = 4.0;
+        }
+    });
+    ui.end_row();
+    if shape.braid {
+        ui.label("   Spread").on_hover_text("Tight: the strands touch. Loose: a strand's width of gap between them");
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("tight").weak().small());
+            ui.add(Bar(egui::Slider::new(&mut shape.spread, 0.0..=1.0).show_value(false)));
+            ui.label(RichText::new("loose").weak().small());
+        });
+        ui.end_row();
+        ui.label("   Turn").on_hover_text("Weaves along the whole braid; more makes thinner strands");
+        ui.add(Bar(egui::Slider::new(&mut shape.braid_turns, 0.0..=60.0).step_by(0.25)));
+        ui.end_row();
     }
 }
 

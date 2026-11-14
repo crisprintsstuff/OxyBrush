@@ -1117,6 +1117,8 @@ pub struct Editor {
     pub tube: Option<crate::tube::TubeEdit>,
     /// The tube tool is waiting for a path to be drawn.
     pub tube_armed: bool,
+    /// Twist, Spin and Braid for the next tube drawn: the last ones used.
+    pub tube_shape: oxy_mesh::primitives::TubeShape,
     /// The piece the tube being drawn will be added into (Tube brush).
     pub tube_into: Option<u64>,
     /// The retopology tool, while its window is open (RFC 0012).
@@ -1443,6 +1445,7 @@ impl Default for Editor {
             primitive_edit: None,
             tube: None,
             tube_armed: false,
+            tube_shape: Default::default(),
             tube_into: None,
             retopo: None,
             poly_edit: None,
@@ -8108,6 +8111,42 @@ mod tests {
         assert!(!e.can_edit_tube());
         e.edit_tube();
         assert!(e.tube.is_none());
+    }
+
+    #[test]
+    fn a_braided_coiled_tube_reopens_with_its_shape_and_the_next_tube_starts_with_it() {
+        use oxy_mesh::primitives::TubeShape;
+        let mut e = editor();
+        e.brush_kind = BrushKind::Tube;
+        let draw = |e: &mut Editor| {
+            let path: Vec<Vec2> = (0..=30).map(|i| Vec2::new(400.0 + i as f32 * 9.0, 300.0 - i as f32 * 3.0)).collect();
+            e.pointer = Some(path[0]);
+            e.pointer_down(PointerButton::Primary);
+            for &p in &path[1..] {
+                e.pointer_moved(p);
+            }
+            e.pointer_up();
+        };
+        draw(&mut e);
+        let plain = e.tube.as_ref().unwrap().preview.triangle_count();
+        let shape =
+            TubeShape { twist: 1.0, coil_size: 2.0, coil_turns: 3.0, braid: true, spread: 0.5, braid_turns: 5.0 };
+        e.tube.as_mut().unwrap().shape = shape;
+        e.update_tube();
+        assert!(e.tube.as_ref().unwrap().preview.triangle_count() > 2 * plain, "three strands in the preview");
+        e.accept_tube();
+        assert_eq!(e.scene.active().tube_recipe().unwrap().shape, shape);
+        // Saved and loaded, it is still editable, with its shape.
+        let bytes = oxy_doc::format::encode(&e.scene.to_data());
+        let loaded = oxy_doc::format::decode(&bytes).unwrap().pieces.pop().unwrap().into_piece();
+        assert_eq!(loaded.tube_recipe().map(|r| r.shape), Some(shape));
+        e.edit_tube();
+        assert_eq!(e.tube.as_ref().unwrap().shape, shape);
+        e.cancel_tube();
+        // The next tube drawn starts out shaped the same.
+        draw(&mut e);
+        assert_eq!(e.tube.as_ref().unwrap().shape, shape);
+        e.cancel_tube();
     }
 
     #[test]
