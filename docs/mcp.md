@@ -20,7 +20,9 @@ default**. Nothing is sent off the machine. The design is
    listener. A new launch always uses a new token.
 
 The agent and you share one undo history. Agent steps are labeled
-`Agent: …`. Don't ask it to open another project over unsaved work unless
+`Agent: …`. Python plugins use the same tools on a listener of their own
+(a new port and token for each run, 127.0.0.1 only), so they don't need
+this setting and their steps are labeled `Plugin: <name>: …`. Don't ask it to open another project over unsaved work unless
 you mean it: it has to pass `discard: true`.
 
 Screenshots and automated runs never start the listener.

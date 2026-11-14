@@ -3417,6 +3417,13 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                 ui.colored_label(Color32::from_rgb(240, 120, 100), format!("Autosave failed: {e}"));
             }
             let accent = ed.accent_color();
+            if let Some(name) = &ed.plugin_running {
+                ui.spinner();
+                tips::hover(
+                    ui.label(format!("Plugin '{name}' running")),
+                    "A Python plugin is working on the scene through its own local connection (this computer only). Its changes are undo steps named after it.",
+                );
+            }
             if ed.agent_connected {
                 let label = RichText::new("Agent connected — Disconnect").color(Color32::WHITE);
                 let button = egui::Button::new(label).fill(accent);

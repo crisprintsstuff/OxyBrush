@@ -119,7 +119,8 @@ alone don't show visual regressions.
     loopback `127.0.0.1` with a per-session token in the app, stdio in
     `oxybrush-cli mcp`. It never dials out, never listens on another
     interface, and every edit goes through the normal undo history labeled
-    `Agent:`.
+    `Agent:` (`Plugin: <name>:` for a Python plugin, which gets its own
+    loopback listener and token for each run).
   Don't add any other network access.
 - **Performance is a feature.** Don't add work to the per-dab or per-frame
   path without measuring (`dab_timing`). Report numbers when you touch hot

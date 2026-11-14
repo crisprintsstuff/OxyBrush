@@ -75,6 +75,12 @@ pub fn open_folder(path: &Path) {
 ///
 /// Recognizes lines such as `# Name: My Plugin` and `# Description: Does stuff`
 /// or inside docstrings `""" Name: ... """`.
+/// A Python plugin's name as shown to the user: its metadata name, as
+/// `run_plugin` uses it.
+pub fn plugin_name(path: &Path) -> String {
+    parse_plugin_metadata(path).map(|p| p.name).unwrap_or_else(|| "Python Plugin".into())
+}
+
 pub fn parse_plugin_metadata(path: &Path) -> Option<PluginInfo> {
     let content = std::fs::read_to_string(path).ok()?;
     let mut name = None;
@@ -331,8 +337,7 @@ pub fn run_plugin(
             .to_string()
     })?;
 
-    let plugin_info = parse_plugin_metadata(script_path);
-    let name = plugin_info.map(|p| p.name).unwrap_or_else(|| "Python Plugin".into());
+    let name = plugin_name(script_path);
 
     let (tx, rx) = channel();
 
@@ -483,6 +488,52 @@ mod tests {
         let _ = std::fs::remove_file(&test_file);
         let output = res.expect("process should complete").expect("plugin should succeed");
         assert_eq!(output, "E2E SUCCESS");
+    }
+
+    #[test]
+    fn a_plugin_has_its_own_listener_and_its_edits_carry_its_name() {
+        if find_python().is_none() {
+            return;
+        }
+        let (wake_tx, wake_rx) = std::sync::mpsc::channel();
+        let wake: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+            let _ = wake_tx.send(());
+        });
+        let test_file = std::env::temp_dir().join(format!("test_plugin_label_{}.py", std::process::id()));
+        std::fs::write(
+            &test_file,
+            "# Name: Cube Maker\n\
+             import oxybrush\n\
+             app = oxybrush.attach()\n\
+             app.add_primitive('cube')\n\
+             print('done')\n",
+        )
+        .unwrap();
+        assert_eq!(plugin_name(&test_file), "Cube Maker");
+        let mut inbox = match crate::agent::Inbox::for_plugin(&plugin_name(&test_file), wake.clone()) {
+            Ok(ib) => ib,
+            Err(_) => return, // port busy or network restricted
+        };
+        let proc = run_plugin(&test_file, &inbox.endpoint, &inbox.token(), wake).expect("spawn plugin");
+        let mut ed = crate::editor::Editor::default();
+        let start = std::time::Instant::now();
+        let mut res = None;
+        while start.elapsed() < std::time::Duration::from_secs(30) {
+            let _ = inbox.poll(&mut ed);
+            if let Ok(r) = proc.rx.try_recv() {
+                res = Some(r);
+                break;
+            }
+            let _ = wake_rx.recv_timeout(std::time::Duration::from_millis(50));
+        }
+        let _ = std::fs::remove_file(&test_file);
+        assert_eq!(res.expect("process should complete").expect("plugin should succeed"), "done");
+        let labels: Vec<&str> = ed.history.undo_labels().collect();
+        assert!(labels.iter().any(|l| l.starts_with("Plugin: Cube Maker: ")), "{labels:?}");
+        assert!(!labels.iter().any(|l| l.starts_with("Agent:")), "{labels:?}");
+        // The label is only for the plugin's own calls.
+        assert_eq!(ed.agent_label, oxy_mcp::AGENT_LABEL);
+        assert!(!ed.agent_enabled, "running a plugin doesn't turn on the agent setting");
     }
 
     #[test]

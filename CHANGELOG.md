@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **Python plugins say they're plugins.** A Python plugin used to run through the local AI agent connection, so running one turned on Settings > Local AI agent (and left it on), the status bar said "Agent connected", and its edits were labelled "Agent:". Each run now gets a connection of its own (this computer only, a new token each time, closed when the script ends): the agent setting stays as you left it, the status bar shows **Plugin '*name*' running**, and its edits are undo steps named after it (**Plugin: *name*: …**).
+
 ## [4.0.0-beta.10] - 2026-11-14
 
 ### Added

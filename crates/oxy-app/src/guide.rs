@@ -298,6 +298,7 @@ Settings > Local AI agent (off by default) listens only on this computer, so an 
         body: "Settings > Local AI agent lets a program on this computer sculpt in the same scene as you. It is off until you turn it on. Copy connection gives the address (127.0.0.1 only) and a token that changes every launch.\n\n\
 - While an agent is connected, the status bar says so. Disconnect drops it and changes the token.\n\
 - The agent's edits are ordinary undo steps labeled Agent:, so Ctrl+Z removes them.\n\
+- Python plugins talk to OxyBrush the same way, but each run gets a connection of its own: running one doesn't turn this setting on, the status bar shows the plugin's name while it runs, and its edits are undo steps named after it (Plugin: name:).\n\
 - A screenshot the agent takes is the viewport, and screen strokes use those pixels.\n\n\
 Nothing is uploaded. The listener never accepts a connection from another machine.",
     },
