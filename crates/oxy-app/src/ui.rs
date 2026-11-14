@@ -501,6 +501,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Save as…", Cmd::SaveAs).clicked() {
                     action = Some(UiAction::SaveAs);
                 }
+                if tips::button_on(ui, ed.can_revert(), "Revert", Cmd::Revert).clicked() {
+                    ed.revert();
+                }
                 if tips::button(ui, "Close project", Cmd::CloseProject).clicked() {
                     ed.request(Pending::Close);
                 }
@@ -5009,6 +5012,29 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 }
             });
         });
+    } else if matches!(ed.pending, Some(Pending::Revert)) {
+        // Revert asks its own question: saving first would defeat it.
+        let name = ed
+            .path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map_or_else(|| "the project".to_string(), |n| n.to_string_lossy().into_owned());
+        egui::Modal::new(egui::Id::unique("revert")).show(&ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.heading("Revert to the saved version?");
+            ui.label(format!(
+                "{name} will be reloaded as you last saved it. The changes since then are lost, and can't be undone."
+            ));
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if tips::hover(ui.button("Revert"), plain::REVERT_CONFIRM).clicked() {
+                    ed.perform(Pending::Revert);
+                }
+                if tips::hover(ui.button("Cancel"), plain::CANCEL).clicked() {
+                    ed.pending = None;
+                }
+            });
+        });
     } else if let Some(pending) = ed.pending.clone() {
         let what = match &pending {
             Pending::Quit => "quitting",
@@ -5016,6 +5042,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             Pending::Close => "closing the project",
             Pending::OpenProject(_) => "opening another project",
             Pending::OpenLink(_) => "opening the objects sent from another app",
+            Pending::Revert => "reverting",
         };
         egui::Modal::new(egui::Id::unique("unsaved")).show(&ctx, |ui| {
             ui.heading("Unsaved changes");
