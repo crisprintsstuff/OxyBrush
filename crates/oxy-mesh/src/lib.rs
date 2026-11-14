@@ -659,6 +659,52 @@ impl Mesh {
         self.faces_changed();
     }
 
+    /// Paint face group `group` onto the visible triangles whose centre is
+    /// within `radius` of `center` (the Paint Groups brush). With
+    /// `facing`, only triangles whose normal points towards it (against
+    /// the view ray) are painted, so a stroke doesn't reach through to the
+    /// back of a thin part. Only chunks the sphere touches are visited.
+    /// RETURNS: whether any triangle changed group.
+    pub fn paint_group(&mut self, center: Vec3, radius: f32, facing: Option<Vec3>, group: u32) -> bool {
+        let r2 = radius * radius;
+        let reach = Aabb { min: center - Vec3::splat(radius), max: center + Vec3::splat(radius) };
+        let mut changed = false;
+        for c in 0..self.chunks.len() {
+            let b = &self.chunks[c].aabb;
+            let overlaps = b.min.x <= reach.max.x
+                && b.max.x >= reach.min.x
+                && b.min.y <= reach.max.y
+                && b.max.y >= reach.min.y
+                && b.min.z <= reach.max.z
+                && b.max.z >= reach.min.z;
+            if !overlaps && !self.loose_bounds[c] {
+                continue;
+            }
+            for t in self.chunks[c].triangles.clone() {
+                let t = t as usize;
+                if self.hidden[t] || self.groups[t] == group {
+                    continue;
+                }
+                let [a, b, d] = self.triangles[t].map(|v| self.positions[v as usize]);
+                if ((a + b + d) / 3.0).distance_squared(center) > r2 {
+                    continue;
+                }
+                if let Some(dir) = facing
+                    && (b - a).cross(d - a).dot(dir) >= 0.0
+                {
+                    continue;
+                }
+                self.groups[t] = group;
+                changed = true;
+            }
+        }
+        if changed {
+            // Only groups changed: visibility (and so hidden points) is as before.
+            self.face_version = NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed);
+        }
+        changed
+    }
+
     pub fn set_hidden(&mut self, hidden: Vec<bool>) {
         assert_eq!(hidden.len(), self.triangles.len());
         self.hidden = hidden;
@@ -2052,6 +2098,26 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn paint_group_reaches_only_the_sphere_and_front_faces() {
+        let mut m = crate::primitives::icosphere(3, 1.0);
+        let n = m.triangle_count();
+        let v0 = m.face_version();
+        // A ball of radius 0.3 at the front (+Z) of the sphere.
+        assert!(m.paint_group(Vec3::new(0.0, 0.0, 1.0), 0.3, None, 7));
+        assert_ne!(m.face_version(), v0, "the renderer sees the change");
+        let painted = m.groups().iter().filter(|&&g| g == 7).count();
+        assert!(painted > 0 && painted < n / 10, "{painted}");
+        assert!(!m.paint_group(Vec3::new(0.0, 0.0, 1.0), 0.3, None, 7), "nothing new to paint");
+        // Through the whole sphere, front faces only (looking down -Z): only the +Z half.
+        let mut f = crate::primitives::icosphere(3, 1.0);
+        assert!(f.paint_group(Vec3::ZERO, 2.0, Some(Vec3::NEG_Z), 3));
+        for (t, &g) in f.triangles.iter().zip(f.groups()) {
+            let c: Vec3 = t.iter().map(|&v| f.positions[v as usize]).sum::<Vec3>() / 3.0;
+            assert_eq!(g == 3, c.z > 0.0, "{c:?}");
+        }
+    }
 
     /// A UV for corner `p` of a triangle with centre `c`: different in
     /// every face (so seams are real) and independent of point order.

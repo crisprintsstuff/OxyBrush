@@ -596,6 +596,16 @@ pub enum SelectAction {
 
 pub enum Drag {
     None,
+    /// A Paint Groups stroke: painting face group `group` on `piece`, whose
+    /// groups were `before` when it started (for undo or Escape). `last`
+    /// is the previous dab, to fill the path between pointer events.
+    GroupPaint {
+        piece: u64,
+        group: u32,
+        before: Vec<u32>,
+        last: Vec3,
+        changed: bool,
+    },
     /// Drawing a tube's path (screen points), from `anchor` in the world.
     TubeDraw {
         points: Vec<Vec2>,
@@ -1715,7 +1725,10 @@ impl Editor {
     }
 
     pub fn is_stroking(&self) -> bool {
-        matches!(self.drag, Drag::Stroke { .. } | Drag::InsertPrimitive { .. } | Drag::CurveCut { .. })
+        matches!(
+            self.drag,
+            Drag::Stroke { .. } | Drag::InsertPrimitive { .. } | Drag::CurveCut { .. } | Drag::GroupPaint { .. }
+        )
     }
 
     /// The user is mid-edit. An agent waits rather than applying a change
@@ -1726,6 +1739,7 @@ impl Editor {
             Drag::Stroke { .. }
                 | Drag::InsertPrimitive { .. }
                 | Drag::CurveCut { .. }
+                | Drag::GroupPaint { .. }
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
                 | Drag::CurveDraw { .. }
@@ -2395,6 +2409,10 @@ impl Editor {
             self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
             return;
         }
+        if kind == BrushKind::PaintGroups {
+            self.start_group_paint(hit, d, invert);
+            return;
+        }
         if kind == BrushKind::InsertPrimitive {
             let normal = facing(hit.normal, d);
             self.drag = Drag::InsertPrimitive {
@@ -2670,7 +2688,7 @@ impl Editor {
     }
 
     /// Screen-space radius (logical points) to world units at `at`.
-    fn world_radius(&self, at: Vec3, radius_pt: f32) -> f32 {
+    pub(crate) fn world_radius(&self, at: Vec3, radius_pt: f32) -> f32 {
         radius_pt * self.pixels_per_point * self.camera.world_per_pixel(at, self.canvas_size().y)
     }
 
@@ -3105,6 +3123,13 @@ impl Editor {
                 self.camera.pan(delta, size.y);
                 true
             }
+            Drag::GroupPaint { .. } => {
+                let (o, d) = self.camera.ray(self.canvas_local(pos), size);
+                if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                    self.group_paint_to(hit.point, d);
+                }
+                true
+            }
             Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
                 let d = pos.distance(*start_pixel);
                 let world_per_pixel = self.camera.world_per_pixel(*anchor, size.y);
@@ -3381,6 +3406,7 @@ impl Editor {
             Drag::Stroke { stroke, dyn_topo, hold, .. } => {
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
             }
+            Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, false),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -3473,6 +3499,7 @@ impl Editor {
             Drag::Stroke { stroke, dyn_topo, hold, .. } => {
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
             }
+            Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, true),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -12614,5 +12641,81 @@ mod tests {
         e.undo();
         assert_eq!(e.scene.get(host).unwrap().instancers.len(), 1);
         assert!(!e.scene.get(rivet).unwrap().visible);
+    }
+
+    /// Groups of the active piece's triangles, and how many have `g`.
+    fn group_count(e: &Editor, g: u32) -> usize {
+        e.scene.active().mesh.groups().iter().filter(|&&x| x == g).count()
+    }
+
+    #[test]
+    fn paint_groups_makes_a_new_group_per_stroke_as_one_undo_step() {
+        let mut e = editor();
+        e.symmetry.x = false;
+        e.brush_kind = BrushKind::PaintGroups;
+        let positions = e.scene.active().mesh.positions.clone();
+        let tris = e.scene.active().mesh.triangle_count();
+        drag(&mut e, Vec2::new(370.0, 300.0), Vec2::new(430.0, 300.0));
+        let painted = group_count(&e, 1);
+        assert!(painted > 0 && painted < tris / 4, "only under the stroke: {painted}");
+        assert!(e.view.show_groups, "the groups are shown while painting them");
+        assert_eq!(e.scene.active().mesh.positions, positions, "painting groups never moves the surface");
+        assert_eq!(e.history.undo_labels().last(), Some("Paint groups"));
+        // A second stroke makes another group.
+        drag(&mut e, Vec2::new(400.0, 250.0), Vec2::new(400.0, 260.0));
+        assert!(group_count(&e, 2) > 0);
+        e.undo();
+        assert_eq!(group_count(&e, 2), 0);
+        assert_eq!(group_count(&e, 1), painted, "one undo step per stroke");
+        e.undo();
+        assert_eq!(group_count(&e, 0), tris);
+    }
+
+    #[test]
+    fn paint_groups_alt_grows_the_group_under_the_stroke_and_escape_cancels() {
+        let mut e = editor();
+        e.symmetry.x = false;
+        e.brush_kind = BrushKind::PaintGroups;
+        drag(&mut e, Vec2::new(390.0, 300.0), Vec2::new(410.0, 300.0));
+        let first = group_count(&e, 1);
+        // Alt, starting inside group 1: grows it, no new group.
+        e.modifiers.alt = true;
+        drag(&mut e, Vec2::new(400.0, 300.0), Vec2::new(400.0, 340.0));
+        e.modifiers.alt = false;
+        assert!(group_count(&e, 1) > first, "grew");
+        assert_eq!(group_count(&e, 2), 0, "no new group");
+        // Escape mid-stroke puts the groups back, with nothing to undo.
+        let before = e.scene.active().mesh.groups().to_vec();
+        let undo_count = e.history.undo_labels().count();
+        e.pointer = Some(Vec2::new(350.0, 280.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(360.0, 280.0));
+        assert_ne!(e.scene.active().mesh.groups(), &before[..], "shown while painting");
+        e.cancel_drag();
+        assert_eq!(e.scene.active().mesh.groups(), &before[..]);
+        assert_eq!(e.history.undo_labels().count(), undo_count);
+    }
+
+    #[test]
+    fn paint_groups_follows_symmetry_and_skips_hidden_faces() {
+        let mut e = editor();
+        e.symmetry.x = true;
+        e.brush_kind = BrushKind::PaintGroups;
+        drag(&mut e, Vec2::new(330.0, 300.0), Vec2::new(340.0, 300.0));
+        let mesh = &e.scene.active().mesh;
+        let side = |sign: f32| {
+            mesh.triangles
+                .iter()
+                .zip(mesh.groups())
+                .filter(|(t, g)| **g == 1 && (mesh.positions[t[0] as usize].x * sign) > 0.0)
+                .count()
+        };
+        assert!(side(1.0) > 0 && side(-1.0) > 0, "both sides: {} {}", side(1.0), side(-1.0));
+        // Hidden faces keep their group.
+        e.undo();
+        let tris = e.scene.active().mesh.triangle_count();
+        e.scene.active_mut().mesh.set_hidden(vec![true; tris]);
+        let mut mesh = e.scene.active().mesh.clone();
+        assert!(!mesh.paint_group(Vec3::ZERO, 10.0, None, 5));
     }
 }

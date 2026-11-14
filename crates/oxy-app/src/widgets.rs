@@ -15,6 +15,7 @@ pub const ACCENT: Color32 = Color32::from_rgb(0xE0, 0x7A, 0x4F);
 pub const MASK_BLUE: Color32 = Color32::from_rgb(110, 150, 255);
 #[allow(dead_code)]
 const PAINT_TEAL: Color32 = Color32::from_rgb(70, 180, 160);
+const GROUP_AMBER: Color32 = Color32::from_rgb(230, 160, 60);
 const CLAY_TOP: Color32 = Color32::from_rgb(0xD9, 0x9A, 0x78);
 const CLAY_BOTTOM: Color32 = Color32::from_rgb(0x7A, 0x45, 0x30);
 const CLAY_EDGE: Color32 = Color32::from_rgb(0xF2, 0xC2, 0xA4);
@@ -52,6 +53,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         }
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
         BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
+        BrushKind::PaintGroups => {
+            "Paints face groups: each stroke makes a new group. Alt grows the group where the stroke starts."
+        }
         BrushKind::InsertPrimitive => "Inserts 3D primitives onto the surface with auto-masking.",
         BrushKind::Tube => {
             "Drag a path to add a tube along it to this piece (horns, tentacles, cables). Drag its points to reshape it, Shift+drag for thickness, then Accept."
@@ -103,6 +107,8 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::Mask => 0.18 * bump(x, 0.8),
         // Paint leaves the shape alone: the same gentle surface, wider.
         BrushKind::Paint => 0.14 * bump(x, 1.1),
+        // Flat, like Paint: groups don't change the shape.
+        BrushKind::PaintGroups => 0.12 * bump(x, 1.2),
         BrushKind::InsertPrimitive => 0.65 * bump(x, 0.35),
         // A tube rising out of the surface and curling over.
         BrushKind::Tube => 0.5 * bump(x + 0.2, 0.18) + 0.35 * bump(x - 0.25, 0.22),
@@ -167,6 +173,7 @@ pub fn paint_brush_icon(p: &Painter, rect: Rect, k: BrushKind) {
         let tint = match k {
             BrushKind::Mask => Some(MASK_BLUE),
             BrushKind::Paint => Some(PAINT_TEAL),
+            BrushKind::PaintGroups => Some(GROUP_AMBER),
             _ => None,
         };
         let (top, bottom) = match tint.filter(|_| x.abs() < 0.45) {
