@@ -71,6 +71,15 @@ struct VsIn {
     @location(4) paint: u32,
 };
 
+// An instance's model matrix (surface instances), for the *_instanced
+// entry points only: ordinary pieces don't read it.
+struct InstIn {
+    @location(5) m0: vec4<f32>,
+    @location(6) m1: vec4<f32>,
+    @location(7) m2: vec4<f32>,
+    @location(8) m3: vec4<f32>,
+};
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) view_normal: vec3<f32>,
@@ -104,6 +113,28 @@ fn vs_main(v: VsIn) -> VsOut {
     o.paint = pow(unpack(v.paint), vec3<f32>(2.2));
     o.world_pos = v.position;
     o.world_normal = v.normal;
+    return o;
+}
+
+// The same for a copy (surface instances): the copy's model matrix first.
+@vertex
+fn vs_main_instanced(v: VsIn, inst: InstIn) -> VsOut {
+    var o: VsOut;
+    // Copies scale evenly, so the matrix turns normals too.
+    let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
+    let wp = (model * vec4<f32>(v.position, 1.0)).xyz;
+    let wn = normalize((model * vec4<f32>(v.normal, 0.0)).xyz);
+    o.clip = u.view_proj * vec4<f32>(wp, 1.0);
+    o.view_normal = (u.view * vec4<f32>(wn, 0.0)).xyz;
+    o.mask = v.mask;
+    o.group_color = v.group_color;
+    let vp = (u.view * vec4<f32>(wp, 1.0)).xyz;
+    o.view_depth = -vp.z;
+    o.view_pos = vp;
+    // Paint is stored as the sRGB color the user picked; shade in linear.
+    o.paint = pow(unpack(v.paint), vec3<f32>(2.2));
+    o.world_pos = wp;
+    o.world_normal = wn;
     return o;
 }
 

@@ -705,14 +705,26 @@ impl App {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
-                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false, material });
+                items.push(oxy_render::DrawItem {
+                    id: p.id,
+                    active: p.id == active,
+                    preview: false,
+                    material,
+                    instances: None,
+                });
             }
         }
         if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
             // A piece shown in place (a curve stroke) keeps its material.
             let material = curve_piece.map_or(0, slot_of);
-            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: curve_piece.is_none(), material });
+            items.push(oxy_render::DrawItem {
+                id: PREVIEW_ID,
+                active: true,
+                preview: curve_piece.is_none(),
+                material,
+                instances: None,
+            });
         }
 
         let frame = match g.surface.get_current_texture() {

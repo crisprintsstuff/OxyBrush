@@ -24,6 +24,13 @@ struct VsIn {
     @location(4) paint: u32,
 };
 
+struct InstIn {
+    @location(5) m0: vec4<f32>,
+    @location(6) m1: vec4<f32>,
+    @location(7) m2: vec4<f32>,
+    @location(8) m3: vec4<f32>,
+};
+
 struct VsOut {
     @builtin(position) clip: vec4<f32>,
 };
@@ -32,6 +39,17 @@ struct VsOut {
 fn vs_wireframe(v: VsIn) -> VsOut {
     var o: VsOut;
     o.clip = u.view_proj * vec4<f32>(v.position, 1.0);
+    // Nudge depth slightly towards near plane to eliminate Z-fighting on lines
+    o.clip.z = o.clip.z - 0.00015 * o.clip.w;
+    return o;
+}
+
+// A copy (surface instances): its model matrix first.
+@vertex
+fn vs_wireframe_instanced(v: VsIn, inst: InstIn) -> VsOut {
+    var o: VsOut;
+    let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
+    o.clip = u.view_proj * (model * vec4<f32>(v.position, 1.0));
     // Nudge depth slightly towards near plane to eliminate Z-fighting on lines
     o.clip.z = o.clip.z - 0.00015 * o.clip.w;
     return o;

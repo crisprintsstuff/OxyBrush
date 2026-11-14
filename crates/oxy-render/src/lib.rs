@@ -253,6 +253,29 @@ pub struct DrawItem {
     /// Which matcap the piece is shown with: 0 the scene's, 1 to
     /// [`MATERIAL_SLOTS`] one set with [`Viewport::set_material_slot`].
     pub material: u32,
+    /// Draw the piece's mesh once per transform of this instance set (see
+    /// [`ViewportRenderer::set_instances`]) instead of once in place.
+    pub instances: Option<u64>,
+}
+
+/// Per-instance data: a model matrix (source space to world), as four
+/// columns (vertex slot 1, shader locations 5 to 8).
+const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
+    wgpu::vertex_attr_array![5 => Float32x4, 6 => Float32x4, 7 => Float32x4, 8 => Float32x4];
+
+fn instance_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: 64,
+        step_mode: wgpu::VertexStepMode::Instance,
+        attributes: &INSTANCE_ATTRIBUTES,
+    }
+}
+
+/// One set of instance transforms on the GPU.
+struct InstanceSet {
+    buffer: wgpu::Buffer,
+    capacity: u32,
+    count: u32,
 }
 
 struct GpuMesh {
@@ -271,6 +294,11 @@ struct GpuMesh {
 pub struct ViewportRenderer {
     pipeline: wgpu::RenderPipeline,
     wireframe_pipeline: wgpu::RenderPipeline,
+    /// The same three for instanced items (surface instances), so ordinary
+    /// pieces keep their vertex shader exactly as it was.
+    pipeline_instanced: wgpu::RenderPipeline,
+    wireframe_pipeline_instanced: wgpu::RenderPipeline,
+    shadow_pipeline_instanced: wgpu::RenderPipeline,
     background_pipeline: wgpu::RenderPipeline,
     floor_pipeline: wgpu::RenderPipeline,
     uniforms: wgpu::Buffer,
@@ -278,6 +306,8 @@ pub struct ViewportRenderer {
     piece_layout: wgpu::BindGroupLayout,
     matcap: wgpu::Texture,
     meshes: HashMap<u64, GpuMesh>,
+    /// Instance sets by key (surface instances, RFC 0022).
+    instance_sets: HashMap<u64, InstanceSet>,
     depth: Option<(wgpu::TextureView, u32, u32)>,
     exact_face_colors: bool,
     color_format: wgpu::TextureFormat,
@@ -542,52 +572,60 @@ impl ViewportRenderer {
         });
         let attributes =
             wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32, 3 => Uint32, 4 => Uint32];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("oxy viewport pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
+        let buffers_pipeline = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
             }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: NORMAL_DEPTH_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                ],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+            Some(instance_layout()),
+        ];
+        let make_pipeline = |entry: &'static str, instanced: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("oxy viewport pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers: if instanced { &buffers_pipeline[..] } else { &buffers_pipeline[..1] },
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    compilation_options: Default::default(),
+                    targets: &[
+                        Some(wgpu::ColorTargetState {
+                            format: color_format,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                        Some(wgpu::ColorTargetState {
+                            format: NORMAL_DEPTH_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                    ],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = make_pipeline("vs_main", false);
+        let pipeline_instanced = make_pipeline("vs_main_instanced", true);
 
         // Floor grid: a quad drawn after the pieces, blended over the color
         // target and depth-tested (not written), so the model hides it. It
@@ -637,52 +675,60 @@ impl ViewportRenderer {
             label: Some("oxy wireframe shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("wireframe.wgsl").into()),
         });
-        let wireframe_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("oxy wireframe pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &wireframe_shader,
-                entry_point: Some("vs_wireframe"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                bias: Default::default(),
-                stencil: Default::default(),
+        let buffers_wireframe_pipeline = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &attributes,
             }),
-            multisample: Default::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &wireframe_shader,
-                entry_point: Some("fs_wireframe"),
-                compilation_options: Default::default(),
-                targets: &[
-                    Some(wgpu::ColorTargetState {
-                        format: color_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    }),
-                    Some(wgpu::ColorTargetState {
-                        format: NORMAL_DEPTH_FORMAT,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::empty(),
-                    }),
-                ],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+            Some(instance_layout()),
+        ];
+        let make_wireframe_pipeline = |entry: &'static str, instanced: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("oxy wireframe pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &wireframe_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers: if instanced { &buffers_wireframe_pipeline[..] } else { &buffers_wireframe_pipeline[..1] },
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::LineList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                    bias: Default::default(),
+                    stencil: Default::default(),
+                }),
+                multisample: Default::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &wireframe_shader,
+                    entry_point: Some("fs_wireframe"),
+                    compilation_options: Default::default(),
+                    targets: &[
+                        Some(wgpu::ColorTargetState {
+                            format: color_format,
+                            blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                            write_mask: wgpu::ColorWrites::ALL,
+                        }),
+                        Some(wgpu::ColorTargetState {
+                            format: NORMAL_DEPTH_FORMAT,
+                            blend: None,
+                            write_mask: wgpu::ColorWrites::empty(),
+                        }),
+                    ],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let wireframe_pipeline = make_wireframe_pipeline("vs_wireframe", false);
+        let wireframe_pipeline_instanced = make_wireframe_pipeline("vs_wireframe_instanced", true);
 
         let post_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("oxy shading"),
@@ -801,38 +847,46 @@ impl ViewportRenderer {
             bind_group_layouts: &[Some(&shadow_layout)],
             immediate_size: 0,
         });
-        let shadow_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("oxy shadow pipeline"),
-            layout: Some(&shadow_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shadow_shader,
-                entry_point: Some("vs_shadow"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<GpuVertex>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float32x3],
-                })],
-            },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                // Slope-scaled bias keeps grazing surfaces from shadowing
-                // themselves (the shader also offsets along the normal).
-                bias: wgpu::DepthBiasState { constant: 2, slope_scale: 1.5, clamp: 0.0 },
+        let buffers_shadow_pipeline = [
+            Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<GpuVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float32x3],
             }),
-            multisample: Default::default(),
-            fragment: None,
-            multiview_mask: None,
-            cache: None,
-        });
+            Some(instance_layout()),
+        ];
+        let make_shadow_pipeline = |entry: &'static str, instanced: bool| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("oxy shadow pipeline"),
+                layout: Some(&shadow_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shadow_shader,
+                    entry_point: Some(entry),
+                    compilation_options: Default::default(),
+                    buffers: if instanced { &buffers_shadow_pipeline[..] } else { &buffers_shadow_pipeline[..1] },
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH_FORMAT,
+                    depth_write_enabled: Some(true),
+                    depth_compare: Some(wgpu::CompareFunction::Less),
+                    stencil: Default::default(),
+                    // Slope-scaled bias keeps grazing surfaces from shadowing
+                    // themselves (the shader also offsets along the normal).
+                    bias: wgpu::DepthBiasState { constant: 2, slope_scale: 1.5, clamp: 0.0 },
+                }),
+                multisample: Default::default(),
+                fragment: None,
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let shadow_pipeline = make_shadow_pipeline("vs_shadow", false);
+        let shadow_pipeline_instanced = make_shadow_pipeline("vs_shadow_instanced", true);
 
         let mut r = Self {
             viewport_layout: layout,
@@ -845,6 +899,9 @@ impl ViewportRenderer {
             shadow_group,
             pipeline,
             wireframe_pipeline,
+            pipeline_instanced,
+            wireframe_pipeline_instanced,
+            shadow_pipeline_instanced,
             background_pipeline,
             floor_pipeline,
             color_format,
@@ -859,6 +916,7 @@ impl ViewportRenderer {
             piece_layout,
             matcap,
             meshes: HashMap::new(),
+            instance_sets: HashMap::new(),
             depth: None,
             exact_face_colors,
         };
@@ -905,6 +963,66 @@ impl ViewportRenderer {
     /// Drop GPU meshes for pieces that no longer exist.
     pub fn retain(&mut self, alive: impl Fn(u64) -> bool) {
         self.meshes.retain(|id, _| alive(*id));
+    }
+
+    /// Upload the transforms of instance set `key` (surface instances): a
+    /// [`DrawItem`] with `instances: Some(key)` then draws its mesh once per
+    /// transform. The buffer grows by half again when it runs out, so
+    /// changing the count doesn't reallocate every frame.
+    pub fn set_instances(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, key: u64, transforms: &[glam::Mat4]) {
+        let data: Vec<[f32; 16]> = transforms.iter().map(|m| m.to_cols_array()).collect();
+        let count = data.len() as u32;
+        let fits = self.instance_sets.get(&key).is_some_and(|s| s.capacity >= count.max(1));
+        if !fits {
+            let capacity = (count + count / 2).max(16);
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("oxy instances"),
+                size: capacity as u64 * 64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.instance_sets.insert(key, InstanceSet { buffer, capacity, count: 0 });
+        }
+        let set = self.instance_sets.get_mut(&key).expect("made above");
+        if !data.is_empty() {
+            queue.write_buffer(&set.buffer, 0, bytemuck::cast_slice(&data));
+        }
+        set.count = count;
+    }
+
+    /// Drop instance sets whose key isn't `alive`.
+    pub fn retain_instances(&mut self, alive: impl Fn(u64) -> bool) {
+        self.instance_sets.retain(|k, _| alive(*k));
+    }
+
+    /// Set up `pass` to draw `item`: the plain or the instanced one of
+    /// `pipelines` (switching only when it changes; `current` remembers
+    /// which is set), and for an instanced item its transforms in vertex
+    /// slot 1. Returns how many instances to draw, or None to skip the item
+    /// (an empty or missing instance set).
+    fn bind_instances<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        item: &DrawItem,
+        current: &mut Option<bool>,
+        pipelines: [&'p wgpu::RenderPipeline; 2],
+    ) -> Option<u32> {
+        let set = match item.instances {
+            None => None,
+            Some(key) => Some(self.instance_sets.get(&key).filter(|s| s.count > 0)?),
+        };
+        let want = set.is_some();
+        if *current != Some(want) {
+            pass.set_pipeline(pipelines[want as usize]);
+            *current = Some(want);
+        }
+        match set {
+            Some(s) => {
+                pass.set_vertex_buffer(1, s.buffer.slice(..));
+                Some(s.count)
+            }
+            None => Some(1),
+        }
     }
 
     /// Upload changes for one piece: full rebuild on topology/face change,
@@ -1275,16 +1393,24 @@ impl ViewportRenderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.shadow_pipeline);
             pass.set_bind_group(0, &self.shadow_group, &[(i as u64 * SHADOW_STRIDE) as u32]);
+            let mut instanced = None;
             for item in items {
                 let Some(gpu) = self.meshes.get(&item.id) else { continue };
                 if gpu.index_count == 0 || item.preview {
                     continue;
                 }
+                let Some(count) = self.bind_instances(
+                    &mut pass,
+                    item,
+                    &mut instanced,
+                    [&self.shadow_pipeline, &self.shadow_pipeline_instanced],
+                ) else {
+                    continue;
+                };
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                 pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+                pass.draw_indexed(0..gpu.index_count, 0, 0..count);
             }
         }
         // With shading off, the matcap pass draws straight into the window
@@ -1312,16 +1438,21 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_pipeline(&self.background_pipeline);
             pass.draw(0..3, 0..1);
-            pass.set_pipeline(&self.pipeline);
+            let mut instanced = None;
             for item in items {
                 let Some(gpu) = self.meshes.get(&item.id) else { continue };
                 if gpu.index_count == 0 {
                     continue;
                 }
+                let Some(count) =
+                    self.bind_instances(&mut pass, item, &mut instanced, [&self.pipeline, &self.pipeline_instanced])
+                else {
+                    continue;
+                };
                 pass.set_bind_group(1, &gpu.bind_group, &[]);
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                 pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu.index_count, 0, 0..1);
+                pass.draw_indexed(0..gpu.index_count, 0, 0..count);
             }
             if settings.floor.is_some() {
                 // After the pieces, so the model hides the grid behind it.
@@ -1329,16 +1460,24 @@ impl ViewportRenderer {
                 pass.draw(0..6, 0..1);
             }
             if settings.wireframe && settings.wireframe_opacity > 0.001 {
-                pass.set_pipeline(&self.wireframe_pipeline);
+                let mut instanced = None;
                 for item in items {
                     let Some(gpu) = self.meshes.get(&item.id) else { continue };
                     if gpu.line_index_count == 0 {
                         continue;
                     }
+                    let Some(count) = self.bind_instances(
+                        &mut pass,
+                        item,
+                        &mut instanced,
+                        [&self.wireframe_pipeline, &self.wireframe_pipeline_instanced],
+                    ) else {
+                        continue;
+                    };
                     pass.set_bind_group(1, &gpu.bind_group, &[]);
                     pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                     pass.set_index_buffer(gpu.line_indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..gpu.line_index_count, 0, 0..1);
+                    pass.draw_indexed(0..gpu.line_index_count, 0, 0..count);
                 }
             }
         }
