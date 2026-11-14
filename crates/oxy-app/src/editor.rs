@@ -3973,7 +3973,7 @@ impl Editor {
             let symmetry_center = original.symmetry_center.map(|c| c * factor);
             let scaled = Piece { symmetry_center, ..Piece::new(original.name.clone(), mesh) };
             let original = std::mem::replace(&mut self.scene.pieces[index], scaled);
-            steps.push(Step::Removed { index, piece: original });
+            steps.push(Step::Removed { index, piece: Box::new(original) });
             steps.push(Step::Inserted { index });
         }
         self.history.record_compound("Fit import to scene", steps);
@@ -5156,7 +5156,7 @@ impl Editor {
         let piece = self.scene.pieces.remove(index);
         self.status = format!("Deleted {}", piece.name);
         self.scene.set_active(index.saturating_sub(1));
-        self.history.record("Delete piece", Step::Removed { index, piece });
+        self.history.record("Delete piece", Step::Removed { index, piece: Box::new(piece) });
     }
 
     /// Show only the active piece; if already solo, show all pieces.
@@ -5784,7 +5784,7 @@ impl Editor {
             steps.push(Step::Inserted { index: index + 1 + k });
         }
         let removed = self.scene.pieces.remove(index);
-        steps.push(Step::Removed { index, piece: removed });
+        steps.push(Step::Removed { index, piece: Box::new(removed) });
         self.scene.set_active(index);
         self.history.record_compound(format!("Split by {what}"), steps);
         self.status = format!("Split into {count} pieces by {what}");
@@ -5861,7 +5861,7 @@ impl Editor {
             steps.push(Step::Inserted { index: index + 1 + k });
         }
         let removed = self.scene.pieces.remove(index);
-        steps.push(Step::Removed { index, piece: removed });
+        steps.push(Step::Removed { index, piece: Box::new(removed) });
         // Parts come in key order, so the part that stays (key 0) now sits
         // where the original was; it stays active.
         self.scene.set_active(index);
@@ -5908,7 +5908,7 @@ impl Editor {
         for &i in joined.iter().rev() {
             let index = if i > active { i + 1 } else { i };
             let removed = self.scene.pieces.remove(index);
-            steps.push(Step::Removed { index, piece: removed });
+            steps.push(Step::Removed { index, piece: Box::new(removed) });
         }
         if let Some(i) = self.scene.index_of(id) {
             self.scene.set_active(i);
@@ -5989,7 +5989,7 @@ impl Editor {
                 for id in &job.consumed {
                     if let Some(i) = self.scene.index_of(*id) {
                         let piece = self.scene.pieces.remove(i);
-                        steps.push(Step::Removed { index: i, piece });
+                        steps.push(Step::Removed { index: i, piece: Box::new(piece) });
                     }
                 }
                 let target_index = self.scene.index_of(job.target).unwrap_or(target_index);

@@ -2658,14 +2658,14 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
             ed.material_for_piece = true;
         }
     });
-    if ed.material_for_piece && ed.scene.active().material.is_some() {
-        if ui
+    if ed.material_for_piece
+        && ed.scene.active().material.is_some()
+        && ui
             .small_button("Use the scene's material")
             .on_hover_text("The active piece goes back to showing the scene's material.")
             .clicked()
-        {
-            ed.set_piece_material(None);
-        }
+    {
+        ed.set_piece_material(None);
     }
 }
 
