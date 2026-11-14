@@ -3,7 +3,7 @@
 //! over stdio, or attaches to the desktop app on 127.0.0.1; it never dials
 //! any other address.
 //!
-//! Inputs: `.oxb` projects (visible pieces), OBJ, STL. Outputs: `.oxb`,
+//! Inputs: `.oxb` projects (visible pieces), glTF (`.glb`/`.gltf`), OBJ, STL, PLY. Outputs: `.oxb`,
 //! glTF (`.glb`/`.gltf`), OBJ, STL, PLY. Output files are written
 //! atomically; an input file is never overwritten in place.
 
@@ -28,7 +28,7 @@ USAGE:
   oxybrush-cli addon    pack <plugin-folder> <out.oxyaddon>
   oxybrush-cli addon    inspect <file.oxyaddon>
 
-Inputs:  .oxb project (visible pieces), .obj, .stl
+Inputs:  .oxb project (visible pieces), .glb, .gltf, .obj, .stl, .ply
 Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
 Any command writing .glb/.gltf takes --compress meshopt|quantize|none:
   quantize  16-bit positions, 8-bit normals (KHR_mesh_quantization), about half
