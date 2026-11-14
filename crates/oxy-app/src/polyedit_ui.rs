@@ -249,7 +249,10 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         .collect();
     let eye = ed.camera.eye();
     let facing = |f: usize| face_normal(c, f).dot(eye - oxy_mesh::polyedit::face_center(c, f)) > 0.0;
-    if c.faces.len() <= MAX_DRAWN_FACES {
+    // Without the smooth preview the renderer draws the edges, depth-tested
+    // (`poly_wire_piece`); drawn here they'd show through the surface.
+    let smooth = ed.poly_wire_piece().is_none();
+    if smooth && c.faces.len() <= MAX_DRAWN_FACES {
         let front: Vec<usize> = (0..c.faces.len()).filter(|&f| facing(f)).collect();
         for [a, b] in outline_edges(c, &front) {
             if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {

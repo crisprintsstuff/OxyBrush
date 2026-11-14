@@ -319,7 +319,15 @@ pub struct DrawItem {
     /// Draw the piece's mesh once per transform of this instance set (see
     /// [`ViewportRenderer::set_instances`]) instead of once in place.
     pub instances: Option<u64>,
+    /// Draw this piece's edges even with the wireframe off (Poly Edit shows
+    /// the edited piece's polygons this way, hidden where the surface is
+    /// in front of them).
+    pub wireframe: bool,
 }
+
+/// Opacity of a piece's edges shown with [`DrawItem::wireframe`] while the
+/// wireframe is off.
+pub const ITEM_WIREFRAME_OPACITY: f32 = 0.9;
 
 /// Per-instance data: a model matrix (source space to world), as four
 /// columns (vertex slot 1, shader locations 5 to 8).
@@ -1158,7 +1166,9 @@ impl ViewportRenderer {
                     Some(vis) => vis,
                     None => &mesh.triangles,
                 };
-                if mesh.quad_count() == 0 {
+                // Quad diagonals and edges inside n-gons are left out, so
+                // the wireframe shows the polygons.
+                if mesh.quad_count() == 0 && mesh.ngon_edges().is_empty() {
                     let mut lines = Vec::with_capacity(tris_slice.len() * 3);
                     for tri in tris_slice {
                         lines.push([tri[0], tri[1]]);
@@ -1168,12 +1178,11 @@ impl ViewportRenderer {
                     let count = lines.len() as u32 * 2;
                     (lines, count)
                 } else {
-                    let diagonals = mesh.quad_diagonals_ref();
                     let mut lines = Vec::with_capacity(tris_slice.len() * 2);
                     for tri in tris_slice {
                         for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
                             let edge = if u < v { [u, v] } else { [v, u] };
-                            if !diagonals.contains(&edge) {
+                            if !mesh.is_inner_edge(edge) {
                                 lines.push(edge);
                             }
                         }
@@ -1404,8 +1413,14 @@ impl ViewportRenderer {
                     } else {
                         0.0
                     },
-                    if settings.wireframe { 1.0 } else { 0.0 },
-                    settings.wireframe_opacity,
+                    if settings.wireframe || item.wireframe { 1.0 } else { 0.0 },
+                    if settings.wireframe {
+                        settings.wireframe_opacity
+                    } else if item.wireframe {
+                        ITEM_WIREFRAME_OPACITY
+                    } else {
+                        0.0
+                    },
                 ];
                 let material = [
                     item.material.min(MATERIAL_SLOTS) as f32,
@@ -1533,9 +1548,10 @@ impl ViewportRenderer {
                 pass.set_pipeline(&self.floor_pipeline);
                 pass.draw(0..6, 0..1);
             }
-            if settings.wireframe && settings.wireframe_opacity > 0.001 {
+            let all_wires = settings.wireframe && settings.wireframe_opacity > 0.001;
+            if all_wires || items.iter().any(|i| i.wireframe) {
                 let mut instanced = None;
-                for item in items {
+                for item in items.iter().filter(|i| all_wires || i.wireframe) {
                     let Some(gpu) = self.meshes.get(&item.id) else { continue };
                     if gpu.line_index_count == 0 {
                         continue;
