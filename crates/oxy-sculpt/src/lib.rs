@@ -41,6 +41,10 @@ pub enum BrushKind {
     PlanarTrim,
     TopoMove,
     Noise,
+    /// A crisp V-shaped crease along the stroke: the surface is pulled
+    /// toward the stroke's line from both sides (not toward each dab's
+    /// centre, as Crease does), so the walls meet in a sharp fold.
+    SharpCrease,
     KelvinGrab,
     KelvinTwist,
     KelvinScale,
@@ -138,7 +142,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 26] = [
+    pub const ALL: [BrushKind; 27] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -158,6 +162,7 @@ impl BrushKind {
         BrushKind::Polish,
         BrushKind::PlanarTrim,
         BrushKind::Noise,
+        BrushKind::SharpCrease,
         BrushKind::InsertPrimitive,
         BrushKind::Tube,
         BrushKind::PlaneClip,
@@ -212,6 +217,7 @@ impl BrushKind {
             BrushKind::PlanarTrim => "Planar Trim",
             BrushKind::TopoMove => "Topological Move",
             BrushKind::Noise => "Noise",
+            BrushKind::SharpCrease => "Sharp Crease",
             BrushKind::InsertPrimitive => "Insert Primitive",
             BrushKind::Tube => "Tube",
             BrushKind::PlaneClip => "Plane Clip",
@@ -908,7 +914,7 @@ impl Stroke {
                 alpha.as_deref(),
                 touch,
             );
-        } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease) {
+        } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease | BrushKind::SharpCrease) {
             blend_symmetry_copies(
                 mesh,
                 &self.settings,
@@ -1350,6 +1356,33 @@ fn target_positions(
                 // Crease carves a groove and pulls its walls together;
                 // inverted it raises a sharp ridge.
                 BrushKind::Crease => p - area_normal * (sign * amount * 0.6 * w) + pinch(p),
+                // Sharp Crease: pull each point across the stroke toward
+                // its line (never past it), and cut deepest on the line,
+                // so the two walls meet in a V. Before the stroke has a
+                // direction (the first dab) it gathers toward the centre
+                // like Crease. Inverted it raises a sharp ridge.
+                BrushKind::SharpCrease => {
+                    // The groove behind the brush tilts the mean normal
+                    // forward or back; without its part along the stroke
+                    // the cut stays straight down and the crease straight.
+                    let normal = (area_normal - dab.direction * area_normal.dot(dab.direction))
+                        .try_normalize()
+                        .unwrap_or(area_normal);
+                    let side = normal.cross(dab.direction).normalize_or_zero();
+                    let offset = p - dab.center;
+                    let (across, gather) = if side == Vec3::ZERO {
+                        let flat = offset - normal * offset.dot(normal);
+                        (flat.length(), -flat)
+                    } else {
+                        let c = offset.dot(side);
+                        (c.abs(), -side * c)
+                    };
+                    // Never more than 90% of the way to the line per dab,
+                    // so points don't cross it and fold the surface over.
+                    let k = (settings.crease_pinch.max(0.0) * w * dab.strength).min(0.9);
+                    let v = (1.0 - across / dab.radius).max(0.0);
+                    p + gather * k - normal * (sign * amount * 0.8 * v * v * w)
+                }
                 BrushKind::SnakeHook => {
                     // Alt (invert): pull straight out along the surface normal.
                     let drag = if invert { along_normal(dab.drag, area_normal, dab.view) } else { dab.drag };
@@ -1885,6 +1918,81 @@ mod tests {
         assert!(min_radius(&a) < min_radius(&b) - 0.005);
         let (b, a) = drag_stroke(BrushKind::Pinch, false);
         assert_ne!(b.positions, a.positions);
+    }
+
+    /// A straight stroke along X over a dense flat grid (z = 0, normal +Z),
+    /// with brush `kind`. Returns the grid before and after.
+    fn line_on_grid(kind: BrushKind, invert: bool) -> (Mesh, Mesh) {
+        let mut mesh = primitives::plane(160, 2.0);
+        let before = mesh.clone();
+        let n = mesh.normals[0];
+        let settings = BrushSettings { kind, radius: 0.2, strength: 1.0, spacing: 0.1, ..Default::default() };
+        let mut s = Stroke::new(settings, Symmetry::default(), invert);
+        for i in 0..=30 {
+            let p = Vec3::new(-0.6 + 0.04 * i as f32, 0.0, 0.0);
+            let p = if n.y.abs() > 0.5 { Vec3::new(p.x, 0.0, p.y) } else { p };
+            s.add_sample(&mut mesh, StrokeSample { position: p, normal: n, pressure: 1.0 }, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    /// Height (along the plane's normal) of the grid points near x = 0,
+    /// by their distance across the stroke, after `line_on_grid`.
+    fn cross_section(before: &Mesh, after: &Mesh) -> Vec<(f32, f32)> {
+        let n = before.normals[0];
+        let across = if n.y.abs() > 0.5 { Vec3::Z } else { Vec3::Y };
+        let mut out: Vec<(f32, f32)> = before
+            .positions
+            .iter()
+            .zip(&after.positions)
+            .filter(|(b, _)| b.x.abs() < 0.02)
+            .map(|(b, a)| (b.dot(across), (a - b).dot(n)))
+            .collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    }
+
+    #[test]
+    fn sharp_crease_cuts_a_v_along_the_stroke() {
+        let (b, a) = line_on_grid(BrushKind::SharpCrease, false);
+        let n = b.normals[0];
+        let sec = cross_section(&b, &a);
+        let depth_at =
+            |d: f32| sec.iter().min_by(|x, y| (x.0 - d).abs().total_cmp(&(y.0 - d).abs())).map(|x| x.1).unwrap();
+        let bottom = depth_at(0.0);
+        assert!(bottom < -0.004, "it cuts in: {bottom}");
+        // Deepest on the line and shallower out to the sides.
+        assert!(depth_at(0.05) > bottom && depth_at(0.1) > depth_at(0.05), "{sec:?}");
+        // Points beside the line moved toward it, across the stroke only,
+        // and none crossed it.
+        let across = if n.y.abs() > 0.5 { Vec3::Z } else { Vec3::Y };
+        let along = Vec3::X;
+        for (p, q) in b.positions.iter().zip(&a.positions) {
+            if p.x.abs() > 0.2 {
+                continue;
+            }
+            let (c0, c1) = (p.dot(across), q.dot(across));
+            if c0.abs() > 1e-4 {
+                assert!(c1 * c0 >= -1e-6, "a point crossed the line: {c0} -> {c1}");
+                assert!(c1.abs() <= c0.abs() + 1e-5, "a point moved away from the line");
+            }
+            // Across, not along: what little moves along comes from the
+            // normal tilting as the groove forms.
+            let d = q - p;
+            assert!(d.dot(along).abs() <= 0.05 * d.length() + 1e-5, "along {} of {} at {p}", d.dot(along), d.length());
+        }
+        // Compared with Crease, its groove is narrower for its depth.
+        let (cb, ca) = line_on_grid(BrushKind::Crease, false);
+        let csec = cross_section(&cb, &ca);
+        let width = |sec: &[(f32, f32)]| {
+            let deep = sec.iter().map(|x| x.1).fold(0.0f32, f32::min);
+            sec.iter().filter(|x| x.1 < deep * 0.5).map(|x| x.0.abs()).fold(0.0f32, f32::max)
+        };
+        assert!(width(&sec) < width(&csec), "sharp {} vs crease {}", width(&sec), width(&csec));
+        // Inverted, it raises a ridge.
+        let (b, a) = line_on_grid(BrushKind::SharpCrease, true);
+        let sec = cross_section(&b, &a);
+        assert!(sec.iter().map(|x| x.1).fold(0.0f32, f32::max) > 0.004);
     }
 
     #[test]

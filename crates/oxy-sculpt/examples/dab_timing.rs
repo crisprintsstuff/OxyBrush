@@ -36,6 +36,8 @@ fn main() {
         (BrushKind::Draw, 0.3, true, 0.0),
         (BrushKind::Smooth, 0.3, false, 0.0),
         (BrushKind::Clay, 0.3, false, 0.0),
+        (BrushKind::Crease, 0.3, false, 0.0),
+        (BrushKind::SharpCrease, 0.3, false, 0.0),
     ] {
         let settings = BrushSettings { kind, radius, spacing: 0.1, focal_shift, ..Default::default() };
         let stamp =

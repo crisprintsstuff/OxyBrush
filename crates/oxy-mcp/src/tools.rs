@@ -570,3 +570,19 @@ pub fn tool_defs() -> Vec<Value> {
         ),
     ]
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_brush_is_found_by_key_and_by_label() {
+        for k in BrushKind::ALL {
+            assert_eq!(brush_from_name(k.label()), Some(k), "{}", k.label());
+            assert_eq!(brush_from_name(&k.label().to_ascii_lowercase().replace(' ', "_")), Some(k), "{}", k.label());
+        }
+        assert_eq!(brush_from_name("sharp_crease"), Some(BrushKind::SharpCrease));
+        assert_eq!(brush_from_name(" Sharp Crease "), Some(BrushKind::SharpCrease));
+        assert_eq!(brush_from_name("chisel"), None);
+    }
+}

@@ -113,7 +113,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 ### Sculpting
 
 - **19 sculpting brushes, plus 7 tools in the same shelf:**
-  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Layer, Polish, Planar Trim, Noise.
+  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Sharp Crease (a crisp V along the stroke, for hard folds and panel lines), Layer, Polish, Planar Trim, Noise.
   - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the volume-preserving Kelvinlet brushes Kelvin Grab, Kelvin Twist and Kelvin Scale (after *de Goes & James, SIGGRAPH 2017*).
   - **Tools:** Mask, Paint (vertex color), Insert Primitives (sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
 

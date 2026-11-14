@@ -41,6 +41,9 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Polish => "Flattens small bumps without shrinking the form.",
         BrushKind::PlanarTrim => "Cuts the surface down to a plane. Alt fills up to it.",
         BrushKind::Noise => "Adds procedural surface noise. Adjust the noise scale below.",
+        BrushKind::SharpCrease => {
+            "Cuts a crisp V-shaped crease along the stroke, for hard folds, seams and panel lines. Alt raises a sharp ridge."
+        }
         BrushKind::KelvinGrab => "Deforms like real elastic rubber with volume preservation. Alt moves along normal.",
         BrushKind::KelvinTwist => "Twists the surface elastically around the contact normal. Alt reverses spin.",
         BrushKind::KelvinScale => "Scales or pinches the volume radially with elastodynamic decay. Alt inverts.",
@@ -80,6 +83,8 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::Flatten | BrushKind::PlanarTrim => (0.6 * bump(x, 0.5)).min(0.28),
         BrushKind::Pinch => 0.6 * (-a / 0.13).exp(),
         BrushKind::Crease => -0.45 * (1.0 - a / 0.3).max(0.0) + 0.1 * bump(a - 0.42, 0.16),
+        // A narrow V with straight walls and a crisp shoulder.
+        BrushKind::SharpCrease => -0.6 * (1.0 - a / 0.16).max(0.0) + 0.06 * bump(a - 0.24, 0.08),
         BrushKind::Layer => 0.3 * smoothstep(0.62, 0.52, a),
         BrushKind::Grab => 0.55 * bump(x - 0.3, 0.38),
         BrushKind::SnakeHook => 0.85 * bump(x - 0.1, 0.13) + 0.1 * bump(x, 0.5),
