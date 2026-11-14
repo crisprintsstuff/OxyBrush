@@ -101,6 +101,8 @@ pub struct TubeRecipe {
     pub caps: bool,
     pub mirror: bool,
     pub mirror_x: f32,
+    /// Twist, Spin (coil) and Braid; plain by default.
+    pub shape: oxy_mesh::primitives::TubeShape,
     /// The face group holding the tube's triangles.
     pub group: u32,
     /// The tube's triangle count and [`group_fingerprint`] when it was made.

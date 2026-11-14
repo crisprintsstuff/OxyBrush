@@ -78,12 +78,41 @@ since a tube is often wanted as its own piece (to pose, hide or export).
   older ones stay on the piece (up to 16), so undoing an edit makes the
   previous recipe match again.
 - **Cost.** The tube is rebuilt only when it changes (points, thickness,
-  sides, caps or mirror). A typical tube is a few thousand triangles; the
+  sides, caps, shape or mirror). A typical tube is a few thousand triangles; the
   per-dab and per-frame paths are untouched.
+- **Twist, Spin and Braid** (since 4.0.0-beta.11). `primitives::tube_shaped`
+  takes a `TubeShape`:
+  - **Twist** turns the cross-section (and a braid) by that many turns
+    along the whole length, on top of the parallel-transported frames.
+  - **Spin** coils the tube around its path like a spring: the centre line
+    is offset by *size × thickness* along the frame, turning *turns* times
+    over the length, and the tube is swept along that.
+  - **Braid** sweeps three round strands. Strand *k* sits at
+    `(sin p, ½ sin 2p)` in the frame, with `p` the weave phase plus a third
+    of a turn per strand, so each draws a figure eight and the three pass
+    alternately over and under. The strand thickness is the largest for
+    which their centre lines stay `2·(1 + Spread)` strand radii apart
+    (touching when tight, a strand's width of gap when loose) while the
+    braid stays within the tube's thickness. The closest approach is
+    between different places along the length, near the crossings, so it
+    depends on the weave's pitch: it is found numerically (a bisection over
+    a sampled search) each rebuild, and a test checks it on dense 3D
+    samples. **Turn** is weaves along the whole length.
+  - All of them combine (a braid can coil) and are saved in a `TUBX`
+    section after `TUBE`. A shaped tube's `TUBE` entry has 0 triangles and
+    the real count is in `TUBX`, so versions before 4.0.0-beta.11, which
+    skip `TUBX`, keep it as ordinary mesh rather than reopening it as a
+    plain tube. The next tube drawn starts with the last shape used (for
+    the session).
+  - A coiled or braided tube is capped at about 400,000 triangles by
+    lengthening its rings along the strands; rebuilding one takes at most
+    about 50 ms (`tube_shape_timing`), so slider drags stay usable.
 
 ## Not in this version
 
 - Points snapping onto the model while dragged (they move on the view plane).
 - Joining the tube into the model automatically (use Merge).
-- A profile other than a circle, twisting, or a spiral.
+- A profile other than a circle.
+- Braids of more than three strands; strands of a braid touching only
+  where they cross (they're spaced for their closest approach).
 - Radial symmetry copies (only the X mirror).
