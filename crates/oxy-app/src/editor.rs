@@ -1062,6 +1062,9 @@ pub struct Editor {
     pub bridge: Option<crate::bridge::Bridge>,
     /// A short message shown over the viewport for a few seconds.
     pub toast: Option<Toast>,
+    /// For each piece: the topology version last seen and whether it had
+    /// UVs then, to say when an operation dropped them (RFC 0020).
+    uv_watch: std::collections::HashMap<u64, (u64, bool)>,
     /// History revision at the last save (or load).
     pub saved_revision: u64,
     pub autosaver: autosave::Autosaver,
@@ -1417,6 +1420,7 @@ impl Default for Editor {
             link: None,
             bridge: None,
             toast: None,
+            uv_watch: Default::default(),
             saved_revision: 0,
             autosaver: autosave::Autosaver::new(None, Duration::from_secs(120)),
             autosaved_revision: 0,
@@ -4281,6 +4285,32 @@ impl Editor {
         }
     }
 
+    /// Call once per frame: when a piece's triangles were rebuilt (remesh,
+    /// dynamic detail, decimate, subdivision levels, …) and that dropped
+    /// its UVs, say so once. Cheap: one lookup per piece.
+    pub fn watch_uvs(&mut self) {
+        let mut dropped: Option<String> = None;
+        let mut seen = std::collections::HashSet::new();
+        for p in &self.scene.pieces {
+            seen.insert(p.id);
+            let now = (p.mesh.topology_version(), p.mesh.has_uvs());
+            match self.uv_watch.insert(p.id, now) {
+                Some((version, true)) if version != now.0 && !now.1 => dropped = Some(p.name.clone()),
+                _ => {}
+            }
+        }
+        self.uv_watch.retain(|id, _| seen.contains(id));
+        if let Some(name) = dropped {
+            self.toast = Some(Toast {
+                text: format!(
+                    "{name} has no UVs any more: rebuilding its triangles (remesh, dynamic detail, decimate, subdivision levels…) drops them. Undo brings them back."
+                ),
+                since: std::time::Instant::now(),
+                long: true,
+            });
+        }
+    }
+
     /// Start a background autosave if one is due. Call once per frame.
     pub fn tick_autosave(&mut self) {
         let changed = self.history.revision() != self.autosaved_revision && self.is_modified();
@@ -4363,7 +4393,7 @@ impl Editor {
         let mut data = src.mesh.to_data();
         if mirror_x {
             data.positions.iter_mut().for_each(|p| p.x = -p.x);
-            data.triangles.iter_mut().for_each(|t| t.swap(1, 2));
+            data.flip_winding();
         }
         let base = if mirror_x { format!("{} (mirror)", src.name) } else { src.name.clone() };
         let symmetry_center = src.symmetry_center.map(|c| if mirror_x { c * Vec3::new(-1.0, 1.0, 1.0) } else { c });
@@ -7987,6 +8017,53 @@ mod tests {
         assert!(topo::boundary_loops(&m.triangles).is_empty(), "still open");
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), open);
+    }
+
+    #[test]
+    fn uvs_survive_sculpting_and_a_rebuild_that_drops_them_says_so() {
+        let mut e = editor();
+        // Give the sphere UVs (a spherical mapping), then cut a hole.
+        let mut d = e.scene.active().mesh.to_data();
+        d.uv = d
+            .triangles
+            .iter()
+            .map(|t| {
+                t.map(|v| {
+                    let p = d.positions[v as usize];
+                    oxy_mesh::Vec2::new(p.x.atan2(p.z), p.y)
+                })
+            })
+            .collect();
+        e.scene.active_mut().mesh = Mesh::from_data(d);
+        e.watch_uvs();
+        let hidden: Vec<bool> = {
+            let m = &e.scene.active().mesh;
+            m.triangles.iter().map(|t| t.iter().all(|&v| m.positions[v as usize].y > 0.7)).collect()
+        };
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.delete_hidden();
+        e.watch_uvs();
+        assert!(e.scene.active().mesh.has_uvs(), "deleting faces keeps the rest's UVs");
+        assert!(e.toast.is_none());
+        // A stroke moves points; the UVs stay.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(430.0, 300.0));
+        e.pointer_up();
+        e.watch_uvs();
+        assert!(e.scene.active().mesh.has_uvs());
+        assert!(e.toast.is_none());
+        // Close holes adds faces without UVs: they're dropped, and it says so.
+        e.close_holes();
+        e.watch_uvs();
+        assert!(!e.scene.active().mesh.has_uvs());
+        assert!(e.toast.as_ref().is_some_and(|t| t.text.contains("no UVs")), "{:?}", e.toast.as_ref().map(|t| &t.text));
+        // Undo brings them back, with no second note.
+        e.toast = None;
+        e.undo();
+        e.watch_uvs();
+        assert!(e.scene.active().mesh.has_uvs());
+        assert!(e.toast.is_none());
     }
 
     #[test]

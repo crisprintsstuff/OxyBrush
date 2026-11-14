@@ -20,7 +20,7 @@
 //! its only decoders are C++, which this project doesn't use.
 
 use crate::{Error, Result};
-use glam::{Mat4, Quat, Vec3};
+use glam::{Mat4, Quat, Vec2, Vec3};
 use serde_json::Value;
 use std::path::Path;
 
@@ -436,6 +436,7 @@ pub(crate) fn import_pieces(path: &Path, stem: &str) -> Result<Vec<(String, oxy_
         let mut positions: Vec<Vec3> = Vec::new();
         let mut tris: Vec<[u32; 3]> = Vec::new();
         let mut colors: Vec<Option<Vec3>> = Vec::new();
+        let mut uvs: Vec<[Vec2; 3]> = Vec::new();
         let flip = world.determinant() < 0.0;
         for prim in get(mesh, "primitives").as_array().map_or(&[][..], Vec::as_slice) {
             if prim.get("extensions").and_then(|e| e.get("KHR_draco_mesh_compression")).is_some()
@@ -464,11 +465,27 @@ pub(crate) fn import_pieces(path: &Path, stem: &str) -> Result<Vec<(String, oxy_
                 return Err(err(format!("a triangle uses point {bad}, but the primitive has {n}")));
             }
             let base = positions.len() as u32;
+            let before = tris.len();
             positions.extend(p.as_chunks::<3>().0.iter().map(|c| world.transform_point3(Vec3::from_array(*c))));
-            tris.extend(primitive_triangles(mode, &idx).into_iter().map(|t| {
+            let local = primitive_triangles(mode, &idx);
+            tris.extend(local.iter().map(|t| {
                 let t = t.map(|i| i + base);
                 if flip { [t[0], t[2], t[1]] } else { t }
             }));
+            // TEXCOORD_0 per corner; glTF's V points down, OxyBrush's (like
+            // OBJ and most tools) up, so it's flipped (UDIM tiles count up).
+            match index(attrs, "TEXCOORD_0").map(|a| data.floats(a)).transpose()? {
+                Some((t, 2)) if t.len() == 2 * n => {
+                    uvs.resize(before, [Vec2::ZERO; 3]);
+                    let uv = |i: u32| Vec2::new(t[2 * i as usize], 1.0 - t[2 * i as usize + 1]);
+                    uvs.extend(local.iter().map(|tr| {
+                        let c = tr.map(uv);
+                        if flip { [c[0], c[2], c[1]] } else { c }
+                    }));
+                }
+                _ if !uvs.is_empty() => uvs.resize(tris.len(), [Vec2::ZERO; 3]),
+                _ => {}
+            }
             match index(attrs, "COLOR_0").map(|a| data.floats(a)).transpose()? {
                 Some((c, cc)) if cc >= 3 => colors.extend(
                     c.chunks_exact(cc)
@@ -486,7 +503,10 @@ pub(crate) fn import_pieces(path: &Path, stem: &str) -> Result<Vec<(String, oxy_
             .and_then(Value::as_str)
             .filter(|s| !s.trim().is_empty())
             .map_or_else(|| format!("{stem} {}", pieces.len() + 1), str::to_owned);
-        pieces.push((name, crate::finish(positions, tris, colors)?));
+        if !uvs.is_empty() {
+            uvs.resize(tris.len(), [Vec2::ZERO; 3]);
+        }
+        pieces.push((name, crate::finish(positions, tris, colors, uvs)?));
     }
     if pieces.is_empty() {
         return Err(err(if skipped_draco {
@@ -670,5 +690,109 @@ mod tests {
         assert_eq!(base64_decode("Zm8=").unwrap(), b"fo");
         assert_eq!(percent_decode("a%20b%2Fc"), "a b/c");
         assert_eq!(percent_decode("100%"), "100%");
+    }
+
+    /// Corner UV from the corner and its triangle's centre (unique per face,
+    /// order-independent), as in oxy-mesh's tests.
+    fn uv_of(p: Vec3, c: Vec3) -> Vec2 {
+        Vec2::new(c.x * 2.0 + p.y * 0.5, c.z * 2.0 + p.x * 0.5 + 1.25)
+    }
+
+    fn uvs_follow_corners(m: &oxy_mesh::Mesh, tol: f32) -> bool {
+        m.has_uvs()
+            && m.triangles.iter().zip(m.uvs()).all(|(t, uv)| {
+                let p = t.map(|v| m.positions[v as usize]);
+                let c = (p[0] + p[1] + p[2]) / 3.0;
+                (0..3).all(|k| uv[k].distance(uv_of(p[k], c)) < tol)
+            })
+    }
+
+    #[test]
+    fn uvs_come_in_from_obj_and_go_out_and_back_in_every_format() {
+        let d = dir();
+        // An OBJ cube whose every face has its own UVs (seams on every
+        // edge): 8 points, 24 vt. Import welds the points, keeps the UVs.
+        let p = d.join("cube.obj");
+        let mut text = String::from("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nv 0 0 1\nv 1 0 1\nv 1 1 1\nv 0 1 1\n");
+        let faces = [[1, 2, 3, 4], [5, 8, 7, 6], [1, 5, 6, 2], [2, 6, 7, 3], [3, 7, 8, 4], [4, 8, 5, 1]];
+        let pos = |i: usize| {
+            let c = [[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 1], [1, 0, 1], [1, 1, 1], [0, 1, 1]][i - 1];
+            Vec3::new(c[0] as f32, c[1] as f32, c[2] as f32)
+        };
+        let mut vt = 1;
+        let mut flines = String::new();
+        for f in faces {
+            // Triangles (a, b, c) and (a, c, d): each corner's UV from its triangle.
+            for tri in [[f[0], f[1], f[2]], [f[0], f[2], f[3]]] {
+                let c = (pos(tri[0]) + pos(tri[1]) + pos(tri[2])) / 3.0;
+                for &v in &tri {
+                    let uv = uv_of(pos(v), c);
+                    text += &format!("vt {} {}\n", uv.x, uv.y);
+                }
+                flines += &format!("f {}/{} {}/{} {}/{}\n", tri[0], vt, tri[1], vt + 1, tri[2], vt + 2);
+                vt += 3;
+            }
+        }
+        text += &flines;
+        std::fs::write(&p, text).unwrap();
+        let m = &crate::import_pieces(&p).unwrap()[0].1;
+        assert_eq!(m.vertex_count(), 8, "welded across the UV seams");
+        assert!(uvs_follow_corners(m, 1e-5));
+        // Out and back in: OBJ, then glTF in every compression.
+        let mut outs = vec![(d.join("out.obj"), ExportOptions::default(), 1e-5)];
+        for c in GltfCompression::ALL {
+            for ext in ["glb", "gltf"] {
+                outs.push((d.join(format!("out-{}.{ext}", c.key())), ExportOptions { gltf: c }, 1e-4));
+            }
+        }
+        for (path, opts, tol) in outs {
+            export_pieces_with(&[ExportPiece::new("Cube", m)], &path, opts).unwrap();
+            let back = &crate::import_pieces(&path).unwrap()[0].1;
+            assert_eq!(back.vertex_count(), 8, "{}: welded again", path.display());
+            assert!(uvs_follow_corners(back, tol), "{}", path.display());
+        }
+        // glTF splits points at seams (one UV per point). These test UVs
+        // differ per triangle, so even each face's diagonal is a seam: 3
+        // points per triangle.
+        let glb = std::fs::read(d.join("out-none.glb")).unwrap();
+        let jl = u32::from_le_bytes(glb[12..16].try_into().unwrap()) as usize;
+        let doc: Value = serde_json::from_slice(&glb[20..20 + jl]).unwrap();
+        let prim = &doc["meshes"][0]["primitives"][0];
+        let tex = &doc["accessors"][prim["attributes"]["TEXCOORD_0"].as_u64().unwrap() as usize];
+        assert_eq!(tex["count"], json_count(36));
+        assert_eq!(
+            doc["accessors"][prim["attributes"]["POSITION"].as_u64().unwrap() as usize]["count"],
+            json_count(36)
+        );
+        // OBJ keeps points shared and writes a vt per distinct UV; a quad
+        // whose diagonal is a UV seam stays two triangles.
+        let obj = std::fs::read_to_string(d.join("out.obj")).unwrap();
+        assert_eq!(obj.lines().filter(|l| l.starts_with("v ")).count(), 8);
+        // Equal UVs share a vt line, so there are at most 36.
+        let vts = obj.lines().filter(|l| l.starts_with("vt ")).count();
+        assert!((24..=36).contains(&vts), "{vts}");
+        assert_eq!(obj.lines().filter(|l| l.starts_with("f ")).count(), 12, "seams across the diagonals");
+        // With one UV set per face (no seam across the diagonal), quads come back.
+        let mut face_uv = m.to_data();
+        face_uv.uv = face_uv
+            .triangles
+            .iter()
+            .map(|t| {
+                t.map(|v| {
+                    let p = face_uv.positions[v as usize];
+                    Vec2::new(p.x + p.z, p.y)
+                })
+            })
+            .collect();
+        let quads = oxy_mesh::Mesh::from_data(face_uv);
+        let q = d.join("quads.obj");
+        export_pieces_with(&[ExportPiece::new("Cube", &quads)], &q, ExportOptions::default()).unwrap();
+        let qt = std::fs::read_to_string(&q).unwrap();
+        assert_eq!(qt.lines().filter(|l| l.starts_with("f ")).count(), 6, "{qt}");
+        std::fs::remove_dir_all(&d).ok();
+    }
+
+    fn json_count(n: u64) -> Value {
+        serde_json::json!(n)
     }
 }
