@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Orbit around the last stroke** (on by default; Preferences, next to "Strokes can start on empty space", or the command palette): orbiting turns around where your last stroke ended, which stays put on screen, so you can keep working on the same spot from another angle without fighting the camera. Framing (F) goes back to orbiting around the middle of the view.
+- **Keep this level only** (Topology, under Dynamic detail when it can't work, and in the Mesh menu with the other level commands): keeps the subdivision level you see as the piece's mesh and removes the others, in one undo step, so dynamic detail works on it.
 - **glTF/GLB import** (File > Open and Import, drag and drop, `oxybrush-cli`, the agent's `import`): `.glb`, and `.gltf` with embedded or external `.bin` buffers. Each mesh in the file's scene becomes a piece, named after its node, placed where the scene puts it (node transforms applied, mirrored ones with their faces kept outward); points split only for normals or materials are welded so the surface sculpts as one. Vertex colors come in; triangle strips and fans become triangles; points and lines are skipped; skinned models come in their rest pose; materials, textures and animations are ignored. Files compressed with `KHR_mesh_quantization` or `EXT_meshopt_compression` (any meshopt mode or filter, as written by gltfpack and OxyBrush) open as usual. Draco-compressed files can't be read (its decoders are C++, which OxyBrush doesn't use) and say so. Checked on Khronos sample models (Box, Duck, Avocado, DamagedHelmet, BrainStem, Fox, Sponza, sparse accessors, every primitive mode) and on gltfpack output.
 - **Compressed glTF/GLB export** (File > **glTF compression** under Export, or Preferences > General; `oxybrush-cli … --compress meshopt|quantize|none`; none by default):
   - **Quantized** stores positions as 16-bit, normals and colors as 8-bit, and indices as 16-bit for pieces up to 65,535 points (the standard extension `KHR_mesh_quantization`): about half the size for pieces of that size, three quarters for bigger ones.
@@ -19,6 +21,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **Python plugins say they're plugins.** A Python plugin used to run through the local AI agent connection, so running one turned on Settings > Local AI agent (and left it on), the status bar said "Agent connected", and its edits were labelled "Agent:". Each run now gets a connection of its own (this computer only, a new token each time, closed when the script ends): the agent setting stays as you left it, the status bar shows **Plugin '*name*' running**, and its edits are undo steps named after it (**Plugin: *name*: …**).
+
+### Fixed
+- **The brush cursor follows a hovering pen on Windows.** With a pen tablet (reported with an XP-Pen), the brush ring stayed where the pen last touched until you pressed again: Windows sends a hovering pen's movement as pen input, not mouse moves, and OxyBrush only followed it while the pen touched the tablet.
+- **Clay Strips shows a round cursor** like every other brush, instead of a square.
+- **Dynamic detail seemed to stop working** after adding subdivision levels: it is off on pieces with levels (it would remove them), but the only sign was a status-bar line that was easy to miss. With Dynamic detail ticked, the Topology section now says so in a warning color, with a **Keep this level only** button that makes it work again; levels left behind by an operation that has since changed the triangles no longer block it.
 
 ## [4.0.0-beta.10] - 2026-11-14
 

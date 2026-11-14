@@ -40,13 +40,14 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
     },
     Topic {
         title: "Sculpting basics",
-        keywords: "start first stroke clay brush size strength radius",
+        keywords: "start first stroke clay brush size strength radius orbit pivot rotate around",
         body: "Drag on the model to sculpt with the current brush. Raise adds material and Carve removes it; hold Alt to flip for one stroke.\n\n\
 - [ and ] make the brush smaller and larger; - and = change its strength. The size/strength bar does the same with the mouse, and so does the quick menu: right-click the model or hold Q.\n\
 - The brush size is on screen: it stays the same size as you zoom, so zooming in gives finer strokes. Brush settings > Size > On the model makes it a size on the model instead (in scene units, for all brushes): zoom in and the circle grows with the model, so a stroke covers the same area at any zoom.\n\
 - S, U and I open a slider right under the pointer for size, strength and Paint strength; Shift+O opens one for focal shift (O in the Single-key tools scheme). Press the key again, Esc, or click outside to close it.\n\
 - Hold Shift to smooth with any brush, Ctrl to mask.\n\
 - With a pen, pressure sets the strength (and the radius, if you turn that on in the brush settings).\n\
+- After a stroke, orbiting turns around where it ended, so that spot stays in view as you look at it from another side. F frames the model and goes back to orbiting around the middle; Preferences > Orbit around the last stroke turns it off.\n\
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it. Ctrl+Alt+Z undoes on the active piece only, skipping changes to other pieces (Preferences > General can make that the default).",
     },
     Topic {
@@ -194,7 +195,7 @@ Remesh and decimate rebuild the mesh, so they remove the levels (undo brings the
         title: "Dynamic detail",
         keywords: "dynamic topology detail triangles adaptive refine sphere sketch",
         body: "Turn on Dynamic detail in the Topology section (or from the command palette) and sculpting brushes add triangles where they need more detail, and remove ones that have become too small. Start from a plain sphere and pull out shapes with Snake Hook, build up with Clay, without remeshing.\n\n\
-How fine it gets depends on the Detail slider and the brush size: a smaller brush gives smaller triangles. Mask, Paint, the Grab-like brushes and the cutting tools don't change triangles. Each stroke is one undo step. It is off on pieces with subdivision levels, and works best up to a few hundred thousand triangles.",
+How fine it gets depends on the Detail slider and the brush size: a smaller brush gives smaller triangles. Mask, Paint, the Grab-like brushes and the cutting tools don't change triangles. Each stroke is one undo step. It is off on pieces with subdivision levels, since it would remove them: Keep this level only (in the Topology section or the Mesh menu) turns the level you see into the piece's mesh, and then it works. It works best up to a few hundred thousand triangles.",
     },
     Topic {
         title: "Tubes",

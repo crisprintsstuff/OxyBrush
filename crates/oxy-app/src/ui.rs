@@ -1166,6 +1166,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ed.set_gizmo_pivot_follows(follows);
     }
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
+    tips::check(ui, &mut ed.orbit_around_stroke, "Orbit around the last stroke", Cmd::OrbitAroundStroke);
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(
         ui,
@@ -2825,7 +2826,7 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             let r = widgets::drag_button(ui, Icon::Orbit, plain::ORBIT);
             if r.dragged() {
                 let d = r.drag_delta() * ppp;
-                ed.camera.orbit(Vec2::new(d.x, d.y));
+                ed.orbit_by(Vec2::new(d.x, d.y));
             }
             let r = widgets::drag_button(ui, Icon::Pan, plain::PAN);
             if r.dragged() {
@@ -3609,6 +3610,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if tips::button_on(ui, levels.is_some_and(|(a, _)| a > 0), "Delete lower levels", Cmd::DeleteLower).clicked() {
         ed.delete_lower_levels();
+    }
+    if tips::button_on(ui, levels.is_some(), "Keep this level only", Cmd::KeepLevel).clicked() {
+        ed.keep_level_only();
     }
     ui.separator();
     if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
@@ -4639,7 +4643,10 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         tips::check_plain(ui, &mut ed.dyntopo, "Add detail as you sculpt", &Cmd::DynDetail.tip_in(&ed.keymap));
     });
     if ed.dyntopo {
-        let levels = ed.scene.active().multires.is_some();
+        let levels = {
+            let p = ed.scene.active();
+            p.multires.as_ref().is_some_and(|m| m.is_bound_to(&p.mesh))
+        };
         ui.add_enabled_ui(!levels, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Detail");
@@ -4653,7 +4660,10 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             });
         });
         if levels {
-            ui.label(RichText::new(plain::DYN_LEVELS).weak().small());
+            ui.label(RichText::new(plain::DYN_LEVELS).color(ui.visuals().warn_fg_color).small());
+            if tips::hover(ui.small_button("Keep this level only"), plain::KEEP_LEVEL).clicked() {
+                ed.keep_level_only();
+            }
         }
     }
     ui.add_space(4.0);
@@ -5271,8 +5281,7 @@ fn surface_cursor_checkbox(ui: &mut Ui, ed: &mut Editor) {
 }
 
 /// Orthonormal axes in the plane perpendicular to `normal`. `up_hint` keeps
-/// the square cursor from spinning as the normal changes a little; a circle
-/// does not show the basis at all.
+/// them from spinning as the normal changes a little.
 fn tangent_basis(normal: Vec3, up_hint: Vec3) -> (Vec3, Vec3) {
     let n = normal.normalize_or(Vec3::Z);
     let mut tangent = up_hint.cross(n);
@@ -5295,12 +5304,6 @@ fn surface_circle(center: Vec3, normal: Vec3, radius: f32, up_hint: Vec3, segmen
             center + (t * a.cos() + b * a.sin()) * radius
         })
         .collect()
-}
-
-/// Square centered on `center` with side length `2 * half`, in the tangent plane.
-fn surface_square(center: Vec3, normal: Vec3, half: f32, up_hint: Vec3) -> Vec<Vec3> {
-    let (t, b) = tangent_basis(normal, up_hint);
-    vec![center + (-t - b) * half, center + (t - b) * half, center + (t + b) * half, center + (-t + b) * half]
 }
 
 pub(crate) fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
@@ -5335,7 +5338,6 @@ fn try_draw_surface_cursor(
     center_px: Vec2,
     radius_pt: f32,
     color: Color32,
-    square: bool,
     inner: bool,
 ) -> bool {
     if !ed.surface_cursor {
@@ -5344,14 +5346,10 @@ fn try_draw_surface_cursor(
     }
     let Some(plane) = ed.cursor_plane(center_px, radius_pt) else { return false };
     let up = ed.camera.up();
-    let outer_world = if square {
-        surface_square(plane.point, plane.normal, plane.radius, up)
-    } else {
-        surface_circle(plane.point, plane.normal, plane.radius, up, 48)
-    };
+    let outer_world = surface_circle(plane.point, plane.normal, plane.radius, up, 48);
     let Some(outer) = project_points(ed, &outer_world) else { return false };
     painter.add(egui::Shape::closed_line(outer, EStroke::new(1.5, color)));
-    if inner && !square {
+    if inner {
         let inner_world = surface_circle(plane.point, plane.normal, plane.radius * ed.focal_ring(), up, 48);
         if let Some(inner_pts) = project_points(ed, &inner_world) {
             painter.add(egui::Shape::closed_line(inner_pts, EStroke::new(1.0, color.linear_multiply(0.45))));
@@ -5371,26 +5369,10 @@ fn try_draw_surface_cursor(
     true
 }
 
-fn paint_screen_cursor(
-    painter: &egui::Painter,
-    pos: egui::Pos2,
-    radius_pt: f32,
-    ring: f32,
-    kind: BrushKind,
-    color: Color32,
-) {
-    if kind == BrushKind::ClayStrips {
-        painter.rect_stroke(
-            egui::Rect::from_center_size(pos, egui::vec2(2.0 * radius_pt, 2.0 * radius_pt)),
-            0.0,
-            EStroke::new(1.5, color),
-            egui::StrokeKind::Middle,
-        );
-    } else {
-        painter.circle_stroke(pos, radius_pt, EStroke::new(1.5, color));
-        // Inner ring marks where the falloff reaches ~50% (moved by focal shift).
-        painter.circle_stroke(pos, radius_pt * ring, EStroke::new(1.0, color.linear_multiply(0.45)));
-    }
+fn paint_screen_cursor(painter: &egui::Painter, pos: egui::Pos2, radius_pt: f32, ring: f32, color: Color32) {
+    painter.circle_stroke(pos, radius_pt, EStroke::new(1.5, color));
+    // Inner ring marks where the falloff reaches ~50% (moved by focal shift).
+    painter.circle_stroke(pos, radius_pt * ring, EStroke::new(1.0, color.linear_multiply(0.45)));
     painter.circle_filled(pos, 1.5, color);
 }
 
@@ -5781,14 +5763,14 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             let c = ed.accent_color();
             if mode == StrokeMode::Stamp {
                 let r = s.distance(pos).max(4.0);
-                if !try_draw_surface_cursor(&painter, ed, start, r, c, false, false) {
+                if !try_draw_surface_cursor(&painter, ed, start, r, c, false) {
                     painter.circle_stroke(s, r, EStroke::new(1.5, c));
                 }
                 painter.line_segment([s, pos], EStroke::new(1.0, c.linear_multiply(0.6)));
             } else {
                 painter.line_segment([s, pos], EStroke::new(2.0, c));
                 let ghost = c.linear_multiply(0.5);
-                if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, ghost, false, false) {
+                if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, ghost, false) {
                     painter.circle_stroke(pos, ed.brush_radius_pt, EStroke::new(1.0, ghost));
                 }
             }
@@ -5798,7 +5780,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             let bp = to_pt(b);
             let accent = ed.accent_color();
             painter.line_segment([bp, pos], EStroke::new(1.0, Color32::from_gray(160)));
-            if !try_draw_surface_cursor(&painter, ed, b, ed.brush_radius_pt, accent, false, false) {
+            if !try_draw_surface_cursor(&painter, ed, b, ed.brush_radius_pt, accent, false) {
                 painter.circle_stroke(bp, ed.brush_radius_pt, EStroke::new(1.5, accent));
                 painter.circle_filled(bp, 2.0, accent);
             }
@@ -5818,9 +5800,9 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                 (_, true) => Color32::from_rgb(120, 200, 255),
                 _ => ed.accent_color(),
             };
-            let square = kind == BrushKind::ClayStrips;
-            if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, color, square, !square) {
-                paint_screen_cursor(&painter, pos, ed.brush_radius_pt, ed.focal_ring(), kind, color);
+            // Every brush, Clay Strips included, shows a round cursor.
+            if !try_draw_surface_cursor(&painter, ed, p, ed.brush_radius_pt, color, true) {
+                paint_screen_cursor(&painter, pos, ed.brush_radius_pt, ed.focal_ring(), color);
             }
         }
     }
