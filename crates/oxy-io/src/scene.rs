@@ -53,6 +53,8 @@ pub(crate) struct Geometry {
     pub diagonals: std::collections::HashSet<[u32; 2]>,
     /// Shape keys: name, a change per vertex of this geometry, weight.
     pub shapes: Vec<(String, Vec<Vec3>, f32)>,
+    /// UVs per triangle corner (RFC 0020), when the piece has them.
+    pub uvs: Option<Vec<[oxy_mesh::Vec2; 3]>>,
 }
 
 pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
@@ -67,10 +69,14 @@ pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
         colors: painted.then(Vec::new),
         diagonals: Default::default(),
         shapes: Vec::new(),
+        uvs: m.has_uvs().then(Vec::new),
     };
     for (t, tri) in m.triangles.iter().enumerate() {
         if m.hidden()[t] {
             continue;
+        }
+        if let Some(uvs) = &mut g.uvs {
+            uvs.push(m.uvs()[t]);
         }
         g.triangles.push(tri.map(|v| {
             let r = &mut remap[v as usize];
@@ -197,6 +203,7 @@ fn merge(geoms: &[Geometry]) -> Mesh {
 fn write_obj_objects(geoms: &[Geometry], w: &mut impl Write) -> io::Result<()> {
     writeln!(w, "# Exported by OxyBrush {}", env!("CARGO_PKG_VERSION"))?;
     let mut base = 1u32;
+    let mut vt_base = 1u32;
     for g in geoms {
         writeln!(w, "o {}", g.name.replace(['\n', '\r'], " "))?;
         match &g.colors {
@@ -215,10 +222,17 @@ fn write_obj_objects(geoms: &[Geometry], w: &mut impl Write) -> io::Result<()> {
         for n in &g.normals {
             writeln!(w, "vn {} {} {}", n.x, n.y, n.z)?;
         }
+        // UVs as `vt` lines, shared by the faces that use the same UV.
+        let (list, corners) = crate::dedupe_uvs(g.uvs.as_deref().unwrap_or_default());
+        for uv in &list {
+            writeln!(w, "vt {} {}", uv.x, uv.y)?;
+        }
+        let uvs = g.uvs.is_some().then_some(crate::ObjUvs { corners: &corners, base: vt_base });
         // The mesh's own quads when it knows them; otherwise they are guessed.
         let diagonals = (!g.diagonals.is_empty()).then_some(&g.diagonals);
-        crate::write_obj_faces_with_diagonals(&g.positions, &g.triangles, base, diagonals, w)?;
+        crate::write_obj_faces_with_diagonals(&g.positions, &g.triangles, base, diagonals, uvs, w)?;
         base += g.positions.len() as u32;
+        vt_base += list.len() as u32;
     }
     Ok(())
 }
