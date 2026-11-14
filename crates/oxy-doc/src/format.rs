@@ -36,6 +36,15 @@
 //!   **preceding** `PIEC` when it isn't the scene's, as UTF-8 text:
 //!   `preset:KEY` or `custom:NAME`. Older readers skip it and show the piece
 //!   with the scene's matcap.
+//! - `INST` (optional, since 4.0.0-beta.12): surface instances on the
+//!   **preceding** `PIEC` (RFC 0022): `count:u32` then per instancer
+//!   `source:u32` (the source piece's place among the file's pieces, from
+//!   0; not this piece) `place:u8` (0 faces, 1 points, 2 one face group)
+//!   `group:u32` (for 2) `orient:u8` (0 a world direction, 1 longest edge,
+//!   2 first edge, 3 random) `direction:f32*3` `size_mode:u8` (0 scene
+//!   units, 1 times the face size) `size:f32 offset:f32 spin:f32
+//!   vary_size:f32 vary_spin:f32 seed:u32`. Older readers skip it: the host
+//!   and the (hidden) source open as ordinary pieces, without the copies.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -220,6 +229,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(m) = &p.material {
             sections.push((*b"MATL", m.as_bytes().to_vec()));
+        }
+        if !p.instancers.is_empty() {
+            sections.push((*b"INST", encode_instancers(&p.instancers)));
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
             sections.push((*b"STRK", encode_strokes(st)));
@@ -536,6 +548,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 match String::from_utf8(raw.clone()) {
                     Ok(m) if !m.is_empty() && m.len() <= 512 => piece.material = Some(m),
                     _ => log::warn!("ignoring a damaged material on piece {:?}", piece.name),
+                }
+            }
+            b"INST" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("INST before any piece".into()))?;
+                match decode_instancers(&raw) {
+                    Ok(list) => piece.instancers = list,
+                    Err(e) => log::warn!("ignoring damaged surface instances on piece {:?}: {e}", piece.name),
                 }
             }
             b"STRK" => {
@@ -865,6 +884,95 @@ fn decode_tube_shapes(raw: &[u8]) -> Result<Vec<(oxy_mesh::primitives::TubeShape
         .collect()
 }
 
+/// One instancer's bytes in `INST` (see the header).
+const INSTANCER_BYTES: usize = 47;
+
+fn encode_instancers(list: &[crate::SavedInstancer]) -> Vec<u8> {
+    use oxy_mesh::instances::{Orient, Place, SizeMode};
+    let mut b = Vec::with_capacity(4 + list.len() * INSTANCER_BYTES);
+    b.extend_from_slice(&(list.len() as u32).to_le_bytes());
+    for ins in list {
+        let s = &ins.settings;
+        b.extend_from_slice(&ins.source.to_le_bytes());
+        let (place, group) = match s.place {
+            Place::Faces => (0u8, 0u32),
+            Place::Points => (1, 0),
+            Place::Group(g) => (2, g),
+        };
+        b.push(place);
+        b.extend_from_slice(&group.to_le_bytes());
+        b.push(match s.orient {
+            Orient::World => 0,
+            Orient::LongestEdge => 1,
+            Orient::FirstEdge => 2,
+            Orient::Random => 3,
+        });
+        for x in s.direction.to_array() {
+            b.extend_from_slice(&x.to_le_bytes());
+        }
+        b.push(match s.size_mode {
+            SizeMode::Absolute => 0,
+            SizeMode::Face => 1,
+        });
+        for x in [s.size, s.offset, s.spin, s.vary_size, s.vary_spin] {
+            b.extend_from_slice(&x.to_le_bytes());
+        }
+        b.extend_from_slice(&s.seed.to_le_bytes());
+    }
+    b
+}
+
+fn decode_instancers(raw: &[u8]) -> Result<Vec<crate::SavedInstancer>> {
+    use oxy_mesh::instances::{Orient, Place, Settings, SizeMode};
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, INSTANCER_BYTES)?;
+    (0..count)
+        .map(|_| {
+            let source = r.u32()?;
+            let place = match (r.u8()?, r.u32()?) {
+                (0, _) => Place::Faces,
+                (1, _) => Place::Points,
+                (2, g) => Place::Group(g),
+                _ => return Err(Error::Corrupt("unknown instance placement".into())),
+            };
+            let orient = match r.u8()? {
+                0 => Orient::World,
+                1 => Orient::LongestEdge,
+                2 => Orient::FirstEdge,
+                3 => Orient::Random,
+                _ => return Err(Error::Corrupt("unknown instance orientation".into())),
+            };
+            let direction = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+            let size_mode = match r.u8()? {
+                0 => SizeMode::Absolute,
+                1 => SizeMode::Face,
+                _ => return Err(Error::Corrupt("unknown instance size".into())),
+            };
+            let [size, offset, spin, vary_size, vary_spin] = [r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?];
+            let seed = r.u32()?;
+            let finite =
+                direction.is_finite() && [size, offset, spin, vary_size, vary_spin].iter().all(|x| x.is_finite());
+            if !finite || size <= 0.0 {
+                return Err(Error::Corrupt("invalid instance settings".into()));
+            }
+            let settings = Settings {
+                place,
+                orient,
+                direction,
+                size_mode,
+                size,
+                offset,
+                spin,
+                vary_size: vary_size.clamp(0.0, 1.0),
+                vary_spin: vary_spin.clamp(0.0, 1.0),
+                seed,
+            };
+            Ok(crate::SavedInstancer { source, settings })
+        })
+        .collect()
+}
+
 /// Bound on a tube's twist, coil and braid numbers in a file: far past
 /// what the Tube window offers, but keeps a damaged file from asking for a
 /// mesh too fine to build.
@@ -1034,6 +1142,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         curve: None,
         strokes: None,
         material: None,
+        instancers: Vec::new(),
     })
 }
 
@@ -1280,6 +1389,7 @@ mod tests {
                     curve: None,
                     strokes: None,
                     material: None,
+                    instancers: Vec::new(),
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -1293,6 +1403,7 @@ mod tests {
                     curve: None,
                     strokes: None,
                     material: None,
+                    instancers: Vec::new(),
                 },
             ],
             active: 1,
@@ -1461,6 +1572,7 @@ mod tests {
                 strokes: vec![stroke, painted],
             }),
             material: None,
+            instancers: Vec::new(),
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
@@ -1924,6 +2036,7 @@ mod tests {
                 curve: None,
                 strokes: None,
                 material: None,
+                instancers: Vec::new(),
             }],
             active: 0,
             alphas: Vec::new(),
@@ -1997,5 +2110,57 @@ mod tests {
         let i = old.windows(4).position(|w| w == b"MATL").unwrap();
         old[i..i + 4].copy_from_slice(b"ZZZZ");
         assert_eq!(decode(&old).unwrap().pieces[0].material, None);
+    }
+
+    #[test]
+    fn surface_instances_roundtrip_and_older_readers_skip_them() {
+        use crate::{Instancer, Piece, Scene};
+        use oxy_mesh::instances::{Orient, Place, Settings, SizeMode};
+        let mut host = Piece::new("Host", primitives::icosphere(1, 1.0));
+        let mut source = Piece::new("Rivet", primitives::icosphere(0, 0.1));
+        source.visible = false;
+        let settings = Settings {
+            place: Place::Group(3),
+            orient: Orient::LongestEdge,
+            direction: Vec3::new(0.0, 0.6, 0.8),
+            size_mode: SizeMode::Absolute,
+            size: 0.25,
+            offset: -0.1,
+            spin: 30.0,
+            vary_size: 0.5,
+            vary_spin: 1.0,
+            seed: 77,
+        };
+        host.instancers.push(Instancer { source: source.id, settings });
+        // The source comes after the host in the list: sources are found by
+        // place, forwards or backwards.
+        let mut scene = Scene::new(host);
+        scene.pieces.push(source);
+        let bytes = encode(&scene.to_data());
+        assert_eq!(bytes.windows(4).filter(|w| w == b"INST").count(), 1);
+        let back = Scene::from_data(decode(&bytes).unwrap()).unwrap();
+        let ins = &back.pieces[0].instancers;
+        assert_eq!(ins.len(), 1);
+        assert_eq!(ins[0].source, back.pieces[1].id);
+        assert_eq!(ins[0].settings, settings);
+        assert!(!back.pieces[1].visible);
+        // An older reader skips INST and keeps both pieces as they are.
+        let mut old = bytes.clone();
+        let i = old.windows(4).position(|w| w == b"INST").unwrap();
+        old[i..i + 4].copy_from_slice(b"ZZZZ");
+        let back = Scene::from_data(decode(&old).unwrap()).unwrap();
+        assert_eq!(back.pieces.len(), 2);
+        assert!(back.pieces[0].instancers.is_empty());
+    }
+
+    #[test]
+    fn instances_pointing_at_themselves_or_nowhere_are_dropped() {
+        use crate::{Instancer, Piece, Scene};
+        let mut host = Piece::new("Host", primitives::icosphere(1, 1.0));
+        host.instancers.push(Instancer { source: host.id, settings: Default::default() });
+        let scene = Scene::new(host);
+        // to_data keeps it (index 0 is found); from_data drops a self-source.
+        let back = Scene::from_data(decode(&encode(&scene.to_data())).unwrap()).unwrap();
+        assert!(back.pieces[0].instancers.is_empty());
     }
 }

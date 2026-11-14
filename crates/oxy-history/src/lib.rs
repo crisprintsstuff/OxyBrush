@@ -54,6 +54,16 @@ enum Change {
         mesh: Box<Mesh>,
         cage: Option<Box<Cage>>,
     },
+    /// The piece's surface instancers (RFC 0022) are exchanged.
+    Instancers {
+        piece: u64,
+        list: Vec<oxy_doc::Instancer>,
+    },
+    /// The piece is shown or hidden (used with instancers, whose source is hidden).
+    Visible {
+        piece: u64,
+        visible: bool,
+    },
     /// Several changes applied as one; order alternates on each swap.
     Compound(Vec<Change>),
 }
@@ -68,6 +78,10 @@ pub enum Step {
     Removed { index: usize, piece: Box<Piece> },
     /// The piece's mesh and retopology cage were replaced; these are the old ones.
     Cage { piece: u64, previous: Mesh, previous_cage: Option<Cage> },
+    /// The piece's surface instancers changed; these are the old ones.
+    Instancers { piece: u64, previous: Vec<oxy_doc::Instancer> },
+    /// The piece was shown or hidden; this is whether it was visible.
+    Visible { piece: u64, previous: bool },
 }
 
 impl From<Step> for Change {
@@ -81,6 +95,8 @@ impl From<Step> for Change {
             Step::Cage { piece, previous, previous_cage } => {
                 Change::Cage { piece, mesh: Box::new(previous), cage: previous_cage.map(Box::new) }
             }
+            Step::Instancers { piece, previous } => Change::Instancers { piece, list: previous },
+            Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
         }
     }
 }
@@ -94,6 +110,8 @@ impl Change {
             Change::Chunks { piece, .. }
             | Change::Topology { piece, .. }
             | Change::Faces { piece, .. }
+            | Change::Instancers { piece, .. }
+            | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
             Change::Piece { .. } => None,
             Change::Compound(c) => {
@@ -111,6 +129,8 @@ impl Change {
             Change::Chunks { piece, .. }
             | Change::Topology { piece, .. }
             | Change::Faces { piece, .. }
+            | Change::Instancers { piece, .. }
+            | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
             Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
             Change::Compound(c) => c.iter().any(|x| x.touches(id)),
@@ -127,6 +147,8 @@ impl Change {
                 mesh_bytes(mesh) + multires.as_ref().map_or(0, |m| m.approx_bytes())
             }
             Change::Faces { groups, .. } => groups.len() * 5,
+            Change::Instancers { list, .. } => list.len() * 64 + 32,
+            Change::Visible { .. } => 16,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Cage { mesh, cage, .. } => {
                 mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
@@ -168,6 +190,16 @@ impl Change {
                 let old_hidden = std::mem::replace(hidden, mesh.hidden().to_vec());
                 mesh.set_groups(old_groups);
                 mesh.set_hidden(old_hidden);
+                Some(*piece)
+            }
+            Change::Instancers { piece, list } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.instancers, list);
+                Some(*piece)
+            }
+            Change::Visible { piece, visible } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.visible, visible);
                 Some(*piece)
             }
             Change::Piece { index, piece } => match piece.take() {
@@ -923,5 +955,28 @@ mod tests {
         h.touch(&s.active().mesh, 0);
         h.commit();
         assert!(!h.can_redo());
+    }
+
+    #[test]
+    fn instancers_and_visibility_swap_as_one_step() {
+        let mut s = scene();
+        s.pieces.push(Piece::new("b", primitives::icosphere(0, 0.2)));
+        let (host, source) = (s.pieces[0].id, s.pieces[1].id);
+        let mut h = History::new(1 << 30);
+        s.pieces[1].visible = false;
+        s.pieces[0].instancers.push(oxy_doc::Instancer { source, settings: Default::default() });
+        h.record_compound(
+            "Add surface instances",
+            vec![
+                Step::Visible { piece: source, previous: true },
+                Step::Instancers { piece: host, previous: Vec::new() },
+            ],
+        );
+        h.undo(&mut s);
+        assert!(s.pieces[0].instancers.is_empty());
+        assert!(s.pieces[1].visible);
+        h.redo(&mut s);
+        assert_eq!(s.pieces[0].instancers.len(), 1);
+        assert!(!s.pieces[1].visible);
     }
 }

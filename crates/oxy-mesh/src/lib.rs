@@ -12,6 +12,7 @@ pub use adjacency::Neighbors;
 pub mod catmull_clark;
 pub mod deform;
 pub mod dyntopo;
+pub mod instances;
 pub mod multires;
 
 pub mod polyedit;

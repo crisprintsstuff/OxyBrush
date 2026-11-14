@@ -793,6 +793,9 @@ pub struct Job {
 
 /// What a background job produces for its target piece.
 pub enum JobResult {
+    /// Surface instances made real (RFC 0022): the new piece's name, its
+    /// mesh and how many copies it holds.
+    MadeReal(String, Mesh, usize),
     /// A new mesh (remesh, merge, decimate); subdivision levels are dropped.
     Mesh(Mesh),
     /// New pieces to add after the target (e.g. a LOD chain), as (name, mesh).
@@ -1288,6 +1291,15 @@ pub struct Editor {
     /// The piece the Pieces panel's Boolean row combines with (the last one
     /// picked, while it exists).
     pub boolean_with: Option<u64>,
+    /// The piece the Instances section copies onto the active piece.
+    pub instance_pick: Option<u64>,
+    /// Edit source (surface instances): the source shown alone.
+    pub editing_source: Option<crate::instances::SourceEdit>,
+    /// A surface instance settings edit in progress: the host and its
+    /// instancers before it, recorded as one undo step when it ends.
+    pub(crate) instancer_before: Option<(u64, Vec<oxy_doc::Instancer>)>,
+    /// Copies worked out for each instancer, by renderer key.
+    pub(crate) instance_cache: std::collections::HashMap<u64, crate::instances::InstanceCache>,
     /// The diagnostics window's last report, for (piece, topology version):
     /// checking a large mesh on every frame was slow, and the report only
     /// changes with the triangles.
@@ -1554,6 +1566,10 @@ impl Default for Editor {
             show_print_dialog: false,
             show_diagnostics: false,
             boolean_with: None,
+            instance_pick: None,
+            editing_source: None,
+            instancer_before: None,
+            instance_cache: Default::default(),
             diagnostics_cache: None,
             print_scale_mm_per_unit: 10.0,
             import_scale: None,
@@ -3350,6 +3366,7 @@ impl Editor {
 
     pub fn pointer_up(&mut self) {
         self.flush_drag();
+        self.commit_instancer_edit();
         if self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
             return;
         }
@@ -5423,7 +5440,16 @@ impl Editor {
         let piece = self.scene.pieces.remove(index);
         self.status = format!("Deleted {}", piece.name);
         self.scene.set_active(index.saturating_sub(1));
-        self.history.record("Delete piece", Step::Removed { index, piece: Box::new(piece) });
+        // The pieces it copied (surface instances) become ordinary, shown pieces.
+        let sources: Vec<u64> = piece.instancers.iter().map(|i| i.source).collect();
+        let mut steps = vec![Step::Removed { index, piece: Box::new(piece) }];
+        for id in sources {
+            if let Some(p) = self.scene.get_mut(id) {
+                steps.push(Step::Visible { piece: id, previous: p.visible });
+                p.visible = true;
+            }
+        }
+        self.history.record_compound("Delete piece", steps);
     }
 
     /// Show only the active piece; if already solo, show all pieces.
@@ -6247,6 +6273,14 @@ impl Editor {
                 let n = alpha.size;
                 self.add_alpha(alpha);
                 self.status = format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s");
+            }
+            Ok(JobResult::MadeReal(name, mesh, copies)) => {
+                let name = self.scene.unique_name(&name);
+                let tris = mesh.triangle_count();
+                self.add_piece(Piece::new(name.clone(), mesh), "Make surface instances real");
+                self.status = format!(
+                    "Made {copies} copies real as {name} ({tris} triangles); the copies and their source are kept"
+                );
             }
             Ok(JobResult::Primitive(name, mesh)) => {
                 let name = self.scene.unique_name(&name);
@@ -12440,5 +12474,145 @@ mod tests {
         // Undo restores original sphere
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount);
+    }
+
+    /// A host sphere and a small rivet, copied onto the sphere.
+    fn instanced_editor() -> (Editor, u64, u64) {
+        let mut e = editor();
+        e.scene.pieces.push(Piece::new("Rivet", primitives::icosphere(1, 0.1)));
+        let (host, rivet) = (e.scene.pieces[0].id, e.scene.pieces[1].id);
+        e.scene.set_active(0);
+        e.add_instancer(rivet);
+        (e, host, rivet)
+    }
+
+    #[test]
+    fn surface_instances_add_undo_and_redo() {
+        let (mut e, host, rivet) = instanced_editor();
+        assert_eq!(e.scene.active().id, host);
+        assert_eq!(e.scene.active().instancers.len(), 1);
+        assert!(!e.scene.get(rivet).unwrap().visible, "the source is hidden");
+        let faces = oxy_mesh::instances::polygons(&e.scene.active().mesh).len();
+        assert_eq!(e.instance_count(host, 0), faces, "one copy per polygon");
+        let draws = e.instance_draws();
+        assert_eq!(draws.len(), 1);
+        assert_eq!(draws[0].source, rivet);
+        e.undo();
+        assert!(e.scene.active().instancers.is_empty());
+        assert!(e.scene.get(rivet).unwrap().visible, "undo shows the source again");
+        assert!(e.instance_draws().is_empty());
+        e.redo();
+        assert_eq!(e.scene.active().instancers.len(), 1);
+        assert!(!e.scene.get(rivet).unwrap().visible);
+        // No copies of copies, and a source can't take copies.
+        let before = e.scene.active().instancers.len();
+        e.add_instancer(rivet);
+        assert_eq!(e.scene.active().instancers.len(), before, "the same source twice is refused");
+        e.scene.set_active(1);
+        assert!(e.instance_sources().is_empty() || e.instance_sources().iter().all(|(id, _)| *id != host));
+    }
+
+    #[test]
+    fn surface_instance_settings_are_one_undo_step_per_edit() {
+        let (mut e, host, _) = instanced_editor();
+        let first = e.instance_transforms(host, 0).unwrap();
+        let mut s = e.scene.active().instancers[0].settings;
+        // A slider drag: many changes, one step.
+        for k in 1..=5 {
+            s.spin = k as f32 * 10.0;
+            e.set_instancer_settings(0, s);
+        }
+        e.commit_instancer_edit();
+        let turned = e.instance_transforms(host, 0).unwrap();
+        assert_ne!(first[0], turned[0], "the copies follow the new settings");
+        let labels: Vec<&str> = e.history.undo_labels().collect();
+        assert_eq!(labels, ["Add surface instances", "Change surface instances"]);
+        e.undo();
+        assert_eq!(e.scene.active().instancers[0].settings.spin, 0.0);
+        assert_eq!(e.instance_transforms(host, 0).unwrap()[0], first[0]);
+        // Placing on one face group only.
+        let mut groups = vec![0u32; e.scene.active().mesh.triangle_count()];
+        groups.iter_mut().take(10).for_each(|g| *g = 4);
+        e.scene.active_mut().mesh.set_groups(groups);
+        let mut s = e.scene.active().instancers[0].settings;
+        s.place = oxy_mesh::instances::Place::Group(4);
+        e.set_instancer_settings(0, s);
+        e.commit_instancer_edit();
+        let mesh = &e.scene.active().mesh;
+        let in_group =
+            oxy_mesh::instances::polygons(mesh).iter().filter(|(_, t)| mesh.groups()[t[0] as usize] == 4).count();
+        assert!(in_group > 0);
+        assert_eq!(e.instance_count(host, 0), in_group);
+    }
+
+    #[test]
+    fn surface_instances_follow_a_sculpted_host_and_an_edited_source() {
+        let (mut e, host, rivet) = instanced_editor();
+        let before = e.instance_transforms(host, 0).unwrap();
+        // Move the host's points out: the copies move with the surface.
+        let n = e.scene.active().mesh.vertex_count() as u32;
+        let mesh = &mut e.scene.active_mut().mesh;
+        mesh.positions.iter_mut().for_each(|p| *p *= 1.5);
+        mesh.update_after_move(&(0..n).collect::<Vec<_>>());
+        let after = e.instance_transforms(host, 0).unwrap();
+        let (a, b) = (before[0].w_axis.truncate().length(), after[0].w_axis.truncate().length());
+        assert!(b > a * 1.3, "copies sit on the moved surface: {a} -> {b}");
+        // Edit source: shown alone and active; Done puts the scene back.
+        e.begin_edit_source(0);
+        assert_eq!(e.scene.active().id, rivet);
+        assert!(e.scene.active().visible);
+        assert!(!e.scene.get(host).unwrap().visible);
+        let m = &mut e.scene.active_mut().mesh;
+        let n = m.vertex_count() as u32;
+        m.positions.iter_mut().for_each(|p| p.y *= 3.0);
+        m.update_after_move(&(0..n).collect::<Vec<_>>());
+        e.end_edit_source();
+        assert_eq!(e.scene.active().id, host);
+        assert!(e.scene.get(host).unwrap().visible);
+        assert!(!e.scene.get(rivet).unwrap().visible);
+        let edited = e.instance_transforms(host, 0).unwrap();
+        assert_ne!(edited[0], after[0], "a taller source changes every copy's scale");
+    }
+
+    #[test]
+    fn make_real_adds_a_piece_and_keeps_the_copies() {
+        let (mut e, host, rivet) = instanced_editor();
+        let copies = e.instance_count(host, 0);
+        let per = e.scene.get(rivet).unwrap().mesh.triangle_count();
+        e.make_instances_real(0);
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 3);
+        let real = e.scene.active();
+        assert_eq!(real.mesh.triangle_count(), copies * per);
+        assert!(real.name.contains("Rivet"), "{}", real.name);
+        let mut groups = real.mesh.groups().to_vec();
+        groups.sort_unstable();
+        groups.dedup();
+        assert_eq!(groups.len(), copies, "one face group per copy");
+        assert_eq!(e.scene.get(host).unwrap().instancers.len(), 1, "the instancer is kept");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn removing_instances_shows_the_source_and_saving_keeps_them() {
+        let (mut e, host, rivet) = instanced_editor();
+        let data = e.scene.to_data();
+        let bytes = oxy_doc::format::encode(&data);
+        let back = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        assert_eq!(back.pieces[0].instancers.len(), 1);
+        assert_eq!(back.pieces[0].instancers[0].source, back.pieces[1].id);
+        // Deleting the host shows its source again; undo hides it.
+        e.delete_active();
+        assert!(e.scene.get(rivet).unwrap().visible);
+        e.undo();
+        assert!(!e.scene.get(rivet).unwrap().visible);
+        assert_eq!(e.scene.active().id, host);
+        e.remove_instancer(0);
+        assert!(e.scene.get(host).unwrap().instancers.is_empty());
+        assert!(e.scene.get(rivet).unwrap().visible);
+        e.undo();
+        assert_eq!(e.scene.get(host).unwrap().instancers.len(), 1);
+        assert!(!e.scene.get(rivet).unwrap().visible);
     }
 }
