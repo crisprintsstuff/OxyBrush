@@ -15,7 +15,7 @@ struct Uniforms {
     wireframe_color: vec4<f32>,
     // Floor grid: height, cell size, fade radius, opacity (0 = off).
     floor: vec4<f32>,
-    // Floor grid: center x, center z.
+    // Floor grid: center x, center z; z: show vertex color (1) or not.
     floor_center: vec4<f32>,
     // Viewport lights (see lighting.rs, GpuLighting).
     lighting: Lighting,
@@ -241,7 +241,8 @@ fn fs_main(
     }
     // Vertex color: tint by the paint while keeping the material's shading.
     // White (unpainted) leaves the material exactly as it is.
-    let paint_w = clamp(distance(i.paint, vec3<f32>(1.0)) * 4.0, 0.0, 1.0);
+    // View > Show vertex color off: the plain material.
+    let paint_w = clamp(distance(i.paint, vec3<f32>(1.0)) * 4.0, 0.0, 1.0) * u.floor_center.z;
     if (paint_w > 0.0) {
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
         color = mix(color, i.paint * lum * 1.6, paint_w);

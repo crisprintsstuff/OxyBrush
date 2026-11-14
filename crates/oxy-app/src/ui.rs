@@ -625,13 +625,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
-                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, lights, wireframe and face group colors", |ui| {
+                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, vertex color, lights, wireframe and face group colors", |ui| {
                     tips::hover(
                         ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))),
                         plain::AO,
                     );
                     tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))), plain::CAVITY);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+                    tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
                     tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
                     if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
                         ed.show_lights = true;
@@ -3730,6 +3731,7 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button(ui, "Paint brush", Cmd::PaintBrush).clicked() {
             ed.brush_kind = BrushKind::Paint;
         }
+        tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
         color_actions(ui, ed);
     });
     tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {

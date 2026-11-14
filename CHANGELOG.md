@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **View > Shading > Show vertex color** (also in the Vertex color menu and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.
+
 ## [4.0.0-beta.11] - 2026-11-14
 
 ### Added

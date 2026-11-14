@@ -297,6 +297,8 @@ pub struct Settings {
     pub update_skip: String,
     /// Faceted instead of smooth shading in the viewport.
     pub flat_shading: bool,
+    /// View > Show vertex color.
+    pub show_vertex_color: bool,
     /// Overlay polygon edges atop shaded surfaces.
     pub wireframe: bool,
     /// Wireframe line opacity (0.0 to 1.0).
@@ -858,6 +860,7 @@ impl Default for Settings {
             update_last_check: 0,
             update_skip: String::new(),
             flat_shading: false,
+            show_vertex_color: true,
             wireframe: false,
             wireframe_opacity: 0.7,
             wireframe_color: view.wireframe_color,
@@ -1049,6 +1052,7 @@ impl Settings {
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
             + &format!("orbit_around = {}\n", self.orbit_around.key())
+            + &format!("show_vertex_color = {}\n", self.show_vertex_color)
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("subdivision_smooth = {}\n", self.subdivision_smooth)
             + &format!("radius_on_model = {}\n", self.radius_on_model)
@@ -1152,6 +1156,7 @@ impl Settings {
                 }
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
+                "show_vertex_color" => s.show_vertex_color = v.parse().unwrap_or(s.show_vertex_color),
                 "wireframe" => s.wireframe = v.parse().unwrap_or(s.wireframe),
                 "wireframe_opacity" => {
                     if let Ok(x) = v.parse::<f32>()
@@ -1518,6 +1523,7 @@ mod tests {
             update_last_check: 1_800_000_000,
             update_skip: "0.4.0-alpha".into(),
             flat_shading: true,
+            show_vertex_color: false,
             wireframe: true,
             wireframe_opacity: 0.85,
             wireframe_color: [0.15, 0.2, 0.25],

@@ -252,6 +252,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::GroupColors, "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd(ed, Cmd::Shading, "view ambient occlusion cavity", Editor::toggle_shading),
         cmd(ed, Cmd::FlatShading, "view faceted polygons smooth", |e| e.view.flat_shading = !e.view.flat_shading),
+        cmd(
+            ed,
+            Cmd::ShowVertexColor,
+            "view vertex color colour paint hide show polypaint clay",
+            Editor::toggle_vertex_color,
+        ),
         cmd(ed, Cmd::DynDetail, "dynamic detail topology dyntopo adaptive triangles refine", |e| {
             e.dyntopo = !e.dyntopo
         }),

@@ -162,6 +162,7 @@ commands! {
     GroupColors => "Face group colors", "G", "Show face groups as colors, or the normal material.";
     Shading => "Shading on / off", "", "Turn ambient occlusion and cavity shading on or off.";
     FlatShading => "Flat shading on / off", "", "Show each polygon as a flat facet instead of a smooth surface.";
+    ShowVertexColor => "Show vertex color on / off", "", "Show the model's vertex color (painted, or imported from OBJ, PLY or glTF) over the material, or hide it to judge the form in plain clay. Hiding only changes the view: the colors are kept, saved and exported. Painting shows them again.";
     DynDetail => "Dynamic detail on / off", "", "Sculpting brushes add triangles where they need more detail and remove ones that have become too small, so you can build a shape from a simple sphere without remeshing.";
     LightViewport => "Light the viewport on / off", "", "Shade the model with lights (and shadows) instead of the material. Set them up in View > Shading > Lights.";
     LightsWindow => "Lights…", "", "Open the Lights window: add, move and color lights, and turn on shadows.";

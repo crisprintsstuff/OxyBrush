@@ -1756,6 +1756,7 @@ impl Editor {
             update_last_check: self.updater.last_check,
             update_skip: self.updater.skip.clone(),
             flat_shading: self.view.flat_shading,
+            show_vertex_color: self.view.show_vertex_color,
             wireframe: self.view.wireframe,
             wireframe_opacity: self.view.wireframe_opacity,
             wireframe_color: self.view.wireframe_color,
@@ -1994,6 +1995,7 @@ impl Editor {
         self.updater.last_check = s.update_last_check;
         self.updater.skip = s.update_skip.clone();
         self.view.flat_shading = s.flat_shading;
+        self.view.show_vertex_color = s.show_vertex_color;
         self.view.wireframe = s.wireframe;
         self.view.wireframe_opacity = s.wireframe_opacity;
         self.view.wireframe_color = s.wireframe_color;
@@ -2401,6 +2403,9 @@ impl Editor {
         // Detail first, then the dab, so the dab shapes the new triangles.
         self.dyntopo_step(Some(sample.position), true);
         let changed = matches!(&self.drag, Drag::Stroke { dyn_topo: Some(d), .. } if d.changed);
+        if kind == BrushKind::Paint {
+            self.reveal_vertex_color();
+        }
         let piece = self.scene.active_mut();
         if !changed {
             self.history.begin_with(
@@ -3557,6 +3562,9 @@ impl Editor {
                 (stroke, samples)
             }
         };
+        if kind == BrushKind::Paint {
+            self.reveal_vertex_color();
+        }
         let piece = self.scene.active_mut();
         self.history.begin_with(
             kind.label(),
@@ -4983,6 +4991,9 @@ impl Editor {
         let Some(c) = self.curve.take() else { return };
         let radius = self.brush_radius_pt * c.world_per_pt;
         let mut stroke = self.new_stroke(c.kind, c.invert, radius, 0.0);
+        if c.kind == BrushKind::Paint {
+            self.reveal_vertex_color();
+        }
         let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
         let paint = c.kind == BrushKind::Paint || piece.mesh.is_painted();
         self.history.begin_with(c.kind.label(), piece.id, &piece.mesh, paint);
@@ -6618,6 +6629,28 @@ impl Editor {
         piece.mesh.mark_all_dirty();
         self.history.commit();
         self.status = label.into();
+        if label != "Clear color" {
+            self.reveal_vertex_color();
+        }
+    }
+
+    /// View > Show vertex color: show or hide the colors over the material.
+    pub fn toggle_vertex_color(&mut self) {
+        self.view.show_vertex_color = !self.view.show_vertex_color;
+        self.status = if self.view.show_vertex_color {
+            "Showing vertex color".into()
+        } else {
+            "Vertex color hidden (it's kept): View > Shading > Show vertex color shows it again".into()
+        };
+    }
+
+    /// Painting with vertex color hidden would show nothing: show it again,
+    /// and say so.
+    fn reveal_vertex_color(&mut self) {
+        if !self.view.show_vertex_color {
+            self.view.show_vertex_color = true;
+            self.status = format!("{} (vertex color shown again)", self.status);
+        }
     }
 
     /// Run a 2-manifold topology check on the active piece.
@@ -7683,6 +7716,38 @@ mod tests {
             .collect();
         old.apply_settings(&crate::settings::Settings::from_text(&stripped));
         assert_eq!((old.brush_kind, old.brush_radius_pt), before);
+    }
+
+    #[test]
+    fn vertex_color_can_be_hidden_and_painting_shows_it_again() {
+        let mut e = editor();
+        assert!(e.view.show_vertex_color, "shown by default");
+        e.toggle_vertex_color();
+        assert!(!e.view.show_vertex_color);
+        // Hiding is only a view: nothing in the scene or the history changes.
+        let revision = e.history.revision();
+        e.toggle_vertex_color();
+        e.toggle_vertex_color();
+        assert_eq!(e.history.revision(), revision);
+        // Clearing color leaves it hidden; filling or painting shows it again.
+        e.edit_color("Clear color", Mesh::clear_color);
+        assert!(!e.view.show_vertex_color);
+        e.edit_color("Fill color", |m| m.fill_color(Vec3::new(1.0, 0.0, 0.0), 1.0));
+        assert!(e.view.show_vertex_color);
+        assert!(e.status.contains("shown again"), "{}", e.status);
+        e.toggle_vertex_color();
+        e.brush_kind = BrushKind::Paint;
+        e.pointer = Some(Vec2::new(430.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(440.0, 300.0));
+        e.pointer_up();
+        assert!(e.view.show_vertex_color, "a Paint stroke shows the colors");
+        // Remembered with the other view settings.
+        e.view.show_vertex_color = false;
+        let text = e.settings().to_text();
+        let mut next = editor();
+        next.apply_settings(&crate::settings::Settings::from_text(&text));
+        assert!(!next.view.show_vertex_color);
     }
 
     #[test]
@@ -10725,6 +10790,7 @@ mod tests {
             update_last_check: 42,
             update_skip: "1.2.3".into(),
             flat_shading: true,
+            show_vertex_color: false,
             wireframe: true,
             wireframe_opacity: 0.8,
             wireframe_color: [0.2, 0.22, 0.25],
@@ -10803,6 +10869,7 @@ mod tests {
         // Reset does not put the other preferences back.
         assert_eq!(e.layout, UiLayout::Touch);
         assert!(e.view.flat_shading);
+        assert!(!e.view.show_vertex_color);
     }
 
     #[test]
