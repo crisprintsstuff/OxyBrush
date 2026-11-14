@@ -621,6 +621,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             pressure_radius: ed.pressure_radius,
             front_faces_only: ed.front_faces_only,
             auto_smooth: ed.auto_smooth,
+            gravity: ed.gravity(kind),
             spray: ed.spray,
             noise_scale: ed.noise_scale,
             crease_pinch: ed.crease_pinch,

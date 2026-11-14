@@ -710,6 +710,7 @@ pub mod plain {
     pub const PRESET_DELETE: &str = "Delete this preset from your library.";
     pub const SPACING: &str = "Distance between dabs, as a fraction of the radius. Lower is smoother.";
     pub const AUTO_SMOOTH: &str = "Smooth a little after every dab.";
+    pub const GRAVITY: &str = "Let the surface sag downward as you sculpt, for drapery, hanging folds and drooping flesh. Each brush keeps its own setting. It pulls toward the world's down (the floor), not the screen's, and follows pen pressure and the mask.";
     pub const GRAB_THROUGH: &str =
         "Move everything under the brush circle, front to back, not just the surface you click.";
     pub const NOISE: &str = "Size of the noise pattern.";
