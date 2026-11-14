@@ -313,6 +313,10 @@ pub struct Settings {
     pub flat_shading: bool,
     /// View > Show vertex color.
     pub show_vertex_color: bool,
+    /// View > Inactive pieces.
+    pub inactive_look: oxy_render::InactiveLook,
+    pub inactive_strength: f32,
+    pub inactive_color: [f32; 3],
     /// Overlay polygon edges atop shaded surfaces.
     pub wireframe: bool,
     /// Wireframe line opacity (0.0 to 1.0).
@@ -877,6 +881,9 @@ impl Default for Settings {
             update_skip: String::new(),
             flat_shading: false,
             show_vertex_color: true,
+            inactive_look: oxy_render::InactiveLook::GreyOut,
+            inactive_strength: 1.0,
+            inactive_color: [0.25, 0.35, 0.6],
             wireframe: false,
             wireframe_opacity: 0.7,
             wireframe_color: view.wireframe_color,
@@ -1070,6 +1077,14 @@ impl Settings {
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
             + &format!("orbit_around = {}\n", self.orbit_around.key())
             + &format!("show_vertex_color = {}\n", self.show_vertex_color)
+            + &format!(
+                "inactive_look = {}\ninactive_strength = {}\ninactive_color = {}, {}, {}\n",
+                self.inactive_look.key(),
+                self.inactive_strength,
+                self.inactive_color[0],
+                self.inactive_color[1],
+                self.inactive_color[2]
+            )
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("subdivision_smooth = {}\n", self.subdivision_smooth)
             + &format!("radius_on_model = {}\n", self.radius_on_model)
@@ -1186,6 +1201,22 @@ impl Settings {
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
                 "show_vertex_color" => s.show_vertex_color = v.parse().unwrap_or(s.show_vertex_color),
+                "inactive_look" => s.inactive_look = oxy_render::InactiveLook::from_key(v).unwrap_or(s.inactive_look),
+                "inactive_strength" => {
+                    s.inactive_strength = v
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|x| x.is_finite())
+                        .map_or(s.inactive_strength, |x| x.clamp(0.0, 1.0))
+                }
+                "inactive_color" => {
+                    let c: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    if let [r, g, b] = c[..]
+                        && [r, g, b].iter().all(|x| x.is_finite())
+                    {
+                        s.inactive_color = [r, g, b].map(|x| x.clamp(0.0, 1.0));
+                    }
+                }
                 "wireframe" => s.wireframe = v.parse().unwrap_or(s.wireframe),
                 "wireframe_opacity" => {
                     if let Ok(x) = v.parse::<f32>()
@@ -1543,6 +1574,9 @@ mod tests {
             update_skip: "0.4.0-alpha".into(),
             flat_shading: true,
             show_vertex_color: false,
+            inactive_look: oxy_render::InactiveLook::Darken,
+            inactive_strength: 0.5,
+            inactive_color: [0.1, 0.2, 0.3],
             wireframe: true,
             wireframe_opacity: 0.85,
             wireframe_color: [0.15, 0.2, 0.25],
