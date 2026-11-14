@@ -13,6 +13,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Changed
 - **A Tools menu, and a shorter Mesh menu.** The tools that shape a piece moved from Mesh to a new **Tools** menu: Deform…, Transform, Symmetrize, Poly Edit…, Retopology… and Vertex color. Mesh keeps resolution and repair: subdivision levels, Subdivide, Remesh, Decimate, booleans, 3D print, diagnostics, Delete hidden, Close holes and Split. Shortcuts and the command palette are unchanged.
 
+### Fixed
+- **Painted areas no longer have a bright outline.** Where vertex color fades to white at the edge of a stroke, the pale in-between was tinted at full strength and brightened, so every painted area had a light rim (a tester compared it with another sculpting app). The edge now blends smoothly from the material into the color; full-strength colors look as before.
+
 ## [4.0.0-beta.11] - 2026-11-14
 
 ### Added
