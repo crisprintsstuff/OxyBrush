@@ -1,6 +1,7 @@
-//! The Strokes panel (Living strokes, RFC 0017): the active piece's
+//! The Strokes window (Living strokes, RFC 0017): the active piece's
 //! recorded strokes, newest first, with strength, delete, solo, mask-out,
-//! groups (used like sculpt layers) and bake.
+//! groups (used like sculpt layers) and bake. The right panel's Layers
+//! section (`layers_section`) shows the layers and opens this window.
 
 use crate::editor::Editor;
 use egui::RichText;
@@ -202,7 +203,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
 
 /// The groups of the piece, each a row like a layer: eye, name, strength,
 /// and a menu (rename, merge, ungroup, delete).
-fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
+pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
     let groups: Vec<(u32, String, f32, bool, usize)> = ed
         .living
         .groups_of(pid)
@@ -291,12 +292,12 @@ fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
     ui.add_space(4.0);
 }
 
-fn plural(n: usize, what: &str) -> String {
+pub(crate) fn plural(n: usize, what: &str) -> String {
     if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
 }
 
 /// "Sculpt into": the layer new strokes go into, chosen before sculpting.
-fn sculpt_into(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
+pub(crate) fn sculpt_into(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
     use crate::living::Target;
     let current = ed.living_target_name();
     let layers: Vec<(u32, String, bool)> =
@@ -334,4 +335,46 @@ fn sculpt_into(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
     {
         ui.label(RichText::new(format!("{name} appears with your next stroke.")).weak().small());
     }
+}
+
+/// The right panel's Layers section: the active piece's layers (stroke
+/// groups) with eye, strength and menu, the layer new strokes go into, and
+/// a button for the full stroke list.
+pub fn layers_section(ui: &mut egui::Ui, ed: &mut Editor) {
+    ed.living_sync();
+    if !ed.living.enabled {
+        ui.label(
+            RichText::new("Layers need Living strokes, which keeps each stroke editable: fade, hide or delete it later, alone or as a layer.")
+                .weak()
+                .small(),
+        );
+        if ui.button("Turn on Living strokes").clicked() {
+            ed.set_living_strokes(true);
+        }
+        return;
+    }
+    let pid = ed.scene.active().id;
+    sculpt_into(ui, ed, pid);
+    if ed.living.groups_of(pid).is_empty() {
+        ui.label(
+            RichText::new("No layers yet: + New layer starts one, or group the strokes you've made with Strokes…")
+                .weak()
+                .small(),
+        );
+    } else {
+        groups(ui, ed, pid);
+    }
+    let strokes = ed.living.listed(pid).len();
+    ui.horizontal(|ui| {
+        if ui
+            .button("Strokes…")
+            .on_hover_text(
+                "Every stroke on this piece: fade, delete, solo, mirror, split by side, group them into layers.",
+            )
+            .clicked()
+        {
+            ed.living.show = true;
+        }
+        ui.label(RichText::new(plural(strokes, "stroke")).weak().small());
+    });
 }

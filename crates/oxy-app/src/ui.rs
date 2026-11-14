@@ -589,6 +589,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             });
             tips::menu(ui, "Pieces", plain::PIECES, |ui| piece_actions(ui, ed, busy));
             tips::menu(ui, "Mesh", plain::MESH, |ui| mesh_actions(ui, ed, busy));
+            tips::menu(ui, "Tools", plain::TOOLS, |ui| tool_actions(ui, ed, busy));
             tips::menu(ui, "Groups", plain::GROUPS, |ui| group_actions(ui, ed));
             tips::menu(ui, "Mask", plain::MASK, |ui| mask_actions(ui, ed));
             tips::menu(ui, "View", plain::VIEW, |ui| {
@@ -1133,7 +1134,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ui,
         &mut living,
         "Living strokes: keep strokes editable",
-        "On: every stroke you make is kept in Mesh > Strokes, where you can fade, delete, group or solo it later without undoing what came after. Uses memory (see the budget below); a remesh or subdivision level change bakes the list. Off: strokes are final, as usual, and turning it off bakes the list.",
+        "On: every stroke you make is kept in the Strokes list (right panel, Layers > Strokes…), where you can fade, delete, group or solo it later without undoing what came after. Uses memory (see the budget below); a remesh or subdivision level change bakes the list. Off: strokes are final, as usual, and turning it off bakes the list.",
     );
     if living != ed.living.enabled {
         ed.set_living_strokes(living);
@@ -3641,18 +3642,6 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
     }
-    if tips::button(ui, "Strokes…", Cmd::LivingStrokes).clicked() {
-        ed.living.show = true;
-    }
-    if tips::button(ui, "Deform…", Cmd::DeformWindow).clicked() {
-        ed.show_deform = true;
-    }
-    if tips::button(ui, "Retopology (draw quads)…", Cmd::Retopology).clicked() {
-        ed.start_retopo();
-    }
-    if tips::button(ui, "Poly Edit (model polygons)…", Cmd::PolyEdit).clicked() {
-        ed.start_poly_edit();
-    }
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
@@ -3702,6 +3691,40 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Delete hidden", Cmd::DeleteHidden).clicked() {
         ed.delete_hidden();
     }
+    if tips::button(ui, "Close holes", Cmd::CloseHoles).clicked() {
+        ed.close_holes();
+    }
+    if tips::button(ui, "Split hidden", Cmd::SplitHidden).clicked() {
+        ed.split_hidden();
+    }
+    if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
+        ed.split_masked();
+    }
+}
+
+/// The Tools menu: the tools that shape a piece, or a part of it, as a
+/// whole (the Mesh menu has resolution, topology and repair).
+fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    if tips::button(ui, "Deform…", Cmd::DeformWindow).clicked() {
+        ed.show_deform = true;
+    }
+    tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
+        for m in GizmoMode::ALL {
+            let cmd = match m {
+                GizmoMode::Move => Cmd::GizmoMove,
+                GizmoMode::Rotate => Cmd::GizmoRotate,
+                GizmoMode::Scale => Cmd::GizmoScale,
+            };
+            if tips::hover(
+                ui.selectable_label(ed.gizmo == Some(m), tips::menu_text_km(&ed.keymap, m.label(), cmd)),
+                cmd.tip_in(&ed.keymap),
+            )
+            .clicked()
+            {
+                ed.toggle_gizmo(m);
+            }
+        }
+    });
     tips::menu(ui, "Symmetrize", plain::SYMMETRIZE, |ui| {
         if tips::button_on(ui, !busy, "+X onto −X", Cmd::SymmetrizePosX).clicked() {
             ed.symmetrize(0, true);
@@ -3720,14 +3743,12 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     });
-    if tips::button(ui, "Close holes", Cmd::CloseHoles).clicked() {
-        ed.close_holes();
+    ui.separator();
+    if tips::button(ui, "Retopology (draw quads)…", Cmd::Retopology).clicked() {
+        ed.start_retopo();
     }
-    if tips::button(ui, "Split hidden", Cmd::SplitHidden).clicked() {
-        ed.split_hidden();
-    }
-    if tips::button(ui, "Split masked", Cmd::SplitMasked).clicked() {
-        ed.split_masked();
+    if tips::button(ui, "Poly Edit (model polygons)…", Cmd::PolyEdit).clicked() {
+        ed.start_poly_edit();
     }
     ui.separator();
     tips::menu(ui, "Vertex color", plain::VERTEX_COLOR, |ui| {
@@ -3736,23 +3757,6 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
         tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
         color_actions(ui, ed);
-    });
-    tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
-        for m in GizmoMode::ALL {
-            let cmd = match m {
-                GizmoMode::Move => Cmd::GizmoMove,
-                GizmoMode::Rotate => Cmd::GizmoRotate,
-                GizmoMode::Scale => Cmd::GizmoScale,
-            };
-            if tips::hover(
-                ui.selectable_label(ed.gizmo == Some(m), tips::menu_text_km(&ed.keymap, m.label(), cmd)),
-                cmd.tip_in(&ed.keymap),
-            )
-            .clicked()
-            {
-                ed.toggle_gizmo(m);
-            }
-        }
     });
 }
 
@@ -4126,6 +4130,8 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
 fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.add_space(4.0);
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
+    let layers_open = ed.living.enabled;
+    widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| crate::living_ui::layers_section(ui, ed));
     let brush_title = format!("{} brush", ed.brush_kind.label());
     widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
     widgets::section(ui, "Stroke", plain::SECTION_STROKE, false, |ui| stroke_section(ui, ed));
