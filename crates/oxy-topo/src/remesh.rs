@@ -12,7 +12,10 @@
 //!    pieces joined, a fold sculpted through the model), voxels next to the
 //!    triangles buried inside the solid are signed by winding number
 //!    instead ([`crate::winding`]): the buried surface used to count as a
-//!    boundary, which left holes and thin walls.
+//!    boundary, which left holes and thin walls. So are voxels next to
+//!    triangles facing into an inside-out pocket (winding -1), where skin
+//!    folded back through itself (a rigged toe bent down, a crease) or the
+//!    whole mesh faces inward: there the normals point the wrong way.
 //! 3. Surface nets extract the zero level set as quads, split into triangles.
 
 use glam::{UVec3, Vec3};
@@ -206,7 +209,11 @@ pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, Remes
 /// with the Insert brush, a fold sculpted through the model), the triangles
 /// buried inside the solid are nearest to voxels inside it and mark them
 /// "outside", so the remesh got inner walls, holes and thin shells (issue
-/// #174).
+/// #174). The same goes for triangles facing into a pocket where the winding
+/// number is -1: skin that folded back through itself, as under a rigged
+/// toe bent down (a posed game character's feet tore apart), or a mesh
+/// with flipped normals. Inside is where the winding number is 1 or more,
+/// or -1 or less.
 /// Those triangles, and two rings of triangles around them (which reach
 /// across the lines where the surface crosses itself), get their side from
 /// the winding number instead ([`crate::winding`]). `None` when nothing is
@@ -218,7 +225,7 @@ fn with_sign_override<R>(positions: &[Vec3], triangles: &[[u32; 3]], f: impl FnO
         return f(&oxy_vdb::Signing { thin_wall_if_open: false, ..Default::default() });
     }
     let suspect = crate::winding::grow_triangles(triangles, &buried, 2);
-    let inside = |p: Vec3| winding.at(p) > 0.5;
+    let inside = |p: Vec3| winding.at(p).abs() > 0.5;
     f(&oxy_vdb::Signing {
         sign: Some(oxy_vdb::SignOverride { suspect: &suspect, inside: &inside }),
         thin_wall_if_open: false,
@@ -924,6 +931,88 @@ mod tests {
             assert!((v - expected).abs() / expected < 0.05, "{engine:?}: volume {v}, expected about {expected}");
             assert_eq!(euler(&r), 2, "{engine:?}: one closed surface");
         }
+    }
+
+    /// A capped tube along X bent down by `angle` at x = 0 with linear
+    /// blend skinning over a short joint, the way a rig bends a toe: the
+    /// skin under the joint is squeezed through itself, leaving a thin
+    /// pocket where the winding number is -1.
+    fn bent_toe(angle: f32) -> Mesh {
+        let mut d = primitives::cylinder_with(48, 64, 0.5, 4.0, true).to_data();
+        // The cylinder stands along Y: lay it along X.
+        for p in &mut d.positions {
+            *p = Vec3::new(p.y, p.x, p.z);
+        }
+        // Flip the winding to keep the normals outward after the swap.
+        for t in &mut d.triangles {
+            t.swap(1, 2);
+        }
+        let pivot = Vec3::new(0.0, 0.5, 0.0);
+        let rot = glam::Quat::from_rotation_z(-angle);
+        for p in &mut d.positions {
+            let w = ((p.x + 0.15) / 0.3).clamp(0.0, 1.0);
+            let w = w * w * (3.0 - 2.0 * w);
+            *p = p.lerp(pivot + rot * (*p - pivot), w);
+        }
+        Mesh::from_data(d)
+    }
+
+    #[test]
+    fn a_skin_fold_that_turns_inside_out_remeshes_solid() {
+        // The Ork model's toes: the crease under each toe folded through the
+        // sole. Voxels in the pocket used to take their side from the
+        // inverted triangles' normals, which pointed the wrong way, and the
+        // toes came out hollow and torn.
+        // Sharper bends (about 85 degrees and more over this short joint)
+        // can still leave small tunnels where the pocket and an overlap
+        // cancel out (winding 0), which the winding number alone can't tell
+        // from a real cavity.
+        for angle in [0.6, 1.2] {
+            let m = bent_toe(angle);
+            let w = crate::winding::Winding::new(&m.positions, &m.triangles);
+            let inverted = m
+                .triangles
+                .iter()
+                .filter(|t| {
+                    let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                    let n = (b - a).cross(c - a);
+                    n.length() > 0.0 && w.at((a + b + c) / 3.0 + n.normalize() * 1e-3) < -0.5
+                })
+                .count();
+            assert!(inverted > 0, "the test shape folds through itself");
+            for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+                let r = voxel_remesh(&[&m], RemeshOptions { resolution: 96, engine, ..Default::default() }).unwrap();
+                assert_eq!(euler(&r), 2, "{engine:?}: one closed surface, no holes or torn pockets");
+                assert_eq!(pieces(&r), 1, "{engine:?}: no loose bits");
+                // Every new point lies near the original surface.
+                // Points near the original surface (checked on every 5th).
+                let far = r
+                    .positions
+                    .iter()
+                    .step_by(5)
+                    .filter(|p| {
+                        let d = m.triangles.iter().fold(f32::MAX, |d, t| {
+                            let [a, b, c] = t.map(|v| m.positions[v as usize]);
+                            d.min(oxy_vdb::closest_point_on_triangle(**p, a, b, c).distance(**p))
+                        });
+                        d > 0.1
+                    })
+                    .count();
+                assert_eq!(far, 0, "{engine:?}: {far} points far off the tube's surface");
+            }
+        }
+    }
+
+    #[test]
+    fn an_inside_out_mesh_remeshes_as_the_solid_it_encloses() {
+        // Flipped normals (some exports do this): every triangle faces in.
+        let mut d = primitives::icosphere(4, 1.0).to_data();
+        d.triangles.iter_mut().for_each(|t| t.swap(1, 2));
+        let m = Mesh::from_data(d);
+        let r = voxel_remesh(&[&m], RemeshOptions { resolution: 64, ..Default::default() }).unwrap();
+        assert_eq!(euler(&r), 2);
+        let v = volume(&r);
+        assert!((v - 4.0 / 3.0 * std::f32::consts::PI).abs() < 0.1, "volume {v}: outward and whole");
     }
 
     #[test]
