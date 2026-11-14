@@ -148,6 +148,13 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             "multires apply flatten freeze collapse levels dynamic detail",
             Editor::keep_level_only,
         ),
+        cmd(ed, Cmd::PrintTools, "3d print printing scale volume hollow drain wall thickness split pins", |e| {
+            e.show_print_dialog = true;
+            e.update_print_dimensions();
+        }),
+        cmd(ed, Cmd::Diagnostics, "topology manifold check open edges holes degenerate clean", |e| {
+            e.show_diagnostics = true
+        }),
         cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
         cmd(
