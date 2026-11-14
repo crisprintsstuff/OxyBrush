@@ -261,9 +261,9 @@ Decimate reduces the triangle count to the Keep percentage while preserving the 
     },
     Topic {
         title: "Saving, autosave and recovery",
-        keywords: "save project oxb autosave crash recover recent files open close",
+        keywords: "save project oxb autosave crash recover recent files open close revert reload discard",
         body: "Ctrl+S saves the whole scene as an .oxb project (pieces, levels, masks and groups). Saves are atomic: a crash while saving never damages the previous file.\n\n\
-OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it ever closes unexpectedly, the next start offers to recover your work. File > Open recent and the welcome window list the files you used last. File > Close project closes the project (asking to save unsaved work first) and goes back to the start screen.",
+OxyBrush also autosaves every couple of minutes (Settings > Autosave). If it ever closes unexpectedly, the next start offers to recover your work. File > Open recent and the welcome window list the files you used last. File > Revert reloads the project as you last saved it, dropping the changes since then (it asks first; Undo can't bring them back). File > Close project closes the project (asking to save unsaved work first) and goes back to the start screen.",
     },
     Topic {
         title: "Importing and exporting",
