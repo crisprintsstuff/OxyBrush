@@ -31,6 +31,8 @@ pub struct TubeEdit {
     pub sides: u32,
     /// Close both ends with rounded caps.
     pub caps: bool,
+    /// Twist, Spin (coil) and Braid.
+    pub shape: primitives::TubeShape,
     /// Also build the copy mirrored across the active piece's X symmetry plane.
     pub mirror: bool,
     /// The point whose radius the window edits; None edits all of them.
@@ -52,6 +54,7 @@ struct TubeKey {
     radii: Vec<f32>,
     sides: u32,
     caps: bool,
+    shape: primitives::TubeShape,
     mirror: bool,
 }
 
@@ -62,13 +65,14 @@ impl TubeEdit {
             radii: self.radii.clone(),
             sides: self.sides,
             caps: self.caps,
+            shape: self.shape,
             mirror: self.mirror,
         }
     }
 
     /// The tube's mesh (with its mirror copy, if on).
     pub fn mesh(&self) -> Mesh {
-        let tube = primitives::tube(&self.points, &self.radii, self.sides, self.caps);
+        let tube = primitives::tube_shaped(&self.points, &self.radii, self.sides, self.caps, self.shape);
         if !self.mirror {
             return tube;
         }
@@ -121,6 +125,8 @@ impl Editor {
     pub fn accept_tube(&mut self) {
         let Some(tube) = self.tube.take() else { return };
         self.tube_armed = false;
+        // The next tube drawn starts with this one's shape.
+        self.tube_shape = tube.shape;
         self.restore_tube_hidden(&tube);
         let mesh = tube.mesh();
         let group = if let Some(i) = tube.into.and_then(|id| self.scene.index_of(id)) {
@@ -157,6 +163,7 @@ impl Editor {
             caps: tube.caps,
             mirror: tube.mirror,
             mirror_x: tube.mirror_x,
+            shape: tube.shape,
             group,
             triangles,
             fingerprint,
@@ -191,11 +198,13 @@ impl Editor {
         let hidden: Vec<bool> = piece.mesh.groups().iter().zip(&before).map(|(&g, &h)| h || g == r.group).collect();
         self.scene.active_mut().mesh.set_hidden(hidden);
         let mut tube = TubeEdit {
-            preview: primitives::tube(&r.points, &r.radii, r.sides, r.caps),
+            // Replaced by `update` below, with the tube's shape.
+            preview: primitives::tube(&r.points, &r.radii, 3, false),
             points: r.points,
             radii: r.radii,
             sides: r.sides,
             caps: r.caps,
+            shape: r.shape,
             mirror: r.mirror,
             selected: None,
             replace: Some((r.group, before)),
@@ -413,11 +422,13 @@ impl Editor {
     pub(crate) fn open_tube(&mut self, points: Vec<Vec3>, radius: f32, into: Option<u64>) {
         let radii = vec![radius; points.len()];
         let mut tube = TubeEdit {
-            preview: primitives::tube(&points, &radii, 24, true),
+            // Replaced by `update` below, with the tube's shape.
+            preview: primitives::tube(&points, &radii, 3, false),
             points,
             radii,
             sides: 24,
             caps: true,
+            shape: self.tube_shape,
             mirror: self.symmetry.x,
             selected: None,
             replace: None,

@@ -665,38 +665,86 @@ pub fn tube_path(points: &[Vec3], radii: &[f32], spacing: f32) -> Vec<(Vec3, f32
 ///
 /// PRECONDITION: `points.len() == radii.len() >= 2`, radii > 0.
 pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
+    let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), sides, caps, 0.0);
+    Mesh::new(positions, tris)
+}
+
+/// How a tube is shaped beyond its path and thickness (the Tube window).
+/// The default is a plain round tube, exactly as [`tube`] makes.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct TubeShape {
+    /// Turns of the cross-section (or of the braid) along the whole length.
+    pub twist: f32,
+    /// Spin: the tube coils around its path like a spring. The coil's
+    /// radius as a multiple of the tube's thickness (0: straight).
+    pub coil_size: f32,
+    /// Spin: coils along the whole length.
+    pub coil_turns: f32,
+    /// Three round strands woven along the path instead of one tube.
+    pub braid: bool,
+    /// Braid: 0 = tight (strands touch), 1 = loose (wide gaps).
+    pub spread: f32,
+    /// Braid: weaves along the whole length.
+    pub braid_turns: f32,
+}
+
+impl TubeShape {
+    pub fn is_plain(&self) -> bool {
+        *self == TubeShape::default()
+    }
+}
+
+/// Distance between rings for a tube this thick with this many sides, so
+/// quads come out about square.
+fn ring_spacing(radii: &[f32], sides: u32) -> f32 {
     let sides = sides.max(3) as usize;
     let min_r = radii.iter().copied().fold(f32::INFINITY, f32::min).max(1e-4);
     let max_r = radii.iter().copied().fold(0.0, f32::max).max(min_r);
-    // Ring spacing close to the spacing around the ring, so quads are square-ish.
     let around = std::f32::consts::TAU * (0.5 * (min_r + max_r)) / sides as f32;
-    let path = tube_path(points, radii, around.max(min_r * 0.25));
+    around.max(min_r * 0.25)
+}
+
+/// Parallel-transported frames (centre, radius, tangent, normal, binormal)
+/// along `path`: the first frame carried along, turned only as much as the
+/// tangent turns, so nothing twists by itself.
+fn transport_frames(path: &[(Vec3, f32)]) -> Vec<(Vec3, f32, Vec3, Vec3, Vec3)> {
     let rings = path.len();
     let tangent = |i: usize| {
         let a = path[i.saturating_sub(1)].0;
         let b = path[(i + 1).min(rings - 1)].0;
         (b - a).normalize_or(Vec3::Y)
     };
-    // Parallel transport: carry the first frame along, rotating it only as
-    // much as the tangent turns.
     let t0 = tangent(0);
     let mut normal = if t0.x.abs() < 0.9 { t0.cross(Vec3::X) } else { t0.cross(Vec3::Y) }.normalize();
     let mut prev_t = t0;
+    path.iter()
+        .enumerate()
+        .map(|(i, &(c, r))| {
+            let t = tangent(i);
+            let axis = prev_t.cross(t);
+            if axis.length_squared() > 1e-12 {
+                let angle = prev_t.dot(t).clamp(-1.0, 1.0).acos();
+                normal = glam::Quat::from_axis_angle(axis.normalize(), angle) * normal;
+            }
+            normal = (normal - t * normal.dot(t)).normalize_or(normal);
+            prev_t = t;
+            (c, r, t, normal, t.cross(normal))
+        })
+        .collect()
+}
+
+/// A tube's rings along `path` (`sides` around), the cross-section turned
+/// `twist` times over the length, with rounded `caps`.
+fn sweep(path: &[(Vec3, f32)], sides: u32, caps: bool, twist: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    let sides = sides.max(3) as usize;
+    let rings = path.len();
+    let frames = transport_frames(path);
     let mut positions = Vec::with_capacity(rings * sides + 2 + if caps { 2 * sides * 3 } else { 0 });
-    let mut frames = Vec::with_capacity(rings);
-    for (i, &(c, r)) in path.iter().enumerate() {
-        let t = tangent(i);
-        let axis = prev_t.cross(t);
-        if axis.length_squared() > 1e-12 {
-            let angle = prev_t.dot(t).clamp(-1.0, 1.0).acos();
-            normal = glam::Quat::from_axis_angle(axis.normalize(), angle) * normal;
-        }
-        normal = (normal - t * normal.dot(t)).normalize_or(normal);
-        let binormal = t.cross(normal);
-        prev_t = t;
-        frames.push((c, r, t, normal, binormal));
+    let last = (rings - 1).max(1) as f32;
+    for (i, &(c, r, _, normal, binormal)) in frames.iter().enumerate() {
+        let turn = std::f32::consts::TAU * twist * i as f32 / last;
         for k in 0..sides {
-            let a = std::f32::consts::TAU * k as f32 / sides as f32;
+            let a = std::f32::consts::TAU * k as f32 / sides as f32 + turn;
             positions.push(c + (normal * a.cos() + binormal * a.sin()) * r);
         }
     }
@@ -715,9 +763,12 @@ pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
         // A dome of a few shrinking rings and a tip at each end.
         let domes = [(0usize, -1.0f32), (rings - 1, 1.0)];
         for (end, dir) in domes {
-            let (c, r, t, n, b) = frames[end];
+            let (c, r, t, n0, b0) = frames[end];
+            // The end ring's own turn, so the dome lines up with it.
+            let turn = std::f32::consts::TAU * twist * end as f32 / last;
+            let (n, b) = (n0 * turn.cos() + b0 * turn.sin(), b0 * turn.cos() - n0 * turn.sin());
             let steps = 3;
-            let mut last: Vec<u32> = (0..sides).map(|k| ring(end, k)).collect();
+            let mut last_ring: Vec<u32> = (0..sides).map(|k| ring(end, k)).collect();
             for s in 1..=steps {
                 let phi = std::f32::consts::FRAC_PI_2 * s as f32 / (steps + 1) as f32;
                 let (rr, off) = (r * phi.cos(), r * phi.sin() * dir);
@@ -728,7 +779,7 @@ pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
                 }
                 let next: Vec<u32> = (0..sides as u32).map(|k| start + k).collect();
                 for k in 0..sides {
-                    let (a0, a1, b0, b1) = (last[k], last[(k + 1) % sides], next[k], next[(k + 1) % sides]);
+                    let (a0, a1, b0, b1) = (last_ring[k], last_ring[(k + 1) % sides], next[k], next[(k + 1) % sides]);
                     if dir > 0.0 {
                         tris.push([a0, a1, b0]);
                         tris.push([a1, b1, b0]);
@@ -737,12 +788,12 @@ pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
                         tris.push([a1, b0, b1]);
                     }
                 }
-                last = next;
+                last_ring = next;
             }
             let tip = positions.len() as u32;
             positions.push(c + t * r * dir);
             for k in 0..sides {
-                let (a0, a1) = (last[k], last[(k + 1) % sides]);
+                let (a0, a1) = (last_ring[k], last_ring[(k + 1) % sides]);
                 if dir > 0.0 {
                     tris.push([a0, a1, tip]);
                 } else {
@@ -750,6 +801,157 @@ pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
                 }
             }
         }
+    }
+    (positions, tris)
+}
+
+/// Resample a polyline of (point, radius) evenly by length, `spacing` apart.
+fn resample(line: &[(Vec3, f32)], spacing: f32) -> Vec<(Vec3, f32)> {
+    let mut length = vec![0.0f32];
+    for w in line.windows(2) {
+        length.push(length.last().unwrap() + w[0].0.distance(w[1].0));
+    }
+    let total = *length.last().unwrap();
+    let count = ((total / spacing.max(1e-5)).ceil() as usize).clamp(1, 20_000);
+    let mut out = Vec::with_capacity(count + 1);
+    let mut j = 0;
+    for i in 0..=count {
+        let s = total * i as f32 / count as f32;
+        while j + 1 < length.len() - 1 && length[j + 1] < s {
+            j += 1;
+        }
+        let f = ((s - length[j]) / (length[j + 1] - length[j]).max(1e-9)).clamp(0.0, 1.0);
+        let (a, b) = (line[j], line[j + 1]);
+        out.push((a.0.lerp(b.0, f), a.1 + (b.1 - a.1) * f));
+    }
+    out
+}
+
+/// The braid's strands, in a unit cross-section: strand `k` sits at
+/// `(sin p, ½ sin 2p)` with `p = phase + k·⅓ turn`, so each strand draws a
+/// figure eight and, a third of a turn apart, the three cross alternately
+/// over and under each other.
+fn braid_offset(phase: f32, k: usize) -> (f32, f32) {
+    let p = phase + std::f32::consts::TAU * k as f32 / 3.0;
+    (p.sin(), 0.5 * (2.0 * p).sin())
+}
+
+/// The closest two strand centre lines come in a straight braid of
+/// amplitude `amp`, one weave every `pitch` along its length. The strands
+/// are the same curve a third of a weave apart, so one pair covers all
+/// three; the closest point can be between different places along the
+/// length (near the crossing), so it is searched over both.
+fn braid_clearance(amp: f32, pitch: f32) -> f32 {
+    use std::f32::consts::TAU;
+    let at = |p: f32, k: usize| {
+        let (x, y) = braid_offset(p, k);
+        Vec3::new(x * amp, y * amp, pitch * p / TAU)
+    };
+    const N: usize = 96;
+    let mut best = f32::MAX;
+    for i in 0..N {
+        let p = TAU * i as f32 / N as f32;
+        let a = at(p, 0);
+        for j in 0..N {
+            let q = p + TAU * (j as f32 / N as f32 - 0.5);
+            best = best.min(a.distance(at(q, 1)));
+        }
+    }
+    best
+}
+
+/// The strands' thickness as a share of the braid's: as thick as they can
+/// be with their centre lines at least `2·(1 + spread)` strand radii apart
+/// (touching at spread 0, a strand's width of gap at 1) while the whole
+/// braid stays within the tube's thickness. `pitch_per_r` is the length of
+/// one weave over the tube's thickness.
+fn braid_strand_share(pitch_per_r: f32, spread: f32) -> f32 {
+    let want = 2.0 * (1.0 + spread.clamp(0.0, 1.0));
+    let fits = |rs: f32| braid_clearance(1.0 - rs, pitch_per_r) >= want * rs;
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if fits(mid) {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // A little slack for the faceted strands.
+    lo * 0.97
+}
+
+/// About how many triangles a coiled or braided tube may have.
+const SHAPED_TUBE_TRIANGLES: usize = 400_000;
+
+/// A tube shaped by `shape` (see [`TubeShape`]): twisted, coiled around
+/// its path (Spin), or as three woven strands (Braid), or a combination.
+/// The thickness at each point is the whole tube's (the braid fits inside
+/// it); each strand or coil is a closed tube of its own when `caps`.
+///
+/// PRECONDITION: as [`tube`].
+pub fn tube_shaped(points: &[Vec3], radii: &[f32], sides: u32, caps: bool, shape: TubeShape) -> Mesh {
+    let coil = shape.coil_size > 0.0 && shape.coil_turns != 0.0;
+    if !coil && !shape.braid {
+        let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), sides, caps, shape.twist);
+        return Mesh::new(positions, tris);
+    }
+    // The centre line, finely sampled so coils and weaves stay smooth.
+    let coarse = tube_path(points, radii, ring_spacing(radii, sides));
+    let total: f32 = coarse.windows(2).map(|w| w[0].0.distance(w[1].0)).sum();
+    let waves =
+        shape.coil_turns.abs().max(if shape.braid { shape.braid_turns.abs() } else { 0.0 }).max(shape.twist.abs());
+    let fine = (total / (waves * 48.0).max(1.0)).min(ring_spacing(radii, sides) * 0.5);
+    let base = tube_path(points, radii, fine.max(total / 20_000.0));
+    let frames = transport_frames(&base);
+    let last = (frames.len() - 1).max(1) as f32;
+    // Each line to sweep: (centre, radius) per base sample.
+    let strands = if shape.braid { 3 } else { 1 };
+    // Braid sizes: the strand thickness as a share of the tube's, from the
+    // weave's pitch against the average thickness (see `braid_strand_share`).
+    let strand_share = if shape.braid {
+        let mean_r = base.iter().map(|b| b.1).sum::<f32>() / base.len() as f32;
+        let pitch = if shape.braid_turns.abs() > 1e-3 { total / shape.braid_turns.abs() } else { 1e6 };
+        braid_strand_share(pitch / mean_r.max(1e-4), shape.spread)
+    } else {
+        1.0
+    };
+    let mut positions = Vec::new();
+    let mut tris = Vec::new();
+    for k in 0..strands {
+        let line: Vec<(Vec3, f32)> = frames
+            .iter()
+            .enumerate()
+            .map(|(i, &(c, r, _, n, b))| {
+                let u = i as f32 / last;
+                let tw = std::f32::consts::TAU * shape.twist * u;
+                let (n, b) = (n * tw.cos() + b * tw.sin(), b * tw.cos() - n * tw.sin());
+                let mut centre = c;
+                if coil {
+                    let a = std::f32::consts::TAU * shape.coil_turns * u;
+                    centre += (n * a.cos() + b * a.sin()) * (shape.coil_size * r);
+                }
+                if shape.braid {
+                    let rs = r * strand_share;
+                    let (x, y) = braid_offset(std::f32::consts::TAU * shape.braid_turns * u, k);
+                    centre += (n * x + b * y) * (r - rs);
+                    (centre, rs)
+                } else {
+                    (centre, r)
+                }
+            })
+            .collect();
+        let rs = line.iter().map(|l| l.1).fold(f32::MAX, f32::min).max(1e-4);
+        // About square quads, until the budget: then longer ones, so a
+        // fine braid or a long coil stays quick to rebuild while dragging.
+        let length: f32 = line.windows(2).map(|w| w[0].0.distance(w[1].0)).sum();
+        let max_rings = (SHAPED_TUBE_TRIANGLES / (2 * sides.max(3) as usize * strands)).max(8);
+        let spacing = (std::f32::consts::TAU * rs / sides.max(3) as f32).max(rs * 0.25).max(length / max_rings as f32);
+        let path = resample(&line, spacing);
+        let base_index = positions.len() as u32;
+        let (p, t) = sweep(&path, sides, caps, 0.0);
+        positions.extend(p);
+        tris.extend(t.into_iter().map(|t| t.map(|v| v + base_index)));
     }
     Mesh::new(positions, tris)
 }
@@ -807,6 +1009,116 @@ mod tube_tests {
         let open = tube(&pts, &[0.1, 0.1, 0.3], 16, false);
         assert!(signed_volume(&open).is_finite());
         assert!(open.positions.iter().all(|p| p.is_finite()));
+    }
+
+    fn watertight(m: &Mesh) -> bool {
+        let mut edges: HashMap<(u32, u32), u32> = HashMap::new();
+        for t in &m.triangles {
+            for i in 0..3 {
+                let (a, b) = (t[i], t[(i + 1) % 3]);
+                *edges.entry((a.min(b), a.max(b))).or_default() += 1;
+            }
+        }
+        edges.values().all(|&n| n == 2)
+    }
+
+    #[test]
+    fn plain_shape_is_the_plain_tube() {
+        let pts = [Vec3::ZERO, Vec3::new(0.3, 1.0, 0.0), Vec3::new(0.0, 2.0, 0.5)];
+        let r = [0.2, 0.15, 0.25];
+        let a = tube(&pts, &r, 16, true);
+        let b = tube_shaped(&pts, &r, 16, true, TubeShape::default());
+        assert_eq!(a.positions, b.positions);
+        assert_eq!(a.triangles, b.triangles);
+        assert!(TubeShape::default().is_plain());
+    }
+
+    #[test]
+    fn twist_turns_the_cross_section_but_keeps_the_tube() {
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0)];
+        let shape = TubeShape { twist: 0.125, ..Default::default() };
+        let m = tube_shaped(&pts, &[0.2, 0.2], 4, true, shape);
+        assert!(watertight(&m));
+        assert!(signed_volume(&m) > 0.0);
+        // A square tube: corners at the start and at the end differ by an
+        // eighth of a turn (45°, measured modulo the square's 90°).
+        let corner = |y: f32| {
+            let p = m.positions.iter().find(|p| (p.y - y).abs() < 1e-5 && p.x.hypot(p.z) > 0.19).unwrap();
+            p.z.atan2(p.x).rem_euclid(std::f32::consts::FRAC_PI_2)
+        };
+        let d = (corner(2.0) - corner(0.0)).rem_euclid(std::f32::consts::FRAC_PI_2);
+        assert!((d - std::f32::consts::FRAC_PI_4).abs() < 0.02, "turned {d}");
+    }
+
+    #[test]
+    fn spin_coils_around_the_path() {
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 4.0, 0.0)];
+        let shape = TubeShape { coil_size: 3.0, coil_turns: 4.0, ..Default::default() };
+        let m = tube_shaped(&pts, &[0.1, 0.1], 12, true, shape);
+        assert!(watertight(&m));
+        assert!(signed_volume(&m) > 0.0, "faces point inward");
+        // The coil stays about 0.3 from the axis: the surface between 0.2 and 0.4.
+        for p in &m.positions {
+            let d = (p.x * p.x + p.z * p.z).sqrt();
+            assert!((0.19..=0.41).contains(&d), "{d} from the axis at {p}");
+        }
+        // And goes all the way round: points on every side of the axis.
+        let quadrants: std::collections::HashSet<(bool, bool)> =
+            m.positions.iter().map(|p| (p.x > 0.0, p.z > 0.0)).collect();
+        assert_eq!(quadrants.len(), 4);
+    }
+
+    #[test]
+    fn braid_is_three_closed_strands_that_never_cut_each_other() {
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 3.0, 0.0)];
+        for spread in [0.0, 0.5, 1.0] {
+            let shape = TubeShape { braid: true, spread, braid_turns: 3.0, ..Default::default() };
+            let m = tube_shaped(&pts, &[0.3, 0.3], 12, true, shape);
+            assert!(watertight(&m));
+            let v = signed_volume(&m);
+            assert!(v > 0.0);
+            // Stays inside the tube's thickness (a little slack for facets).
+            for p in m.positions.iter().filter(|p| p.y > 0.0 && p.y < 3.0) {
+                assert!((p.x * p.x + p.z * p.z).sqrt() < 0.3 * 1.02, "outside at {p}, spread {spread}");
+            }
+        }
+        // Strand centre lines, sampled finely in 3D, stay at least two strand
+        // radii (touching) apart when tight, and a strand's width apart when
+        // loose — whatever the pitch.
+        for (len, turns) in [(3.0f32, 3.0f32), (3.0, 12.0), (1.0, 6.0), (6.0, 1.0)] {
+            for spread in [0.0f32, 1.0] {
+                let r = 0.3;
+                let rs = r * braid_strand_share(len / turns / r, spread);
+                let line = |k: usize| -> Vec<Vec3> {
+                    (0..=3000)
+                        .map(|i| {
+                            let u = i as f32 / 3000.0;
+                            let (x, y) = braid_offset(std::f32::consts::TAU * turns * u, k);
+                            Vec3::new(x * (r - rs), len * u, y * (r - rs))
+                        })
+                        .collect()
+                };
+                let (a, b) = (line(0), line(1));
+                let min = a
+                    .iter()
+                    .map(|p| b.iter().map(|q| p.distance(*q)).fold(f32::MAX, f32::min))
+                    .fold(f32::MAX, f32::min);
+                let want = 2.0 * rs * (1.0 + spread);
+                assert!(min >= want * 0.99, "{len}/{turns} spread {spread}: {min} < {want}");
+                assert!(rs > 0.0);
+            }
+        }
+        // Looser spread: thinner strands further apart.
+        let vol = |spread| {
+            signed_volume(&tube_shaped(
+                &pts,
+                &[0.3, 0.3],
+                12,
+                true,
+                TubeShape { braid: true, spread, braid_turns: 3.0, ..Default::default() },
+            ))
+        };
+        assert!(vol(1.0) < vol(0.0));
     }
 }
 
