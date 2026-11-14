@@ -1,6 +1,6 @@
 # RFC 0016: The Deform window
 
-Status: implemented (unreleased)
+Status: implemented (4.0.0-beta.5)
 
 ## Why
 

@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.11" date="2026-11-14" type="development">
+      <description>
+        <p>Orbiting turns around the point of the model under the cursor (or
+        the last stroke). Tubes can be twisted, coiled like a spring or
+        braided from three strands. glTF and GLB files can be imported, and
+        exported compressed; UVs are kept from import to export. New Sharp
+        Crease brush and sculpt layers made ahead of time. The brush cursor
+        follows a hovering pen on Windows.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.10" date="2026-11-14" type="development">
       <description>
         <p>Each piece can have its own material (matcap). Living strokes can be

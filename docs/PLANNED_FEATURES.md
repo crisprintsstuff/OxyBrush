@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.10](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.11](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -96,6 +96,11 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.11:** orbit around the point under the cursor (or the
+  last stroke), tube Twist, Spin and Braid, glTF/GLB import and
+  compressed export, UVs kept from imports to exports, the Sharp Crease
+  brush, sculpt layers you make ahead of time, and fixes for pen hover on
+  Windows and dynamic detail after subdividing.
 - **4.0.0-beta.10:** a material (matcap) per piece, Living strokes'
   third phase (Mirror copy, Split by side, groups exported as glTF shape
   keys), Living strokes for plugins and agents, and a voxel remesh that
