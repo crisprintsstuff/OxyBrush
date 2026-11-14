@@ -5,8 +5,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **View > Shading > Show vertex color** (also in the Vertex color menu and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.
 - **Gravity, per brush** (brush settings, under Auto smooth): the surface under the brush also sags downward as you sculpt, for drapery, hanging folds and drooping flesh. Each brush keeps its own Gravity, so Clay can drape while Draw doesn't; presets and brush codes carry it, and with Remember brush settings it's kept between sessions. It pulls toward the world's down (the floor, -Y), follows pen pressure and the mask, and keeps mirrored strokes mirror images. At 1, one full-pressure pass sags the middle of the stroke about a third of the brush radius; it adds up with the length of the stroke, not with the spacing of the dabs, so dense dabs don't tear the surface. It's added to the brush's own move, so it costs nothing measurable per dab (Clay at radius 0.3: 1.1–1.3 ms per dab with or without it, within run-to-run noise). Not on Mask, Paint, the Grab-like brushes or the placing and cutting tools.
 - **File > Revert** (also in the command palette, [#218](https://github.com/crisprintsstuff/OxyBrush/issues/218)): reloads the project as you last saved it, dropping the changes since then, for when an experiment goes wrong. It asks first (Revert / Cancel), keeps the view where it is, and is available once the project is saved to a file and has changes. Undo can't bring the dropped changes back. If the file has gone missing or can't be read, nothing changes. Not available while the objects came through the Blender bridge.
+
+### Fixed
+- **Painted areas no longer have a bright outline.** Where vertex color fades to white at the edge of a stroke, the pale in-between was tinted at full strength and brightened, so every painted area had a light rim (a tester compared it with another sculpting app). The edge now blends smoothly from the material into the color; full-strength colors look as before.
 
 ## [4.0.0-beta.11] - 2026-11-14
 

@@ -59,7 +59,9 @@ struct Uniforms {
     wireframe_color: [f32; 4],
     /// Floor grid: height, cell size, fade radius, opacity (0 hides it).
     floor: [f32; 4],
-    /// Floor grid: center x, center z, unused, unused.
+    /// Floor grid: center x, center z; z: show vertex color (1) or not
+    /// (kept here, in a spare slot, so the block's layout, which the
+    /// wireframe shader shares, doesn't change); w unused.
     floor_center: [f32; 4],
     /// Viewport lights (all zero: the matcap).
     lighting: lighting::GpuLighting,
@@ -123,6 +125,9 @@ impl BackgroundStyle {
 pub struct ViewSettings {
     pub show_mask: bool,
     pub show_groups: bool,
+    /// Tint the surface with vertex color (painted or imported). Off shows
+    /// the plain material; the colors are kept.
+    pub show_vertex_color: bool,
     /// How the viewport backdrop is drawn.
     pub background_style: BackgroundStyle,
     /// Background color at the viewport edges, or the only color when
@@ -205,6 +210,7 @@ impl Default for ViewSettings {
         Self {
             show_mask: true,
             show_groups: false,
+            show_vertex_color: true,
             background_style: BackgroundStyle::Gradient,
             // Neutral linear gray. The previous defaults raised blue
             // (0.010, 0.011, 0.013 and 0.062, 0.064, 0.070); after the sRGB
@@ -1197,7 +1203,10 @@ impl ViewportRenderer {
             bg_edge: rgba(settings.background),
             wireframe_color: rgba(settings.wireframe_color),
             floor: settings.floor.map_or([0.0; 4], |f| [f.height, f.cell, f.radius, 1.0]),
-            floor_center: settings.floor.map_or([0.0; 4], |f| [f.center[0], f.center[1], 0.0, 0.0]),
+            floor_center: {
+                let [x, z] = settings.floor.map_or([0.0; 2], |f| f.center);
+                [x, z, if settings.show_vertex_color { 1.0 } else { 0.0 }, 0.0]
+            },
             lighting: gpu_lighting,
         };
         queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));

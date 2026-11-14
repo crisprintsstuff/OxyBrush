@@ -15,7 +15,7 @@ struct Uniforms {
     wireframe_color: vec4<f32>,
     // Floor grid: height, cell size, fade radius, opacity (0 = off).
     floor: vec4<f32>,
-    // Floor grid: center x, center z.
+    // Floor grid: center x, center z; z: show vertex color (1) or not.
     floor_center: vec4<f32>,
     // Viewport lights (see lighting.rs, GpuLighting).
     lighting: Lighting,
@@ -241,10 +241,18 @@ fn fs_main(
     }
     // Vertex color: tint by the paint while keeping the material's shading.
     // White (unpainted) leaves the material exactly as it is.
-    let paint_w = clamp(distance(i.paint, vec3<f32>(1.0)) * 4.0, 0.0, 1.0);
+    // View > Show vertex color off: the plain material.
+    //
+    // The weight ramps smoothly over the whole distance from white, and the
+    // brightening that keeps strong colors vivid grows with it. At a
+    // stroke's edge the color fades from the paint to white, so a pale
+    // in-between used to get the full weight and the full boost, and
+    // came out brighter than both sides: a bright outline around every
+    // painted area. Now the edge eases from the material into the color.
+    let paint_w = smoothstep(0.0, 0.9, distance(i.paint, vec3<f32>(1.0))) * u.floor_center.z;
     if (paint_w > 0.0) {
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
-        color = mix(color, i.paint * lum * 1.6, paint_w);
+        color = mix(color, i.paint * lum * (1.0 + 0.6 * paint_w), paint_w);
     }
     if (piece.flags.x > 0.5) {
         var gc = i.group_color;
