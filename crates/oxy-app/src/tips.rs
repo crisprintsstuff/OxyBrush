@@ -109,6 +109,7 @@ commands! {
     LevelDown => "Subdivision level down", "Shift+D", "Sculpt on the next coarser subdivision level.";
     DeleteHigher => "Delete higher levels", "", "Remove subdivision levels finer than the current one.";
     DeleteLower => "Delete lower levels", "", "Remove subdivision levels coarser than the current one.";
+    KeepLevel => "Keep this level only", "", "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail can work on it.";
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
@@ -169,6 +170,7 @@ commands! {
     WireGroups => "Wireframe + groups on / off", "", "Toggle wireframe edges and face group colors together.";
     ResetWireframeColor => "Reset wireframe color", "", "Reset wireframe overlay lines to the default dark slate.";
     LoadMatcap => "Load matcap…", "", "Use a PNG or JPEG of a lit sphere as the material.";
+    OrbitAroundStroke => "Orbit around the last stroke on / off", "", "Orbiting turns around where your last stroke ended, so the part you're working on stays in view. Framing the view (F) goes back to orbiting around the middle.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
     Panels => "Show / hide panels", "Tab", "Show or hide the side panels.";
     Palette => "Command palette", "Ctrl+K", "Type part of any command, brush, file or guide topic and run it.";
@@ -774,7 +776,8 @@ pub mod plain {
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
-    pub const DYN_LEVELS: &str = "Dynamic detail changes the triangles, which would remove subdivision levels, so it is off on pieces that have them.";
+    pub const DYN_LEVELS: &str = "Not working on this piece: it has subdivision levels, which dynamic detail would remove. Keep this level only turns the level you see into the piece's mesh (undo brings the levels back).";
+    pub const KEEP_LEVEL: &str = "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail and other tools that change the triangles work on it. One undo step.";
     pub const RADIAL: &str = "How many copies to repeat around the axis. Zero turns radial symmetry off.";
     pub const RADIAL_AXIS: &str = "The axis the radial copies go around.";
     pub const SYM_RECENTER: &str = "Put this piece's mirror planes through the middle of its shape. Use it after moving the whole piece, or if mirroring lands in the wrong place.";

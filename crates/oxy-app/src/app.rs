@@ -1599,7 +1599,7 @@ impl ApplicationHandler for App {
                 redraw = true;
             }
             WindowEvent::RotationGesture { delta, .. } if !over_egui => {
-                self.editor.camera.orbit(Vec2::new(*delta * 2.0, 0.0));
+                self.editor.orbit_by(Vec2::new(*delta * 2.0, 0.0));
                 redraw = true;
             }
             // Pen pressure on X11 arrives as TouchpadPressure, scaled to 0..=1
@@ -1683,7 +1683,14 @@ impl ApplicationHandler for App {
                         if let Some(tp) = self.touches.get_mut(&t.id) {
                             tp.pos = pos;
                         }
-                        if self.touches.len() == 1 {
+                        if self.touches.is_empty() {
+                            // A pen hovering above the tablet: on Windows,
+                            // winit reports it as touch moves with no touch
+                            // started (and no mouse moves), so the brush
+                            // cursor must follow these or it stays where the
+                            // pen last touched.
+                            self.editor.pointer_moved(pos);
+                        } else if self.touches.len() == 1 {
                             self.editor.pressure = force_pressure;
                             self.editor.pointer_moved(pos);
                         } else if self.touches.len() == 2 {
@@ -1698,7 +1705,7 @@ impl ApplicationHandler for App {
                                     }
                                     let pan_delta = m - prev_m;
                                     if pan_delta.length() > 0.5 {
-                                        self.editor.camera.orbit(pan_delta * 0.5);
+                                        self.editor.orbit_by(pan_delta * 0.5);
                                     }
                                 }
                                 self.touch_prev_dist = Some(d);

@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Orbit around the last stroke** (on by default; Preferences, next to "Strokes can start on empty space", or the command palette): orbiting turns around where your last stroke ended, which stays put on screen, so you can keep working on the same spot from another angle without fighting the camera. Framing (F) goes back to orbiting around the middle of the view.
+- **Keep this level only** (Topology, under Dynamic detail when it can't work, and in the Mesh menu with the other level commands): keeps the subdivision level you see as the piece's mesh and removes the others, in one undo step, so dynamic detail works on it.
 - **Tube Twist, Spin and Braid** (in the Tube window, for the Tube brush and Pieces > + Add > Tube):
   - **Twist** turns the tube's cross-section (or a braid) along its length.
   - **Spin** coils the tube around its path like a spring, with a coil size (in tube thicknesses) and the number of turns.
@@ -25,6 +27,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **Python plugins say they're plugins.** A Python plugin used to run through the local AI agent connection, so running one turned on Settings > Local AI agent (and left it on), the status bar said "Agent connected", and its edits were labelled "Agent:". Each run now gets a connection of its own (this computer only, a new token each time, closed when the script ends): the agent setting stays as you left it, the status bar shows **Plugin '*name*' running**, and its edits are undo steps named after it (**Plugin: *name*: …**).
+
+### Fixed
+- **The brush cursor follows a hovering pen on Windows.** With a pen tablet (reported with an XP-Pen), the brush ring stayed where the pen last touched until you pressed again: Windows sends a hovering pen's movement as pen input, not mouse moves, and OxyBrush only followed it while the pen touched the tablet.
+- **Clay Strips shows a round cursor** like every other brush, instead of a square.
+- **Dynamic detail seemed to stop working** after adding subdivision levels: it is off on pieces with levels (it would remove them), but the only sign was a status-bar line that was easy to miss. With Dynamic detail ticked, the Topology section now says so in a warning color, with a **Keep this level only** button that makes it work again; levels left behind by an operation that has since changed the triangles no longer block it.
 
 ## [4.0.0-beta.10] - 2026-11-14
 

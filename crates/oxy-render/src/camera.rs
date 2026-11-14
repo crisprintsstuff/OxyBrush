@@ -185,6 +185,27 @@ impl Camera {
         self.pitch = (self.pitch + delta_pixels.y * 0.008).clamp(-1.55, 1.55);
     }
 
+    /// Turn the view with `turn` (which changes yaw and pitch, as [`orbit`]
+    /// does) around `pivot` instead of the target: the camera swings
+    /// around the pivot so it stays at the same place on screen, and the
+    /// target moves with it. Distance and field of view are unchanged.
+    ///
+    /// [`orbit`]: Camera::orbit
+    pub fn orbit_about(&mut self, pivot: Vec3, turn: impl FnOnce(&mut Self)) {
+        let basis = |c: &Camera| {
+            let f = c.forward();
+            let up = c.up();
+            (f.cross(up).normalize_or(Vec3::X), up, f)
+        };
+        let (r0, u0, f0) = basis(self);
+        let rel = self.eye() - pivot;
+        let local = Vec3::new(rel.dot(r0), rel.dot(u0), rel.dot(f0));
+        turn(self);
+        let (r1, u1, f1) = basis(self);
+        let eye = pivot + r1 * local.x + u1 * local.y + f1 * local.z;
+        self.target = eye + f1 * self.distance;
+    }
+
     /// Orbit in `step`-radian increments. `free` carries the unsnapped
     /// angles between calls (start it at the current yaw and pitch), so
     /// slow drags still reach the next step.
@@ -241,6 +262,27 @@ impl Camera {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn orbit_about_keeps_the_pivot_in_place_on_screen() {
+        let mut c =
+            Camera { target: Vec3::new(0.0, 1.0, 0.0), distance: 3.0, yaw: 0.3, pitch: 0.2, ..Default::default() };
+        let pivot = Vec3::new(0.4, 1.3, 0.2);
+        let vp = Vec2::new(800.0, 600.0);
+        let before = c.project(pivot, vp).unwrap();
+        let eye_to_pivot = c.eye().distance(pivot);
+        c.orbit_about(pivot, |c| c.orbit(Vec2::new(120.0, -60.0)));
+        let after = c.project(pivot, vp).unwrap();
+        assert!(before.distance(after) < 0.05, "{before} -> {after}");
+        assert!((c.eye().distance(pivot) - eye_to_pivot).abs() < 1e-4);
+        assert!((c.yaw - (0.3 - 120.0 * 0.008)).abs() < 1e-6, "turns as much as a plain orbit");
+        // Around the target itself, it is the plain orbit.
+        let mut a = Camera { distance: 3.0, yaw: 0.3, pitch: 0.2, ..Default::default() };
+        let mut b = a;
+        a.orbit(Vec2::new(50.0, 30.0));
+        b.orbit_about(b.target, |c| c.orbit(Vec2::new(50.0, 30.0)));
+        assert!(a.target.distance(b.target) < 1e-5 && a.eye().distance(b.eye()) < 1e-5);
+    }
 
     #[test]
     fn snapped_orbit_lands_on_steps_and_accumulates() {

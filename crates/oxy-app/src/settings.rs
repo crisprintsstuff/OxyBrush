@@ -345,6 +345,8 @@ pub struct Settings {
     pub gizmo_done_reverts: bool,
     /// The gizmo pivot moves to the unmasked part after each change.
     pub gizmo_pivot_follows: bool,
+    /// Orbit around where the last stroke ended.
+    pub orbit_around_stroke: bool,
     /// New subdivision levels are quads (Catmull–Clark); false: triangles (Loop).
     pub subdivision_quads: bool,
     /// New subdivision levels are smoothed (false: split in place).
@@ -861,6 +863,7 @@ impl Default for Settings {
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
+            orbit_around_stroke: true,
             subdivision_quads: true,
             subdivision_smooth: true,
             radius_on_model: false,
@@ -1008,6 +1011,7 @@ impl Settings {
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
+            + &format!("orbit_around_stroke = {}\n", self.orbit_around_stroke)
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("subdivision_smooth = {}\n", self.subdivision_smooth)
             + &format!("radius_on_model = {}\n", self.radius_on_model)
@@ -1238,6 +1242,7 @@ impl Settings {
                 "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
                 "gizmo_pivot_follows" => s.gizmo_pivot_follows = v.parse().unwrap_or(s.gizmo_pivot_follows),
+                "orbit_around_stroke" => s.orbit_around_stroke = v.parse().unwrap_or(s.orbit_around_stroke),
                 "subdivision" => s.subdivision_quads = v != "triangles",
                 "subdivision_smooth" => s.subdivision_smooth = v.parse().unwrap_or(s.subdivision_smooth),
                 "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
@@ -1515,6 +1520,7 @@ mod tests {
             undo_per_piece: false,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
+            orbit_around_stroke: false,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: true,

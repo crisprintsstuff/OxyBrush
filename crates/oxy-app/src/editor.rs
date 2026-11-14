@@ -821,6 +821,8 @@ enum LevelChange {
     Set(usize),
     DeleteHigher,
     DeleteLower,
+    /// Keep only the active level, as a plain mesh (no levels left).
+    KeepOnly,
 }
 
 /// Level changes that produce more triangles than this run on a worker
@@ -949,6 +951,12 @@ pub struct Editor {
     /// after every change (on by default). Off, it is found once per piece
     /// and then stays where it is.
     pub gizmo_pivot_follows: bool,
+    /// Orbiting turns around where the last stroke ended (`orbit_pivot`),
+    /// so the part being worked on stays in view (on by default).
+    pub orbit_around_stroke: bool,
+    /// Where the last stroke ended: the temporary orbit pivot. Cleared by
+    /// framing the view.
+    pub orbit_pivot: Option<Vec3>,
     /// How new subdivision levels (and Subdivide) are made: quads
     /// (Catmull–Clark, the default) or triangles (Loop). A piece that has
     /// levels keeps its own.
@@ -1362,6 +1370,8 @@ impl Default for Editor {
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
+            orbit_around_stroke: true,
+            orbit_pivot: None,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: true,
             kept_pivot_of: None,
@@ -1791,6 +1801,7 @@ impl Editor {
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
+            orbit_around_stroke: self.orbit_around_stroke,
             subdivision_quads: self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: self.subdivision_smooth,
             radius_on_model: self.radius_on_model,
@@ -2021,6 +2032,7 @@ impl Editor {
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
+        self.orbit_around_stroke = s.orbit_around_stroke;
         self.subdivision_smooth = s.subdivision_smooth;
         self.subdivision_scheme = if s.subdivision_quads {
             oxy_mesh::multires::Scheme::CatmullClark
@@ -2373,8 +2385,9 @@ impl Editor {
         if !sculpts {
             return false;
         }
-        if self.scene.active().multires.is_some() {
-            self.status = "Dynamic detail is off on pieces with subdivision levels (it would remove them)".into();
+        let piece = self.scene.active();
+        if piece.multires.as_ref().is_some_and(|m| m.is_bound_to(&piece.mesh)) {
+            self.status = "Dynamic detail is off on pieces with subdivision levels (it would remove them): use Keep this level only in Topology".into();
             return false;
         }
         true
@@ -2441,7 +2454,13 @@ impl Editor {
 
     /// End a stroke: one undo step, either the usual chunk snapshots or,
     /// when dynamic detail changed the mesh, the whole mesh before it.
-    fn finish_stroke(&mut self, kind: BrushKind, dyn_topo: Option<Box<DynStroke>>, hold: Option<Box<HoldWatch>>) {
+    fn finish_stroke(
+        &mut self,
+        kind: BrushKind,
+        end: Option<Vec3>,
+        dyn_topo: Option<Box<DynStroke>>,
+        hold: Option<Box<HoldWatch>>,
+    ) {
         let before = self.history.revision();
         match dyn_topo {
             Some(d) if d.changed => self.history.record_topology(d.label, d.piece, d.before, None),
@@ -2451,6 +2470,10 @@ impl Editor {
                     self.living_record(kind);
                 }
             }
+        }
+        // Orbit around where the stroke ended, if it changed anything.
+        if self.history.revision() != before && end.is_some() {
+            self.orbit_pivot = end;
         }
         // Remember the stroke's path, so Edit > Last stroke can reopen it.
         self.last_stroke = hold.filter(|_| self.history.revision() != before).map(|h| LastStroke {
@@ -2898,12 +2921,22 @@ impl Editor {
     /// dragging empty space does: the snap key (Shift, unless the keymap
     /// says otherwise) steps it by 45°. Also used by dragging the axis gizmo.
     pub fn orbit_by(&mut self, delta: Vec2) {
-        if self.snap_modifier_held() {
-            let free = self.snap_orbit.get_or_insert((self.camera.yaw, self.camera.pitch));
-            self.camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
-        } else {
-            self.snap_orbit = None;
-            self.camera.orbit(delta);
+        let pivot = self.orbit_pivot.filter(|_| self.orbit_around_stroke);
+        let turn = |camera: &mut Camera, snap: &mut Option<(f32, f32)>, snapping: bool| {
+            if snapping {
+                let free = snap.get_or_insert((camera.yaw, camera.pitch));
+                camera.orbit_snapped(free, delta, std::f32::consts::FRAC_PI_4);
+            } else {
+                *snap = None;
+                camera.orbit(delta);
+            }
+        };
+        let snapping = self.snap_modifier_held();
+        let snap = &mut self.snap_orbit;
+        match pivot {
+            // Around where the last stroke ended, which stays put on screen.
+            Some(p) => self.camera.orbit_about(p, |c| turn(c, snap, snapping)),
+            None => turn(&mut self.camera, snap, snapping),
         }
     }
 
@@ -3227,7 +3260,9 @@ impl Editor {
         self.snap_orbit = None;
         self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { stroke, dyn_topo, hold, .. } => self.finish_stroke(stroke.kind(), dyn_topo, hold),
+            Drag::Stroke { stroke, dyn_topo, hold, .. } => {
+                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
+            }
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -3317,7 +3352,9 @@ impl Editor {
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { stroke, dyn_topo, hold, .. } => self.finish_stroke(stroke.kind(), dyn_topo, hold),
+            Drag::Stroke { stroke, dyn_topo, hold, .. } => {
+                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
+            }
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -5327,13 +5364,19 @@ impl Editor {
                     mr.delete_lower_prepared();
                     None
                 }
+                LevelChange::KeepOnly => {
+                    mr.delete_higher_prepared();
+                    mr.delete_lower_prepared();
+                    None
+                }
             }
         };
         if background {
             // The stack moves into the worker (no copy); the undo copy is made
             // there too. Edits to this piece and saving wait (`job_blocks_active`,
             // `holds_levels`) until the result is applied in `poll_job`.
-            let snapshot_needed = matches!(change, LevelChange::DeleteHigher | LevelChange::DeleteLower);
+            let snapshot_needed =
+                matches!(change, LevelChange::DeleteHigher | LevelChange::DeleteLower | LevelChange::KeepOnly);
             let current = snapshot_needed.then(|| piece.mesh.clone());
             self.start_job(label.to_string(), Vec::new(), move || {
                 let previous = had_levels.then(|| mr.clone());
@@ -5434,6 +5477,20 @@ impl Editor {
             return;
         }
         self.multires_op("Delete lower levels", 0, LevelChange::DeleteLower);
+    }
+
+    /// Keep the level being shown as the piece's mesh and remove the other
+    /// subdivision levels (one undo step), so tools that change the
+    /// triangles, such as dynamic detail, can work on it.
+    pub fn keep_level_only(&mut self) {
+        if self.multires_level().is_none() {
+            self.status = "This piece has no subdivision levels".into();
+            return;
+        }
+        self.multires_op("Keep this level only", 0, LevelChange::KeepOnly);
+        if self.multires_level().is_none() {
+            self.status = format!("{}: no levels now, so dynamic detail can work on it", self.status);
+        }
     }
 
     /// Subdivide the active piece once, as a plain mesh (no levels), with
@@ -6625,12 +6682,14 @@ impl Editor {
 
     /// Frame every visible piece.
     pub fn frame(&mut self) {
+        self.orbit_pivot = None;
         self.camera.frame(self.scene.bounds());
     }
 
     /// Centre and frame the active piece (F), or every visible piece when
     /// the active one is hidden.
     pub fn frame_active(&mut self) {
+        self.orbit_pivot = None;
         let piece = self.scene.active();
         if piece.visible && piece.mesh.triangle_count() > 0 {
             self.camera.frame(piece.mesh.bounds());
@@ -8432,6 +8491,62 @@ mod tests {
         short_stroke(&mut e);
         assert_eq!(e.scene.active().mesh.triangle_count(), tris);
         assert!(e.scene.active().multires.is_some());
+
+        // Keep this level only: the levels go (one undo step) and dynamic
+        // detail works again, at a lower level too.
+        let mut e = dyntopo_editor();
+        e.add_level();
+        wait_job(&mut e);
+        e.add_level();
+        wait_job(&mut e);
+        e.step_level(-1);
+        wait_job(&mut e);
+        let at_level = e.scene.active().mesh.triangle_count();
+        e.keep_level_only();
+        wait_job(&mut e);
+        assert!(e.scene.active().multires.is_none());
+        assert_eq!(e.scene.active().mesh.triangle_count(), at_level, "the level that was shown is kept");
+        assert_eq!(e.history.undo_labels().last(), Some("Keep this level only"));
+        short_stroke(&mut e);
+        assert!(e.scene.active().mesh.triangle_count() > at_level, "dynamic detail works again");
+        e.undo();
+        e.undo();
+        assert_eq!(e.multires_level(), Some((1, 3)), "undo brings the levels back");
+    }
+
+    #[test]
+    fn orbit_turns_around_where_the_last_stroke_ended() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::Draw;
+        e.symmetry = Symmetry::default();
+        let target = e.camera.target;
+        // Before any stroke: around the view's centre, as always.
+        e.orbit_by(Vec2::new(30.0, 0.0));
+        assert_eq!(e.camera.target, target);
+        e.orbit_by(Vec2::new(-30.0, 0.0));
+        // A stroke off to the side of the model.
+        e.pointer = Some(Vec2::new(440.0, 280.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=10 {
+            e.pointer_moved(Vec2::new(440.0 + i as f32 * 3.0, 280.0));
+        }
+        e.pointer_up();
+        let pivot = e.orbit_pivot.expect("the stroke's end is the pivot");
+        let size = e.canvas_size();
+        let before = e.camera.project(pivot, size).unwrap();
+        e.orbit_by(Vec2::new(80.0, 40.0));
+        let after = e.camera.project(pivot, size).unwrap();
+        assert!(before.distance(after) < 0.5, "the stroke stays put on screen: {before} -> {after}");
+        assert_ne!(e.camera.target, target, "the view turned around the stroke, not the centre");
+        // With the option off, orbiting is around the view's centre again.
+        e.orbit_around_stroke = false;
+        let t = e.camera.target;
+        e.orbit_by(Vec2::new(50.0, 0.0));
+        assert_eq!(e.camera.target, t);
+        // Framing forgets the pivot.
+        e.orbit_around_stroke = true;
+        e.frame_active();
+        assert!(e.orbit_pivot.is_none());
     }
 
     #[test]
@@ -10496,6 +10611,7 @@ mod tests {
             undo_per_piece: true,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
+            orbit_around_stroke: false,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: false,

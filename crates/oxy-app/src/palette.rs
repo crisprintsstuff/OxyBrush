@@ -142,6 +142,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::LevelDown, "multires", |e| e.step_level(-1)),
         cmd(ed, Cmd::DeleteHigher, "multires", Editor::delete_higher_levels),
         cmd(ed, Cmd::DeleteLower, "multires", Editor::delete_lower_levels),
+        cmd(
+            ed,
+            Cmd::KeepLevel,
+            "multires apply flatten freeze collapse levels dynamic detail",
+            Editor::keep_level_only,
+        ),
         cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
         cmd(
@@ -284,6 +290,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::ResetBackground, "view color default backdrop", Editor::reset_background),
         cmd(ed, Cmd::AlignCursor, "view brush cursor ring normal tangent", |e| e.toggle_surface_cursor()),
         cmd(ed, Cmd::LoadMatcap, "material image custom", |e| e.request_load_matcap = true),
+        cmd(ed, Cmd::OrbitAroundStroke, "navigation orbit pivot rotate around stroke camera", |e| {
+            e.orbit_around_stroke = !e.orbit_around_stroke
+        }),
         cmd(ed, Cmd::StrokeFromEmpty, "navigation orbit middle mouse", |e| e.stroke_from_empty = !e.stroke_from_empty),
         cmd(ed, Cmd::Panels, "view interface", |e| e.show_panels = !e.show_panels),
         cmd(ed, Cmd::Shortcuts, "help keys keyboard", |e| e.show_shortcuts = true),

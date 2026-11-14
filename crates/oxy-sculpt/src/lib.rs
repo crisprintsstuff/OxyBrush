@@ -678,6 +678,11 @@ impl Stroke {
     /// Bound each `add_sample` call to approximately `ms` milliseconds by
     /// widening spacing and scaling strength when dabs take longer.
     /// The brush this stroke uses.
+    /// Where the stroke is now: its last dab, or its last sample.
+    pub fn last_position(&self) -> Option<Vec3> {
+        self.last_dab.or(self.last.map(|s| s.position))
+    }
+
     pub fn kind(&self) -> BrushKind {
         self.settings.kind
     }
