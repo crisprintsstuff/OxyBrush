@@ -198,12 +198,15 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
     },
     Topic {
         title: "Tubes",
-        keywords: "tube pipe horn tentacle tail limb cable path curve sweep draw",
+        keywords: "tube pipe horn tentacle tail limb cable path curve sweep draw twist spin coil spring spiral helix braid plait rope strands weave",
         body: "The Tube brush (in the brush shelf, next to Insert Primitive) draws a tube along a path and adds it to the active piece, in a face group of its own. Pieces > + Add > Tube (draw)… (or the command palette) does the same but makes the tube a new piece; the Tube window's Accept option switches between the two. Drag from the model, where the tube starts on its surface, or from empty space. The path lies flat to the view; orbit afterwards to move points in depth.\n\n\
 - Drag a point to move it.\n\
 - Shift+drag a point up or down to make the tube thicker or thinner there. Thickness blends smoothly between points.\n\
 - Click the line between two points to add one; Alt+click a point to remove it.\n\
-- The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\n\
+- The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\
+- Twist turns the cross-section along the tube (easiest to see with few sides, or on a braid).\n\
+- Spin coils the tube around its path like a spring: Coil size is the coil's radius, in tube thicknesses, and Coil turns how many times it goes round (negative winds the other way).\n\
+- Style Braid makes three round strands woven along the path, inside the tube's thickness. Spread goes from tight (the strands touch) to loose (a strand's width of gap); Turn is how many weaves along the length, and more weaves make thinner strands. Twist and Spin work on a braid too. These stay editable with Edit tube…, and the next tube starts with the last shape used.\n\n\
 Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge + remesh in the Pieces panel, which fuses the visible pieces into one surface with a voxel remesh; Join keeps them as they are, in one piece.",
     },
     Topic {
