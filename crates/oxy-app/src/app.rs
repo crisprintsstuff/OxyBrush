@@ -946,9 +946,13 @@ impl App {
                 let mut dialog = rfd::AsyncFileDialog::new()
                     .add_filter(
                         "OxyBrush project or mesh",
-                        &["oxb", "obj", "stl", "ply", "ztl", "zpr", "OXB", "OBJ", "STL", "PLY", "ZTL", "ZPR"],
+                        &[
+                            "oxb", "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "OXB", "OBJ", "GLB", "GLTF",
+                            "STL", "PLY", "ZTL", "ZPR",
+                        ],
                     )
                     .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
+                    .add_filter("glTF (*.glb, *.gltf)", &["glb", "gltf", "GLB", "GLTF"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
                     .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])
@@ -963,7 +967,14 @@ impl App {
                     return;
                 }
                 let mut dialog = rfd::AsyncFileDialog::new()
-                    .add_filter("Meshes", &["obj", "stl", "ply", "ztl", "zpr", "OBJ", "STL", "PLY", "ZTL", "ZPR"])
+                    .add_filter(
+                        "Meshes",
+                        &[
+                            "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "OBJ", "GLB", "GLTF", "STL", "PLY",
+                            "ZTL", "ZPR",
+                        ],
+                    )
+                    .add_filter("glTF (*.glb, *.gltf)", &["glb", "gltf", "GLB", "GLTF"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
                     .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])

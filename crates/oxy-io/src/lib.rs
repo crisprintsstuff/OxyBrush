@@ -1,7 +1,8 @@
 //! Mesh import and export.
 //!
 //! Supported: OBJ import/export, binary/ASCII STL import, binary STL export,
-//! PLY export, glTF 2.0 export (`.glb` and self-contained `.gltf`). Several
+//! PLY import/export, glTF 2.0 import (`.glb`, `.gltf`; see
+//! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`). Several
 //! pieces at once go through [`export_pieces`].
 //! Imported geometry is triangulated and welded so it can be sculpted as one
 //! continuous surface.
@@ -14,6 +15,7 @@ use std::path::Path;
 
 pub mod bridge;
 mod gltf;
+mod gltf_import;
 mod meshopt;
 mod ply;
 mod scene;
@@ -60,6 +62,22 @@ pub fn import(path: &Path) -> Result<Mesh> {
         "stl" => import_stl(&std::fs::read(path)?),
         "ply" => import_ply(&std::fs::read(path)?),
         "ztl" | "zpr" => oxy_ztl::import(&std::fs::read(path)?).map_err(Error::Format),
+        // One mesh: every piece of the file merged.
+        "glb" | "gltf" => {
+            let pieces = gltf_import::import_pieces(path, "Imported")?;
+            let mut data = MeshData::default();
+            for (_, m) in pieces {
+                let d = m.to_data();
+                let base = data.positions.len() as u32;
+                data.positions.extend(d.positions);
+                data.triangles.extend(d.triangles.iter().map(|t| t.map(|v| v + base)));
+                if !d.color.is_empty() || !data.color.is_empty() {
+                    data.color.resize(base as usize, Vec3::ONE);
+                    data.color.extend(if d.color.is_empty() { vec![Vec3::ONE; m.vertex_count()] } else { d.color });
+                }
+            }
+            Ok(Mesh::from_data(data))
+        }
         other => Err(Error::Unsupported(other.to_string())),
     }
 }
@@ -74,6 +92,7 @@ pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
         "stl" => Ok(vec![(stem, import_stl(&std::fs::read(path)?)?)]),
         "ply" => Ok(vec![(stem, import_ply(&std::fs::read(path)?)?)]),
         "ztl" | "zpr" => oxy_ztl::import_pieces(&std::fs::read(path)?).map_err(Error::Format),
+        "glb" | "gltf" => gltf_import::import_pieces(path, &stem),
         other => Err(Error::Unsupported(other.to_string())),
     }
 }

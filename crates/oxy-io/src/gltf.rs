@@ -623,9 +623,9 @@ mod tests {
             assert_eq!(v["byteLength"].as_u64().unwrap() as usize, count * stride);
             let src = &bin[off..off + len];
             let out: Vec<u8> = match e["mode"].as_str().unwrap() {
-                "ATTRIBUTES" => decode::attributes(src, count, stride),
+                "ATTRIBUTES" => decode::attributes(src, count, stride).unwrap(),
                 "TRIANGLES" => {
-                    let idx = decode::triangles(src, count);
+                    let idx = decode::triangles(src, count).unwrap();
                     if stride == 2 {
                         idx.iter().flat_map(|i| (*i as u16).to_le_bytes()).collect()
                     } else {
