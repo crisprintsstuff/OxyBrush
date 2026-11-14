@@ -5,7 +5,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
-- **Orbit around the last stroke** (on by default; Preferences, next to "Strokes can start on empty space", or the command palette): orbiting turns around where your last stroke ended, which stays put on screen, so you can keep working on the same spot from another angle without fighting the camera. Framing (F) goes back to orbiting around the middle of the view.
+- **Orbit around the cursor, or the last stroke** (Preferences > **Orbit around**, next to "Strokes can start on empty space", or the command palette):
+  - **Cursor** (the default): orbiting turns around the point of the model under the pointer where you start the orbit, so you can turn around any spot you point at, even when your last stroke is off screen. Starting from empty space, it turns around the part of the model nearest the pointer (within a quarter of the view), or else the last pivot.
+  - **Last stroke**: orbiting turns around where your last stroke ended.
+  - **Centre of the view**: as before.
+  - With Cursor or Last stroke, that point stays put on screen while you orbit. Framing (F) goes back to orbiting around the middle until the next stroke or orbit.
 - **Keep this level only** (Topology, under Dynamic detail when it can't work, and in the Mesh menu with the other level commands): keeps the subdivision level you see as the piece's mesh and removes the others, in one undo step, so dynamic detail works on it.
 - **Tube Twist, Spin and Braid** (in the Tube window, for the Tube brush and Pieces > + Add > Tube):
   - **Twist** turns the tube's cross-section (or a braid) along its length.

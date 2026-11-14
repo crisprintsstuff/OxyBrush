@@ -47,7 +47,7 @@ Every shortcut and the mouse buttons can be changed in Settings > Keymap, includ
 - S, U and I open a slider right under the pointer for size, strength and Paint strength; Shift+O opens one for focal shift (O in the Single-key tools scheme). Press the key again, Esc, or click outside to close it.\n\
 - Hold Shift to smooth with any brush, Ctrl to mask.\n\
 - With a pen, pressure sets the strength (and the radius, if you turn that on in the brush settings).\n\
-- After a stroke, orbiting turns around where it ended, so that spot stays in view as you look at it from another side. F frames the model and goes back to orbiting around the middle; Preferences > Orbit around the last stroke turns it off.\n\
+- Orbiting turns around the point of the model under the pointer where you start it (from empty space, the nearest part of the model), and that point stays put on screen, so you can turn around any spot you point at. Preferences > Orbit around can make it the last stroke instead, or the centre of the view. F frames the model and goes back to orbiting around the middle until you orbit or sculpt again.\n\
 - Ctrl+Z undoes a stroke, Ctrl+Shift+Z redoes it. Ctrl+Alt+Z undoes on the active piece only, skipping changes to other pieces (Preferences > General can make that the default).",
     },
     Topic {

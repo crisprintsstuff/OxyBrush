@@ -170,7 +170,9 @@ commands! {
     WireGroups => "Wireframe + groups on / off", "", "Toggle wireframe edges and face group colors together.";
     ResetWireframeColor => "Reset wireframe color", "", "Reset wireframe overlay lines to the default dark slate.";
     LoadMatcap => "Load matcap…", "", "Use a PNG or JPEG of a lit sphere as the material.";
-    OrbitAroundStroke => "Orbit around the last stroke on / off", "", "Orbiting turns around where your last stroke ended, so the part you're working on stays in view. Framing the view (F) goes back to orbiting around the middle.";
+    OrbitAroundCursor => "Orbit around the cursor", "", "Orbiting turns around the surface under the pointer where you start the orbit; from empty space, the nearest part of the model. That point stays put on screen.";
+    OrbitAroundStroke => "Orbit around the last stroke", "", "Orbiting turns around where your last stroke ended, so the part you're working on stays in view. Framing the view (F) goes back to orbiting around the middle.";
+    OrbitAroundCentre => "Orbit around the centre of the view", "", "Orbiting turns around the middle of the view, as framing (F) sets it.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
     Panels => "Show / hide panels", "Tab", "Show or hide the side panels.";
     Palette => "Command palette", "Ctrl+K", "Type part of any command, brush, file or guide topic and run it.";
@@ -776,6 +778,7 @@ pub mod plain {
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
+    pub const ORBIT_AROUND: &str = "What orbiting turns around. Cursor: the surface under the pointer where you start the orbit (from empty space, the nearest part of the model), so you can turn around any spot you point at. Last stroke: where your last stroke ended. Centre of the view: the middle, as framing (F) sets it. With Cursor or Last stroke, that point stays put on screen while you orbit; F goes back to the middle until the next stroke or orbit.";
     pub const DYN_LEVELS: &str = "Not working on this piece: it has subdivision levels, which dynamic detail would remove. Keep this level only turns the level you see into the piece's mesh (undo brings the levels back).";
     pub const KEEP_LEVEL: &str = "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail and other tools that change the triangles work on it. One undo step.";
     pub const RADIAL: &str = "How many copies to repeat around the axis. Zero turns radial symmetry off.";

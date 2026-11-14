@@ -951,12 +951,15 @@ pub struct Editor {
     /// after every change (on by default). Off, it is found once per piece
     /// and then stays where it is.
     pub gizmo_pivot_follows: bool,
-    /// Orbiting turns around where the last stroke ended (`orbit_pivot`),
-    /// so the part being worked on stays in view (on by default).
-    pub orbit_around_stroke: bool,
-    /// Where the last stroke ended: the temporary orbit pivot. Cleared by
+    /// What orbiting turns around: the surface under the pointer (the
+    /// default), where the last stroke ended, or the middle of the view.
+    pub orbit_around: crate::settings::OrbitAround,
+    /// The temporary orbit pivot: where the last stroke ended, or the
+    /// surface picked under the pointer when an orbit started. Cleared by
     /// framing the view.
     pub orbit_pivot: Option<Vec3>,
+    /// This press's orbit has already picked its pivot (Cursor mode).
+    orbit_picked: bool,
     /// How new subdivision levels (and Subdivide) are made: quads
     /// (Catmull–Clark, the default) or triangles (Loop). A piece that has
     /// levels keeps its own.
@@ -1370,8 +1373,9 @@ impl Default for Editor {
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
-            orbit_around_stroke: true,
+            orbit_around: crate::settings::OrbitAround::Cursor,
             orbit_pivot: None,
+            orbit_picked: false,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: true,
             kept_pivot_of: None,
@@ -1801,7 +1805,7 @@ impl Editor {
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
-            orbit_around_stroke: self.orbit_around_stroke,
+            orbit_around: self.orbit_around,
             subdivision_quads: self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: self.subdivision_smooth,
             radius_on_model: self.radius_on_model,
@@ -2032,7 +2036,7 @@ impl Editor {
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
-        self.orbit_around_stroke = s.orbit_around_stroke;
+        self.orbit_around = s.orbit_around;
         self.subdivision_smooth = s.subdivision_smooth;
         self.subdivision_scheme = if s.subdivision_quads {
             oxy_mesh::multires::Scheme::CatmullClark
@@ -2132,6 +2136,43 @@ impl Editor {
         self.camera.snap(best.1.0, best.1.1);
     }
 
+    /// The point to orbit around for a press at `pixel` (Orbit around:
+    /// Cursor): the visible surface under it, or, from empty space, the
+    /// visible point nearest to it on screen, if one is within a quarter of
+    /// the view's height. None leaves the pivot as it was.
+    pub(crate) fn orbit_point_under(&self, pixel: Vec2) -> Option<Vec3> {
+        let size = self.canvas_size();
+        let (o, d) = self.camera.ray(self.canvas_local(pixel), size);
+        if let Some((_, hit)) = self.pick_piece(o, d) {
+            return Some(o + d * hit.t);
+        }
+        // Nearest on screen: distance from the ray over depth (in
+        // perspective, so near and far points count alike), within a
+        // quarter of the view's height.
+        let ortho = self.camera.orthographic;
+        let limit = if ortho {
+            self.camera.distance * (self.camera.fov_y * 0.5).tan() * 0.5
+        } else {
+            (self.camera.fov_y * 0.25).tan()
+        };
+        let mut best: Option<(f32, Vec3)> = None;
+        for piece in self.scene.pieces.iter().filter(|p| p.visible) {
+            let m = &piece.mesh;
+            for (v, &p) in m.positions.iter().enumerate() {
+                let rel = p - o;
+                let along = rel.dot(d);
+                if (!ortho && along <= 0.0) || m.is_vertex_hidden(v as u32) {
+                    continue;
+                }
+                let off = (rel - d * along).length() / if ortho { 1.0 } else { along };
+                if off <= limit && best.is_none_or(|(b, _)| off < b) {
+                    best = Some((off, p));
+                }
+            }
+        }
+        best.map(|b| b.1)
+    }
+
     /// Nearest visible piece under a ray: (index, hit).
     fn pick_piece(&self, o: Vec3, d: Vec3) -> Option<(usize, oxy_mesh::RayHit)> {
         self.scene
@@ -2157,6 +2198,7 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        self.orbit_picked = false;
         // The size on the model, measured where this press lands.
         self.sync_model_radius();
         if button != PointerButton::Primary {
@@ -2921,7 +2963,7 @@ impl Editor {
     /// dragging empty space does: the snap key (Shift, unless the keymap
     /// says otherwise) steps it by 45°. Also used by dragging the axis gizmo.
     pub fn orbit_by(&mut self, delta: Vec2) {
-        let pivot = self.orbit_pivot.filter(|_| self.orbit_around_stroke);
+        let pivot = self.orbit_pivot.filter(|_| self.orbit_around != crate::settings::OrbitAround::Centre);
         let turn = |camera: &mut Camera, snap: &mut Option<(f32, f32)>, snapping: bool| {
             if snapping {
                 let free = snap.get_or_insert((camera.yaw, camera.pitch));
@@ -2934,7 +2976,7 @@ impl Editor {
         let snapping = self.snap_modifier_held();
         let snap = &mut self.snap_orbit;
         match pivot {
-            // Around where the last stroke ended, which stays put on screen.
+            // Around the pivot, which stays put on screen.
             Some(p) => self.camera.orbit_about(p, |c| turn(c, snap, snapping)),
             None => turn(&mut self.camera, snap, snapping),
         }
@@ -2966,6 +3008,14 @@ impl Editor {
             | Drag::Retopo(_)
             | Drag::PolyEdit(_) => true,
             Drag::Orbit => {
+                // Orbit around the cursor: the pivot is picked where the
+                // press was, on the drag's first move.
+                if self.orbit_around == crate::settings::OrbitAround::Cursor && !self.orbit_picked {
+                    self.orbit_picked = true;
+                    if let Some(at) = prev.and_then(|p| self.orbit_point_under(p)) {
+                        self.orbit_pivot = Some(at);
+                    }
+                }
                 self.orbit_by(delta);
                 true
             }
@@ -8515,8 +8565,47 @@ mod tests {
     }
 
     #[test]
+    fn orbit_turns_around_the_surface_under_the_cursor() {
+        let mut e = editor();
+        assert_eq!(e.orbit_around, crate::settings::OrbitAround::Cursor, "the default");
+        e.symmetry = Symmetry::default();
+        let size = e.canvas_size();
+        // Middle-drag starting over the model, off its centre.
+        let press = Vec2::new(450.0, 270.0);
+        let (o, d) = e.camera.ray(e.canvas_local(press), size);
+        let under = e.pick_piece(o, d).map(|(_, h)| o + d * h.t).expect("the model is under the press");
+        e.pointer = Some(press);
+        e.pointer_down(PointerButton::Middle);
+        assert!(matches!(e.drag, Drag::Orbit));
+        let before = e.camera.project(under, size).unwrap();
+        for i in 1..=10 {
+            e.pointer_moved(press + Vec2::new(i as f32 * 8.0, i as f32 * 3.0));
+        }
+        e.pointer_up();
+        assert!(e.orbit_pivot.unwrap().distance(under) < 1e-4, "the pivot is the point under the press");
+        let after = e.camera.project(under, size).unwrap();
+        assert!(before.distance(after) < 0.5, "that point stays put on screen: {before} -> {after}");
+
+        // From empty space just beside the model: the nearest point of it.
+        e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(3, 1.0))), None);
+        e.frame();
+        let b = e.scene.active().mesh.bounds();
+        let edge =
+            e.camera.project(Vec3::new(b.max.x, (b.min.y + b.max.y) * 0.5, (b.min.z + b.max.z) * 0.5), size).unwrap();
+        // (A sphere in perspective looks a little wider than its x extent.)
+        let beside = Vec2::new(e.canvas[0], e.canvas[1]) + edge + Vec2::new(60.0, 0.0);
+        let (o, d) = e.camera.ray(e.canvas_local(beside), size);
+        assert!(e.pick_piece(o, d).is_none(), "empty space");
+        let p = e.orbit_point_under(beside).expect("a point near the pointer");
+        assert!(p.x > (b.min.x + b.max.x) * 0.5, "on the side the pointer is on: {p}");
+        // Far from everything: nothing, so the pivot stays as it was.
+        assert!(e.orbit_point_under(Vec2::new(e.canvas[0] + 2.0, e.canvas[1] + 2.0)).is_none());
+    }
+
+    #[test]
     fn orbit_turns_around_where_the_last_stroke_ended() {
         let mut e = editor();
+        e.orbit_around = crate::settings::OrbitAround::LastStroke;
         e.brush_kind = BrushKind::Draw;
         e.symmetry = Symmetry::default();
         let target = e.camera.target;
@@ -8538,13 +8627,13 @@ mod tests {
         let after = e.camera.project(pivot, size).unwrap();
         assert!(before.distance(after) < 0.5, "the stroke stays put on screen: {before} -> {after}");
         assert_ne!(e.camera.target, target, "the view turned around the stroke, not the centre");
-        // With the option off, orbiting is around the view's centre again.
-        e.orbit_around_stroke = false;
+        // Around the centre, orbiting doesn't move the target.
+        e.orbit_around = crate::settings::OrbitAround::Centre;
         let t = e.camera.target;
         e.orbit_by(Vec2::new(50.0, 0.0));
         assert_eq!(e.camera.target, t);
         // Framing forgets the pivot.
-        e.orbit_around_stroke = true;
+        e.orbit_around = crate::settings::OrbitAround::LastStroke;
         e.frame_active();
         assert!(e.orbit_pivot.is_none());
     }
@@ -10611,7 +10700,7 @@ mod tests {
             undo_per_piece: true,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
-            orbit_around_stroke: false,
+            orbit_around: crate::settings::OrbitAround::LastStroke,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: false,

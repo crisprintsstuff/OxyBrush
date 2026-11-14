@@ -11,6 +11,43 @@ use oxy_render::{BackgroundStyle, MatcapPreset, ViewSettings};
 use oxy_sculpt::BrushKind;
 use std::path::{Path, PathBuf};
 
+/// What orbiting turns around.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OrbitAround {
+    /// The middle of the view (the camera's target), as in older versions.
+    Centre,
+    /// Where the last stroke ended.
+    LastStroke,
+    /// The surface under the pointer when the orbit starts (from empty
+    /// space, the nearest surface to the pointer); else the last pivot.
+    #[default]
+    Cursor,
+}
+
+impl OrbitAround {
+    pub const ALL: [OrbitAround; 3] = [OrbitAround::Cursor, OrbitAround::LastStroke, OrbitAround::Centre];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            OrbitAround::Centre => "Centre of the view",
+            OrbitAround::LastStroke => "Last stroke",
+            OrbitAround::Cursor => "Cursor",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            OrbitAround::Centre => "centre",
+            OrbitAround::LastStroke => "stroke",
+            OrbitAround::Cursor => "cursor",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|o| o.key() == key)
+    }
+}
+
 /// How the interface is laid out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UiLayout {
@@ -345,8 +382,8 @@ pub struct Settings {
     pub gizmo_done_reverts: bool,
     /// The gizmo pivot moves to the unmasked part after each change.
     pub gizmo_pivot_follows: bool,
-    /// Orbit around where the last stroke ended.
-    pub orbit_around_stroke: bool,
+    /// What orbiting turns around.
+    pub orbit_around: OrbitAround,
     /// New subdivision levels are quads (Catmull–Clark); false: triangles (Loop).
     pub subdivision_quads: bool,
     /// New subdivision levels are smoothed (false: split in place).
@@ -863,7 +900,7 @@ impl Default for Settings {
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
-            orbit_around_stroke: true,
+            orbit_around: OrbitAround::Cursor,
             subdivision_quads: true,
             subdivision_smooth: true,
             radius_on_model: false,
@@ -1011,7 +1048,7 @@ impl Settings {
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
-            + &format!("orbit_around_stroke = {}\n", self.orbit_around_stroke)
+            + &format!("orbit_around = {}\n", self.orbit_around.key())
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("subdivision_smooth = {}\n", self.subdivision_smooth)
             + &format!("radius_on_model = {}\n", self.radius_on_model)
@@ -1242,7 +1279,13 @@ impl Settings {
                 "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
                 "gizmo_pivot_follows" => s.gizmo_pivot_follows = v.parse().unwrap_or(s.gizmo_pivot_follows),
-                "orbit_around_stroke" => s.orbit_around_stroke = v.parse().unwrap_or(s.orbit_around_stroke),
+                "orbit_around" => s.orbit_around = OrbitAround::from_key(v).unwrap_or(s.orbit_around),
+                // Written by builds between 4.0.0-beta.10 and the Cursor choice.
+                "orbit_around_stroke" => {
+                    if v == "false" {
+                        s.orbit_around = OrbitAround::Centre;
+                    }
+                }
                 "subdivision" => s.subdivision_quads = v != "triangles",
                 "subdivision_smooth" => s.subdivision_smooth = v.parse().unwrap_or(s.subdivision_smooth),
                 "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
@@ -1520,7 +1563,7 @@ mod tests {
             undo_per_piece: false,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
-            orbit_around_stroke: false,
+            orbit_around: OrbitAround::LastStroke,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: true,
