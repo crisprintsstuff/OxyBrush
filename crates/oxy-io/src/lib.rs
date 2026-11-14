@@ -18,7 +18,7 @@ mod ply;
 mod scene;
 
 pub use ply::{read_ply, write_ply};
-pub use scene::{ExportPiece, ExportStats, export_pieces, write_atomic};
+pub use scene::{ExportPiece, ExportShape, ExportStats, export_pieces, write_atomic};
 
 #[derive(Debug)]
 pub enum Error {
@@ -209,7 +209,7 @@ fn push_colors(colors: &mut Vec<Option<Vec3>>, m: &tobj::Model) {
 /// Export one mesh by file extension (`obj`, `stl`, `ply`, `glb`, `gltf`),
 /// written atomically.
 pub fn export(mesh: &Mesh, path: &Path) -> Result<()> {
-    export_pieces(&[ExportPiece { name: "OxyBrush", mesh }], path).map(|_| ())
+    export_pieces(&[ExportPiece::new("OxyBrush", mesh)], path).map(|_| ())
 }
 
 /// File extensions `export`/`export_pieces` can write.

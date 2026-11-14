@@ -1,6 +1,6 @@
 # RFC 0017: Living strokes
 
-Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 2 landed: groups as layers, mask out, saving (`STRK`), and the plugin/MCP surface (plugin API 4 `strokes_state`/`stroke_command`, agent tools `list_strokes`/`edit_strokes`)
+Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 3 landed except exact replay: Mirror copy, Split by side, stroke groups exported as glTF shape keys. Phase 2 landed: groups as layers, mask out, saving (`STRK`), and the plugin/MCP surface (plugin API 4 `strokes_state`/`stroke_command`, agent tools `list_strokes`/`edit_strokes`)
 
 ## Summary
 
@@ -178,11 +178,45 @@ The headless `oxybrush-cli mcp` session has no living strokes and says so.
 3. **Beyond:** copy a stroke to another place or the mirrored side,
    per-group displacement export, exact replay for small meshes.
 
+As built for phase 3:
+
+- **Mirror copy** adds the mirror image of the selected strokes across the
+  piece's symmetry plane (X, Y or Z, through the piece's symmetry centre)
+  as new strokes, with the same brush, strength and group. Each point goes
+  to the mesh point nearest its mirror position (taken before the stroke
+  moved it), within the mean edge length, and its change is mirrored;
+  several points landing on one are averaged. Points with no match are
+  skipped and counted in the status line, so the piece needs to be roughly
+  symmetric where the stroke is. Copying "to another place" (not a mirror)
+  is left out: without a surface map between the two places there's no
+  good way to say which point goes where.
+- **Split by side** answers the open question below: a symmetric stroke
+  stays one record, and this action makes it one record per side (by the
+  side each point was on before the stroke) when you want to fade one
+  side. The whole comes off and the halves go on in the same undo step,
+  so nothing moves.
+- Both make new records inside a panel undo step: `living_commit` treats a
+  record the change adds as starting off the surface, and gives it the
+  step's undo entry, so undoing the step hides it like an undone stroke.
+- **Per-group export:** glTF/GLB exports write each stroke group as a
+  morph target (shape key) named after the group (`extras.targetNames`,
+  read by Blender and three.js) on the piece without the groups, with the
+  group's strokes at their strengths times the group's. Its weight is 1, or
+  0 for a hidden group, so the file shows what the viewport shows. Color
+  changes stay in the base. OBJ, STL and PLY get the surface as shown.
+- **Exact replay is not built.** It needs every stroke's dab inputs kept,
+  and replaying all later strokes through the brush engine after an edit,
+  which interacts with undo snapshots, dynamic detail and symmetry. The
+  additive model has been enough for the cases reported so far; it stays a
+  candidate if testers hit its limits (fading a stroke that later strokes
+  smoothed over).
+
 ## Open questions
 
 - Should strokes made with symmetry be one record (all sides) or one per
   side? One record is simpler; per side lets you fade just the left wrinkle.
-  Proposed: one record, with "split by side" as a later action.
+  Proposed: one record, with "split by side" as a later action (built in
+  phase 3).
 - Should the panel also list mask strokes? Proposed: no; masks are cheap to
   redo and would crowd the list.
 - Default memory budget: proposed 256 MB, adjustable in Preferences.

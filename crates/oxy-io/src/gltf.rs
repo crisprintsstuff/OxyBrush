@@ -2,6 +2,11 @@
 //! with POSITION, NORMAL, COLOR_0 (painted pieces, linear) and u32 indices. `.glb` is the binary container
 //! (JSON chunk + BIN chunk); `.gltf` is a single JSON file with the buffer
 //! embedded as a base64 data URI.
+//!
+//! Shape keys (living stroke groups) are morph targets: a POSITION
+//! displacement per vertex for each, the mesh's default `weights`, and
+//! their names in the mesh's `extras.targetNames`, the convention Blender
+//! and three.js read for shape key names.
 
 use crate::scene::Geometry;
 use serde_json::{Value, json};
@@ -52,8 +57,26 @@ fn build(geoms: &[Geometry], buffer_uri: Option<String>) -> (Value, Vec<u8>) {
                 .push(json!({"bufferView": cv, "componentType": FLOAT, "count": g.positions.len(), "type": "VEC3"}));
             attributes["COLOR_0"] = json!(base + 3);
         }
-        meshes.push(json!({"name": g.name, "primitives": [{
-            "attributes": attributes, "indices": base + 2, "mode": 4}]}));
+        let mut primitive = json!({"attributes": attributes, "indices": base + 2, "mode": 4});
+        let mut mesh = json!({"name": g.name});
+        if !g.shapes.is_empty() {
+            let mut targets = Vec::new();
+            for (_, deltas, _) in &g.shapes {
+                let (min, max) =
+                    deltas.iter().fold((glam::Vec3::splat(f32::MAX), glam::Vec3::splat(f32::MIN)), |(a, b), p| {
+                        (a.min(*p), b.max(*p))
+                    });
+                let v = view(&mut bin, &floats(deltas), ARRAY_BUFFER);
+                accessors.push(json!({"bufferView": v, "componentType": FLOAT, "count": deltas.len(), "type": "VEC3",
+                                      "min": min.to_array(), "max": max.to_array()}));
+                targets.push(json!({"POSITION": accessors.len() - 1}));
+            }
+            primitive["targets"] = json!(targets);
+            mesh["weights"] = json!(g.shapes.iter().map(|s| s.2).collect::<Vec<_>>());
+            mesh["extras"] = json!({"targetNames": g.shapes.iter().map(|s| s.0.as_str()).collect::<Vec<_>>()});
+        }
+        mesh["primitives"] = json!([primitive]);
+        meshes.push(mesh);
         nodes.push(json!({"name": g.name, "mesh": i}));
     }
     let mut buffer = json!({"byteLength": bin.len()});
@@ -135,10 +158,8 @@ mod tests {
     fn glb_is_structurally_valid_and_data_reads_back() {
         let a = primitives::icosphere(2, 1.0);
         let b = primitives::cube(1, 1.0);
-        let geoms: Vec<Geometry> = [ExportPiece { name: "Head", mesh: &a }, ExportPiece { name: "Box", mesh: &b }]
-            .iter()
-            .map(visible_geometry)
-            .collect();
+        let geoms: Vec<Geometry> =
+            [ExportPiece::new("Head", &a), ExportPiece::new("Box", &b)].iter().map(visible_geometry).collect();
         let glb = write_glb(&geoms);
         assert_eq!(&glb[0..4], b"glTF");
         assert_eq!(read_u32(&glb, 4), 2);
@@ -178,7 +199,7 @@ mod tests {
     #[test]
     fn gltf_embeds_its_buffer() {
         let a = primitives::icosphere(1, 1.0);
-        let g = [visible_geometry(&ExportPiece { name: "A", mesh: &a })];
+        let g = [visible_geometry(&ExportPiece::new("A", &a))];
         let doc: Value = serde_json::from_str(&write_gltf_embedded(&g)).unwrap();
         let uri = doc["buffers"][0]["uri"].as_str().unwrap();
         assert!(uri.starts_with("data:application/octet-stream;base64,"));
@@ -186,5 +207,38 @@ mod tests {
         assert_eq!(uri.len() - "data:application/octet-stream;base64,".len(), len.div_ceil(3) * 4);
         assert_eq!(base64(b"foobar"), "Zm9vYmFy");
         assert_eq!(base64(b"fo"), "Zm8=");
+    }
+
+    #[test]
+    fn shape_keys_are_named_morph_targets_with_weights() {
+        use crate::scene::ExportShape;
+        let a = primitives::icosphere(1, 1.0);
+        let mut piece = ExportPiece::new("Head", &a);
+        piece.shapes = vec![
+            ExportShape {
+                name: "Wrinkles".into(),
+                vertices: vec![0, 5],
+                deltas: vec![glam::Vec3::X, glam::Vec3::Y],
+                weight: 1.0,
+            },
+            ExportShape { name: "Scales".into(), vertices: vec![3], deltas: vec![glam::Vec3::Z * 0.5], weight: 0.0 },
+            // A shape that changes nothing is left out.
+            ExportShape { name: "Empty".into(), vertices: vec![], deltas: vec![], weight: 1.0 },
+        ];
+        let g = [visible_geometry(&piece)];
+        let doc: Value = serde_json::from_str(&write_gltf_embedded(&g)).unwrap();
+        let mesh = &doc["meshes"][0];
+        assert_eq!(mesh["extras"]["targetNames"], json!(["Wrinkles", "Scales"]));
+        assert_eq!(mesh["weights"], json!([1.0, 0.0]));
+        let targets = mesh["primitives"][0]["targets"].as_array().unwrap();
+        assert_eq!(targets.len(), 2);
+        let acc = &doc["accessors"][targets[1]["POSITION"].as_u64().unwrap() as usize];
+        assert_eq!(acc["count"].as_u64().unwrap() as usize, g[0].positions.len());
+        assert_eq!(acc["max"], json!([0.0, 0.0, 0.5]));
+        // The data: vertex 3's change in the second target.
+        let (_, bin) = build(&g, None);
+        let view = &doc["bufferViews"][acc["bufferView"].as_u64().unwrap() as usize];
+        let at = view["byteOffset"].as_u64().unwrap() as usize + 3 * 12 + 8;
+        assert_eq!(f32::from_le_bytes(bin[at..at + 4].try_into().unwrap()), 0.5);
     }
 }

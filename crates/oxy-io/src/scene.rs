@@ -18,6 +18,26 @@ use std::path::Path;
 pub struct ExportPiece<'a> {
     pub name: &'a str,
     pub mesh: &'a Mesh,
+    /// Shape keys (glTF morph targets) on top of `mesh`. Formats without
+    /// them (OBJ, STL, PLY) get the shapes added at their weights instead,
+    /// so every format shows the same surface.
+    pub shapes: Vec<ExportShape>,
+}
+
+impl<'a> ExportPiece<'a> {
+    pub fn new(name: &'a str, mesh: &'a Mesh) -> Self {
+        ExportPiece { name, mesh, shapes: Vec::new() }
+    }
+}
+
+/// A shape key: a change to some of a piece's points, by the mesh's point
+/// numbers, shown at `weight` (0 off, 1 full).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExportShape {
+    pub name: String,
+    pub vertices: Vec<u32>,
+    pub deltas: Vec<Vec3>,
+    pub weight: f32,
 }
 
 /// Visible geometry of one piece, with unused vertices dropped.
@@ -31,6 +51,8 @@ pub(crate) struct Geometry {
     /// The quads' shared diagonals, in this geometry's vertex numbers
     /// (exact for meshes that know their quads, such as retopology).
     pub diagonals: std::collections::HashSet<[u32; 2]>,
+    /// Shape keys: name, a change per vertex of this geometry, weight.
+    pub shapes: Vec<(String, Vec<Vec3>, f32)>,
 }
 
 pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
@@ -44,6 +66,7 @@ pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
         triangles: Vec::new(),
         colors: painted.then(Vec::new),
         diagonals: Default::default(),
+        shapes: Vec::new(),
     };
     for (t, tri) in m.triangles.iter().enumerate() {
         if m.hidden()[t] {
@@ -70,7 +93,34 @@ pub(crate) fn visible_geometry(piece: &ExportPiece) -> Geometry {
             (ra != u32::MAX && rb != u32::MAX).then(|| [ra.min(rb), ra.max(rb)])
         })
         .collect();
+    for shape in &piece.shapes {
+        let mut dense = vec![Vec3::ZERO; g.positions.len()];
+        let mut any = false;
+        for (&v, d) in shape.vertices.iter().zip(&shape.deltas) {
+            if let Some(&r) = remap.get(v as usize)
+                && r != u32::MAX
+            {
+                dense[r as usize] = *d;
+                any |= *d != Vec3::ZERO;
+            }
+        }
+        if any {
+            g.shapes.push((shape.name.clone(), dense, shape.weight));
+        }
+    }
     g
+}
+
+impl Geometry {
+    /// Add the shape keys to the positions at their weights and drop them,
+    /// for formats without shape keys.
+    fn bake_shapes(&mut self) {
+        for (_, deltas, w) in std::mem::take(&mut self.shapes) {
+            for (p, d) in self.positions.iter_mut().zip(&deltas) {
+                *p += *d * w;
+            }
+        }
+    }
 }
 
 /// What an export wrote.
@@ -82,12 +132,15 @@ pub struct ExportStats {
 
 /// Export pieces by file extension: `glb`, `gltf`, `obj`, `stl`, `ply`.
 pub fn export_pieces(pieces: &[ExportPiece], path: &Path) -> Result<ExportStats> {
-    let geoms: Vec<Geometry> = pieces.iter().map(visible_geometry).filter(|g| !g.triangles.is_empty()).collect();
+    let mut geoms: Vec<Geometry> = pieces.iter().map(visible_geometry).filter(|g| !g.triangles.is_empty()).collect();
+    let ext = crate::extension(path);
+    if !matches!(ext.as_str(), "glb" | "gltf") {
+        geoms.iter_mut().for_each(Geometry::bake_shapes);
+    }
     let stats = ExportStats { pieces: geoms.len(), triangles: geoms.iter().map(|g| g.triangles.len()).sum() };
     if geoms.is_empty() {
         return Err(Error::Format("nothing to export (no visible faces)".into()));
     }
-    let ext = crate::extension(path);
     let bytes: Vec<u8> = match ext.as_str() {
         "glb" => crate::gltf::write_glb(&geoms),
         "gltf" => crate::gltf::write_gltf_embedded(&geoms).into_bytes(),
@@ -184,7 +237,7 @@ mod tests {
         let plain = oxy_mesh::primitives::cube(1, 1.0);
         let dir = std::env::temp_dir().join(format!("oxy-io-color-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        let pieces = [ExportPiece { name: "Painted", mesh: &m }, ExportPiece { name: "Plain", mesh: &plain }];
+        let pieces = [ExportPiece::new("Painted", &m), ExportPiece::new("Plain", &plain)];
         // OBJ: "v x y z r g b" for the painted piece, plain "v x y z" for the other.
         let obj = dir.join("c.obj");
         export_pieces(&pieces, &obj).unwrap();
@@ -230,7 +283,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("oxy-io-quads-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let obj = dir.join("q.obj");
-        export_pieces(&[ExportPiece { name: "Retopo", mesh: &mesh }], &obj).unwrap();
+        export_pieces(&[ExportPiece::new("Retopo", &mesh)], &obj).unwrap();
         let text = std::fs::read_to_string(&obj).unwrap();
         let faces: Vec<usize> =
             text.lines().filter(|l| l.starts_with("f ")).map(|l| l.split_whitespace().count() - 1).collect();
@@ -248,7 +301,7 @@ mod tests {
         let mut hidden = vec![false; cube.triangle_count()];
         hidden[0] = true;
         cube.set_hidden(hidden);
-        let pieces = [ExportPiece { name: "Sphere", mesh: &sphere }, ExportPiece { name: "Cube", mesh: &cube }];
+        let pieces = [ExportPiece::new("Sphere", &sphere), ExportPiece::new("Cube", &cube)];
         let total = sphere.triangle_count() + cube.triangle_count() - 1;
         for ext in ["glb", "gltf", "obj", "stl", "ply"] {
             let path = dir.join(format!("scene.{ext}"));
@@ -263,5 +316,23 @@ mod tests {
         assert_eq!(crate::import(&dir.join("scene.obj")).unwrap().triangle_count(), total);
         assert!(matches!(export_pieces(&pieces, &dir.join("scene.xyz")), Err(Error::Unsupported(_))));
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn formats_without_shape_keys_get_them_added_at_their_weights() {
+        let m = oxy_mesh::primitives::icosphere(1, 1.0);
+        let dir = std::env::temp_dir().join(format!("oxy-shapes-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut piece = ExportPiece::new("S", &m);
+        piece.shapes = vec![
+            ExportShape { name: "On".into(), vertices: vec![0], deltas: vec![Vec3::X], weight: 1.0 },
+            ExportShape { name: "Half".into(), vertices: vec![0], deltas: vec![Vec3::Y], weight: 0.5 },
+        ];
+        let ply = dir.join("s.ply");
+        export_pieces(&[piece], &ply).unwrap();
+        let back = crate::import(&ply).unwrap();
+        let want = m.positions[0] + Vec3::X + Vec3::Y * 0.5;
+        assert!(back.positions.iter().any(|p| p.distance(want) < 1e-5));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

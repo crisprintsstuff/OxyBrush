@@ -13,7 +13,7 @@ fn main() {
     let mut hidden = vec![false; cube.triangle_count()];
     hidden[0] = true;
     cube.set_hidden(hidden);
-    let pieces = [ExportPiece { name: "Sphere", mesh: &sphere }, ExportPiece { name: "Cube", mesh: &cube }];
+    let pieces = [ExportPiece::new("Sphere", &sphere), ExportPiece::new("Cube", &cube)];
     for ext in EXPORT_EXTENSIONS {
         let path = dir.join(format!("sample.{ext}"));
         let stats = export_pieces(&pieces, &path).expect("export");

@@ -147,6 +147,34 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         ed.living_remove_selected_from_group();
                     }
                 });
+                ui.horizontal(|ui| {
+                    let axis = ed.living.side_axis.min(2);
+                    let name = ["X", "Y", "Z"][axis];
+                    if ui
+                        .button("Mirror copy")
+                        .on_hover_text(format!("Copy the selected strokes to the other side of the piece's {name} symmetry plane, as new strokes you can fade on their own. Works where the piece is symmetric."))
+                        .clicked()
+                    {
+                        ed.living_mirror_selected(axis);
+                    }
+                    if ui
+                        .button("Split by side")
+                        .on_hover_text(format!("Make each selected stroke that changed both sides of the {name} symmetry plane (one made with symmetry on) into two strokes, one per side, so you can fade or delete one side. Nothing on the model moves."))
+                        .clicked()
+                    {
+                        ed.living_split_selected(axis);
+                    }
+                    egui::ComboBox::from_id_salt("living_side_axis")
+                        .width(44.0)
+                        .selected_text(name)
+                        .show_ui(ui, |ui| {
+                            for (i, n) in ["X", "Y", "Z"].into_iter().enumerate() {
+                                ui.selectable_value(&mut ed.living.side_axis, i, n);
+                            }
+                        })
+                        .response
+                        .on_hover_text("The symmetry plane for Mirror copy and Split by side, through the piece's symmetry centre (Symmetry section).");
+                });
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {

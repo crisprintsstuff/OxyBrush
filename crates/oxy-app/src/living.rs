@@ -175,6 +175,8 @@ pub struct Living {
     pub show: bool,
     /// The group whose name is being edited in the panel, and the text.
     pub renaming: Option<(u32, String)>,
+    /// The axis Mirror copy and Split by side use (0 = X).
+    pub side_axis: usize,
     drag_from: Option<DragFrom>,
 }
 
@@ -241,6 +243,30 @@ impl Living {
             .map(|n| format!("Group {n}"))
             .find(|name| !self.groups.iter().any(|g| g.piece == piece && g.name == *name))
             .expect("a free name")
+    }
+
+    /// A new record like `from` (piece, brush, time, strength, group) with
+    /// the given change, not yet on the surface.
+    fn new_like(
+        &mut self,
+        from: &LivingStroke,
+        vertices: Vec<u32>,
+        deltas: Vec<Vec3>,
+        colors: Vec<Vec3>,
+    ) -> LivingStroke {
+        let id = self.next_id;
+        self.next_id += 1;
+        LivingStroke {
+            id,
+            entry: 0,
+            vertices,
+            deltas,
+            colors,
+            deleted: false,
+            undone: false,
+            applied: 0.0,
+            ..from.clone()
+        }
     }
 
     /// Forget every record (nothing on the surface changes).
@@ -472,9 +498,23 @@ impl Editor {
         change(&mut self.living);
         let groups_after = self.living.groups_of_piece(pid);
         data.retain(|(id, ..)| before.contains_key(id));
+        // Strokes `change` added (Mirror, Split by side): they start off the
+        // surface (applied 0) and go on with this step; undoing the step
+        // hides them like an undone stroke.
+        let added: Vec<u64> = self
+            .living
+            .strokes
+            .iter()
+            .filter(|s| s.piece == pid && !s.undone && !before.contains_key(&s.id))
+            .map(|s| s.id)
+            .collect();
         let mut changed: Vec<(u64, Snap, Snap)> = Vec::new();
         for s in &self.living.strokes {
-            let Some(&b) = before.get(&s.id) else { continue };
+            let b = match before.get(&s.id) {
+                Some(&b) => b,
+                None if added.contains(&s.id) => Snap { applied: 0.0, ..Snap::of(s) },
+                None => continue,
+            };
             let a = Snap { applied: self.living.effective(s), ..Snap::of(s) };
             if a != b || data.iter().any(|d| d.0 == s.id) {
                 changed.push((s.id, b, a));
@@ -540,6 +580,9 @@ impl Editor {
         }
         self.history.commit();
         if let Some(entry) = self.history.newest_id() {
+            for s in self.living.strokes.iter_mut().filter(|s| added.contains(&s.id)) {
+                s.entry = entry;
+            }
             self.living.edits.push(PanelEdit {
                 entry,
                 piece: pid,
@@ -790,6 +833,115 @@ impl Editor {
         }
     }
 
+    /// The selected listed strokes of the active piece, oldest first.
+    fn living_selected_strokes(&self, pid: u64) -> Vec<LivingStroke> {
+        self.living
+            .strokes
+            .iter()
+            .filter(|s| s.piece == pid && s.listed() && self.living.selected.contains(&s.id))
+            .cloned()
+            .collect()
+    }
+
+    /// Mirror copy: add the mirror image of each selected stroke across the
+    /// piece's symmetry plane on `axis` (0 = X), as new strokes. Each point
+    /// of a stroke goes to the point nearest its mirror position, so the
+    /// piece needs to be roughly symmetric where the stroke is.
+    pub fn living_mirror_selected(&mut self, axis: usize) {
+        self.living_sync();
+        let pid = self.scene.active().id;
+        let picked = self.living_selected_strokes(pid);
+        if picked.is_empty() {
+            self.status = "Select the strokes to mirror first".into();
+            return;
+        }
+        let center = self.symmetry_center();
+        let mesh = &self.scene.active().mesh;
+        let mut made = Vec::new();
+        let (mut unmatched, mut total) = (0, 0);
+        for s in &picked {
+            let (vertices, deltas, colors, missed) = mirror_change(mesh, s, axis, center);
+            unmatched += missed;
+            total += s.vertices.len();
+            if !vertices.is_empty() {
+                made.push(self.living.new_like(s, vertices, deltas, colors));
+            }
+        }
+        if made.is_empty() {
+            self.status = "No points on the other side match these strokes: is the piece symmetric here?".into();
+            return;
+        }
+        let ids: Vec<u64> = made.iter().map(|s| s.id).collect();
+        let n = made.len();
+        if self.living_commit("Mirror stroke", pid, Vec::new(), |l| l.strokes.extend(made)) {
+            self.living.selected = ids.into_iter().collect();
+            let name = ["X", "Y", "Z"][axis.min(2)];
+            self.status = if unmatched * 20 > total {
+                format!(
+                    "Mirrored {n} stroke(s) across {name}; {unmatched} of {total} points had no match on the other side (the piece isn't symmetric there)"
+                )
+            } else {
+                format!("Mirrored {n} stroke(s) across {name}: the copies are selected")
+            };
+            self.living_enforce_budget();
+        }
+    }
+
+    /// Split by side: each selected stroke that changed both sides of the
+    /// piece's symmetry plane on `axis` (a stroke made with symmetry on)
+    /// becomes two strokes, one per side, so each side can be faded on its
+    /// own. The surface doesn't change.
+    pub fn living_split_selected(&mut self, axis: usize) {
+        self.living_sync();
+        let pid = self.scene.active().id;
+        let picked = self.living_selected_strokes(pid);
+        if picked.is_empty() {
+            self.status = "Select the strokes to split first".into();
+            return;
+        }
+        let center = self.symmetry_center();
+        let mesh = &self.scene.active().mesh;
+        let mut parts: Vec<(LivingStroke, [Vec<usize>; 2])> = Vec::new();
+        for s in &picked {
+            let mut sides: [Vec<usize>; 2] = [Vec::new(), Vec::new()];
+            for (j, &v) in s.vertices.iter().enumerate() {
+                // Which side the point was on before the stroke moved it.
+                let p = mesh.positions[v as usize] - s.deltas[j] * s.applied;
+                sides[usize::from(p[axis] < center[axis])].push(j);
+            }
+            if !sides[0].is_empty() && !sides[1].is_empty() {
+                parts.push((s.clone(), sides));
+            }
+        }
+        if parts.is_empty() {
+            self.status = "The selected strokes are each on one side already".into();
+            return;
+        }
+        let mut made = Vec::new();
+        let mut gone = Vec::new();
+        for (s, sides) in &parts {
+            gone.push(s.id);
+            for side in sides {
+                let vertices = side.iter().map(|&j| s.vertices[j]).collect();
+                let deltas = side.iter().map(|&j| s.deltas[j]).collect();
+                let colors = if s.colors.is_empty() { Vec::new() } else { side.iter().map(|&j| s.colors[j]).collect() };
+                made.push(self.living.new_like(s, vertices, deltas, colors));
+            }
+        }
+        let ids: Vec<u64> = made.iter().map(|s| s.id).collect();
+        let n = parts.len();
+        // The halves go on as the whole comes off: the surface stays put.
+        if self.living_commit("Split stroke by side", pid, Vec::new(), |l| {
+            for s in l.strokes.iter_mut().filter(|s| gone.contains(&s.id)) {
+                (s.strength, s.deleted) = (0.0, true);
+            }
+            l.strokes.extend(made);
+        }) {
+            self.living.selected = ids.into_iter().collect();
+            self.status = format!("Split {n} stroke(s) into one per side: fade or delete each side on its own");
+        }
+    }
+
     /// Solo: show only the selected strokes on top of the surface as it was
     /// before the first of them (later strokes go to 0). Again: put them back.
     pub fn living_toggle_solo(&mut self) {
@@ -883,6 +1035,46 @@ impl Editor {
             .map(|g| SavedStrokeGroup { id: g.id, name: g.name.clone(), strength: g.strength, visible: g.visible })
             .collect();
         Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes })
+    }
+
+    /// For a glTF export: piece `piece`'s surface without its stroke
+    /// groups, and one shape key per group (its strokes at their strengths
+    /// times the group's), shown at weight 1, or 0 when the group is hidden.
+    /// Base plus shapes at their weights is the surface as it is now.
+    /// RETURNS: None when the piece has no groups.
+    pub(crate) fn living_export_shapes(&self, piece: &Piece) -> Option<(oxy_mesh::Mesh, Vec<oxy_io::ExportShape>)> {
+        if !self.living.enabled {
+            return None;
+        }
+        let groups = self.living.groups_of(piece.id);
+        if groups.is_empty() {
+            return None;
+        }
+        let mesh = &piece.mesh;
+        let mut base = mesh.clone();
+        let mut shapes = Vec::new();
+        for g in groups {
+            let mut sum: HashMap<u32, Vec3> = HashMap::new();
+            for s in self.living.strokes.iter().filter(|s| s.group == Some(g.id) && s.listed()) {
+                if s.topology != mesh.topology_version() || s.points != mesh.vertex_count() {
+                    continue;
+                }
+                for (&v, d) in s.vertices.iter().zip(&s.deltas) {
+                    base.positions[v as usize] -= *d * s.applied;
+                    *sum.entry(v).or_insert(Vec3::ZERO) += *d * s.strength * g.strength;
+                }
+            }
+            let mut rows: Vec<(u32, Vec3)> = sum.into_iter().collect();
+            rows.sort_unstable_by_key(|r| r.0);
+            shapes.push(oxy_io::ExportShape {
+                name: g.name.clone(),
+                vertices: rows.iter().map(|r| r.0).collect(),
+                deltas: rows.iter().map(|r| r.1).collect(),
+                weight: if g.visible { 1.0 } else { 0.0 },
+            });
+        }
+        base.recompute_all_normals();
+        Some((base, shapes))
     }
 
     /// After a project was opened: start a fresh list, and take the strokes
@@ -1098,6 +1290,22 @@ impl Editor {
                 self.living_bake_active();
                 return Ok(self.status.clone());
             }
+            Op::Mirror { strokes, axis } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_mirror_selected(axis);
+                let made: Vec<u64> = self.living.selected.iter().copied().collect();
+                if self.history.revision() != before {
+                    return Ok(format!("{} (new strokes {made:?})", self.status));
+                }
+            }
+            Op::SplitBySide { strokes, axis } => {
+                self.living.selected = pick(&strokes)?;
+                self.living_split_selected(axis);
+                let made: Vec<u64> = self.living.selected.iter().copied().collect();
+                if self.history.revision() != before {
+                    return Ok(format!("{} (new strokes {made:?})", self.status));
+                }
+            }
         }
         if self.history.revision() == before {
             return Err(format!("nothing changed: {}", self.status));
@@ -1116,6 +1324,115 @@ fn fold_and_move(l: &mut Living, ids: &[u64], group: Option<u32>) {
             s.strength *= f;
             s.group = group;
         }
+    }
+}
+
+/// The mirror image of stroke `s` across the plane through `center`
+/// across `axis`: for each point, the mesh point nearest its mirror
+/// position (as it was before the stroke moved it), with the change
+/// mirrored. Points that land on the same point are averaged.
+/// RETURNS: the new points (sorted), changes, color changes, and how many
+/// points found no match within about an edge length.
+fn mirror_change(
+    mesh: &oxy_mesh::Mesh,
+    s: &LivingStroke,
+    axis: usize,
+    center: Vec3,
+) -> (Vec<u32>, Vec<Vec3>, Vec<Vec3>, usize) {
+    let flip = |mut p: Vec3, about: f32| {
+        p[axis] = 2.0 * about - p[axis];
+        p
+    };
+    let mut reflect = Vec3::ONE;
+    reflect[axis] = -1.0;
+    // Where each point should land.
+    let queries: Vec<Vec3> = s
+        .vertices
+        .iter()
+        .zip(&s.deltas)
+        .map(|(&v, d)| flip(mesh.positions[v as usize] - *d * s.applied, center[axis]))
+        .collect();
+    let tol = mean_edge(mesh).max(1e-6);
+    let near = NearGrid::new(&mesh.positions, &queries, tol);
+    let mut sum: HashMap<u32, (Vec3, Vec3, u32)> = HashMap::new();
+    let mut missed = 0;
+    for (j, q) in queries.iter().enumerate() {
+        let Some(t) = near.nearest(&mesh.positions, *q, tol) else {
+            missed += 1;
+            continue;
+        };
+        let e = sum.entry(t).or_insert((Vec3::ZERO, Vec3::ZERO, 0));
+        e.0 += s.deltas[j] * reflect;
+        e.1 += s.colors.get(j).copied().unwrap_or(Vec3::ZERO);
+        e.2 += 1;
+    }
+    let mut rows: Vec<(u32, Vec3, Vec3)> =
+        sum.into_iter().map(|(v, (d, c, n))| (v, d / n as f32, c / n as f32)).collect();
+    rows.sort_unstable_by_key(|r| r.0);
+    let colors = if s.colors.is_empty() { Vec::new() } else { rows.iter().map(|r| r.2).collect() };
+    (rows.iter().map(|r| r.0).collect(), rows.iter().map(|r| r.1).collect(), colors, missed)
+}
+
+/// The mean edge length of up to 20,000 of the mesh's triangles.
+fn mean_edge(mesh: &oxy_mesh::Mesh) -> f32 {
+    let step = (mesh.triangles.len() / 20_000).max(1);
+    let (mut sum, mut n) = (0.0f64, 0u32);
+    for t in mesh.triangles.iter().step_by(step) {
+        let p = t.map(|v| mesh.positions[v as usize]);
+        sum += f64::from((p[0] - p[1]).length() + (p[1] - p[2]).length() + (p[2] - p[0]).length());
+        n += 3;
+    }
+    if n == 0 { 0.0 } else { (sum / f64::from(n)) as f32 }
+}
+
+/// A uniform grid of the mesh points near some query points, for nearest
+/// point lookups.
+struct NearGrid {
+    cell: f32,
+    cells: HashMap<[i32; 3], Vec<u32>>,
+}
+
+impl NearGrid {
+    /// Only the points within `tol` of the queries' bounds are kept, so a
+    /// small stroke on a large mesh stays cheap.
+    fn new(points: &[Vec3], queries: &[Vec3], tol: f32) -> Self {
+        let (mut lo, mut hi) = (Vec3::splat(f32::MAX), Vec3::splat(f32::MIN));
+        for q in queries {
+            lo = lo.min(*q);
+            hi = hi.max(*q);
+        }
+        let (lo, hi) = (lo - Vec3::splat(tol), hi + Vec3::splat(tol));
+        let mut cells: HashMap<[i32; 3], Vec<u32>> = HashMap::new();
+        for (i, p) in points.iter().enumerate() {
+            if p.cmpge(lo).all() && p.cmple(hi).all() {
+                cells.entry(Self::key(*p, tol)).or_default().push(i as u32);
+            }
+        }
+        NearGrid { cell: tol, cells }
+    }
+
+    fn key(p: Vec3, cell: f32) -> [i32; 3] {
+        (p / cell).floor().as_ivec3().to_array()
+    }
+
+    /// The point nearest `q` within `tol` (the cell size).
+    fn nearest(&self, points: &[Vec3], q: Vec3, tol: f32) -> Option<u32> {
+        let k = Self::key(q, self.cell);
+        let mut best: Option<(f32, u32)> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                for dz in -1..=1 {
+                    let Some(list) = self.cells.get(&[k[0] + dx, k[1] + dy, k[2] + dz]) else { continue };
+                    for &i in list {
+                        let d = points[i as usize].distance_squared(q);
+                        if d <= tol * tol && best.is_none_or(|b| d < b.0) {
+                            best = Some((d, i));
+                        }
+                    }
+                }
+            }
+        }
+        best.map(|b| b.1)
     }
 }
 
@@ -1488,5 +1805,145 @@ mod tests {
         want.sort_unstable();
         got.sort_unstable();
         assert_eq!(want, got);
+    }
+
+    /// A Draw stroke from window x `x0` to `x1` at height `y`.
+    fn stroke_x(e: &mut Editor, x0: f32, x1: f32, y: f32) {
+        e.pointer = Some(Vec2::new(x0, y));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=30 {
+            e.pointer_moved(Vec2::new(x0 + (x1 - x0) * i as f32 / 30.0, y));
+        }
+        e.pointer_up();
+    }
+
+    /// Every point has a point at its mirror position across X = 0.
+    fn mirror_symmetric(p: &[Vec3]) -> bool {
+        p.iter().all(|a| {
+            let m = Vec3::new(-a.x, a.y, a.z);
+            p.iter().any(|b| b.distance(m) < 1e-4)
+        })
+    }
+
+    #[test]
+    fn mirror_copies_a_stroke_to_the_other_side_as_a_new_stroke() {
+        let mut e = editor();
+        let base = positions(&e);
+        assert!(mirror_symmetric(&base), "the test sphere is symmetric");
+        stroke_x(&mut e, 430.0, 490.0, 300.0);
+        let one_side = positions(&e);
+        assert!(!mirror_symmetric(&one_side));
+        let id = e.living.strokes[0].id;
+        e.living.selected = [id].into();
+        e.living_mirror_selected(0);
+        assert_eq!(e.living.listed(e.scene.active().id).len(), 2, "{}", e.status);
+        assert!(mirror_symmetric(&positions(&e)), "{}", e.status);
+        // The copy is a stroke of its own: it fades on its own.
+        let copy = e.living.strokes[1].id;
+        assert!(e.living.selected.contains(&copy));
+        e.living_set_strength(0.0);
+        assert!(close(&positions(&e), &one_side));
+        // Undo the fade and the copy: back to one side; redo brings it back.
+        e.undo();
+        e.undo();
+        assert!(close(&positions(&e), &one_side));
+        assert_eq!(e.living.listed(e.scene.active().id).len(), 1);
+        e.redo();
+        assert!(mirror_symmetric(&positions(&e)));
+        assert_eq!(e.living.listed(e.scene.active().id).len(), 2);
+    }
+
+    #[test]
+    fn split_by_side_makes_one_stroke_per_side_without_moving_anything() {
+        let mut e = editor();
+        e.symmetry.x = true;
+        let base = positions(&e);
+        stroke_x(&mut e, 430.0, 490.0, 300.0);
+        let both = positions(&e);
+        let pid = e.scene.active().id;
+        assert_eq!(e.living.listed(pid).len(), 1, "one record for a symmetric stroke");
+        e.living.selected = [e.living.strokes[0].id].into();
+        e.living_split_selected(0);
+        let listed: Vec<u64> = e.living.listed(pid).iter().map(|s| s.id).collect();
+        assert_eq!(listed.len(), 2, "{}", e.status);
+        assert!(close(&positions(&e), &both), "splitting doesn't move the surface");
+        // Delete the -X half: the -X side is back to the base, +X keeps it.
+        let neg = *listed
+            .iter()
+            .find(|id| {
+                let s = e.living.strokes.iter().find(|s| s.id == **id).unwrap();
+                base[s.vertices[0] as usize].x < 0.0
+            })
+            .unwrap();
+        e.living.selected = [neg].into();
+        e.living_delete_selected();
+        let now = positions(&e);
+        for v in 0..base.len() {
+            let want = if base[v].x < 0.0 { base[v] } else { both[v] };
+            assert!((now[v] - want).length() < 1e-5, "point {v}");
+        }
+        // Undo both: one stroke again, as it was.
+        e.undo();
+        e.undo();
+        assert_eq!(e.living.listed(pid).len(), 1);
+        assert!(close(&positions(&e), &both));
+        // A stroke on one side has nothing to split.
+        e.living.selected = [e.living.listed(pid)[0].id].into();
+        e.symmetry.x = false;
+        stroke_x(&mut e, 490.0, 520.0, 330.0);
+        e.living.selected = [e.living.listed(pid)[0].id].into();
+        let rev = e.history.revision();
+        e.living_split_selected(0);
+        assert_eq!(e.history.revision(), rev);
+        assert!(e.status.contains("one side"), "{}", e.status);
+    }
+
+    #[test]
+    fn groups_export_as_shape_keys_over_the_surface_without_them() {
+        let mut e = editor();
+        stroke(&mut e, 280.0);
+        stroke(&mut e, 300.0);
+        stroke(&mut e, 320.0);
+        let now = positions(&e);
+        let pid = e.scene.active().id;
+        let ids: Vec<u64> = e.living.strokes.iter().map(|s| s.id).collect();
+        // Two groups (one hidden, one at 60%) and one stroke left out.
+        e.living.selected = [ids[0]].into();
+        let a = e.living_group_selected().unwrap();
+        e.living.selected = [ids[1]].into();
+        let b = e.living_group_selected().unwrap();
+        e.living_set_group_strength(a, 0.6);
+        e.living_toggle_group(b);
+        let now_hidden = positions(&e);
+        assert!(!close(&now, &now_hidden));
+        assert!(e.living.listed(pid).len() == 3);
+        let (base, shapes) = e.living_export_shapes(e.scene.active()).unwrap();
+        assert_eq!(shapes.iter().map(|s| s.name.as_str()).collect::<Vec<_>>(), ["Group 1", "Group 2"]);
+        assert_eq!(shapes.iter().map(|s| s.weight).collect::<Vec<_>>(), [1.0, 0.0]);
+        // Base plus the shapes at their weights is the surface as it is.
+        let mut sum = base.positions.clone();
+        for sh in &shapes {
+            for (&v, d) in sh.vertices.iter().zip(&sh.deltas) {
+                sum[v as usize] += *d * sh.weight;
+            }
+        }
+        assert!(close(&sum, &now_hidden));
+        // The hidden group's key is its full change: base + it = shown.
+        let s1 = e.living.strokes.iter().find(|s| s.id == ids[1]).unwrap().clone();
+        for (j, &v) in s1.vertices.iter().enumerate() {
+            let k = shapes[1].vertices.binary_search(&v).unwrap();
+            assert!((shapes[1].deltas[k] - s1.deltas[j]).length() < 1e-6);
+        }
+        // A .gltf export names them; an OBJ export is the surface as shown.
+        let dir = std::env::temp_dir().join(format!("oxy-living-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("m.gltf");
+        e.export(&path);
+        assert!(e.status.contains("2 stroke group(s) as shape keys"), "{}", e.status);
+        let doc: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(doc["meshes"][0]["extras"]["targetNames"], serde_json::json!(["Group 1", "Group 2"]));
+        e.export(&dir.join("m.obj"));
+        assert!(!e.status.contains("shape keys"), "{}", e.status);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
