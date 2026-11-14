@@ -1231,6 +1231,25 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
             .response
             .on_hover_text(plain::ORBIT_AROUND);
     });
+    ui.horizontal(|ui| {
+        tips::hover(ui.label("Units"), plain::UNITS);
+        egui::ComboBox::from_id_salt("units")
+            .selected_text(ed.units.label())
+            .show_ui(ui, |ui| {
+                for u in crate::settings::Units::ALL {
+                    ui.selectable_value(&mut ed.units, u, u.label());
+                }
+            })
+            .response
+            .on_hover_text(plain::UNITS);
+        tips::hover(ui.label("1 scene unit ="), plain::SCENE_UNIT);
+        let r = ui.add(
+            egui::DragValue::new(&mut ed.print_scale_mm_per_unit).speed(0.1).range(0.001..=100_000.0).suffix(" mm"),
+        );
+        if tips::hover(r, plain::SCENE_UNIT).changed() {
+            ed.print_dimensions_cache = None;
+        }
+    });
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(
         ui,
