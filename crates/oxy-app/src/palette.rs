@@ -290,8 +290,14 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::ResetBackground, "view color default backdrop", Editor::reset_background),
         cmd(ed, Cmd::AlignCursor, "view brush cursor ring normal tangent", |e| e.toggle_surface_cursor()),
         cmd(ed, Cmd::LoadMatcap, "material image custom", |e| e.request_load_matcap = true),
+        cmd(ed, Cmd::OrbitAroundCursor, "navigation orbit pivot rotate around cursor pointer point camera", |e| {
+            e.orbit_around = crate::settings::OrbitAround::Cursor
+        }),
         cmd(ed, Cmd::OrbitAroundStroke, "navigation orbit pivot rotate around stroke camera", |e| {
-            e.orbit_around_stroke = !e.orbit_around_stroke
+            e.orbit_around = crate::settings::OrbitAround::LastStroke
+        }),
+        cmd(ed, Cmd::OrbitAroundCentre, "navigation orbit pivot rotate around centre center middle camera", |e| {
+            e.orbit_around = crate::settings::OrbitAround::Centre
         }),
         cmd(ed, Cmd::StrokeFromEmpty, "navigation orbit middle mouse", |e| e.stroke_from_empty = !e.stroke_from_empty),
         cmd(ed, Cmd::Panels, "view interface", |e| e.show_panels = !e.show_panels),

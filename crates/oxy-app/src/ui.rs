@@ -1166,7 +1166,18 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ed.set_gizmo_pivot_follows(follows);
     }
     tips::check(ui, &mut ed.stroke_from_empty, "Strokes can start on empty space", Cmd::StrokeFromEmpty);
-    tips::check(ui, &mut ed.orbit_around_stroke, "Orbit around the last stroke", Cmd::OrbitAroundStroke);
+    ui.horizontal(|ui| {
+        ui.label("Orbit around");
+        egui::ComboBox::from_id_salt("orbit_around")
+            .selected_text(ed.orbit_around.label())
+            .show_ui(ui, |ui| {
+                for o in crate::settings::OrbitAround::ALL {
+                    ui.selectable_value(&mut ed.orbit_around, o, o.label());
+                }
+            })
+            .response
+            .on_hover_text(plain::ORBIT_AROUND);
+    });
     surface_cursor_checkbox(ui, ed);
     tips::check_plain(
         ui,

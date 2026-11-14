@@ -66,7 +66,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 ![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
 
-1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model. After a stroke, orbiting turns around where the stroke ended, so the spot you're working on stays in view (Preferences > **Orbit around the last stroke**).
+1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model. Orbiting turns around the point of the model under the pointer where you start it (from empty space, the nearest part of the model), which stays put on screen, so you can turn around any spot you point at. Preferences > **Orbit around** can make it the last stroke or the centre of the view instead.
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the brush shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
 3. **Need more detail?** **Ctrl+D** adds a subdivision level (quads, keeping your edge loops), and **D** / **Shift+D** step between levels, keeping your detail. **Ctrl+R** remeshes to even triangles.
 4. **Save** with **Ctrl+S** (an `.oxb` project). **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY for game engines, other 3D apps or 3D printing.
