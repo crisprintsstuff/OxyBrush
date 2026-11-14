@@ -875,6 +875,8 @@ pub struct Editor {
     /// pointer), for when the pointer is off the model.
     radius_depth: Option<Vec3>,
     pub strengths: [f32; BrushKind::ALL.len()],
+    /// Each brush's Gravity, 0..=1 (0: off).
+    pub gravities: [f32; BrushKind::ALL.len()],
     pub falloff: Falloff,
     /// Moves the falloff's middle, -1..=1 (negative firmer, positive softer).
     pub focal_shift: f32,
@@ -1329,6 +1331,7 @@ impl Default for Editor {
             radius_pt_derived: 0.0,
             radius_depth: None,
             strengths,
+            gravities: [0.0; BrushKind::ALL.len()],
             falloff: Falloff::Smooth,
             focal_shift: 0.0,
             spacing: 0.15,
@@ -1648,6 +1651,15 @@ impl Editor {
         &mut self.strengths[kind_index(k)]
     }
 
+    /// Gravity of brush `k` (each brush keeps its own).
+    pub fn gravity(&self, k: BrushKind) -> f32 {
+        self.gravities[kind_index(k)]
+    }
+
+    pub fn gravity_mut(&mut self, k: BrushKind) -> &mut f32 {
+        &mut self.gravities[kind_index(k)]
+    }
+
     pub fn canvas_size(&self) -> Vec2 {
         Vec2::new(self.canvas[2].max(1.0), self.canvas[3].max(1.0))
     }
@@ -1798,6 +1810,11 @@ impl Editor {
             brush: self.remember_brushes.then(|| self.capture_preset("Last brush")),
             brush_strengths: if self.remember_brushes {
                 BrushKind::ALL.iter().map(|&k| (k, self.strength(k))).collect()
+            } else {
+                Vec::new()
+            },
+            brush_gravity: if self.remember_brushes {
+                BrushKind::ALL.iter().map(|&k| (k, self.gravity(k))).filter(|&(_, g)| g > 0.0).collect()
             } else {
                 Vec::new()
             },
@@ -2071,6 +2088,9 @@ impl Editor {
         }
         for &(k, v) in &s.brush_strengths {
             *self.strength_mut(k) = v;
+        }
+        for &(k, v) in &s.brush_gravity {
+            *self.gravity_mut(k) = v;
         }
     }
 
@@ -2668,6 +2688,7 @@ impl Editor {
             pressure_radius: self.pressure_radius,
             front_faces_only: self.front_faces_only,
             auto_smooth: self.auto_smooth,
+            gravity: self.gravity(kind),
             spray: self.spray,
             noise_scale: self.noise_scale,
             crease_pinch: self.crease_pinch,
@@ -2747,6 +2768,7 @@ impl Editor {
             pressure_radius: self.pressure_radius,
             front_faces_only: self.front_faces_only,
             auto_smooth: self.auto_smooth,
+            gravity: self.gravity(k),
             spray: self.spray,
             noise_scale: self.noise_scale,
             crease_pinch: self.crease_pinch,
@@ -2772,6 +2794,7 @@ impl Editor {
         self.pressure_radius = p.pressure_radius;
         self.front_faces_only = p.front_faces_only;
         self.auto_smooth = p.auto_smooth;
+        *self.gravity_mut(p.kind) = p.gravity;
         self.spray = p.spray;
         self.noise_scale = p.noise_scale;
         self.crease_pinch = p.crease_pinch;
@@ -7686,6 +7709,51 @@ mod tests {
     }
 
     #[test]
+    fn gravity_is_per_brush_used_by_strokes_and_remembered() {
+        let mut e = editor();
+        e.remember_brushes = true;
+        e.brush_kind = BrushKind::Clay;
+        *e.gravity_mut(BrushKind::Clay) = 0.6;
+        *e.gravity_mut(BrushKind::Smooth) = 0.2;
+        // Each brush keeps its own; the others stay off.
+        assert_eq!(e.gravity(BrushKind::Draw), 0.0);
+        assert_eq!(e.new_stroke(BrushKind::Clay, false, 0.2, 0.0).settings().gravity, 0.6);
+        assert_eq!(e.new_stroke(BrushKind::Draw, false, 0.2, 0.0).settings().gravity, 0.0);
+        // A stroke with it sags the surface compared with the same stroke without.
+        let sum_y = |e: &Editor| e.scene.active().mesh.positions.iter().map(|p| p.y).sum::<f32>();
+        let stroke = |e: &mut Editor| {
+            e.pointer = Some(Vec2::new(430.0, 300.0));
+            e.pointer_down(PointerButton::Primary);
+            for i in 1..=10 {
+                e.pointer_moved(Vec2::new(430.0, 300.0 + i as f32 * 3.0));
+            }
+            e.pointer_up();
+        };
+        let y0 = sum_y(&e);
+        stroke(&mut e);
+        let with = y0 - sum_y(&e);
+        e.undo();
+        *e.gravity_mut(BrushKind::Clay) = 0.0;
+        stroke(&mut e);
+        let without = y0 - sum_y(&e);
+        assert!(with > without + 1e-3, "sagged {with} vs {without}");
+        *e.gravity_mut(BrushKind::Clay) = 0.6;
+        // In presets (brush codes)...
+        let preset = e.capture_preset("Drape");
+        assert_eq!(preset.gravity, 0.6);
+        *e.gravity_mut(BrushKind::Clay) = 0.0;
+        e.apply_preset(&preset);
+        assert_eq!(e.gravity(BrushKind::Clay), 0.6);
+        // ...and in the settings file for the next start.
+        let text = e.settings().to_text();
+        let mut next = editor();
+        next.apply_settings(&crate::settings::Settings::from_text(&text));
+        assert_eq!(next.gravity(BrushKind::Clay), 0.6);
+        assert_eq!(next.gravity(BrushKind::Smooth), 0.2);
+        assert_eq!(next.gravity(BrushKind::Draw), 0.0);
+    }
+
+    #[test]
     fn remembering_brush_settings_can_be_turned_off() {
         let defaults = editor();
         let mut e = editor();
@@ -10763,6 +10831,7 @@ mod tests {
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             brush: None,
             brush_strengths: Vec::new(),
+            brush_gravity: Vec::new(),
             remember_brushes: true,
             plugin_params: [("squash/amount".to_string(), vec![0.5])].into_iter().collect(),
             window: Some(crate::settings::WindowGeometry {

@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Gravity, per brush** (brush settings, under Auto smooth): the surface under the brush also sags downward as you sculpt, for drapery, hanging folds and drooping flesh. Each brush keeps its own Gravity, so Clay can drape while Draw doesn't; presets and brush codes carry it, and with Remember brush settings it's kept between sessions. It pulls toward the world's down (the floor, -Y), follows pen pressure and the mask, and keeps mirrored strokes mirror images. At 1, one full-pressure pass sags the middle of the stroke about a third of the brush radius; it adds up with the length of the stroke, not with the spacing of the dabs, so dense dabs don't tear the surface. It's added to the brush's own move, so it costs nothing measurable per dab (Clay at radius 0.3: 1.1–1.3 ms per dab with or without it, within run-to-run noise). Not on Mask, Paint, the Grab-like brushes or the placing and cutting tools.
+
 ## [4.0.0-beta.11] - 2026-11-14
 
 ### Added

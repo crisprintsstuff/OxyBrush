@@ -38,6 +38,8 @@ pub struct BrushPreset {
     pub pressure_radius: bool,
     pub front_faces_only: bool,
     pub auto_smooth: f32,
+    /// Gravity, 0..=1 (see `BrushSettings::gravity`).
+    pub gravity: f32,
     pub spray: f32,
     pub noise_scale: f32,
     /// Crease brush: pinch intensity factor (0.0 = groove only, 0.3 = default, 1.0 = sharp pinch).
@@ -71,6 +73,7 @@ impl BrushPreset {
             pressure_radius: false,
             front_faces_only: true,
             auto_smooth: 0.0,
+            gravity: 0.0,
             spray: 0.0,
             noise_scale: 3.0,
             crease_pinch: 0.3,
@@ -100,6 +103,7 @@ impl BrushPreset {
         kv("pressure_radius", self.pressure_radius.to_string());
         kv("front_faces_only", self.front_faces_only.to_string());
         kv("auto_smooth", self.auto_smooth.to_string());
+        kv("gravity", self.gravity.to_string());
         kv("spray", self.spray.to_string());
         kv("noise_scale", self.noise_scale.to_string());
         kv("crease_pinch", self.crease_pinch.to_string());
@@ -155,6 +159,9 @@ impl BrushPreset {
         }
         if let Some(x) = num("auto_smooth", 0.0..=1.0) {
             p.auto_smooth = x;
+        }
+        if let Some(x) = num("gravity", 0.0..=1.0) {
+            p.gravity = x;
         }
         if let Some(x) = num("spray", 0.0..=1.0) {
             p.spray = x;
@@ -377,6 +384,11 @@ mod tests {
         assert_eq!(q, BrushPreset::new("Untitled brush", BrushKind::Pinch));
         assert!(BrushPreset::from_text("strength = 0.5").is_err(), "a preset needs a brush");
         assert!(BrushPreset::from_text("brush = laser").is_err());
+        // Gravity: kept, and out-of-range values fall back to off.
+        let mut g = BrushPreset::new("Drape", BrushKind::Clay);
+        g.gravity = 0.4;
+        assert_eq!(BrushPreset::from_text(&g.to_text()).unwrap().gravity, 0.4);
+        assert_eq!(BrushPreset::from_text("brush = clay\ngravity = 3").unwrap().gravity, 0.0);
     }
 
     #[test]
