@@ -4267,6 +4267,45 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.merge_visible();
         }
     });
+    boolean_row(ui, ed, busy);
+}
+
+/// Booleans in the Pieces panel: the piece to combine with, and what to
+/// do with it. The active piece is the one that changes.
+fn boolean_row(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    let active = ed.scene.active().id;
+    let others: Vec<(u64, String)> =
+        ed.scene.pieces.iter().filter(|p| p.id != active).map(|p| (p.id, p.name.clone())).collect();
+    if others.is_empty() {
+        return;
+    }
+    // The piece picked last, while it's still there; otherwise the first other one.
+    let with = ed.boolean_with.filter(|id| others.iter().any(|(o, _)| o == id)).unwrap_or(others[0].0);
+    ed.boolean_with = Some(with);
+    let name = others.iter().find(|(id, _)| *id == with).map_or(String::new(), |(_, n)| n.clone());
+    ui.horizontal_wrapped(|ui| {
+        tips::hover(ui.label("Boolean"), plain::BOOLEAN_MENU);
+        egui::ComboBox::from_id_salt("boolean_with")
+            .selected_text(format!("with {name}"))
+            .show_ui(ui, |ui| {
+                for (id, n) in &others {
+                    if ui.selectable_label(*id == with, n).clicked() {
+                        ed.boolean_with = Some(*id);
+                    }
+                }
+            })
+            .response
+            .on_hover_text(plain::BOOLEAN_PICK);
+        for (label, tip, op) in [
+            ("Subtract", plain::BOOLEAN_SUBTRACT, oxy_topo::BooleanOp::Difference),
+            ("Add", plain::BOOLEAN_UNION, oxy_topo::BooleanOp::Union),
+            ("Overlap", plain::BOOLEAN_INTERSECT, oxy_topo::BooleanOp::Intersection),
+        ] {
+            if tips::hover(ui.add_enabled(!busy, egui::Button::new(label)), tip).clicked() {
+                ed.boolean_operation(with, op);
+            }
+        }
+    });
 }
 
 /// Brush presets: starter presets and the user's library; save, share, import.

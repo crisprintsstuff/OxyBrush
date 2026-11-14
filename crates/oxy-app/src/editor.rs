@@ -1285,6 +1285,9 @@ pub struct Editor {
     pub show_print_dialog: bool,
     /// Mesh topology diagnostics dialog visibility.
     pub show_diagnostics: bool,
+    /// The piece the Pieces panel's Boolean row combines with (the last one
+    /// picked, while it exists).
+    pub boolean_with: Option<u64>,
     /// The diagnostics window's last report, for (piece, topology version):
     /// checking a large mesh on every frame was slow, and the report only
     /// changes with the triangles.
@@ -1550,6 +1553,7 @@ impl Default for Editor {
             extract_smooth: 2,
             show_print_dialog: false,
             show_diagnostics: false,
+            boolean_with: None,
             diagnostics_cache: None,
             print_scale_mm_per_unit: 10.0,
             import_scale: None,
@@ -5822,7 +5826,7 @@ impl Editor {
     pub fn boolean_operation(&mut self, tool_id: u64, op: oxy_topo::BooleanOp) {
         let active = self.scene.active().id;
         if active == tool_id {
-            self.status = "Cannot perform Boolean operation on the same piece".into();
+            self.status = "Pick another piece to combine with".into();
             return;
         }
         let Some(tool_piece) = self.scene.pieces.iter().find(|p| p.id == tool_id) else {
@@ -5831,14 +5835,15 @@ impl Editor {
         };
         let target_mesh = self.scene.active().mesh.clone();
         let tool_mesh = tool_piece.mesh.clone();
+        let tool_name = tool_piece.name.clone();
         let op_name = match op {
-            oxy_topo::BooleanOp::Union => "Boolean Union",
-            oxy_topo::BooleanOp::Difference => "Boolean Difference",
-            oxy_topo::BooleanOp::Intersection => "Boolean Intersection",
+            oxy_topo::BooleanOp::Union => "Boolean: add",
+            oxy_topo::BooleanOp::Difference => "Boolean: subtract",
+            oxy_topo::BooleanOp::Intersection => "Boolean: keep the overlap",
         };
         let consumed = vec![tool_id];
         let res = self.remesh_resolution;
-        self.start_job(format!("{op_name} with piece #{tool_id}"), consumed, move || {
+        self.start_job(format!("{op_name} {tool_name}"), consumed, move || {
             let extent = target_mesh.bounds().union(&tool_mesh.bounds()).extent();
             let h = (extent.max_element() / res as f32).max(1e-5);
             oxy_topo::boolean_mesh(&target_mesh, &tool_mesh, op, Some(h))
@@ -7914,6 +7919,32 @@ mod tests {
         // The check's threshold and Hollow's wall are separate settings.
         e.print_hollow_thickness_mm = 3.0;
         assert_eq!(e.print_wall_thickness_mm, 10.0);
+    }
+
+    #[test]
+    fn boolean_subtract_uses_up_the_other_piece_and_undoes_in_one_step() {
+        let mut e = editor();
+        let mut moved = primitives::icosphere(3, 0.6).to_data();
+        moved.positions.iter_mut().for_each(|p| p.x += 0.7);
+        let mut scene = Scene::new(Piece::new("Ball", primitives::icosphere(3, 1.0)));
+        scene.pieces.push(Piece::new("Bite", Mesh::from_data(moved)));
+        e.replace_document(scene, None);
+        e.scene.set_active(0);
+        e.remesh_resolution = 48;
+        let tool = e.scene.pieces[1].id;
+        let before = e.scene.active().mesh.bounds();
+        e.boolean_operation(tool, oxy_topo::BooleanOp::Difference);
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 1, "the other piece is used up");
+        assert_eq!(e.scene.active().name, "Ball");
+        let after = e.scene.active().mesh.bounds();
+        assert!(after.max.x < before.max.x - 0.05, "the bite is taken out of the +X side: {after:?}");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 2, "Undo brings both pieces back");
+        // Combining a piece with itself is refused.
+        let me = e.scene.active().id;
+        e.boolean_operation(me, oxy_topo::BooleanOp::Union);
+        assert!(e.job.is_none());
     }
 
     #[test]

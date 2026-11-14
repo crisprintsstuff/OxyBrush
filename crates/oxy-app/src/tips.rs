@@ -788,9 +788,10 @@ pub mod plain {
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
     pub const REVERT_CONFIRM: &str =
         "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
-    pub const BOOLEAN_MENU: &str = "Combine the active piece with another one through a voxel remesh: subtract it, add it, or keep only where they overlap.";
-    pub const BOOLEAN_WITH: &str =
-        "What to do with this piece and the active one. The result replaces the active piece; the other piece stays.";
+    pub const BOOLEAN_MENU: &str = "Combine the active piece with another one through a voxel remesh: subtract it, add it, or keep only where they overlap. Also in the Pieces panel.";
+    pub const BOOLEAN_WITH: &str = "What to do with this piece and the active one. The result replaces the active piece and this piece is used up; Undo brings both back.";
+    pub const BOOLEAN_PICK: &str =
+        "The piece to combine with the active one. It is used up by the Boolean; Undo brings it back.";
     pub const BOOLEAN_SUBTRACT: &str = "Cut this piece's shape out of the active piece.";
     pub const BOOLEAN_UNION: &str = "Fuse this piece's shape into the active piece, as one closed surface.";
     pub const BOOLEAN_INTERSECT: &str = "Keep only the part of the active piece that is inside this piece.";
