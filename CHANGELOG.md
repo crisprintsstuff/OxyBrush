@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 - **View > Shading > Show vertex color** (also in the Vertex color menu and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.
+- **File > Revert** (also in the command palette, [#218](https://github.com/crisprintsstuff/OxyBrush/issues/218)): reloads the project as you last saved it, dropping the changes since then, for when an experiment goes wrong. It asks first (Revert / Cancel), keeps the view where it is, and is available once the project is saved to a file and has changes. Undo can't bring the dropped changes back. If the file has gone missing or can't be read, nothing changes. Not available while the objects came through the Blender bridge.
 
 ## [4.0.0-beta.11] - 2026-11-14
 

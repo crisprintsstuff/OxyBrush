@@ -62,7 +62,7 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube, plane, or a female or male human base mesh), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube, plane, or a female or male human base mesh), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work, and **File > Revert** reloads the project as you last saved it. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
 
 ![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
 

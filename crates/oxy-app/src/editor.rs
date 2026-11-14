@@ -772,6 +772,9 @@ pub enum Pending {
     OpenProject(PathBuf),
     /// Open a link manifest from another app (RFC 0010).
     OpenLink(PathBuf),
+    /// Reload the project from its file, dropping the changes since it was
+    /// saved (File > Revert). Always asked first.
+    Revert,
 }
 
 /// Long-running topology work on a background thread.
@@ -3855,8 +3858,11 @@ impl Editor {
                     None => "Closed the project".into(),
                 };
             }
-            Pending::OpenProject(path) => self.open_project_now(&path),
+            Pending::OpenProject(path) => {
+                self.open_project_now(&path);
+            }
             Pending::OpenLink(path) => self.open_link_now(&path),
+            Pending::Revert => self.revert_now(),
         }
     }
 
@@ -3971,7 +3977,9 @@ impl Editor {
         self.status = "The Curve Move curve that was open is back: drag its points, or Enter to apply it".into();
     }
 
-    fn open_project_now(&mut self, path: &Path) {
+    /// Open the project at `path`; false (with a status message) if it
+    /// couldn't be read, leaving the document as it was.
+    fn open_project_now(&mut self, path: &Path) -> bool {
         let mut alphas = Vec::new();
         match format::load(path).map(|mut d| {
             alphas = std::mem::take(&mut d.alphas);
@@ -3985,10 +3993,51 @@ impl Editor {
                 self.protect_path(path);
                 self.remember_recent(path);
                 self.status = format!("Opened {} ({n} piece{})", path.display(), if n == 1 { "" } else { "s" });
+                true
             }
-            Ok(None) => self.status = format!("{} contains no pieces", path.display()),
-            Err(e) => self.status = format!("Could not open {}: {e}", path.display()),
+            Ok(None) => {
+                self.status = format!("{} contains no pieces", path.display());
+                false
+            }
+            Err(e) => {
+                self.status = format!("Could not open {}: {e}", path.display());
+                false
+            }
         }
+    }
+
+    /// Whether File > Revert can reload the project: it has a saved file,
+    /// changes since then, and isn't open from another app through the
+    /// Blender bridge (whose objects are matched to these pieces).
+    pub fn can_revert(&self) -> bool {
+        self.bridge.is_none() && self.is_modified() && self.path.as_ref().is_some_and(|p| p.is_file())
+    }
+
+    /// File > Revert: ask, then reload the project as last saved (#218).
+    pub fn revert(&mut self) {
+        if self.bridge.is_some() {
+            self.status = "Revert isn't available while the objects came from another app: use Undo".into();
+        } else if !self.path.as_ref().is_some_and(|p| p.is_file()) {
+            self.status = "Nothing to revert to: this project hasn't been saved to a file yet".into();
+        } else if !self.is_modified() {
+            self.status = "Nothing to revert: no changes since the project was saved".into();
+        } else {
+            self.pending = Some(Pending::Revert);
+        }
+    }
+
+    /// Reload the project from its file, keeping the view. The changes since
+    /// it was saved are gone, and so is their undo history.
+    fn revert_now(&mut self) {
+        let Some(path) = self.path.clone() else { return };
+        let camera = self.camera;
+        if !self.open_project_now(&path) {
+            // The file was moved or damaged: the work stays as it is.
+            return;
+        }
+        self.camera = camera;
+        let name = path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+        self.status = format!("Reverted to {name} as last saved");
     }
 
     /// Open a project (`.oxb`) or import a mesh file as a new piece.
@@ -10705,6 +10754,50 @@ mod tests {
         let step = std::f32::consts::FRAC_PI_4;
         let r = (e.camera.yaw / step).round() * step;
         assert!((e.camera.yaw - r).abs() < 1e-4, "snapped to 45°: {}", e.camera.yaw);
+    }
+
+    #[test]
+    fn revert_reloads_the_saved_file_after_asking() {
+        let dir = std::env::temp_dir().join(format!("oxy-revert-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("bust.oxb");
+        let mut e = editor();
+        e.show_welcome = false;
+        // Not saved to a file yet: nothing to revert to.
+        e.add_primitive("cube");
+        assert!(!e.can_revert());
+        e.revert();
+        assert!(e.pending.is_none());
+        assert!(e.status.contains("hasn't been saved"), "{}", e.status);
+        assert!(e.save(&path));
+        let saved = e.scene.pieces.len();
+        // No changes since saving: nothing to do.
+        assert!(!e.can_revert());
+        e.revert();
+        assert!(e.pending.is_none());
+        // Changes, then Revert: it asks first, and changes nothing until answered.
+        e.add_primitive("cube");
+        e.camera.orbit(Vec2::new(90.0, 20.0));
+        let camera = e.camera;
+        assert!(e.can_revert());
+        e.revert();
+        assert!(matches!(e.pending, Some(Pending::Revert)));
+        assert_eq!(e.scene.pieces.len(), saved + 1);
+        e.perform(Pending::Revert);
+        assert_eq!(e.scene.pieces.len(), saved, "back to the saved version");
+        assert!(!e.is_modified());
+        assert_eq!(e.path.as_deref(), Some(path.as_path()));
+        assert_eq!(e.camera, camera, "the view stays where it was");
+        assert!(e.status.starts_with("Reverted"), "{}", e.status);
+        // The file has gone: the work stays as it is.
+        e.add_primitive("cube");
+        std::fs::remove_file(&path).unwrap();
+        assert!(!e.can_revert());
+        e.pending = Some(Pending::Revert);
+        e.perform(Pending::Revert);
+        assert_eq!(e.scene.pieces.len(), saved + 1);
+        assert!(e.is_modified());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
