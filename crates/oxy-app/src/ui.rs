@@ -460,6 +460,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
     let busy = ed.job.is_some();
     ed.preview_matcap = None;
+    ed.preview_piece_material = None;
     // With pen panel gestures on (RFC 0015) a pen drag over a label scrolls
     // the panel, so labels don't start a text selection then.
     let selectable = !ed.pen_panels_active();
@@ -643,28 +644,25 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         .on_hover_text("Hides the circular brush radius outline while actively sculpting so the mesh deformation is clearly visible.");
                 });
                 tips::menu(ui, "Material", "The viewport material (matcap), including ones you loaded", |ui| {
+                    material_target(ui, ed);
                     for m in MatcapPreset::ALL {
-                        let resp = tips::hover(
-                            ui.radio(ed.custom_matcap.is_none() && ed.matcap == m, m.label()),
-                            tips::matcap_tip(m),
-                        );
+                        let resp = tips::hover(ui.radio(ed.is_chosen_matcap(m), m.label()), tips::matcap_tip(m));
                         if resp.hovered() {
-                            ed.preview_matcap = Some((m, None));
+                            ed.preview_choice(m);
                         }
                         if resp.clicked() {
-                            ed.matcap = m;
-                            ed.custom_matcap = None;
+                            ed.choose_matcap(m);
                         }
                     }
                     for i in 0..ed.custom_matcaps.len() {
                         let name = ed.custom_matcaps[i].name.clone();
                         let tip = format!("{name}. A material you loaded.");
-                        let resp = tips::hover(ui.radio(ed.custom_matcap == Some(i), name), tip);
+                        let resp = tips::hover(ui.radio(ed.is_chosen_custom_matcap(i), name), tip);
                         if resp.hovered() {
-                            ed.preview_matcap = Some((ed.matcap, Some(i)));
+                            ed.preview_custom_choice(i);
                         }
                         if resp.clicked() {
-                            ed.custom_matcap = Some(i);
+                            ed.choose_custom_matcap(i);
                         }
                     }
                     if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
@@ -2588,58 +2586,87 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         };
         let label = ed.material_label();
         let r = widgets::tile(ui, Some(&mat_tex), &label, plain::MATERIAL_TILE, size);
-        egui::Popup::from_toggle_button_response(&r).show(|ui| {
-            ui.label(RichText::new("Materials").strong());
-            ui.horizontal(|ui| {
-                for m in MatcapPreset::ALL {
-                    let t = widgets::material_texture(&ctx, m);
-                    let resp = widgets::thumb(
-                        ui,
-                        Some(&t),
-                        m.label(),
-                        ed.custom_matcap.is_none() && ed.matcap == m,
-                        tips::matcap_tip(m),
-                    );
-                    if resp.hovered() {
-                        ed.preview_matcap = Some((m, None));
-                    }
-                    if resp.clicked() {
-                        ed.matcap = m;
-                        ed.custom_matcap = None;
-                    }
-                }
-            });
-            if !ed.custom_matcaps.is_empty() {
-                ui.label(RichText::new("Yours (right-click to remove)").weak().small());
-                let mut remove = None;
-                ui.horizontal_wrapped(|ui| {
-                    for i in 0..ed.custom_matcaps.len() {
-                        let m = &ed.custom_matcaps[i];
-                        let t = custom_matcap_texture(&ctx, m);
-                        let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
-                        let r = widgets::thumb(ui, Some(&t), &m.name, ed.custom_matcap == Some(i), &tip);
-                        if r.hovered() {
-                            ed.preview_matcap = Some((ed.matcap, Some(i)));
+        egui::Popup::from_toggle_button_response(&r)
+            // Stays open for the Whole scene / piece choice; click outside to close.
+            .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
+            .show(|ui| {
+                ui.label(RichText::new("Materials").strong());
+                material_target(ui, ed);
+                ui.horizontal(|ui| {
+                    for m in MatcapPreset::ALL {
+                        let t = widgets::material_texture(&ctx, m);
+                        let resp = widgets::thumb(ui, Some(&t), m.label(), ed.is_chosen_matcap(m), tips::matcap_tip(m));
+                        if resp.hovered() {
+                            ed.preview_choice(m);
                         }
-                        if r.clicked() {
-                            ed.custom_matcap = Some(i);
+                        if resp.clicked() {
+                            ed.choose_matcap(m);
                         }
-                        r.context_menu(|ui| {
-                            if tips::hover(ui.button("Remove"), plain::REMOVE_MATCAP).clicked() {
-                                remove = Some(i);
-                            }
-                        });
                     }
                 });
-                if let Some(i) = remove {
-                    ed.remove_custom_matcap(i);
+                if !ed.custom_matcaps.is_empty() {
+                    ui.label(RichText::new("Yours (right-click to remove)").weak().small());
+                    let mut remove = None;
+                    ui.horizontal_wrapped(|ui| {
+                        for i in 0..ed.custom_matcaps.len() {
+                            let m = &ed.custom_matcaps[i];
+                            let t = custom_matcap_texture(&ctx, m);
+                            let tip = format!("{}. A material you loaded. Right-click to remove it.", m.name);
+                            let r = widgets::thumb(ui, Some(&t), &m.name, ed.is_chosen_custom_matcap(i), &tip);
+                            if r.hovered() {
+                                ed.preview_custom_choice(i);
+                            }
+                            if r.clicked() {
+                                ed.choose_custom_matcap(i);
+                            }
+                            r.context_menu(|ui| {
+                                if tips::hover(ui.button("Remove"), plain::REMOVE_MATCAP).clicked() {
+                                    remove = Some(i);
+                                }
+                            });
+                        }
+                    });
+                    if let Some(i) = remove {
+                        ed.remove_custom_matcap(i);
+                    }
                 }
-            }
-            if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
-                ed.request_load_matcap = true;
-            }
-        });
+                if tips::button(ui, "Load matcap…", Cmd::LoadMatcap).clicked() {
+                    ed.request_load_matcap = true;
+                }
+            });
     });
+}
+
+/// Whether the material pickers set the whole scene's material or just the
+/// active piece's, and a way back to the scene's for the piece.
+fn material_target(ui: &mut Ui, ed: &mut Editor) {
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("For").small().weak());
+        if ui
+            .selectable_label(!ed.material_for_piece, "Whole scene")
+            .on_hover_text("Pick the material every piece shows, unless it has its own.")
+            .clicked()
+        {
+            ed.material_for_piece = false;
+        }
+        let name = ed.scene.active().name.clone();
+        if ui
+            .selectable_label(ed.material_for_piece, format!("{name} only"))
+            .on_hover_text("Pick a material for the active piece alone. It's saved with the project.")
+            .clicked()
+        {
+            ed.material_for_piece = true;
+        }
+    });
+    if ed.material_for_piece && ed.scene.active().material.is_some() {
+        if ui
+            .small_button("Use the scene's material")
+            .on_hover_text("The active piece goes back to showing the scene's material.")
+            .clicked()
+        {
+            ed.set_piece_material(None);
+        }
+    }
 }
 
 /// Preview of a custom matcap as a round image (cached per name).

@@ -60,6 +60,9 @@ pub struct App {
     editor: Editor,
     /// Material last uploaded: a built-in preset, or a custom matcap's name.
     applied_matcap: Option<(MatcapPreset, Option<String>)>,
+    /// Material keys in the renderer's piece material slots (slot `i + 1`),
+    /// so a slot is only uploaded again when what it holds changes.
+    material_slots: Vec<Option<String>>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
     /// When the last pen pressure reading arrived (a pen is in use).
@@ -205,6 +208,7 @@ impl App {
                 e
             },
             applied_matcap: None,
+            material_slots: vec![None; oxy_render::MATERIAL_SLOTS as usize],
             mmb_scroll: None,
             last_pressure: None,
             pen_press: None,
@@ -632,18 +636,67 @@ impl App {
         let curve_piece = ed.preview_in_place();
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.active().id;
+        // Pieces with their own material: give each distinct one a slot.
+        let piece_key = |p: &oxy_doc::Piece| -> Option<String> {
+            if p.id == active && ed.preview_piece_material.is_some() {
+                return ed.preview_piece_material.clone();
+            }
+            p.material.clone()
+        };
+        let mut wanted: Vec<String> = Vec::new();
+        for p in ed.scene.pieces.iter().filter(|p| p.visible) {
+            if let Some(k) = piece_key(p)
+                && ed.resolve_material(&k).is_some()
+                && !wanted.contains(&k)
+                && wanted.len() < oxy_render::MATERIAL_SLOTS as usize
+            {
+                wanted.push(k);
+            }
+        }
+        for k in &wanted {
+            if self.material_slots.iter().any(|s| s.as_ref() == Some(k)) {
+                continue;
+            }
+            // A slot nothing wanted uses now.
+            let Some(i) = self.material_slots.iter().position(|s| s.as_ref().is_none_or(|s| !wanted.contains(s)))
+            else {
+                break;
+            };
+            let pixels = match ed.resolve_material(k) {
+                Some(Ok(m)) => oxy_render::matcap::generate(m, oxy_render::MATCAP_SIZE),
+                Some(Err(px)) => px.to_vec(),
+                None => continue,
+            };
+            g.viewport.set_material_slot(&g.queue, i as u32 + 1, &pixels);
+            self.material_slots[i] = Some(k.clone());
+        }
+        let slots = &self.material_slots;
+        let slot_map: std::collections::HashMap<u64, u32> = ed
+            .scene
+            .pieces
+            .iter()
+            .filter_map(|p| {
+                let k = piece_key(p)?;
+                let i = slots.iter().position(|s| s.as_ref() == Some(&k))?;
+                Some((p.id, i as u32 + 1))
+            })
+            .collect();
+        let slot_of = |id: u64| slot_map.get(&id).copied().unwrap_or(0);
         let mut items = Vec::new();
         // The retopology tool draws its piece as an overlay, on top of the surface.
         let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece);
         for p in ed.scene.pieces.iter_mut() {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
-                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false });
+                let material = slot_of(p.id);
+                items.push(oxy_render::DrawItem { id: p.id, active: p.id == active, preview: false, material });
             }
         }
         if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
-            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: curve_piece.is_none() });
+            // A piece shown in place (a curve stroke) keeps its material.
+            let material = curve_piece.map_or(0, slot_of);
+            items.push(oxy_render::DrawItem { id: PREVIEW_ID, active: true, preview: curve_piece.is_none(), material });
         }
 
         let frame = match g.surface.get_current_texture() {

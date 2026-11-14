@@ -52,6 +52,9 @@ pub struct Piece {
     /// point numbers already in this mesh's order. The app takes them on
     /// load; they aren't kept here afterwards.
     pub strokes: Option<Box<SavedStrokes>>,
+    /// The matcap the piece is shown with, if not the scene's: `preset:KEY`
+    /// (a built-in matcap) or `custom:NAME` (a matcap the user loaded).
+    pub material: Option<String>,
 }
 
 /// An open Curve Move curve (RFC 0005), as saved with the project: the
@@ -163,6 +166,7 @@ impl Piece {
             tubes: Vec::new(),
             curve: None,
             strokes: None,
+            material: None,
         }
     }
 
@@ -206,6 +210,7 @@ impl Piece {
                     tubes: Vec::new(),
                     curve: None,
                     strokes: None,
+                    material: self.material.clone(),
                 }
             }
             None => PieceData {
@@ -219,6 +224,7 @@ impl Piece {
                 tubes: self.tubes.clone(),
                 curve: self.curve.clone(),
                 strokes: None,
+                material: self.material.clone(),
             },
         }
     }
@@ -246,6 +252,8 @@ pub struct PieceData {
     /// The `STRK` section: editable strokes (Living strokes), with point
     /// numbers in `mesh`'s order. Filled in by the app when it saves.
     pub strokes: Option<SavedStrokes>,
+    /// The `MATL` section: the piece's own matcap (see [`Piece::material`]).
+    pub material: Option<String>,
 }
 
 impl PieceData {
@@ -295,6 +303,7 @@ impl PieceData {
             tubes: self.tubes,
             curve: self.curve,
             strokes,
+            material: self.material,
         }
     }
 }

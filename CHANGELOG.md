@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **A material per piece** (material picker and View > Material: **For: Whole scene | *piece* only**): give the active piece its own matcap, built-in or one you loaded, to tell parts apart (a jade eye, a bronze armour plate) while the rest shows the scene's material. Hovering previews it on that piece only, **Use the scene's material** puts it back, and it's saved with the project in a new `MATL` section (older versions skip it and show the scene's material). Up to 8 different piece materials show at once; a loaded matcap that isn't on this computer falls back to the scene's. With viewport lights on, every piece uses the lit surface as before. The picker now stays open until you click outside it.
+
 ## [4.0.0-beta.9] - 2026-11-13
 
 ### Added

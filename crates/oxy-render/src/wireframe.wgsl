@@ -10,6 +10,7 @@ struct Uniforms {
 
 struct Piece {
     flags: vec4<f32>,
+    material: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;

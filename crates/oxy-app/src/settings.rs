@@ -907,7 +907,7 @@ fn parse_rgb(v: &str) -> Option<[f64; 3]> {
     Some(c)
 }
 
-fn matcap_key(m: MatcapPreset) -> &'static str {
+pub(crate) fn matcap_key(m: MatcapPreset) -> &'static str {
     match m {
         MatcapPreset::Terracotta => "terracotta",
         MatcapPreset::CrimsonClay => "crimson_clay",
