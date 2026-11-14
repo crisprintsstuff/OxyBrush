@@ -48,6 +48,39 @@ impl OrbitAround {
     }
 }
 
+/// How lengths are shown to the user (Preferences > Units): the Measure
+/// plugin and any plugin that asks (`units()` in the plugin API).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Units {
+    /// Millimetres (volumes in cubic centimetres).
+    #[default]
+    Metric,
+    /// Inches (volumes in cubic inches).
+    Imperial,
+}
+
+impl Units {
+    pub const ALL: [Units; 2] = [Units::Metric, Units::Imperial];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Units::Metric => "Metric (mm)",
+            Units::Imperial => "Imperial (in)",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Units::Metric => "metric",
+            Units::Imperial => "imperial",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|u| u.key() == key)
+    }
+}
+
 /// How the interface is laid out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum UiLayout {
@@ -406,6 +439,10 @@ pub struct Settings {
     pub gizmo_pivot_follows: bool,
     /// What orbiting turns around.
     pub orbit_around: OrbitAround,
+    /// How lengths are shown, and how many millimetres one scene unit is
+    /// (also the 3D print window's scale).
+    pub units: Units,
+    pub scene_unit_mm: f32,
     /// New subdivision levels are quads (Catmull–Clark); false: triangles (Loop).
     pub subdivision_quads: bool,
     /// New subdivision levels are smoothed (false: split in place).
@@ -928,6 +965,8 @@ impl Default for Settings {
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
             orbit_around: OrbitAround::Cursor,
+            units: Units::Metric,
+            scene_unit_mm: 10.0,
             subdivision_quads: true,
             subdivision_smooth: true,
             radius_on_model: false,
@@ -1076,6 +1115,7 @@ impl Settings {
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
             + &format!("orbit_around = {}\n", self.orbit_around.key())
+            + &format!("units = {}\nscene_unit_mm = {}\n", self.units.key(), self.scene_unit_mm)
             + &format!("show_vertex_color = {}\n", self.show_vertex_color)
             + &format!(
                 "inactive_look = {}\ninactive_strength = {}\ninactive_color = {}, {}, {}\n",
@@ -1345,6 +1385,15 @@ impl Settings {
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
                 "gizmo_pivot_follows" => s.gizmo_pivot_follows = v.parse().unwrap_or(s.gizmo_pivot_follows),
                 "orbit_around" => s.orbit_around = OrbitAround::from_key(v).unwrap_or(s.orbit_around),
+                "units" => s.units = Units::from_key(v).unwrap_or(s.units),
+                "scene_unit_mm" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && x.is_finite()
+                        && x > 0.0
+                    {
+                        s.scene_unit_mm = x.clamp(0.001, 100_000.0);
+                    }
+                }
                 // Written by builds between 4.0.0-beta.10 and the Cursor choice.
                 "orbit_around_stroke" => {
                     if v == "false" {
@@ -1624,6 +1673,8 @@ mod tests {
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
             orbit_around: OrbitAround::LastStroke,
+            units: Units::Imperial,
+            scene_unit_mm: 25.4,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: true,

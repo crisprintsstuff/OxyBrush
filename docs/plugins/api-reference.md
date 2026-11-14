@@ -1,8 +1,8 @@
 # Plugin host API reference
 
 An in-app plugin imports these functions from the module **`oxybrush`**.
-This is API version 4, which adds the rows marked *(4)*, along with *(3)*
-and *(2)* from earlier versions. Older plugins keep working unchanged.
+This is API version 5, which adds the rows marked *(5)*, along with *(4)*,
+*(3)* and *(2)* from earlier versions. Older plugins keep working unchanged.
 
 ## Conventions
 
@@ -47,6 +47,8 @@ and *(2)* from earlier versions. Older plugins keep working unchanged.
 | `progress(fraction: f32) -> i32` *(3)* | report progress, 0..=1, shown as a bar; returns **1 once the user has clicked Stop**, else 0 |
 | `piece_count() -> i32` | pieces in the scene |
 | `active_piece() -> i32` | index of the active piece |
+| `units() -> i32` *(5)* | how the user wants lengths shown (Preferences > Units): 0 metric (millimetres), 1 imperial (inches) |
+| `unit_scale() -> f32` *(5)* | millimetres in one scene unit (Preferences > Units, also the 3D print scale); always above 0. Divide by 25.4 for inches |
 
 ### Reading meshes: `read_mesh`
 

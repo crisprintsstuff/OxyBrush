@@ -18,6 +18,7 @@ fn snapshot() -> Snapshot {
         vertex_counts: vec![3],
         triangle_counts: vec![1],
         active: 0,
+        units: Default::default(),
         scene_json: "{\"pieces\":1}".into(),
         strokes_json: "{\"strokes\":[]}".into(),
     }
@@ -37,7 +38,7 @@ fn manifest_parses_and_rejects_bad_ones() {
     assert!(!m.capabilities.read_scene);
     assert_eq!(m.commands[0].label, "Squash");
     assert_eq!(m.params[0].default, 0.3);
-    assert!(Manifest::parse(r#"{"name":"X","api":5}"#).unwrap_err().contains("API 5"));
+    assert!(Manifest::parse(r#"{"name":"X","api":6}"#).unwrap_err().contains("API 6"));
     assert!(
         Manifest::parse(r#"{"name":"X","api":4,"capabilities":["edit_strokes"]}"#).unwrap().capabilities.edit_strokes
     );
@@ -255,6 +256,7 @@ fn cube_snapshot() -> Snapshot {
         vertex_counts: vec![8],
         triangle_counts: vec![12],
         active: 0,
+        units: Default::default(),
         scene_json: String::new(),
         strokes_json: String::new(),
     }
@@ -373,10 +375,37 @@ fn measure_reports_size_and_volume_and_draws_the_box() {
     for v in &mut snap.pieces[0].positions {
         *v *= Vec3::new(2.0, 1.0, 0.5);
     }
-    let r = p.run(0, snap).unwrap();
-    assert_eq!(r.log, vec!["Size 2.000 × 1.000 × 0.500, volume 1.000".to_string()]);
+    // Metric, 10 mm per scene unit (the default): mm and cm³.
+    let r = p.run(0, snap.clone()).unwrap();
+    assert_eq!(r.log, vec!["Size 20.000 × 10.000 × 5.000 mm, volume 1.000 cm³".to_string()]);
     let lines = p.overlay().unwrap();
     assert_eq!(lines.len(), 12);
+    // Imperial, one inch per scene unit: in and in³.
+    snap.units = Units { mm_per_unit: 25.4, imperial: true };
+    let r = p.run(0, snap.clone()).unwrap();
+    assert_eq!(r.log, vec!["Size 2.000 × 1.000 × 0.500 in, volume 1.000 in³".to_string()]);
+    // A metre-sized model in millimetre units doesn't overflow.
+    snap.units = Units { mm_per_unit: 1000.0, imperial: false };
+    let r = p.run(0, snap).unwrap();
+    assert_eq!(r.log, vec!["Size 2000.000 × 1000.000 × 500.000 mm, volume 1000000.000 cm³".to_string()]);
+}
+
+#[test]
+fn units_are_readable_by_any_plugin_and_never_zero() {
+    let wat = r#"(module
+        (import "oxybrush" "units" (func $u (result i32)))
+        (import "oxybrush" "unit_scale" (func $s (result f32)))
+        (import "oxybrush" "log" (func $log (param i32 i32)))
+        (memory (export "memory") 1)
+        (data (i32.const 0) "MI")
+        (func (export "run") (param i32)
+          (call $log (call $u) (i32.const 1))
+          (if (f32.ne (call $s) (f32.const 1)) (then (call $log (i32.const 0) (i32.const 1))))))"#;
+    let mut p = plugin(r#"{"name":"U","api":5,"capabilities":[],"commands":[{"id":"go"}]}"#, wat).unwrap();
+    let mut snap = snapshot();
+    snap.units = Units { mm_per_unit: 0.0, imperial: true };
+    // units() is 1 (imperial): logs byte 1, "I"; unit_scale() falls back to 1, so no "M".
+    assert_eq!(p.run(0, snap).unwrap().log, vec!["I".to_string()]);
 }
 
 // ---- API 3 ----
@@ -696,6 +725,7 @@ fn grid_snapshot(n: usize) -> Snapshot {
         vertex_counts: vec![nv],
         triangle_counts: vec![nt],
         active: 0,
+        units: Default::default(),
         scene_json: String::new(),
         strokes_json: String::new(),
     }
@@ -719,6 +749,7 @@ fn octahedron_snapshot() -> Snapshot {
         vertex_counts: vec![6],
         triangle_counts: vec![8],
         active: 0,
+        units: Default::default(),
         scene_json: String::new(),
         strokes_json: String::new(),
     }
@@ -872,6 +903,7 @@ fn fill_holes_caps_an_opening_without_moving_the_surface() {
         vertex_counts: vec![8],
         triangle_counts: vec![before_tris.len()],
         active: 0,
+        units: Default::default(),
         scene_json: String::new(),
         strokes_json: String::new(),
     };

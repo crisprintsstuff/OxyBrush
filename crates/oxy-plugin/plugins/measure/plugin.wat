@@ -1,8 +1,10 @@
 ;; Measure: an in-app OxyBrush plugin in WebAssembly text (RFC 0011).
-;; Writes "Size W × H × D, volume V" for the active piece to the status
-;; line (three decimals, in scene units) and draws its bounding box while
-;; the panel is open. The volume is the signed volume of the triangles, so
-;; it is meaningful for closed (watertight) pieces.
+;; Writes "Size W × H × D mm, volume V cm³" for the active piece to the
+;; status line and draws its bounding box while the panel is open. Units
+;; follow Preferences > Units (API 5): millimetres and cubic centimetres,
+;; or inches and cubic inches, from the size of a scene unit. The volume
+;; is the signed volume of the triangles, so it is meaningful for closed
+;; (watertight) pieces.
 ;;
 ;; Memory: text at 0..1023 (strings at 0, the message built at 512),
 ;; positions at 1024, then triangles.
@@ -14,12 +16,18 @@
   (import "oxybrush" "read_positions" (func $read_positions (param i32 i32 i32) (result i32)))
   (import "oxybrush" "read_triangles" (func $read_triangles (param i32 i32 i32) (result i32)))
   (import "oxybrush" "draw_line" (func $draw_line (param f32 f32 f32 f32 f32 f32 i32) (result i32)))
+  (import "oxybrush" "units" (func $units (result i32)))
+  (import "oxybrush" "unit_scale" (func $unit_scale (result f32)))
 
   (memory (export "memory") 1)
   (data (i32.const 0) "Size ")
   (data (i32.const 8) " \c3\97 ")
   (data (i32.const 16) ", volume ")
   (data (i32.const 32) "The piece is too large for a plugin")
+  (data (i32.const 80) " mm")
+  (data (i32.const 84) " cm\c2\b3")
+  (data (i32.const 96) " in")
+  (data (i32.const 100) " in\c2\b3")
   (global $have (mut i32) (i32.const 0))
   (global $x0 (mut f32) (f32.const 0)) (global $x1 (mut f32) (f32.const 0))
   (global $y0 (mut f32) (f32.const 0)) (global $y1 (mut f32) (f32.const 0))
@@ -41,14 +49,14 @@
     (i32.add (local.get $at) (local.get $len)))
 
   ;; Decimal digits of `n` at `at`; returns the end.
-  (func $put_u (param $n i32) (param $at i32) (result i32)
-    (local $len i32) (local $m i32) (local $i i32)
+  (func $put_u (param $n i64) (param $at i32) (result i32)
+    (local $len i32) (local $m i64) (local $i i32)
     ;; Count digits.
     (local.set $m (local.get $n))
     (local.set $len (i32.const 1))
     (block $done (loop $count
-      (br_if $done (i32.lt_u (local.get $m) (i32.const 10)))
-      (local.set $m (i32.div_u (local.get $m) (i32.const 10)))
+      (br_if $done (i64.lt_u (local.get $m) (i64.const 10)))
+      (local.set $m (i64.div_u (local.get $m) (i64.const 10)))
       (local.set $len (i32.add (local.get $len) (i32.const 1)))
       (br $count)))
     ;; Write them from the end.
@@ -58,22 +66,22 @@
       (br_if $done2 (i32.eqz (local.get $i)))
       (local.set $i (i32.sub (local.get $i) (i32.const 1)))
       (i32.store8 (i32.add (local.get $at) (local.get $i))
-        (i32.add (i32.const 48) (i32.rem_u (local.get $m) (i32.const 10))))
-      (local.set $m (i32.div_u (local.get $m) (i32.const 10)))
+        (i32.add (i32.const 48) (i32.wrap_i64 (i64.rem_u (local.get $m) (i64.const 10)))))
+      (local.set $m (i64.div_u (local.get $m) (i64.const 10)))
       (br $write)))
     (i32.add (local.get $at) (local.get $len)))
 
   ;; `v` with three decimals (a leading "-" when negative); returns the end.
   (func $put_f (param $v f32) (param $at i32) (result i32)
-    (local $m i32) (local $f i32)
+    (local $m i64) (local $f i32)
     (if (f32.lt (local.get $v) (f32.const 0))
       (then
         (i32.store8 (local.get $at) (i32.const 45))
         (local.set $at (i32.add (local.get $at) (i32.const 1)))
         (local.set $v (f32.neg (local.get $v)))))
-    (local.set $m (i32.trunc_sat_f32_u (f32.nearest (f32.mul (local.get $v) (f32.const 1000)))))
-    (local.set $at (call $put_u (i32.div_u (local.get $m) (i32.const 1000)) (local.get $at)))
-    (local.set $f (i32.rem_u (local.get $m) (i32.const 1000)))
+    (local.set $m (i64.trunc_sat_f32_u (f32.nearest (f32.mul (local.get $v) (f32.const 1000)))))
+    (local.set $at (call $put_u (i64.div_u (local.get $m) (i64.const 1000)) (local.get $at)))
+    (local.set $f (i32.wrap_i64 (i64.rem_u (local.get $m) (i64.const 1000))))
     (i32.store8 (local.get $at) (i32.const 46))
     (i32.store8 offset=1 (local.get $at) (i32.add (i32.const 48) (i32.div_u (local.get $f) (i32.const 100))))
     (i32.store8 offset=2 (local.get $at)
@@ -84,6 +92,7 @@
   (func (export "run") (param $command i32)
     (local $piece i32) (local $n i32) (local $t i32) (local $tris i32) (local $i i32) (local $p i32)
     (local $a i32) (local $b i32) (local $c i32) (local $at i32) (local $v f32) (local $vol f32)
+    (local $s f32) (local $vs f32) (local $len_txt i32) (local $vol_txt i32)
     (local.set $piece (call $active))
     (local.set $n (call $vertex_count (local.get $piece)))
     (local.set $t (call $triangle_count (local.get $piece)))
@@ -137,15 +146,30 @@
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $tri)))
     (local.set $vol (f32.div (local.get $vol) (f32.const 6)))
-    ;; "Size W × H × D, volume V"
+    ;; Scene units to millimetres or inches ($s), and the volume's factor
+    ;; ($vs): mm³ to cm³, or in³.
+    (local.set $s (call $unit_scale))
+    (if (call $units)
+      (then
+        (local.set $s (f32.div (local.get $s) (f32.const 25.4)))
+        (local.set $vs (f32.mul (local.get $s) (f32.mul (local.get $s) (local.get $s))))
+        (local.set $len_txt (i32.const 96))
+        (local.set $vol_txt (i32.const 100)))
+      (else
+        (local.set $vs (f32.div (f32.mul (local.get $s) (f32.mul (local.get $s) (local.get $s))) (f32.const 1000)))
+        (local.set $len_txt (i32.const 80))
+        (local.set $vol_txt (i32.const 84))))
+    ;; "Size W × H × D mm, volume V cm³"
     (local.set $at (call $put_str (i32.const 0) (i32.const 5) (i32.const 512)))
-    (local.set $at (call $put_f (f32.sub (global.get $x1) (global.get $x0)) (local.get $at)))
+    (local.set $at (call $put_f (f32.mul (f32.sub (global.get $x1) (global.get $x0)) (local.get $s)) (local.get $at)))
     (local.set $at (call $put_str (i32.const 8) (i32.const 4) (local.get $at)))
-    (local.set $at (call $put_f (f32.sub (global.get $y1) (global.get $y0)) (local.get $at)))
+    (local.set $at (call $put_f (f32.mul (f32.sub (global.get $y1) (global.get $y0)) (local.get $s)) (local.get $at)))
     (local.set $at (call $put_str (i32.const 8) (i32.const 4) (local.get $at)))
-    (local.set $at (call $put_f (f32.sub (global.get $z1) (global.get $z0)) (local.get $at)))
+    (local.set $at (call $put_f (f32.mul (f32.sub (global.get $z1) (global.get $z0)) (local.get $s)) (local.get $at)))
+    (local.set $at (call $put_str (local.get $len_txt) (i32.const 3) (local.get $at)))
     (local.set $at (call $put_str (i32.const 16) (i32.const 9) (local.get $at)))
-    (local.set $at (call $put_f (local.get $vol) (local.get $at)))
+    (local.set $at (call $put_f (f32.mul (local.get $vol) (local.get $vs)) (local.get $at)))
+    (local.set $at (call $put_str (local.get $vol_txt) (i32.const 5) (local.get $at)))
     (call $log (i32.const 512) (i32.sub (local.get $at) (i32.const 512))))
 
   (func $edge (param $ax f32) (param $ay f32) (param $az f32) (param $bx f32) (param $by f32) (param $bz f32)

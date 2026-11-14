@@ -962,6 +962,8 @@ pub struct Editor {
     /// What orbiting turns around: the surface under the pointer (the
     /// default), where the last stroke ended, or the middle of the view.
     pub orbit_around: crate::settings::OrbitAround,
+    /// How lengths are shown (Preferences > Units).
+    pub units: crate::settings::Units,
     /// The temporary orbit pivot: where the last stroke ended, or the
     /// surface picked under the pointer when an orbit started. Cleared by
     /// framing the view.
@@ -1407,6 +1409,7 @@ impl Default for Editor {
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
             orbit_around: crate::settings::OrbitAround::Cursor,
+            units: crate::settings::Units::Metric,
             orbit_pivot: None,
             orbit_picked: false,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
@@ -1866,6 +1869,8 @@ impl Editor {
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
             orbit_around: self.orbit_around,
+            units: self.units,
+            scene_unit_mm: self.print_scale_mm_per_unit,
             subdivision_quads: self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: self.subdivision_smooth,
             radius_on_model: self.radius_on_model,
@@ -2101,6 +2106,8 @@ impl Editor {
         self.gizmo_done_reverts = s.gizmo_done_reverts;
         self.gizmo_pivot_follows = s.gizmo_pivot_follows;
         self.orbit_around = s.orbit_around;
+        self.units = s.units;
+        self.print_scale_mm_per_unit = s.scene_unit_mm;
         self.subdivision_smooth = s.subdivision_smooth;
         self.subdivision_scheme = if s.subdivision_quads {
             oxy_mesh::multires::Scheme::CatmullClark
@@ -11155,6 +11162,8 @@ mod tests {
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,
             orbit_around: crate::settings::OrbitAround::LastStroke,
+            units: crate::settings::Units::Imperial,
+            scene_unit_mm: 25.4,
             subdivision_quads: false,
             subdivision_smooth: false,
             radius_on_model: false,
