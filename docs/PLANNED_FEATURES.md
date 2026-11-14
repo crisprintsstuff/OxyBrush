@@ -87,6 +87,14 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **Signed releases:** a signed Windows installer and a notarized macOS app,
   so the security warnings on first launch go away.
 
+### Sculpting with copies
+- **Surface instances:** sculpt a rivet, spike or scale once and place it
+  on every face, point or edge of another piece, on a face group, on the
+  masked part, or scattered evenly. The copies follow the surface as you
+  sculpt it, all update when you edit the original, can be fitted into
+  each face for chainmail and tiles, and can be made real when you're
+  done ([RFC 0022](rfcs/0022-surface-instances.md), proposed).
+
 ### Working with other apps
 - **Gaussian splats** (scans from capture apps): open one as a reference
   next to your sculpt, turn it into a mesh with its colors, sculpt the
