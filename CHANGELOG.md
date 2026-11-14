@@ -13,6 +13,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
   - **glTF/GLB export** writes each stroke group as a shape key (morph target) named after it, on the piece without the groups, so the groups become sliders in Blender or a game engine. Visible groups are at 1 and hidden ones at 0, so the file looks like the viewport. Other formats are unchanged.
   - Plugins and agents get the same actions: `mirror` and `split_by_side` stroke commands, with an optional `axis`.
 
+### Fixed
+- **Voxel remesh of posed or rigged models:** toes (and other bent joints) no longer come out hollow and torn. When a rig bends a toe down, the skin in the crease underneath can fold back through the sole, leaving thin inside-out pockets; the remesh took their side from those triangles' normals, which point the wrong way there. Such triangles are now judged by the winding number, as overlapping parts already were, and the pocket counts as solid. On a game-character model whose toes tore, no remeshed point is now more than a voxel off the original surface (before: up to 3.6 voxels at resolution 128). Meshes whose normals all face inward (some exports) now remesh correctly too, about three times slower than a normal mesh. Very sharp folds (around 90° over a short joint) can still leave a small tunnel.
+
 ## [4.0.0-beta.9] - 2026-11-13
 
 ### Added

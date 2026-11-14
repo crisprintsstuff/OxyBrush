@@ -189,7 +189,10 @@ impl<'a> Winding<'a> {
 
 /// Which triangles are buried inside the solid the mesh encloses: the
 /// winding number just outside them (a little along their normal) is 1 or
-/// more, so another part of the mesh wraps around them. A triangle that
+/// more, so another part of the mesh wraps around them; or -1 or less, so
+/// they face into a pocket where the surface folded back through itself
+/// (or the whole mesh is inside out). Either way their normal can't say
+/// which side is solid. A triangle that
 /// crosses another part is judged by its centre.
 ///
 /// RETURNS: one flag per triangle; all false for a mesh that doesn't
@@ -211,7 +214,9 @@ impl Winding<'_> {
             }
             let size = (b - a).length().max((c - b).length()).max((a - c).length());
             let q = (a + b + c) / 3.0 + n / len * (size * 1e-3);
-            self.at(q) > 0.5
+            // Above 0.5: another part wraps around it. Below -0.5: it faces
+            // into a pocket where the surface folded back through itself.
+            self.at(q).abs() > 0.5
         };
         // Most meshes don't pass through themselves, so first a sample: one
         // triangle in every 32 (at least 4096, so small meshes are checked
