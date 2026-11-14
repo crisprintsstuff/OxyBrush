@@ -357,6 +357,9 @@ pub struct Settings {
     pub living_save: bool,
     /// Memory Living strokes may use, in megabytes.
     pub living_budget_mb: u32,
+    /// Compress glTF/GLB exports (`KHR_mesh_quantization`). Off by default:
+    /// a few older readers don't support the extension.
+    pub gltf_compress: bool,
     /// The brush size on the model (world units), with `radius_on_model`
     /// and `remember_brushes` on; 0 when not saved.
     pub brush_radius_world: f32,
@@ -865,6 +868,7 @@ impl Default for Settings {
             living_strokes: false,
             living_save: true,
             living_budget_mb: crate::living::DEFAULT_BUDGET_MB,
+            gltf_compress: false,
             plugin_params: Default::default(),
             window: None,
             show_brush_names: true,
@@ -1010,6 +1014,7 @@ impl Settings {
             + &format!("living_strokes = {}\n", self.living_strokes)
             + &format!("living_save = {}\n", self.living_save)
             + &format!("living_budget_mb = {}\n", self.living_budget_mb)
+            + &format!("gltf_compress = {}\n", self.gltf_compress)
             + &format!("brush_radius_world = {}\n", self.brush_radius_world)
             + &self
                 .plugin_params
@@ -1238,6 +1243,7 @@ impl Settings {
                 "radius_on_model" => s.radius_on_model = v.parse().unwrap_or(s.radius_on_model),
                 "living_strokes" => s.living_strokes = v.parse().unwrap_or(s.living_strokes),
                 "living_save" => s.living_save = v.parse().unwrap_or(s.living_save),
+                "gltf_compress" => s.gltf_compress = v.parse().unwrap_or(s.gltf_compress),
                 "living_budget_mb" => {
                     s.living_budget_mb = v.parse::<u32>().map(|m| m.clamp(16, 8192)).unwrap_or(s.living_budget_mb)
                 }
@@ -1514,6 +1520,7 @@ mod tests {
             living_strokes: true,
             living_save: false,
             living_budget_mb: 512,
+            gltf_compress: true,
             plugin_params: [
                 ("displace/amount".to_string(), vec![2.5]),
                 ("tint/color".to_string(), vec![0.25, 0.5, 1.0]),

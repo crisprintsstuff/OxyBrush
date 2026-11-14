@@ -130,8 +130,20 @@ pub struct ExportStats {
     pub triangles: usize,
 }
 
+/// Export options beyond the file format.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ExportOptions {
+    /// How glTF/GLB files store their data (other formats ignore it).
+    pub gltf: crate::gltf::GltfCompression,
+}
+
 /// Export pieces by file extension: `glb`, `gltf`, `obj`, `stl`, `ply`.
 pub fn export_pieces(pieces: &[ExportPiece], path: &Path) -> Result<ExportStats> {
+    export_pieces_with(pieces, path, ExportOptions::default())
+}
+
+/// [`export_pieces`] with options (glTF compression).
+pub fn export_pieces_with(pieces: &[ExportPiece], path: &Path, options: ExportOptions) -> Result<ExportStats> {
     let mut geoms: Vec<Geometry> = pieces.iter().map(visible_geometry).filter(|g| !g.triangles.is_empty()).collect();
     let ext = crate::extension(path);
     if !matches!(ext.as_str(), "glb" | "gltf") {
@@ -142,8 +154,8 @@ pub fn export_pieces(pieces: &[ExportPiece], path: &Path) -> Result<ExportStats>
         return Err(Error::Format("nothing to export (no visible faces)".into()));
     }
     let bytes: Vec<u8> = match ext.as_str() {
-        "glb" => crate::gltf::write_glb(&geoms),
-        "gltf" => crate::gltf::write_gltf_embedded(&geoms).into_bytes(),
+        "glb" => crate::gltf::write_glb(&geoms, options.gltf),
+        "gltf" => crate::gltf::write_gltf_embedded(&geoms, options.gltf).into_bytes(),
         "obj" => {
             let mut out = Vec::new();
             write_obj_objects(&geoms, &mut out)?;

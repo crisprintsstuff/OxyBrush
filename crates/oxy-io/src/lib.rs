@@ -17,8 +17,11 @@ mod gltf;
 mod ply;
 mod scene;
 
+pub use gltf::GltfCompression;
 pub use ply::{read_ply, write_ply};
-pub use scene::{ExportPiece, ExportShape, ExportStats, export_pieces, write_atomic};
+pub use scene::{
+    ExportOptions, ExportPiece, ExportShape, ExportStats, export_pieces, export_pieces_with, write_atomic,
+};
 
 #[derive(Debug)]
 pub enum Error {
