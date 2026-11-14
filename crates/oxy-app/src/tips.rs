@@ -853,6 +853,8 @@ pub mod plain {
     pub const INSTANCE_DONE_SOURCE: &str = "Hide the source again and go back to the scene as it was.";
     pub const INSTANCE_MAKE_REAL: &str = "Turn the copies into a new piece of ordinary mesh, one face group per copy. The copies and their source stay, so you can change them and make them real again.";
     pub const INSTANCE_REMOVE: &str = "Remove these copies. The piece they copied is shown again as an ordinary piece.";
+    pub const UNITS: &str = "How lengths are shown: millimetres (volumes in cubic centimetres) or inches (cubic inches). Used by the Measure plugin and by plugins that ask.";
+    pub const SCENE_UNIT: &str = "How big one scene unit is, in millimetres (25.4 for inches). The same scale as the 3D print window. The starting sphere is 2 units across.";
     pub const SECTION_LAYERS: &str = "Sculpt layers of the active piece (with Living strokes on): pick the layer new strokes go into, fade, hide or delete a whole layer, and open the full stroke list.";
     pub const SECTION_BRUSH: &str = "Size, strength and the options for the current brush.";
     pub const SECTION_STROKE: &str = "How a drag becomes dabs: freehand, a straight line, or one stamp.";

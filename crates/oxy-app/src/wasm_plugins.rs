@@ -364,6 +364,10 @@ impl Editor {
                 String::new()
             },
             strokes_json,
+            units: oxy_plugin::Units {
+                mm_per_unit: self.print_scale_mm_per_unit,
+                imperial: self.units == crate::settings::Units::Imperial,
+            },
         };
         // Pieces it may edit are locked while it runs (a preview edits
         // nothing until Accept).

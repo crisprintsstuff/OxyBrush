@@ -28,7 +28,7 @@ or more than it asked for.
 | Field | Required | |
 |---|---|---|
 | `name` | yes | Shown in the Plugins menu, panel title and undo history |
-| `api` | yes | The host API version it was written for: 1 to 4 |
+| `api` | yes | The host API version it was written for: 1 to 5 |
 | `version` | no | Your plugin's own version (for you and people sharing it) |
 | `description` | no | One or two sentences, shown in menus and the panel |
 | `capabilities` | no | What it may do (below); none by default |

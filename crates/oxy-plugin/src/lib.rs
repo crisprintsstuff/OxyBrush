@@ -114,7 +114,7 @@ use wasmi::{
 };
 
 /// Host API version this build implements (`"api"` in the manifest).
-pub const API_VERSION: u32 = 4;
+pub const API_VERSION: u32 = 5;
 /// Oldest host API version this build still runs.
 pub const API_MIN: u32 = 1;
 /// The capability is not in the manifest.
@@ -389,6 +389,23 @@ pub struct Snapshot {
     /// API 4. The active piece's living strokes as JSON (empty without
     /// `read_scene`).
     pub strokes_json: String,
+    /// API 5. The user's units (Preferences > Units).
+    pub units: Units,
+}
+
+/// API 5. How the user wants lengths shown, and the size of a scene unit.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Units {
+    /// Millimetres in one scene unit.
+    pub mm_per_unit: f32,
+    /// Inches rather than millimetres.
+    pub imperial: bool,
+}
+
+impl Default for Units {
+    fn default() -> Self {
+        Units { mm_per_unit: 10.0, imperial: false }
+    }
 }
 
 /// What a command asked for.
@@ -632,6 +649,15 @@ fn linker(engine: &Engine) -> Result<Linker<CallState>, String> {
     .map_err(e)?;
     l.func_wrap("oxybrush", "param", |caller: Caller<'_, CallState>, i: i32| -> f32 {
         usize::try_from(i).ok().and_then(|i| caller.data().params.get(i).copied()).unwrap_or(0.0)
+    })
+    .map_err(e)?;
+    l.func_wrap("oxybrush", "units", |caller: Caller<'_, CallState>| -> i32 {
+        caller.data().snap.units.imperial as i32
+    })
+    .map_err(e)?;
+    l.func_wrap("oxybrush", "unit_scale", |caller: Caller<'_, CallState>| -> f32 {
+        let mm = caller.data().snap.units.mm_per_unit;
+        if mm.is_finite() && mm > 0.0 { mm } else { 1.0 }
     })
     .map_err(e)?;
     l.func_wrap("oxybrush", "piece_count", |caller: Caller<'_, CallState>| -> i32 {
