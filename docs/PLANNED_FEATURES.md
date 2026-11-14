@@ -63,7 +63,6 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 ### Sculpting
 - **Stencils:** an image laid over the view that you sculpt through.
 - **A brush editor and custom shelves** of your favourite brushes and presets.
-- **A dedicated sharp-crease brush.**
 
 ### Models and topology
 - **Rebuild lower subdivision levels** for a dense model imported from

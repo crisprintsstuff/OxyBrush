@@ -5,6 +5,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Sharp Crease brush** (in the brush picker after Noise): cuts a crisp V-shaped crease along the stroke, for hard folds, seams and panel lines; Alt raises a sharp ridge. Where Crease gathers the surface toward each dab's centre, Sharp Crease pulls it toward the stroke's line from both sides, across the stroke only and never past the line, and cuts deepest on the line, so the walls meet in a fold. Its groove is narrower for its depth than Crease's. It shares Crease's **Pinch** setting (how hard the walls are pulled together). About 1.1 ms a dab over 14k points, like the other brushes. Agents can pick it as `sharp_crease`.
+
+### Added
 - **Sculpt layers made ahead of time** (Mesh > Strokes…, with Living strokes on): **Sculpt into** picks the layer new strokes go into, and **+ New layer** starts one, so you can make a "Wrinkles" layer first and sculpt on it, instead of grouping strokes afterwards. New strokes follow the layer's strength and eye: on a layer at 50% a stroke settles to half when you let go, and the whole layer still fades, hides and exports as a shape key like any group. A hidden layer doesn't take strokes. Plugins and agents can choose it too (`sculpt_into`).
 
 ## [4.0.0-beta.10] - 2026-11-14

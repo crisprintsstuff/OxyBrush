@@ -2358,7 +2358,7 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                             plain::FOCAL_SHIFT,
                         );
 
-                        if ed.brush_kind == BrushKind::Crease {
+                        if matches!(ed.brush_kind, BrushKind::Crease | BrushKind::SharpCrease) {
                             ui.add_space(2.0);
                             ui.label(RichText::new("Pinch").weak().small());
                             tips::hover(
@@ -4394,7 +4394,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.noise_scale, 0.5..=12.0))), plain::NOISE);
             ui.end_row();
         }
-        if ed.brush_kind == BrushKind::Crease {
+        if matches!(ed.brush_kind, BrushKind::Crease | BrushKind::SharpCrease) {
             ui.label("Pinch");
             tips::hover(
                 ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.crease_pinch, 0.0..=1.0).max_decimals(2))),

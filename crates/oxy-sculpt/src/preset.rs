@@ -221,6 +221,7 @@ pub fn kind_key(k: BrushKind) -> &'static str {
         BrushKind::Flatten => "flatten",
         BrushKind::Pinch => "pinch",
         BrushKind::Crease => "crease",
+        BrushKind::SharpCrease => "sharp_crease",
         BrushKind::Layer => "layer",
         BrushKind::Grab => "grab",
         BrushKind::SnakeHook => "snake_hook",
