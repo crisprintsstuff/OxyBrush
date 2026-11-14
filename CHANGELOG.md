@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Quad sphere and UV sphere in the Insert Primitive brush**, next to the geodesic sphere: the same two spheres as Pieces > + Add, coming in as quads (good for subdivision levels) or rings.
 - **Layers in the right panel:** a **Layers** section under Pieces shows the active piece's sculpt layers while you work: Sculpt into and + New layer, then each layer with its eye, strength and … menu, and **Strokes…** for the full stroke list. It replaces Mesh > Strokes…; with Living strokes off, it offers to turn it on.
 - **View > Shading > Show vertex color** (also in Tools > Vertex color and the command palette): hide a model's vertex color, painted or imported, to judge the form in plain clay, and show it again. It only changes the view: the colors are kept, saved and exported. Painting, or filling with color, shows them again (and says so), so a stroke never paints invisibly. Remembered between sessions.
 - **Gravity, per brush** (brush settings, under Auto smooth): the surface under the brush also sags downward as you sculpt, for drapery, hanging folds and drooping flesh. Each brush keeps its own Gravity, so Clay can drape while Draw doesn't; presets and brush codes carry it, and with Remember brush settings it's kept between sessions. It pulls toward the world's down (the floor, -Y), follows pen pressure and the mask, and keeps mirrored strokes mirror images. At 1, one full-pressure pass sags the middle of the stroke about a third of the brush radius; it adds up with the length of the stroke, not with the spacing of the dabs, so dense dabs don't tear the surface. It's added to the brush's own move, so it costs nothing measurable per dab (Clay at radius 0.3: 1.1–1.3 ms per dab with or without it, within run-to-run noise). Not on Mask, Paint, the Grab-like brushes or the placing and cutting tools.
@@ -14,6 +15,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **A Tools menu, and a shorter Mesh menu.** The tools that shape a piece moved from Mesh to a new **Tools** menu: Deform…, Transform, Symmetrize, Poly Edit…, Retopology… and Vertex color. Mesh keeps resolution and repair: subdivision levels, Subdivide, Remesh, Decimate, booleans, 3D print, diagnostics, Delete hidden, Close holes and Split. Shortcuts and the command palette are unchanged.
 
 ### Fixed
+- **The gizmo pivot stays put after Insert Primitive** when "Gizmo pivot follows the mask" is off. Inserting a shape masks what was there, and the pivot jumped to the new shape anyway; Ctrl+drag duplicating had the same problem.
 - **Painted areas no longer have a bright outline.** Where vertex color fades to white at the edge of a stroke, the pale in-between was tinted at full strength and brightened, so every painted area had a light rim (a tester compared it with another sculpting app). The edge now blends smoothly from the material into the color; full-strength colors look as before.
 
 ## [4.0.0-beta.11] - 2026-11-14
