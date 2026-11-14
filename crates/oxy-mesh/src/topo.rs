@@ -252,6 +252,157 @@ pub fn drop_specks(positions: &mut Vec<Vec3>, triangles: &mut Vec<[u32; 3]>, siz
     specks.len()
 }
 
+/// Insert a loop of quads along the border of the `chosen` triangles (the
+/// masked part), on the chosen side and, with `both_sides`, on the other
+/// side too: support loops that keep a hard-surface edge crisp when the
+/// piece is subdivided or smoothed.
+///
+/// Each border point is split: the triangles on a side are moved onto a
+/// copy of the point, pulled `width` (0..1) of the way towards the
+/// average of its neighbours on that side, and a strip of quads (two
+/// triangles each) joins the copy to the original border. On a flat or
+/// gently curved surface the shape doesn't change; on a sharp corner the
+/// copies cut it slightly, like any edge loop.
+///
+/// Only edges with exactly one chosen and one other visible triangle count
+/// as border; open borders and edges with more than two triangles are
+/// left alone. New points copy the mask and color of the point they split
+/// from. The strips get a new face group, so the loop can be found again
+/// (Ctrl+Shift+click to isolate it). UVs are dropped (like subdivision).
+///
+/// RETURNS: the new mesh data and the number of border edges, or None if
+/// the chosen part has no border.
+pub fn edge_loops_at_border(
+    data: &crate::MeshData,
+    chosen: &[bool],
+    width: f32,
+    both_sides: bool,
+) -> Option<(crate::MeshData, usize)> {
+    use std::collections::HashSet;
+    let t_count = data.triangles.len();
+    if chosen.len() != t_count {
+        return None;
+    }
+    let hidden = |t: usize| data.hidden.get(t).copied().unwrap_or(false);
+    // Directed edge -> triangle, to find each edge's two triangles.
+    let mut owner: HashMap<(u32, u32), usize> = HashMap::with_capacity(t_count * 3);
+    let mut uses: HashMap<(u32, u32), u32> = HashMap::with_capacity(t_count * 3);
+    for (t, tri) in data.triangles.iter().enumerate() {
+        for k in 0..3 {
+            let (a, b) = (tri[k], tri[(k + 1) % 3]);
+            owner.insert((a, b), t);
+            *uses.entry((a.min(b), a.max(b))).or_insert(0) += 1;
+        }
+    }
+    // Border edges, as directed in the chosen triangle: (a, b, inside, outside).
+    let mut border: Vec<(u32, u32, usize, usize)> = Vec::new();
+    for (t, tri) in data.triangles.iter().enumerate() {
+        if !chosen[t] || hidden(t) {
+            continue;
+        }
+        for k in 0..3 {
+            let (a, b) = (tri[k], tri[(k + 1) % 3]);
+            if uses[&(a.min(b), a.max(b))] != 2 {
+                continue;
+            }
+            if let Some(&o) = owner.get(&(b, a))
+                && !chosen[o]
+                && !hidden(o)
+            {
+                border.push((a, b, t, o));
+            }
+        }
+    }
+    if border.is_empty() {
+        return None;
+    }
+    let border_points: HashSet<u32> = border.iter().flat_map(|&(a, b, _, _)| [a, b]).collect();
+    let mut out = data.clone();
+    out.uv = Vec::new();
+    let has_mask = out.mask.len() == out.positions.len();
+    let has_color = out.color.len() == out.positions.len();
+    if out.groups.len() != t_count {
+        out.groups = vec![0; t_count];
+    }
+    if out.hidden.len() != t_count {
+        out.hidden = vec![false; t_count];
+    }
+    let loop_group = out.groups.iter().copied().max().unwrap_or(0).saturating_add(1);
+    let width = width.clamp(0.01, 0.9);
+    // Sides to split: the chosen side (true), and the other side if asked.
+    let sides: &[bool] = if both_sides { &[true, false] } else { &[true] };
+    for &side in sides {
+        // Triangles on this side touching a border point.
+        let on_side = |t: usize| chosen[t] == side && !hidden(t);
+        let mut copy: HashMap<u32, u32> = HashMap::new();
+        let mut points: Vec<u32> = border_points.iter().copied().collect();
+        points.sort_unstable();
+        // Neighbours of each border point on this side (not on the border).
+        let mut toward: HashMap<u32, (Vec3, u32)> = HashMap::new();
+        let mut fallback: HashMap<u32, (Vec3, u32)> = HashMap::new();
+        for (t, tri) in data.triangles.iter().enumerate() {
+            if !on_side(t) {
+                continue;
+            }
+            for k in 0..3 {
+                let v = tri[k];
+                if !border_points.contains(&v) {
+                    continue;
+                }
+                for j in 1..3 {
+                    let n = tri[(k + j) % 3];
+                    let p = data.positions[n as usize];
+                    let e = fallback.entry(v).or_insert((Vec3::ZERO, 0));
+                    e.0 += p;
+                    e.1 += 1;
+                    if !border_points.contains(&n) {
+                        let e = toward.entry(v).or_insert((Vec3::ZERO, 0));
+                        e.0 += p;
+                        e.1 += 1;
+                    }
+                }
+            }
+        }
+        for v in points {
+            let Some(&(sum, n)) = toward.get(&v).or_else(|| fallback.get(&v)) else { continue };
+            let p = data.positions[v as usize];
+            let target = sum / n as f32;
+            let id = out.positions.len() as u32;
+            out.positions.push(p.lerp(target, width));
+            if has_mask {
+                out.mask.push(data.mask[v as usize]);
+            }
+            if has_color {
+                out.color.push(data.color[v as usize]);
+            }
+            copy.insert(v, id);
+        }
+        // Move this side's triangles onto the copies.
+        for (t, tri) in out.triangles.iter_mut().enumerate().take(t_count) {
+            if on_side(t) {
+                for v in tri.iter_mut() {
+                    if let Some(&c) = copy.get(v) {
+                        *v = c;
+                    }
+                }
+            }
+        }
+        // A quad strip between each border edge and its copy, oriented
+        // like the side's triangle (x -> y as it ran there).
+        for &(a, b, _, _) in &border {
+            let (x, y) = if side { (a, b) } else { (b, a) };
+            let (Some(&cx), Some(&cy)) = (copy.get(&x), copy.get(&y)) else { continue };
+            out.triangles.push([x, y, cy]);
+            out.triangles.push([x, cy, cx]);
+            out.groups.push(loop_group);
+            out.groups.push(loop_group);
+            out.hidden.push(false);
+            out.hidden.push(false);
+        }
+    }
+    Some((out, border.len()))
+}
+
 /// Subdivide only part of a mesh: the triangles marked in `chosen` split
 /// into four, and their neighbours split just enough (in two, or in four)
 /// to meet the new points, so the surface stays closed: red-green
@@ -1242,5 +1393,71 @@ mod hole_tests {
             assert_eq!(out.mask.len(), out.positions.len());
         }
         assert!(subdivide_where(&data, &vec![false; data.triangles.len()], true).is_none());
+    }
+
+    /// Every directed edge once and its reverse once: closed, consistently wound.
+    fn closed_and_oriented(tris: &[[u32; 3]]) -> bool {
+        let mut seen = std::collections::HashSet::new();
+        for t in tris {
+            for k in 0..3 {
+                if !seen.insert((t[k], t[(k + 1) % 3])) {
+                    return false;
+                }
+            }
+        }
+        seen.iter().all(|&(a, b)| seen.contains(&(b, a)))
+    }
+
+    #[test]
+    fn edge_loops_go_around_the_masked_part_and_keep_the_surface_closed() {
+        let data = crate::primitives::icosphere(2, 1.0).to_data();
+        let n = data.triangles.len();
+        // The top cap.
+        let chosen: Vec<bool> = data
+            .triangles
+            .iter()
+            .map(|t| t.iter().map(|&v| data.positions[v as usize].y).sum::<f32>() / 3.0 > 0.5)
+            .collect();
+        assert!(chosen.iter().any(|&c| c));
+        for both in [false, true] {
+            let (out, edges) = edge_loops_at_border(&data, &chosen, 0.3, both).unwrap();
+            let sides = if both { 2 } else { 1 };
+            assert_eq!(out.triangles.len(), n + 2 * edges * sides, "two triangles per border edge and side");
+            assert!(closed_and_oriented(&out.triangles), "still closed and consistently wound");
+            assert_eq!(out.groups.len(), out.triangles.len());
+            let loop_group = out.groups[n];
+            assert!(data.groups.iter().all(|&g| g != loop_group), "the loop gets its own group");
+            assert_eq!(out.groups.iter().filter(|&&g| g == loop_group).count(), 2 * edges * sides);
+            // Original points stay where they were; the copies sit near the surface.
+            assert_eq!(&out.positions[..data.positions.len()], &data.positions[..]);
+            assert!(out.positions[data.positions.len()..].iter().all(|p| (p.length() - 1.0).abs() < 0.1));
+            let m = Mesh::from_data(out);
+            assert_eq!(m.triangle_count(), n + 2 * edges * sides);
+        }
+    }
+
+    #[test]
+    fn edge_loops_need_a_border() {
+        let data = crate::primitives::icosphere(1, 1.0).to_data();
+        let n = data.triangles.len();
+        assert!(edge_loops_at_border(&data, &vec![false; n], 0.3, true).is_none(), "nothing chosen");
+        assert!(edge_loops_at_border(&data, &vec![true; n], 0.3, true).is_none(), "everything chosen");
+    }
+
+    #[test]
+    fn edge_loops_on_a_flat_panel_keep_it_flat() {
+        let data = crate::primitives::plane(8, 2.0).to_data();
+        let chosen: Vec<bool> = data
+            .triangles
+            .iter()
+            .map(|t| {
+                let c = t.iter().map(|&v| data.positions[v as usize]).sum::<Vec3>() / 3.0;
+                c.x.abs() < 0.5 && c.z.abs() < 0.5
+            })
+            .collect();
+        let (out, edges) = edge_loops_at_border(&data, &chosen, 0.25, true).unwrap();
+        assert!(edges > 0);
+        let y0 = data.positions[0].y;
+        assert!(out.positions.iter().all(|p| (p.y - y0).abs() < 1e-6), "a flat panel stays flat");
     }
 }
