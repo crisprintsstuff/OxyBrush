@@ -82,8 +82,63 @@ struct PostUniforms {
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct PieceUniforms {
     flags: [f32; 4],
-    /// x: matcap layer (0 the scene's).
+    /// x: matcap layer (0 the scene's), y: inactive look (see
+    /// [`InactiveLook::code`]), z: its strength.
     material: [f32; 4],
+    /// The Tint look's color (linear), w unused.
+    inactive_color: [f32; 4],
+}
+
+/// How pieces other than the active one are shown when there are several
+/// (View > Inactive pieces), so the active one stands out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InactiveLook {
+    /// Desaturated and a little darker (OxyBrush's look so far).
+    #[default]
+    GreyOut,
+    /// Darker, keeping their colors and materials.
+    Darken,
+    /// Washed with a color of your choice.
+    Tint,
+    /// As they are: true materials and colors.
+    Off,
+}
+
+impl InactiveLook {
+    pub const ALL: [InactiveLook; 4] =
+        [InactiveLook::GreyOut, InactiveLook::Darken, InactiveLook::Tint, InactiveLook::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            InactiveLook::GreyOut => "Grey out",
+            InactiveLook::Darken => "Darken",
+            InactiveLook::Tint => "Tint",
+            InactiveLook::Off => "Off (true materials)",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            InactiveLook::GreyOut => "grey",
+            InactiveLook::Darken => "darken",
+            InactiveLook::Tint => "tint",
+            InactiveLook::Off => "off",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|l| l.key() == key)
+    }
+
+    /// The shader's code for it (`Piece.material.y`).
+    fn code(self) -> f32 {
+        match self {
+            InactiveLook::Off => 0.0,
+            InactiveLook::GreyOut => 1.0,
+            InactiveLook::Darken => 2.0,
+            InactiveLook::Tint => 3.0,
+        }
+    }
 }
 
 /// Viewport backdrop: a soft radial gradient, or one flat color.
@@ -128,6 +183,11 @@ pub struct ViewSettings {
     /// Tint the surface with vertex color (painted or imported). Off shows
     /// the plain material; the colors are kept.
     pub show_vertex_color: bool,
+    /// How inactive pieces are shown, how strongly (0..=1), and the Tint
+    /// color (sRGB, 0..=1).
+    pub inactive_look: InactiveLook,
+    pub inactive_strength: f32,
+    pub inactive_color: [f32; 3],
     /// How the viewport backdrop is drawn.
     pub background_style: BackgroundStyle,
     /// Background color at the viewport edges, or the only color when
@@ -211,6 +271,9 @@ impl Default for ViewSettings {
             show_mask: true,
             show_groups: false,
             show_vertex_color: true,
+            inactive_look: InactiveLook::GreyOut,
+            inactive_strength: 1.0,
+            inactive_color: [0.25, 0.35, 0.6],
             background_style: BackgroundStyle::Gradient,
             // Neutral linear gray. The previous defaults raised blue
             // (0.010, 0.011, 0.013 and 0.062, 0.064, 0.070); after the sRGB
@@ -1344,8 +1407,19 @@ impl ViewportRenderer {
                     if settings.wireframe { 1.0 } else { 0.0 },
                     settings.wireframe_opacity,
                 ];
-                let material = [item.material.min(MATERIAL_SLOTS) as f32, 0.0, 0.0, 0.0];
-                queue.write_buffer(&gpu.piece_uniforms, 0, bytemuck::bytes_of(&PieceUniforms { flags, material }));
+                let material = [
+                    item.material.min(MATERIAL_SLOTS) as f32,
+                    settings.inactive_look.code(),
+                    settings.inactive_strength.clamp(0.0, 1.0),
+                    0.0,
+                ];
+                let c = settings.inactive_color.map(|v| v.clamp(0.0, 1.0).powf(2.2));
+                let inactive_color = [c[0], c[1], c[2], 0.0];
+                queue.write_buffer(
+                    &gpu.piece_uniforms,
+                    0,
+                    bytemuck::bytes_of(&PieceUniforms { flags, material, inactive_color }),
+                );
             }
         }
 

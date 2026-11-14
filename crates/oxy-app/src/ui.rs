@@ -648,6 +648,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     }
                     tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
                 });
+                tips::menu(ui, "Inactive pieces", plain::INACTIVE_PIECES, |ui| inactive_pieces_menu(ui, ed));
                 tips::menu(ui, "Brush cursor", "How the brush circle is drawn over the model", |ui| {
                     surface_cursor_checkbox(ui, ed);
                     ui.checkbox(&mut ed.hide_cursor_during_stroke, "Hide circle during stroke")
@@ -1060,6 +1061,38 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
         }
     });
     ed.show_print_dialog = open;
+}
+
+/// View > Inactive pieces: how pieces other than the active one are
+/// shown, so the active one stands out, or as they are.
+fn inactive_pieces_menu(ui: &mut Ui, ed: &mut Editor) {
+    use oxy_render::InactiveLook;
+    for look in InactiveLook::ALL {
+        let cmd = match look {
+            InactiveLook::GreyOut => Cmd::InactiveGrey,
+            InactiveLook::Darken => Cmd::InactiveDarken,
+            InactiveLook::Tint => Cmd::InactiveTint,
+            InactiveLook::Off => Cmd::InactiveOff,
+        };
+        if tips::hover(ui.radio(ed.view.inactive_look == look, look.label()), cmd.tip_in(&ed.keymap)).clicked() {
+            ed.view.inactive_look = look;
+        }
+    }
+    ui.add_enabled_ui(ed.view.inactive_look != InactiveLook::Off, |ui| {
+        ui.separator();
+        tips::hover(
+            ui.add(crate::widgets::Bar(
+                egui::Slider::new(&mut ed.view.inactive_strength, 0.0..=1.0).max_decimals(2).text("Strength"),
+            )),
+            plain::INACTIVE_STRENGTH,
+        );
+        if ed.view.inactive_look == InactiveLook::Tint {
+            ui.horizontal(|ui| {
+                ui.label("Color");
+                tips::hover(ui.color_edit_button_rgb(&mut ed.view.inactive_color), plain::INACTIVE_COLOR);
+            });
+        }
+    });
 }
 
 /// The color for "all good" messages, readable in light and dark themes.

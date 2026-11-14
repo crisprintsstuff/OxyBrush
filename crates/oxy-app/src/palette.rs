@@ -259,6 +259,18 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::GroupColors, "view", |e| e.view.show_groups = !e.view.show_groups),
         cmd(ed, Cmd::Shading, "view ambient occlusion cavity", Editor::toggle_shading),
         cmd(ed, Cmd::FlatShading, "view faceted polygons smooth", |e| e.view.flat_shading = !e.view.flat_shading),
+        cmd(ed, Cmd::InactiveGrey, "inactive pieces grey dim desaturate", |e| {
+            e.view.inactive_look = oxy_render::InactiveLook::GreyOut
+        }),
+        cmd(ed, Cmd::InactiveDarken, "inactive pieces darken dim dark", |e| {
+            e.view.inactive_look = oxy_render::InactiveLook::Darken
+        }),
+        cmd(ed, Cmd::InactiveTint, "inactive pieces tint color colour overlay", |e| {
+            e.view.inactive_look = oxy_render::InactiveLook::Tint
+        }),
+        cmd(ed, Cmd::InactiveOff, "inactive pieces true material off overlay none", |e| {
+            e.view.inactive_look = oxy_render::InactiveLook::Off
+        }),
         cmd(
             ed,
             Cmd::ShowVertexColor,

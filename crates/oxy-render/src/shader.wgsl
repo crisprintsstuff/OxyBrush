@@ -51,8 +51,11 @@ struct Lighting {
 struct Piece {
     // x: show face groups, y: 1 = active piece
     flags: vec4<f32>,
-    // x: matcap layer (0: the scene's matcap, 1+: a piece material)
+    // x: matcap layer (0: the scene's matcap, 1+: a piece material),
+    // y: inactive look (0 off, 1 grey out, 2 darken, 3 tint), z: strength
     material: vec4<f32>,
+    // rgb: the Tint look's color (linear)
+    inactive_color: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: Uniforms;
@@ -300,9 +303,21 @@ fn fs_main(
         color = mix(color, vec3<f32>(0.42, 0.66, 1.0) * (0.35 + lum), 0.6);
     }
     if (piece.flags.y < 0.5) {
-        // Inactive pieces are slightly desaturated and darker.
+        // Inactive pieces (View > Inactive pieces), at strength s.
+        let look = piece.material.y;
+        let s = piece.material.z;
         let lum = dot(color, vec3<f32>(0.299, 0.587, 0.114));
-        color = mix(color, vec3<f32>(lum), 0.6) * 0.75;
+        if (look > 2.5) {
+            // Tint: washed with a color, keeping the shading.
+            color = mix(color, piece.inactive_color.rgb * (0.35 + lum), 0.6 * s);
+        } else if (look > 1.5) {
+            // Darken: colors and materials kept, just darker.
+            color = color * (1.0 - 0.55 * s);
+        } else if (look > 0.5) {
+            // Grey out: desaturated and a little darker (at s = 1, the
+            // look OxyBrush always had).
+            color = mix(color, vec3<f32>(lum), 0.6 * s) * (1.0 - 0.25 * s);
+        }
     }
     if (!front) {
         color = color * vec3<f32>(0.35, 0.35, 0.45);
