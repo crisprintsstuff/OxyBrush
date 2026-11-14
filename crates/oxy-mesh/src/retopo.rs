@@ -584,12 +584,16 @@ impl Cage {
             return None;
         }
         let (triangles, diagonals, groups) = self.triangulate_with_groups();
+        let ngon_edges = ngon_inner_edges(&self.faces, &triangles);
         let groups = if groups.iter().all(|&g| g == 0) { Vec::new() } else { groups };
         let mesh =
             Mesh::from_data(MeshData { positions: self.positions.clone(), triangles, groups, ..Default::default() });
         let perm = self.adopt_order(mesh.source_vertices());
-        let diagonals = diagonals.into_iter().map(|[a, b]| edge_key(perm[a as usize], perm[b as usize])).collect();
-        mesh.set_quad_diagonals(diagonals);
+        let renumber = |e: HashSet<[u32; 2]>| -> HashSet<[u32; 2]> {
+            e.into_iter().map(|[a, b]| edge_key(perm[a as usize], perm[b as usize])).collect()
+        };
+        mesh.set_quad_diagonals(renumber(diagonals));
+        mesh.set_ngon_edges(renumber(ngon_edges));
         self.linked = Some(mesh.topology_version());
         Some((mesh, perm))
     }
@@ -655,6 +659,7 @@ impl Cage {
         let used = self.used();
         let used_count = used.iter().filter(|u| **u).count();
         let (tris, diagonals) = self.triangulate();
+        let ngon_edges = ngon_inner_edges(&self.faces, &tris);
         let source = mesh.source_vertices();
         let fits = used_count == mesh.vertex_count()
             && tris.len() == mesh.triangle_count()
@@ -664,12 +669,38 @@ impl Cage {
             return false;
         }
         let perm = self.adopt_order(source);
-        mesh.set_quad_diagonals(
-            diagonals.into_iter().map(|[a, b]| edge_key(perm[a as usize], perm[b as usize])).collect(),
-        );
+        let renumber = |e: HashSet<[u32; 2]>| -> HashSet<[u32; 2]> {
+            e.into_iter().map(|[a, b]| edge_key(perm[a as usize], perm[b as usize])).collect()
+        };
+        mesh.set_quad_diagonals(renumber(diagonals));
+        mesh.set_ngon_edges(renumber(ngon_edges));
         self.linked = Some(mesh.topology_version());
         true
     }
+}
+
+/// Edges of `triangles` that lie inside n-gons of `faces` (five or more
+/// corners): every triangle edge that isn't a polygon side (quad
+/// diagonals, which aren't sides either, are left out). `triangles` are
+/// the faces' triangles, as [`Cage::triangulate`] makes them.
+pub fn ngon_inner_edges(faces: &[Face], triangles: &[[u32; 3]]) -> HashSet<[u32; 2]> {
+    if faces.iter().all(|f| f.corners.len() <= 4) {
+        return HashSet::new();
+    }
+    let mut sides = HashSet::new();
+    let mut diagonals = HashSet::new();
+    for f in faces {
+        let c = &f.corners;
+        sides.extend((0..c.len()).map(|j| edge_key(c[j], c[(j + 1) % c.len()])));
+        if c.len() == 4 {
+            diagonals.insert(edge_key(c[0], c[2]));
+        }
+    }
+    triangles
+        .iter()
+        .flat_map(|t| (0..3).map(move |j| edge_key(t[j], t[(j + 1) % 3])))
+        .filter(|e| !sides.contains(e) && !diagonals.contains(e))
+        .collect()
 }
 
 /// Split polygon `poly` (corner indices into `positions`, in order) into
@@ -971,5 +1002,46 @@ mod tests {
             c.set_pinned(v, false);
         }
         assert!(c.pinned.is_empty());
+    }
+
+    /// An L-shaped prism: two six-sided caps and six quad sides.
+    fn l_prism() -> Cage {
+        let l = [(-1.0, -1.0), (1.0, -1.0), (1.0, 0.0), (0.0, 0.0), (0.0, 1.0), (-1.0, 1.0)];
+        let mut positions = Vec::new();
+        for y in [-0.5f32, 0.5] {
+            positions.extend(l.iter().map(|&(x, z)| Vec3::new(x, y, z)));
+        }
+        let mut faces = vec![Face::new((0..6).collect()), Face::new((6..12).rev().collect())];
+        for i in 0..6u32 {
+            let j = (i + 1) % 6;
+            faces.push(Face::new(vec![i, i + 6, j + 6, j]));
+        }
+        Cage { positions, faces, ..Default::default() }
+    }
+
+    #[test]
+    fn edges_inside_ngons_are_known_so_a_wireframe_can_leave_them_out() {
+        let mut cage = l_prism();
+        let mesh = cage.build_mesh().unwrap();
+        // Each hexagon is four triangles, so three edges inside it.
+        assert_eq!(mesh.ngon_edges().len(), 6);
+        assert_eq!(mesh.quad_count(), 6);
+        // Every triangle edge is a polygon side, a quad diagonal or inside a hexagon.
+        let sides: HashSet<[u32; 2]> = cage.edges().into_iter().collect();
+        for t in &mesh.triangles {
+            for j in 0..3 {
+                let e = edge_key(t[j], t[(j + 1) % 3]);
+                assert!(sides.contains(&e) != mesh.is_inner_edge(e), "{e:?}");
+            }
+        }
+        // A cage of quads and triangles has none.
+        let mut quads = Cage { faces: cage.faces[2..].to_vec(), ..cage.clone() };
+        assert!(quads.build_mesh().unwrap().ngon_edges().is_empty());
+        // A cage loaded from a file and relinked knows them too.
+        let saved = Mesh::from_data(mesh.to_data());
+        assert!(saved.ngon_edges().is_empty(), "a plain mesh doesn't know its polygons");
+        let mut loaded = l_prism();
+        assert!(loaded.relink(&saved));
+        assert_eq!(saved.ngon_edges().len(), 6);
     }
 }

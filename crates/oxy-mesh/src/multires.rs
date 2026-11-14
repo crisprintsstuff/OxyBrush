@@ -354,6 +354,27 @@ impl Multires {
             })
             .collect();
         mesh.set_quad_diagonals(diagonals);
+        // Edges inside n-gons of the base level (Poly Edit made them), so a
+        // wireframe shows the polygons.
+        if let Polys::Mixed { .. } = polys {
+            let mut ngon = HashSet::new();
+            for f in (0..polys.len()).filter(|&f| polys.corners(f).len() > 4) {
+                let c = polys.corners(f);
+                let sides: Vec<[u32; 2]> =
+                    (0..c.len()).map(|j| [c[j].min(c[(j + 1) % c.len()]), c[j].max(c[(j + 1) % c.len()])]).collect();
+                for t in polys.tris(f) {
+                    let tri = tris[t as usize];
+                    for j in 0..3 {
+                        let (a, b) = (tri[j], tri[(j + 1) % 3]);
+                        if !sides.contains(&[a.min(b), a.max(b)]) {
+                            let (a, b) = (mesh_of[a as usize], mesh_of[b as usize]);
+                            ngon.insert([a.min(b), a.max(b)]);
+                        }
+                    }
+                }
+            }
+            mesh.set_ngon_edges(ngon);
+        }
     }
 
     /// Whether `mesh` is the mesh this stack is showing.

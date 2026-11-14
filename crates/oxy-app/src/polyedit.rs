@@ -1246,6 +1246,14 @@ impl Editor {
         }
     }
 
+    /// The piece whose polygon edges the viewport draws as a depth-tested
+    /// wireframe: the edited piece, unless the smooth preview is shown
+    /// (then the cage floats off the smoothed surface and is drawn on top).
+    pub fn poly_wire_piece(&self) -> Option<u64> {
+        let pe = self.poly_edit.as_ref()?;
+        pe.smooth.is_none().then_some(pe.piece)
+    }
+
     /// The piece shown smoothed, while the preview is on.
     pub fn poly_smooth_piece(&self) -> Option<u64> {
         let pe = self.poly_edit.as_ref()?;
@@ -1823,5 +1831,22 @@ mod tests {
         let c = cage(&e).clone();
         polyedit::validate(&c).unwrap();
         assert_eq!(c.faces.len(), 26, "{}", e.status);
+    }
+
+    #[test]
+    fn the_viewport_draws_the_cage_edges_depth_tested_unless_smoothed() {
+        let mut e = editor();
+        assert_eq!(e.poly_wire_piece(), None);
+        e.start_poly_edit();
+        assert_eq!(e.poly_wire_piece(), Some(e.scene.active().id));
+        // The smooth preview floats off the cage: the overlay draws the cage on top.
+        e.poly_edit.as_mut().unwrap().smooth_preview = 2;
+        e.update_poly_smooth();
+        assert_eq!(e.poly_wire_piece(), None);
+        e.poly_edit.as_mut().unwrap().smooth_preview = 0;
+        e.update_poly_smooth();
+        assert_eq!(e.poly_wire_piece(), Some(e.scene.active().id));
+        e.finish_poly_edit();
+        assert_eq!(e.poly_wire_piece(), None);
     }
 }
