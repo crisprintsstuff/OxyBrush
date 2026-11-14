@@ -164,6 +164,18 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Mesh > Split masked (also in the Mask menu) moves the masked part of the active piece into a new piece; invert the mask first to split off the unmasked part instead.",
     },
     Topic {
+        title: "Surface instances",
+        keywords: "instances instancing copies copy clone scatter rivets spikes scales studs array repeat make real source",
+        body: "Copy one piece onto the surface of another: a rivet on every face of a plate, spikes on a ball, scales on one face group. The copies follow the surface as you sculpt it.\n\n\
+- Make the piece to copy first (add or import it), then make the other piece active. In the right panel's Instances section, pick the piece to copy and click Copy onto this piece. The copied piece is hidden and marked \"copied\" in the Pieces list.\n\
+- On: every face (quads stay whole), every point, or only the faces of one face group (Groups menu to make one).\n\
+- Facing: which way each copy turns around the surface normal. World direction (+Z by default) keeps neighbours facing the same way; Longest edge and First edge follow each face but can flip between neighbours; Random turns each one differently.\n\
+- Size is the copy's largest side, as a share of the face or in scene units. Lift raises copies off the surface or sinks them in; Turn spins them all; Vary size and Vary turn add randomness, and Seed picks another random mix.\n\
+- Edit source shows the copied piece alone, with every tool; Done editing source goes back. Every copy follows the changes.\n\
+- Make real turns the copies into a new piece of ordinary mesh, one face group per copy, and keeps the copies, so you can change them and make them real again. Remove deletes the copies and shows the copied piece again.\n\
+- Every change is one undo step. Exports don't include the copies: Make real first.",
+    },
+    Topic {
         title: "Painting color",
         keywords: "vertex color colour paint fill cavity dirt import obj ply mrgb painted show hide toggle view",
         body: "The Paint brush (last in the shelf) colors the surface without changing its shape; Alt erases back to white. Pick a color or swatch in its settings. Alphas, spray and symmetry work as with other brushes.\n\n\

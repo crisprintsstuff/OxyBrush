@@ -55,6 +55,27 @@ pub struct Piece {
     /// The matcap the piece is shown with, if not the scene's: `preset:KEY`
     /// (a built-in matcap) or `custom:NAME` (a matcap the user loaded).
     pub material: Option<String>,
+    /// Surface instances on this piece (RFC 0022): copies of other pieces
+    /// placed on its surface, written as the `INST` section.
+    pub instancers: Vec<Instancer>,
+}
+
+/// Copies of one piece (the source) on the surface of the piece that owns
+/// this (the host), RFC 0022. The source is an ordinary piece, kept
+/// hidden; the copies are drawn from it, so editing it updates them all.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Instancer {
+    /// The source piece's id.
+    pub source: u64,
+    pub settings: oxy_mesh::instances::Settings,
+}
+
+/// An [`Instancer`] as saved: the source by its place in the scene's list
+/// of pieces, since piece ids aren't saved.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SavedInstancer {
+    pub source: u32,
+    pub settings: oxy_mesh::instances::Settings,
 }
 
 /// An open Curve Move curve (RFC 0005), as saved with the project: the
@@ -169,6 +190,7 @@ impl Piece {
             curve: None,
             strokes: None,
             material: None,
+            instancers: Vec::new(),
         }
     }
 
@@ -213,6 +235,7 @@ impl Piece {
                     curve: None,
                     strokes: None,
                     material: self.material.clone(),
+                    instancers: Vec::new(),
                 }
             }
             None => PieceData {
@@ -227,6 +250,7 @@ impl Piece {
                 curve: self.curve.clone(),
                 strokes: None,
                 material: self.material.clone(),
+                instancers: Vec::new(),
             },
         }
     }
@@ -256,6 +280,9 @@ pub struct PieceData {
     pub strokes: Option<SavedStrokes>,
     /// The `MATL` section: the piece's own matcap (see [`Piece::material`]).
     pub material: Option<String>,
+    /// The `INST` section: surface instances. Filled in by
+    /// [`Scene::to_data`], which knows the pieces' places in the list.
+    pub instancers: Vec<SavedInstancer>,
 }
 
 impl PieceData {
@@ -306,6 +333,7 @@ impl PieceData {
             curve: self.curve,
             strokes,
             material: self.material,
+            instancers: Vec::new(),
         }
     }
 }
@@ -426,6 +454,10 @@ impl Scene {
         self.pieces.iter().position(|p| p.id == id)
     }
 
+    pub fn get(&self, id: u64) -> Option<&Piece> {
+        self.pieces.iter().find(|p| p.id == id)
+    }
+
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Piece> {
         self.pieces.iter_mut().find(|p| p.id == id)
     }
@@ -447,19 +479,42 @@ impl Scene {
     }
 
     pub fn to_data(&self) -> SceneData {
-        SceneData {
-            pieces: self.pieces.iter().map(Piece::to_data).collect(),
-            active: self.active_index(),
-            alphas: Vec::new(),
+        let mut pieces: Vec<PieceData> = self.pieces.iter().map(Piece::to_data).collect();
+        for (data, p) in pieces.iter_mut().zip(&self.pieces) {
+            data.instancers = p
+                .instancers
+                .iter()
+                .filter_map(|ins| {
+                    let source = self.index_of(ins.source)?;
+                    Some(SavedInstancer { source: source as u32, settings: ins.settings })
+                })
+                .collect();
         }
+        SceneData { pieces, active: self.active_index(), alphas: Vec::new() }
     }
 
     /// Returns None for a scene without pieces.
-    pub fn from_data(data: SceneData) -> Option<Self> {
+    pub fn from_data(mut data: SceneData) -> Option<Self> {
         if data.pieces.is_empty() {
             return None;
         }
-        let pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
+        let saved: Vec<Vec<SavedInstancer>> =
+            data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
+        let mut pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
+        // Sources are found by their place in the list; ids are new.
+        let ids: Vec<u64> = pieces.iter().map(|p| p.id).collect();
+        for (i, (p, list)) in pieces.iter_mut().zip(saved).enumerate() {
+            p.instancers = list
+                .into_iter()
+                .filter_map(|s| {
+                    let ok = s.source as usize != i && (s.source as usize) < ids.len();
+                    if !ok {
+                        log::warn!("ignoring surface instances with a missing source on piece {:?}", p.name);
+                    }
+                    ok.then(|| Instancer { source: ids[s.source as usize], settings: s.settings })
+                })
+                .collect();
+        }
         let active = data.active.min(pieces.len() - 1);
         Some(Self { pieces, active })
     }

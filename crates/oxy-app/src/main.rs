@@ -10,6 +10,8 @@ mod deform_ui;
 mod editor;
 mod gizmo_ops;
 mod guide;
+mod instances;
+mod instances_ui;
 mod keymap;
 mod lights_ui;
 mod living;

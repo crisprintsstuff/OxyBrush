@@ -63,6 +63,9 @@ pub struct App {
     /// Material keys in the renderer's piece material slots (slot `i + 1`),
     /// so a slot is only uploaded again when what it holds changes.
     material_slots: Vec<Option<String>>,
+    /// The generation of each surface-instance buffer last sent to the
+    /// renderer, so transforms are uploaded only when they change.
+    instance_uploaded: std::collections::HashMap<u64, u64>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
     /// When the last pen pressure reading arrived (a pen is in use).
@@ -211,6 +214,7 @@ impl App {
             },
             applied_matcap: None,
             material_slots: vec![None; oxy_render::MATERIAL_SLOTS as usize],
+            instance_uploaded: Default::default(),
             mmb_scroll: None,
             last_pressure: None,
             pen_press: None,
@@ -660,7 +664,10 @@ impl App {
             p.material.clone()
         };
         let mut wanted: Vec<String> = Vec::new();
-        for p in ed.scene.pieces.iter().filter(|p| p.visible) {
+        // Hidden sources of surface instances are drawn as their copies.
+        let sources: Vec<u64> =
+            ed.scene.pieces.iter().filter(|p| p.visible).flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
+        for p in ed.scene.pieces.iter().filter(|p| p.visible || sources.contains(&p.id)) {
             if let Some(k) = piece_key(p)
                 && ed.resolve_material(&k).is_some()
                 && !wanted.contains(&k)
@@ -714,6 +721,24 @@ impl App {
                 });
             }
         }
+        // Surface instances: the source's mesh, drawn once per copy. The
+        // transforms are uploaded only when they change.
+        let draws = ed.instance_draws();
+        for d in &draws {
+            if self.instance_uploaded.get(&d.key) != Some(&d.generation) {
+                g.viewport.set_instances(&g.device, &g.queue, d.key, &d.transforms);
+                self.instance_uploaded.insert(d.key, d.generation);
+            }
+            items.push(oxy_render::DrawItem {
+                id: d.source,
+                active: d.host == active,
+                preview: false,
+                material: slot_of(d.source),
+                instances: Some(d.key),
+            });
+        }
+        self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
+        g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
         if let Some(preview) = ed.preview_mesh_mut() {
             g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
             // A piece shown in place (a curve stroke) keeps its material.

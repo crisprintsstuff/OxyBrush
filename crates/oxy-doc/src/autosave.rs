@@ -155,6 +155,7 @@ mod tests {
                 curve: None,
                 strokes: None,
                 material: None,
+                instancers: Vec::new(),
             }],
             active: 0,
             alphas: Vec::new(),

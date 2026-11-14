@@ -4146,6 +4146,10 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
     let layers_open = ed.living.enabled;
     widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| crate::living_ui::layers_section(ui, ed));
+    let has_copies = !ed.scene.active().instancers.is_empty() || ed.editing_source.is_some();
+    widgets::section(ui, "Instances", plain::SECTION_INSTANCES, has_copies, |ui| {
+        crate::instances_ui::section(ui, ed, busy)
+    });
     let brush_title = format!("{} brush", ed.brush_kind.label());
     widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
     widgets::section(ui, "Stroke", plain::SECTION_STROKE, false, |ui| stroke_section(ui, ed));
@@ -4187,6 +4191,7 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
 fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
+    let sources: Vec<u64> = ed.scene.pieces.iter().flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
         let (fill, stroke) = if i == active {
             widgets::selected_look(ui.visuals(), 0.18)
@@ -4218,6 +4223,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         select = Some(i);
                     }
                     ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
+                    if sources.contains(&p.id) {
+                        tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
+                    }
                 });
             });
     }
@@ -5922,7 +5930,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
 }
 
-fn fmt_count(n: usize) -> String {
+pub(crate) fn fmt_count(n: usize) -> String {
     if n >= 1_000_000 {
         format!("{:.2}M", n as f64 / 1e6)
     } else if n >= 10_000 {

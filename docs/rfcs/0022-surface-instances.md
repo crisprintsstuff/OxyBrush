@@ -1,6 +1,6 @@
 # RFC 0022: Surface instances (plan)
 
-Status: accepted in outline (open questions answered by the maintainer, 2026-11-14)
+Status: accepted; phase 1 implemented (rigid copies on faces, points and face groups, Edit source, Make real, `INST` section)
 
 ## Summary
 
