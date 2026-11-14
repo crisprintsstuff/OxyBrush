@@ -62,8 +62,13 @@ pub enum BrushKind {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum InsertShape {
+    /// Geodesic (triangles).
     #[default]
     Sphere,
+    /// A cube projected onto a sphere: quads, good for subdivision levels.
+    QuadSphere,
+    /// Rings and segments, poles at top and bottom.
+    UvSphere,
     Cube,
     Cylinder,
     Cone,
@@ -72,8 +77,10 @@ pub enum InsertShape {
 }
 
 impl InsertShape {
-    pub const ALL: [InsertShape; 6] = [
+    pub const ALL: [InsertShape; 8] = [
         InsertShape::Sphere,
+        InsertShape::QuadSphere,
+        InsertShape::UvSphere,
         InsertShape::Cube,
         InsertShape::Cylinder,
         InsertShape::Cone,
@@ -84,6 +91,8 @@ impl InsertShape {
     pub fn label(self) -> &'static str {
         match self {
             InsertShape::Sphere => "Sphere",
+            InsertShape::QuadSphere => "Quad sphere",
+            InsertShape::UvSphere => "UV sphere",
             InsertShape::Cube => "Cube",
             InsertShape::Cylinder => "Cylinder",
             InsertShape::Cone => "Cone",
@@ -100,6 +109,21 @@ impl InsertShape {
         match self {
             InsertShape::Sphere => {
                 let mut m = oxy_mesh::primitives::icosphere(3, 1.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            // About as many triangles as the geodesic sphere (1,280).
+            InsertShape::QuadSphere => {
+                let mut m = oxy_mesh::primitives::quad_sphere(10, 1.0);
+                for p in &mut m.positions {
+                    p.y += 1.0;
+                }
+                m
+            }
+            InsertShape::UvSphere => {
+                let mut m = oxy_mesh::primitives::uv_sphere(32, 16, 1.0);
                 for p in &mut m.positions {
                     p.y += 1.0;
                 }
@@ -1695,6 +1719,20 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_insert_shape_sits_on_its_base_facing_up() {
+        for shape in InsertShape::ALL {
+            let m = shape.build_mesh();
+            // From the points: `bounds()` is cached from before the shift up.
+            let b = oxy_mesh::Aabb::from_points(m.positions.iter().copied());
+            assert!(b.min.y > -0.01, "{shape:?} sits on Y = 0: {b:?}");
+            assert!(b.max.y > 0.0 || shape == InsertShape::Plane, "{shape:?}");
+            assert!((b.min.x + b.max.x).abs() < 0.05 && (b.min.z + b.max.z).abs() < 0.05, "{shape:?} centred");
+            assert_eq!(preset::shape_from_key(preset::shape_key(shape)), Some(shape));
+        }
+        assert!(InsertShape::QuadSphere.build_mesh().quad_count() >= 500, "quads");
+    }
 
     #[test]
     fn modulation_scales_dab_size_and_strength() {

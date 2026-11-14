@@ -268,6 +268,8 @@ pub fn legacy_kind_key(key: &str) -> &str {
 pub fn shape_key(s: crate::InsertShape) -> &'static str {
     match s {
         crate::InsertShape::Sphere => "sphere",
+        crate::InsertShape::QuadSphere => "quad_sphere",
+        crate::InsertShape::UvSphere => "uv_sphere",
         crate::InsertShape::Cube => "cube",
         crate::InsertShape::Cylinder => "cylinder",
         crate::InsertShape::Cone => "cone",

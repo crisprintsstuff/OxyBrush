@@ -6359,6 +6359,19 @@ impl Editor {
         };
     }
 
+    /// After an edit that changes the mask on its own (Insert Primitive
+    /// masks what was there; Duplicate geometry masks the original): let the
+    /// gizmo find its pivot again, if it follows the mask. With following
+    /// off, the pivot it was keeping stays where it is (it used to jump
+    /// to the inserted primitive, since clearing it made the gizmo find a
+    /// new one from the new mask).
+    fn forget_followed_pivot(&mut self) {
+        self.gizmo_pivot = None;
+        if self.gizmo_pivot_follows {
+            self.custom_gizmo_pivot = None;
+        }
+    }
+
     /// Reset custom gizmo pivot and orientation to the unmasked geometry centre.
     pub fn reset_gizmo_pivot(&mut self) {
         self.kept_pivot_of = None;
@@ -6411,8 +6424,7 @@ impl Editor {
         let prev_mesh = std::mem::replace(&mut piece.mesh, new_mesh);
         let prev_multires = piece.multires.take();
         self.history.record_topology("Duplicate geometry", id, prev_mesh, prev_multires);
-        self.gizmo_pivot = None;
-        self.custom_gizmo_pivot = None;
+        self.forget_followed_pivot();
         self.status = "Duplicated unmasked geometry".into();
         true
     }
@@ -6490,8 +6502,7 @@ impl Editor {
         let prev_mesh = std::mem::replace(&mut piece.mesh, new_mesh);
         let prev_multires = piece.multires.take();
         self.history.record_topology(format!("Insert {}", shape.label()), id, prev_mesh, prev_multires);
-        self.gizmo_pivot = None;
-        self.custom_gizmo_pivot = None;
+        self.forget_followed_pivot();
         self.status = format!("Inserted {} (pre-existing mesh masked)", shape.label());
     }
 
@@ -10692,6 +10703,42 @@ mod tests {
         // And as an extra piece.
         e.add_primitive("human_female");
         assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn inserting_a_primitive_keeps_a_pivot_that_doesnt_follow_the_mask() {
+        let mut e = editor();
+        e.symmetry = Symmetry::default();
+        e.gizmo = Some(GizmoMode::Move);
+        // Off: the pivot found once stays, even though Insert Primitive
+        // masks everything that was there before.
+        e.set_gizmo_pivot_follows(false);
+        let kept = e.gizmo_base_pivot().unwrap();
+        e.commit_inserted_primitive(Vec3::new(1.0, 0.0, 0.0), Vec3::X, 0.3, oxy_sculpt::InsertShape::Cube);
+        assert!(e.status.starts_with("Inserted"), "{}", e.status);
+        assert_eq!(e.gizmo_base_pivot().unwrap(), kept, "the pivot stays put");
+        // Following: it moves to what can move now, the inserted shape.
+        e.undo();
+        e.set_gizmo_pivot_follows(true);
+        let before = e.gizmo_base_pivot().unwrap();
+        e.commit_inserted_primitive(Vec3::new(1.0, 0.0, 0.0), Vec3::X, 0.3, oxy_sculpt::InsertShape::Cube);
+        let after = e.gizmo_base_pivot().unwrap();
+        assert!(after.x > before.x + 0.3, "follows the new mask: {before} -> {after}");
+    }
+
+    #[test]
+    fn the_quad_and_uv_spheres_can_be_inserted() {
+        let mut e = editor();
+        e.symmetry = Symmetry::default();
+        for shape in [oxy_sculpt::InsertShape::QuadSphere, oxy_sculpt::InsertShape::UvSphere] {
+            let before = e.scene.active().mesh.triangle_count();
+            let quads = e.scene.active().mesh.quad_count();
+            e.commit_inserted_primitive(Vec3::new(0.0, 1.0, 0.0), Vec3::Y, 0.2, shape);
+            let m = &e.scene.active().mesh;
+            assert!(m.triangle_count() > before, "{shape:?} inserted");
+            assert!(m.quad_count() > quads + 100, "{shape:?} comes in as quads");
+            assert_eq!(e.history.undo_labels().last(), Some(format!("Insert {}", shape.label()).as_str()));
+        }
     }
 
     #[test]
