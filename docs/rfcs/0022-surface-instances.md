@@ -1,6 +1,6 @@
 # RFC 0022: Surface instances (plan)
 
-Status: proposed
+Status: accepted in outline (open questions answered by the maintainer, 2026-11-14)
 
 ## Summary
 
@@ -53,18 +53,21 @@ same as real mesh is millions of triangles.
 
 An **instancer** belongs to the host piece (a host can have several):
 
-- `source`: a piece id. The source piece is hidden by default and shown
-  in its own place while it's being edited.
+- `source`: a piece id. The source piece is hidden and isn't sculpted
+  directly from the Pieces list: **Edit source** (a mode on the host's
+  instancer) shows it alone, in its own place, to edit it.
 - `place`: **faces** (each polygon, quads kept from the piece's
   polygons when it has them), **points**, **edges** (copies stretched or
   centred along each edge), **group** (faces of one face group),
   **mask** (where the mask is above a threshold), or **scatter**
   (Poisson-disk at a spacing, on all, a group, or the masked part).
 - `orient`: the copy's up axis follows the surface **normal**; its
-  forward axis follows the face's **longest edge**, **first edge**, a
-  **direction** in the world (the default: no flipping between
-  neighbours), or a **random** spin. Mirroring follows the host's
-  symmetry, so left and right copies match.
+  forward axis is a choice in each instancer: a **direction** in the
+  world (the default: copies never flip between neighbours, but can look
+  turned on a strongly curved host), the face's **longest edge**
+  (follows the surface, can flip between neighbours), its **first
+  edge**, or a **random** spin. Mirroring follows the host's symmetry, so
+  left and right copies match.
 - `size`: absolute (scene units), relative to the face, or **fit**
   (see below); plus **height** separately, so studs don't grow taller on
   bigger faces.
@@ -110,7 +113,9 @@ note.
 - **Make real** writes the copies into a new piece (or into the host),
   one face group per copy, through the normal add-piece and topology undo.
   A count and triangle estimate are shown first; above the triangle limit
-  it asks.
+  it asks. The instancer and its source are **kept** (hidden), so after
+  changing the source or the host you can make it real again; Remove
+  instancer deletes them when you're done.
 - **glTF/GLB export**: rigid copies as `EXT_mesh_gpu_instancing` on a
   node (tiny files, three.js and engines keep them as instances), or
   realized, by an export option, since not every importer reads the
@@ -154,13 +159,10 @@ and the (hidden) source as ordinary pieces, nothing lost.
 - Physics or collision between copies.
 - Sculpting one copy differently from the others (make it real first).
 
-## Open questions
+## Decisions
 
-- Should **Edit source** be a mode on the host (the source stays hidden
-  in the Pieces list), or is the source an ordinary visible piece you
-  switch to?
-- Default **orientation** for faces: a world direction (consistent, may
-  look rotated on curved hosts) or the longest edge (follows the
-  surface, may flip between neighbours)?
-- Should Make real keep the instancer (so it can be re-made after
-  changes) or remove it?
+- **Edit source** is a mode on the host's instancer; the source stays a
+  hidden piece.
+- **Orientation** is chosen per instancer (world direction, longest
+  edge, first edge, random); world direction is the default.
+- **Make real** keeps the instancer and its source.
