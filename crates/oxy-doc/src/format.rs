@@ -44,6 +44,11 @@
 //!   `vcount:u32 rgb:f32*3v` (sRGB, 0..=1), indexed like its positions.
 //!   Only written for painted pieces; older readers skip it and show the
 //!   piece unpainted.
+//! - `UVCO` (optional, since 4.0.0-beta.11): texture coordinates of the
+//!   **preceding** `PIEC`, per triangle corner (RFC 0020): `tcount:u32
+//!   uv:f32*6t` (u, v for each of a triangle's three corners, in the
+//!   `PIEC`'s triangle order; v points up, UDIM tiles count up from 0..1).
+//!   Older readers skip it and open the piece without UVs.
 //! - `VMAP` (optional, since 2.5.8): vertex origin of the **preceding**
 //!   `PIEC`: `vcount:u32 source:u32*vcount`. `source[i]` is the index of
 //!   vertex `i` in the vertex array of the `PIEC` the piece was originally
@@ -207,6 +212,17 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
             sections.push((*b"STRK", encode_strokes(st)));
+        }
+        if !p.mesh.uv.is_empty() && p.mesh.uv.len() == p.mesh.triangles.len() {
+            let mut b = Vec::with_capacity(4 + p.mesh.uv.len() * 24);
+            b.extend_from_slice(&(p.mesh.uv.len() as u32).to_le_bytes());
+            for t in &p.mesh.uv {
+                for c in t {
+                    b.extend_from_slice(&c.x.to_le_bytes());
+                    b.extend_from_slice(&c.y.to_le_bytes());
+                }
+            }
+            sections.push((*b"UVCO", b));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -389,6 +405,21 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     piece.multires = Some(mr);
                 } else {
                     log::warn!("ignoring subdivision levels that don't match piece {:?}", piece.name);
+                }
+            }
+            b"UVCO" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("UVCO before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let n = r.u32()? as usize;
+                if n == piece.mesh.triangles.len() {
+                    piece.mesh.uv = (0..n)
+                        .map(|_| {
+                            let mut uv = || -> Result<oxy_mesh::Vec2> { Ok(oxy_mesh::Vec2::new(r.f32()?, r.f32()?)) };
+                            Ok([uv()?, uv()?, uv()?])
+                        })
+                        .collect::<Result<_>>()?;
+                } else {
+                    log::warn!("ignoring UVs that don't match piece {:?}", piece.name);
                 }
             }
             b"VCOL" => {
@@ -1182,6 +1213,24 @@ mod tests {
             active: 1,
             alphas: Vec::new(),
         }
+    }
+
+    #[test]
+    fn uvs_roundtrip_per_corner_and_are_optional() {
+        let mut s = sample();
+        assert_eq!(encode(&s).windows(4).filter(|w| w == b"UVCO").count(), 0, "no UVs, no section");
+        let m = &mut s.pieces[0].mesh;
+        m.uv = (0..m.triangles.len())
+            .map(|t| std::array::from_fn(|k| oxy_mesh::Vec2::new(t as f32 + 0.25 * k as f32, 1.5 - k as f32)))
+            .collect();
+        let bytes = encode(&s);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"UVCO").count(), 1);
+        let d = decode(&bytes).unwrap();
+        assert_eq!(d.pieces[0].mesh.uv, s.pieces[0].mesh.uv);
+        assert!(d.pieces[1].mesh.uv.is_empty());
+        // UVs that don't cover every triangle aren't written.
+        s.pieces[0].mesh.uv.pop();
+        assert_eq!(encode(&s).windows(4).filter(|w| w == b"UVCO").count(), 0);
     }
 
     #[test]

@@ -613,7 +613,15 @@ impl Work {
         let groups = (0..self.tris.len()).filter(|&i| keep(i)).map(|i| self.groups[i]).collect();
         let hidden = (0..self.tris.len()).filter(|&i| keep(i)).map(|i| self.hidden[i]).collect();
         // Unreferenced (collapsed) vertices are dropped by the rebuild.
-        Mesh::from_data(MeshData { positions: self.pos, triangles, mask: self.mask, groups, hidden, color: self.color })
+        Mesh::from_data(MeshData {
+            positions: self.pos,
+            triangles,
+            mask: self.mask,
+            groups,
+            hidden,
+            color: self.color,
+            uv: Vec::new(),
+        })
     }
 }
 

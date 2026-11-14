@@ -735,6 +735,7 @@ impl Multires {
             groups: a.groups,
             hidden: a.hidden,
             color: a.color,
+            uv: Vec::new(),
         }
     }
 

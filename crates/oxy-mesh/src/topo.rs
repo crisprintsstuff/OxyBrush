@@ -432,7 +432,15 @@ pub fn subdivide(mesh: &Mesh, smooth_passes: u32) -> Mesh {
     // Each parent triangle becomes four consecutive children.
     let groups = mesh.groups().iter().flat_map(|&g| [g; 4]).collect();
     let hidden = mesh.hidden().iter().flat_map(|&h| [h; 4]).collect();
-    let mut out = Mesh::from_data(crate::MeshData { positions: pos, triangles: tris, mask, groups, hidden, color });
+    let mut out = Mesh::from_data(crate::MeshData {
+        positions: pos,
+        triangles: tris,
+        mask,
+        groups,
+        hidden,
+        color,
+        uv: Vec::new(),
+    });
     for _ in 0..smooth_passes {
         let prev = out.positions.clone();
         for v in 0..out.vertex_count() {
