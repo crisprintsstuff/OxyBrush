@@ -18,6 +18,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 - **Lights without shadows no longer end in a hard line.** Every light now fades gently where the surface turns away from it, set by its **Softness** (now always available, not only with shadows on). A light with shadows got that softening from its shadow; one without stopped abruptly, and the tone curve made the edge look like a line.
+- **Low-poly models shade with crisp, flat faces.** A box from Insert Primitive or Poly Edit looked blotchy, with highlights and a dark band smeared across its faces and edges, under both the matcap and the viewport lights. Each corner had one normal, averaged from the faces meeting there, so every face shaded as if it were curved. The viewport now gives faces meeting at more than 60° their own normals at the shared corner, so a box shades as a box. Spheres, cylinders with six or more sides, and sculpts stay smooth. Only the viewport changes: the mesh, exports and brushes are as before. Finding these edges adds about 10 ms when a 1.3 million-triangle mesh is rebuilt (0.7 ms at 82,000) and nothing measurable per brush dab.
 
 ## [4.0.0-beta.13] - 2026-11-15
 
