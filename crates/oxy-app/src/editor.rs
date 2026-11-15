@@ -1303,6 +1303,10 @@ pub struct Editor {
     /// The piece the Pieces panel's Boolean row combines with (the last one
     /// picked, while it exists).
     pub boolean_with: Option<u64>,
+    /// Edge loop at mask border: a loop on both sides, and how far from
+    /// the border (share of the neighbouring faces).
+    pub edge_loop_both_sides: bool,
+    pub edge_loop_width: f32,
     /// The piece the Instances section copies onto the active piece.
     pub instance_pick: Option<u64>,
     /// Edit source (surface instances): the source shown alone.
@@ -1579,6 +1583,8 @@ impl Default for Editor {
             show_print_dialog: false,
             show_diagnostics: false,
             boolean_with: None,
+            edge_loop_both_sides: true,
+            edge_loop_width: 0.25,
             instance_pick: None,
             editing_source: None,
             instancer_before: None,
@@ -5769,6 +5775,50 @@ impl Editor {
         let after = out.triangles.len();
         self.replace_active_mesh("Subdivide masked", Mesh::from_data(out));
         self.status = format!("Subdivided the masked part: {before} → {after} triangles");
+    }
+
+    /// Add a loop of quads along the border of the masked part (visible
+    /// triangles whose three corners are all at least half masked, so a
+    /// face group masked with Ctrl+M gives exactly that group's border),
+    /// on both sides with the option on:
+    /// support loops for hard edges. One undo step; removes subdivision
+    /// levels, like Subdivide masked.
+    pub fn edge_loop_masked(&mut self) {
+        let data = self.scene.active().mesh.to_data();
+        let chosen: Vec<bool> = data
+            .triangles
+            .iter()
+            .enumerate()
+            .map(|(t, tri)| {
+                tri.iter().all(|&v| data.mask.get(v as usize).copied().unwrap_or(0.0) >= 0.5)
+                    && !data.hidden.get(t).copied().unwrap_or(false)
+            })
+            .collect();
+        if !chosen.iter().any(|&c| c) {
+            self.status =
+                "Nothing masked: mask the part whose edge should be sharp first (Ctrl+M masks a face group)".into();
+            return;
+        }
+        let Some((out, edges)) =
+            oxy_mesh::topo::edge_loops_at_border(&data, &chosen, self.edge_loop_width, self.edge_loop_both_sides)
+        else {
+            self.status = "The masked part has no border to put a loop along (everything visible is masked)".into();
+            return;
+        };
+        if self.max_triangles > 0 && out.triangles.len() > self.max_triangles {
+            self.status = format!(
+                "The edge loop would make over {} triangles (limit {}, raise in Settings or OXYBRUSH_MAX_TRIANGLES)",
+                out.triangles.len(),
+                self.max_triangles
+            );
+            return;
+        }
+        let added = out.triangles.len() - data.triangles.len();
+        let sides = if self.edge_loop_both_sides { "on both sides of" } else { "inside" };
+        self.replace_active_mesh("Edge loop at mask border", Mesh::from_data(out));
+        self.status = format!(
+            "Added an edge loop {sides} the mask border: {edges} edges, {added} new triangles, in a new face group"
+        );
     }
 
     /// Fill every hole (open boundary) in the active piece with a smooth
@@ -12650,6 +12700,31 @@ mod tests {
         e.undo();
         assert_eq!(e.scene.get(host).unwrap().instancers.len(), 1);
         assert!(!e.scene.get(rivet).unwrap().visible);
+    }
+
+    #[test]
+    fn edge_loop_at_mask_border_adds_support_loops_as_one_undo_step() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.triangle_count();
+        e.edge_loop_masked();
+        assert!(e.status.starts_with("Nothing masked"), "{}", e.status);
+        assert_eq!(e.scene.active().mesh.triangle_count(), before);
+        let mask: Vec<f32> =
+            e.scene.active().mesh.positions.iter().map(|p| if p.y > 0.3 { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+        e.edge_loop_both_sides = false;
+        e.edge_loop_masked();
+        let one = e.scene.active().mesh.triangle_count();
+        assert!(one > before, "{}", e.status);
+        assert!(e.status.contains("inside the mask border"), "{}", e.status);
+        let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
+        assert_eq!(groups.len(), 2, "the loop is a face group of its own");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), before, "one undo step");
+        e.edge_loop_both_sides = true;
+        e.edge_loop_masked();
+        let both = e.scene.active().mesh.triangle_count();
+        assert_eq!(both - before, 2 * (one - before), "a loop on each side");
     }
 
     /// Groups of the active piece's triangles, and how many have `g`.

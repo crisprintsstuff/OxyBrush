@@ -3710,6 +3710,7 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
         ed.subdivide_masked();
     }
+    edge_loop_menu(ui, ed);
     if tips::button(ui, "Subdivide (single mesh)", Cmd::SubdivideOnce).clicked() {
         ed.subdivide(ed.subdivision_smooth);
     }
@@ -4134,6 +4135,7 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
         ed.subdivide_masked();
     }
+    edge_loop_menu(ui, ed);
     ui.separator();
     if tips::hover(ui.button("Blur"), Cmd::BlurMask.tip_in(&ed.keymap)).clicked() {
         ed.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
@@ -6051,6 +6053,24 @@ fn gltf_compression_choice(ui: &mut Ui, ed: &mut Editor) {
         };
         ui.radio_value(&mut ed.gltf_compression, c, c.label()).on_hover_text(tip);
     }
+}
+
+/// Edge loop at mask border, with its options (Mask and Mesh menus).
+fn edge_loop_menu(ui: &mut Ui, ed: &mut Editor) {
+    tips::menu(ui, "Edge loop at mask border", &Cmd::EdgeLoopMask.tip(), |ui| {
+        if tips::button(ui, "Add edge loop", Cmd::EdgeLoopMask).clicked() {
+            ed.edge_loop_masked();
+            ui.close();
+        }
+        tips::check_plain(ui, &mut ed.edge_loop_both_sides, "Both sides", plain::EDGE_LOOP_BOTH);
+        ui.horizontal(|ui| {
+            tips::hover(ui.label("Width"), plain::EDGE_LOOP_WIDTH);
+            tips::hover(
+                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.edge_loop_width, 0.05..=0.5).max_decimals(2))),
+                plain::EDGE_LOOP_WIDTH,
+            );
+        });
+    });
 }
 
 #[cfg(test)]
