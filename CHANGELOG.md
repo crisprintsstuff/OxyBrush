@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Poly Edit: pick several faces** ([#243](https://github.com/crisprintsstuff/OxyBrush/issues/243)): Ctrl/Cmd+click faces to pick them (outlined in green); dragging or clicking one of them then extrudes, insets, bevels, moves or deletes them all together. Ctrl/Cmd+click a picked face to unpick it, or empty space to clear; the Poly Edit window shows how many are picked, with a Clear button. The pick ends once the faces change.
+- **Poly Edit: centred and paired edge loops** ([#243](https://github.com/crisprintsstuff/OxyBrush/issues/243)): **Shift+click** an edge with Insert loop to put the loop exactly in the middle. **Two loops** cuts a pair the same distance in from each end of the edge; dragging slides them in or out together, and Shift+click puts them at thirds.
+
 ### Fixed
 - **Poly Edit uses face groups painted since it was last open** ([#249](https://github.com/crisprintsstuff/OxyBrush/issues/249)). It kept the piece's polygons with their old groups, so after painting new face groups (Paint Groups brush, Groups menu), **Reach: Face group** still extruded the previous group. It now takes the current groups when it opens and whenever they change while it's open.
 
