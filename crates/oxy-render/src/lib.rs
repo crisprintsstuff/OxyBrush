@@ -7,6 +7,7 @@
 //! (hidden triangles are left out of the index buffer).
 
 mod camera;
+mod hard_edges;
 pub mod lighting;
 pub mod matcap;
 
@@ -360,6 +361,8 @@ struct GpuMesh {
     topology_version: u64,
     face_version: u64,
     group_lut: Vec<u32>,
+    /// Vertices drawn with one normal per smooth fan (hard edges).
+    hard: hard_edges::HardEdges,
 }
 
 pub struct ViewportRenderer {
@@ -1108,8 +1111,21 @@ impl ViewportRenderer {
             let lut: Vec<u32> = (0..=max_group).map(|g| group_color(g as u32)).collect();
             let vertex_lut: &[u32] = if self.exact_face_colors { &[] } else { &lut };
             let m: &Mesh = mesh;
-            let verts: Vec<GpuVertex> =
+            let mut verts: Vec<GpuVertex> =
                 (0..mesh.vertex_count()).into_par_iter().map(|i| vertex(m, i, vertex_lut)).collect();
+            // Hard edges: each fan's own normal, the copies after the vertices.
+            let hard = hard_edges::HardEdges::find(m);
+            for i in 0..hard.fans.len() {
+                let f = &hard.fans[i];
+                let mut v = verts[f.vertex as usize];
+                v.normal = hard.normal(m, i).to_array();
+                if f.gpu == f.vertex {
+                    verts[f.vertex as usize] = v;
+                } else {
+                    debug_assert_eq!(f.gpu as usize, verts.len());
+                    verts.push(v);
+                }
+            }
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy vertices"),
                 contents: bytemuck::cast_slice(&verts),
@@ -1117,13 +1133,13 @@ impl ViewportRenderer {
             });
             // Visible triangles only; face colors in the same order.
             let any_hidden = mesh.any_hidden();
-            let (indices, index_count): (Option<Vec<[u32; 3]>>, u32) = if !any_hidden {
+            let (indices, index_count): (Option<Vec<[u32; 3]>>, u32) = if !any_hidden && hard.is_empty() {
                 (None, mesh.triangles.len() as u32 * 3)
             } else {
                 let mut vis = Vec::with_capacity(mesh.triangle_count());
                 for (t, tri) in mesh.triangles.iter().enumerate() {
-                    if !mesh.hidden()[t] {
-                        vis.push(*tri);
+                    if !any_hidden || !mesh.hidden()[t] {
+                        vis.push(hard.remap(t as u32, *tri));
                     }
                 }
                 let count = vis.len() as u32 * 3;
@@ -1228,6 +1244,7 @@ impl ViewportRenderer {
                     topology_version: mesh.topology_version(),
                     face_version: mesh.face_version(),
                     group_lut: if self.exact_face_colors { Vec::new() } else { lut },
+                    hard,
                 },
             );
             return mesh.take_dirty().len();
@@ -1247,17 +1264,32 @@ impl ViewportRenderer {
             }
         }
         let m = mesh;
+        let stride = std::mem::size_of::<GpuVertex>() as u64;
         for run in runs {
-            let staging: Vec<GpuVertex> = if run.len() > 4096 {
+            let mut staging: Vec<GpuVertex> = if run.len() > 4096 {
                 run.clone().into_par_iter().map(|i| vertex(m, i, &gpu.group_lut)).collect()
             } else {
                 run.clone().map(|i| vertex(m, i, &gpu.group_lut)).collect()
             };
-            queue.write_buffer(
-                &gpu.vertices,
-                run.start as u64 * std::mem::size_of::<GpuVertex>() as u64,
-                bytemuck::cast_slice(&staging),
-            );
+            // Hard edges in this run: their fans' normals, and their copies
+            // (which are a run of their own, see HardEdges).
+            let mut copies: Vec<GpuVertex> = Vec::new();
+            let mut first_copy = None;
+            for i in gpu.hard.fans_in(run.start as u32..run.end as u32) {
+                let f = &gpu.hard.fans[i];
+                let mut v = staging[f.vertex as usize - run.start];
+                v.normal = gpu.hard.normal(m, i).to_array();
+                if f.gpu == f.vertex {
+                    staging[f.vertex as usize - run.start] = v;
+                } else {
+                    first_copy.get_or_insert(f.gpu);
+                    copies.push(v);
+                }
+            }
+            queue.write_buffer(&gpu.vertices, run.start as u64 * stride, bytemuck::cast_slice(&staging));
+            if let Some(first) = first_copy {
+                queue.write_buffer(&gpu.vertices, first as u64 * stride, bytemuck::cast_slice(&copies));
+            }
         }
         dirty.len()
     }
