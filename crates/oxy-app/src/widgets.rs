@@ -287,6 +287,10 @@ pub enum Icon {
     Lens,
     /// A floor grid seen in perspective.
     Floor,
+    /// A window with a side panel on the right (show / hide the settings panel).
+    PanelRight,
+    /// The same with the panel on the left.
+    PanelLeft,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -543,6 +547,19 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             for v in [0.42, 0.72] {
                 p.line_segment([at(-1.0, v), at(1.0, v)], thin);
             }
+        }
+        Icon::PanelRight | Icon::PanelLeft => {
+            // A window outline with a filled strip down one side: the panel.
+            let frame = Rect::from_center_size(ctr, vec2(r * 1.6, r * 1.3));
+            p.rect_stroke(frame, r * 0.15, s, egui::StrokeKind::Middle);
+            let x = if icon == Icon::PanelRight { frame.right() - r * 0.55 } else { frame.left() + r * 0.55 };
+            p.line_segment([pos2(x, frame.top()), pos2(x, frame.bottom())], s);
+            let strip = if icon == Icon::PanelRight {
+                Rect::from_x_y_ranges(x..=frame.right(), frame.y_range())
+            } else {
+                Rect::from_x_y_ranges(frame.left()..=x, frame.y_range())
+            };
+            p.rect_filled(strip.shrink(s.width), r * 0.08, c.gamma_multiply(0.45));
         }
     }
 }

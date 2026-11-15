@@ -685,6 +685,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.open_theme(crate::editor::ThemeTab::Themes);
                 }
                 tips::check_km(ui, &ed.keymap, &mut ed.show_panels, "Show panels", Cmd::Panels);
+                let mut inspector = ed.show_panels && ed.show_inspector;
+                if tips::check_km(ui, &ed.keymap, &mut inspector, "Show settings panel", Cmd::SettingsPanel).changed() {
+                    ed.toggle_settings_panel();
+                }
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -752,13 +756,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Right => egui::Panel::right(format!("inspector_{key}")),
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
-        inspector_panel.resizable(true).default_size(m.inspector_width).show(ui, |ui| {
-            // Fill the panel's width whatever is open: a scroll area that
-            // shrinks to its content made the panel grow and shrink as
-            // sections opened and closed (#80). Dragging its edge still
-            // resizes it.
-            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
-        });
+        if ed.show_inspector {
+            inspector_panel.resizable(true).default_size(m.inspector_width).show(ui, |ui| {
+                // Fill the panel's width whatever is open: a scroll area that
+                // shrinks to its content made the panel grow and shrink as
+                // sections opened and closed (#80). Dragging its edge still
+                // resizes it.
+                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
+            });
+        }
         view_strip(ui, ed);
     }
 
@@ -2901,6 +2907,14 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
         ui.add_space(6.0);
         ui.vertical_centered(|ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
+            // Hide or show the settings panel beside the strip (#260). It's at
+            // the top so it stays in the same place either way.
+            let icon = if ed.panels == PanelSide::Right { Icon::PanelRight } else { Icon::PanelLeft };
+            let tip = Cmd::SettingsPanel.tip_in(&ed.keymap);
+            if widgets::icon_button(ui, icon, ed.show_inspector, true, &tip).clicked() {
+                ed.toggle_settings_panel();
+            }
+            ui.separator();
             if ed.layout == UiLayout::Touch {
                 // Undo/redo within thumb reach (no keyboard on a tablet).
                 if widgets::icon_button(ui, Icon::Undo, false, ed.history.can_undo(), &Cmd::Undo.tip()).clicked() {
