@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Tube profiles:** a Profile section in the Tube window sets the tube's cross-section. Start from Round, Square, Triangle, Star, D-shape or Ribbon, then drag points on a small canvas: click the outline to add one, right-click to remove one, and Shift to snap. **Smooth** curves through the points or keeps sharp corners, and **Mirror left and right** edits both sides at once. The tube updates live; the profile turns with Twist and shapes coil and braid strands too. It's saved with the project (new optional `TUBP` section) and kept when the tube is edited again, and the next tube starts with it. Older versions keep a profiled tube as ordinary triangles.
 - **Tube editing** ([#258](https://github.com/crisprintsstuff/OxyBrush/issues/258)):
   - **Sharp corners:** double-click a tube's point to make it a sharp corner. The tube runs straight into it and out again, mitred so it keeps its thickness, and the handle turns square. Double-click again for a smooth point. Corners are saved with the project (new optional `TUBC` section) and kept when the tube is edited again. Older versions keep a tube with corners as ordinary triangles.
   - **Merge and delete points:** drag a point onto its neighbour to merge them, or click a point and press **Delete** (or Backspace) to remove it. Alt+click still works.

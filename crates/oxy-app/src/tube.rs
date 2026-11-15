@@ -37,6 +37,13 @@ pub struct TubeEdit {
     pub caps: bool,
     /// Twist, Spin (coil) and Braid.
     pub shape: primitives::TubeShape,
+    /// The cross-section shape (the window's Profile); None is round.
+    pub profile: Option<primitives::TubeProfile>,
+    /// The profile point being dragged in the window's editor, and its
+    /// mirror partner while Mirror is on.
+    pub profile_drag: Option<(usize, Option<usize>)>,
+    /// Edit the profile symmetrically, left and right.
+    pub profile_mirror: bool,
     /// Also build the copy mirrored across the active piece's X symmetry plane.
     pub mirror: bool,
     /// The point whose radius the window edits; None edits all of them.
@@ -62,6 +69,7 @@ struct TubeKey {
     sides: u32,
     caps: bool,
     shape: primitives::TubeShape,
+    profile: Option<primitives::TubeProfile>,
     mirror: bool,
 }
 
@@ -74,13 +82,22 @@ impl TubeEdit {
             sides: self.sides,
             caps: self.caps,
             shape: self.shape,
+            profile: self.profile.clone(),
             mirror: self.mirror,
         }
     }
 
     /// The tube's mesh (with its mirror copy, if on).
     pub fn mesh(&self) -> Mesh {
-        let tube = primitives::tube_cornered(&self.points, &self.radii, &self.sharp, self.sides, self.caps, self.shape);
+        let tube = primitives::tube_profiled(
+            &self.points,
+            &self.radii,
+            &self.sharp,
+            self.sides,
+            self.caps,
+            self.shape,
+            self.profile.as_ref(),
+        );
         if !self.mirror {
             return tube;
         }
@@ -148,6 +165,7 @@ impl Editor {
         self.tube_armed = false;
         // The next tube drawn starts with this one's shape.
         self.tube_shape = tube.shape;
+        self.tube_profile = tube.profile.clone();
         self.restore_tube_hidden(&tube);
         let mesh = tube.mesh();
         let group = if let Some(i) = tube.into.and_then(|id| self.scene.index_of(id)) {
@@ -186,6 +204,7 @@ impl Editor {
             mirror: tube.mirror,
             mirror_x: tube.mirror_x,
             shape: tube.shape,
+            profile: tube.profile,
             group,
             triangles,
             fingerprint,
@@ -228,6 +247,9 @@ impl Editor {
             sides: r.sides,
             caps: r.caps,
             shape: r.shape,
+            profile: r.profile,
+            profile_drag: None,
+            profile_mirror: true,
             mirror: r.mirror,
             selected: None,
             replace: Some((r.group, before)),
@@ -501,6 +523,9 @@ impl Editor {
             sides: 24,
             caps: true,
             shape: self.tube_shape,
+            profile: self.tube_profile.clone(),
+            profile_drag: None,
+            profile_mirror: true,
             mirror: self.symmetry.x,
             selected: None,
             replace: None,

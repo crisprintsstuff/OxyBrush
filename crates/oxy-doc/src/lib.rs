@@ -127,6 +127,8 @@ pub struct TubeRecipe {
     /// Points that are sharp corners (#258), one per point; empty when
     /// every point is smooth.
     pub sharp: Vec<bool>,
+    /// The cross-section shape; None is round.
+    pub profile: Option<oxy_mesh::primitives::TubeProfile>,
     /// The face group holding the tube's triangles.
     pub group: u32,
     /// The tube's triangle count and [`group_fingerprint`] when it was made.
@@ -163,6 +165,28 @@ impl TubeRecipe {
     /// Whether any point is a sharp corner.
     pub fn has_corners(&self) -> bool {
         self.sharp.iter().any(|&s| s)
+    }
+
+    /// Which tube section holds this tube's real triangle count: the
+    /// newest one it needs (0 `TUBE`, 1 `TUBX`, 2 `TUBC`, 3 `TUBP`). The
+    /// older ones get 0, so a version that can't read the newer section
+    /// keeps the tube as ordinary triangles instead of reopening it
+    /// without the shape, corners or profile it was made with.
+    pub fn count_section(&self) -> u8 {
+        if self.profile.is_some() {
+            3
+        } else if self.has_corners() {
+            2
+        } else if !self.shape.is_plain() {
+            1
+        } else {
+            0
+        }
+    }
+
+    /// The triangle count to write in tube section `section`.
+    pub fn triangles_in(&self, section: u8) -> u32 {
+        if self.count_section() == section { self.triangles } else { 0 }
     }
 
     /// Whether `mesh` still has this tube, as it was made.
