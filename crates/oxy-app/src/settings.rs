@@ -473,6 +473,9 @@ pub struct Settings {
     /// A side shelf as one narrow column: the current brush, alpha and
     /// material stacked, then one brush per row with its name underneath.
     pub narrow_shelf: bool,
+    /// The settings panel (inspector) is shown; Shift+Tab or the view
+    /// strip's button hides it on its own (#260).
+    pub settings_panel: bool,
     /// Side of a captured alpha in pixels (Capture from view).
     pub alpha_capture_size: u32,
     /// When dragging empty space in a panel scrolls it (RFC 0015).
@@ -980,6 +983,7 @@ impl Default for Settings {
             window: None,
             show_brush_names: true,
             narrow_shelf: false,
+            settings_panel: true,
             alpha_capture_size: 1024,
             panel_drag_scroll: PanelDragScroll::Pen,
         }
@@ -1145,6 +1149,7 @@ impl Settings {
             + &self.window.map_or(String::new(), WindowGeometry::to_line)
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
+            + &format!("settings_panel = {}\n", self.settings_panel)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
@@ -1419,6 +1424,7 @@ impl Settings {
                 "window" => s.window = WindowGeometry::parse(v).or(s.window),
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
+                "settings_panel" => s.settings_panel = v.parse().unwrap_or(s.settings_panel),
                 "panel_drag_scroll" => {
                     s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
                 }
@@ -1509,6 +1515,10 @@ mod tests {
         assert!(!Settings::default().narrow_shelf);
         let narrow = Settings { narrow_shelf: true, ..Settings::default() };
         assert!(Settings::from_text(&narrow.to_text()).narrow_shelf);
+        // The settings panel shows unless hidden, and stays hidden (#260).
+        assert!(Settings::default().settings_panel);
+        let hidden = Settings { settings_panel: false, ..Settings::default() };
+        assert!(!Settings::from_text(&hidden.to_text()).settings_panel);
         assert_eq!(Settings::default().alpha_capture_size, 1024);
         let big = Settings { alpha_capture_size: 4096, ..Settings::default() };
         assert_eq!(Settings::from_text(&big.to_text()).alpha_capture_size, 4096);
@@ -1693,6 +1703,7 @@ mod tests {
             window: Some(WindowGeometry { width: 1200.5, height: 800.0, position: Some((-1920, 40)), maximized: true }),
             show_brush_names: false,
             narrow_shelf: true,
+            settings_panel: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
         };

@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Hide just the settings panel** ([#260](https://github.com/crisprintsstuff/OxyBrush/issues/260)): the view strip's new top button, **Shift+Tab**, **View > Show settings panel** or the command palette hides the right-hand settings panel and brings it back, for more room around the model. The brush shelf and view strip stay, and the panel stays hidden after a restart. Tab still hides every panel at once; Shift+Tab after Tab brings them back.
+
 ## [4.0.0-beta.13] - 2026-11-15
 
 ### Added

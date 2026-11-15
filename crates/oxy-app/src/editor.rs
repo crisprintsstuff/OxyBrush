@@ -1019,6 +1019,9 @@ pub struct Editor {
     /// in the status bar was easy to miss, issue #117).
     pub save_error: Option<String>,
     pub show_panels: bool,
+    /// The settings panel on its own (Shift+Tab, the view strip's button,
+    /// #260). Tab still hides every panel at once.
+    pub show_inspector: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
     /// Color pickers for the viewport backdrop. A menu closes on click, so
@@ -1443,6 +1446,7 @@ impl Default for Editor {
             ui_scale_from: None,
             save_error: None,
             show_panels: true,
+            show_inspector: true,
             show_shortcuts: false,
             show_about: false,
             show_theme: false,
@@ -1909,6 +1913,7 @@ impl Editor {
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
             narrow_shelf: self.narrow_shelf,
+            settings_panel: self.show_inspector,
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
         }
@@ -2149,6 +2154,7 @@ impl Editor {
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
         self.narrow_shelf = s.narrow_shelf;
+        self.show_inspector = s.settings_panel;
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
         if !s.remember_brushes {
@@ -7058,6 +7064,27 @@ impl Editor {
     }
 
     /// Frame every visible piece.
+    /// Show or hide just the settings panel (#260). With every panel hidden
+    /// (Tab), it brings them back with the settings panel showing.
+    pub fn toggle_settings_panel(&mut self) {
+        if !self.show_panels {
+            self.show_panels = true;
+            self.show_inspector = true;
+        } else {
+            self.show_inspector = !self.show_inspector;
+        }
+        self.status = if self.show_inspector {
+            "Settings panel shown".into()
+        } else {
+            let key = self.keymap.primary(crate::keymap::CommandId::ToggleSettingsPanel);
+            if key.is_empty() {
+                "Settings panel hidden: the view strip's top button shows it".into()
+            } else {
+                format!("Settings panel hidden: {key} or the view strip's top button shows it")
+            }
+        };
+    }
+
     pub fn frame(&mut self) {
         self.orbit_pivot = None;
         self.camera.frame(self.scene.bounds());
@@ -7316,6 +7343,13 @@ impl Editor {
                 // Tab is held to extend edges in the retopology tool.
                 if self.retopo.is_none() {
                     self.show_panels = !self.show_panels;
+                }
+                E::None
+            }
+            C::ToggleSettingsPanel => {
+                // Like Tab, Shift+Tab belongs to the retopology tool while it's open.
+                if self.retopo.is_none() {
+                    self.toggle_settings_panel();
                 }
                 E::None
             }
@@ -8437,6 +8471,26 @@ mod tests {
         let g = e.scene.active().mesh.groups();
         assert!(g.iter().all(|&x| x == g[0]) && g[0] != bottom);
         assert!(e.status.starts_with("Group visible"), "{}", e.status);
+    }
+
+    #[test]
+    fn shift_tab_hides_just_the_settings_panel_and_is_remembered() {
+        let mut e = Editor::for_tests();
+        assert!(e.show_panels && e.show_inspector);
+        let chord = crate::keymap::Chord::parse("shift+tab").unwrap();
+        assert_eq!(e.keymap.command_for(chord), Some(CommandId::ToggleSettingsPanel));
+        e.perform_command(CommandId::ToggleSettingsPanel);
+        assert!(e.show_panels && !e.show_inspector, "only the settings panel goes");
+        assert!(!e.settings().settings_panel, "and stays hidden after a restart");
+        e.perform_command(CommandId::ToggleSettingsPanel);
+        assert!(e.show_inspector);
+        // After Tab hid everything, Shift+Tab brings the panels back with
+        // the settings panel showing.
+        e.show_inspector = false;
+        e.perform_command(CommandId::TogglePanels);
+        assert!(!e.show_panels);
+        e.perform_command(CommandId::ToggleSettingsPanel);
+        assert!(e.show_panels && e.show_inspector);
     }
 
     #[test]
@@ -11324,6 +11378,7 @@ mod tests {
             }),
             show_brush_names: false,
             narrow_shelf: true,
+            settings_panel: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
         };

@@ -329,6 +329,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::StrokeFromEmpty, "navigation orbit middle mouse", |e| e.stroke_from_empty = !e.stroke_from_empty),
         cmd(ed, Cmd::Panels, "view interface", |e| e.show_panels = !e.show_panels),
+        cmd(ed, Cmd::SettingsPanel, "view interface inspector sidebar side panel right", |e| e.toggle_settings_panel()),
         cmd(ed, Cmd::Shortcuts, "help keys keyboard", |e| e.show_shortcuts = true),
         cmd(ed, Cmd::Keymap, "help keys hotkeys mouse navigation rebind", |e| e.show_keymap = true),
         cmd(ed, Cmd::Guide, "help manual documentation", |e| e.guide.open = true),
