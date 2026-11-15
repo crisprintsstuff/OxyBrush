@@ -301,8 +301,10 @@ impl BrushKind {
 pub const GRAVITY_DOWN: Vec3 = Vec3::NEG_Y;
 
 /// How far Gravity 1 sags the middle of one pass of a stroke, as a share of
-/// the brush radius (see `Stroke::sag`).
-const GRAVITY_PER_PASS: f32 = 0.3;
+/// the brush radius (see `Stroke::sag`): about one radius, so a few passes
+/// drape a whole cap into a lip. It was 0.3, which a tester found far too
+/// weak next to another app's gravity at half. 2.0 tore the surface at 1.
+const GRAVITY_PER_PASS: f32 = 1.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BrushSettings {
@@ -327,8 +329,8 @@ pub struct BrushSettings {
     pub auto_smooth: f32,
     /// Gravity: the surface under the brush also sags downward (world -Y)
     /// as the stroke goes, 0..=1, for draping and hanging folds. At 1 one
-    /// full-pressure pass sags the middle of the stroke about a third of
-    /// the radius.
+    /// full-pressure pass sags the middle of the stroke about one brush
+    /// radius (half that at 0.5).
     pub gravity: f32,
     /// Random scatter of dab position, rotation and strength, 0..=1.
     pub spray: f32,
@@ -980,9 +982,9 @@ impl Stroke {
     /// Gravity's sag for a dab of `radius` and (pressure-scaled) `strength`:
     /// toward world down. Scaled by the dab spacing, so it adds up by the
     /// length of the stroke, not by how many dabs land on a point: one pass
-    /// at Gravity 1 and full pressure sags the middle of the stroke about a
-    /// third of the radius (a point under the middle gets about 2/spacing
-    /// dabs at an average weight of about a half). Brush strength doesn't
+    /// at Gravity 1 and full pressure sags the middle of the stroke about one
+    /// radius (a point under the middle gets about 2/spacing dabs at an
+    /// average weight of about a half; [`GRAVITY_PER_PASS`]). Brush strength doesn't
     /// change it; pen pressure does.
     fn sag(&self, radius: f32, strength: f32) -> Vec3 {
         let g = self.settings.gravity.clamp(0.0, 1.0);
@@ -1913,6 +1915,38 @@ mod tests {
             s0 - sum_y(&mesh)
         };
         assert!(sag(0.3) < sag(1.0) * 0.5, "{} vs {}", sag(0.3), sag(1.0));
+    }
+
+    #[test]
+    fn gravity_drapes_deeply() {
+        // One pass of Draw (strength 0.5) across the side of a sphere, one
+        // brush-width each way of the point under the brush. The pass stays
+        // on the original surface, so points that sag out of the brush stop
+        // sagging (in the app the brush follows the surface down).
+        let pass = |gravity: f32| {
+            let mut mesh = primitives::icosphere(5, 1.0);
+            let r = 0.3;
+            let settings = BrushSettings { radius: r, strength: 0.5, gravity, ..Default::default() };
+            let mut s = Stroke::new(settings, Symmetry::default(), false);
+            for i in 0..=40 {
+                let z = -r + 2.0 * r * i as f32 / 40.0;
+                let p = Vec3::new(1.0, 0.0, z).normalize();
+                s.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 1.0 }, &mut |_, _| {});
+            }
+            // How far the point that started under the middle of the pass went down.
+            let start = primitives::icosphere(5, 1.0);
+            let v = (0..start.vertex_count()).min_by(|&a, &b| {
+                start.positions[a].distance_squared(Vec3::X).total_cmp(&start.positions[b].distance_squared(Vec3::X))
+            });
+            let v = v.unwrap();
+            (start.positions[v].y - mesh.positions[v].y) / r
+        };
+        // Gravity 0.3 now is what 1 used to be (0.3 radius per pass).
+        let (old_full, half, full) = (pass(0.3), pass(0.5), pass(1.0));
+        eprintln!("sag: old 1 = {old_full:.2} R, 0.5 = {half:.2} R, 1 = {full:.2} R");
+        assert!(half > old_full, "0.5 is already more than the old full strength: {half:.2} vs {old_full:.2}");
+        assert!(full > 2.0 * old_full, "full strength is far more: {full:.2} vs {old_full:.2}");
+        assert!(full > 0.5, "a deep drape at 1: {full:.2} radii");
     }
 
     #[test]
