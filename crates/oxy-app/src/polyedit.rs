@@ -181,6 +181,58 @@ impl PointAction {
     }
 }
 
+/// Which kind of element Poly Edit works on (RFC 0023): faces, edges or
+/// points, picked with 1, 2, 3 (4: Auto) while the tool is open, or the
+/// buttons at the top of its window. Auto is the original behaviour: the
+/// element under the pointer decides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ElementMode {
+    #[default]
+    Faces,
+    Edges,
+    Points,
+    Auto,
+}
+
+impl ElementMode {
+    pub const ALL: [ElementMode; 4] = [ElementMode::Faces, ElementMode::Edges, ElementMode::Points, ElementMode::Auto];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ElementMode::Faces => "Faces",
+            ElementMode::Edges => "Edges",
+            ElementMode::Points => "Points",
+            ElementMode::Auto => "Auto",
+        }
+    }
+
+    /// The number key that picks it (the first four brush keys).
+    pub fn key(self) -> u32 {
+        match self {
+            ElementMode::Faces => 1,
+            ElementMode::Edges => 2,
+            ElementMode::Points => 3,
+            ElementMode::Auto => 4,
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            ElementMode::Faces => "Work on faces: a click anywhere on a face picks it.",
+            ElementMode::Edges => "Work on edges: a click picks the nearest edge of the face under the pointer.",
+            ElementMode::Points => "Work on points: a click picks the nearest corner of the face under the pointer.",
+            ElementMode::Auto => {
+                "What's under the pointer decides: a point when close to one, else an edge when close to one, else the face (all three sections show)."
+            }
+        }
+    }
+
+    /// Whether the window shows this kind's section.
+    pub fn shows(self, kind: ElementMode) -> bool {
+        self == ElementMode::Auto || self == kind
+    }
+}
+
 /// The tool's state while its window is open.
 pub struct PolyEdit {
     /// The piece being modeled.
@@ -210,11 +262,17 @@ pub struct PolyEdit {
     /// Smooth preview levels (0: off), and the subdivided mesh shown for
     /// the cage it was made from.
     pub smooth_preview: u32,
+    /// Faces, edges, points or Auto (RFC 0023).
+    pub mode: ElementMode,
     /// Faces picked with Ctrl/Cmd+click, which a face action then works
     /// on together, and the mesh topology they were picked on (face
     /// numbers change with it, and the pick is dropped).
     pub selected: Vec<usize>,
     pub selected_topology: u64,
+    /// Edges (`[low, high]`) or points picked the same way in Edges and
+    /// Points mode (RFC 0023); only one kind is picked at a time.
+    pub picked_edges: Vec<[u32; 2]>,
+    pub picked_points: Vec<u32>,
     /// Insert loop makes two loops, the same distance in from each end.
     pub loop_pair: bool,
     /// The mesh's face version the polygons last took face groups from.
@@ -357,13 +415,29 @@ impl Editor {
             smooth: None,
             smooth_shown: 0,
             subdivide_levels: 1,
+            mode: ElementMode::default(),
             selected: Vec::new(),
             selected_topology: 0,
+            picked_edges: Vec::new(),
+            picked_points: Vec::new(),
             loop_pair: false,
             groups_seen: 0,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
+    }
+
+    /// Work on faces, edges or points (or Auto), RFC 0023. Picked faces are
+    /// kept for Faces and Auto; switching to Edges or Points turns the pick
+    /// into its edges or points (see `poly_convert_pick`).
+    pub fn set_poly_mode(&mut self, mode: ElementMode) {
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        if pe.mode == mode {
+            return;
+        }
+        pe.mode = mode;
+        self.poly_convert_pick(mode);
+        self.status = format!("Poly Edit: {} ({})", mode.label(), mode.help());
     }
 
     /// Close the tool.
@@ -484,15 +558,24 @@ impl Editor {
     pub fn poly_element_at(&self, p: Vec2) -> Option<Element> {
         let (face, edge, _) = self.poly_hit(p)?;
         let c = self.poly_cage()?;
-        let reach = PICK_PT * self.pixels_per_point.max(0.5);
+        let mode = self.poly_edit.as_ref().map_or(ElementMode::Auto, |pe| pe.mode);
+        // In a fixed mode the kind is set, and the nearest one of the face
+        // under the pointer is picked however far it is on screen.
+        let reach = if mode == ElementMode::Auto { PICK_PT * self.pixels_per_point.max(0.5) } else { f32::INFINITY };
+        if mode == ElementMode::Faces {
+            return Some(Element::Face(face, edge));
+        }
         let k = corners(&c.faces[face]);
         let near_point = k
             .iter()
             .filter_map(|&v| self.poly_screen(c, v).map(|s| (v, s.distance(p))))
             .filter(|&(_, d)| d <= reach)
             .min_by(|a, b| a.1.total_cmp(&b.1));
-        if let Some((v, _)) = near_point {
+        if let Some((v, _)) = near_point.filter(|_| mode != ElementMode::Edges) {
             return Some(Element::Point(v));
+        }
+        if mode == ElementMode::Points {
+            return None;
         }
         let near_edge = (0..k.len())
             .filter_map(|j| {
@@ -520,38 +603,161 @@ impl Editor {
         }
     }
 
+    /// Whether the pick was made on the mesh as it is now (picks are by
+    /// face and point numbers, which a change of topology renumbers).
+    fn poly_pick_valid(&self) -> bool {
+        let (Some(pe), Some(i)) = (self.poly_edit.as_ref(), self.poly_piece_index()) else { return false };
+        pe.selected_topology == self.scene.pieces[i].mesh.topology_version()
+    }
+
     /// The faces picked with Ctrl/Cmd+click, while they still describe the
     /// piece (empty once its faces were renumbered).
     pub fn poly_selection(&self) -> &[usize] {
-        let (Some(pe), Some(i)) = (self.poly_edit.as_ref(), self.poly_piece_index()) else { return &[] };
-        let topology = self.scene.pieces[i].mesh.topology_version();
-        if pe.selected_topology == topology { &pe.selected } else { &[] }
+        match self.poly_edit.as_ref() {
+            Some(pe) if self.poly_pick_valid() => &pe.selected,
+            _ => &[],
+        }
     }
 
-    /// Ctrl/Cmd+click: add face `face` to the pick, or take it out; on
-    /// empty space (`None`), clear the pick.
-    pub fn poly_toggle_selected(&mut self, face: Option<usize>) {
+    /// The edges picked in Edges mode (`[low, high]`), while valid.
+    pub fn poly_picked_edges(&self) -> &[[u32; 2]] {
+        match self.poly_edit.as_ref() {
+            Some(pe) if self.poly_pick_valid() => &pe.picked_edges,
+            _ => &[],
+        }
+    }
+
+    /// The points picked in Points mode, while valid.
+    pub fn poly_picked_points(&self) -> &[u32] {
+        match self.poly_edit.as_ref() {
+            Some(pe) if self.poly_pick_valid() => &pe.picked_points,
+            _ => &[],
+        }
+    }
+
+    /// How many elements are picked, and what kind ("faces", "edges", "points").
+    pub fn poly_pick_count(&self) -> (usize, &'static str) {
+        let (f, e, p) = (self.poly_selection().len(), self.poly_picked_edges().len(), self.poly_picked_points().len());
+        if e > 0 {
+            (e, "edges")
+        } else if p > 0 {
+            (p, "points")
+        } else {
+            (f, "faces")
+        }
+    }
+
+    /// Start a fresh pick (on the mesh as it is now), keeping the current
+    /// one if it's still valid.
+    fn poly_pick_begin(&mut self) {
         let Some(i) = self.poly_piece_index() else { return };
         let topology = self.scene.pieces[i].mesh.topology_version();
-        let current = self.poly_selection().to_vec();
+        let valid = self.poly_pick_valid();
         let Some(pe) = self.poly_edit.as_mut() else { return };
-        pe.selected = current;
-        pe.selected_topology = topology;
-        match face {
-            Some(f) => match pe.selected.iter().position(|&x| x == f) {
-                Some(k) => {
-                    pe.selected.remove(k);
-                }
-                None => pe.selected.push(f),
-            },
-            None => pe.selected.clear(),
+        if !valid {
+            pe.selected.clear();
+            pe.picked_edges.clear();
+            pe.picked_points.clear();
         }
-        let n = pe.selected.len();
+        pe.selected_topology = topology;
+    }
+
+    /// Ctrl/Cmd+click on `element`: add it to the pick or take it out (a
+    /// different kind than what's picked starts a new pick); on empty space
+    /// (`None`), clear the pick.
+    pub fn poly_toggle_pick(&mut self, element: Option<Element>) {
+        self.poly_pick_begin();
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        fn toggle<T: PartialEq>(list: &mut Vec<T>, x: T) {
+            match list.iter().position(|y| *y == x) {
+                Some(k) => {
+                    list.remove(k);
+                }
+                None => list.push(x),
+            }
+        }
+        match element {
+            Some(Element::Face(f, _)) => {
+                pe.picked_edges.clear();
+                pe.picked_points.clear();
+                toggle(&mut pe.selected, f);
+            }
+            Some(Element::Edge(a, b, _)) => {
+                pe.selected.clear();
+                pe.picked_points.clear();
+                toggle(&mut pe.picked_edges, edge_key(a, b));
+            }
+            Some(Element::Point(v)) => {
+                pe.selected.clear();
+                pe.picked_edges.clear();
+                toggle(&mut pe.picked_points, v);
+            }
+            None => {
+                pe.selected.clear();
+                pe.picked_edges.clear();
+                pe.picked_points.clear();
+            }
+        }
+        let (n, kind) = self.poly_pick_count();
         self.status = if n == 0 {
-            "No faces picked".into()
+            "Nothing picked".into()
         } else {
-            format!("{n} face(s) picked: drag one of them to {} them together", pe.action.label().to_lowercase())
+            format!("{n} {kind} picked: click or drag one of them to act on them together")
         };
+    }
+
+    /// Switching modes turns the pick into the new kind (RFC 0023): faces
+    /// into their sides or corners, edges into their ends or the faces
+    /// they close, points into the edges or faces they make up. Auto keeps
+    /// the pick as it is.
+    fn poly_convert_pick(&mut self, mode: ElementMode) {
+        if mode == ElementMode::Auto || !self.poly_pick_valid() {
+            return;
+        }
+        let Some(c) = self.poly_cage() else { return };
+        let faces = self.poly_selection().to_vec();
+        let edges = self.poly_picked_edges().to_vec();
+        let points = self.poly_picked_points().to_vec();
+        let sides = |f: usize| {
+            let k = corners(&c.faces[f]);
+            (0..k.len()).map(|j| edge_key(k[j], k[(j + 1) % k.len()])).collect::<Vec<_>>()
+        };
+        let mut new_faces = Vec::new();
+        let mut new_edges = Vec::new();
+        let mut new_points = Vec::new();
+        match mode {
+            ElementMode::Faces if !edges.is_empty() => {
+                let set: std::collections::HashSet<[u32; 2]> = edges.iter().copied().collect();
+                new_faces = (0..c.faces.len()).filter(|&f| sides(f).iter().all(|e| set.contains(e))).collect();
+            }
+            ElementMode::Faces if !points.is_empty() => {
+                let set: std::collections::HashSet<u32> = points.iter().copied().collect();
+                new_faces =
+                    (0..c.faces.len()).filter(|&f| corners(&c.faces[f]).iter().all(|v| set.contains(v))).collect();
+            }
+            ElementMode::Edges if !faces.is_empty() => {
+                new_edges = faces.iter().flat_map(|&f| sides(f)).collect();
+            }
+            ElementMode::Edges if !points.is_empty() => {
+                let set: std::collections::HashSet<u32> = points.iter().copied().collect();
+                new_edges = c.edges().into_iter().filter(|[a, b]| set.contains(a) && set.contains(b)).collect();
+            }
+            ElementMode::Points if !faces.is_empty() => {
+                new_points = faces.iter().flat_map(|&f| corners(&c.faces[f]).to_vec()).collect();
+            }
+            ElementMode::Points if !edges.is_empty() => {
+                new_points = edges.iter().flat_map(|e| *e).collect();
+            }
+            _ => return,
+        }
+        new_edges.sort_unstable();
+        new_edges.dedup();
+        new_points.sort_unstable();
+        new_points.dedup();
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        pe.selected = new_faces;
+        pe.picked_edges = new_edges;
+        pe.picked_points = new_points;
     }
 
     fn poly_faces(&self, face: usize, edge: [u32; 2]) -> Vec<usize> {
@@ -569,6 +775,16 @@ impl Editor {
     /// The edges the edge action reaches from `(a, b)`, mirrored too.
     fn poly_edges(&self, a: u32, b: u32) -> Vec<[u32; 2]> {
         let (Some(pe), Some(c)) = (self.poly_edit.as_ref(), self.poly_cage()) else { return Vec::new() };
+        // A picked edge acts with every picked edge (Insert loop and Spin
+        // work on the one clicked).
+        let picked = self.poly_picked_edges();
+        if picked.contains(&edge_key(a, b)) && !matches!(pe.edge_action, EdgeAction::InsertLoop | EdgeAction::Spin) {
+            let edges = picked.to_vec();
+            return match self.poly_mirror() {
+                Some((cx, tol)) => polyedit::edges_with_mirror(c, &edges, cx, tol),
+                None => edges,
+            };
+        }
         let reach = match pe.edge_action {
             EdgeAction::InsertLoop => EdgeReach::Ring,
             EdgeAction::CloseHole => EdgeReach::Loop,
@@ -590,12 +806,19 @@ impl Editor {
     /// `points` and their mirror images (when mirroring), with whether each
     /// is a mirror image.
     fn poly_points(&self, v: u32) -> Vec<(u32, bool)> {
-        let mut out = vec![(v, false)];
-        if let (Some((cx, tol)), Some(c)) = (self.poly_mirror(), self.poly_cage())
-            && let Some(w) = polyedit::mirror_point(c, v, cx, tol)
-            && w != v
-        {
-            out.push((w, true));
+        // A picked point acts with every picked point.
+        let picked = self.poly_picked_points();
+        let base: Vec<u32> = if picked.contains(&v) { picked.to_vec() } else { vec![v] };
+        let mut out: Vec<(u32, bool)> = base.iter().map(|&p| (p, false)).collect();
+        if let (Some((cx, tol)), Some(c)) = (self.poly_mirror(), self.poly_cage()) {
+            for &p in &base {
+                if let Some(w) = polyedit::mirror_point(c, p, cx, tol)
+                    && w != p
+                    && !out.iter().any(|&(q, _)| q == w)
+                {
+                    out.push((w, true));
+                }
+            }
         }
         out
     }
@@ -630,11 +853,7 @@ impl Editor {
         let element = self.poly_element_at(p);
         // Ctrl/Cmd+click picks faces to act on together (empty space clears).
         if self.modifiers.ctrl {
-            match element {
-                Some(Element::Face(f, _)) => self.poly_toggle_selected(Some(f)),
-                None => self.poly_toggle_selected(None),
-                _ => {}
-            }
+            self.poly_toggle_pick(element);
             return true;
         }
         let Some(element) = element else {
@@ -1472,6 +1691,15 @@ mod tests {
         e.pointer_up();
     }
 
+    /// Open Poly Edit in Auto (the element under the pointer decides), as
+    /// the tests written before element modes expect.
+    fn start(e: &mut Editor) {
+        e.start_poly_edit();
+        if let Some(pe) = e.poly_edit.as_mut() {
+            pe.mode = ElementMode::Auto;
+        }
+    }
+
     fn cage(e: &Editor) -> &Cage {
         e.poly_cage().expect("the tool has a cage")
     }
@@ -1480,7 +1708,7 @@ mod tests {
     fn opening_makes_polygons_from_the_mesh_without_changing_it() {
         let mut e = editor();
         let before = e.scene.active().mesh.positions.clone();
-        e.start_poly_edit();
+        start(&mut e);
         assert!(e.poly_edit.is_some(), "{}", e.status);
         assert_eq!(cage(&e).quad_count(), 6);
         assert_eq!(e.scene.active().mesh.positions, before);
@@ -1490,7 +1718,7 @@ mod tests {
     #[test]
     fn dragging_a_face_extrudes_it_as_one_undo_step_and_escape_or_a_click_changes_nothing() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let hit = e.poly_hit(centre()).expect("the cube is under the middle of the view");
         let reach = e.poly_reach_at(centre());
         assert_eq!(reach, vec![hit.0]);
@@ -1522,7 +1750,7 @@ mod tests {
     #[test]
     fn inset_delete_and_move() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().action = FaceAction::Inset;
         drag(&mut e, centre(), centre() + Vec2::new(30.0, 0.0));
         assert_eq!(cage(&e).faces.len(), 10);
@@ -1546,7 +1774,7 @@ mod tests {
     /// Window positions of the front face's first corner and of a point
     /// just inside the middle of its first edge.
     fn front_corner_and_edge(e: &Editor) -> (u32, Vec2, [u32; 2], Vec2) {
-        let Some(Element::Face(f, _)) = e.poly_element_at(centre()) else { panic!("a face at the centre") };
+        let Some((f, _, _)) = e.poly_hit(centre()) else { panic!("a face at the centre") };
         let c = cage(e);
         let k = corners(&c.faces[f]).to_vec();
         let s = |p: Vec3| e.camera.project(p, e.canvas_size()).unwrap() + Vec2::new(e.canvas[0], e.canvas[1]);
@@ -1584,7 +1812,7 @@ mod tests {
     #[test]
     fn edges_insert_loops_delete_and_close_holes() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let (_, _, edge, at) = front_corner_and_edge(&e);
         assert!(matches!(e.poly_element_at(at), Some(Element::Edge(..))), "{:?}", e.poly_element_at(at));
         // Insert loop: a click cuts a loop round the cube's ring (4 quads more).
@@ -1628,7 +1856,7 @@ mod tests {
     #[test]
     fn deleting_an_edge_loop_merges_faces_back() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let (_, _, _, at) = front_corner_and_edge(&e);
         click(&mut e, at);
         assert_eq!(cage(&e).faces.len(), 10);
@@ -1654,7 +1882,7 @@ mod tests {
     #[test]
     fn points_move_weld_and_delete() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let (v, at, [_, w], _) = front_corner_and_edge(&e);
         assert_eq!(e.poly_element_at(at), Some(Element::Point(v)));
         let before = cage(&e).positions[v as usize];
@@ -1686,7 +1914,7 @@ mod tests {
     #[test]
     fn reach_and_mirror_widen_the_action() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().reach = Reach::Island;
         assert_eq!(e.poly_reach_at(centre()).len(), 6);
         // Mirror across X adds the face on the other side (the cube is
@@ -1710,7 +1938,7 @@ mod tests {
     #[test]
     fn bevel_faces_and_edges() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().action = FaceAction::Bevel;
         drag(&mut e, centre(), centre() + Vec2::new(0.0, -40.0));
         let c = cage(&e).clone();
@@ -1738,7 +1966,7 @@ mod tests {
     #[test]
     fn slide_and_spin_edges() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Slide;
         let (_, _, [a, b], edge_px) = front_corner_and_edge(&e);
         let before = cage(&e).positions.clone();
@@ -1763,7 +1991,7 @@ mod tests {
     #[test]
     fn bridge_and_split_take_two_clicks() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().action = FaceAction::Bridge;
         let Some(Element::Face(front, _)) = e.poly_element_at(centre()) else { panic!("a face") };
         let n = polyedit::face_normal(cage(&e), front);
@@ -1800,7 +2028,7 @@ mod tests {
     #[test]
     fn repeat_applies_the_last_amount_where_the_pointer_is() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         drag(&mut e, centre(), centre() + Vec2::new(0.0, -40.0));
         assert_eq!(cage(&e).faces.len(), 10);
         let last = e.poly_edit.as_ref().unwrap().last[0].expect("remembered");
@@ -1823,7 +2051,7 @@ mod tests {
     #[test]
     fn crease_preview_and_subdivide() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         // Crease an edge, then click it again to clear it.
         e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Crease;
         let (corner, corner_px, [a, b], edge_px) = front_corner_and_edge(&e);
@@ -1867,7 +2095,7 @@ mod tests {
     #[test]
     fn bevel_rows_and_profile_reach_the_tool() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let pe = e.poly_edit.as_mut().unwrap();
         (pe.edge_action, pe.bevel_segments, pe.bevel_profile) = (EdgeAction::Bevel, 3, 1.0);
         let (_, _, _, edge_px) = front_corner_and_edge(&e);
@@ -1901,7 +2129,7 @@ mod tests {
         }
         let mut e = editor();
         e.scene = oxy_doc::Scene::new(oxy_doc::Piece::new("Boxes", Mesh::from_data(data)));
-        e.start_poly_edit();
+        start(&mut e);
         e.poly_edit.as_mut().unwrap().mirror = true;
         let c = cage(&e).clone();
         assert_eq!(c.faces.len(), 24);
@@ -1939,7 +2167,7 @@ mod tests {
     fn the_viewport_draws_the_cage_edges_depth_tested_unless_smoothed() {
         let mut e = editor();
         assert_eq!(e.poly_wire_piece(), None);
-        e.start_poly_edit();
+        start(&mut e);
         assert_eq!(e.poly_wire_piece(), Some(e.scene.active().id));
         // The smooth preview floats off the cage: the overlay draws the cage on top.
         e.poly_edit.as_mut().unwrap().smooth_preview = 2;
@@ -1956,7 +2184,7 @@ mod tests {
     fn ctrl_click_picks_faces_that_then_act_together() {
         // #243: Ctrl/Cmd+click several faces, then drag one of them.
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.camera.orbit(Vec2::new(60.0, 45.0));
         let (front, _, _) = e.poly_hit(centre()).expect("a face in the middle");
         // Another face that shows: the one under a point to the side.
@@ -2000,7 +2228,7 @@ mod tests {
     #[test]
     fn shift_centres_a_new_loop_and_two_loops_sit_evenly() {
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         let (_, _, [a, b], at) = front_corner_and_edge(&e);
         let (pa, pb) = (cage(&e).positions[a as usize], cage(&e).positions[b as usize]);
         // Shift+click: a loop exactly in the middle, kept at once.
@@ -2046,7 +2274,7 @@ mod tests {
         // #249: open, close, paint face groups, reopen: Reach: Face group
         // must see the new groups.
         let mut e = editor();
-        e.start_poly_edit();
+        start(&mut e);
         e.finish_poly_edit();
         assert!(e.scene.active().cage.is_some(), "the polygons are kept");
         // Paint the triangles of the top face (+Y) into group 7.
@@ -2058,7 +2286,7 @@ mod tests {
             .collect();
         assert_eq!(groups.iter().filter(|&&g| g == 7).count(), 2);
         e.scene.active_mut().mesh.set_groups(groups);
-        e.start_poly_edit();
+        start(&mut e);
         let c = cage(&e);
         let top: Vec<&oxy_mesh::retopo::Face> =
             c.faces.iter().filter(|f| f.corners.iter().all(|&v| c.positions[v as usize].y > 0.4)).collect();
@@ -2070,5 +2298,78 @@ mod tests {
         e.scene.active_mut().mesh.set_groups(vec![3; tris]);
         e.poly_sync();
         assert!(cage(&e).faces.iter().all(|f| f.group == 3));
+    }
+
+    #[test]
+    fn element_modes_pick_their_kind_and_take_the_first_number_keys() {
+        // RFC 0023: Faces is the default; 1-4 pick Faces, Edges, Points,
+        // Auto while the tool is open (and brushes otherwise).
+        use crate::keymap::CommandId;
+        let mut e = editor();
+        let brush = e.brush_kind;
+        e.start_poly_edit();
+        assert_eq!(e.poly_edit.as_ref().unwrap().mode, ElementMode::Faces);
+        let (_, _, _, near_edge) = front_corner_and_edge(&e);
+        // Faces: even next to an edge, the face.
+        assert!(matches!(e.poly_element_at(near_edge), Some(Element::Face(..))));
+        // 2: Edges; the middle of a face picks its nearest edge.
+        e.perform_command(CommandId::Brush2);
+        assert_eq!(e.poly_edit.as_ref().unwrap().mode, ElementMode::Edges);
+        assert_eq!(e.brush_kind, brush, "the brush doesn't change while Poly Edit is open");
+        assert!(matches!(e.poly_element_at(centre()), Some(Element::Edge(..))));
+        // 3: Points; the middle picks a corner.
+        e.perform_command(CommandId::Brush3);
+        assert!(matches!(e.poly_element_at(centre()), Some(Element::Point(_))));
+        // 4: Auto, as before modes: the middle is the face, near an edge the edge.
+        e.perform_command(CommandId::Brush4);
+        assert!(matches!(e.poly_element_at(centre()), Some(Element::Face(..))));
+        assert!(matches!(e.poly_element_at(near_edge), Some(Element::Edge(..))));
+        // Closed: the keys pick brushes again.
+        e.finish_poly_edit();
+        e.perform_command(CommandId::Brush2);
+        assert_ne!(e.brush_kind, brush);
+    }
+
+    #[test]
+    fn picks_work_for_edges_and_points_and_convert_between_modes() {
+        let mut e = editor();
+        e.start_poly_edit();
+        // Pick the front face, then switch: its four sides, then corners, then back.
+        e.modifiers.ctrl = true;
+        click(&mut e, centre());
+        e.modifiers.ctrl = false;
+        assert_eq!(e.poly_pick_count(), (1, "faces"));
+        e.set_poly_mode(ElementMode::Edges);
+        assert_eq!(e.poly_pick_count(), (4, "edges"));
+        e.set_poly_mode(ElementMode::Points);
+        assert_eq!(e.poly_pick_count(), (4, "points"));
+        e.set_poly_mode(ElementMode::Faces);
+        assert_eq!(e.poly_pick_count(), (1, "faces"));
+        e.set_poly_mode(ElementMode::Edges);
+        // Crease: clicking one picked edge creases all four.
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Crease;
+        let picked = e.poly_picked_edges().to_vec();
+        let (_, _, [a, b], at) = front_corner_and_edge(&e);
+        assert!(picked.contains(&edge_key(a, b)), "the clicked edge is one of the picked");
+        click(&mut e, at);
+        let c = cage(&e);
+        assert!(picked.iter().all(|&[x, y]| c.crease(x, y) > 0.0), "{}", e.status);
+        e.undo();
+        // Points: dragging a picked corner moves all picked points the same way.
+        e.set_poly_mode(ElementMode::Points);
+        assert_eq!(e.poly_pick_count(), (4, "points"));
+        let pts = e.poly_picked_points().to_vec();
+        let before: Vec<Vec3> = pts.iter().map(|&v| cage(&e).positions[v as usize]).collect();
+        let (corner, corner_px, _, _) = front_corner_and_edge(&e);
+        assert!(pts.contains(&corner));
+        drag(&mut e, corner_px, corner_px + Vec2::new(30.0, 0.0));
+        let c = cage(&e);
+        let moved: Vec<Vec3> = pts.iter().zip(&before).map(|(&v, b)| c.positions[v as usize] - *b).collect();
+        assert!(moved[0].length() > 1e-3, "{}", e.status);
+        assert!(moved.iter().all(|m| (*m - moved[0]).length() < 1e-4), "all moved together: {moved:?}");
+        // Ctrl/Cmd+click on empty space clears.
+        e.modifiers.ctrl = true;
+        click(&mut e, Vec2::new(5.0, 5.0));
+        assert_eq!(e.poly_pick_count().0, 0);
     }
 }
