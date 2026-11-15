@@ -7202,6 +7202,14 @@ impl Editor {
             | C::Brush8
             | C::Brush9
             | C::Brush0 => {
+                // While Poly Edit is open, the first four pick what it works
+                // on: faces, edges, points, Auto (RFC 0023).
+                if self.poly_edit.is_some()
+                    && let Some(slot) = id.brush_slot().filter(|&s| s < 4)
+                {
+                    self.set_poly_mode(crate::polyedit::ElementMode::ALL[slot]);
+                    return E::None;
+                }
                 // Shelf slots are 1–9 then 0, the same order as the number keys.
                 let n = match id.brush_slot() {
                     Some(9) => 0,

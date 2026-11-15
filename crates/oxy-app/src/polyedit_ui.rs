@@ -1,7 +1,7 @@
 //! The Poly Edit window and the polygons drawn over the viewport (RFC 0018).
 
 use crate::editor::{Drag, Editor};
-use crate::polyedit::{EdgeAction, FaceAction, Pending, PointAction, outline_edges};
+use crate::polyedit::{EdgeAction, ElementMode, FaceAction, Pending, PointAction, outline_edges};
 use egui::{Color32, RichText, Stroke};
 use glam::Vec2;
 use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
@@ -41,102 +41,125 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label(RichText::new(format!("{q} quads, {t} triangles, {n} larger polygons")).weak().small());
             }
             ui.add_space(4.0);
-            let picked = ed.poly_selection().len();
+            // What it works on (RFC 0023): 1 faces, 2 edges, 3 points, 4 Auto.
+            let mode = ed.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
+            ui.horizontal(|ui| {
+                for m in ElementMode::ALL {
+                    let r = ui
+                        .selectable_label(mode == m, format!("{} {}", m.key(), m.label()))
+                        .on_hover_text(format!("{} (key {}).", m.help(), m.key()));
+                    if r.clicked() {
+                        ed.set_poly_mode(m);
+                    }
+                }
+            });
+            let (picked, kind) = ed.poly_pick_count();
             if picked > 0 {
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(format!("{picked} face(s) picked")).color(PICKED));
+                    ui.label(RichText::new(format!("{picked} {kind} picked")).color(PICKED));
                     if ui.small_button("Clear").on_hover_text("Unpick them (or Ctrl/Cmd+click empty space)").clicked() {
-                        ed.poly_toggle_selected(None);
+                        ed.poly_toggle_pick(None);
                     }
                 });
             }
             let Some(pe) = ed.poly_edit.as_mut() else { return };
-            ui.label(RichText::new("Faces").strong());
-            ui.horizontal_wrapped(|ui| {
-                for a in FaceAction::ALL {
-                    ui.selectable_value(&mut pe.action, a, a.label()).on_hover_text(a.help());
-                }
-            });
-            ui.label(RichText::new(pe.action.help()).weak().small());
-            egui::Grid::new("poly_edit_face_options").num_columns(2).show(ui, |ui| {
-                ui.label("Reach");
-                egui::ComboBox::from_id_salt("poly_reach").selected_text(pe.reach.label()).show_ui(ui, |ui| {
-                    for r in Reach::ALL {
-                        ui.selectable_value(&mut pe.reach, r, r.label()).on_hover_text(reach_help(r));
+            let mode = pe.mode;
+            if mode.shows(ElementMode::Faces) {
+                ui.label(RichText::new("Faces").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for a in FaceAction::ALL {
+                        ui.selectable_value(&mut pe.action, a, a.label()).on_hover_text(a.help());
                     }
                 });
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut pe.each, "Each face on its own")
-                    .on_hover_text("Extrude, inset and bevel every face separately, instead of touching faces as one block");
-                ui.end_row();
-                if pe.action == FaceAction::Bridge {
-                    ui.label("Rows");
-                    ui.add(egui::DragValue::new(&mut pe.bridge_segments).range(1..=64))
-                        .on_hover_text("Rows of faces along the bridge");
+                ui.label(RichText::new(pe.action.help()).weak().small());
+                egui::Grid::new("poly_edit_face_options").num_columns(2).show(ui, |ui| {
+                    ui.label("Reach");
+                    egui::ComboBox::from_id_salt("poly_reach").selected_text(pe.reach.label()).show_ui(ui, |ui| {
+                        for r in Reach::ALL {
+                            ui.selectable_value(&mut pe.reach, r, r.label()).on_hover_text(reach_help(r));
+                        }
+                    });
                     ui.end_row();
-                    ui.label("Twist");
-                    ui.add(egui::DragValue::new(&mut pe.bridge_twist).range(-32..=32))
-                        .on_hover_text("Turn one end by this many corners, for a twisted bridge");
+                    ui.label("");
+                    ui.checkbox(&mut pe.each, "Each face on its own")
+                        .on_hover_text("Extrude, inset and bevel every face separately, instead of touching faces as one block");
                     ui.end_row();
+                    if pe.action == FaceAction::Bridge {
+                        ui.label("Rows");
+                        ui.add(egui::DragValue::new(&mut pe.bridge_segments).range(1..=64))
+                            .on_hover_text("Rows of faces along the bridge");
+                        ui.end_row();
+                        ui.label("Twist");
+                        ui.add(egui::DragValue::new(&mut pe.bridge_twist).range(-32..=32))
+                            .on_hover_text("Turn one end by this many corners, for a twisted bridge");
+                        ui.end_row();
+                    }
+                });
+                if let Some(Pending::BridgeFrom(_)) = pe.pending {
+                    ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
                 }
-            });
-            if pe.action == FaceAction::Bevel || pe.edge_action == EdgeAction::Bevel {
-                bevel_options(ui, pe);
-            }
-            if let Some(Pending::BridgeFrom(_)) = pe.pending {
-                ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
-            }
-            ui.label(
-                RichText::new("Ctrl/Cmd+click faces to pick several, then drag one of them to act on them together.")
-                    .weak()
-                    .small(),
-            );
-            ui.add_space(4.0);
-            ui.label(RichText::new("Edges").strong());
-            ui.horizontal_wrapped(|ui| {
-                for a in EdgeAction::ALL {
-                    ui.selectable_value(&mut pe.edge_action, a, a.label()).on_hover_text(a.help());
-                }
-            });
-            ui.label(RichText::new(pe.edge_action.help()).weak().small());
-            if pe.edge_action == EdgeAction::InsertLoop {
-                ui.checkbox(&mut pe.loop_pair, "Two loops").on_hover_text(
-                    "Cut two loops at once, the same distance in from each end of the edge; dragging moves them together, in or out. Shift+click puts them at thirds.",
+                ui.label(
+                    RichText::new("Ctrl/Cmd+click to pick several, then click or drag one of them to act on them all.")
+                        .weak()
+                        .small(),
                 );
             }
-            if matches!(
-                pe.edge_action,
-                EdgeAction::Delete
-                    | EdgeAction::ExtrudeBorder
-                    | EdgeAction::Slide
-                    | EdgeAction::Bevel
-                    | EdgeAction::Crease
-            ) {
-                ui.horizontal(|ui| {
-                    ui.label("Reach");
-                    egui::ComboBox::from_id_salt("poly_edge_reach").selected_text(pe.edge_reach.label()).show_ui(
-                        ui,
-                        |ui| {
-                            for r in EdgeReach::ALL {
-                                ui.selectable_value(&mut pe.edge_reach, r, r.label());
-                            }
-                        },
-                    );
+            if mode.shows(ElementMode::Edges) {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Edges").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for a in EdgeAction::ALL {
+                        ui.selectable_value(&mut pe.edge_action, a, a.label()).on_hover_text(a.help());
+                    }
                 });
-            }
-            ui.add_space(4.0);
-            ui.label(RichText::new("Points").strong());
-            ui.horizontal_wrapped(|ui| {
-                for a in PointAction::ALL {
-                    ui.selectable_value(&mut pe.point_action, a, a.label()).on_hover_text(a.help());
+                ui.label(RichText::new(pe.edge_action.help()).weak().small());
+                if pe.edge_action == EdgeAction::InsertLoop {
+                    ui.checkbox(&mut pe.loop_pair, "Two loops").on_hover_text(
+                        "Cut two loops at once, the same distance in from each end of the edge; dragging moves them together, in or out. Shift+click puts them at thirds.",
+                    );
                 }
-            });
-            ui.label(RichText::new(pe.point_action.help()).weak().small());
-            if let Some(Pending::SplitFrom(_)) = pe.pending {
-                ui.label(RichText::new("Split face: click the second point (Esc cancels)").color(REACH_EDGE));
+                if matches!(
+                    pe.edge_action,
+                    EdgeAction::Delete
+                        | EdgeAction::ExtrudeBorder
+                        | EdgeAction::Slide
+                        | EdgeAction::Bevel
+                        | EdgeAction::Crease
+                ) {
+                    ui.horizontal(|ui| {
+                        ui.label("Reach");
+                        egui::ComboBox::from_id_salt("poly_edge_reach").selected_text(pe.edge_reach.label()).show_ui(
+                            ui,
+                            |ui| {
+                                for r in EdgeReach::ALL {
+                                    ui.selectable_value(&mut pe.edge_reach, r, r.label());
+                                }
+                            },
+                        );
+                    });
+                }
             }
-            if pe.edge_action == EdgeAction::Crease || pe.point_action == PointAction::Crease {
+            if mode.shows(ElementMode::Points) {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Points").strong());
+                ui.horizontal_wrapped(|ui| {
+                    for a in PointAction::ALL {
+                        ui.selectable_value(&mut pe.point_action, a, a.label()).on_hover_text(a.help());
+                    }
+                });
+                ui.label(RichText::new(pe.point_action.help()).weak().small());
+                if let Some(Pending::SplitFrom(_)) = pe.pending {
+                    ui.label(RichText::new("Split face: click the second point (Esc cancels)").color(REACH_EDGE));
+                }
+            }
+            if (mode.shows(ElementMode::Faces) && pe.action == FaceAction::Bevel)
+                || (mode.shows(ElementMode::Edges) && pe.edge_action == EdgeAction::Bevel)
+            {
+                bevel_options(ui, pe);
+            }
+            if (mode.shows(ElementMode::Edges) && pe.edge_action == EdgeAction::Crease)
+                || (mode.shows(ElementMode::Points) && pe.point_action == PointAction::Crease)
+            {
                 ui.horizontal(|ui| {
                     ui.label("Crease weight");
                     let mut pct = pe.crease_weight * 100.0;
@@ -196,7 +219,12 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             });
             ui.add_space(4.0);
             ui.label(
-                RichText::new("Point at a face, an edge or a point: what lights up is what its action changes. Drag empty space to orbit.")
+                RichText::new(match mode {
+                    ElementMode::Faces => "Point at a face: what lights up is what its action changes. 2 and 3 switch to edges and points. Drag empty space to orbit.",
+                    ElementMode::Edges => "Point at an edge: what lights up is what its action changes. 1 and 3 switch to faces and points. Drag empty space to orbit.",
+                    ElementMode::Points => "Point at a point: what lights up is what its action changes. 1 and 2 switch to faces and edges. Drag empty space to orbit.",
+                    ElementMode::Auto => "Point at a face, an edge or a point: what lights up is what its action changes. Drag empty space to orbit.",
+                })
                     .weak()
                     .small(),
             );
@@ -257,6 +285,9 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     let reach = preview.faces.clone();
     let pending = ed.poly_edit.as_ref().and_then(|pe| pe.pending);
     let picked = ed.poly_selection().to_vec();
+    let picked_edges = ed.poly_picked_edges().to_vec();
+    let picked_points = ed.poly_picked_points().to_vec();
+    let mode = ed.poly_edit.as_ref().map_or(ElementMode::Auto, |pe| pe.mode);
     let Some(c) = ed.poly_cage() else { return };
     let painter = ui.painter_at(canvas);
     let ppp = ed.pixels_per_point.max(0.1);
@@ -326,6 +357,32 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
             if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
                 painter.line_segment([pa, pb], Stroke::new(2.0, PICKED));
             }
+        }
+    }
+    // Points mode: the points of the faces facing the camera, as dots.
+    if mode == ElementMode::Points && c.faces.len() <= MAX_DRAWN_FACES {
+        let mut seen = vec![false; c.positions.len()];
+        for f in (0..c.faces.len()).filter(|&f| facing(f)) {
+            for &v in corners(&c.faces[f]) {
+                if !std::mem::replace(&mut seen[v as usize], true)
+                    && let Some(pv) = screen[v as usize]
+                {
+                    painter.circle_filled(pv, 2.5, EDGE);
+                }
+            }
+        }
+    }
+    // Edges and points picked with Ctrl/Cmd+click.
+    for &[a, b] in &picked_edges {
+        if let (Some(pa), Some(pb)) =
+            (screen.get(a as usize).copied().flatten(), screen.get(b as usize).copied().flatten())
+        {
+            painter.line_segment([pa, pb], Stroke::new(3.0, PICKED));
+        }
+    }
+    for &v in &picked_points {
+        if let Some(pv) = screen.get(v as usize).copied().flatten() {
+            painter.circle_filled(pv, 5.0, PICKED);
         }
     }
     // The first pick of a bridge or split, until the second.

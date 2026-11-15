@@ -6,6 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 - **Hide just the settings panel** ([#260](https://github.com/crisprintsstuff/OxyBrush/issues/260)): the view strip's new top button, **Shift+Tab**, **View > Show settings panel** or the command palette hides the right-hand settings panel and brings it back, for more room around the model. The brush shelf and view strip stay, and the panel stays hidden after a restart. Tab still hides every panel at once; Shift+Tab after Tab brings them back.
+- **Poly Edit element modes** ([RFC 0023](docs/rfcs/0023-poly-edit-element-modes.md)): **1 Faces**, **2 Edges**, **3 Points** (buttons at the top of the window too), like other modeling apps, so the window shows only that kind's actions instead of all of them at once. A click picks that kind: anywhere on a face, the nearest edge, the nearest point, so small targets are easy to hit. **4 Auto** keeps the old behaviour (what's under the pointer decides). Faces is the default. The keys only change meaning while Poly Edit is open; elsewhere they pick brushes.
+- **Poly Edit: pick edges and points too.** Ctrl/Cmd+click picks several edges or points in their modes, as it did faces: crease or bevel several edges at once, move several points together. Switching modes turns the pick into the new kind: a face's sides or corners, the faces that picked edges or points close, the edges picked points make. So you can pick a face, press 2 and bevel its border.
 
 ## [4.0.0-beta.13] - 2026-11-15
 
