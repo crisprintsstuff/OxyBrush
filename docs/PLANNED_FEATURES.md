@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.12](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.13](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -104,6 +104,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.13:** the transform gizmo follows Mirror X/Y/Z, much
+  stronger Gravity, Stamp strokes as strong as freehand and shown while
+  dragging, Kelvin Grab without creases, and Poly Edit multi-face picks
+  with centred and paired edge loops.
 - **4.0.0-beta.12:** surface instances (live copies of one piece on the
   faces of another, with Make real), a Paint Groups brush, edge loops at
   the mask border for crisp hard edges, per-brush Gravity, a Units

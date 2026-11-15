@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.13" date="2026-11-15" type="development">
+      <description>
+        <p>The transform gizmo follows Mirror X, Y and Z. Gravity is much
+        stronger. Stamp strokes are as strong as freehand ones and show while
+        you drag. Kelvin Grab no longer creases long pulls. Poly Edit can pick
+        several faces and cut centred or paired edge loops.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.12" date="2026-11-15" type="development">
       <description>
         <p>Copy one piece onto the faces of another as live copies that
