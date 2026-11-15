@@ -952,6 +952,10 @@ pub struct Keymap {
     /// Keyboard key that inverts the brush (carve) while held.
     pub invert: ModKey,
     pub mask_empty: MaskEmpty,
+    /// Keys given to single brushes, from the shelf's right-click menu
+    /// (#259): at most one per brush, and one brush per key. They win over a
+    /// command on the same key.
+    pub brush_keys: Vec<(oxy_sculpt::BrushKind, Chord)>,
     /// Lines this version did not understand, written back unchanged.
     pub extra: Vec<String>,
 }
@@ -990,6 +994,7 @@ impl Keymap {
             mask: ModKey::Ctrl,
             invert: ModKey::Alt,
             mask_empty: MaskEmpty::Box,
+            brush_keys: Vec::new(),
             extra: Vec::new(),
         }
     }
@@ -1122,6 +1127,29 @@ impl Keymap {
         self.commands.iter().find(|(_, chords)| chords.contains(&chord)).map(|(id, _)| *id)
     }
 
+    /// The key given to brush `k`, if any.
+    pub fn brush_key(&self, k: oxy_sculpt::BrushKind) -> Option<Chord> {
+        self.brush_keys.iter().find(|(b, _)| *b == k).map(|(_, c)| *c)
+    }
+
+    /// The brush given `chord`, if any.
+    pub fn brush_for(&self, chord: Chord) -> Option<oxy_sculpt::BrushKind> {
+        self.brush_keys.iter().find(|(_, c)| *c == chord).map(|(b, _)| *b)
+    }
+
+    /// Give brush `k` the key `chord`, replacing its old one. RETURNS: the
+    /// brush that had that key before, which loses it.
+    pub fn set_brush_key(&mut self, k: oxy_sculpt::BrushKind, chord: Chord) -> Option<oxy_sculpt::BrushKind> {
+        let previous = self.brush_for(chord).filter(|b| *b != k);
+        self.brush_keys.retain(|(b, c)| *b != k && *c != chord);
+        self.brush_keys.push((k, chord));
+        previous
+    }
+
+    pub fn remove_brush_key(&mut self, k: oxy_sculpt::BrushKind) {
+        self.brush_keys.retain(|(b, _)| *b != k);
+    }
+
     /// Chords claimed by more than one command.
     pub fn conflicts(&self) -> Vec<(Chord, Vec<CommandId>)> {
         let mut found: Vec<(Chord, Vec<CommandId>)> = Vec::new();
@@ -1229,6 +1257,9 @@ impl Keymap {
         rows.push(("Hover a control".into(), "Read what it does, and its shortcut".into()));
         rows.push(("Press and hold (touch)".into(), "The same explanation; the control does not activate".into()));
         rows.push(("Middle-drag on a panel".into(), "Scroll the panel".into()));
+        for (k, chord) in &self.brush_keys {
+            rows.push((chord.label(), format!("{} brush", k.label())));
+        }
         for meta in COMMANDS {
             let keys = self.list(meta.id);
             if !keys.is_empty() && meta.id != CommandId::QuickMenu {
@@ -1270,6 +1301,9 @@ impl Keymap {
                     out.push_str(&format!("bind.{key} = {}\n", chord.token()));
                 }
             }
+        }
+        for (k, chord) in &self.brush_keys {
+            out.push_str(&format!("brush_key.{} = {}\n", crate::settings::brush_key(*k), chord.token()));
         }
         for line in &self.extra {
             out.push_str(line);
@@ -1401,6 +1435,18 @@ impl Keymap {
                 if !apply_bind(&mut map, k.trim_start_matches("bind."), v, &mut replaced_bind) {
                     extra.push(line);
                 }
+            } else if let Some(name) = k.strip_prefix("brush_key.") {
+                // Unknown brushes (from a newer version) are kept as they are.
+                let name = oxy_sculpt::preset::legacy_kind_key(name);
+                match (
+                    oxy_sculpt::BrushKind::ALL.into_iter().find(|b| crate::settings::brush_key(*b) == name),
+                    Chord::parse(v),
+                ) {
+                    (Some(brush), Some(chord)) => {
+                        map.set_brush_key(brush, chord);
+                    }
+                    _ => extra.push(line),
+                }
             } else if !known {
                 extra.push(line);
             }
@@ -1424,6 +1470,7 @@ impl Keymap {
             .iter()
             .filter(|(id, _)| replaced_bind.contains(id))
             .flat_map(|(_, c)| c.iter().copied())
+            .chain(map.brush_keys.iter().map(|(_, c)| *c))
             .collect();
         for (id, chords) in map.commands.iter_mut() {
             if !replaced_bind.contains(id) {
@@ -1457,6 +1504,7 @@ impl Keymap {
                     | "mask_empty"
                     | "nav"
             ) || key.starts_with("bind.")
+                || key.starts_with("brush_key.")
         });
         if known { Ok(Self::from_text(text)) } else { Err("That file isn't an OxyBrush keymap") }
     }
@@ -1631,6 +1679,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             });
             ui.label(egui::RichText::new(ed.keymap.preset.description()).weak().small());
 
+            if let Some(k) = ed.brush_key_capture {
+                ui.add_space(4.0);
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 160, 60),
+                    format!("Press a key for the {} brush. Esc cancels.", k.label()),
+                );
+            }
             if let Some((id, _)) = ed.keymap_capture {
                 ui.add_space(4.0);
                 ui.colored_label(
@@ -1645,6 +1700,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 navigation_section(ui, ed);
                 ui.add_space(8.0);
                 gesture_section(ui, ed);
+                ui.add_space(8.0);
+                brush_key_section(ui, ed);
                 ui.add_space(8.0);
                 command_section(ui, ed);
                 ui.add_space(6.0);
@@ -1795,6 +1852,47 @@ fn modkey_combo(ui: &mut egui::Ui, salt: &str, name: &str, value: &mut ModKey) {
             ui.selectable_value(value, key, format!("{name}: {}", key.label()));
         }
     });
+}
+
+/// Keys given to single brushes from the shelf (#259).
+fn brush_key_section(ui: &mut egui::Ui, ed: &mut Editor) {
+    ui.label(egui::RichText::new("Brush keys").strong());
+    ui.label(
+        egui::RichText::new(
+            "Right-click a brush in the shelf and choose Set hotkey to give it a key. A brush's key wins over a command on the same key.",
+        )
+        .weak()
+        .small(),
+    );
+    let mut remove = None;
+    for (k, chord) in ed.keymap.brush_keys.clone() {
+        ui.horizontal(|ui| {
+            ui.add_sized([210.0, 18.0], egui::Label::new(format!("{} brush", k.label())).truncate());
+            let mut text = egui::RichText::new(chord.label()).monospace();
+            let shadowed = ed.keymap.command_for(chord);
+            if shadowed.is_some() {
+                text = text.color(egui::Color32::from_rgb(220, 140, 50));
+            }
+            let tip = match shadowed {
+                Some(id) => format!("Instead of {}. Click to change it.", command_meta(id).name),
+                None => "Click to change this key".to_string(),
+            };
+            if ui.add(egui::Button::new(text)).on_hover_text(tip).clicked() {
+                ed.brush_key_capture = Some(k);
+                ed.keymap_capture = None;
+                ui.memory_mut(|m| m.stop_text_input());
+            }
+            if ui.small_button("×").on_hover_text("Remove this key").clicked() {
+                remove = Some(k);
+            }
+        });
+    }
+    if ed.keymap.brush_keys.is_empty() {
+        ui.label(egui::RichText::new("None yet").weak());
+    }
+    if let Some(k) = remove {
+        ed.keymap.remove_brush_key(k);
+    }
 }
 
 fn command_section(ui: &mut egui::Ui, ed: &mut Editor) {
@@ -2066,6 +2164,33 @@ mod tests {
         assert_eq!(map.primary(CommandId::Undo), "Ctrl+Z");
         assert_eq!(map.snap, Some(ModKey::Alt));
         assert!(map.is_standard_gestures());
+    }
+
+    #[test]
+    fn brush_keys_are_one_per_brush_saved_and_kept_for_unknown_brushes() {
+        use oxy_sculpt::BrushKind;
+        let mut map = Keymap::default();
+        assert_eq!(map.set_brush_key(BrushKind::Clay, chord("c")), None);
+        assert_eq!(map.brush_for(chord("c")), Some(BrushKind::Clay));
+        // A new key replaces the brush's old one.
+        map.set_brush_key(BrushKind::Clay, chord("shift+c"));
+        assert_eq!(map.brush_for(chord("c")), None);
+        assert_eq!(map.brush_key(BrushKind::Clay), Some(chord("shift+c")));
+        // Giving the key to another brush takes it from the first.
+        assert_eq!(map.set_brush_key(BrushKind::Inflate, chord("shift+c")), Some(BrushKind::Clay));
+        assert_eq!(map.brush_key(BrushKind::Clay), None);
+        map.set_brush_key(BrushKind::Clay, chord("ctrl+alt+c"));
+        // Saved and read back; a brush from a newer version is kept as it is.
+        let text = map.to_text() + "brush_key.future_brush = f\n";
+        let back = Keymap::from_text(&text);
+        assert_eq!(back.brush_for(chord("shift+c")), Some(BrushKind::Inflate));
+        assert_eq!(back.brush_for(chord("ctrl+alt+c")), Some(BrushKind::Clay));
+        assert!(back.to_text().contains("brush_key.future_brush = f"));
+        assert!(Keymap::import_text("brush_key.clay = c\n").is_ok());
+        // In the shortcut list, and gone once removed.
+        assert!(back.shortcut_rows().iter().any(|(_, what)| what == "Clay brush"));
+        map.remove_brush_key(BrushKind::Clay);
+        assert_eq!(map.brush_key(BrushKind::Clay), None);
     }
 
     #[test]

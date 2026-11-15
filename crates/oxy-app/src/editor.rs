@@ -1089,6 +1089,8 @@ pub struct Editor {
     pub keymap: keymap::Keymap,
     /// Waiting for a key: the command, and which of its chords to replace (`None` adds one).
     pub keymap_capture: Option<(CommandId, Option<usize>)>,
+    /// Waiting for the key to give this brush (shelf right-click, #259).
+    pub brush_key_capture: Option<BrushKind>,
     pub show_keymap: bool,
     /// Set by the keymap window; the platform layer opens the file dialog.
     pub request_import_keymap: bool,
@@ -1484,6 +1486,7 @@ impl Default for Editor {
             space_held: false,
             keymap: keymap::Keymap::default(),
             keymap_capture: None,
+            brush_key_capture: None,
             show_keymap: false,
             request_import_keymap: false,
             request_export_keymap: false,
@@ -2059,10 +2062,35 @@ impl Editor {
 
     /// Key shown next to a brush in the shelf: the binding for its slot, if it has one.
     pub fn number_key(&self, k: BrushKind) -> Option<String> {
+        // A key given to the brush itself comes first (#259).
+        if let Some(chord) = self.keymap.brush_key(k) {
+            return Some(chord.label());
+        }
         let slot = self.brush_order.iter().position(|b| *b == k)?;
         let id = CommandId::from_brush_slot(slot)?;
         let label = self.keymap.primary(id);
         if label.is_empty() { None } else { Some(label) }
+    }
+
+    /// Pick brush `k` from its own key (#259).
+    pub fn pick_brush_from_key(&mut self, k: BrushKind) {
+        self.brush_kind = k;
+        self.status = format!("{} brush", k.label());
+    }
+
+    /// Give brush `k` the key `chord` (#259) and say what that changed: the
+    /// brush that had the key loses it, and a command on the same key now
+    /// needs another (the brush wins).
+    pub fn give_brush_key(&mut self, k: BrushKind, chord: crate::keymap::Chord) {
+        let previous = self.keymap.set_brush_key(k, chord);
+        let mut msg = format!("{} brush: {}", k.label(), chord.label());
+        if let Some(p) = previous {
+            msg += &format!(" (taken from {})", p.label());
+        }
+        if let Some(id) = self.keymap.command_for(chord) {
+            msg += &format!(". It no longer does {}", crate::keymap::command_name(id));
+        }
+        self.status = msg;
     }
 
     /// Apply saved preferences.
@@ -8479,6 +8507,22 @@ mod tests {
         let g = e.scene.active().mesh.groups();
         assert!(g.iter().all(|&x| x == g[0]) && g[0] != bottom);
         assert!(e.status.starts_with("Group visible"), "{}", e.status);
+    }
+
+    #[test]
+    fn a_brush_key_from_the_shelf_shows_on_the_brush_and_says_what_it_replaces() {
+        let mut e = Editor::for_tests();
+        let c = crate::keymap::Chord::parse("ctrl+s").unwrap();
+        e.give_brush_key(BrushKind::Clay, c);
+        assert!(e.status.contains(&format!("Clay brush: {}", c.label())), "{}", e.status);
+        assert!(e.status.contains("no longer does Save"), "{}", e.status);
+        assert_eq!(e.number_key(BrushKind::Clay), Some(c.label()));
+        e.give_brush_key(BrushKind::Inflate, c);
+        assert!(e.status.contains("taken from Clay"), "{}", e.status);
+        // Clay goes back to its shelf number key.
+        assert_eq!(e.number_key(BrushKind::Clay).as_deref(), Some("2"));
+        e.pick_brush_from_key(BrushKind::Inflate);
+        assert_eq!(e.brush_kind, BrushKind::Inflate);
     }
 
     #[test]
