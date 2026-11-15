@@ -41,6 +41,15 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label(RichText::new(format!("{q} quads, {t} triangles, {n} larger polygons")).weak().small());
             }
             ui.add_space(4.0);
+            let picked = ed.poly_selection().len();
+            if picked > 0 {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("{picked} face(s) picked")).color(PICKED));
+                    if ui.small_button("Clear").on_hover_text("Unpick them (or Ctrl/Cmd+click empty space)").clicked() {
+                        ed.poly_toggle_selected(None);
+                    }
+                });
+            }
             let Some(pe) = ed.poly_edit.as_mut() else { return };
             ui.label(RichText::new("Faces").strong());
             ui.horizontal_wrapped(|ui| {
@@ -78,6 +87,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             if let Some(Pending::BridgeFrom(_)) = pe.pending {
                 ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
             }
+            ui.label(
+                RichText::new("Ctrl/Cmd+click faces to pick several, then drag one of them to act on them together.")
+                    .weak()
+                    .small(),
+            );
             ui.add_space(4.0);
             ui.label(RichText::new("Edges").strong());
             ui.horizontal_wrapped(|ui| {
@@ -86,6 +100,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
             ui.label(RichText::new(pe.edge_action.help()).weak().small());
+            if pe.edge_action == EdgeAction::InsertLoop {
+                ui.checkbox(&mut pe.loop_pair, "Two loops").on_hover_text(
+                    "Cut two loops at once, the same distance in from each end of the edge; dragging moves them together, in or out. Shift+click puts them at thirds.",
+                );
+            }
             if matches!(
                 pe.edge_action,
                 EdgeAction::Delete
@@ -237,6 +256,7 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     };
     let reach = preview.faces.clone();
     let pending = ed.poly_edit.as_ref().and_then(|pe| pe.pending);
+    let picked = ed.poly_selection().to_vec();
     let Some(c) = ed.poly_cage() else { return };
     let painter = ui.painter_at(canvas);
     let ppp = ed.pixels_per_point.max(0.1);
@@ -276,6 +296,36 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     for v in &preview.points {
         if let Some(pv) = screen[*v as usize] {
             painter.circle_filled(pv, 5.0, hot);
+        }
+    }
+    // Faces picked with Ctrl/Cmd+click.
+    if !picked.is_empty() {
+        let mut mesh = egui::Mesh::default();
+        let fill = Color32::from_rgba_unmultiplied(PICKED.r(), PICKED.g(), PICKED.b(), 50);
+        for &f in picked.iter().filter(|&&f| f < c.faces.len() && facing(f)) {
+            let k = corners(&c.faces[f]);
+            let tris: Vec<[u32; 3]> = if k.len() <= 4 {
+                (1..k.len() - 1).map(|j| [k[0], k[j], k[j + 1]]).collect()
+            } else {
+                ear_clip(&c.positions, k)
+            };
+            for t in tris {
+                let pts: Option<Vec<egui::Pos2>> = t.iter().map(|&v| screen[v as usize]).collect();
+                if let Some(pts) = pts {
+                    let base = mesh.vertices.len() as u32;
+                    for q in pts {
+                        mesh.colored_vertex(q, fill);
+                    }
+                    mesh.add_triangle(base, base + 1, base + 2);
+                }
+            }
+        }
+        painter.add(egui::Shape::mesh(mesh));
+        let valid: Vec<usize> = picked.iter().copied().filter(|&f| f < c.faces.len() && facing(f)).collect();
+        for [a, b] in outline_edges(c, &valid) {
+            if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
+                painter.line_segment([pa, pb], Stroke::new(2.0, PICKED));
+            }
         }
     }
     // The first pick of a bridge or split, until the second.

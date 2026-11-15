@@ -123,7 +123,7 @@ impl EdgeAction {
     pub fn help(self) -> &'static str {
         match self {
             EdgeAction::InsertLoop => {
-                "Click an edge to cut a new edge loop across the quads it runs through, where you clicked; drag along the edge to slide the loop before letting go."
+                "Click an edge to cut a new edge loop across the quads it runs through, where you clicked; drag along the edge to slide the loop before letting go. Shift+click puts it in the middle. Two loops cuts a pair, the same distance in from each end."
             }
             EdgeAction::Slide => {
                 "Drag across the edge to slide it (or its loop, with Reach Edge loop) along the edges beside it, towards either side, without changing the shape."
@@ -210,6 +210,13 @@ pub struct PolyEdit {
     /// Smooth preview levels (0: off), and the subdivided mesh shown for
     /// the cage it was made from.
     pub smooth_preview: u32,
+    /// Faces picked with Ctrl/Cmd+click, which a face action then works
+    /// on together, and the mesh topology they were picked on (face
+    /// numbers change with it, and the pick is dropped).
+    pub selected: Vec<usize>,
+    pub selected_topology: u64,
+    /// Insert loop makes two loops, the same distance in from each end.
+    pub loop_pair: bool,
     smooth: Option<(Cage, Mesh)>,
     /// Levels the preview shows (fewer than asked on big cages).
     pub smooth_shown: u32,
@@ -341,6 +348,9 @@ impl Editor {
             smooth: None,
             smooth_shown: 0,
             subdivide_levels: 1,
+            selected: Vec::new(),
+            selected_topology: 0,
+            loop_pair: false,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -488,9 +498,46 @@ impl Editor {
         }
     }
 
+    /// The faces picked with Ctrl/Cmd+click, while they still describe the
+    /// piece (empty once its faces were renumbered).
+    pub fn poly_selection(&self) -> &[usize] {
+        let (Some(pe), Some(i)) = (self.poly_edit.as_ref(), self.poly_piece_index()) else { return &[] };
+        let topology = self.scene.pieces[i].mesh.topology_version();
+        if pe.selected_topology == topology { &pe.selected } else { &[] }
+    }
+
+    /// Ctrl/Cmd+click: add face `face` to the pick, or take it out; on
+    /// empty space (`None`), clear the pick.
+    pub fn poly_toggle_selected(&mut self, face: Option<usize>) {
+        let Some(i) = self.poly_piece_index() else { return };
+        let topology = self.scene.pieces[i].mesh.topology_version();
+        let current = self.poly_selection().to_vec();
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        pe.selected = current;
+        pe.selected_topology = topology;
+        match face {
+            Some(f) => match pe.selected.iter().position(|&x| x == f) {
+                Some(k) => {
+                    pe.selected.remove(k);
+                }
+                None => pe.selected.push(f),
+            },
+            None => pe.selected.clear(),
+        }
+        let n = pe.selected.len();
+        self.status = if n == 0 {
+            "No faces picked".into()
+        } else {
+            format!("{n} face(s) picked: drag one of them to {} them together", pe.action.label().to_lowercase())
+        };
+    }
+
     fn poly_faces(&self, face: usize, edge: [u32; 2]) -> Vec<usize> {
         let (Some(pe), Some(c)) = (self.poly_edit.as_ref(), self.poly_cage()) else { return Vec::new() };
-        let faces = polyedit::reach_faces(c, face, Some(edge), pe.reach);
+        // A picked face acts with every picked face.
+        let picked = self.poly_selection();
+        let faces =
+            if picked.contains(&face) { picked.to_vec() } else { polyedit::reach_faces(c, face, Some(edge), pe.reach) };
         match self.poly_mirror() {
             Some((cx, tol)) => polyedit::with_mirror(c, &faces, cx, tol),
             None => faces,
@@ -558,7 +605,17 @@ impl Editor {
             return false;
         }
         self.poly_sync();
-        let Some(element) = self.poly_element_at(p) else {
+        let element = self.poly_element_at(p);
+        // Ctrl/Cmd+click picks faces to act on together (empty space clears).
+        if self.modifiers.ctrl {
+            match element {
+                Some(Element::Face(f, _)) => self.poly_toggle_selected(Some(f)),
+                None => self.poly_toggle_selected(None),
+                _ => {}
+            }
+            return true;
+        }
+        let Some(element) = element else {
             // Not on the piece: orbit, as with any tool.
             self.drag = Drag::Orbit;
             return true;
@@ -811,8 +868,22 @@ impl Editor {
                 self.status = format!("Turned {n} edge(s)");
             }
             EdgeAction::InsertLoop => {
+                // Two loops (the option) sit the same distance in from each
+                // end; Shift puts the loop in the middle (a pair at thirds)
+                // with no slide.
+                let pair = self.poly_edit.as_ref().is_some_and(|pe| pe.loop_pair);
+                let centre = self.modifiers.shift;
+                let t = match (pair, centre) {
+                    (false, true) => 0.5,
+                    (true, true) => 1.0 / 3.0,
+                    (true, false) => t.min(1.0 - t).clamp(0.02, 0.48),
+                    (false, false) => t,
+                };
+                let insert = |c: &mut Cage, x: u32, y: u32| {
+                    if pair { polyedit::insert_loop_pair(c, x, y, t) } else { polyedit::insert_loop(c, x, y, t) }
+                };
                 // The clicked edge's ring, and its mirror image's if separate.
-                let mut slide = polyedit::insert_loop(&mut cage, a, b, t);
+                let mut slide = insert(&mut cage, a, b);
                 if let Some((cx, tol)) = self.poly_mirror()
                     && let (Some(x), Some(y)) =
                         (polyedit::mirror_point(&cage, a, cx, tol), polyedit::mirror_point(&cage, b, cx, tol))
@@ -821,13 +892,22 @@ impl Editor {
                         q.distance(Vec3::new(2.0 * cx - q.x, q.y, q.z)) <= tol
                     })
                 {
-                    slide.extend(polyedit::insert_loop(&mut cage, x, y, t));
+                    slide.extend(insert(&mut cage, x, y));
                 }
                 if slide.is_empty() {
                     self.status = "Insert loop: that edge isn't on any face".into();
                     return;
                 }
                 let made = slide.verts.len();
+                if centre {
+                    let label = if pair { "Poly Edit: insert two loops" } else { "Poly Edit: insert loop" };
+                    self.poly_commit(label, before_mesh, before_cage, cage);
+                    self.status = format!(
+                        "Inserted {} in the middle ({made} new points)",
+                        if pair { "two loops" } else { "a loop" }
+                    );
+                    return;
+                }
                 if !self.poly_rebuild(i, cage, &mut slide) {
                     return;
                 }
@@ -838,9 +918,9 @@ impl Editor {
                     (Some(sa), Some(sb)) if sa.distance(sb) > 4.0 => ((sb - sa).normalize(), 1.0 / sa.distance(sb)),
                     _ => (Vec2::X, 0.005),
                 };
-                let what = format!("Insert loop ({made} new points)");
+                let what = format!("Insert {} ({made} new points)", if pair { "two loops" } else { "loop" });
                 self.poly_start_drag(p, what, slide, axis, scale, t.clamp(0.02, 0.98), true, before_mesh, before_cage);
-                self.poly_drag_meta(1, None);
+                self.poly_drag_meta(1, pair.then_some((0.02, 0.48)));
             }
             EdgeAction::Delete => {
                 let n = polyedit::dissolve_edges(&mut cage, &edges);
@@ -1848,5 +1928,94 @@ mod tests {
         assert_eq!(e.poly_wire_piece(), Some(e.scene.active().id));
         e.finish_poly_edit();
         assert_eq!(e.poly_wire_piece(), None);
+    }
+
+    #[test]
+    fn ctrl_click_picks_faces_that_then_act_together() {
+        // #243: Ctrl/Cmd+click several faces, then drag one of them.
+        let mut e = editor();
+        e.start_poly_edit();
+        e.camera.orbit(Vec2::new(60.0, 45.0));
+        let (front, _, _) = e.poly_hit(centre()).expect("a face in the middle");
+        // Another face that shows: the one under a point to the side.
+        let other_px = (1..60)
+            .flat_map(|k| {
+                [Vec2::new(0.0, -6.0), Vec2::new(6.0, 0.0), Vec2::new(-6.0, 0.0), Vec2::new(0.0, 6.0)]
+                    .map(|d| centre() + d * k as f32)
+            })
+            .find(|&p| matches!(e.poly_element_at(p), Some(Element::Face(f, _)) if f != front))
+            .expect("a second face on screen");
+        e.modifiers.ctrl = true;
+        click(&mut e, centre());
+        click(&mut e, other_px);
+        assert_eq!(e.poly_selection().len(), 2, "{}", e.status);
+        assert_eq!(cage(&e).faces.len(), 6, "picking changes nothing");
+        assert!(!e.history.can_undo());
+        // Ctrl+click a picked face again unpicks it; pick it back.
+        click(&mut e, other_px);
+        assert_eq!(e.poly_selection().len(), 1);
+        click(&mut e, other_px);
+        e.modifiers.ctrl = false;
+        // Dragging a picked face extrudes both: more faces than one extrusion (10).
+        e.poly_edit.as_mut().unwrap().each = true;
+        e.pointer = Some(centre());
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(centre() + Vec2::new(0.0, -40.0));
+        e.pointer_up();
+        assert_eq!(cage(&e).faces.len(), 14, "two faces extruded, each with four walls: {}", e.status);
+        polyedit::validate(cage(&e)).unwrap();
+        assert!(e.poly_selection().is_empty(), "the pick ends once the faces change");
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6, "one undo step");
+        // Ctrl+click on empty space clears a pick.
+        e.modifiers.ctrl = true;
+        click(&mut e, centre());
+        assert_eq!(e.poly_selection().len(), 1);
+        click(&mut e, Vec2::new(5.0, 5.0));
+        assert!(e.poly_selection().is_empty());
+    }
+
+    #[test]
+    fn shift_centres_a_new_loop_and_two_loops_sit_evenly() {
+        let mut e = editor();
+        e.start_poly_edit();
+        let (_, _, [a, b], at) = front_corner_and_edge(&e);
+        let (pa, pb) = (cage(&e).positions[a as usize], cage(&e).positions[b as usize]);
+        // Shift+click: a loop exactly in the middle, kept at once.
+        e.modifiers.shift = true;
+        click(&mut e, at);
+        e.modifiers.shift = false;
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 10, "{}", e.status);
+        let mid = (pa + pb) / 2.0;
+        assert!(c.positions.iter().any(|p| p.distance(mid) < 1e-4), "a new point at the middle");
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+        // Two loops, Shift: at thirds, as one undo step.
+        e.poly_edit.as_mut().unwrap().loop_pair = true;
+        e.modifiers.shift = true;
+        click(&mut e, at);
+        e.modifiers.shift = false;
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 14, "two loops round the ring: {}", e.status);
+        polyedit::validate(&c).unwrap();
+        for f in [1.0 / 3.0, 2.0 / 3.0] {
+            let q = pa.lerp(pb, f);
+            assert!(c.positions.iter().any(|p| p.distance(q) < 1e-4), "a point at {f} of the edge");
+        }
+        e.undo();
+        // Two loops by a plain click (and slide): still even from both ends.
+        click(&mut e, at);
+        let c = cage(&e).clone();
+        assert_eq!(c.faces.len(), 14);
+        let on_edge: Vec<f32> = c
+            .positions
+            .iter()
+            .filter(|p| (**p - pa).cross(pb - pa).length() < 1e-4)
+            .map(|p| (*p - pa).dot(pb - pa) / (pb - pa).length_squared())
+            .filter(|f| *f > 1e-4 && *f < 1.0 - 1e-4)
+            .collect();
+        assert_eq!(on_edge.len(), 2, "{on_edge:?}");
+        assert!((on_edge[0] + on_edge[1] - 1.0).abs() < 1e-4, "even from both ends: {on_edge:?}");
     }
 }
