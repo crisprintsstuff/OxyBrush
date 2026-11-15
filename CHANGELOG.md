@@ -14,6 +14,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Poly Edit element modes** ([RFC 0023](docs/rfcs/0023-poly-edit-element-modes.md)): **1 Faces**, **2 Edges**, **3 Points** (buttons at the top of the window too), like other modeling apps, so the window shows only that kind's actions instead of all of them at once. A click picks that kind: anywhere on a face, the nearest edge, the nearest point, so small targets are easy to hit. **4 Auto** keeps the old behaviour (what's under the pointer decides). Faces is the default. The keys only change meaning while Poly Edit is open; elsewhere they pick brushes.
 - **Poly Edit: pick edges and points too.** Ctrl/Cmd+click picks several edges or points in their modes, as it did faces: crease or bevel several edges at once, move several points together. Switching modes turns the pick into the new kind: a face's sides or corners, the faces that picked edges or points close, the edges picked points make. So you can pick a face, press 2 and bevel its border.
 
+### Fixed
+- **Low-poly models shade with crisp, flat faces.** A box from Insert Primitive or Poly Edit looked blotchy, with highlights and a dark band smeared across its faces and edges, under both the matcap and the viewport lights. Each corner had one normal, averaged from the faces meeting there, so every face shaded as if it were curved. The viewport now gives faces meeting at more than 60° their own normals at the shared corner, so a box shades as a box. Spheres, cylinders with six or more sides, and sculpts stay smooth. Only the viewport changes: the mesh, exports and brushes are as before. Finding these edges adds about 10 ms when a 1.3 million-triangle mesh is rebuilt (0.7 ms at 82,000) and nothing measurable per brush dab.
+
 ## [4.0.0-beta.13] - 2026-11-15
 
 ### Added
