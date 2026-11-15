@@ -1700,8 +1700,8 @@ mod tests {
     fn uniform_layouts_match_wgsl() {
         // std140-style sizes the shaders expect (vec4/mat4 aligned).
         assert_eq!(std::mem::size_of::<Uniforms>(), 2 * 64 + 7 * 16 + std::mem::size_of::<lighting::GpuLighting>());
-        // GpuLighting: 5 vec4, 4 lights of 4 vec4, 4 mat4.
-        assert_eq!(std::mem::size_of::<lighting::GpuLighting>(), 5 * 16 + 4 * 64 + 4 * 64);
+        // GpuLighting: 5 vec4, 4 lights of 5 vec4, 4 mat4.
+        assert_eq!(std::mem::size_of::<lighting::GpuLighting>(), 5 * 16 + 4 * 80 + 4 * 64);
         assert_eq!(std::mem::size_of::<PostUniforms>(), 3 * 16);
     }
 
