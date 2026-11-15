@@ -289,6 +289,7 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::CurveMove => "curve_move",
         BrushKind::Mask => "mask",
         BrushKind::Paint => "paint",
+        BrushKind::PaintGroups => "paint_groups",
         BrushKind::InsertPrimitive => "insert_primitive",
         BrushKind::Tube => "tube",
         BrushKind::PlaneClip => "plane_clip",

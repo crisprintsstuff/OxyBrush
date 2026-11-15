@@ -112,10 +112,10 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### Sculpting
 
-- **19 sculpting brushes, plus 7 tools in the same shelf:**
+- **19 sculpting brushes, plus 8 tools in the same shelf:**
   - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Sharp Crease (a crisp V along the stroke, for hard folds and panel lines), Layer, Polish, Planar Trim, Noise.
   - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the volume-preserving Kelvinlet brushes Kelvin Grab, Kelvin Twist and Kelvin Scale (after *de Goes & James, SIGGRAPH 2017*).
-  - **Tools:** Mask, Paint (vertex color), Insert Primitives (sphere, quad sphere, UV sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
+  - **Tools:** Mask, Paint (vertex color), Paint Groups (face groups), Insert Primitives (sphere, quad sphere, UV sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
 
   Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options. **Shift** smooths, and holding it while dragging changes the smoothing strength on the fly.
 - **Strokes:** a stabilizer for smooth lines, Freehand, Line, Stamp and **Curve** stroke modes, spray, and a pressure curve. A Curve stroke stays editable after you draw it: drag, add or remove points, change size and strength per point, close it into a loop, and see the result live before you Accept ([RFC 0004](docs/rfcs/0004-curve-stroke.md)). In Freehand mode, hold still mid-stroke to turn it into a curve. **Edit > Last stroke** reopens the stroke you just made as an editable curve, or uses its path for a Curve Move curve or a tube.
@@ -147,7 +147,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 - **Pieces:** many meshes per scene: add (parametric sphere, with even quads, UV rings or triangles; cube, plane, cylinder, cone, torus, and a **disc**: a flat round plate, a ring with a hole or a slice of either, made of quads), duplicate, mirror-duplicate, delete, rename, show/hide, solo; Alt+click a piece to make it active. **Join** combines the visible pieces exactly as they are (each keeps its face groups); **Merge + remesh** fuses them into one closed surface. Split a piece by face groups, into loose parts, by its hidden faces or by its mask (**Split masked**).
 - **Masking and selection:** paint a mask with Ctrl, or box or lasso it (following symmetry); mask by cavity, peaks or face group, or mask the border of the visible surface or the lines where face groups meet; blur, sharpen, grow, shrink or invert it. **Extract mask…** turns the masked area into a shell piece with live preview of its thickness.
-- **Face groups and hiding:** group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, and a group color overlay.
+- **Face groups and hiding:** the **Paint Groups** brush (each stroke a new group; Alt grows the one you start on), group visible, group from mask, group by islands, Ctrl+Shift+click to isolate a group, invert visibility, and a group color overlay.
 - **Transform gizmo (T):** move, rotate or scale a piece. With a mask, only the unmasked part moves and a soft mask edge bends smoothly, which makes it a quick posing tool. It snaps with Shift and has pivot choices (the pivot follows the mask edge by default; untick **Follow the mask** to keep it in place) and operators (mirror, put on the ground, centre at origin). Its fields show the move, turn or scale live while you drag; type a value and press Enter to land exactly on it. A second row shows the actual **size** and **centre** of what it moves (along the world axes), also live; type a size or a position to set it exactly (with Even on, the other sides follow in proportion). **Apply** keeps the changes and counts from zero again; **Cancel** puts them back (Redo brings them back); **Done** closes the gizmo and keeps them, unless Preferences > General > *Closing the gizmo puts back changes not applied* is on.
 
 ### Color and viewport
