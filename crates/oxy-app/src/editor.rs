@@ -776,6 +776,8 @@ pub struct GizmoDrag {
     current: pose::Transform,
     /// Last pointer position queued for frame redraw.
     queued_pos: Option<Vec2>,
+    /// The mirror planes it follows (Mirror X/Y/Z).
+    mirror: pose::GizmoMirror,
 }
 
 /// Something that needs a "discard unsaved changes?" confirmation first.
@@ -3364,11 +3366,12 @@ impl Editor {
                     }
                     return true;
                 }
+                let mirror = g.mirror;
                 let mesh = &mut self.scene.active_mut().mesh;
-                pose::apply_interactive(mesh, &g.original, &g.original_normals, &g.weights, g.pivot, &t);
+                pose::apply_interactive(mesh, &g.original, &g.original_normals, &g.weights, g.pivot, &t, &mirror);
                 for &c in &g.affected_chunks {
                     let orig = g.original_chunk_aabbs[c as usize];
-                    let transformed = pose::transform_aabb(&orig, g.pivot, &t);
+                    let transformed = mirror.transform_aabb(&orig, g.pivot, &t);
                     mesh.update_chunk_bounds(c, orig.union(&transformed));
                     mesh.mark_dirty(c);
                 }
@@ -6848,6 +6851,10 @@ impl Editor {
             affected_chunk_flags.iter().enumerate().filter_map(|(c, &aff)| aff.then_some(c as u32)).collect();
         let original_chunk_aabbs: Vec<oxy_mesh::Aabb> = piece.mesh.chunks.iter().map(|c| c.aabb).collect();
         let current_rot = self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY);
+        let original = piece.mesh.positions.clone();
+        let original_normals = piece.mesh.normals.clone();
+        // Moving the pivot itself (Alt) doesn't mirror anything.
+        let mirror = if reposition_pivot { pose::GizmoMirror::NONE } else { self.gizmo_mirror() };
 
         self.drag = Drag::Gizmo(Box::new(GizmoDrag {
             handle,
@@ -6856,8 +6863,8 @@ impl Editor {
             rotation: current_rot,
             axis_dirs: layout.axis_dirs,
             reposition_pivot,
-            original: piece.mesh.positions.clone(),
-            original_normals: piece.mesh.normals.clone(),
+            original,
+            original_normals,
             original_chunk_aabbs,
             affected_chunks,
             has_soft_weights,
@@ -6868,6 +6875,7 @@ impl Editor {
             world_per_px,
             current: pose::Transform::IDENTITY,
             queued_pos: None,
+            mirror,
         }));
         if reposition_pivot {
             self.status = "Repositioning gizmo pivot (Alt held)".into();
@@ -12889,5 +12897,38 @@ mod tests {
         e.pointer_down(PointerButton::Primary);
         e.pointer_up();
         assert!(height(&e) > 0.0);
+    }
+
+    #[test]
+    fn dragging_the_gizmo_on_one_of_a_mirrored_pair_moves_the_other_mirrored() {
+        // Two spheres, as Insert Primitive with Mirror X makes them, the
+        // gizmo on the right one: dragging X moves them apart.
+        let mut e = editor();
+        let one = primitives::icosphere(2, 0.3).to_data();
+        let mut data = one.clone();
+        data.positions.iter_mut().for_each(|p| p.x += 0.6);
+        let n = data.positions.len() as u32;
+        data.positions.extend(one.positions.iter().map(|p| *p - Vec3::X * 0.6));
+        data.triangles.extend(one.triangles.iter().map(|t| t.map(|v| v + n)));
+        e.scene = Scene::new(Piece::new("Pair", Mesh::from_data(data)));
+        e.symmetry.x = true;
+        e.camera.frame(e.scene.bounds());
+        e.custom_gizmo_pivot = Some(Vec3::new(0.6, 0.0, 0.0));
+        e.toggle_gizmo(GizmoMode::Move);
+        let before = e.scene.active().mesh.positions.clone();
+        let layout = e.gizmo_layout().expect("gizmo is shown");
+        let end = layout.axes[0].expect("X handle visible from the front");
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        let mesh = &e.scene.active().mesh;
+        let (mut right, mut left) = (0.0, 0.0);
+        for (v, old) in before.iter().enumerate() {
+            let d = mesh.positions[v] - *old;
+            assert!(d.y.abs() < 1e-4 && d.z.abs() < 1e-4, "along X only: {d}");
+            if old.x > 0.0 { right += d.x } else { left += d.x }
+        }
+        assert!(right > 0.0, "the right sphere moves right");
+        assert!((left + right).abs() < 1e-3 * right.abs().max(1.0), "the left moves left as far: {left} vs {right}");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
     }
 }
