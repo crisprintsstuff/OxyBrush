@@ -217,6 +217,8 @@ pub struct PolyEdit {
     pub selected_topology: u64,
     /// Insert loop makes two loops, the same distance in from each end.
     pub loop_pair: bool,
+    /// The mesh's face version the polygons last took face groups from.
+    pub groups_seen: u64,
     smooth: Option<(Cage, Mesh)>,
     /// Levels the preview shows (fewer than asked on big cages).
     pub smooth_shown: u32,
@@ -327,6 +329,13 @@ impl Editor {
         if !linked {
             let cage = cage_from_mesh(&piece.mesh);
             self.scene.active_mut().cage = Some(cage);
+        } else {
+            // The polygons are kept while the triangles are unchanged, but
+            // face groups may have been painted since (#249).
+            let p = self.scene.active_mut();
+            if let Some(c) = p.cage.as_mut() {
+                c.sync_groups_from(&p.mesh);
+            }
         }
         self.poly_edit = Some(PolyEdit {
             piece: id,
@@ -351,6 +360,7 @@ impl Editor {
             selected: Vec::new(),
             selected_topology: 0,
             loop_pair: false,
+            groups_seen: 0,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -385,6 +395,18 @@ impl Editor {
             Some(c) => c.sync_from(&p.mesh),
             None => false,
         };
+        // Face groups painted or changed since (#249): the polygons take
+        // them, so Reach: Face group follows what's shown.
+        let faces = p.mesh.face_version();
+        if ok
+            && let Some(pe) = self.poly_edit.as_mut()
+            && pe.groups_seen != faces
+        {
+            pe.groups_seen = faces;
+            if let Some(c) = p.cage.as_mut() {
+                c.sync_groups_from(&p.mesh);
+            }
+        }
         if !ok {
             if p.multires.is_none() && p.mesh.triangle_count() <= MAX_TRIANGLES && p.mesh.triangle_count() > 0 {
                 // Another tool changed its faces (remesh, a boolean): start
@@ -2017,5 +2039,36 @@ mod tests {
             .collect();
         assert_eq!(on_edge.len(), 2, "{on_edge:?}");
         assert!((on_edge[0] + on_edge[1] - 1.0).abs() < 1e-4, "even from both ends: {on_edge:?}");
+    }
+
+    #[test]
+    fn face_groups_painted_after_closing_are_used_when_reopened() {
+        // #249: open, close, paint face groups, reopen: Reach: Face group
+        // must see the new groups.
+        let mut e = editor();
+        e.start_poly_edit();
+        e.finish_poly_edit();
+        assert!(e.scene.active().cage.is_some(), "the polygons are kept");
+        // Paint the triangles of the top face (+Y) into group 7.
+        let mesh = &e.scene.active().mesh;
+        let groups: Vec<u32> = mesh
+            .triangles
+            .iter()
+            .map(|t| if t.iter().all(|&v| mesh.positions[v as usize].y > 0.4) { 7 } else { 0 })
+            .collect();
+        assert_eq!(groups.iter().filter(|&&g| g == 7).count(), 2);
+        e.scene.active_mut().mesh.set_groups(groups);
+        e.start_poly_edit();
+        let c = cage(&e);
+        let top: Vec<&oxy_mesh::retopo::Face> =
+            c.faces.iter().filter(|f| f.corners.iter().all(|&v| c.positions[v as usize].y > 0.4)).collect();
+        assert_eq!(top.len(), 1);
+        assert_eq!(top[0].group, 7, "the reopened polygons take the painted group");
+        assert_eq!(c.faces.iter().filter(|f| f.group == 7).count(), 1);
+        // Painting while the tool is open is picked up too.
+        let tris = e.scene.active().mesh.triangle_count();
+        e.scene.active_mut().mesh.set_groups(vec![3; tris]);
+        e.poly_sync();
+        assert!(cage(&e).faces.iter().all(|f| f.group == 3));
     }
 }
