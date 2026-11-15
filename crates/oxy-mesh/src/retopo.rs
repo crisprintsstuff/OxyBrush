@@ -658,8 +658,7 @@ impl Cage {
             k.sort_unstable();
             k
         };
-        let by_tri: HashMap<[u32; 3], u32> =
-            mesh.triangles.iter().zip(groups).map(|(&t, &g)| (key(t), g)).collect();
+        let by_tri: HashMap<[u32; 3], u32> = mesh.triangles.iter().zip(groups).map(|(&t, &g)| (key(t), g)).collect();
         for f in &mut self.faces {
             let c = &f.corners;
             if c.len() < 3 {

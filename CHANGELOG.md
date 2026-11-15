@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+- **Poly Edit uses face groups painted since it was last open** ([#249](https://github.com/crisprintsstuff/OxyBrush/issues/249)). It kept the piece's polygons with their old groups, so after painting new face groups (Paint Groups brush, Groups menu), **Reach: Face group** still extruded the previous group. It now takes the current groups when it opens and whenever they change while it's open.
+
 ## [4.0.0-beta.12] - 2026-11-15
 
 ### Added
