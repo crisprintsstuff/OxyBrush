@@ -32,6 +32,12 @@ pub struct Modifiers {
     pub alt: bool,
 }
 
+/// Dabs a stamp (Stamp stroke mode) stacks in place: as much as a
+/// freehand stroke one brush-width long over the same spot (Draw at full
+/// strength raises about half the radius either way; one dab, as stamps
+/// used to be, raised a tenth).
+pub const STAMP_REPEATS: u32 = 6;
+
 /// How a primary-button drag on the model applies the brush.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum StrokeMode {
@@ -3161,6 +3167,11 @@ impl Editor {
                 }
                 true
             }
+            Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start } => {
+                let (kind, invert, start) = (*kind, *invert, *start);
+                self.apply_stamp(kind, invert, start, pos, false);
+                true
+            }
             Drag::Deferred { .. } => true,
             Drag::CurveDraw { points, .. } => {
                 if points.last().is_none_or(|l| l.distance(pos) > 2.0) {
@@ -3531,6 +3542,11 @@ impl Editor {
                 }
             }
             Drag::CurveCut { .. } => self.status = "Cut cancelled".into(),
+            Drag::Deferred { .. } => {
+                // A stamp shown while dragging goes back.
+                self.history.revert_pending(&mut self.scene);
+                self.status = "Cancelled".into();
+            }
             _ => self.status = "Cancelled".into(),
         }
     }
@@ -3631,40 +3647,68 @@ impl Editor {
         }
     }
 
+    /// Stamp stroke mode: put the stamp for a drag from `start` to `end`,
+    /// first taking back the one shown for the previous pointer position,
+    /// so the stamp follows the drag live. `commit` (on release) makes it
+    /// an undo step. The drag's length is the stamp's radius and its
+    /// direction turns the alpha; a click (a drag under 4 px) stamps at
+    /// the brush size.
+    fn apply_stamp(&mut self, kind: BrushKind, invert: bool, start: Vec2, end: Vec2, commit: bool) {
+        self.history.revert_pending(&mut self.scene);
+        let click = end.distance(start) < 4.0 * self.pixels_per_point.max(0.1);
+        if click && !commit {
+            return;
+        }
+        let size = self.canvas_size();
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let (o, d) = self.camera.ray(start - origin, size);
+        let Some(hit) = self.scene.active().mesh.raycast(o, d) else { return };
+        let drag = end - start;
+        let (radius_pt, angle) = if click {
+            (self.brush_radius_pt, 0.0)
+        } else {
+            ((drag.length() / self.pixels_per_point).max(4.0), -drag.y.atan2(drag.x))
+        };
+        let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
+        let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
+        if kind == BrushKind::Paint {
+            self.reveal_vertex_color();
+        }
+        let piece = self.scene.active_mut();
+        self.history.begin_with(
+            kind.label(),
+            piece.id,
+            &piece.mesh,
+            kind == BrushKind::Paint || piece.mesh.is_painted(),
+        );
+        let history = &mut self.history;
+        stroke.stamp(&mut piece.mesh, sample, STAMP_REPEATS, &mut |m, c| history.touch(m, c));
+        if commit {
+            self.history.commit();
+        }
+    }
+
     fn finish_deferred(&mut self, mode: StrokeMode, kind: BrushKind, invert: bool, start: Vec2, end: Vec2) {
+        if mode == StrokeMode::Stamp {
+            self.apply_stamp(kind, invert, start, end, true);
+            return;
+        }
         let size = self.canvas_size();
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
         let ray = |p: Vec2| self.camera.ray(p - origin, size);
         let (o, d) = ray(start);
         let Some(hit) = self.scene.active().mesh.raycast(o, d) else { return };
         let pressure = self.pressure();
-        let (mut stroke, samples): (Stroke, Vec<StrokeSample>) = match mode {
-            StrokeMode::Stamp => {
-                // Drag distance is the radius; drag direction rotates the alpha.
-                let drag = end - start;
-                let radius_pt = (drag.length() / self.pixels_per_point).max(4.0);
-                let angle = -drag.y.atan2(drag.x);
-                let stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
-                (stroke, vec![StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure }])
-            }
-            _ => {
-                // Line: sample the straight screen segment every 2 px.
-                let stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, self.brush_radius_pt), 0.0);
-                let steps = ((end - start).length() / 2.0).ceil().max(1.0) as usize;
-                let mesh = &self.scene.active().mesh;
-                let samples = (0..=steps)
-                    .filter_map(|i| {
-                        let (o, d) = ray(start.lerp(end, i as f32 / steps as f32));
-                        mesh.raycast(o, d).map(|h| StrokeSample {
-                            position: h.point,
-                            normal: facing(h.normal, d),
-                            pressure,
-                        })
-                    })
-                    .collect();
-                (stroke, samples)
-            }
-        };
+        // Line: sample the straight screen segment every 2 px.
+        let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, self.brush_radius_pt), 0.0);
+        let steps = ((end - start).length() / 2.0).ceil().max(1.0) as usize;
+        let mesh = &self.scene.active().mesh;
+        let samples: Vec<StrokeSample> = (0..=steps)
+            .filter_map(|i| {
+                let (o, d) = ray(start.lerp(end, i as f32 / steps as f32));
+                mesh.raycast(o, d).map(|h| StrokeSample { position: h.point, normal: facing(h.normal, d), pressure })
+            })
+            .collect();
         if kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
@@ -9705,7 +9749,11 @@ mod tests {
             e.pointer = Some(Vec2::new(360.0, 300.0));
             e.pointer_down(PointerButton::Primary);
             e.pointer_moved(Vec2::new(440.0, 300.0));
-            assert_eq!(before, e.scene.active().mesh.positions, "{mode:?}: nothing until release");
+            if mode == StrokeMode::Line {
+                assert_eq!(before, e.scene.active().mesh.positions, "{mode:?}: nothing until release");
+            } else {
+                assert_ne!(before, e.scene.active().mesh.positions, "{mode:?}: shown while dragging");
+            }
             e.pointer_up();
             assert_ne!(before, e.scene.active().mesh.positions, "{mode:?}: applied on release");
             e.undo();
@@ -12801,5 +12849,45 @@ mod tests {
         e.scene.active_mut().mesh.set_hidden(vec![true; tris]);
         let mut mesh = e.scene.active().mesh.clone();
         assert!(!mesh.paint_group(Vec3::ZERO, 10.0, None, 5));
+    }
+
+    #[test]
+    fn a_stamp_is_as_strong_as_a_short_stroke_and_follows_the_drag() {
+        // Freehand: one brush-width stroke across the middle.
+        let height = |e: &Editor| e.scene.active().mesh.positions.iter().map(|p| p.length()).fold(0.0, f32::max) - 1.0;
+        let mut free = editor();
+        free.brush_radius_pt = 40.0;
+        drag(&mut free, Vec2::new(360.0, 300.0), Vec2::new(440.0, 300.0));
+        let stroke = height(&free);
+        // Stamp: dragging 40 px out from the middle (the same radius).
+        let mut e = editor();
+        e.stroke_mode = StrokeMode::Stamp;
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(420.0, 300.0));
+        let small = height(&e);
+        e.pointer_moved(Vec2::new(440.0, 300.0));
+        let full = height(&e);
+        assert!(small > 0.0 && full > small, "the stamp grows with the drag, live: {small} -> {full}");
+        e.pointer_up();
+        assert!((height(&e) - full).abs() < 1e-6, "release keeps what was shown");
+        assert!(full > 0.6 * stroke, "about as strong as a short stroke: {full} vs {stroke}");
+        assert_eq!(e.history.undo_labels().count(), 1, "one undo step, however long the drag");
+        e.undo();
+        assert!(height(&e) < 1e-4);
+        // Escape while dragging takes the stamp back.
+        let before = e.scene.active().mesh.positions.clone();
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(440.0, 300.0));
+        assert_ne!(e.scene.active().mesh.positions, before);
+        e.cancel_drag();
+        assert_eq!(e.scene.active().mesh.positions, before);
+        assert!(!e.history.can_undo());
+        // A click stamps at the brush size.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert!(height(&e) > 0.0);
     }
 }

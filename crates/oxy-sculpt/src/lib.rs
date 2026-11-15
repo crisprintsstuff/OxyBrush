@@ -924,6 +924,21 @@ impl Stroke {
         self.last = Some(sample);
     }
 
+    /// A stamp (Stamp stroke mode): one dab at `sample`, applied `repeats`
+    /// times in place, so it builds up like the dabs of a short freehand
+    /// stroke over the same spot instead of moving the surface the tenth of
+    /// a radius a single dab does. Not for the grab-like brushes.
+    pub fn stamp(&mut self, mesh: &mut Mesh, sample: StrokeSample, repeats: u32, touch: &mut dyn FnMut(&Mesh, u32)) {
+        if self.settings.kind.is_grab_like() {
+            return;
+        }
+        for _ in 0..repeats.max(1) {
+            self.apply_dab(mesh, sample, touch);
+        }
+        self.last = Some(sample);
+        self.carry = 0.0;
+    }
+
     fn make_dab(&self, s: StrokeSample) -> Dab {
         let p = s.pressure.clamp(0.0, 1.0);
         let radius =
