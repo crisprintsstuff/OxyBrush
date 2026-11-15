@@ -26,16 +26,21 @@ pub enum LightKind {
     Point,
     /// Light from a point, in a cone toward an aim point.
     Spot,
+    /// A round light with a size, facing its aim point: soft-edged light
+    /// and shadows that are sharp where things touch and softer further
+    /// away (RFC 0024).
+    Area,
 }
 
 impl LightKind {
-    pub const ALL: [Self; 3] = [Self::Sun, Self::Point, Self::Spot];
+    pub const ALL: [Self; 4] = [Self::Sun, Self::Point, Self::Spot, Self::Area];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Sun => "Sun",
             Self::Point => "Point",
             Self::Spot => "Spot",
+            Self::Area => "Area",
         }
     }
 
@@ -44,6 +49,7 @@ impl LightKind {
             Self::Sun => 0.0,
             Self::Point => 1.0,
             Self::Spot => 2.0,
+            Self::Area => 3.0,
         }
     }
 
@@ -51,6 +57,7 @@ impl LightKind {
         match c.round() as i32 {
             1 => Self::Point,
             2 => Self::Spot,
+            3 => Self::Area,
             _ => Self::Sun,
         }
     }
@@ -81,8 +88,13 @@ pub struct Light {
     /// 0 = none). Distance is measured in scene sizes.
     pub falloff: f32,
     pub shadows: bool,
-    /// Shadow edge softness, 0 (sharp) to 1 (very soft).
+    /// Shadow edge softness, 0 (sharp) to 1 (very soft). Also how gently
+    /// the light fades where the surface turns away from it, so a light
+    /// without shadows doesn't end in a hard line.
     pub softness: f32,
+    /// Area light: its diameter, relative to the scene (see the module
+    /// docs). Bigger is softer.
+    pub size: f32,
 }
 
 impl Default for Light {
@@ -102,6 +114,7 @@ impl Default for Light {
             falloff: 2.0,
             shadows: false,
             softness: 0.3,
+            size: 0.2,
         }
     }
 }
@@ -128,6 +141,9 @@ pub struct Lighting {
     pub shadows: bool,
     /// Shadow map size per light (1024, 2048 or 4096).
     pub shadow_size: u32,
+    /// Keep the matcap and let the lights brighten it and their shadows
+    /// darken it, instead of the plain lit surface (RFC 0024).
+    pub light_matcap: bool,
 }
 
 impl Default for Lighting {
@@ -168,6 +184,7 @@ impl Default for Lighting {
             exposure: 0.0,
             shadows: true,
             shadow_size: 2048,
+            light_matcap: false,
         }
     }
 }
@@ -316,6 +333,9 @@ pub fn kelvin_to_rgb(kelvin: f32) -> [f32; 3] {
 /// - `b`: color × intensity (rgb); w: falloff exponent
 /// - `c`: spot view-space direction the cone points (xyz); w: cos(outer half-angle)
 /// - `d`: x: cos(inner half-angle), y: shadow layer (-1 none), z: shadow softness (texels), w: reference distance
+/// - `e`: x: area light radius (world units, 0 for others), y: how far past
+///   the terminator the light fades (sine of an angle), z, w: the shadow
+///   map's near and far planes (perspective maps)
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuLight {
@@ -323,13 +343,15 @@ pub struct GpuLight {
     pub b: [f32; 4],
     pub c: [f32; 4],
     pub d: [f32; 4],
+    pub e: [f32; 4],
 }
 
 /// The lighting block appended to the viewport uniforms.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct GpuLighting {
-    /// x: lit (1) or matcap (0), y: light count, z: exposure multiplier, w: rim
+    /// x: matcap (0), lit (1) or matcap lit by the lights (2), y: light
+    /// count, z: exposure multiplier, w: rim
     pub params: [f32; 4],
     /// rgb surface color; w: roughness
     pub surface: [f32; 4],
@@ -379,16 +401,21 @@ pub fn shadow_views(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame) -> Vec<
                 let view = look_at(eye, scene.center, dir);
                 ortho(-r, r, -r, r, r * 0.5, r * 3.5) * view
             }
-            LightKind::Spot => {
+            LightKind::Spot | LightKind::Area => {
                 let pos = light.world_position(scene, cam);
                 let aim = light.world_aim(scene, cam);
                 let to = (aim - pos).normalize_or(-Vec3::Y);
                 let view = look_at(pos, pos + to, -to);
-                let dist = pos.distance(scene.center);
-                let near = (dist - r).max(r * 0.02);
-                let far = dist + r * 1.5;
-                // A little wider than the cone, so its soft edge is covered.
-                let fov = (light.cone.clamp(1.0, 85.0) * 2.0 * 1.1).to_radians().min(3.0);
+                let (near, far) = shadow_range(pos, scene);
+                let fov = if light.kind == LightKind::Spot {
+                    // A little wider than the cone, so its soft edge is covered.
+                    (light.cone.clamp(1.0, 85.0) * 2.0 * 1.1).to_radians().min(3.0)
+                } else {
+                    // An area light lights the half in front of it: cover
+                    // the scene's bounding sphere as seen from the light.
+                    let dist = pos.distance(scene.center).max(r * 1.05);
+                    (2.2 * (r / dist).asin()).min(150f32.to_radians())
+                };
                 perspective(fov, near, far) * view
             }
             // Point lights would need six maps (a cube); not in this version.
@@ -397,6 +424,14 @@ pub fn shadow_views(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame) -> Vec<
         out.push(ShadowView { light: i, matrix });
     }
     out
+}
+
+/// Near and far planes of a perspective shadow map from `pos` that holds
+/// the whole scene.
+fn shadow_range(pos: Vec3, scene: &SceneFrame) -> (f32, f32) {
+    let r = scene.radius();
+    let dist = pos.distance(scene.center);
+    ((dist - r).max(r * 0.02), dist + r * 1.5)
 }
 
 /// A view matrix looking from `eye` to `target`. `away` is the direction
@@ -467,6 +502,16 @@ pub fn pack(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame, view: Mat4, sha
                 let outer = light.cone.clamp(1.0, 89.0).to_radians();
                 (view.transform_point3(pos).extend(2.0), dir.extend(outer.cos()).to_array())
             }
+            LightKind::Area => {
+                let pos = light.world_position(scene, cam);
+                let dir = to_view_dir(light.world_aim(scene, cam) - pos);
+                (view.transform_point3(pos).extend(3.0), dir.extend(-1.0).to_array())
+            }
+        };
+        let radius = if light.kind == LightKind::Area { light.size.clamp(0.0, 4.0) * scene.size * 0.5 } else { 0.0 };
+        let (near, far) = match light.kind {
+            LightKind::Spot | LightKind::Area => shadow_range(light.world_position(scene, cam), scene),
+            _ => (0.0, 0.0),
         };
         let outer = light.cone.clamp(1.0, 89.0).to_radians();
         let inner = outer * (1.0 - light.cone_edge.clamp(0.0, 1.0));
@@ -475,6 +520,7 @@ pub fn pack(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame, view: Mat4, sha
             b: [rgb.x, rgb.y, rgb.z, light.falloff.clamp(0.0, 4.0)],
             c,
             d: [inner.cos(), layer, soft_texels, scene.size],
+            e: [radius, terminator_softness(light.softness), near, far],
         };
         count += 1;
     }
@@ -483,7 +529,12 @@ pub fn pack(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame, view: Mat4, sha
     }
     let amb = l.ambient.max(0.0);
     let up = to_view_dir(Vec3::Y);
-    g.params = [1.0, count as f32, 2f32.powf(l.exposure.clamp(-6.0, 6.0)), l.rim.clamp(0.0, 2.0)];
+    g.params = [
+        if l.light_matcap { 2.0 } else { 1.0 },
+        count as f32,
+        2f32.powf(l.exposure.clamp(-6.0, 6.0)),
+        l.rim.clamp(0.0, 2.0),
+    ];
     g.surface = [l.surface[0], l.surface[1], l.surface[2], l.roughness.clamp(0.04, 1.0)];
     g.sky = [l.sky[0] * amb, l.sky[1] * amb, l.sky[2] * amb, l.specular.clamp(0.0, 1.0)];
     g.ground = [l.ground[0] * amb, l.ground[1] * amb, l.ground[2] * amb, l.shadow_size as f32];
@@ -491,10 +542,20 @@ pub fn pack(l: &Lighting, scene: &SceneFrame, cam: &CameraFrame, view: Mat4, sha
     g
 }
 
+/// How far past the terminator (where the surface turns away from the
+/// light) the light fades out, as the sine of an angle: from about 2° at
+/// softness 0 to about 34° at 1 (11° at the default 0.3). With shadows, the shadow's own soft edge
+/// covers the same band; without, this keeps the light from ending in a
+/// hard line.
+fn terminator_softness(softness: f32) -> f32 {
+    0.04 + 0.52 * softness.clamp(0.0, 1.0)
+}
+
 // ---------------------------------------------------------------------------
 // Settings file
 
-const VERSION: &str = "v1";
+/// v2 adds the matcap switch and each light's size; v1 lines still load.
+const VERSION: &str = "v2";
 
 impl Lighting {
     /// One line for the settings file: version, globals, then each light.
@@ -506,13 +567,14 @@ impl Lighting {
         v.extend(self.sky);
         v.extend(self.ground);
         v.extend([self.ambient, self.rim, self.exposure, b(self.shadows), self.shadow_size as f32]);
+        v.push(b(self.light_matcap));
         for l in &self.lights {
             v.extend([b(l.on), l.kind.code()]);
             v.extend(l.color);
             v.extend([l.intensity, b(l.follow_camera), l.azimuth, l.elevation]);
             v.extend(l.position);
             v.extend(l.aim);
-            v.extend([l.cone, l.cone_edge, l.falloff, b(l.shadows), l.softness]);
+            v.extend([l.cone, l.cone_edge, l.falloff, b(l.shadows), l.softness, l.size]);
         }
         std::iter::once(VERSION.to_string()).chain(v.iter().map(|x| format!("{x}"))).collect::<Vec<_>>().join(" ")
     }
@@ -521,13 +583,16 @@ impl Lighting {
     /// gives `None` (the caller keeps the defaults).
     pub fn from_line(s: &str) -> Option<Self> {
         let mut it = s.split_whitespace();
-        if it.next()? != VERSION {
-            return None;
-        }
+        // v1 had no matcap switch and no light sizes.
+        let v2 = match it.next()? {
+            "v1" => false,
+            VERSION => true,
+            _ => return None,
+        };
         let v: Vec<f32> = it.map(|x| x.parse::<f32>().ok().filter(|f| f.is_finite())).collect::<Option<_>>()?;
-        const GLOBALS: usize = 1 + 3 + 2 + 3 + 3 + 5;
-        const PER_LIGHT: usize = 2 + 3 + 4 + 3 + 3 + 5;
-        if v.len() != GLOBALS + PER_LIGHT * MAX_LIGHTS {
+        let globals = 1 + 3 + 2 + 3 + 3 + 5 + v2 as usize;
+        let per_light = 2 + 3 + 4 + 3 + 3 + 5 + v2 as usize;
+        if v.len() != globals + per_light * MAX_LIGHTS {
             return None;
         }
         let mut i = 0;
@@ -550,6 +615,9 @@ impl Lighting {
             4096 => 4096,
             _ => 2048,
         };
+        if v2 {
+            l.light_matcap = next() > 0.5;
+        }
         for light in &mut l.lights {
             light.on = next() > 0.5;
             light.kind = LightKind::from_code(next());
@@ -565,6 +633,9 @@ impl Lighting {
             light.falloff = next().clamp(0.0, 4.0);
             light.shadows = next() > 0.5;
             light.softness = next().clamp(0.0, 1.0);
+            if v2 {
+                light.size = next().clamp(0.0, 4.0);
+            }
         }
         Some(l)
     }
@@ -699,9 +770,63 @@ mod tests {
         l.lights[2].position = [0.25, -0.5, 1.5];
         let line = l.to_line();
         assert_eq!(Lighting::from_line(&line), Some(l));
-        assert!(Lighting::from_line("v1 1 2 3").is_none());
-        assert!(Lighting::from_line(&line.replace("v1", "v9")).is_none());
+        assert!(Lighting::from_line("v2 1 2 3").is_none());
+        assert!(Lighting::from_line(&line.replace("v2", "v9")).is_none());
         assert!(Lighting::from_line(&line.replacen(" 1 ", " nan ", 1)).is_none());
+    }
+
+    #[test]
+    fn area_lights_and_the_matcap_switch_are_saved_and_v1_lines_still_load() {
+        let mut l = Lighting { enabled: true, light_matcap: true, ..Lighting::default() };
+        l.lights[3] = Light { on: true, kind: LightKind::Area, size: 1.25, shadows: true, ..Light::default() };
+        assert_eq!(Lighting::from_line(&l.to_line()), Some(l));
+        // A v1 line (before area lights): same lights, default size, no matcap.
+        let plain = Lighting { enabled: true, exposure: 0.5, ..Lighting::default() };
+        let mut v: Vec<String> = plain.to_line().split(' ').map(str::to_string).collect();
+        v[0] = "v1".into();
+        let globals_end = 1 + 1 + 3 + 2 + 3 + 3 + 5;
+        v.remove(globals_end); // the matcap switch
+        for k in (0..MAX_LIGHTS).rev() {
+            // A v2 light is 23 numbers, its size last.
+            let per = 2 + 3 + 4 + 3 + 3 + 5 + 1;
+            v.remove(globals_end + k * per + per - 1);
+        }
+        assert_eq!(Lighting::from_line(&v.join(" ")), Some(plain));
+    }
+
+    #[test]
+    fn an_area_light_packs_its_size_and_its_shadow_map_holds_the_scene() {
+        let s = scene();
+        let cam = front_camera();
+        let mut l = Lighting { enabled: true, light_matcap: true, ..Lighting::default() };
+        l.lights[0].shadows = false;
+        l.lights[2] = Light {
+            on: true,
+            kind: LightKind::Area,
+            position: [0.6, 0.8, 0.9],
+            size: 0.5,
+            shadows: true,
+            ..Light::default()
+        };
+        let views = shadow_views(&l, &s, &cam);
+        assert_eq!(views.len(), 1);
+        assert_eq!(views[0].light, 2);
+        for x in [-1.0, 1.0] {
+            for y in [0.0, 2.0] {
+                for z in [-1.0, 1.0] {
+                    let p = views[0].matrix.project_point3(Vec3::new(x, y, z));
+                    assert!(p.x.abs() <= 1.0 && p.y.abs() <= 1.0 && (0.0..=1.0).contains(&p.z), "{p}");
+                }
+            }
+        }
+        let g = pack(&l, &s, &cam, Mat4::IDENTITY, &views);
+        assert_eq!(g.params[0], 2.0, "the matcap lit by the lights");
+        let area = g.lights.iter().find(|x| x.a[3] == 3.0).expect("packed");
+        assert!((area.e[0] - 0.5 * s.size * 0.5).abs() < 1e-6, "radius in world units");
+        assert!(area.e[2] > 0.0 && area.e[3] > area.e[2], "near and far for the shadow map");
+        // Every light fades past its terminator, more with more softness.
+        assert!(g.lights[1].e[1] > 0.0);
+        assert!(terminator_softness(1.0) > terminator_softness(0.0));
     }
 
     #[test]
