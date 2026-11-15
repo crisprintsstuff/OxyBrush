@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.11](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.12](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -88,12 +88,12 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
   so the security warnings on first launch go away.
 
 ### Sculpting with copies
-- **Surface instances:** sculpt a rivet, spike or scale once and place it
-  on every face, point or edge of another piece, on a face group, on the
-  masked part, or scattered evenly. The copies follow the surface as you
-  sculpt it, all update when you edit the original, can be fitted into
-  each face for chainmail and tiles, and can be made real when you're
-  done ([RFC 0022](rfcs/0022-surface-instances.md), proposed).
+- **More surface instances:** the first part shipped in 4.0.0-beta.12
+  (copies on every face, point or a face group, following the surface,
+  Make real). Next: copies on edges, on the masked part or scattered
+  evenly, several per face, turning single copies off, copies fitted into
+  each face for chainmail and tiles, and glTF export that keeps them as
+  instances ([RFC 0022](rfcs/0022-surface-instances.md)).
 
 ### Working with other apps
 - **Gaussian splats** (scans from capture apps): open one as a reference
@@ -104,6 +104,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.12:** surface instances (live copies of one piece on the
+  faces of another, with Make real), a Paint Groups brush, edge loops at
+  the mask border for crisp hard edges, per-brush Gravity, a Units
+  preference for Measure, File > Revert, and cleaner Poly Edit display.
 - **4.0.0-beta.11:** orbit around the point under the cursor (or the
   last stroke), tube Twist, Spin and Braid, glTF/GLB import and
   compressed export, UVs kept from imports to exports, the Sharp Crease
