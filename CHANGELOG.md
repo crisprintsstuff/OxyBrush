@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.12] - 2026-11-15
+
 ### Added
 - **Edge loop at mask border** (Mask and Mesh menus, and the command palette): adds a loop of quads along the edge of the masked part, inside it or on both sides (**Both sides**, on by default), at a **Width** you set, so a hard edge stays crisp when you subdivide or smooth, for hard-surface work. A triangle counts as masked when all three corners are, so masking a face group (Ctrl+M) puts the loop exactly around that group. The loop gets a face group of its own; the rest of the surface keeps its shape (original points don't move, and a flat panel stays flat). One undo step; like Subdivide masked, it removes subdivision levels and UVs.
 - **Paint Groups brush** (in the brush shelf after Paint): paint face groups directly onto the model. Each stroke makes a new group; **Alt**+stroke grows the group you start on. It follows symmetry and Front faces only, leaves hidden faces alone, never moves the surface, shows the group colors while you paint, and each stroke is one undo step (Escape cancels it mid-stroke). A dab takes 0.07–0.2 ms on a 1.3-million-triangle sphere (4 cores).

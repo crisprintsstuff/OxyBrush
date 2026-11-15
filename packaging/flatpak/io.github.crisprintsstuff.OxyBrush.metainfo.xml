@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.12" date="2026-11-15" type="development">
+      <description>
+        <p>Copy one piece onto the faces of another as live copies that
+        follow the surface (surface instances), paint face groups with a
+        brush, add edge loops at the edge of the mask for crisp hard edges,
+        and give each brush its own Gravity. Lengths can be shown in
+        millimetres or inches, and File > Revert reloads the last save.
+        Poly Edit no longer shows edges through the model.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.11" date="2026-11-14" type="development">
       <description>
         <p>Orbiting turns around the point of the model under the cursor (or
