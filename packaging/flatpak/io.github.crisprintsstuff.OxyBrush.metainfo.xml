@@ -53,6 +53,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.14" date="2026-11-15" type="development">
+      <description>
+        <p>Area lights with soft shadows, and an option to keep the matcap
+        under the lights. Tubes can have any cross-section and sharp corners.
+        Poly Edit has Faces, Edges and Points modes. Low-poly models shade
+        with crisp, flat faces. Any brush can have its own hotkey, and
+        Shift+Tab hides just the settings panel.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.13" date="2026-11-15" type="development">
       <description>
         <p>The transform gizmo follows Mirror X, Y and Z. Gravity is much

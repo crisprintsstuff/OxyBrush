@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.13](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.14](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -104,6 +104,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.14:** area lights with soft shadows, the matcap lit by the
+  lights, tube profiles and sharp tube corners, Poly Edit Faces/Edges/Points
+  modes, crisp flat faces on low-poly models, a hotkey for any brush, and
+  Shift+Tab to hide just the settings panel.
 - **4.0.0-beta.13:** the transform gizmo follows Mirror X/Y/Z, much
   stronger Gravity, Stamp strokes as strong as freehand and shown while
   dragging, Kelvin Grab without creases, and Poly Edit multi-face picks
