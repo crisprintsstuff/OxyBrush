@@ -268,9 +268,9 @@ Dynamic detail, remesh, subdivision and Close holes change the vertices, so thos
     },
     Topic {
         title: "Lights and shadows",
-        keywords: "lights lighting shadows sun spot lamp viewport shading render",
-        body: "View > Shading > Light the viewport shades the model with lights instead of the material; View > Shading > Lights… sets them up. There are four lights: each can be a Sun (a direction), a Point (a position) or a Spot (a cone aimed at a point), with its own color, brightness and shadows. Follow the view keeps a light in place relative to you, so the model turns under it as you orbit.\n\n\
-While the Lights window is open, numbered dots show the lights in the viewport: drag one to move its light (a sun's dot sets its direction; a spot's diamond sets where it aims). Shadows come from suns and spots; each one redraws the model once more per frame, so turn shadows off for lights that don't need them on very dense meshes.",
+        keywords: "lights lighting shadows sun spot area soft box lamp viewport shading render matcap softness",
+        body: "View > Shading > Light the viewport shades the model with lights instead of the material; View > Shading > Lights… sets them up. There are four lights: each can be a Sun (a direction), a Point (a position), a Spot (a cone aimed at a point) or an Area light (a round light with a size, facing a point, like a soft box), with its own color, brightness and shadows. An area light's shadows are sharp where things touch and softer further away; a bigger light gives softer light and shadows. Softness sets how gently each light fades where the surface turns away from it, and how soft its shadow edges are. Follow the view keeps a light in place relative to you, so the model turns under it as you orbit.\n\nLight the matcap keeps your matcap as the material: the lights brighten it where they shine and their shadows darken it.\n\n\
+While the Lights window is open, numbered dots show the lights in the viewport: drag one to move its light (a sun's dot sets its direction; a spot's diamond sets where it aims). Shadows come from suns, spots and area lights; each one redraws the model once more per frame, and an area light's soft shadows cost a little more to draw, so turn shadows off for lights that don't need them on very dense meshes.",
     },
     Topic {
         title: "Remesh and decimate",
@@ -304,7 +304,7 @@ The Touch layout has no mouse hover. Press and hold a control to read what it do
         title: "Shading and materials",
         keywords: "material matcap ambient occlusion cavity view look flat faceted custom image background gradient color backdrop",
         body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.\n\n\
-- Each piece can have its own material: in the material picker (or View > Material) set For to the piece (its name, then only), then pick one; it applies to the active piece and is saved with the project. Use the scene's material puts it back. Whole scene sets the material every other piece shows. Up to 8 different piece materials show at once; with viewport lights on, all pieces use the lit surface.\n\
+- Each piece can have its own material: in the material picker (or View > Material) set For to the piece (its name, then only), then pick one; it applies to the active piece and is saved with the project. Use the scene's material puts it back. Whole scene sets the material every other piece shows. Up to 8 different piece materials show at once; with viewport lights on, all pieces use the lit surface, unless Light the matcap is on (Lights window), which keeps each piece's material under the lights.\n\
 - Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
 - View > Flat shading shows every polygon as a flat facet.\n\
 - View > Wireframe (Shift+W or the wireframe icon in the view strip) overlays polygon edges atop the shaded surface, with adjustable line opacity.\n\

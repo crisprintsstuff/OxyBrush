@@ -21,20 +21,22 @@ struct Uniforms {
     lighting: Lighting,
 };
 
-// One light, four vec4s (see lighting.rs, GpuLight):
-// a: sun direction or position (view space), w: kind (0 sun, 1 point, 2 spot)
+// One light, five vec4s (see lighting.rs, GpuLight):
+// a: sun direction or position (view space), w: kind (0 sun, 1 point, 2 spot, 3 area)
 // b: color * intensity, w: falloff exponent
-// c: spot direction (view space), w: cos(outer half-angle)
+// c: spot/area direction (view space), w: cos(outer half-angle)
 // d: x cos(inner half-angle), y shadow layer (-1 none), z softness (texels), w reference distance
+// e: x area radius (world), y terminator softness (sine), z/w shadow map near/far
 struct Light {
     a: vec4<f32>,
     b: vec4<f32>,
     c: vec4<f32>,
     d: vec4<f32>,
+    e: vec4<f32>,
 };
 
 struct Lighting {
-    // x: lit (1) or matcap (0), y: light count, z: exposure, w: rim
+    // x: matcap (0), lit (1) or matcap lit by the lights (2), y: light count, z: exposure, w: rim
     params: vec4<f32>,
     // rgb surface color, w roughness
     surface: vec4<f32>,
@@ -182,12 +184,155 @@ fn shadow_factor(light: Light, wp: vec3<f32>, wn: vec3<f32>, n_dot_l: f32) -> f3
     return lit / 12.0;
 }
 
-// The surface under the viewport lights: diffuse plus GGX specular
-// (Walter et al., "Microfacet Models for Refraction through Rough
-// Surfaces", EGSR 2007) with Schlick's Fresnel and Smith-Schlick
-// visibility, sky/ground light and a rim, tone mapped with Narkowicz's
-// fit of the ACES curve (2015).
-fn lit_color(n: vec3<f32>, vp: vec3<f32>, wp: vec3<f32>, wn_in: vec3<f32>, front: bool) -> vec3<f32> {
+// Linear distance from the light of a perspective shadow map's depth
+// (lighting.rs `perspective`: depth = far (d - near) / (d (far - near))).
+fn shadow_distance(depth: f32, near: f32, far: f32) -> f32 {
+    return far * near / max(far - depth * (far - near), 1e-6);
+}
+
+// The inverse: the map's depth at distance `d` from the light.
+fn shadow_depth(d: f32, near: f32, far: f32) -> f32 {
+    return far * (d - near) / max(d * (far - near), 1e-6);
+}
+
+// Sample k of n spread evenly over a unit disk (Vogel's golden-angle
+// spiral), turned by `angle`.
+fn vogel(k: i32, n: f32, angle: f32) -> vec2<f32> {
+    let r = sqrt((f32(k) + 0.5) / n);
+    let t = f32(k) * 2.39996323 + angle;
+    return vec2<f32>(cos(t), sin(t)) * r;
+}
+
+// A point's place on a perspective shadow map: uv, and its distance
+// along the map's axis (clip w).
+fn shadow_uvd(m: mat4x4<f32>, p: vec3<f32>) -> vec3<f32> {
+    let c = m * vec4<f32>(p, 1.0);
+    let ndc = c.xy / max(c.w, 1e-6);
+    return vec3<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5, c.w);
+}
+
+// An area light's shadow: percentage-closer soft shadows (Fernando,
+// "Percentage-Closer Soft Shadows", NVIDIA 2005). Find the average depth of
+// what blocks the light near this point, estimate the penumbra from the
+// light's size by similar triangles, then filter over that width: sharp
+// where an object touches the surface, softer further away.
+fn area_shadow_factor(light: Light, wp: vec3<f32>, wn: vec3<f32>, n_dot_l: f32, pix: vec2<f32>) -> f32 {
+    let layer = i32(light.d.y + 0.5);
+    if (light.d.y < -0.5) {
+        return 1.0;
+    }
+    let size = max(u.lighting.ground.w, 1.0);
+    let m = u.lighting.shadow_matrices[layer];
+    let probe = m * vec4<f32>(wp, 1.0);
+    if (probe.w <= 0.0) {
+        return 1.0;
+    }
+    // 1 / tan(half the map's field of view): the length of the matrix's first row.
+    let f = length(vec3<f32>(m[0].x, m[1].x, m[2].x));
+    // World size of one texel at this distance.
+    let texel_world = 2.0 * probe.w / (f * size);
+    let p = wp + wn * texel_world * 1.5;
+    let here = shadow_uvd(m, p);
+    let uv = here.xy;
+    if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
+        return 1.0;
+    }
+    let near = light.e.z;
+    let far = light.e.w;
+    let d_recv = here.z;
+    if (d_recv > far) {
+        return 1.0;
+    }
+    // How this surface's own distance from the light changes across the
+    // map (receiver plane depth bias, Isidoro, "Shadow Mapping: GPU-based
+    // Tips and Techniques", GDC 2006): each sample is compared with the
+    // surface where that sample lands, not with this point, so a wide
+    // search doesn't find the surface itself. Found by projecting two
+    // nearby points of the tangent plane.
+    var t1 = cross(wn, vec3<f32>(0.0, 1.0, 0.0));
+    if (dot(t1, t1) < 1e-4) {
+        t1 = cross(wn, vec3<f32>(1.0, 0.0, 0.0));
+    }
+    t1 = normalize(t1);
+    let t2 = cross(wn, t1);
+    let step = texel_world * 4.0;
+    let a = shadow_uvd(m, p + t1 * step) - here;
+    let b = shadow_uvd(m, p + t2 * step) - here;
+    let det = a.x * b.y - a.y * b.x;
+    var grad = vec2<f32>(0.0);
+    if (abs(det) > 1e-12) {
+        grad = vec2<f32>(a.z * b.y - b.z * a.y, a.x * b.z - b.x * a.z) / det;
+    }
+    // Seen edge-on the plane is no help: cap the slope.
+    let max_slope = d_recv * 8.0;
+    if (length(grad) > max_slope) {
+        grad = grad / length(grad) * max_slope;
+    }
+    let bias = texel_world * 2.0;
+    let radius = light.e.x;
+    // Blocker search: the light's disk as seen from here, on the map.
+    let world_to_uv = f / (2.0 * d_recv);
+    let search = clamp(radius * world_to_uv, 1.0 / size, 0.08);
+    // The sample spiral turned by a different angle at each pixel
+    // (interleaved gradient noise, Jimenez, "Next Generation Post Processing
+    // in Call of Duty: Advanced Warfare", SIGGRAPH 2014): fine grain instead
+    // of the bands a fixed pattern would leave in a wide penumbra.
+    let angle = 6.2831853 * fract(52.9829189 * fract(dot(pix, vec2<f32>(0.06711056, 0.00583715))));
+    var blockers = 0.0;
+    var sum = 0.0;
+    let texels = vec2<f32>(size);
+    for (var k = 0; k < 12; k++) {
+        let o = vogel(k, 12.0, angle) * search;
+        let q = clamp((uv + o) * texels, vec2<f32>(0.0), texels - 1.0);
+        let d = shadow_distance(textureLoad(shadow_maps, vec2<i32>(q), layer, 0), near, far);
+        if (d < d_recv + dot(grad, o) - bias) {
+            blockers += 1.0;
+            sum += d;
+        }
+    }
+    if (blockers < 0.5) {
+        return 1.0;
+    }
+    // Penumbra width by similar triangles: (receiver - blocker) / blocker,
+    // times the light's diameter.
+    let d_block = sum / blockers;
+    let penumbra = (d_recv - d_block) * 2.0 * radius / max(d_block, 1e-4);
+    let filter_r = clamp(penumbra * world_to_uv, light.d.z / size, 0.06);
+    var lit = 0.0;
+    for (var k = 0; k < 16; k++) {
+        let o = vogel(k, 16.0, angle) * filter_r;
+        let reference = shadow_depth(d_recv + dot(grad, o) - bias, near, far);
+        lit += textureSampleCompareLevel(shadow_maps, shadow_sampler, uv + o, layer, reference);
+    }
+    return lit / 16.0;
+}
+
+// How much light a surface gets when it turns `n_dot_l` toward a light,
+// fading out over `h` (a sine) on both sides of the terminator instead of
+// stopping there. Exact for a round light of angular radius asin(h) when
+// the surface faces it (n_dot_l >= h), and a smooth quadratic through the
+// horizon, as for sphere lights in Lagarde and de Rousiers, "Moving
+// Frostbite to Physically Based Rendering" (2014).
+fn soft_n_dot_l(n_dot_l: f32, h: f32) -> f32 {
+    if (n_dot_l >= h) {
+        return n_dot_l;
+    }
+    if (n_dot_l <= -h) {
+        return 0.0;
+    }
+    return (n_dot_l + h) * (n_dot_l + h) / (4.0 * h);
+}
+
+// What the lights do to a white surface, before tone mapping: sky and
+// ground light, the lights' diffuse (times 1 - Fresnel) and their specular.
+struct LightSum {
+    ambient: vec3<f32>,
+    diffuse: vec3<f32>,
+    spec: vec3<f32>,
+    n_dot_v: f32,
+};
+
+fn light_sum(n: vec3<f32>, vp: vec3<f32>, wp: vec3<f32>, wn_in: vec3<f32>, front: bool, pix: vec2<f32>) -> LightSum {
     let L = u.lighting;
     var view_dir = normalize(-vp);
     if (L.up.w > 0.5) {
@@ -197,13 +342,16 @@ fn lit_color(n: vec3<f32>, vp: vec3<f32>, wp: vec3<f32>, wn_in: vec3<f32>, front
     if (!front) {
         wn = -wn;
     }
-    let base = L.surface.rgb;
     let rough = clamp(L.surface.w, 0.04, 1.0);
     let alpha = rough * rough;
     let f0 = vec3<f32>(mix(0.02, 0.08, L.sky.w));
     let n_dot_v = max(dot(n, view_dir), 1e-4);
     let hemi = dot(n, L.up.xyz) * 0.5 + 0.5;
-    var color = mix(L.ground.rgb, L.sky.rgb, hemi) * base;
+    var out: LightSum;
+    out.ambient = mix(L.ground.rgb, L.sky.rgb, hemi);
+    out.diffuse = vec3<f32>(0.0);
+    out.spec = vec3<f32>(0.0);
+    out.n_dot_v = n_dot_v;
     let count = i32(L.params.y + 0.5);
     for (var i = 0; i < 4; i++) {
         if (i >= count) {
@@ -212,39 +360,102 @@ fn lit_color(n: vec3<f32>, vp: vec3<f32>, wp: vec3<f32>, wn_in: vec3<f32>, front
         let light = L.lights[i];
         var to_light: vec3<f32>;
         var atten = 1.0;
+        var h = light.e.y;
+        // Where the highlight comes from, and how much wider it gets.
+        var spec_dir: vec3<f32>;
+        var spec_norm = 1.0;
+        var a_spec = alpha;
         if (light.a.w < 0.5) {
             to_light = normalize(light.a.xyz);
+            spec_dir = to_light;
         } else {
             let d = light.a.xyz - vp;
             let dist = max(length(d), 1e-5);
             to_light = d / dist;
+            spec_dir = to_light;
             atten = min(pow(light.d.w / dist, light.b.w), 64.0);
-            if (light.a.w > 1.5) {
+            if (light.a.w > 2.5) {
+                // Area: a disk facing c.xyz lights the half in front of it,
+                // most straight ahead.
+                atten *= max(dot(-to_light, normalize(light.c.xyz)), 0.0);
+                let radius = light.e.x;
+                // The disk as seen from here softens the terminator ...
+                h = clamp(max(h, radius / dist), 0.0, 0.95);
+                // ... and its highlight is the closest point of the light
+                // to the reflected ray, with the lobe widened to keep the
+                // energy (the "representative point" of Karis, "Real
+                // Shading in Unreal Engine 4", SIGGRAPH 2013).
+                let r = reflect(-view_dir, n);
+                let to_ray = dot(d, r) * r - d;
+                let closest = d + to_ray * clamp(radius / max(length(to_ray), 1e-5), 0.0, 1.0);
+                spec_dir = normalize(closest);
+                a_spec = clamp(alpha + radius / (2.0 * dist), 0.0, 1.0);
+                spec_norm = (alpha / a_spec) * (alpha / a_spec);
+            } else if (light.a.w > 1.5) {
                 let c = dot(-to_light, normalize(light.c.xyz));
                 atten *= smoothstep(light.c.w, max(light.d.x, light.c.w + 1e-4), c);
             }
         }
         let n_dot_l = dot(n, to_light);
-        if (n_dot_l <= 0.0 || atten <= 0.0) {
+        let soft = soft_n_dot_l(n_dot_l, h);
+        if (soft <= 0.0 || atten <= 0.0) {
             continue;
         }
-        let shadow = shadow_factor(light, wp, wn, n_dot_l);
-        let h = normalize(to_light + view_dir);
-        let n_dot_h = max(dot(n, h), 0.0);
-        let a2 = alpha * alpha;
-        let dd = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
-        let ndf = a2 / (PI * dd * dd);
-        let k = alpha * 0.5;
-        let vis = 1.0 / ((n_dot_l * (1.0 - k) + k) * (n_dot_v * (1.0 - k) + k));
-        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(h, view_dir), 0.0), 5.0);
-        let spec = ndf * vis * 0.25 * fresnel * L.sky.w * 4.0;
-        color += (base * (1.0 - fresnel) + spec) * light.b.rgb * n_dot_l * atten * shadow;
+        var shadow = 1.0;
+        if (light.a.w > 2.5) {
+            shadow = area_shadow_factor(light, wp, wn, max(n_dot_l, 0.0), pix);
+        } else {
+            shadow = shadow_factor(light, wp, wn, max(n_dot_l, 0.0));
+        }
+        let lit = light.b.rgb * atten * shadow;
+        let hv = normalize(spec_dir + view_dir);
+        let fresnel = f0 + (vec3<f32>(1.0) - f0) * pow(1.0 - max(dot(hv, view_dir), 0.0), 5.0);
+        out.diffuse += (vec3<f32>(1.0) - fresnel) * lit * soft;
+        let s_dot_l = dot(n, spec_dir);
+        if (s_dot_l > 0.0) {
+            let n_dot_h = max(dot(n, hv), 0.0);
+            let a2 = a_spec * a_spec;
+            let dd = n_dot_h * n_dot_h * (a2 - 1.0) + 1.0;
+            let ndf = a2 / (PI * dd * dd);
+            let k = a_spec * 0.5;
+            let vis = 1.0 / ((s_dot_l * (1.0 - k) + k) * (n_dot_v * (1.0 - k) + k));
+            let spec = ndf * vis * 0.25 * fresnel * L.sky.w * 4.0 * spec_norm;
+            out.spec += spec * lit * s_dot_l;
+        }
     }
-    // Rim: edges turning away from the viewer catch a little sky light.
-    let rim = pow(1.0 - n_dot_v, 3.0) * L.params.w;
-    color += rim * mix(L.sky.rgb, vec3<f32>(1.0), 0.5);
-    let x = color * L.params.z;
+    return out;
+}
+
+// Narkowicz's fit of the ACES tone curve (2015).
+fn tone_map(x: vec3<f32>) -> vec3<f32> {
     return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// The matcap lit by the lights (RFC 0024): the matcap stays the material,
+// each light brightens it where it shines and its shadows darken it. A
+// surface facing the default key light comes out about as the matcap
+// alone; where only the sky and fill reach, darker.
+fn lit_matcap(matcap: vec3<f32>, s: LightSum) -> vec3<f32> {
+    let exposure = u.lighting.params.z;
+    let light = (s.ambient + s.diffuse) * exposure * 0.8;
+    // Ease highlights above the matcap's own brightness instead of clipping.
+    let gain = light / (1.0 + max(light - vec3<f32>(1.0), vec3<f32>(0.0)) * 0.5);
+    return clamp(matcap * gain + s.spec * exposure * 0.5, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+// The surface under the viewport lights: diffuse plus GGX specular
+// (Walter et al., "Microfacet Models for Refraction through Rough
+// Surfaces", EGSR 2007) with Schlick's Fresnel and Smith-Schlick
+// visibility, sky/ground light and a rim, tone mapped with Narkowicz's
+// fit of the ACES curve (2015).
+fn lit_color(n: vec3<f32>, vp: vec3<f32>, wp: vec3<f32>, wn_in: vec3<f32>, front: bool, pix: vec2<f32>) -> vec3<f32> {
+    let L = u.lighting;
+    let s = light_sum(n, vp, wp, wn_in, front, pix);
+    var color = (s.ambient + s.diffuse) * L.surface.rgb + s.spec;
+    // Rim: edges turning away from the viewer catch a little sky light.
+    let rim = pow(1.0 - s.n_dot_v, 3.0) * L.params.w;
+    color += rim * mix(L.sky.rgb, vec3<f32>(1.0), 0.5);
+    return tone_map(color * L.params.z);
 }
 
 fn unpack(c: u32) -> vec3<f32> {
@@ -270,8 +481,10 @@ fn fs_main(
     let uv = vec2<f32>(n.x * 0.49 + 0.5, 0.5 - n.y * 0.49);
     // Sampled in uniform control flow either way, then replaced when lit.
     var color = textureSample(matcap_tex, matcap_sampler, uv, i32(piece.material.x + 0.5)).rgb;
-    if (u.lighting.params.x > 0.5) {
-        color = lit_color(n, i.view_pos, i.world_pos, i.world_normal, front);
+    if (u.lighting.params.x > 1.5) {
+        color = lit_matcap(color, light_sum(n, i.view_pos, i.world_pos, i.world_normal, front, i.clip.xy));
+    } else if (u.lighting.params.x > 0.5) {
+        color = lit_color(n, i.view_pos, i.world_pos, i.world_normal, front, i.clip.xy);
     }
     // Vertex color: tint by the paint while keeping the material's shading.
     // White (unpainted) leaves the material exactly as it is.

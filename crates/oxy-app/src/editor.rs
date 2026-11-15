@@ -5472,7 +5472,7 @@ impl Editor {
             if let Some(p) = place(light.marker(&scene, &cam)) {
                 out.push((LightHandle::Light(i), p));
             }
-            if light.kind == oxy_render::lighting::LightKind::Spot
+            if matches!(light.kind, oxy_render::lighting::LightKind::Spot | oxy_render::lighting::LightKind::Area)
                 && let Some(p) = place(light.world_aim(&scene, &cam))
             {
                 out.push((LightHandle::Aim(i), p));
@@ -9527,6 +9527,26 @@ mod tests {
         // One undo step each.
         e.undo();
         assert_eq!(e.scene.active().name, "Cylinder");
+    }
+
+    #[test]
+    fn an_area_light_has_an_aim_handle_and_its_shadow_map() {
+        use oxy_render::lighting::LightKind;
+        let mut e = editor();
+        e.view.lighting.enabled = true;
+        e.show_lights = true;
+        let light = &mut e.view.lighting.lights[3];
+        light.on = true;
+        light.kind = LightKind::Area;
+        light.shadows = true;
+        light.follow_camera = false;
+        light.position = [0.4, 0.8, 0.8];
+        let handles = e.light_handles();
+        assert!(handles.iter().any(|(h, _)| *h == LightHandle::Light(3)));
+        assert!(handles.iter().any(|(h, _)| *h == LightHandle::Aim(3)), "it faces its aim point, like a spot");
+        let (scene, cam) = e.light_frames();
+        let views = oxy_render::lighting::shadow_views(&e.view.lighting, &scene, &cam);
+        assert!(views.iter().any(|v| v.light == 3), "an area light casts shadows");
     }
 
     #[test]

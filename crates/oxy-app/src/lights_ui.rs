@@ -10,7 +10,11 @@ use oxy_render::lighting::{self, LightKind, Lighting};
 /// Tooltips for this window.
 mod tip {
     pub const LIGHT_ON: &str = "Turn this light on or off.";
-    pub const KIND: &str = "Sun: parallel light from a direction. Point: light from a spot in every direction. Spot: a cone of light aimed at a point.";
+    pub const KIND: &str = "Sun: parallel light from a direction. Point: light from a spot in every direction. Spot: a cone of light aimed at a point. Area: a round light with a size, facing a point, like a soft box: soft light and shadows that are sharp where things touch and softer further away.";
+    pub const SIZE: &str =
+        "How big the area light is, in model sizes. Bigger lights give softer light and wider soft shadows.";
+    pub const AIM_AREA: &str = "Face the area light toward the middle of the scene.";
+    pub const LIGHT_MATCAP: &str = "Keep the matcap as the material and let the lights brighten it where they shine and their shadows darken it. Off: the plain lit surface below.";
     pub const FOLLOW: &str = "Keep this light where it is relative to the view, so the model turns under it as you orbit. Off: it stays put in the scene.";
     pub const INTENSITY: &str = "How bright this light is.";
     pub const COLOR: &str = "Light color.";
@@ -22,8 +26,8 @@ mod tip {
     pub const CONE: &str = "How wide the spot's cone is (half-angle, degrees).";
     pub const CONE_EDGE: &str = "How much of the cone fades out softly at its edge.";
     pub const AIM: &str = "Aim the spot at the middle of the scene.";
-    pub const SHADOWS: &str = "This light casts shadows (suns and spots; point lights don't yet).";
-    pub const SOFTNESS: &str = "How soft the shadow edges are.";
+    pub const SHADOWS: &str = "This light casts shadows (suns, spots and area lights; point lights don't yet).";
+    pub const SOFTNESS: &str = "How gently the light fades where the surface turns away from it, and how soft its shadow edges are. Area lights are softened by their size as well.";
     pub const SHADOWS_ALL: &str = "Shadows at all. Each light that casts them redraws the model once more per frame.";
     pub const MAP_SIZE: &str = "Shadow detail: larger is sharper but uses more video memory (16 MB per light at 2048).";
     pub const EXPOSURE: &str = "Overall brightness, in stops.";
@@ -68,6 +72,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
 fn controls(ui: &mut Ui, ed: &mut Editor) {
     let l = &mut ed.view.lighting;
     tips::check(ui, &mut l.enabled, "Light the viewport", Cmd::LightViewport);
+    ui.add_enabled_ui(l.enabled, |ui| {
+        tips::hover(ui.checkbox(&mut l.light_matcap, "Light the matcap"), tip::LIGHT_MATCAP);
+    });
     ui.label(RichText::new(tip::MARKERS).weak().small());
     ui.add_space(4.0);
     egui::Grid::new("lights_global").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -85,7 +92,9 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.rim, 0.0..=1.0))), tip::RIM);
         ui.end_row();
         ui.label("Surface");
-        tips::hover(color_edit(ui, &mut l.surface), tip::SURFACE);
+        // The matcap is the surface while it's lit.
+        let matcap = l.light_matcap;
+        ui.add_enabled_ui(!matcap, |ui| tips::hover(color_edit(ui, &mut l.surface), tip::SURFACE));
         ui.end_row();
         ui.label("Roughness");
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.roughness, 0.05..=1.0))), tip::ROUGHNESS);
@@ -165,7 +174,7 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                         });
                         ui.end_row();
                     }
-                    LightKind::Point | LightKind::Spot => {
+                    LightKind::Point | LightKind::Spot | LightKind::Area => {
                         ui.label("Position");
                         ui.horizontal(|ui| {
                             for (axis, v) in ["x", "y", "z"].iter().zip(light.position.iter_mut()) {
@@ -201,21 +210,31 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
                     );
                     ui.end_row();
                 }
-                if light.kind != LightKind::Point {
-                    ui.label("Shadows");
+                if light.kind == LightKind::Area {
+                    ui.label("Size");
                     ui.horizontal(|ui| {
-                        tips::hover(ui.checkbox(&mut light.shadows, ""), tip::SHADOWS);
-                        ui.add_enabled_ui(light.shadows, |ui| {
-                            tips::hover(
-                                ui.add(crate::widgets::Bar(
-                                    egui::Slider::new(&mut light.softness, 0.0..=1.0).text("Soft"),
-                                )),
-                                tip::SOFTNESS,
-                            );
-                        });
+                        tips::hover(
+                            ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.size, 0.05..=2.0))),
+                            tip::SIZE,
+                        );
+                        if tips::hover(ui.small_button("Aim at the model"), tip::AIM_AREA).clicked() {
+                            light.aim = [0.0, 0.0, 0.0];
+                            light.follow_camera = false;
+                        }
                     });
                     ui.end_row();
                 }
+                if light.kind != LightKind::Point {
+                    ui.label("Shadows");
+                    tips::hover(ui.checkbox(&mut light.shadows, ""), tip::SHADOWS);
+                    ui.end_row();
+                }
+                ui.label("Softness");
+                tips::hover(
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut light.softness, 0.0..=1.0))),
+                    tip::SOFTNESS,
+                );
+                ui.end_row();
             });
         });
     }
@@ -262,7 +281,7 @@ pub fn markers(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
                 {
                     painter.line_segment([p, c], Stroke::new(1.0, col.gamma_multiply(0.4)));
                 }
-                if light.kind == LightKind::Spot
+                if matches!(light.kind, LightKind::Spot | LightKind::Area)
                     && let Some(a) = at(LightHandle::Aim(i))
                 {
                     painter.line_segment([p, a], Stroke::new(1.0, col.gamma_multiply(0.6)));

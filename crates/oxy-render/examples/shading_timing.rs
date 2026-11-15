@@ -54,6 +54,19 @@ fn main() {
 
     let frames = 60;
     let lit = |shadows: bool| oxy_render::lighting::Lighting { enabled: true, shadows, ..Default::default() };
+    // The default rig with its key light swapped for a shadowing area light.
+    let area = || {
+        let mut l = lit(true);
+        l.lights[0] = oxy_render::lighting::Light {
+            on: true,
+            kind: oxy_render::lighting::LightKind::Area,
+            intensity: 4.0,
+            position: [0.6, 0.9, 0.8],
+            shadows: true,
+            ..Default::default()
+        };
+        l
+    };
     let bounds = mesh.bounds();
     let scene_bounds = Some((bounds.min.to_array(), bounds.max.to_array()));
     for (label, ao, cavity, lighting) in [
@@ -62,6 +75,13 @@ fn main() {
         ("ambient occlusion + cavity", 0.7, 0.6, oxy_render::lighting::Lighting::default()),
         ("lights (no shadows) + AO + cavity", 0.7, 0.6, lit(false)),
         ("lights + 1 shadow map + AO + cavity", 0.7, 0.6, lit(true)),
+        (
+            "matcap lit by lights + 1 shadow map + AO + cavity",
+            0.7,
+            0.6,
+            oxy_render::lighting::Lighting { light_matcap: true, ..lit(true) },
+        ),
+        ("area light, soft shadows (instead of the key) + AO + cavity", 0.7, 0.6, area()),
     ] {
         let settings = ViewSettings { ambient_occlusion: ao, cavity, lighting, scene_bounds, ..Default::default() };
         let mut run = |n: usize| {

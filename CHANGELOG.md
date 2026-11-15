@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Area lights** ([RFC 0024](docs/rfcs/0024-area-lights-and-lit-matcap.md)): a fourth kind of viewport light, round with a **Size**, facing its aim point like a soft box. Its light wraps further round as it gets bigger, its highlights widen, and its shadows are sharp where things touch and softer further away (percentage-closer soft shadows). Drag its dot and diamond in the viewport like a spot's.
+- **Light the matcap** (Lights window): keep the matcap as the material and let the lights brighten it where they shine and their shadows darken it, instead of switching to the plain lit surface.
 - **Tube editing** ([#258](https://github.com/crisprintsstuff/OxyBrush/issues/258)):
   - **Sharp corners:** double-click a tube's point to make it a sharp corner. The tube runs straight into it and out again, mitred so it keeps its thickness, and the handle turns square. Double-click again for a smooth point. Corners are saved with the project (new optional `TUBC` section) and kept when the tube is edited again. Older versions keep a tube with corners as ordinary triangles.
   - **Merge and delete points:** drag a point onto its neighbour to merge them, or click a point and press **Delete** (or Backspace) to remove it. Alt+click still works.
@@ -15,6 +17,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Poly Edit: pick edges and points too.** Ctrl/Cmd+click picks several edges or points in their modes, as it did faces: crease or bevel several edges at once, move several points together. Switching modes turns the pick into the new kind: a face's sides or corners, the faces that picked edges or points close, the edges picked points make. So you can pick a face, press 2 and bevel its border.
 
 ### Fixed
+- **Lights without shadows no longer end in a hard line.** Every light now fades gently where the surface turns away from it, set by its **Softness** (now always available, not only with shadows on). A light with shadows got that softening from its shadow; one without stopped abruptly, and the tone curve made the edge look like a line.
 - **Low-poly models shade with crisp, flat faces.** A box from Insert Primitive or Poly Edit looked blotchy, with highlights and a dark band smeared across its faces and edges, under both the matcap and the viewport lights. Each corner had one normal, averaged from the faces meeting there, so every face shaded as if it were curved. The viewport now gives faces meeting at more than 60° their own normals at the shared corner, so a box shades as a box. Spheres, cylinders with six or more sides, and sculpts stay smooth. Only the viewport changes: the mesh, exports and brushes are as before. Finding these edges adds about 10 ms when a 1.3 million-triangle mesh is rebuilt (0.7 ms at 82,000) and nothing measurable per brush dab.
 
 ## [4.0.0-beta.13] - 2026-11-15
