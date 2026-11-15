@@ -642,6 +642,36 @@ impl Cage {
         self.linked == Some(mesh.topology_version()) && mesh.vertex_count() <= self.positions.len()
     }
 
+    /// Copy the mesh's face groups onto the cage's faces, after something
+    /// regrouped the mesh without changing its triangles (the Paint Groups
+    /// brush, Groups menu commands). Each face takes the group of its first
+    /// triangle (a face painted only in part takes one group). False, and
+    /// nothing changes, if the cage no longer describes the mesh.
+    /// RETURNS: whether the cage matches the mesh.
+    pub fn sync_groups_from(&mut self, mesh: &Mesh) -> bool {
+        if !self.is_linked_to(mesh) {
+            return false;
+        }
+        let groups = mesh.groups();
+        let key = |t: [u32; 3]| {
+            let mut k = t;
+            k.sort_unstable();
+            k
+        };
+        let by_tri: HashMap<[u32; 3], u32> = mesh.triangles.iter().zip(groups).map(|(&t, &g)| (key(t), g)).collect();
+        for f in &mut self.faces {
+            let c = &f.corners;
+            if c.len() < 3 {
+                continue;
+            }
+            let first = if c.len() <= 4 { [c[0], c[1], c[2]] } else { ear_clip(&self.positions, c)[0] };
+            if let Some(&g) = by_tri.get(&key(first)) {
+                f.group = g;
+            }
+        }
+        true
+    }
+
     /// Copy the mesh's vertex positions back into the cage (after a brush
     /// or an undo moved them). False if the cage no longer matches it.
     pub fn sync_from(&mut self, mesh: &Mesh) -> bool {
