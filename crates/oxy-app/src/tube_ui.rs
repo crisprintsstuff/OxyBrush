@@ -5,7 +5,7 @@ use crate::editor::{Drag, Editor};
 use egui::{Color32, RichText, Stroke};
 use glam::Vec2;
 
-const HINT: &str = "Drag a point to move it. Shift+drag a point up or down to make the tube thicker or thinner there. Click the line to add a point; Alt+click a point to remove it. Orbit to look from another side.";
+const HINT: &str = "Drag a point to move it, or onto the next one to merge them. Shift+drag a point up or down to make the tube thicker or thinner there. Double-click a point for a sharp corner (again for smooth). Click the line to add a point; Delete removes the picked point (or Alt+click it). Drag away from the tube to orbit.";
 
 /// Settings for the open tube, with Accept and Cancel (Enter / Esc).
 pub fn window(ctx: &egui::Context, ed: &mut Editor) {
@@ -15,6 +15,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     let (enter, esc) = ctx.input(|i| (i.key_pressed(egui::Key::Enter), i.key_pressed(egui::Key::Escape)));
     let mut accept = enter && !ctx.egui_wants_keyboard_input() && ed.tube.is_some();
     let mut cancel = esc;
+    let delete = ctx.input(|i| i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace));
+    if delete && !ctx.egui_wants_keyboard_input() && ed.tube.is_some() {
+        ed.tube_delete_selected();
+    }
     // Low on the left, away from where the model usually is; movable.
     let screen = ctx.content_rect();
     egui::Window::new("Tube")
@@ -173,7 +177,7 @@ pub fn overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
         return;
     }
     let Some(tube) = &ed.tube else { return };
-    let path = oxy_mesh::primitives::tube_path(&tube.points, &tube.radii, 0.02);
+    let path = oxy_mesh::primitives::tube_path_cornered(&tube.points, &tube.radii, &tube.sharp, 0.02);
     let line: Vec<egui::Pos2> = path.iter().filter_map(|(p, _)| ed.tube_screen(*p).map(to_ui)).collect();
     if line.len() == path.len() {
         painter.add(egui::Shape::line(line, Stroke::new(1.5, Color32::from_white_alpha(200))));
@@ -187,6 +191,14 @@ pub fn overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
         let at = to_ui(s);
         let selected = tube.selected == Some(i) || held == Some(i);
         let fill = if selected { accent } else { Color32::from_gray(235) };
-        painter.circle(at, if selected { 6.5 } else { 5.0 }, fill, Stroke::new(1.5, Color32::from_black_alpha(160)));
+        let edge = Stroke::new(1.5, Color32::from_black_alpha(160));
+        let size = if selected { 6.5 } else { 5.0 };
+        if tube.sharp.get(i).copied().unwrap_or(false) {
+            // A sharp corner is a square handle.
+            let r = egui::Rect::from_center_size(at, egui::vec2(size * 1.8, size * 1.8));
+            painter.rect(r, 1.0, fill, edge, egui::StrokeKind::Middle);
+        } else {
+            painter.circle(at, size, fill, edge);
+        }
     }
 }

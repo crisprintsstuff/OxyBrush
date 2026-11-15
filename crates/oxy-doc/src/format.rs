@@ -94,6 +94,13 @@
 //!   `triangles` 0 and its real count is here, so an older reader, which
 //!   skips `TUBX`, never matches it and keeps it as ordinary triangles
 //!   instead of reopening it as a plain tube.
+//! - `TUBC` (optional, since 4.0.0-beta.14): which points of the tubes in
+//!   the **preceding** `TUBE` are sharp corners (#258), in the same order:
+//!   `count:u32` then per tube `n:u32 sharp:u8*n triangles:u32`, `n` the
+//!   tube's point count (0 for a tube without corners). Written only when
+//!   some tube has a corner. Such a tube's entries in `TUBE` and `TUBX`
+//!   have `triangles` 0 and its real count is here, so an older reader
+//!   never reopens it with its corners rounded off.
 //! - `CURV` (optional, since 3.0.6): a Curve Move curve (RFC 0005) that was
 //!   open on the **preceding** `PIEC` when it was saved; the piece itself is
 //!   saved without the curve's bend. `n:u32` then `points:f32*6n` (position
@@ -222,6 +229,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             sections.push((*b"TUBE", encode_tubes(&p.tubes)));
             if p.tubes.iter().any(|t| !t.shape.is_plain()) {
                 sections.push((*b"TUBX", encode_tube_shapes(&p.tubes)));
+            }
+            if p.tubes.iter().any(crate::TubeRecipe::has_corners) {
+                sections.push((*b"TUBC", encode_tube_corners(&p.tubes)));
             }
         }
         if let Some(c) = &p.curve {
@@ -493,6 +503,27 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     }
                     Ok(_) => log::warn!("ignoring tube shapes that don't match the tubes of piece {:?}", piece.name),
                     Err(e) => log::warn!("ignoring damaged tube shapes on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"TUBC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("TUBC before any piece".into()))?;
+                match decode_tube_corners(&raw) {
+                    Ok(corners)
+                        if corners.len() == piece.tubes.len()
+                            && corners
+                                .iter()
+                                .zip(&piece.tubes)
+                                .all(|((s, _), t)| s.is_empty() || s.len() == t.points.len()) =>
+                    {
+                        for (t, (sharp, triangles)) in piece.tubes.iter_mut().zip(corners) {
+                            if sharp.iter().any(|&s| s) {
+                                t.sharp = sharp;
+                                t.triangles = triangles;
+                            }
+                        }
+                    }
+                    Ok(_) => log::warn!("ignoring tube corners that don't match the tubes of piece {:?}", piece.name),
+                    Err(e) => log::warn!("ignoring damaged tube corners on piece {:?}: {e}", piece.name),
                 }
             }
             b"CURV" => {
@@ -792,8 +823,9 @@ fn encode_tubes(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
         b.push(t.mirror as u8);
         f(&mut b, t.mirror_x);
         u(&mut b, t.group);
-        // Shaped tubes: the real count is in TUBX (see the header).
-        u(&mut b, if t.shape.is_plain() { t.triangles } else { 0 });
+        // Shaped tubes: the real count is in TUBX; tubes with corners: in
+        // TUBC (see the header).
+        u(&mut b, if t.shape.is_plain() && !t.has_corners() { t.triangles } else { 0 });
         for x in t.fingerprint.to_array() {
             f(&mut b, x);
         }
@@ -834,6 +866,7 @@ fn decode_tubes(raw: &[u8]) -> Result<Vec<crate::TubeRecipe>> {
             mirror,
             mirror_x,
             shape: Default::default(),
+            sharp: Vec::new(),
             group,
             triangles,
             fingerprint,
@@ -851,9 +884,44 @@ fn encode_tube_shapes(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
         for x in [s.twist, s.coil_size, s.coil_turns, s.spread, s.braid_turns] {
             b.extend_from_slice(&x.to_le_bytes());
         }
+        // A tube with corners has its real count in TUBC (see the header).
+        let triangles = if t.has_corners() { 0 } else { t.triangles };
+        b.extend_from_slice(&triangles.to_le_bytes());
+    }
+    b
+}
+
+fn encode_tube_corners(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(tubes.len() as u32).to_le_bytes());
+    for t in tubes {
+        let sharp: &[bool] = if t.has_corners() { &t.sharp } else { &[] };
+        b.extend_from_slice(&(sharp.len() as u32).to_le_bytes());
+        b.extend(sharp.iter().map(|&s| s as u8));
         b.extend_from_slice(&t.triangles.to_le_bytes());
     }
     b
+}
+
+/// RETURNS: per tube, its corner flags (empty: none) and real triangle count.
+fn decode_tube_corners(raw: &[u8]) -> Result<Vec<(Vec<bool>, u32)>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, 8)?;
+    (0..count)
+        .map(|_| {
+            let n = r.u32()? as usize;
+            r.check(n, 1)?;
+            let sharp = (0..n)
+                .map(|_| match r.u8()? {
+                    0 => Ok(false),
+                    1 => Ok(true),
+                    _ => Err(Error::Corrupt("invalid tube corner flag".into())),
+                })
+                .collect::<Result<Vec<bool>>>()?;
+            Ok((sharp, r.u32()?))
+        })
+        .collect()
 }
 
 fn decode_tube_shapes(raw: &[u8]) -> Result<Vec<(oxy_mesh::primitives::TubeShape, u32)>> {
@@ -1786,6 +1854,7 @@ mod tests {
             mirror: true,
             mirror_x: 0.25,
             shape: Default::default(),
+            sharp: Vec::new(),
             group: 0,
             triangles,
             fingerprint,
@@ -1828,6 +1897,7 @@ mod tests {
             mirror: false,
             mirror_x: 0.0,
             shape,
+            sharp: Vec::new(),
             group: 0,
             triangles,
             fingerprint,
@@ -1854,6 +1924,58 @@ mod tests {
         assert!(decode_tube_shapes(&bad).is_err());
         bad.truncate(10);
         assert!(decode_tube_shapes(&bad).is_err());
+    }
+
+    #[test]
+    fn tube_corners_roundtrip_and_older_readers_dont_reopen_them_rounded() {
+        use crate::{Piece, TubeRecipe, group_fingerprint};
+        use oxy_mesh::primitives::TubeShape;
+        let points = vec![Vec3::ZERO, Vec3::X, Vec3::new(1.0, 1.0, 0.0)];
+        let radii = vec![0.1; 3];
+        let sharp = vec![false, true, false];
+        // Twisted as well, so both TUBE and TUBX must hide the real count.
+        let shape = TubeShape { twist: 0.5, ..Default::default() };
+        let mesh = primitives::tube_cornered(&points, &radii, &sharp, 12, true, shape);
+        let (triangles, fingerprint) = group_fingerprint(&mesh, 0);
+        let mut piece = Piece::new("Bent", mesh);
+        let recipe = TubeRecipe {
+            points,
+            radii,
+            sides: 12,
+            caps: true,
+            mirror: false,
+            mirror_x: 0.0,
+            shape,
+            sharp,
+            group: 0,
+            triangles,
+            fingerprint,
+        };
+        piece.tubes.push(recipe.clone());
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"TUBC").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(loaded.tubes, vec![recipe]);
+        assert!(loaded.tube_recipe().is_some());
+        // A reader without TUBC (4.0.0-beta.13) has the tube with no corners
+        // and a count of 0, so it keeps the tube as ordinary triangles.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"TUBC").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let piece = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert!(!piece.tubes[0].has_corners());
+        assert!(piece.tube_recipe().is_none(), "an older reader must not reopen it with rounded corners");
+        // Damaged flags are refused.
+        let mut bad = encode_tube_corners(&[loaded.tubes[0].clone()]);
+        bad[8] = 7;
+        assert!(decode_tube_corners(&bad).is_err());
+        // Tubes without corners write no TUBC.
+        let mut plain = loaded.tubes[0].clone();
+        plain.sharp = vec![false; 3];
+        let mut p2 = Piece::new("Plain", primitives::cube(1, 1.0));
+        p2.tubes.push(plain);
+        let bytes = encode(&SceneData { pieces: vec![p2.to_data()], active: 0, alphas: Vec::new() });
+        assert!(!bytes.windows(4).any(|w| w == b"TUBC"));
     }
 
     #[test]
