@@ -183,7 +183,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### Interface
 
-- **Menus:** File, Edit, Pieces, Mesh (resolution and repair), Tools (Deform, Transform, Symmetrize, Poly Edit, Retopology, vertex color), Groups, Mask, View, Plugins and Help, a toolbar with Raise/Carve, size, strength, symmetry and subdivision levels, and a view strip beside the viewport with toggles for the mask, face groups, shading, wireframe and floor grid.
+- **Menus:** File, Edit, Pieces, Mesh (resolution and repair), Tools (Deform, Transform, Symmetrize, Poly Edit, Retopology, vertex color), Groups, Mask, View, Plugins and Help, a toolbar with Raise/Carve, size, strength, symmetry and subdivision levels, and a view strip beside the viewport with a button that hides the settings panel and toggles for the mask, face groups, shading, wireframe and floor grid.
 - **Command palette (Ctrl+K)** for any command, brush, recent file or guide topic; a **brush finder (Space)**; and a searchable **offline guide (F2)**.
 - **Accessibility:** interface scale from 75 to 300%, a high-contrast theme, a full mouse-only workflow, and screen-reader labels.
 - **Undo/redo** covers strokes, topology changes, face groups, visibility and pieces, within a memory budget. **Undo on this piece** (Ctrl+Alt+Z) takes back the active piece's last change even if you changed other pieces since; turn on **Preferences > General > Undo works on the active piece** to make that what Ctrl+Z does. The History section can show just the active piece's changes.
@@ -232,6 +232,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Middle-drag on a panel | Scroll the panel |
 | Ctrl+K | Command palette |
 | Space | Find a brush by name |
+| Tab / Shift+Tab | Hide or show every panel / just the settings panel (also the view strip's top button) |
 | `Ctrl+,` | Preferences window (General, Pen & tablet, Interface, Plugins, Keymap, AI agent, Updates) |
 | `F1` / `F2` | Full shortcut list / built-in guide |
 

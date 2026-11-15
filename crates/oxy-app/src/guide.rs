@@ -34,7 +34,7 @@ pub const TOPICS: &[Topic] = &[
 - Hold Shift while orbiting to snap the view to 45° steps.\n\
 - O switches between perspective and orthographic (P in the Single-key tools scheme).\n\
 - The lens button in that strip, or View > Focal length, sets how much perspective you see. See Focal length.\n\
-- Tab hides the panels to give the model the whole window.\n\n\
+- Tab hides the panels to give the model the whole window. Shift+Tab, or the top button of the view strip, hides just the settings panel.\n\n\
 Prefer starting strokes beside the model? Turn on Settings > Strokes can start on empty space and orbit with the middle mouse button instead.\n\n\
 Every shortcut and the mouse buttons can be changed in Settings > Keymap, including switching between the Default and Single-key tools shortcut schemes. The Right-drag orbit preset orbits with the right button; the MMB orbit preset uses the middle button to orbit, Ctrl+middle to zoom and Shift+middle to pan.",
     },
