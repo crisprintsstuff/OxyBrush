@@ -85,6 +85,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.end_row();
                 }
             });
+            ui.add_space(4.0);
+            profile_section(ui, tube);
             if tube.selected.is_some() && ui.small_button("Edit the whole tube's thickness").clicked() {
                 tube.selected = None;
             }
@@ -106,6 +108,225 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         ed.cancel_tube();
     } else if accept {
         ed.accept_tube();
+    }
+}
+
+/// The Profile presets: name, outline (in tube radii), smooth. Round is no
+/// profile at all.
+fn profile_presets() -> Vec<(&'static str, Vec<glam::Vec2>, bool)> {
+    use glam::Vec2;
+    let star: Vec<Vec2> = (0..10)
+        .map(|i| {
+            let a = std::f32::consts::FRAC_PI_2 + i as f32 * std::f32::consts::TAU / 10.0;
+            let r = if i % 2 == 0 { 1.0 } else { 0.45 };
+            Vec2::new(a.cos(), a.sin()) * r
+        })
+        .collect();
+    vec![
+        ("Square", vec![Vec2::new(-0.9, -0.9), Vec2::new(0.9, -0.9), Vec2::new(0.9, 0.9), Vec2::new(-0.9, 0.9)], false),
+        ("Triangle", vec![Vec2::new(-1.0, -0.6), Vec2::new(1.0, -0.6), Vec2::new(0.0, 1.0)], false),
+        ("Star", star, false),
+        (
+            "D-shape",
+            vec![
+                Vec2::new(-1.0, -0.4),
+                Vec2::new(1.0, -0.4),
+                Vec2::new(0.85, 0.25),
+                Vec2::new(0.4, 0.6),
+                Vec2::new(-0.4, 0.6),
+                Vec2::new(-0.85, 0.25),
+            ],
+            true,
+        ),
+        (
+            "Ribbon",
+            vec![Vec2::new(-1.0, -0.15), Vec2::new(1.0, -0.15), Vec2::new(1.0, 0.15), Vec2::new(-1.0, 0.15)],
+            false,
+        ),
+    ]
+}
+
+/// A round profile with points to drag: what editing Round starts from.
+fn round_profile() -> oxy_mesh::primitives::TubeProfile {
+    let points = (0..8)
+        .map(|i| {
+            let a = i as f32 * std::f32::consts::TAU / 8.0;
+            glam::Vec2::new(a.cos(), a.sin())
+        })
+        .collect();
+    oxy_mesh::primitives::TubeProfile { points, smooth: true }
+}
+
+/// The partner of profile point `i` across the vertical axis, if any:
+/// the point nearest its mirror image, or itself when it's on the axis.
+fn mirror_partner(points: &[glam::Vec2], i: usize) -> Option<usize> {
+    let p = points[i];
+    if p.x.abs() < 0.03 {
+        return Some(i);
+    }
+    let image = glam::Vec2::new(-p.x, p.y);
+    points
+        .iter()
+        .enumerate()
+        .filter(|&(j, _)| j != i)
+        .map(|(j, q)| (j, q.distance(image)))
+        .filter(|&(_, d)| d < 0.15)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(j, _)| j)
+}
+
+/// The Tube window's Profile: presets, and the cross-section drawn on a
+/// square to edit by dragging its points.
+fn profile_section(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
+    // Open from the start only when the tube has a profile, so the window
+    // stays short for round tubes.
+    let title = match &tube.profile {
+        None => "Profile: round".to_string(),
+        Some(p) => format!("Profile: {} points", p.points.len()),
+    };
+    egui::CollapsingHeader::new(RichText::new(title).strong())
+        .id_salt("tube_profile")
+        .default_open(tube.profile.is_some())
+        .show(ui, |ui| profile_editor(ui, tube));
+}
+
+fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
+    use glam::Vec2;
+    ui.label(
+        RichText::new(
+            "The tube's cross-section. Drag points to reshape it; click the outline to add a point; right-click (or Alt+click) a point to remove it; Shift snaps to the grid.",
+        )
+        .weak()
+        .small(),
+    );
+    ui.horizontal_wrapped(|ui| {
+        if ui.selectable_label(tube.profile.is_none(), "Round").clicked() {
+            tube.profile = None;
+        }
+        for (name, points, smooth) in profile_presets() {
+            let on = tube.profile.as_ref().is_some_and(|p| p.points == points && p.smooth == smooth);
+            if ui.selectable_label(on, name).clicked() {
+                tube.profile = Some(oxy_mesh::primitives::TubeProfile { points, smooth });
+            }
+        }
+    });
+    let mut profile = tube.profile.clone().unwrap_or_else(round_profile);
+    let before = profile.clone();
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut profile.smooth, "Smooth")
+            .on_hover_text("A curve through the points, or straight sides with sharp corners");
+        ui.checkbox(&mut tube.profile_mirror, "Mirror left and right")
+            .on_hover_text("Moving a point moves its partner on the other side too");
+    });
+    // The canvas: ±1.4 tube radii, so a point can go a little outside the
+    // tube's normal thickness (the faint circle).
+    let side = ui.available_width().clamp(160.0, 240.0);
+    let (resp, painter) = ui.allocate_painter(egui::vec2(side, side), egui::Sense::click_and_drag());
+    let rect = resp.rect;
+    let extent = 1.4;
+    let to_screen = |p: Vec2| {
+        egui::pos2(
+            rect.center().x + p.x / extent * rect.width() * 0.5,
+            rect.center().y - p.y / extent * rect.height() * 0.5,
+        )
+    };
+    let to_profile = |s: egui::Pos2| {
+        Vec2::new(
+            (s.x - rect.center().x) / (rect.width() * 0.5) * extent,
+            -(s.y - rect.center().y) / (rect.height() * 0.5) * extent,
+        )
+    };
+    let visuals = ui.visuals().clone();
+    painter.rect_filled(rect, 4.0, visuals.extreme_bg_color);
+    let faint = Stroke::new(1.0, visuals.weak_text_color().gamma_multiply(0.35));
+    for v in [-1.0f32, -0.5, 0.0, 0.5, 1.0] {
+        painter.line_segment([to_screen(Vec2::new(v, -extent)), to_screen(Vec2::new(v, extent))], faint);
+        painter.line_segment([to_screen(Vec2::new(-extent, v)), to_screen(Vec2::new(extent, v))], faint);
+    }
+    painter.circle_stroke(to_screen(Vec2::ZERO), rect.width() * 0.5 / extent, faint);
+
+    // Interaction.
+    let (alt, shift) = ui.input(|i| (i.modifiers.alt, i.modifiers.shift));
+    let reach = 9.0;
+    let near_point = |profile: &oxy_mesh::primitives::TubeProfile, s: egui::Pos2| {
+        profile
+            .points
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (i, to_screen(*p).distance(s)))
+            .filter(|&(_, d)| d <= reach)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(i, _)| i)
+    };
+    if let Some(s) = resp.interact_pointer_pos() {
+        let remove = resp.secondary_clicked() || (alt && resp.clicked());
+        if remove {
+            if let Some(i) = near_point(&profile, s)
+                && profile.points.len() > 3
+            {
+                profile.points.remove(i);
+            }
+        } else if resp.drag_started() || (resp.clicked() && tube.profile_drag.is_none()) {
+            let hit = near_point(&profile, s).or_else(|| {
+                // On the outline between two points: add one there.
+                let n = profile.points.len();
+                (0..n)
+                    .filter_map(|i| {
+                        let (a, b) = (to_screen(profile.points[i]), to_screen(profile.points[(i + 1) % n]));
+                        let ab = b - a;
+                        let f = ((s - a).dot(ab) / ab.length_sq().max(1e-6)).clamp(0.0, 1.0);
+                        let d = (a + ab * f).distance(s);
+                        (d <= reach).then_some((i, d))
+                    })
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(i, _)| {
+                        profile.points.insert(i + 1, to_profile(s));
+                        i + 1
+                    })
+            });
+            if let Some(i) = hit {
+                let partner = if tube.profile_mirror { mirror_partner(&profile.points, i) } else { None };
+                tube.profile_drag = Some((i, partner));
+            }
+        }
+        if resp.dragged()
+            && let Some((i, partner)) = tube.profile_drag
+            && i < profile.points.len()
+        {
+            let mut p = to_profile(s).clamp(Vec2::splat(-extent), Vec2::splat(extent));
+            if shift {
+                p = (p * 10.0).round() / 10.0;
+            }
+            match partner {
+                Some(j) if j == i => p.x = 0.0,
+                Some(j) if j < profile.points.len() => profile.points[j] = Vec2::new(-p.x, p.y),
+                _ => {}
+            }
+            profile.points[i] = p;
+        }
+    }
+    if resp.drag_stopped() || resp.clicked() {
+        tube.profile_drag = None;
+    }
+
+    // The outline you'll get, the points, and (when smooth) the lines between them.
+    let ring = profile.ring(tube.sides.max(profile.points.len() as u32) as usize * 2);
+    let accent = visuals.selection.bg_fill;
+    let mut outline: Vec<egui::Pos2> = ring.iter().map(|&p| to_screen(p)).collect();
+    outline.push(outline[0]);
+    painter.add(egui::Shape::line(outline, Stroke::new(2.0, accent)));
+    if profile.smooth {
+        let mut control: Vec<egui::Pos2> = profile.points.iter().map(|&p| to_screen(p)).collect();
+        control.push(control[0]);
+        painter.add(egui::Shape::dashed_line(&control, faint, 4.0, 3.0));
+    }
+    let held = tube.profile_drag.map(|(i, _)| i);
+    for (i, &p) in profile.points.iter().enumerate() {
+        let r = if held == Some(i) { 5.5 } else { 4.0 };
+        painter.circle(to_screen(p), r, visuals.text_color(), Stroke::new(1.5, accent));
+    }
+    if profile != before {
+        tube.profile = Some(profile);
     }
 }
 

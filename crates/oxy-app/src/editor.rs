@@ -1166,6 +1166,8 @@ pub struct Editor {
     pub tube_armed: bool,
     /// Twist, Spin and Braid for the next tube drawn: the last ones used.
     pub tube_shape: oxy_mesh::primitives::TubeShape,
+    /// The cross-section the next tube starts with (the last one accepted).
+    pub tube_profile: Option<oxy_mesh::primitives::TubeProfile>,
     /// The piece the tube being drawn will be added into (Tube brush).
     pub tube_into: Option<u64>,
     /// The retopology tool, while its window is open (RFC 0012).
@@ -1525,6 +1527,7 @@ impl Default for Editor {
             tube: None,
             tube_armed: false,
             tube_shape: Default::default(),
+            tube_profile: None,
             tube_into: None,
             retopo: None,
             poly_edit: None,
@@ -8858,6 +8861,32 @@ mod tests {
         e.tube_delete_selected();
         assert_eq!(e.tube.as_ref().unwrap().points.len(), 2);
         assert!(e.status.contains("at least two"), "{}", e.status);
+    }
+
+    #[test]
+    fn a_tube_profile_is_kept_after_accept_and_edit_and_the_next_tube_starts_with_it() {
+        use oxy_mesh::primitives::TubeProfile;
+        let mut e = editor();
+        let points = vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.5, 1.4, 0.0)];
+        e.open_tube(points.clone(), 0.05, None);
+        let round = e.tube.as_ref().unwrap().preview.triangles.len();
+        let square = TubeProfile {
+            points: vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0)],
+            smooth: false,
+        };
+        e.tube.as_mut().unwrap().profile = Some(square.clone());
+        e.tube.as_mut().unwrap().sides = 12;
+        e.update_tube();
+        assert_ne!(e.tube.as_ref().unwrap().preview.triangles.len(), round, "the preview takes the profile");
+        e.accept_tube();
+        assert_eq!(e.scene.active().tubes.last().unwrap().profile.as_ref(), Some(&square));
+        assert!(e.can_edit_tube());
+        e.edit_tube();
+        assert_eq!(e.tube.as_ref().expect("reopened").profile.as_ref(), Some(&square));
+        e.cancel_tube();
+        // The next tube starts with it, as with Twist and Braid.
+        e.open_tube(points, 0.05, None);
+        assert_eq!(e.tube.as_ref().unwrap().profile.as_ref(), Some(&square));
     }
 
     #[test]

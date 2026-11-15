@@ -706,7 +706,7 @@ fn resample_by_length(dense: &[(Vec3, f32)], spacing: f32) -> Vec<(Vec3, f32)> {
 ///
 /// PRECONDITION: `points.len() == radii.len() >= 2`, radii > 0.
 pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
-    let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), &[], sides, caps, 0.0);
+    let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), &[], sides, caps, 0.0, None);
     Mesh::new(positions, tris)
 }
 
@@ -805,8 +805,29 @@ fn corner_miter(path: &[(Vec3, f32)], corners: &[usize], i: usize, t: Vec3) -> O
 
 /// A tube's rings along `path` (`sides` around), the cross-section turned
 /// `twist` times over the length, with rounded `caps`.
-fn sweep(path: &[(Vec3, f32)], corners: &[usize], sides: u32, caps: bool, twist: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
-    let sides = sides.max(3) as usize;
+fn sweep(
+    path: &[(Vec3, f32)],
+    corners: &[usize],
+    sides: u32,
+    caps: bool,
+    twist: f32,
+    profile: Option<&[glam::Vec2]>,
+) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+    // A profile sets the cross-section (and how many points it has);
+    // otherwise it's a circle of `sides` points, computed as it always was.
+    let sides = profile.map_or(sides.max(3) as usize, |p| p.len());
+    let around = |k: usize, turn: f32| -> (f32, f32) {
+        match profile {
+            Some(p) => {
+                let (s, c) = turn.sin_cos();
+                (p[k].x * c - p[k].y * s, p[k].x * s + p[k].y * c)
+            }
+            None => {
+                let a = std::f32::consts::TAU * k as f32 / sides as f32 + turn;
+                (a.cos(), a.sin())
+            }
+        }
+    };
     let rings = path.len();
     let frames = transport_frames(path, corners);
     let mut positions = Vec::with_capacity(rings * sides + 2 + if caps { 2 * sides * 3 } else { 0 });
@@ -815,8 +836,8 @@ fn sweep(path: &[(Vec3, f32)], corners: &[usize], sides: u32, caps: bool, twist:
         let turn = std::f32::consts::TAU * twist * i as f32 / last;
         let miter = corner_miter(path, corners, i, t);
         for k in 0..sides {
-            let a = std::f32::consts::TAU * k as f32 / sides as f32 + turn;
-            let mut o = (normal * a.cos() + binormal * a.sin()) * r;
+            let (x, y) = around(k, turn);
+            let mut o = (normal * x + binormal * y) * r;
             if let Some((across, stretch)) = miter {
                 o += across * o.dot(across) * stretch;
             }
@@ -849,8 +870,8 @@ fn sweep(path: &[(Vec3, f32)], corners: &[usize], sides: u32, caps: bool, twist:
                 let (rr, off) = (r * phi.cos(), r * phi.sin() * dir);
                 let start = positions.len() as u32;
                 for k in 0..sides {
-                    let a = std::f32::consts::TAU * k as f32 / sides as f32;
-                    positions.push(c + t * off + (n * a.cos() + b * a.sin()) * rr);
+                    let (x, y) = around(k, 0.0);
+                    positions.push(c + t * off + (n * x + b * y) * rr);
                 }
                 let next: Vec<u32> = (0..sides as u32).map(|k| start + k).collect();
                 for k in 0..sides {
@@ -972,11 +993,120 @@ pub fn tube_shaped(points: &[Vec3], radii: &[f32], sides: u32, caps: bool, shape
 /// [`tube_shaped`] with sharp corners at the points where `sharp` is true
 /// (see [`tube_path_cornered`]); the tube is mitred there.
 pub fn tube_cornered(points: &[Vec3], radii: &[f32], sharp: &[bool], sides: u32, caps: bool, shape: TubeShape) -> Mesh {
+    tube_profiled(points, radii, sharp, sides, caps, shape, None)
+}
+
+/// A tube's cross-section shape (the Tube window's Profile): a closed
+/// outline through `points`, in units of the tube's radius around its
+/// centre line (x across, y up as seen looking along the tube). Sharp
+/// outlines keep their corners; smooth ones are a closed curve through the
+/// points. `None` in [`tube_profiled`] is the round tube.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TubeProfile {
+    pub points: Vec<glam::Vec2>,
+    pub smooth: bool,
+}
+
+impl TubeProfile {
+    /// The outline as `count` points around it (at least one per point of
+    /// a sharp outline, on its corners), counter-clockwise, so the tube's
+    /// faces point outward whichever way the points were drawn.
+    ///
+    /// PRECONDITION: at least three points.
+    pub fn ring(&self, count: usize) -> Vec<glam::Vec2> {
+        use glam::Vec2;
+        let n = self.points.len();
+        let count = count.max(n).max(3);
+        let p = &self.points;
+        let mut out: Vec<Vec2> = if self.smooth {
+            // A closed uniform Catmull-Rom curve, then even spacing along it.
+            let steps = 16;
+            let mut dense = Vec::with_capacity(n * steps + 1);
+            for i in 0..n {
+                let (p0, p1, p2, p3) = (p[(i + n - 1) % n], p[i], p[(i + 1) % n], p[(i + 2) % n]);
+                for k in 0..steps {
+                    let t = k as f32 / steps as f32;
+                    let (t2, t3) = (t * t, t * t * t);
+                    dense.push(
+                        0.5 * ((2.0 * p1)
+                            + (p2 - p0) * t
+                            + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
+                            + (3.0 * p1 - p0 - 3.0 * p2 + p3) * t3),
+                    );
+                }
+            }
+            dense.push(dense[0]);
+            even_along(&dense, count)
+        } else {
+            // Every corner, then the rest spread over the sides by length.
+            let len: Vec<f32> = (0..n).map(|i| p[i].distance(p[(i + 1) % n])).collect();
+            let total: f32 = len.iter().sum::<f32>().max(1e-6);
+            let spare = count - n;
+            let mut extra: Vec<usize> = len.iter().map(|l| (l / total * spare as f32).floor() as usize).collect();
+            let left = spare - extra.iter().sum::<usize>();
+            // Hand out what rounding left to the longest sides.
+            let mut order: Vec<usize> = (0..n).collect();
+            order.sort_by(|&a, &b| len[b].total_cmp(&len[a]));
+            for &i in order.iter().cycle().take(left) {
+                extra[i] += 1;
+            }
+            let mut out = Vec::with_capacity(count);
+            for i in 0..n {
+                let (a, b) = (p[i], p[(i + 1) % n]);
+                for k in 0..=extra[i] {
+                    out.push(a.lerp(b, k as f32 / (extra[i] + 1) as f32));
+                }
+            }
+            out
+        };
+        let area: f32 = (0..out.len()).map(|i| out[i].perp_dot(out[(i + 1) % out.len()])).sum();
+        if area < 0.0 {
+            out.reverse();
+        }
+        out
+    }
+}
+
+/// `count` points evenly spaced along the closed polyline `line` (whose
+/// last point repeats its first).
+fn even_along(line: &[glam::Vec2], count: usize) -> Vec<glam::Vec2> {
+    let mut length = vec![0.0f32];
+    for w in line.windows(2) {
+        length.push(length.last().unwrap() + w[0].distance(w[1]));
+    }
+    let total = length.last().copied().unwrap_or(0.0).max(1e-6);
+    let mut out = Vec::with_capacity(count);
+    let mut j = 0;
+    for i in 0..count {
+        let s = total * i as f32 / count as f32;
+        while j + 2 < length.len() && length[j + 1] < s {
+            j += 1;
+        }
+        let f = ((s - length[j]) / (length[j + 1] - length[j]).max(1e-9)).clamp(0.0, 1.0);
+        out.push(line[j].lerp(line[j + 1], f));
+    }
+    out
+}
+
+/// [`tube_cornered`] with a cross-section `profile` (None: round). The
+/// profile turns with Twist and shapes coil and braid strands too; the
+/// rounded caps shrink it to a point.
+pub fn tube_profiled(
+    points: &[Vec3],
+    radii: &[f32],
+    sharp: &[bool],
+    sides: u32,
+    caps: bool,
+    shape: TubeShape,
+    profile: Option<&TubeProfile>,
+) -> Mesh {
+    let ring: Option<Vec<glam::Vec2>> = profile.filter(|p| p.points.len() >= 3).map(|p| p.ring(sides.max(3) as usize));
+    let ring = ring.as_deref();
     let tube_path = |p: &[Vec3], r: &[f32], spacing: f32| tube_path_cornered(p, r, sharp, spacing);
     let coil = shape.coil_size > 0.0 && shape.coil_turns != 0.0;
     if !coil && !shape.braid {
         let (path, corners) = path_with_corners(points, radii, sharp, ring_spacing(radii, sides));
-        let (positions, tris) = sweep(&path, &corners, sides, caps, shape.twist);
+        let (positions, tris) = sweep(&path, &corners, sides, caps, shape.twist, ring);
         return Mesh::new(positions, tris);
     }
     // The centre line, finely sampled so coils and weaves stay smooth.
@@ -1033,7 +1163,7 @@ pub fn tube_cornered(points: &[Vec3], radii: &[f32], sharp: &[bool], sides: u32,
         let spacing = (std::f32::consts::TAU * rs / sides.max(3) as f32).max(rs * 0.25).max(length / max_rings as f32);
         let path = resample(&line, spacing);
         let base_index = positions.len() as u32;
-        let (p, t) = sweep(&path, &[], sides, caps, 0.0);
+        let (p, t) = sweep(&path, &[], sides, caps, 0.0, ring);
         positions.extend(p);
         tris.extend(t.into_iter().map(|t| t.map(|v| v + base_index)));
     }
@@ -1104,6 +1234,50 @@ mod tube_tests {
             }
         }
         edges.values().all(|&n| n == 2)
+    }
+
+    #[test]
+    fn a_square_profile_makes_a_square_closed_tube() {
+        use glam::Vec2;
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0)];
+        let r = [0.5, 0.5];
+        // Drawn clockwise on purpose: the faces must still point outward.
+        let square = TubeProfile {
+            points: vec![Vec2::new(-1.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, -1.0)],
+            smooth: false,
+        };
+        let ring = square.ring(16);
+        assert_eq!(ring.len(), 16);
+        for c in &square.points {
+            assert!(ring.iter().any(|p| p.distance(*c) < 1e-6), "corner {c} kept");
+        }
+        for p in &ring {
+            assert!((p.x.abs().max(p.y.abs()) - 1.0).abs() < 1e-5, "{p} is on the square");
+        }
+        let m = tube_profiled(&pts, &r, &[], 16, true, TubeShape::default(), Some(&square));
+        assert!(watertight(&m));
+        assert!(signed_volume(&m) > 0.0, "faces point outward");
+        // Along the straight part every vertex is on a square 2 × radius wide.
+        for p in &m.positions {
+            if p.y > 0.2 && p.y < 1.8 {
+                assert!((p.x.abs().max(p.z.abs()) - 0.5).abs() < 1e-4, "{p}");
+            }
+        }
+        // A smooth profile through the same points is rounder, and spaced evenly.
+        let round = TubeProfile { smooth: true, ..square.clone() };
+        let ring = round.ring(32);
+        assert!(ring.iter().any(|p| (p.x.abs().max(p.y.abs()) - 1.0).abs() > 0.02), "a curve, not the square");
+        let gaps: Vec<f32> = (0..32).map(|i| ring[i].distance(ring[(i + 1) % 32])).collect();
+        let (lo, hi) = gaps.iter().fold((f32::MAX, 0.0f32), |(a, b), &g| (a.min(g), b.max(g)));
+        assert!(hi < lo * 1.2, "even spacing: {lo}..{hi}");
+        // No profile is the round tube, exactly as before.
+        let plain = tube_shaped(&pts, &r, 16, true, TubeShape::default());
+        let none = tube_profiled(&pts, &r, &[], 16, true, TubeShape::default(), None);
+        assert_eq!(plain.positions, none.positions);
+        // Twisted and braided tubes take it too.
+        let braid = TubeShape { braid: true, braid_turns: 2.0, spread: 0.3, ..Default::default() };
+        let m = tube_profiled(&pts, &r, &[], 8, true, braid, Some(&square));
+        assert!(watertight(&m) && signed_volume(&m) > 0.0);
     }
 
     #[test]
