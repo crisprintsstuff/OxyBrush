@@ -529,7 +529,9 @@ pub fn stroke_tip(mode: crate::editor::StrokeMode) -> &'static str {
     match mode {
         StrokeMode::Freehand => "Dabs follow the pointer.",
         StrokeMode::Line => "Drag a straight line. The stroke is applied when you release.",
-        StrokeMode::Stamp => "Drag out one dab. Distance sets the size, direction the rotation.",
+        StrokeMode::Stamp => {
+            "Drag out one stamp, shown as you drag: distance sets the size, direction the rotation. A click stamps at the brush size. As strong as a short stroke."
+        }
         StrokeMode::Curve => {
             "Draw a stroke that stays editable: drag its points to reshape it, click the curve to add a point, Alt+click a point to remove it. Size, strength and the fades update it live; Enter or Accept applies it."
         }

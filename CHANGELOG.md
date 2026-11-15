@@ -9,6 +9,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Poly Edit: centred and paired edge loops** ([#243](https://github.com/crisprintsstuff/OxyBrush/issues/243)): **Shift+click** an edge with Insert loop to put the loop exactly in the middle. **Two loops** cuts a pair the same distance in from each end of the edge; dragging slides them in or out together, and Shift+click puts them at thirds.
 
 ### Fixed
+- **Stamp stroke mode is as strong as a freehand stroke, and shows the stamp while you drag.** A stamp was a single dab, which moves the surface only a tenth of the brush radius, so Draw at full strength barely raised a dimple (a tester compared it with another app). It now stacks six dabs in place, as much as a freehand stroke one brush-width long. The stamp also grows and turns with the drag, live, instead of appearing on release. Escape takes it back, it's one undo step, and a click without dragging stamps at the brush size.
 - **Poly Edit uses face groups painted since it was last open** ([#249](https://github.com/crisprintsstuff/OxyBrush/issues/249)). It kept the piece's polygons with their old groups, so after painting new face groups (Paint Groups brush, Groups menu), **Reach: Face group** still extruded the previous group. It now takes the current groups when it opens and whenever they change while it's open.
 
 ## [4.0.0-beta.12] - 2026-11-15
