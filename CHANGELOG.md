@@ -9,6 +9,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Poly Edit: centred and paired edge loops** ([#243](https://github.com/crisprintsstuff/OxyBrush/issues/243)): **Shift+click** an edge with Insert loop to put the loop exactly in the middle. **Two loops** cuts a pair the same distance in from each end of the edge; dragging slides them in or out together, and Shift+click puts them at thirds.
 
 ### Fixed
+- **Kelvin Grab no longer creases long pulls.** Pulling a horn or an ear out of a sphere left a slit running from tip to base. The Kelvinlet's elastic part, which bulges the sides and pinches behind the brush, is a small-move formula: on a long pull it pinched the surface behind the brush right across itself (up to a 170° fold), and its narrow peak drew the middle into a ridge. Now its regularization width is the brush radius (the paper's scale, not a third of it), its falloff is gentler, and the elastic part fades as the pull grows past the brush radius. Small moves keep the rubbery, volume-preserving feel; long pulls come out as smooth as with Grab. Kelvin Twist and Kelvin Scale are unchanged.
 - **Poly Edit uses face groups painted since it was last open** ([#249](https://github.com/crisprintsstuff/OxyBrush/issues/249)). It kept the piece's polygons with their old groups, so after painting new face groups (Paint Groups brush, Groups menu), **Reach: Face group** still extruded the previous group. It now takes the current groups when it opens and whenever they change while it's open.
 
 ## [4.0.0-beta.12] - 2026-11-15
