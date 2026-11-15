@@ -17,6 +17,8 @@ const PICK_PT: f32 = 10.0;
 const MAX_POINTS: usize = 8;
 /// A piece remembers at most this many tubes.
 const MAX_RECIPES: usize = 16;
+/// Two presses on the same point within this long are a double-click.
+const DOUBLE_CLICK: std::time::Duration = std::time::Duration::from_millis(400);
 
 /// The open tube.
 pub struct TubeEdit {
@@ -27,6 +29,8 @@ pub struct TubeEdit {
     pub points: Vec<Vec3>,
     /// Radius at each control point, blended along the tube.
     pub radii: Vec<f32>,
+    /// Which control points are sharp corners (double-click one, #258).
+    pub sharp: Vec<bool>,
     /// Vertices around the tube.
     pub sides: u32,
     /// Close both ends with rounded caps.
@@ -46,12 +50,15 @@ pub struct TubeEdit {
     /// The tube (and its mirror copy) as drawn in the viewport.
     pub preview: Mesh,
     built: Option<TubeKey>,
+    /// The last press on a point and when, to spot a double-click.
+    last_press: Option<(usize, std::time::Instant)>,
 }
 
 #[derive(Clone, PartialEq)]
 struct TubeKey {
     points: Vec<Vec3>,
     radii: Vec<f32>,
+    sharp: Vec<bool>,
     sides: u32,
     caps: bool,
     shape: primitives::TubeShape,
@@ -63,6 +70,7 @@ impl TubeEdit {
         TubeKey {
             points: self.points.clone(),
             radii: self.radii.clone(),
+            sharp: self.sharp.clone(),
             sides: self.sides,
             caps: self.caps,
             shape: self.shape,
@@ -72,7 +80,7 @@ impl TubeEdit {
 
     /// The tube's mesh (with its mirror copy, if on).
     pub fn mesh(&self) -> Mesh {
-        let tube = primitives::tube_shaped(&self.points, &self.radii, self.sides, self.caps, self.shape);
+        let tube = primitives::tube_cornered(&self.points, &self.radii, &self.sharp, self.sides, self.caps, self.shape);
         if !self.mirror {
             return tube;
         }
@@ -85,6 +93,19 @@ impl TubeEdit {
         data.positions.extend(mirrored);
         data.triangles.extend(flipped);
         Mesh::from_data(MeshData { positions: data.positions, triangles: data.triangles, ..Default::default() })
+    }
+
+    /// Remove control point `i` (the tube keeps at least two).
+    fn remove_point(&mut self, i: usize) -> bool {
+        if self.points.len() <= 2 || i >= self.points.len() {
+            return false;
+        }
+        self.points.remove(i);
+        self.radii.remove(i);
+        self.sharp.remove(i);
+        self.selected = None;
+        self.last_press = None;
+        true
     }
 
     /// Rebuild the preview if anything changed since the last build.
@@ -158,6 +179,7 @@ impl Editor {
         // Older recipes stay: undo brings back the tube they describe.
         piece.tubes.push(TubeRecipe {
             points: tube.points,
+            sharp: if tube.sharp.iter().any(|&s| s) { tube.sharp } else { Vec::new() },
             radii: tube.radii,
             sides: tube.sides,
             caps: tube.caps,
@@ -200,6 +222,7 @@ impl Editor {
         let mut tube = TubeEdit {
             // Replaced by `update` below, with the tube's shape.
             preview: primitives::tube(&r.points, &r.radii, 3, false),
+            sharp: if r.sharp.len() == r.points.len() { r.sharp } else { vec![false; r.points.len()] },
             points: r.points,
             radii: r.radii,
             sides: r.sides,
@@ -211,6 +234,7 @@ impl Editor {
             mirror_x: r.mirror_x,
             into: Some(id),
             built: None,
+            last_press: None,
         };
         tube.update();
         self.tube = Some(tube);
@@ -314,12 +338,17 @@ impl Editor {
         if let Some(i) = self.tube_point_at(p) {
             let tube = self.tube.as_mut().unwrap();
             if m.alt {
-                if tube.points.len() > 2 {
-                    tube.points.remove(i);
-                    tube.radii.remove(i);
-                    tube.selected = None;
-                }
+                tube.remove_point(i);
                 return true;
+            }
+            // A second press on the same point soon after: a double-click
+            // turns it into a sharp corner, or back into a smooth point.
+            let now = std::time::Instant::now();
+            let double = tube.last_press.is_some_and(|(j, t)| j == i && now.duration_since(t) < DOUBLE_CLICK);
+            tube.last_press = if double { None } else { Some((i, now)) };
+            if double {
+                tube.sharp[i] = !tube.sharp[i];
+                self.status = if tube.sharp[i] { "Sharp corner" } else { "Smooth point" }.into();
             }
             tube.selected = Some(i);
             self.drag = if m.shift {
@@ -337,13 +366,32 @@ impl Editor {
             let tube = self.tube.as_mut().unwrap();
             tube.points.insert(i + 1, at);
             tube.radii.insert(i + 1, r);
+            tube.sharp.insert(i + 1, false);
             tube.selected = Some(i + 1);
             self.drag = Drag::TubePoint { index: i + 1 };
             return true;
         }
-        // With the Tube brush, a press elsewhere does nothing (there is no
-        // stroke to make); other brushes sculpt as usual.
+        // With the Tube brush there's no stroke to make: a press away from
+        // the tube's points and line moves the view, as a press on empty
+        // space does (#258). Other brushes sculpt as usual.
+        if brush {
+            self.drag = match self.keymap.nav_action(crate::keymap::NavButton::Left, m) {
+                Some(action) => self.drag_for_nav(Some(action), crate::editor::PointerButton::Primary),
+                None => Drag::Orbit,
+            };
+        }
         brush
+    }
+
+    /// Delete the selected control point (Delete or Backspace, #258).
+    pub fn tube_delete_selected(&mut self) {
+        let Some(tube) = &mut self.tube else { return };
+        let Some(i) = tube.selected else {
+            self.status = "Click a point first, then Delete removes it".into();
+            return;
+        };
+        self.status =
+            if tube.remove_point(i) { "Point removed".into() } else { "A tube needs at least two points".into() };
     }
 
     /// Handle pointer movement for a tube drag. True if one is active.
@@ -385,11 +433,32 @@ impl Editor {
                 self.finish_tube_path(&points, anchor);
                 true
             }
-            Drag::TubePoint { .. } | Drag::TubeRadius { .. } => true,
+            Drag::TubePoint { index } => {
+                self.tube_merge_dropped(index);
+                true
+            }
+            Drag::TubeRadius { .. } => true,
             other => {
                 self.drag = other;
                 false
             }
+        }
+    }
+
+    /// A point dropped onto a neighbour merges into it (#258): the
+    /// neighbour stays, the dropped point goes.
+    fn tube_merge_dropped(&mut self, i: usize) {
+        let reach = PICK_PT * self.pixels_per_point.max(0.5);
+        let Some(tube) = &self.tube else { return };
+        let Some(at) = tube.points.get(i).and_then(|&w| self.tube_screen(w)) else { return };
+        let near = [i.checked_sub(1), Some(i + 1)]
+            .into_iter()
+            .flatten()
+            .filter(|&j| j < tube.points.len())
+            .any(|j| self.tube_screen(tube.points[j]).is_some_and(|s| s.distance(at) <= reach));
+        if near && let Some(tube) = &mut self.tube {
+            self.status =
+                if tube.remove_point(i) { "Points merged".into() } else { "A tube needs at least two points".into() };
         }
     }
 
@@ -421,7 +490,10 @@ impl Editor {
     /// into piece `into` (or as a new piece).
     pub(crate) fn open_tube(&mut self, points: Vec<Vec3>, radius: f32, into: Option<u64>) {
         let radii = vec![radius; points.len()];
+        let sharp = vec![false; points.len()];
         let mut tube = TubeEdit {
+            sharp,
+            last_press: None,
             // Replaced by `update` below, with the tube's shape.
             preview: primitives::tube(&points, &radii, 3, false),
             points,

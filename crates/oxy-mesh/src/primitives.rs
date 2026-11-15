@@ -615,16 +615,37 @@ mod tests {
 /// RETURNS: at least two (position, radius) pairs, first and last exactly at
 /// the end points.
 pub fn tube_path(points: &[Vec3], radii: &[f32], spacing: f32) -> Vec<(Vec3, f32)> {
+    tube_path_cornered(points, radii, &[], spacing)
+}
+
+/// [`tube_path`] with sharp corners: where `sharp[i]` is true the curve
+/// comes into point `i` and leaves it in a straight line to its
+/// neighbours' side, instead of rounding it, and a sample lands exactly on
+/// it. A missing entry is a smooth point (`&[]` is [`tube_path`]).
+///
+/// How: each Catmull-Rom segment takes its outer neighbour from the next
+/// point over, so a sharp point stands in for its own neighbour, as the
+/// clamped ends do; the arc-length resampling then runs separately between
+/// corners.
+pub fn tube_path_cornered(points: &[Vec3], radii: &[f32], sharp: &[bool], spacing: f32) -> Vec<(Vec3, f32)> {
+    path_with_corners(points, radii, sharp, spacing).0
+}
+
+/// [`tube_path_cornered`], and the indices of the samples on sharp corners.
+fn path_with_corners(points: &[Vec3], radii: &[f32], sharp: &[bool], spacing: f32) -> (Vec<(Vec3, f32)>, Vec<usize>) {
     assert!(points.len() >= 2 && points.len() == radii.len());
     let n = points.len();
     let at = |i: isize| points[i.clamp(0, n as isize - 1) as usize];
+    let is_sharp = |i: usize| sharp.get(i).copied().unwrap_or(false);
+    const STEPS: usize = 24;
     // Dense samples per segment, then resampled evenly by arc length.
     let mut dense: Vec<(Vec3, f32)> = Vec::new();
     for s in 0..n - 1 {
-        let (p0, p1, p2, p3) = (at(s as isize - 1), at(s as isize), at(s as isize + 1), at(s as isize + 2));
-        let steps = 24;
-        for k in 0..steps {
-            let t = k as f32 / steps as f32;
+        let p0 = if is_sharp(s) { points[s] } else { at(s as isize - 1) };
+        let p3 = if is_sharp(s + 1) { points[s + 1] } else { at(s as isize + 2) };
+        let (p1, p2) = (points[s], points[s + 1]);
+        for k in 0..STEPS {
+            let t = k as f32 / STEPS as f32;
             let (t2, t3) = (t * t, t * t * t);
             let p = 0.5
                 * ((2.0 * p1)
@@ -637,6 +658,26 @@ pub fn tube_path(points: &[Vec3], radii: &[f32], spacing: f32) -> Vec<(Vec3, f32
         }
     }
     dense.push((points[n - 1], radii[n - 1]));
+    // Resample each run between corners on its own, so every corner is a sample.
+    let mut cuts: Vec<usize> = (1..n - 1).filter(|&i| is_sharp(i)).map(|i| i * STEPS).collect();
+    cuts.insert(0, 0);
+    cuts.push(dense.len() - 1);
+    let mut out: Vec<(Vec3, f32)> = Vec::new();
+    let mut corners = Vec::new();
+    for w in cuts.windows(2) {
+        if !out.is_empty() {
+            corners.push(out.len() - 1);
+        }
+        let run = resample_by_length(&dense[w[0]..=w[1]], spacing);
+        let skip = if out.is_empty() { 0 } else { 1 };
+        out.extend(run.into_iter().skip(skip));
+    }
+    (out, corners)
+}
+
+/// `dense` resampled to points about `spacing` apart along it, first and
+/// last exactly at its ends.
+fn resample_by_length(dense: &[(Vec3, f32)], spacing: f32) -> Vec<(Vec3, f32)> {
     let mut length = vec![0.0f32];
     for w in dense.windows(2) {
         length.push(length.last().unwrap() + w[0].0.distance(w[1].0));
@@ -665,7 +706,7 @@ pub fn tube_path(points: &[Vec3], radii: &[f32], spacing: f32) -> Vec<(Vec3, f32
 ///
 /// PRECONDITION: `points.len() == radii.len() >= 2`, radii > 0.
 pub fn tube(points: &[Vec3], radii: &[f32], sides: u32, caps: bool) -> Mesh {
-    let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), sides, caps, 0.0);
+    let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), &[], sides, caps, 0.0);
     Mesh::new(positions, tris)
 }
 
@@ -707,11 +748,19 @@ fn ring_spacing(radii: &[f32], sides: u32) -> f32 {
 /// Parallel-transported frames (centre, radius, tangent, normal, binormal)
 /// along `path`: the first frame carried along, turned only as much as the
 /// tangent turns, so nothing twists by itself.
-fn transport_frames(path: &[(Vec3, f32)]) -> Vec<(Vec3, f32, Vec3, Vec3, Vec3)> {
+fn transport_frames(path: &[(Vec3, f32)], corners: &[usize]) -> Vec<(Vec3, f32, Vec3, Vec3, Vec3)> {
     let rings = path.len();
     let tangent = |i: usize| {
         let a = path[i.saturating_sub(1)].0;
         let b = path[(i + 1).min(rings - 1)].0;
+        // On a sharp corner the samples either side can be unevenly
+        // spaced: use the bisector of the two directions, so the ring sits
+        // square to the mitre.
+        if corners.contains(&i) && i > 0 && i + 1 < rings {
+            let d0 = (path[i].0 - a).normalize_or_zero();
+            let d1 = (b - path[i].0).normalize_or_zero();
+            return (d0 + d1).normalize_or(d1);
+        }
         (b - a).normalize_or(Vec3::Y)
     };
     let t0 = tangent(0);
@@ -733,19 +782,45 @@ fn transport_frames(path: &[(Vec3, f32)]) -> Vec<(Vec3, f32, Vec3, Vec3, Vec3)> 
         .collect()
 }
 
+/// On a sharp corner of `path` (sample `i` is in `corners`), the ring
+/// there is a mitre joint: it lies across the
+/// bend's bisector, so it must be stretched by 1/cos(half the bend) across
+/// the bend to keep the tube's thickness on both sides. RETURNS: the unit
+/// direction across the bend (in the ring's plane) and the extra stretch
+/// (1/cos − 1, at most 3); None elsewhere.
+fn corner_miter(path: &[(Vec3, f32)], corners: &[usize], i: usize, t: Vec3) -> Option<(Vec3, f32)> {
+    if !corners.contains(&i) || i == 0 || i + 1 >= path.len() {
+        return None;
+    }
+    let d0 = (path[i].0 - path[i - 1].0).normalize_or_zero();
+    let d1 = (path[i + 1].0 - path[i].0).normalize_or_zero();
+    if d0 == Vec3::ZERO || d1 == Vec3::ZERO {
+        return None;
+    }
+    let cos_half = d0.dot(t).clamp(0.25, 1.0);
+    let across = (d1 - d0) - t * (d1 - d0).dot(t);
+    let across = across.normalize_or_zero();
+    (across != Vec3::ZERO).then(|| (across, 1.0 / cos_half - 1.0))
+}
+
 /// A tube's rings along `path` (`sides` around), the cross-section turned
 /// `twist` times over the length, with rounded `caps`.
-fn sweep(path: &[(Vec3, f32)], sides: u32, caps: bool, twist: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+fn sweep(path: &[(Vec3, f32)], corners: &[usize], sides: u32, caps: bool, twist: f32) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     let sides = sides.max(3) as usize;
     let rings = path.len();
-    let frames = transport_frames(path);
+    let frames = transport_frames(path, corners);
     let mut positions = Vec::with_capacity(rings * sides + 2 + if caps { 2 * sides * 3 } else { 0 });
     let last = (rings - 1).max(1) as f32;
-    for (i, &(c, r, _, normal, binormal)) in frames.iter().enumerate() {
+    for (i, &(c, r, t, normal, binormal)) in frames.iter().enumerate() {
         let turn = std::f32::consts::TAU * twist * i as f32 / last;
+        let miter = corner_miter(path, corners, i, t);
         for k in 0..sides {
             let a = std::f32::consts::TAU * k as f32 / sides as f32 + turn;
-            positions.push(c + (normal * a.cos() + binormal * a.sin()) * r);
+            let mut o = (normal * a.cos() + binormal * a.sin()) * r;
+            if let Some((across, stretch)) = miter {
+                o += across * o.dot(across) * stretch;
+            }
+            positions.push(c + o);
         }
     }
     let mut tris = Vec::with_capacity(rings * sides * 2 + if caps { 8 * sides } else { 0 });
@@ -891,9 +966,17 @@ const SHAPED_TUBE_TRIANGLES: usize = 400_000;
 ///
 /// PRECONDITION: as [`tube`].
 pub fn tube_shaped(points: &[Vec3], radii: &[f32], sides: u32, caps: bool, shape: TubeShape) -> Mesh {
+    tube_cornered(points, radii, &[], sides, caps, shape)
+}
+
+/// [`tube_shaped`] with sharp corners at the points where `sharp` is true
+/// (see [`tube_path_cornered`]); the tube is mitred there.
+pub fn tube_cornered(points: &[Vec3], radii: &[f32], sharp: &[bool], sides: u32, caps: bool, shape: TubeShape) -> Mesh {
+    let tube_path = |p: &[Vec3], r: &[f32], spacing: f32| tube_path_cornered(p, r, sharp, spacing);
     let coil = shape.coil_size > 0.0 && shape.coil_turns != 0.0;
     if !coil && !shape.braid {
-        let (positions, tris) = sweep(&tube_path(points, radii, ring_spacing(radii, sides)), sides, caps, shape.twist);
+        let (path, corners) = path_with_corners(points, radii, sharp, ring_spacing(radii, sides));
+        let (positions, tris) = sweep(&path, &corners, sides, caps, shape.twist);
         return Mesh::new(positions, tris);
     }
     // The centre line, finely sampled so coils and weaves stay smooth.
@@ -903,7 +986,8 @@ pub fn tube_shaped(points: &[Vec3], radii: &[f32], sides: u32, caps: bool, shape
         shape.coil_turns.abs().max(if shape.braid { shape.braid_turns.abs() } else { 0.0 }).max(shape.twist.abs());
     let fine = (total / (waves * 48.0).max(1.0)).min(ring_spacing(radii, sides) * 0.5);
     let base = tube_path(points, radii, fine.max(total / 20_000.0));
-    let frames = transport_frames(&base);
+    // Coils and braids wind round the corners rather than mitring them.
+    let frames = transport_frames(&base, &[]);
     let last = (frames.len() - 1).max(1) as f32;
     // Each line to sweep: (centre, radius) per base sample.
     let strands = if shape.braid { 3 } else { 1 };
@@ -949,7 +1033,7 @@ pub fn tube_shaped(points: &[Vec3], radii: &[f32], sides: u32, caps: bool, shape
         let spacing = (std::f32::consts::TAU * rs / sides.max(3) as f32).max(rs * 0.25).max(length / max_rings as f32);
         let path = resample(&line, spacing);
         let base_index = positions.len() as u32;
-        let (p, t) = sweep(&path, sides, caps, 0.0);
+        let (p, t) = sweep(&path, &[], sides, caps, 0.0);
         positions.extend(p);
         tris.extend(t.into_iter().map(|t| t.map(|v| v + base_index)));
     }
@@ -1020,6 +1104,46 @@ mod tube_tests {
             }
         }
         edges.values().all(|&n| n == 2)
+    }
+
+    #[test]
+    fn sharp_points_make_mitred_corners() {
+        let pts = [Vec3::ZERO, Vec3::new(1.0, 0.0, 0.0), Vec3::new(1.0, 1.0, 0.0)];
+        let r = [0.1, 0.1, 0.1];
+        let sharp = [false, true, false];
+        let path = tube_path_cornered(&pts, &r, &sharp, 0.05);
+        // A sample exactly on the corner, and straight lines either side of it.
+        assert!(path.iter().any(|(p, _)| p.distance(pts[1]) < 1e-5));
+        for (p, _) in &path {
+            let on_first = p.y.abs() < 1e-4 && p.x <= 1.0 + 1e-4;
+            let on_second = (p.x - 1.0).abs() < 1e-4 && p.y >= -1e-4;
+            assert!(on_first || on_second, "{p} is off the two straight legs");
+        }
+        // Without the flag the curve rounds the corner.
+        let smooth = tube_path(&pts, &r, 0.05);
+        assert!(smooth.iter().any(|(p, _)| p.y.abs() > 0.01 && (p.x - 1.0).abs() > 0.01));
+        // The tube keeps its thickness through the corner: every vertex of
+        // the corner's ring is at least the radius from both legs' axes,
+        // and the tube is still closed.
+        let m = tube_cornered(&pts, &r, &sharp, 16, true, TubeShape::default());
+        assert!(watertight(&m));
+        assert!(signed_volume(&m) > 0.0);
+        // The corner's ring: rings come first in the vertex list, 16 each.
+        let rings = tube_path_cornered(&pts, &r, &sharp, ring_spacing(&r, 16));
+        let at = rings.iter().position(|(p, _)| p.distance(pts[1]) < 1e-5).unwrap();
+        let near_corner = &m.positions[at * 16..(at + 1) * 16];
+        let to_segment = |p: Vec3, a: Vec3, b: Vec3| {
+            let f = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+            p.distance(a + (b - a) * f)
+        };
+        for &p in near_corner {
+            let d = to_segment(p, pts[0], pts[1]).min(to_segment(p, pts[1], pts[2]));
+            assert!((d - 0.1).abs() < 0.1 * 0.03, "pinched or bulging at {p}: {d}");
+        }
+        // No flags at all is the old tube, exactly.
+        let plain = tube_shaped(&pts, &r, 16, true, TubeShape::default());
+        let flagged = tube_cornered(&pts, &r, &[false; 3], 16, true, TubeShape::default());
+        assert_eq!(plain.positions, flagged.positions);
     }
 
     #[test]
