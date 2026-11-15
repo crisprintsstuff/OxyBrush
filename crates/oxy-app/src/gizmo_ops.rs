@@ -251,13 +251,14 @@ impl Editor {
             let prev_multires = piece.multires.take();
             self.history.record_topology(label, id, prev, prev_multires);
         } else {
+            let mirror = self.gizmo_mirror();
             let piece = self.scene.active_mut();
             self.history.begin(label, piece.id, &piece.mesh);
             for c in 0..piece.mesh.chunks.len() as u32 {
                 self.history.touch(&piece.mesh, c);
             }
             let original = piece.mesh.positions.clone();
-            let moved = pose::apply(&mut piece.mesh, &original, &weights, pivot, &t);
+            let moved = pose::apply(&mut piece.mesh, &original, &weights, pivot, &t, &mirror);
             piece.mesh.update_after_move(&moved);
             piece.mesh.tighten_bounds();
             self.history.commit();
@@ -269,6 +270,37 @@ impl Editor {
         self.gizmo_pivot = None;
         self.status = label.to_owned();
         true
+    }
+
+    /// The mirror planes the gizmo follows: the brushes' Mirror X/Y/Z about
+    /// the piece's symmetry centre, for planes the moved part is centred on
+    /// (a mirrored pair, a symmetric model). A part off to one side, such as
+    /// a whole model already moved off-centre, moves as one: mirroring it
+    /// would pull it apart. Near a plane (within 2% of the piece's size) the
+    /// two sides blend, so a part across it stretches instead of tearing.
+    pub(crate) fn gizmo_mirror(&self) -> pose::GizmoMirror {
+        let s = self.symmetry;
+        if !(s.x || s.y || s.z) {
+            return pose::GizmoMirror::NONE;
+        }
+        let mesh = &self.scene.active().mesh;
+        let weights = pose::weights(mesh);
+        let moved = oxy_mesh::Aabb::from_points(
+            mesh.positions.iter().zip(&weights).filter(|(_, w)| **w > 0.0).map(|(p, _)| *p),
+        );
+        if moved.is_empty() {
+            return pose::GizmoMirror::NONE;
+        }
+        let size = mesh.bounds().extent().max_element();
+        let band = (size * 0.02).max(1e-5);
+        let center = self.symmetry_center();
+        let mid = (moved.min + moved.max) * 0.5;
+        let centred = |a: usize| (mid[a] - center[a]).abs() <= band;
+        let axes = [s.x && centred(0), s.y && centred(1), s.z && centred(2)];
+        if !axes.iter().any(|&a| a) {
+            return pose::GizmoMirror::NONE;
+        }
+        pose::GizmoMirror { axes, center, band }
     }
 
     /// Note a gizmo change of `t` about `pivot` (a handle drag or typed
@@ -672,6 +704,81 @@ mod tests {
         e.mirror_gizmo(0);
         assert_eq!(e.scene.active().mesh.positions, p);
         assert!(e.status.contains("whole piece"), "{}", e.status);
+    }
+
+    /// Two spheres at x = ±1.5 as one piece, as Insert Primitive with
+    /// Mirror X makes them.
+    fn two_spheres() -> Editor {
+        let mut e = editor();
+        let one = oxy_mesh::primitives::icosphere(2, 0.5).to_data();
+        let mut data = one.clone();
+        data.positions.iter_mut().for_each(|p| p.x += 1.5);
+        let n = data.positions.len() as u32;
+        data.positions.extend(one.positions.iter().map(|p| *p - Vec3::X * 1.5));
+        data.triangles.extend(one.triangles.iter().map(|t| t.map(|v| v + n)));
+        e.scene = oxy_doc::Scene::new(oxy_doc::Piece::new("Pair", oxy_mesh::Mesh::from_data(data)));
+        e.symmetry.x = true;
+        e
+    }
+
+    fn centres(e: &Editor) -> (Vec3, Vec3) {
+        let m = &e.scene.active().mesh;
+        let side = |s: f32| {
+            let pts: Vec<Vec3> = m.positions.iter().copied().filter(|p| p.x * s > 0.0).collect();
+            pts.iter().sum::<Vec3>() / pts.len() as f32
+        };
+        (side(1.0), side(-1.0))
+    }
+
+    #[test]
+    fn with_mirror_x_the_gizmo_moves_the_other_side_mirrored() {
+        // A tester's video: two spheres inserted with Mirror X, the gizmo
+        // on one; both moved the same way. Other apps mirror the move.
+        let mut e = two_spheres();
+        e.custom_gizmo_pivot = Some(Vec3::new(1.5, 0.0, 0.0));
+        e.gizmo_numeric.offset = Vec3::new(0.5, 0.3, -0.2);
+        e.apply_gizmo_numeric();
+        let (right, left) = centres(&e);
+        assert!((right - Vec3::new(2.0, 0.3, -0.2)).length() < 1e-3, "{right}");
+        assert!((left - Vec3::new(-2.0, 0.3, -0.2)).length() < 1e-3, "mirrored: {left}");
+        e.undo();
+        // Mirror X off: both move the same way, as before.
+        e.symmetry.x = false;
+        e.custom_gizmo_pivot = Some(Vec3::new(1.5, 0.0, 0.0));
+        e.gizmo_numeric = Default::default();
+        e.gizmo_numeric.offset = Vec3::new(0.5, 0.0, 0.0);
+        e.apply_gizmo_numeric();
+        let (right, left) = centres(&e);
+        assert!((right.x - 2.0).abs() < 1e-3 && (left.x + 1.0).abs() < 1e-3, "{right} {left}");
+    }
+
+    #[test]
+    fn a_part_off_to_one_side_moves_as_one_with_mirror_x() {
+        // A whole sphere moved off-centre, then moved again with the pivot
+        // on it: no mirroring, which would pull it apart.
+        let mut e = editor();
+        e.symmetry.x = true;
+        e.custom_gizmo_pivot = Some(Vec3::ZERO);
+        e.gizmo_numeric.offset = Vec3::new(1.0, 0.0, 0.0);
+        e.apply_gizmo_numeric();
+        let before = e.scene.active().mesh.positions.clone();
+        e.gizmo_numeric = Default::default();
+        e.gizmo_numeric.offset = Vec3::new(0.5, 0.0, 0.0);
+        e.apply_gizmo_numeric();
+        for (a, b) in before.iter().zip(&e.scene.active().mesh.positions) {
+            assert!((*b - *a - Vec3::X * 0.5).length() < 1e-4, "rigid: {a} -> {b}");
+        }
+    }
+
+    #[test]
+    fn with_the_pivot_on_the_mirror_plane_the_gizmo_moves_everything_as_one() {
+        // Moving a whole symmetric model with Mirror X on mustn't pull it apart.
+        let mut e = two_spheres();
+        e.custom_gizmo_pivot = Some(Vec3::ZERO);
+        e.gizmo_numeric.offset = Vec3::new(0.5, 0.0, 0.0);
+        e.apply_gizmo_numeric();
+        let (right, left) = centres(&e);
+        assert!((right.x - 2.0).abs() < 1e-3 && (left.x + 1.0).abs() < 1e-3, "{right} {left}");
     }
 
     #[test]

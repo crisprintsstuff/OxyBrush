@@ -252,6 +252,121 @@ impl Transform {
     }
 }
 
+/// The mirror planes the gizmo follows (Mirror X/Y/Z): a move, turn or
+/// scale of the part on the pivot's side is mirrored on the other side, as
+/// brushes are. Two spheres inserted with Mirror X move apart and together,
+/// not both the same way.
+///
+/// INVARIANT: continuous across each plane. Points within `band` of a plane
+/// blend the two transforms (smoothstep), so a part that spans the plane
+/// (a nose, a tail) stretches symmetrically instead of tearing; on the
+/// plane itself the blend is half and half, which keeps those points on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct GizmoMirror {
+    pub axes: [bool; 3],
+    pub center: Vec3,
+    pub band: f32,
+}
+
+impl GizmoMirror {
+    pub const NONE: GizmoMirror = GizmoMirror { axes: [false; 3], center: Vec3::ZERO, band: 0.0 };
+
+    /// The axes that mirror for a gizmo at `pivot`: enabled, and with the
+    /// pivot clearly on one side (a pivot on a plane moves both sides as one,
+    /// which is already symmetric for a symmetric part).
+    fn active(&self, pivot: Vec3) -> [Option<f32>; 3] {
+        std::array::from_fn(|a| {
+            let d = pivot[a] - self.center[a];
+            (self.axes[a] && d.abs() > self.band.max(1e-6)).then_some(d.signum())
+        })
+    }
+
+    /// The diagonal reflection for mirror combination `flips` (bit a set:
+    /// axis a reflected).
+    fn flip_diag(flips: u8) -> Vec3 {
+        Vec3::new(
+            if flips & 1 != 0 { -1.0 } else { 1.0 },
+            if flips & 2 != 0 { -1.0 } else { 1.0 },
+            if flips & 4 != 0 { -1.0 } else { 1.0 },
+        )
+    }
+
+    /// For each mirror combination, the matrix that turns normals: the
+    /// inverse transpose of `t`'s linear part reflected (worked out once
+    /// per frame, not per point).
+    pub fn normal_maps(t: &Transform) -> [Mat3; 8] {
+        std::array::from_fn(|f| {
+            let d = Mat3::from_diagonal(Self::flip_diag(f as u8));
+            (d * t.linear * d).inverse().transpose()
+        })
+    }
+
+    /// Where `t` about `pivot` puts point `p`, and which mirror combination
+    /// mostly moves it (for its normal, see [`Self::normal_maps`]): `t`
+    /// itself on the pivot's side, `t` reflected in the plane on the other,
+    /// blended near the plane.
+    pub fn place(&self, pivot: Vec3, t: &Transform, p: Vec3, active: &[Option<f32>; 3]) -> (Vec3, u8) {
+        if active.iter().all(Option::is_none) {
+            return (t.apply(pivot, p), 0);
+        }
+        // How much each axis keeps the pivot's side (1) or the mirror (0).
+        let keep: [f32; 3] = std::array::from_fn(|a| match active[a] {
+            None => 1.0,
+            Some(side) => {
+                let x = side * (p[a] - self.center[a]);
+                let b = self.band.max(1e-6);
+                let u = ((x + b) / (2.0 * b)).clamp(0.0, 1.0);
+                u * u * (3.0 - 2.0 * u)
+            }
+        });
+        let mut out = Vec3::ZERO;
+        let mut best = (0.0, 0u8);
+        for flips in 0u8..8 {
+            let mut w = 1.0;
+            for a in 0..3 {
+                let flip = flips & (1 << a) != 0;
+                if flip && active[a].is_none() {
+                    w = 0.0;
+                    break;
+                }
+                w *= if flip { 1.0 - keep[a] } else { keep[a] };
+            }
+            if w <= 0.0 {
+                continue;
+            }
+            // Reflect, transform, reflect back: S t S.
+            let d = Self::flip_diag(flips);
+            let reflect = |q: Vec3| self.center + d * (q - self.center);
+            out += reflect(t.apply(pivot, reflect(p))) * w;
+            if w > best.0 {
+                best = (w, flips);
+            }
+        }
+        (out, best.1)
+    }
+
+    /// Bounds of `aabb` under every mirrored copy of `t` (conservative).
+    pub fn transform_aabb(&self, aabb: &Aabb, pivot: Vec3, t: &Transform) -> Aabb {
+        let active = self.active(pivot);
+        let mut out = transform_aabb(aabb, pivot, t);
+        for flips in 1u8..8 {
+            if (0..3).any(|a| flips & (1 << a) != 0 && active[a].is_none()) {
+                continue;
+            }
+            let d = Self::flip_diag(flips);
+            let reflect = |q: Vec3| self.center + d * (q - self.center);
+            for x in [aabb.min.x, aabb.max.x] {
+                for y in [aabb.min.y, aabb.max.y] {
+                    for z in [aabb.min.z, aabb.max.z] {
+                        out.grow(reflect(t.apply(pivot, reflect(Vec3::new(x, y, z)))));
+                    }
+                }
+            }
+        }
+        out
+    }
+}
+
 /// Rotation per pixel of drag.
 const RADIANS_PER_PX: f32 = 0.01;
 
@@ -358,12 +473,20 @@ pub fn numeric_transform(basis: Mat3, offset: Vec3, degrees: Vec3, scale: Vec3) 
 /// Move `mesh` from `original` by `t`, weighted per vertex. Returns the
 /// vertices that moved (for `Mesh::update_after_move`).
 #[allow(dead_code)]
-pub fn apply(mesh: &mut Mesh, original: &[Vec3], weights: &[f32], pivot: Vec3, t: &Transform) -> Vec<u32> {
+pub fn apply(
+    mesh: &mut Mesh,
+    original: &[Vec3],
+    weights: &[f32],
+    pivot: Vec3,
+    t: &Transform,
+    mirror: &GizmoMirror,
+) -> Vec<u32> {
+    let active = mirror.active(pivot);
     let mut moved = Vec::new();
     for (v, &w) in weights.iter().enumerate() {
         if w > 0.0 {
             let o = original[v];
-            mesh.positions[v] = o + (t.apply(pivot, o) - o) * w;
+            mesh.positions[v] = o + (mirror.place(pivot, t, o, &active).0 - o) * w;
             moved.push(v as u32);
         }
     }
@@ -396,10 +519,33 @@ pub fn apply_interactive(
     weights: &[f32],
     pivot: Vec3,
     t: &Transform,
+    mirror: &GizmoMirror,
 ) {
+    let active = mirror.active(pivot);
+    let plain = active.iter().all(Option::is_none);
     let inv_trans = t.linear.inverse().transpose();
+    let normal_maps = if plain { [inv_trans; 8] } else { GizmoMirror::normal_maps(t) };
+    let one = |p: &mut Vec3, n: &mut Vec3, orig_p: Vec3, orig_n: Vec3, w: f32| {
+        if w <= 0.0 {
+            *p = orig_p;
+            *n = orig_n;
+            return;
+        }
+        let (target_p, target_n) = if plain {
+            (t.apply(pivot, orig_p), (inv_trans * orig_n).normalize_or(orig_n))
+        } else {
+            let (tp, flips) = mirror.place(pivot, t, orig_p, &active);
+            (tp, (normal_maps[flips as usize] * orig_n).normalize_or(orig_n))
+        };
+        if (w - 1.0).abs() < 1e-5 {
+            *p = target_p;
+            *n = target_n;
+        } else {
+            *p = orig_p + (target_p - orig_p) * w;
+            *n = (orig_n + (target_n - orig_n) * w).normalize_or(orig_n);
+        }
+    };
     const PAR_ABOVE: usize = 2048;
-
     if mesh.positions.len() > PAR_ABOVE {
         mesh.positions
             .par_iter_mut()
@@ -407,36 +553,12 @@ pub fn apply_interactive(
             .zip(original_pos)
             .zip(original_norm)
             .zip(weights)
-            .for_each(|((((p, n), &orig_p), &orig_n), &w)| {
-                if w <= 0.0 {
-                    *p = orig_p;
-                    *n = orig_n;
-                } else if (w - 1.0).abs() < 1e-5 {
-                    *p = t.apply(pivot, orig_p);
-                    *n = (inv_trans * orig_n).normalize_or(orig_n);
-                } else {
-                    let target_p = t.apply(pivot, orig_p);
-                    *p = orig_p + (target_p - orig_p) * w;
-                    let target_n = (inv_trans * orig_n).normalize_or(orig_n);
-                    *n = (orig_n + (target_n - orig_n) * w).normalize_or(orig_n);
-                }
-            });
+            .for_each(|((((p, n), &orig_p), &orig_n), &w)| one(p, n, orig_p, orig_n, w));
     } else {
         for ((((p, n), &orig_p), &orig_n), &w) in
             mesh.positions.iter_mut().zip(&mut mesh.normals).zip(original_pos).zip(original_norm).zip(weights)
         {
-            if w <= 0.0 {
-                *p = orig_p;
-                *n = orig_n;
-            } else if (w - 1.0).abs() < 1e-5 {
-                *p = t.apply(pivot, orig_p);
-                *n = (inv_trans * orig_n).normalize_or(orig_n);
-            } else {
-                let target_p = t.apply(pivot, orig_p);
-                *p = orig_p + (target_p - orig_p) * w;
-                let target_n = (inv_trans * orig_n).normalize_or(orig_n);
-                *n = (orig_n + (target_n - orig_n) * w).normalize_or(orig_n);
-            }
+            one(p, n, orig_p, orig_n, w);
         }
     }
 }
@@ -547,7 +669,7 @@ mod tests {
         assert!(p.y.abs() < 0.15, "pivot on the mask edge: {p}");
         let orig = m.positions.clone();
         let t = Transform { translate: Vec3::Y, ..Transform::IDENTITY };
-        let moved = apply(&mut m, &orig, &w, p, &t);
+        let moved = apply(&mut m, &orig, &w, p, &t, &GizmoMirror::NONE);
         assert!(!moved.is_empty() && moved.len() < m.vertex_count());
         for v in 0..m.vertex_count() {
             let dy = m.positions[v].y - orig[v].y;
@@ -583,5 +705,33 @@ mod tests {
         assert_eq!(l.pick(Vec2::new(103.0, 98.0), 14.0), Some(Handle::Center));
         assert_eq!(l.pick(Vec2::new(132.0, 72.0), 14.0), Some(Handle::Plane(2)));
         assert_eq!(l.pick(Vec2::new(140.0, 140.0), 14.0), None);
+    }
+
+    #[test]
+    fn gizmo_mirror_reflects_the_far_side_and_blends_at_the_plane() {
+        let m = GizmoMirror { axes: [true, false, false], center: Vec3::ZERO, band: 0.1 };
+        let pivot = Vec3::new(1.0, 0.0, 0.0);
+        let active = m.active(pivot);
+        // A move right and up, and a quarter turn about the pivot's Y.
+        let t = Transform { linear: Mat3::from_rotation_y(0.5), translate: Vec3::new(0.3, 0.2, 0.0) };
+        let near = Vec3::new(1.2, 0.0, 0.1);
+        let far = Vec3::new(-1.2, 0.0, 0.1);
+        let (a, _) = m.place(pivot, &t, near, &active);
+        let (b, _) = m.place(pivot, &t, far, &active);
+        assert!((a - t.apply(pivot, near)).length() < 1e-6, "the pivot's side moves as dragged");
+        assert!((b - a * Vec3::new(-1.0, 1.0, 1.0)).length() < 1e-5, "the far side is its mirror image: {a} {b}");
+        // On the plane, a sideways move keeps points on it (no tear).
+        let on = Vec3::new(0.0, 0.5, 0.0);
+        let (c, _) = m.place(pivot, &Transform { linear: Mat3::IDENTITY, translate: Vec3::X * 0.4 }, on, &active);
+        assert!(c.x.abs() < 1e-6, "{c}");
+        // Continuous across the band.
+        let step = |x: f32| m.place(pivot, &t, Vec3::new(x, 0.3, 0.0), &active).0;
+        for k in -30..30 {
+            let x = k as f32 * 0.01;
+            assert!((step(x + 0.001) - step(x)).length() < 0.02, "jump at {x}");
+        }
+        // A pivot on the plane, or the axis off: no mirroring.
+        assert!(m.active(Vec3::new(0.0, 1.0, 0.0)).iter().all(Option::is_none));
+        assert!(GizmoMirror::NONE.active(pivot).iter().all(Option::is_none));
     }
 }
