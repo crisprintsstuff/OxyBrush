@@ -616,6 +616,40 @@ pub fn insert_loop(c: &mut Cage, a: u32, b: u32, t: f32) -> Slide {
     slide
 }
 
+/// Two loops across the ring of edge `(a, b)`, `t` in from each end
+/// (`t` below one half): the first at `t` from `a`'s side, the second at
+/// `t` from `b`'s side, so they sit evenly between the ends. The returned
+/// slide moves both at once, keeping them even: the first's points run
+/// from the `a` side, the second's from the `b` side, by the same amount.
+pub fn insert_loop_pair(c: &mut Cage, a: u32, b: u32, t: f32) -> Slide {
+    let t = t.clamp(0.02, 0.48);
+    let made = c.insert_loop_ends(a, b, t);
+    let mut slide = Slide::default();
+    for &(m, from, to) in &made {
+        let p = c.positions[from as usize];
+        slide.verts.push(m);
+        slide.start.push(p);
+        slide.dir.push(c.positions[to as usize] - p);
+    }
+    let Some(&(m, _, to)) = made.iter().find(|&&(_, from, to)| edge_key(from, to) == edge_key(a, b)) else {
+        return slide;
+    };
+    // On what is left of each edge (first loop to the far end), the second
+    // loop goes 1 - t of the whole edge from its start.
+    let s = (1.0 - 2.0 * t) / (1.0 - t);
+    let first = slide.clone();
+    for (m2, from, to) in c.insert_loop_ends(m, to, s) {
+        // Each new point cuts an edge from a first-loop point to its far end.
+        let k = first.verts.iter().position(|&v| v == from).or_else(|| first.verts.iter().position(|&v| v == to));
+        let Some(k) = k else { continue };
+        let (near, far) = (first.start[k], first.start[k] + first.dir[k]);
+        slide.verts.push(m2);
+        slide.start.push(far);
+        slide.dir.push(near - far);
+    }
+    slide
+}
+
 /// Remove `edges`, merging the two faces on each into one (a polygon
 /// with more corners). Border edges, and edges whose two sides are the
 /// same face, are left alone. Points left in the middle of a straight
@@ -1076,6 +1110,27 @@ mod tests {
         for &v in &slide.verts {
             assert!((c.positions[v as usize].x - 0.25).abs() < 1e-5, "{}", c.positions[v as usize]);
         }
+    }
+
+    #[test]
+    fn a_loop_pair_sits_evenly_from_both_ends_and_slides_together() {
+        let mut c = grid(2);
+        let at = |x: u32, y: u32| y * 3 + x;
+        // The edge (0,0)-(1,0) runs along X from 0 to 1.
+        let slide = insert_loop_pair(&mut c, at(0, 0), at(1, 0), 0.25);
+        validate(&c).unwrap();
+        assert_eq!(slide.verts.len(), 6, "two loops of three points");
+        assert_eq!(c.faces.len(), 8, "the first column of two quads becomes three across");
+        let xs = |c: &Cage| {
+            let mut x: Vec<f32> = slide.verts.iter().map(|&v| c.positions[v as usize].x).collect();
+            x.sort_by(f32::total_cmp);
+            x
+        };
+        let close = |a: &[f32], b: &[f32]| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-5);
+        assert!(close(&xs(&c), &[0.25, 0.25, 0.25, 0.75, 0.75, 0.75]), "{:?}", xs(&c));
+        // Sliding moves both loops, mirror images of each other.
+        slide.apply(&mut c, 0.1);
+        assert!(close(&xs(&c), &[0.1, 0.1, 0.1, 0.9, 0.9, 0.9]), "{:?}", xs(&c));
     }
 
     #[test]
