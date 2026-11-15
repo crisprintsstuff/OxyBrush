@@ -220,7 +220,9 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
         body: "The Tube brush (in the brush shelf, next to Insert Primitive) draws a tube along a path and adds it to the active piece, in a face group of its own. Pieces > + Add > Tube (draw)… (or the command palette) does the same but makes the tube a new piece; the Tube window's Accept option switches between the two. Drag from the model, where the tube starts on its surface, or from empty space. The path lies flat to the view; orbit afterwards to move points in depth.\n\n\
 - Drag a point to move it.\n\
 - Shift+drag a point up or down to make the tube thicker or thinner there. Thickness blends smoothly between points.\n\
-- Click the line between two points to add one; Alt+click a point to remove it.\n\
+- Click the line between two points to add one. To remove a point, click it and press Delete (or Backspace), Alt+click it, or drag it onto the next point to merge them.\n\
+- Double-click a point to make it a sharp corner (a square handle): the tube runs straight into it and out again. Double-click again for a smooth point. Corners are kept when you edit the tube again later.\n\
+- Drag anywhere away from the tube's points and line to orbit around it.\n\
 - The Tube window sets the thickness (of the selected point, or the whole tube), the number of sides, rounded ends, and a mirror copy across the X plane.\n\
 - Twist turns the cross-section along the tube (easiest to see with few sides, or on a braid).\n\
 - Spin coils the tube around its path like a spring: Coil size is the coil's radius, in tube thicknesses, and Coil turns how many times it goes round (negative winds the other way).\n\

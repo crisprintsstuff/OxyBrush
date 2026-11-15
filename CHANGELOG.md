@@ -5,6 +5,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Tube editing** ([#258](https://github.com/crisprintsstuff/OxyBrush/issues/258)):
+  - **Sharp corners:** double-click a tube's point to make it a sharp corner. The tube runs straight into it and out again, mitred so it keeps its thickness, and the handle turns square. Double-click again for a smooth point. Corners are saved with the project (new optional `TUBC` section) and kept when the tube is edited again. Older versions keep a tube with corners as ordinary triangles.
+  - **Merge and delete points:** drag a point onto its neighbour to merge them, or click a point and press **Delete** (or Backspace) to remove it. Alt+click still works.
+  - **Orbit while editing:** with the Tube brush, dragging anywhere away from the tube's points and line orbits the view, instead of doing nothing.
 - **Poly Edit element modes** ([RFC 0023](docs/rfcs/0023-poly-edit-element-modes.md)): **1 Faces**, **2 Edges**, **3 Points** (buttons at the top of the window too), like other modeling apps, so the window shows only that kind's actions instead of all of them at once. A click picks that kind: anywhere on a face, the nearest edge, the nearest point, so small targets are easy to hit. **4 Auto** keeps the old behaviour (what's under the pointer decides). Faces is the default. The keys only change meaning while Poly Edit is open; elsewhere they pick brushes.
 - **Poly Edit: pick edges and points too.** Ctrl/Cmd+click picks several edges or points in their modes, as it did faces: crease or bevel several edges at once, move several points together. Switching modes turns the pick into the new kind: a face's sides or corners, the faces that picked edges or points close, the edges picked points make. So you can pick a face, press 2 and bevel its border.
 

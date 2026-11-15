@@ -2280,7 +2280,7 @@ impl Editor {
             .min_by(|a, b| a.1.t.total_cmp(&b.1.t))
     }
 
-    fn drag_for_nav(&self, action: Option<NavAction>, button: PointerButton) -> Drag {
+    pub(crate) fn drag_for_nav(&self, action: Option<NavAction>, button: PointerButton) -> Drag {
         match action {
             Some(NavAction::Orbit) => Drag::Orbit,
             Some(NavAction::Zoom) => Drag::Zoom,
@@ -8686,6 +8686,92 @@ mod tests {
         e.tube.as_mut().unwrap().into = None;
         e.accept_tube();
         assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn tube_editing_orbits_from_empty_space_makes_corners_and_merges_or_deletes_points() {
+        let mut e = editor();
+        e.brush_kind = BrushKind::Tube;
+        let path: Vec<Vec2> =
+            (0..=40).map(|i| Vec2::new(400.0 + i as f32 * 8.0, 300.0 + (i * i) as f32 * 0.12)).collect();
+        e.pointer = Some(path[0]);
+        e.pointer_down(PointerButton::Primary);
+        for &p in &path[1..] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        let points = e.tube.as_ref().expect("a tube is open").points.clone();
+        assert!(points.len() >= 4, "{} points", points.len());
+        let screen = |e: &Editor, i: usize| e.tube_screen(e.tube.as_ref().unwrap().points[i]).unwrap();
+        let click = |e: &mut Editor, at: Vec2| {
+            e.pointer = Some(at);
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_up();
+        };
+
+        // Dragging away from the tube orbits; the tube stays as it is.
+        let yaw = e.camera.yaw;
+        e.pointer = Some(Vec2::new(60.0, 60.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(140.0, 60.0));
+        e.pointer_up();
+        assert!((e.camera.yaw - yaw).abs() > 1e-3, "orbited");
+        assert_eq!(e.tube.as_ref().unwrap().points, points);
+
+        // A double-click on a point makes it a sharp corner; again, smooth.
+        let at = screen(&e, 1);
+        click(&mut e, at);
+        assert!(!e.tube.as_ref().unwrap().sharp[1], "one click only picks it");
+        click(&mut e, at);
+        assert!(e.tube.as_ref().unwrap().sharp[1]);
+        let smooth_preview = e.tube.as_ref().unwrap().preview.positions.clone();
+        e.update_tube();
+        assert_ne!(e.tube.as_ref().unwrap().preview.positions, smooth_preview, "the preview has the corner");
+        click(&mut e, at);
+        click(&mut e, at);
+        assert!(!e.tube.as_ref().unwrap().sharp[1]);
+        click(&mut e, at);
+        click(&mut e, at);
+
+        // Dropping a point onto its neighbour merges them.
+        let n = e.tube.as_ref().unwrap().points.len();
+        let (from, to) = (screen(&e, 2), screen(&e, 3));
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(from.lerp(to, 0.5));
+        e.pointer_moved(to);
+        e.pointer_up();
+        assert_eq!(e.tube.as_ref().unwrap().points.len(), n - 1, "{}", e.status);
+        assert_eq!(e.tube.as_ref().unwrap().sharp.len(), n - 1);
+        assert!(e.status.contains("merged"), "{}", e.status);
+
+        // Delete removes the picked point, down to two.
+        let at = screen(&e, 2);
+        click(&mut e, at);
+        e.tube_delete_selected();
+        assert_eq!(e.tube.as_ref().unwrap().points.len(), n - 2);
+        while e.tube.as_ref().unwrap().points.len() > 2 {
+            let at = screen(&e, 0);
+            click(&mut e, at);
+            e.tube_delete_selected();
+        }
+        let at = screen(&e, 0);
+        click(&mut e, at);
+        e.tube_delete_selected();
+        assert_eq!(e.tube.as_ref().unwrap().points.len(), 2);
+        assert!(e.status.contains("at least two"), "{}", e.status);
+    }
+
+    #[test]
+    fn a_sharp_tube_corner_is_kept_after_accept_and_edit() {
+        let mut e = editor();
+        let points = vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.5, 1.2, 0.0)];
+        e.open_tube(points, 0.05, None);
+        e.tube.as_mut().unwrap().sharp[1] = true;
+        e.accept_tube();
+        assert_eq!(e.scene.active().tubes.last().unwrap().sharp, vec![false, true, false]);
+        e.edit_tube();
+        assert_eq!(e.tube.as_ref().expect("reopened").sharp, vec![false, true, false]);
     }
 
     #[test]

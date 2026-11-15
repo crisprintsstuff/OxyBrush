@@ -124,6 +124,9 @@ pub struct TubeRecipe {
     pub mirror_x: f32,
     /// Twist, Spin (coil) and Braid; plain by default.
     pub shape: oxy_mesh::primitives::TubeShape,
+    /// Points that are sharp corners (#258), one per point; empty when
+    /// every point is smooth.
+    pub sharp: Vec<bool>,
     /// The face group holding the tube's triangles.
     pub group: u32,
     /// The tube's triangle count and [`group_fingerprint`] when it was made.
@@ -157,6 +160,11 @@ pub fn group_fingerprint(mesh: &Mesh, group: u32) -> (u32, Vec3) {
 }
 
 impl TubeRecipe {
+    /// Whether any point is a sharp corner.
+    pub fn has_corners(&self) -> bool {
+        self.sharp.iter().any(|&s| s)
+    }
+
     /// Whether `mesh` still has this tube, as it was made.
     pub fn matches(&self, mesh: &Mesh) -> bool {
         let (n, sum) = group_fingerprint(mesh, self.group);
