@@ -661,6 +661,7 @@ pub mod plain {
     pub const ARRANGE: &str = "Where the brush shelf, the settings and the size bar sit.";
     pub const UPDATES: &str = "Whether OxyBrush looks for new versions. Off unless you turn it on.";
     pub const RESET_ORDER: &str = "Put the brushes back in the default order. Number keys follow that order.";
+    pub const BRUSH_HOTKEY: &str = "Press the key (with Ctrl, Shift or Alt if you like) that should pick this brush. It wins over a command on the same key, and the number keys still pick by shelf order. Esc cancels.";
     pub const WELCOME_STARTUP: &str = "Show the welcome window the next time OxyBrush starts.";
     #[allow(dead_code)]
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";

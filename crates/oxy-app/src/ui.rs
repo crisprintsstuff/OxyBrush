@@ -821,6 +821,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         }
     }
     quick_menu(ui.ctx(), ed);
+    brush_key_prompt(ui.ctx(), ed, canvas);
     pointer_slider(ui.ctx(), ed);
     if !ed.show_welcome {
         transform_gizmo(ui.ctx(), ed, canvas);
@@ -2134,6 +2135,8 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     let order = ed.brush_order.clone();
     let mut picked = None;
     let mut moved = None;
+    // (brush, true to remove its key) from the right-click menu (#259).
+    let mut hotkey: Option<(BrushKind, bool)> = None;
     let mut item = |ui: &mut Ui, i: usize, k: BrushKind, ed: &Editor| {
         let selected = ed.brush_kind == k;
         let key_owned = ed.number_key(k);
@@ -2172,7 +2175,24 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         if let Some(m) = reorder(ui, &r, i, horizontal) {
             moved = Some(m);
         }
-        r.context_menu(|ui| arrange_menu(ui, ed_layout_snapshot(ed)));
+        r.context_menu(|ui| {
+            ui.label(RichText::new(format!("{} brush", k.label())).strong());
+            let own = ed.keymap.brush_key(k);
+            let set = match own {
+                Some(c) => format!("Change hotkey ({})…", c.label()),
+                None => "Set hotkey…".to_string(),
+            };
+            if tips::hover(ui.button(set), plain::BRUSH_HOTKEY).clicked() {
+                hotkey = Some((k, false));
+                ui.close();
+            }
+            if own.is_some() && ui.button("Remove hotkey").clicked() {
+                hotkey = Some((k, true));
+                ui.close();
+            }
+            ui.separator();
+            arrange_menu(ui, ed_layout_snapshot(ed));
+        });
     };
     if horizontal {
         // Top-aligned, so the thumbnails line up with the tiles beside them.
@@ -2224,6 +2244,19 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     }
     if let Some(k) = picked {
         ed.brush_kind = k;
+    }
+    match hotkey {
+        Some((k, false)) => {
+            ed.brush_key_capture = Some(k);
+            ed.keymap_capture = None;
+            ed.status = format!("Press a key for the {} brush (Esc cancels)", k.label());
+            ui.memory_mut(|m| m.stop_text_input());
+        }
+        Some((k, true)) => {
+            ed.keymap.remove_brush_key(k);
+            ed.status = format!("{} brush: hotkey removed", k.label());
+        }
+        None => {}
     }
     if let Some((from, to)) = moved {
         ed.move_brush(from, to);
@@ -2312,6 +2345,28 @@ fn ed_layout_snapshot(ed: &Editor) -> Arrangement {
 /// Arrangement choices; the chosen values are stored for the next frame
 /// (`ARRANGE_ID`) because menus can be opened from places that only borrow
 /// the editor.
+/// "Press a key for …" while a brush waits for its hotkey (#259), with a
+/// Cancel button for those without a keyboard at hand.
+fn brush_key_prompt(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    let Some(k) = ed.brush_key_capture else { return };
+    egui::Area::new(egui::Id::unique("brush_key_prompt"))
+        .order(egui::Order::Foreground)
+        .pivot(egui::Align2::CENTER_TOP)
+        .fixed_pos(egui::pos2(canvas.center().x, canvas.top() + 70.0))
+        .show(ctx, |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(format!("Press a key for the {} brush", k.label())).strong());
+                    ui.label(RichText::new("Esc cancels").weak());
+                    if ui.button("Cancel").clicked() {
+                        ed.brush_key_capture = None;
+                        ed.status = "Key unchanged".into();
+                    }
+                });
+            });
+        });
+}
+
 fn arrange_menu(ui: &mut Ui, current: Arrangement) {
     let mut a = current;
     ui.label(RichText::new("Brush shelf").strong());

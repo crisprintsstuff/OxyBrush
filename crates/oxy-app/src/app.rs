@@ -1276,6 +1276,12 @@ impl App {
             }
             return None;
         }
+        if let Some(brush) = self.editor.brush_key_capture {
+            if event.state == ElementState::Pressed && !event.repeat {
+                self.capture_brush_key(brush, key);
+            }
+            return None;
+        }
         // The quick menu is held: it opens on the press and closes when that key is released.
         if let Some(key) = key {
             let chord = self.chord(key);
@@ -1300,6 +1306,11 @@ impl App {
         }
         let key = key?;
         let chord = self.chord(key);
+        // A key given to a brush from the shelf wins over a command (#259).
+        if let Some(brush) = self.editor.keymap.brush_for(chord) {
+            self.editor.pick_brush_from_key(brush);
+            return None;
+        }
         let cmd = self.editor.keymap.command_for(chord)?;
         if cmd == CommandId::QuickMenu || (cmd == CommandId::BrushFinder && self.editor.palette.is_some()) {
             return None;
@@ -1311,6 +1322,20 @@ impl App {
     fn chord(&self, key: KeyId) -> Chord {
         let m = self.editor.modifiers;
         Chord { ctrl: m.ctrl, shift: m.shift, alt: m.alt, key }
+    }
+
+    fn capture_brush_key(&mut self, brush: oxy_sculpt::BrushKind, key: Option<KeyId>) {
+        let m = self.editor.modifiers;
+        if key == Some(KeyId::Escape) && !m.ctrl && !m.shift && !m.alt {
+            self.editor.brush_key_capture = None;
+            self.editor.status = "Key unchanged".into();
+            return;
+        }
+        // A modifier on its own isn't a key yet: wait for the rest.
+        let Some(key) = key else { return };
+        self.editor.brush_key_capture = None;
+        let chord = self.chord(key);
+        self.editor.give_brush_key(brush, chord);
     }
 
     fn capture_key(&mut self, key: Option<KeyId>) {
