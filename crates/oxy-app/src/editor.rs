@@ -2662,6 +2662,7 @@ impl Editor {
         end: Option<Vec3>,
         dyn_topo: Option<Box<DynStroke>>,
         hold: Option<Box<HoldWatch>>,
+        recipe: Option<oxy_sculpt::StrokeRecipe>,
     ) {
         let before = self.history.revision();
         match dyn_topo {
@@ -2669,7 +2670,7 @@ impl Editor {
             _ => {
                 self.history.commit();
                 if self.history.revision() != before {
-                    self.living_record(kind);
+                    self.living_record(kind, recipe);
                 }
             }
         }
@@ -2842,13 +2843,15 @@ impl Editor {
                 follow_stroke: self.alpha_follow_stroke,
                 up: self.camera.up(),
             });
-        Stroke::new(settings, self.symmetry, invert)
+        let stroke = Stroke::new(settings, self.symmetry, invert)
             .with_symmetry_center(self.symmetry_center())
             .with_alpha(stamp)
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
-            .with_budget(self.dab_budget_ms)
+            .with_budget(self.dab_budget_ms);
+        // Living strokes keep what was drawn too, to edit it later (RFC 0025).
+        if self.living.enabled { stroke.with_recording() } else { stroke }
     }
 
     /// Where the active piece's mirror planes and radial axis cross: its own
@@ -3492,8 +3495,9 @@ impl Editor {
         self.snap_orbit = None;
         self.dyntopo_step(None, true);
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { stroke, dyn_topo, hold, .. } => {
-                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
+            Drag::Stroke { mut stroke, dyn_topo, hold, .. } => {
+                let recipe = stroke.take_recipe();
+                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
             Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, false),
             Drag::Gizmo(g) => {
@@ -3593,8 +3597,9 @@ impl Editor {
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
-            Drag::Stroke { stroke, dyn_topo, hold, .. } => {
-                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold)
+            Drag::Stroke { mut stroke, dyn_topo, hold, .. } => {
+                let recipe = stroke.take_recipe();
+                self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
             Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, true),
             Drag::Gizmo(g) => {
@@ -5279,7 +5284,7 @@ impl Editor {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
         }
         self.history.commit();
-        self.living_record(c.kind);
+        self.living_record(c.kind, None);
         self.status = format!("Applied curve stroke ({})", c.kind.label());
     }
 

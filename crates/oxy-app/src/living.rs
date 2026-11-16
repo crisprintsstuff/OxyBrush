@@ -37,8 +37,10 @@
 use crate::editor::Editor;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
-use oxy_sculpt::BrushKind;
+use oxy_sculpt::recipe::alpha_fingerprint;
+use oxy_sculpt::{BrushKind, StrokeRecipe};
 use std::collections::{BTreeSet, HashMap};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 /// Changes smaller than this (world units, or color 0..1) aren't recorded.
@@ -72,12 +74,21 @@ pub struct LivingStroke {
     /// How much of its change is on the surface now: its strength times its
     /// group's, unless a slider is being dragged.
     applied: f32,
+    /// What was drawn, so the stroke can be made again with other settings
+    /// or on another surface (RFC 0025). None for strokes made before
+    /// recipes, with dynamic detail, by curves or whole-piece tools, and
+    /// for copies and halves of strokes.
+    pub recipe: Option<Arc<StrokeRecipe>>,
 }
 
 impl LivingStroke {
     /// Bytes of memory the record uses.
     pub fn bytes(&self) -> usize {
-        self.vertices.len() * 4 + self.deltas.len() * 12 + self.colors.len() * 12 + 112
+        self.vertices.len() * 4
+            + self.deltas.len() * 12
+            + self.colors.len() * 12
+            + 112
+            + self.recipe.as_ref().map_or(0, |r| r.approx_bytes())
     }
 
     /// Shown in the list: not undone and not deleted.
@@ -278,6 +289,8 @@ impl Living {
             deleted: false,
             undone: false,
             applied: 0.0,
+            // A copy or a half isn't what the recipe draws.
+            recipe: None,
             ..from.clone()
         }
     }
@@ -314,7 +327,7 @@ impl Editor {
 
     /// After a stroke of `brush` was committed as the newest undo entry:
     /// record it, when Living strokes is on.
-    pub(crate) fn living_record(&mut self, brush: BrushKind) {
+    pub(crate) fn living_record(&mut self, brush: BrushKind, recipe: Option<StrokeRecipe>) {
         if !self.living.enabled || brush == BrushKind::Mask {
             return;
         }
@@ -369,6 +382,7 @@ impl Editor {
             undone: false,
             group: None,
             applied: 1.0,
+            recipe: recipe.map(Arc::new),
         });
         self.living_record_into_target(piece_id);
         self.living_enforce_budget();
@@ -1120,6 +1134,7 @@ impl Editor {
                 vertices: rows.iter().map(|r| r.0).collect(),
                 deltas: rows.iter().map(|r| r.1).collect(),
                 colors: if s.colors.is_empty() { Vec::new() } else { rows.iter().map(|r| r.2).collect() },
+                recipe: s.recipe.as_ref().map_or_else(Vec::new, |r| r.to_bytes()),
             });
         }
         if strokes.is_empty() {
@@ -1183,6 +1198,7 @@ impl Editor {
         self.living.note = None;
         let mut found = 0;
         let mut taken = 0;
+        let alphas = &self.alphas;
         for p in &mut self.scene.pieces {
             let Some(saved) = p.strokes.take().map(|b| *b) else { continue };
             found += saved.strokes.len();
@@ -1210,6 +1226,15 @@ impl Editor {
                 let id = self.living.next_id;
                 self.living.next_id += 1;
                 let factor = group.and_then(|g| self.living.group(g)).map_or(1.0, StrokeGroup::factor);
+                // The recipe, when it reads and its alpha is still among
+                // the alphas (they're saved with the project).
+                let find = |name: &str, size: u32, print: u64| {
+                    alphas.iter().find(|a| a.name == name && a.size == size && alpha_fingerprint(a) == print).cloned()
+                };
+                let recipe = (!s.recipe.is_empty())
+                    .then(|| StrokeRecipe::from_bytes(&s.recipe, &find))
+                    .and_then(|r| r.map_err(|e| log::warn!("a stroke's recipe was not loaded: {e}")).ok())
+                    .map(Arc::new);
                 self.living.strokes.push(LivingStroke {
                     id,
                     piece: p.id,
@@ -1226,6 +1251,7 @@ impl Editor {
                     undone: false,
                     group,
                     applied: s.strength * factor,
+                    recipe,
                 });
                 taken += 1;
             }
@@ -1886,6 +1912,49 @@ mod tests {
         let bytes = oxy_doc::format::encode(&e.scene_data());
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 0);
         let _ = base;
+    }
+
+    #[test]
+    fn a_stroke_keeps_its_recipe_which_makes_it_again_and_is_saved() {
+        let mut e = editor();
+        e.alpha = Some(0);
+        let base = e.scene.active().mesh.clone();
+        stroke(&mut e, 300.0);
+        let sculpted = positions(&e);
+        let recipe = e.living.strokes[0].recipe.clone().expect("a brush stroke has a recipe");
+        assert!(recipe.alpha.is_some() && recipe.events.len() > 10);
+        assert!(e.living.strokes[0].bytes() > recipe.approx_bytes(), "counted in the memory budget");
+        // Replayed on the surface as it was, it makes the same stroke.
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, sculpted);
+        // Copies and halves don't claim to be what was drawn.
+        e.symmetry.x = true;
+        stroke(&mut e, 260.0);
+        let id = e.living.strokes[1].id;
+        e.living.selected = [id].into();
+        e.living_split_selected(0);
+        let pid = e.scene.active().id;
+        let halves: Vec<_> = e.living.listed(pid).into_iter().filter(|s| s.id != e.living.strokes[0].id).collect();
+        assert!(halves.len() == 2 && halves.iter().all(|s| s.recipe.is_none()));
+        // Saved with the project, and read back with its alpha.
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        assert_eq!(bytes.windows(4).filter(|w| w == b"STRI").count(), 1);
+        let mut f = Editor::for_tests();
+        f.living.enabled = true;
+        let scene = oxy_doc::Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        f.replace_document(scene, None);
+        let pid = f.scene.active().id;
+        let listed = f.living.listed(pid);
+        let loaded: Vec<_> = listed.iter().filter_map(|s| s.recipe.as_ref()).collect();
+        assert_eq!(loaded.len(), 1, "the whole stroke's recipe; the halves have none");
+        assert_eq!(loaded[0].events, recipe.events);
+        assert_eq!(loaded[0].settings, recipe.settings);
+        assert!(loaded[0].alpha.is_some());
+        // With Living strokes off nothing is recorded.
+        let mut off = Editor::for_tests();
+        stroke(&mut off, 300.0);
+        assert!(off.living.strokes.is_empty());
     }
 
     #[test]

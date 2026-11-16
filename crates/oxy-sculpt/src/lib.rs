@@ -9,11 +9,13 @@
 pub mod alpha;
 mod falloff;
 pub mod preset;
+pub mod recipe;
 pub mod wire;
 
 pub use alpha::{Alpha, BuiltinAlpha};
 pub use falloff::{Falloff, shift_exponent};
 pub use preset::BrushPreset;
+pub use recipe::{RecipeEvent, StrokeRecipe};
 
 use glam::{Mat3, Vec2, Vec3};
 use oxy_mesh::Mesh;
@@ -501,7 +503,7 @@ pub fn estimate_symmetry_center(positions: &[Vec3]) -> Vec3 {
 }
 
 /// One pointer sample along a stroke.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StrokeSample {
     /// Surface hit point, or (for Grab) the point on the drag plane.
     pub position: Vec3,
@@ -738,12 +740,22 @@ pub struct Stroke {
     modulation: (f32, f32),
     budget: Option<DabBudget>,
     strength_scale: f32,
+    /// How much wider than set the dabs of the current sample are spaced
+    /// (1.0 unless a budget, or a replayed recipe, widened them).
+    spacing_k: f32,
+    symmetry: Symmetry,
+    /// The stroke's inputs so far, when it is being recorded
+    /// ([`Stroke::with_recording`]).
+    log: Option<Vec<RecipeEvent>>,
 }
 
 impl Stroke {
     pub fn new(settings: BrushSettings, symmetry: Symmetry, invert: bool) -> Self {
         Self {
             settings,
+            symmetry,
+            spacing_k: 1.0,
+            log: None,
             transforms: symmetry.transforms(),
             invert,
             last: None,
@@ -788,7 +800,32 @@ impl Stroke {
     }
 
     pub fn spacing_scale(&self) -> f32 {
-        self.budget.as_ref().map_or(1.0, |b| b.spacing_scale)
+        self.spacing_k
+    }
+
+    /// Keep the stroke's inputs as it goes, so [`Stroke::take_recipe`] can
+    /// hand back a recipe that makes the same stroke again (RFC 0025).
+    pub fn with_recording(mut self) -> Self {
+        self.log = Some(Vec::new());
+        self
+    }
+
+    /// The recipe of the stroke so far, if it was recorded and nothing
+    /// happened that a recipe can't repeat (the mesh rebuilt under it).
+    /// RETURNS: None when not recording; recording stops.
+    pub fn take_recipe(&mut self) -> Option<StrokeRecipe> {
+        let events = self.log.take()?;
+        Some(StrokeRecipe {
+            settings: self.settings,
+            invert: self.invert,
+            symmetry: self.symmetry,
+            center: self.sym_center,
+            view: self.view,
+            grab_through: self.grab_through,
+            paint: self.paint,
+            alpha: self.alpha.clone(),
+            events,
+        })
     }
 
     /// The camera's forward direction. Inverted Grab, Topological Move and
@@ -833,6 +870,9 @@ impl Stroke {
     /// options are.
     pub fn set_modulation(&mut self, size: f32, strength: f32) {
         self.modulation = (size.max(0.0), strength.max(0.0));
+        if let Some(log) = &mut self.log {
+            log.push(RecipeEvent::Modulation { size: self.modulation.0, strength: self.modulation.1 });
+        }
     }
 
     /// Mirror and rotate the symmetry copies about `center` instead of the
@@ -862,6 +902,9 @@ impl Stroke {
     /// `old_count` for vertices that didn't exist before. Per-vertex stroke
     /// state follows its vertices; state of removed vertices is dropped.
     pub fn remap_vertices(&mut self, source: &[u32], old_count: usize) {
+        // The triangles changed under the stroke: its inputs alone no
+        // longer say what it did.
+        self.log = None;
         let mut new_of_old = vec![u32::MAX; old_count];
         for (new, &old) in source.iter().enumerate() {
             if (old as usize) < old_count {
@@ -885,6 +928,24 @@ impl Stroke {
     /// Feed a pointer sample. `touch(mesh, chunk)` is called once per chunk
     /// before it is first modified by this call.
     pub fn add_sample(&mut self, mesh: &mut Mesh, sample: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
+        self.add_sample_planned(mesh, sample, None, touch);
+    }
+
+    /// [`Stroke::add_sample`], with the dab plan a recorded stroke used
+    /// for this sample (`spacing` scale, `strength` scale, most dabs)
+    /// instead of one worked out from how long dabs take now.
+    pub(crate) fn add_sample_planned(
+        &mut self,
+        mesh: &mut Mesh,
+        sample: StrokeSample,
+        plan: Option<(f32, f32, u32)>,
+        touch: &mut dyn FnMut(&Mesh, u32),
+    ) {
+        if (self.settings.kind.is_grab_like() || self.last.is_none())
+            && let Some(log) = &mut self.log
+        {
+            log.push(RecipeEvent::Sample { sample, spacing: 1.0, strength: self.strength_scale, max_dabs: u32::MAX });
+        }
         if self.settings.kind.is_grab_like() {
             self.grab_sample(mesh, sample, touch);
             return;
@@ -898,17 +959,23 @@ impl Stroke {
         let nominal = (self.settings.radius * self.settings.spacing).max(1e-6);
         let seg = sample.position - last.position;
         let len = seg.length();
-        let (step, max_dabs) = match &mut self.budget {
-            Some(b) => {
+        let (k, strength, max_dabs) = match (plan, &mut self.budget) {
+            (Some(plan), _) => plan,
+            (None, Some(b)) => {
                 let wanted = (len + self.carry) / nominal;
                 let (n_max, raw_k) = plan_dabs(wanted, b.dab_ms(), b.ms, b.max_dabs);
                 let k = raw_k.min(b.max_spacing_scale);
                 b.spacing_scale = k;
-                self.strength_scale = k.min(b.max_strength_scale);
-                (nominal * k, n_max)
+                (k, k.min(b.max_strength_scale), n_max)
             }
-            None => (nominal, u32::MAX),
+            (None, None) => (1.0, self.strength_scale, u32::MAX),
         };
+        self.spacing_k = k;
+        self.strength_scale = strength;
+        if let Some(log) = &mut self.log {
+            log.push(RecipeEvent::Sample { sample, spacing: k, strength, max_dabs });
+        }
+        let step = nominal * k;
         let mut d = (step - self.carry).max(0.0);
         let mut placed = 0;
         while d <= len && placed < max_dabs {
@@ -933,6 +1000,9 @@ impl Stroke {
     pub fn stamp(&mut self, mesh: &mut Mesh, sample: StrokeSample, repeats: u32, touch: &mut dyn FnMut(&Mesh, u32)) {
         if self.settings.kind.is_grab_like() {
             return;
+        }
+        if let Some(log) = &mut self.log {
+            log.push(RecipeEvent::Stamp { sample, repeats });
         }
         for _ in 0..repeats.max(1) {
             self.apply_dab(mesh, sample, touch);

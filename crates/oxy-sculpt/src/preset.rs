@@ -283,7 +283,7 @@ pub fn shape_from_key(key: &str) -> Option<crate::InsertShape> {
     crate::InsertShape::ALL.into_iter().find(|s| shape_key(*s) == key)
 }
 
-fn falloff_key(f: Falloff) -> &'static str {
+pub(crate) fn falloff_key(f: Falloff) -> &'static str {
     match f {
         Falloff::Smooth => "smooth",
         Falloff::Sharp => "sharp",
@@ -292,7 +292,7 @@ fn falloff_key(f: Falloff) -> &'static str {
     }
 }
 
-fn falloff_from_key(key: &str) -> Option<Falloff> {
+pub(crate) fn falloff_from_key(key: &str) -> Option<Falloff> {
     Falloff::ALL.into_iter().find(|f| falloff_key(*f) == key)
 }
 
