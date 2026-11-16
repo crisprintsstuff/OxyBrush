@@ -222,7 +222,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+R | Voxel remesh |
 | `G` | Face group colors |
 | Shift+drag on empty space | Orbit in 45° steps |
-| `T` | Transform gizmo: move → rotate → scale → off |
+| `T` | Transform gizmo (move, turn and scale in one) on / off |
 | `Shift`+drag a gizmo handle | Snap to steps (0.1, 15°, 10 %) |
 | Ctrl+S / Ctrl+O | Save / open project |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |

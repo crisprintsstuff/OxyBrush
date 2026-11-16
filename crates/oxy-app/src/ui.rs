@@ -3069,8 +3069,8 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                     ui.horizontal(|ui| {
                         ui.label(RichText::new("Transform").strong());
                         for m in GizmoMode::ALL {
-                            let label = if m == GizmoMode::Move {
-                                tips::menu_text(m.label(), Cmd::GizmoMove)
+                            let label = if m == GizmoMode::Combined {
+                                tips::menu_text_km(&ed.keymap, m.label(), Cmd::GizmoAll)
                             } else {
                                 m.label().to_owned()
                             };
@@ -3116,6 +3116,32 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         .layer_painter(egui::LayerId::new(egui::Order::Background, egui::Id::unique("transform_gizmo")))
         .with_clip_rect(canvas);
     let c = to_pt(layout.center);
+    let combined = mode == GizmoMode::Combined;
+    // Which handle lights up: the combined gizmo has its own for rings and
+    // scale, the single ones reuse Axis and Center.
+    let ring_handle = |a: usize| if combined { Handle::Ring(a) } else { Handle::Axis(a) };
+    let view_handle = if combined { Handle::ViewRing } else { Handle::Center };
+    if let Some(r) = &layout.rings {
+        // The outer view ring, then each axis ring: the near half solid,
+        // the far half faint. Drawn first, so the arrows sit on top.
+        let hot = hover == Some(view_handle);
+        let view = if hot { Color32::WHITE } else { Color32::from_gray(215) };
+        painter.circle_stroke(c, r.view_radius / ppp, EStroke::new(if hot { 3.0 } else { 2.0 }, view));
+        for (a, pts) in r.points.iter().enumerate() {
+            let hot = hover == Some(ring_handle(a));
+            let col = if hot { Color32::WHITE } else { AXIS_COLORS[a] };
+            for i in 0..pts.len() {
+                let (p0, f0) = pts[i];
+                let (p1, f1) = pts[(i + 1) % pts.len()];
+                let stroke = if f0 && f1 {
+                    EStroke::new(if hot { 3.5 } else { if combined { 2.0 } else { 2.5 } }, col)
+                } else {
+                    EStroke::new(1.2, col.gamma_multiply(0.3))
+                };
+                painter.line_segment([to_pt(p0), to_pt(p1)], stroke);
+            }
+        }
+    }
     for (i, end) in layout.axes.iter().enumerate() {
         let Some(end) = end else { continue };
         let e = to_pt(*end);
@@ -3124,7 +3150,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         let w = if hot { 3.5 } else { 2.5 };
         painter.line_segment([c, e], EStroke::new(w, col));
         match mode {
-            GizmoMode::Move => {
+            GizmoMode::Move | GizmoMode::Combined => {
                 let d = (e - c).normalized();
                 let n = egui::vec2(-d.y, d.x);
                 painter.add(egui::Shape::convex_polygon(
@@ -3141,6 +3167,15 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
             }
         }
     }
+    // The combined gizmo's scale cubes, partway along each axis.
+    for (i, at) in layout.cubes.iter().enumerate() {
+        let Some(at) = at else { continue };
+        let hot = hover == Some(Handle::ScaleAxis(i));
+        let col = if hot { Color32::WHITE } else { AXIS_COLORS[i] };
+        let rect = egui::Rect::from_center_size(to_pt(*at), egui::vec2(10.0, 10.0));
+        painter.rect_filled(rect, 1.0, col);
+        painter.rect_stroke(rect, 1.0, EStroke::new(1.0, Color32::from_black_alpha(150)), egui::StrokeKind::Outside);
+    }
     // Plane squares: the colour of the axis they are at right angles to.
     for (i, at) in layout.planes.iter().enumerate() {
         let Some(at) = at else { continue };
@@ -3151,28 +3186,15 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         painter.rect_filled(rect, widgets::rounding(1.5), fill);
         painter.rect_stroke(rect, 1.5, EStroke::new(1.0, AXIS_COLORS[i]), egui::StrokeKind::Inside);
     }
-    if let Some(r) = &layout.rings {
-        // Rotate: the outer view ring, then each axis ring: the near half
-        // solid, the far half faint.
-        let hot = hover == Some(Handle::Center);
-        let view = if hot { Color32::WHITE } else { Color32::from_gray(215) };
-        painter.circle_stroke(c, r.view_radius / ppp, EStroke::new(if hot { 3.0 } else { 2.0 }, view));
-        for (a, pts) in r.points.iter().enumerate() {
-            let hot = hover == Some(Handle::Axis(a));
-            let col = if hot { Color32::WHITE } else { AXIS_COLORS[a] };
-            for i in 0..pts.len() {
-                let (p0, f0) = pts[i];
-                let (p1, f1) = pts[(i + 1) % pts.len()];
-                let stroke = if f0 && f1 {
-                    EStroke::new(if hot { 3.5 } else { 2.5 }, col)
-                } else {
-                    EStroke::new(1.2, col.gamma_multiply(0.3))
-                };
-                painter.line_segment([to_pt(p0), to_pt(p1)], stroke);
-            }
-        }
+    if mode == GizmoMode::Rotate {
         painter.circle_filled(c, 3.0, Color32::from_gray(230));
     } else {
+        // The even-scale circle round the centre (combined), then the dot.
+        if let Some(radius) = layout.scale_ring {
+            let hot = hover == Some(Handle::ScaleAll);
+            let col = if hot { Color32::WHITE } else { Color32::from_gray(200) };
+            painter.circle_stroke(c, radius / ppp, EStroke::new(if hot { 3.0 } else { 1.8 }, col));
+        }
         let hot = hover == Some(Handle::Center);
         painter.circle_filled(
             c,
@@ -3184,10 +3206,13 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
     // Handles are drawn, not widgets. The same sentence shows while the pointer
     // rests on one (a finger held still on a touch screen, or a mouse hover).
     if let Some(handle) = hover {
+        let under = ed.pointer.map(|p| to_pt(p - origin)).unwrap_or(c);
         let at = match handle {
-            Handle::Center => c,
-            Handle::Axis(i) => layout.axes[i].map(to_pt).or_else(|| ed.pointer.map(|p| to_pt(p - origin))).unwrap_or(c),
+            Handle::Center | Handle::ScaleAll => c,
+            Handle::Axis(i) => layout.axes[i].map(to_pt).unwrap_or(under),
             Handle::Plane(i) => layout.planes[i].map(to_pt).unwrap_or(c),
+            Handle::ScaleAxis(i) => layout.cubes[i].map(to_pt).unwrap_or(c),
+            Handle::Ring(_) | Handle::ViewRing => under,
         };
         tips::show_at(ctx, at, tips::gizmo_handle_tip(mode, handle));
     }
@@ -3284,56 +3309,71 @@ fn gizmo_numeric_row(ui: &mut Ui, ed: &mut Editor, mode: GizmoMode) {
     let mut apply = false;
     let mut cancel = false;
     let mut any_editing = false;
-    ui.horizontal(|ui| {
-        let n = &mut ed.gizmo_numeric;
-        let mut field = |ui: &mut Ui, v: &mut f32, speed: f64, suffix: &str, label: &str, color: Color32| {
-            ui.label(RichText::new(label).color(color).strong());
-            let r = ui.add(egui::DragValue::new(v).speed(speed).max_decimals(3).suffix(suffix));
-            any_editing |= r.has_focus() || r.dragged();
-            if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || r.drag_stopped() {
-                set = true;
-            }
-            r.changed()
-        };
-        let names = ["X", "Y", "Z"];
-        match mode {
-            GizmoMode::Move => {
-                ui.label(RichText::new("Moved").weak());
-                for a in 0..3 {
-                    field(ui, &mut n.offset[a], 0.01, "", names[a], AXIS_COLORS[a]);
+    // The combined gizmo shows all three totals, one row each.
+    let rows: &[GizmoMode] = match mode {
+        GizmoMode::Combined => &[GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale],
+        GizmoMode::Move => &[GizmoMode::Move],
+        GizmoMode::Rotate => &[GizmoMode::Rotate],
+        GizmoMode::Scale => &[GizmoMode::Scale],
+    };
+    let changes = ed.gizmo_has_changes();
+    for (k, &row) in rows.iter().enumerate() {
+        ui.horizontal(|ui| {
+            let n = &mut ed.gizmo_numeric;
+            let mut field = |ui: &mut Ui, v: &mut f32, speed: f64, suffix: &str, label: &str, color: Color32| {
+                ui.label(RichText::new(label).color(color).strong());
+                let r = ui.add(egui::DragValue::new(v).speed(speed).max_decimals(3).suffix(suffix));
+                any_editing |= r.has_focus() || r.dragged();
+                if (r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter))) || r.drag_stopped() {
+                    set = true;
                 }
-            }
-            GizmoMode::Rotate => {
-                ui.label(RichText::new("Turned").weak());
-                for a in 0..3 {
-                    field(ui, &mut n.degrees[a], 0.5, "°", names[a], AXIS_COLORS[a]);
-                }
-            }
-            GizmoMode::Scale => {
-                ui.label(RichText::new("Scaled").weak());
-                if n.uniform {
-                    let mut v = n.scale.x;
-                    if field(ui, &mut v, 0.01, "×", "XYZ", Color32::from_gray(220)) {
-                        n.scale = glam::Vec3::splat(v);
-                    }
-                } else {
+                r.changed()
+            };
+            let names = ["X", "Y", "Z"];
+            // Line the fields up when there are several rows.
+            let title = |ui: &mut Ui, t: &str| {
+                ui.add_sized([52.0, 18.0], egui::Label::new(RichText::new(t).weak()));
+            };
+            match row {
+                GizmoMode::Rotate => {
+                    title(ui, "Turned");
                     for a in 0..3 {
-                        field(ui, &mut n.scale[a], 0.01, "×", names[a], AXIS_COLORS[a]);
+                        field(ui, &mut n.degrees[a], 0.5, "°", names[a], AXIS_COLORS[a]);
                     }
                 }
-                if ui.checkbox(&mut n.uniform, "Even").changed() && n.uniform {
-                    n.scale = glam::Vec3::splat(n.scale.x);
+                GizmoMode::Scale => {
+                    title(ui, "Scaled");
+                    if n.uniform {
+                        let mut v = n.scale.x;
+                        if field(ui, &mut v, 0.01, "×", "XYZ", Color32::from_gray(220)) {
+                            n.scale = glam::Vec3::splat(v);
+                        }
+                    } else {
+                        for a in 0..3 {
+                            field(ui, &mut n.scale[a], 0.01, "×", names[a], AXIS_COLORS[a]);
+                        }
+                    }
+                    if ui.checkbox(&mut n.uniform, "Even").changed() && n.uniform {
+                        n.scale = glam::Vec3::splat(n.scale.x);
+                    }
+                }
+                _ => {
+                    title(ui, "Moved");
+                    for a in 0..3 {
+                        field(ui, &mut n.offset[a], 0.01, "", names[a], AXIS_COLORS[a]);
+                    }
                 }
             }
-        }
-        let changes = ed.gizmo_has_changes();
-        if tips::hover(ui.button("Apply"), plain::GIZMO_APPLY).clicked() {
-            apply = true;
-        }
-        if tips::hover(ui.add_enabled(changes, egui::Button::new("Cancel")), plain::GIZMO_CANCEL).clicked() {
-            cancel = true;
-        }
-    });
+            if k + 1 == rows.len() {
+                if tips::hover(ui.button("Apply"), plain::GIZMO_APPLY).clicked() {
+                    apply = true;
+                }
+                if tips::hover(ui.add_enabled(changes, egui::Button::new("Cancel")), plain::GIZMO_CANCEL).clicked() {
+                    cancel = true;
+                }
+            }
+        });
+    }
     ui.data_mut(|d| d.insert_temp(editing_id, any_editing && !set));
     if apply {
         ed.apply_gizmo_numeric();
@@ -3847,6 +3887,7 @@ fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
         for m in GizmoMode::ALL {
             let cmd = match m {
+                GizmoMode::Combined => Cmd::GizmoAll,
                 GizmoMode::Move => Cmd::GizmoMove,
                 GizmoMode::Rotate => Cmd::GizmoRotate,
                 GizmoMode::Scale => Cmd::GizmoScale,

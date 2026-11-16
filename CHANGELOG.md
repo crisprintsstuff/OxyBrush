@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+- **One transform gizmo for move, turn and scale.** T now shows a gizmo with all three at once, so you no longer press T to switch between them: arrows and squares move, rings turn (the outer ring around the view), cubes partway along each axis scale along it, and the circle round the centre scales evenly. T again hides it. The gizmo bar shows the moved, turned and scaled totals together, and can still show **Move**, **Rotate** or **Scale** on its own (and W/E in the single-key shortcut preset still do). Each drag is one undo step named for what it did.
+
 ## [4.0.0-beta.14] - 2026-11-15
 
 ### Added

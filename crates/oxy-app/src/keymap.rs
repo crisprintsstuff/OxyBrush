@@ -131,7 +131,7 @@ impl ShortcutsPreset {
     pub fn description(self) -> &'static str {
         match self {
             ShortcutsPreset::Default => {
-                "Space finds brushes, Q opens quick menu, T cycles transform gizmo, Shift+W toggles wireframe."
+                "Space finds brushes, Q opens quick menu, T shows the transform gizmo, Shift+W toggles wireframe."
             }
             ShortcutsPreset::SingleKey => {
                 "B opens the brush palette, Space opens the quick menu, Q returns to Draw, W/E/R move/scale/rotate with the gizmo, Shift+F toggles the wireframe. Similar to ZBrush's defaults."
