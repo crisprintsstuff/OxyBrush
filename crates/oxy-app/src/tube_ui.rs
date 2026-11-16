@@ -114,9 +114,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     }
 }
 
-/// The Profile presets: name, outline (in tube radii), smooth. Round is no
-/// profile at all.
-fn profile_presets() -> Vec<(&'static str, Vec<glam::Vec2>, bool)> {
+/// The Profile presets. Round is no profile at all.
+fn profile_presets() -> Vec<(&'static str, oxy_mesh::primitives::TubeProfile)> {
     use glam::Vec2;
     let star: Vec<Vec2> = (0..10)
         .map(|i| {
@@ -125,26 +124,32 @@ fn profile_presets() -> Vec<(&'static str, Vec<glam::Vec2>, bool)> {
             Vec2::new(a.cos(), a.sin()) * r
         })
         .collect();
+    let shape =
+        |points: Vec<Vec2>, smooth: bool, sharp: Vec<bool>| oxy_mesh::primitives::TubeProfile { points, smooth, sharp };
+    let flat = |points: Vec<Vec2>| shape(points, false, Vec::new());
     vec![
-        ("Square", vec![Vec2::new(-0.9, -0.9), Vec2::new(0.9, -0.9), Vec2::new(0.9, 0.9), Vec2::new(-0.9, 0.9)], false),
-        ("Triangle", vec![Vec2::new(-1.0, -0.6), Vec2::new(1.0, -0.6), Vec2::new(0.0, 1.0)], false),
-        ("Star", star, false),
+        ("Square", flat(vec![Vec2::new(-0.9, -0.9), Vec2::new(0.9, -0.9), Vec2::new(0.9, 0.9), Vec2::new(-0.9, 0.9)])),
+        ("Triangle", flat(vec![Vec2::new(-1.0, -0.6), Vec2::new(1.0, -0.6), Vec2::new(0.0, 1.0)])),
+        ("Star", flat(star)),
         (
             "D-shape",
-            vec![
-                Vec2::new(-1.0, -0.4),
-                Vec2::new(1.0, -0.4),
-                Vec2::new(0.85, 0.25),
-                Vec2::new(0.4, 0.6),
-                Vec2::new(-0.4, 0.6),
-                Vec2::new(-0.85, 0.25),
-            ],
-            true,
+            // Round over the top, with sharp corners at the flat bottom.
+            shape(
+                vec![
+                    Vec2::new(-1.0, -0.4),
+                    Vec2::new(1.0, -0.4),
+                    Vec2::new(0.85, 0.25),
+                    Vec2::new(0.4, 0.6),
+                    Vec2::new(-0.4, 0.6),
+                    Vec2::new(-0.85, 0.25),
+                ],
+                true,
+                vec![true, true, false, false, false, false],
+            ),
         ),
         (
             "Ribbon",
-            vec![Vec2::new(-1.0, -0.15), Vec2::new(1.0, -0.15), Vec2::new(1.0, 0.15), Vec2::new(-1.0, 0.15)],
-            false,
+            flat(vec![Vec2::new(-1.0, -0.15), Vec2::new(1.0, -0.15), Vec2::new(1.0, 0.15), Vec2::new(-1.0, 0.15)]),
         ),
     ]
 }
@@ -157,7 +162,7 @@ fn round_profile() -> oxy_mesh::primitives::TubeProfile {
             glam::Vec2::new(a.cos(), a.sin())
         })
         .collect();
-    oxy_mesh::primitives::TubeProfile { points, smooth: true }
+    oxy_mesh::primitives::TubeProfile { points, smooth: true, sharp: Vec::new() }
 }
 
 /// The partner of profile point `i` across the vertical axis, if any:
@@ -209,6 +214,37 @@ fn add_profile_point(points: &mut Vec<glam::Vec2>, side: usize, at: glam::Vec2, 
     i
 }
 
+/// Double-click on profile point `i`: a corner becomes smooth and a smooth
+/// point a corner, and with `mirror` its twin alike. All corners is the
+/// straight-sided outline (Smooth off); none, the plain smooth one.
+fn toggle_profile_corner(profile: &mut oxy_mesh::primitives::TubeProfile, i: usize, mirror: bool) {
+    let n = profile.points.len();
+    let mut sharp: Vec<bool> = (0..n).map(|k| profile.is_sharp(k)).collect();
+    let to = !sharp[i];
+    sharp[i] = to;
+    if mirror && let Some(j) = mirror_partner(&profile.points, i) {
+        sharp[j] = to;
+    }
+    profile.smooth = !sharp.iter().all(|&s| s);
+    profile.sharp = if profile.smooth && sharp.iter().any(|&s| s) { sharp } else { Vec::new() };
+}
+
+/// After points were added or removed: each point keeps its corner flag,
+/// found by position (new points are smooth).
+fn keep_corners(profile: &mut oxy_mesh::primitives::TubeProfile, before: &oxy_mesh::primitives::TubeProfile) {
+    if !before.has_corners() {
+        return;
+    }
+    profile.sharp = profile
+        .points
+        .iter()
+        .map(|p| before.points.iter().position(|q| q == p).is_some_and(|j| before.is_sharp(j)))
+        .collect();
+    if !profile.sharp.iter().any(|&s| s) {
+        profile.sharp.clear();
+    }
+}
+
 /// Remove profile point `i`, and with `mirror` its twin too, keeping at
 /// least three points.
 fn remove_profile_point(points: &mut Vec<glam::Vec2>, i: usize, mirror: bool) {
@@ -244,7 +280,7 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
     use glam::Vec2;
     ui.label(
         RichText::new(
-            "The tube's cross-section. Drag points to reshape it; click the outline to add a point; right-click (or Alt+click) a point to remove it; Shift snaps to the grid.",
+            "The tube's cross-section. Drag points to reshape it; click the outline to add a point; right-click (or Alt+click) a point to remove it; double-click a point for a sharp corner (again for smooth); Shift snaps to the grid.",
         )
         .weak()
         .small(),
@@ -253,18 +289,33 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
         if ui.selectable_label(tube.profile.is_none(), "Round").clicked() {
             tube.profile = None;
         }
-        for (name, points, smooth) in profile_presets() {
-            let on = tube.profile.as_ref().is_some_and(|p| p.points == points && p.smooth == smooth);
+        for (name, preset) in profile_presets() {
+            let on = tube.profile.as_ref() == Some(&preset);
             if ui.selectable_label(on, name).clicked() {
-                tube.profile = Some(oxy_mesh::primitives::TubeProfile { points, smooth });
+                tube.profile = Some(preset);
             }
         }
     });
     let mut profile = tube.profile.clone().unwrap_or_else(round_profile);
     let before = profile.clone();
     ui.horizontal(|ui| {
-        ui.checkbox(&mut profile.smooth, "Smooth")
-            .on_hover_text("A curve through the points, or straight sides with sharp corners");
+        let all_smooth = profile.smooth && !profile.has_corners();
+        if ui
+            .selectable_label(all_smooth, "All smooth")
+            .on_hover_text("A curve through every point. Double-click a point to give it a sharp corner.")
+            .clicked()
+        {
+            profile.smooth = true;
+            profile.sharp.clear();
+        }
+        if ui
+            .selectable_label(!profile.smooth, "All sharp")
+            .on_hover_text("Straight sides with a sharp corner at every point. Double-click a point to round it.")
+            .clicked()
+        {
+            profile.smooth = false;
+            profile.sharp.clear();
+        }
         ui.checkbox(&mut tube.profile_mirror, "Mirror left and right")
             .on_hover_text("Moving a point moves its partner on the other side too");
     });
@@ -310,9 +361,14 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
     };
     if let Some(s) = resp.interact_pointer_pos() {
         let remove = resp.secondary_clicked() || (alt && resp.clicked());
-        if remove {
+        if resp.double_clicked() {
+            if let Some(i) = near_point(&profile, s) {
+                toggle_profile_corner(&mut profile, i, tube.profile_mirror);
+            }
+        } else if remove {
             if let Some(i) = near_point(&profile, s) {
                 remove_profile_point(&mut profile.points, i, tube.profile_mirror);
+                keep_corners(&mut profile, &before);
             }
         } else if resp.drag_started() || (resp.clicked() && tube.profile_drag.is_none()) {
             let hit = near_point(&profile, s).or_else(|| {
@@ -327,7 +383,11 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
                         (d <= reach).then_some((i, d))
                     })
                     .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(i, _)| add_profile_point(&mut profile.points, i, to_profile(s), tube.profile_mirror))
+                    .map(|(i, _)| {
+                        let i = add_profile_point(&mut profile.points, i, to_profile(s), tube.profile_mirror);
+                        keep_corners(&mut profile, &before);
+                        i
+                    })
             });
             if let Some(i) = hit {
                 let partner = if tube.profile_mirror { mirror_partner(&profile.points, i) } else { None };
@@ -360,7 +420,7 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
     let mut outline: Vec<egui::Pos2> = ring.iter().map(|&p| to_screen(p)).collect();
     outline.push(outline[0]);
     painter.add(egui::Shape::line(outline, Stroke::new(2.0, accent)));
-    if profile.smooth {
+    if profile.smooth && !(0..profile.points.len()).all(|i| profile.is_sharp(i)) {
         let mut control: Vec<egui::Pos2> = profile.points.iter().map(|&p| to_screen(p)).collect();
         control.push(control[0]);
         painter.add(egui::Shape::dashed_line(&control, faint, 4.0, 3.0));
@@ -368,7 +428,14 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
     let held = tube.profile_drag.map(|(i, _)| i);
     for (i, &p) in profile.points.iter().enumerate() {
         let r = if held == Some(i) { 5.5 } else { 4.0 };
-        painter.circle(to_screen(p), r, visuals.text_color(), Stroke::new(1.5, accent));
+        let stroke = Stroke::new(1.5, accent);
+        if profile.is_sharp(i) {
+            // A corner: a square handle, as on the tube's own points.
+            let rect = egui::Rect::from_center_size(to_screen(p), egui::vec2(r * 1.8, r * 1.8));
+            painter.rect(rect, 0.0, visuals.text_color(), stroke, egui::StrokeKind::Middle);
+        } else {
+            painter.circle(to_screen(p), r, visuals.text_color(), stroke);
+        }
     }
     if profile != before {
         tube.profile = Some(profile);
@@ -502,5 +569,42 @@ mod tests {
         let mut tri = vec![Vec2::new(-1.0, -0.6), Vec2::new(1.0, -0.6), Vec2::new(0.0, 1.0)];
         remove_profile_point(&mut tri, 0, true);
         assert_eq!(tri.len(), 3);
+    }
+
+    #[test]
+    fn double_click_toggles_a_profile_corner_and_points_keep_theirs() {
+        use oxy_mesh::primitives::TubeProfile;
+        let pts = vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0)];
+        let mut p = TubeProfile { points: pts, smooth: true, sharp: Vec::new() };
+        // With Mirror, the twin turns sharp too.
+        toggle_profile_corner(&mut p, 0, true);
+        assert_eq!(p.sharp, vec![true, true, false, false]);
+        assert!(p.smooth && p.has_corners());
+        // Again: smooth, and nothing left sharp.
+        toggle_profile_corner(&mut p, 1, true);
+        assert!(p.smooth && p.sharp.is_empty());
+        // On a sharp outline, a double-click rounds just that point.
+        let mut q = TubeProfile { smooth: false, ..p.clone() };
+        toggle_profile_corner(&mut q, 2, false);
+        assert!(q.smooth);
+        assert_eq!(q.sharp, vec![true, true, false, true]);
+        // Every point sharp again is the plain straight-sided outline.
+        toggle_profile_corner(&mut q, 2, false);
+        assert!(!q.smooth && q.sharp.is_empty());
+        // Adding a point keeps the others' corners; the new one is smooth.
+        let mut r = TubeProfile { sharp: vec![true, true, false, false], ..p.clone() };
+        let before = r.clone();
+        let i = add_profile_point(&mut r.points, 2, Vec2::new(0.0, 1.0), false);
+        keep_corners(&mut r, &before);
+        assert_eq!(r.sharp.len(), 5);
+        assert!(!r.sharp[i] && r.sharp[0] && r.sharp[1]);
+        // Removing a corner keeps the rest.
+        let before = r.clone();
+        remove_profile_point(&mut r.points, 0, false);
+        keep_corners(&mut r, &before);
+        assert_eq!(r.sharp.iter().filter(|&&s| s).count(), 1);
+        // The D-shape preset has its two bottom corners.
+        let d = profile_presets().into_iter().find(|(n, _)| *n == "D-shape").unwrap().1;
+        assert!(d.has_corners() && d.is_sharp(0) && d.is_sharp(1) && !d.is_sharp(3));
     }
 }

@@ -108,6 +108,14 @@
 //!   Written only when some tube has a profile. Such a tube's entries in
 //!   `TUBE`, `TUBX` and `TUBC` have `triangles` 0 and its real count is
 //!   here, so an older reader never reopens it round.
+//! - `TPRC` (optional, since 4.0.0-beta.15): which points of the tubes'
+//!   profiles in the **preceding** `TUBP` are sharp corners of a smooth
+//!   outline, in the same order and laid out as `TUBC`: `count:u32` then
+//!   per tube `n:u32 sharp:u8*n triangles:u32`, `n` the profile's point
+//!   count (0 for a tube without such corners). Written only when some
+//!   profile has one. Such a tube's entries in the older tube sections have
+//!   `triangles` 0, so an older reader never reopens it with the corners
+//!   rounded off.
 //! - `CURV` (optional, since 3.0.6): a Curve Move curve (RFC 0005) that was
 //!   open on the **preceding** `PIEC` when it was saved; the piece itself is
 //!   saved without the curve's bend. `n:u32` then `points:f32*6n` (position
@@ -242,6 +250,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             }
             if p.tubes.iter().any(|t| t.profile.is_some()) {
                 sections.push((*b"TUBP", encode_tube_profiles(&p.tubes)));
+            }
+            if p.tubes.iter().any(|t| t.profile.as_ref().is_some_and(|p| p.has_corners())) {
+                sections.push((*b"TPRC", encode_profile_corners(&p.tubes)));
             }
         }
         if let Some(c) = &p.curve {
@@ -549,6 +560,32 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     }
                     Ok(_) => log::warn!("ignoring tube profiles that don't match the tubes of piece {:?}", piece.name),
                     Err(e) => log::warn!("ignoring damaged tube profiles on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"TPRC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("TPRC before any piece".into()))?;
+                // Same layout as TUBC, with the profile's points.
+                match decode_tube_corners(&raw) {
+                    Ok(list)
+                        if list.len() == piece.tubes.len()
+                            && list.iter().zip(&piece.tubes).all(|((s, _), t)| {
+                                s.is_empty() || t.profile.as_ref().is_some_and(|p| p.points.len() == s.len())
+                            }) =>
+                    {
+                        for (t, (sharp, triangles)) in piece.tubes.iter_mut().zip(list) {
+                            if let Some(p) = &mut t.profile
+                                && p.smooth
+                                && sharp.iter().any(|&s| s)
+                            {
+                                p.sharp = sharp;
+                                t.triangles = triangles;
+                            }
+                        }
+                    }
+                    Ok(_) => {
+                        log::warn!("ignoring profile corners that don't match the tubes of piece {:?}", piece.name)
+                    }
+                    Err(e) => log::warn!("ignoring damaged profile corners on piece {:?}: {e}", piece.name),
                 }
             }
             b"CURV" => {
@@ -951,6 +988,21 @@ fn encode_tube_profiles(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
     b
 }
 
+fn encode_profile_corners(tubes: &[crate::TubeRecipe]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(tubes.len() as u32).to_le_bytes());
+    for t in tubes {
+        let sharp: Vec<bool> = match &t.profile {
+            Some(p) if p.has_corners() => (0..p.points.len()).map(|i| p.is_sharp(i)).collect(),
+            _ => Vec::new(),
+        };
+        b.extend_from_slice(&(sharp.len() as u32).to_le_bytes());
+        b.extend(sharp.iter().map(|&s| s as u8));
+        b.extend_from_slice(&t.triangles_in(4).to_le_bytes());
+    }
+    b
+}
+
 /// Most points a profile may have (the Tube window caps it lower).
 const MAX_PROFILE_POINTS: usize = 256;
 
@@ -977,7 +1029,7 @@ fn decode_tube_profiles(raw: &[u8]) -> Result<Vec<(Option<oxy_mesh::primitives::
                 return Err(Error::Corrupt("invalid tube profile point".into()));
             }
             let triangles = r.u32()?;
-            let profile = (n > 0).then_some(oxy_mesh::primitives::TubeProfile { points, smooth });
+            let profile = (n > 0).then_some(oxy_mesh::primitives::TubeProfile { points, smooth, sharp: Vec::new() });
             Ok((profile, triangles))
         })
         .collect()
@@ -2071,6 +2123,7 @@ mod tests {
         let profile = TubeProfile {
             points: vec![Vec2::new(-1.0, -0.5), Vec2::new(1.0, -0.5), Vec2::new(0.0, 1.0)],
             smooth: false,
+            sharp: Vec::new(),
         };
         // Twisted too, so TUBE and TUBX must both hide the real count.
         let shape = TubeShape { twist: 0.25, ..Default::default() };
@@ -2113,6 +2166,61 @@ mod tests {
         let mut two = loaded.tubes[0].clone();
         two.profile.as_mut().unwrap().points.truncate(2);
         assert!(decode_tube_profiles(&encode_tube_profiles(&[two])).is_err(), "a profile needs three points");
+    }
+
+    #[test]
+    fn profile_corners_roundtrip_and_older_readers_dont_reopen_them_smooth() {
+        use crate::{Piece, TubeRecipe, group_fingerprint};
+        use glam::Vec2;
+        use oxy_mesh::primitives::{TubeProfile, TubeShape};
+        let points = vec![Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0)];
+        let radii = vec![0.3, 0.3];
+        let profile = TubeProfile {
+            points: vec![Vec2::new(-1.0, -0.4), Vec2::new(1.0, -0.4), Vec2::new(0.6, 0.6), Vec2::new(-0.6, 0.6)],
+            smooth: true,
+            sharp: vec![true, true, false, false],
+        };
+        let mesh = primitives::tube_profiled(&points, &radii, &[], 16, true, TubeShape::default(), Some(&profile));
+        let (triangles, fingerprint) = group_fingerprint(&mesh, 0);
+        let mut piece = Piece::new("D", mesh);
+        let recipe = TubeRecipe {
+            points,
+            radii,
+            sides: 16,
+            caps: true,
+            mirror: false,
+            mirror_x: 0.0,
+            shape: TubeShape::default(),
+            sharp: Vec::new(),
+            profile: Some(profile),
+            group: 0,
+            triangles,
+            fingerprint,
+        };
+        assert_eq!(recipe.count_section(), 4);
+        // A second, round tube in the same piece has no entry.
+        let mut round = recipe.clone();
+        round.profile = None;
+        piece.tubes.push(recipe.clone());
+        piece.tubes.push(round.clone());
+        let bytes = encode(&SceneData { pieces: vec![piece.to_data()], active: 0, alphas: Vec::new() });
+        assert_eq!(bytes.windows(4).filter(|w| w == b"TPRC").count(), 1);
+        let loaded = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        assert_eq!(loaded.tubes, vec![recipe, round]);
+        assert!(loaded.tube_recipe().is_some());
+        // Without TPRC (4.0.0-beta.14) the profile is smooth all round and
+        // the count is 0: it stays ordinary triangles.
+        let mut old = bytes.clone();
+        let at = old.windows(4).position(|w| w == b"TPRC").unwrap();
+        old[at..at + 4].copy_from_slice(b"ZZZZ");
+        let piece = decode(&old).unwrap().pieces.remove(0).into_piece();
+        assert!(!piece.tubes[0].profile.as_ref().unwrap().has_corners());
+        assert_eq!(piece.tubes[0].triangles, 0, "an older reader must not reopen it without its corners");
+        // A profile without corners writes no section.
+        let mut plain = loaded;
+        plain.tubes[0].profile.as_mut().unwrap().sharp.clear();
+        let bytes = encode(&SceneData { pieces: vec![plain.to_data()], active: 0, alphas: Vec::new() });
+        assert!(!bytes.windows(4).any(|w| w == b"TPRC"));
     }
 
     #[test]

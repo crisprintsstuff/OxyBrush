@@ -8953,9 +8953,11 @@ mod tests {
         let points = vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.5, 1.4, 0.0)];
         e.open_tube(points.clone(), 0.05, None);
         let round = e.tube.as_ref().unwrap().preview.triangles.len();
+        // Smooth, with sharp corners along the bottom.
         let square = TubeProfile {
             points: vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0)],
-            smooth: false,
+            smooth: true,
+            sharp: vec![true, true, false, false],
         };
         e.tube.as_mut().unwrap().profile = Some(square.clone());
         e.tube.as_mut().unwrap().sides = 12;
@@ -8983,6 +8985,7 @@ mod tests {
         e.tube.as_mut().unwrap().profile = Some(oxy_mesh::primitives::TubeProfile {
             points: vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(0.0, 1.0)],
             smooth: false,
+            sharp: Vec::new(),
         });
         // Still dragging: no step yet. Let go: one step.
         e.tube_settle(true);
