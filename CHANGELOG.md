@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.14] - 2026-11-15
+
 ### Added
 - **Tube profiles:** a Profile section in the Tube window sets the tube's cross-section. Start from Round, Square, Triangle, Star, D-shape or Ribbon, then drag points on a small canvas: click the outline to add one, right-click to remove one, and Shift to snap. **Smooth** curves through the points or keeps sharp corners, and **Mirror left and right** edits both sides at once. The tube updates live; the profile turns with Twist and shapes coil and braid strands too. It's saved with the project (new optional `TUBP` section) and kept when the tube is edited again, and the next tube starts with it. Older versions keep a profiled tube as ordinary triangles.
 - **Area lights** ([RFC 0024](docs/rfcs/0024-area-lights-and-lit-matcap.md)): a fourth kind of viewport light, round with a **Size**, facing its aim point like a soft box. Its light wraps further round as it gets bigger, its highlights widen, and its shadows are sharp where things touch and softer further away (percentage-closer soft shadows). Drag its dot and diamond in the viewport like a spot's.
