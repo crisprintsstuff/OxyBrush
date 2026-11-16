@@ -705,6 +705,7 @@ impl App {
             })
             .collect();
         let slot_of = |id: u64| slot_map.get(&id).copied().unwrap_or(0);
+        let hard_edge_angle = ed.view.hard_edge_angle;
         let mut items = Vec::new();
         // The retopology tool draws its piece as an overlay, on top of the surface.
         let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece);
@@ -712,7 +713,7 @@ impl App {
         // wireframe, so the surface in front hides the edges behind it.
         let poly_wire = ed.poly_wire_piece();
         for p in ed.scene.pieces.iter_mut() {
-            g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh);
+            g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
                 items.push(oxy_render::DrawItem {
@@ -745,7 +746,7 @@ impl App {
         self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
         g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
         if let Some(preview) = ed.preview_mesh_mut() {
-            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview);
+            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle);
             // A piece shown in place (a curve stroke) keeps its material.
             let material = curve_piece.map_or(0, slot_of);
             items.push(oxy_render::DrawItem {

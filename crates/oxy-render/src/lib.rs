@@ -15,6 +15,7 @@ pub use camera::{
     Camera, DEFAULT_FOV_Y, FOCAL_MM_MAX, FOCAL_MM_MIN, FOCAL_PRESETS_MM, clamp_focal_mm, default_focal_mm,
     fov_y_from_focal_mm, quantize_focal_mm,
 };
+pub use hard_edges::DEFAULT_SPLIT_ANGLE_DEG;
 pub use matcap::MatcapPreset;
 
 use bytemuck::{Pod, Zeroable};
@@ -207,6 +208,10 @@ pub struct ViewSettings {
     /// Shade each triangle flat (faceted) instead of smoothing normals
     /// across the surface.
     pub flat_shading: bool,
+    /// Hard edges: faces meeting at more than this angle (degrees) get
+    /// their own normals at the shared corner. 180 keeps every edge smooth.
+    /// A view setting only: it is not stored in the project.
+    pub hard_edge_angle: f32,
     /// Overlay polygon edges atop the shaded surface.
     pub wireframe: bool,
     /// Opacity of the wireframe lines (0.0 to 1.0).
@@ -286,6 +291,7 @@ impl Default for ViewSettings {
             ambient_occlusion: 0.7,
             cavity: 0.6,
             flat_shading: false,
+            hard_edge_angle: DEFAULT_SPLIT_ANGLE_DEG,
             wireframe: false,
             wireframe_opacity: 0.7,
             wireframe_color: [0.10, 0.12, 0.16],
@@ -363,6 +369,9 @@ struct GpuMesh {
     group_lut: Vec<u32>,
     /// Vertices drawn with one normal per smooth fan (hard edges).
     hard: hard_edges::HardEdges,
+    /// The hard-edge angle this mesh was built with. A different angle
+    /// rebuilds it; the same angle does not.
+    split_angle: f32,
 }
 
 pub struct ViewportRenderer {
@@ -1099,13 +1108,28 @@ impl ViewportRenderer {
         }
     }
 
-    /// Upload changes for one piece: full rebuild on topology/face change,
-    /// otherwise dirty chunks only. Returns the number of chunks uploaded.
-    pub fn sync(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, id: u64, mesh: &mut Mesh) -> usize {
-        let rebuild = self
-            .meshes
-            .get(&id)
-            .is_none_or(|g| g.topology_version != mesh.topology_version() || g.face_version != mesh.face_version());
+    /// Upload changes for one piece: full rebuild on a topology, face or
+    /// hard-edge angle change, otherwise dirty chunks only. Returns the
+    /// number of chunks uploaded.
+    ///
+    /// `split_angle_deg` is the hard-edge angle (see
+    /// [`hard_edges::HardEdges::find`]). The buffers are rebuilt only when
+    /// it differs from the angle this mesh was built with, so a slider that
+    /// has not committed a new value costs nothing here.
+    pub fn sync(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        id: u64,
+        mesh: &mut Mesh,
+        split_angle_deg: f32,
+    ) -> usize {
+        let split_angle_deg = hard_edges::clamp_split_angle(split_angle_deg);
+        let rebuild = self.meshes.get(&id).is_none_or(|g| {
+            g.topology_version != mesh.topology_version()
+                || g.face_version != mesh.face_version()
+                || (g.split_angle - split_angle_deg).abs() > 1e-3
+        });
         if rebuild {
             let max_group = mesh.groups().iter().copied().max().unwrap_or(0) as usize;
             let lut: Vec<u32> = (0..=max_group).map(|g| group_color(g as u32)).collect();
@@ -1114,7 +1138,7 @@ impl ViewportRenderer {
             let mut verts: Vec<GpuVertex> =
                 (0..mesh.vertex_count()).into_par_iter().map(|i| vertex(m, i, vertex_lut)).collect();
             // Hard edges: each fan's own normal, the copies after the vertices.
-            let hard = hard_edges::HardEdges::find(m);
+            let hard = hard_edges::HardEdges::find(m, split_angle_deg);
             for i in 0..hard.fans.len() {
                 let f = &hard.fans[i];
                 let mut v = verts[f.vertex as usize];
@@ -1217,6 +1241,7 @@ impl ViewportRenderer {
                     face_version: mesh.face_version(),
                     group_lut: if self.exact_face_colors { Vec::new() } else { lut },
                     hard,
+                    split_angle: split_angle_deg,
                 },
             );
             return mesh.take_dirty().len();

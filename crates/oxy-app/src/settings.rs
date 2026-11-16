@@ -7,7 +7,7 @@
 //! Unknown keys and invalid values are ignored, so older and newer versions
 //! can share the file. Writes are atomic (temp file + rename).
 
-use oxy_render::{BackgroundStyle, MatcapPreset, ViewSettings};
+use oxy_render::{BackgroundStyle, DEFAULT_SPLIT_ANGLE_DEG, MatcapPreset, ViewSettings};
 use oxy_sculpt::BrushKind;
 use std::path::{Path, PathBuf};
 
@@ -345,6 +345,8 @@ pub struct Settings {
     pub update_skip: String,
     /// Faceted instead of smooth shading in the viewport.
     pub flat_shading: bool,
+    /// View > Shading > Hard edge angle, in degrees. 180 keeps every edge smooth.
+    pub hard_edge_angle: f32,
     /// View > Show vertex color.
     pub show_vertex_color: bool,
     /// View > Inactive pieces.
@@ -921,6 +923,7 @@ impl Default for Settings {
             update_last_check: 0,
             update_skip: String::new(),
             flat_shading: false,
+            hard_edge_angle: DEFAULT_SPLIT_ANGLE_DEG,
             show_vertex_color: true,
             inactive_look: oxy_render::InactiveLook::GreyOut,
             inactive_strength: 1.0,
@@ -1050,7 +1053,7 @@ impl Settings {
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nbutton_color = {}\nbrush_icon_color = {}\nbrush_icon_custom = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nhard_edge_angle = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nbutton_color = {}\nbrush_icon_color = {}\nbrush_icon_custom = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -1067,6 +1070,7 @@ impl Settings {
             self.update_last_check,
             self.update_skip,
             self.flat_shading,
+            self.hard_edge_angle,
             self.wireframe,
             self.wireframe_opacity,
             wireframe_color,
@@ -1246,6 +1250,14 @@ impl Settings {
                 }
                 "updates" => s.updates = UpdateMode::from_key(v).unwrap_or(s.updates),
                 "flat_shading" => s.flat_shading = v.parse().unwrap_or(s.flat_shading),
+                "hard_edge_angle" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && x.is_finite()
+                        && (0.0..=180.0).contains(&x)
+                    {
+                        s.hard_edge_angle = x;
+                    }
+                }
                 "show_vertex_color" => s.show_vertex_color = v.parse().unwrap_or(s.show_vertex_color),
                 "inactive_look" => s.inactive_look = oxy_render::InactiveLook::from_key(v).unwrap_or(s.inactive_look),
                 "inactive_strength" => {
@@ -1561,6 +1573,19 @@ mod tests {
     }
 
     #[test]
+    fn hard_edge_angle_defaults_to_40_and_is_remembered() {
+        assert_eq!(Settings::default().hard_edge_angle, DEFAULT_SPLIT_ANGLE_DEG);
+        let off = Settings::from_text("hard_edge_angle = 180\n");
+        assert_eq!(off.hard_edge_angle, 180.0);
+        assert_eq!(Settings::from_text(&off.to_text()).hard_edge_angle, 180.0);
+        let gentle = Settings::from_text("hard_edge_angle = 55.5\n");
+        assert_eq!(gentle.hard_edge_angle, 55.5);
+        // Out of range, or not a number, keeps the default.
+        let bad = Settings::from_text("hard_edge_angle = 200\nhard_edge_angle = off\nhard_edge_angle = -1\n");
+        assert_eq!(bad.hard_edge_angle, DEFAULT_SPLIT_ANGLE_DEG);
+    }
+
+    #[test]
     fn floor_grid_is_on_by_default_and_remembered() {
         assert!(Settings::default().floor_grid);
         let off = Settings::from_text("floor_grid = false\n");
@@ -1633,6 +1658,7 @@ mod tests {
             update_last_check: 1_800_000_000,
             update_skip: "0.4.0-alpha".into(),
             flat_shading: true,
+            hard_edge_angle: 75.0,
             show_vertex_color: false,
             inactive_look: oxy_render::InactiveLook::Darken,
             inactive_strength: 0.5,

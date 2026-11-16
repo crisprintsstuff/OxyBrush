@@ -305,11 +305,12 @@ The Touch layout has no mouse hover. Press and hold a control to read what it do
     },
     Topic {
         title: "Shading and materials",
-        keywords: "material matcap ambient occlusion cavity view look flat faceted custom image background gradient color backdrop",
+        keywords: "material matcap ambient occlusion cavity view look flat faceted hard edge angle custom image background gradient color backdrop",
         body: "View > Material picks the look of the clay. Ambient occlusion darkens folds and the inside of shapes, and cavity shading darkens creases and pores, so detail reads clearly; set both in View > Shading, or toggle them with the ball button in the view strip.\n\n\
 - Each piece can have its own material: in the material picker (or View > Material) set For to the piece (its name, then only), then pick one; it applies to the active piece and is saved with the project. Use the scene's material puts it back. Whole scene sets the material every other piece shows. Up to 8 different piece materials show at once; with viewport lights on, all pieces use the lit surface, unless Light the matcap is on (Lights window), which keeps each piece's material under the lights.\n\
 - Load matcap… (in the material picker or the View menu) uses your own PNG or JPEG image of a lit sphere; it is kept for next time. Right-click it in the picker to remove it.\n\
 - View > Flat shading shows every polygon as a flat facet.\n\
+- View > Shading > Hard edge angle sets how sharp a corner must be before the faces there shade flat (40° by default). 180° (Off) keeps every edge smooth. The view updates when you let go of the slider. It is remembered, and it is not saved in the project.\n\
 - View > Wireframe (Shift+W or the wireframe icon in the view strip) overlays polygon edges atop the shaded surface, with adjustable line opacity.\n\
 - View > Shading > Floor grid draws a grid on the floor under the model. It stays at the bottom of the visible pieces and its spacing follows the model's size.\n\
 - View > Background (also under Settings) switches between a soft gradient and one flat color. Colors… sets the center and the edge, or the single flat color. Reset to default puts the original gradient back. The command palette can open the colors, switch the style or reset it. The choice is remembered.",

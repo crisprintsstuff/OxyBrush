@@ -629,12 +629,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
-                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, vertex color, lights, wireframe and face group colors", |ui| {
+                tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, hard edges, vertex color, lights, wireframe and face group colors", |ui| {
                     tips::hover(
                         ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))),
                         plain::AO,
                     );
                     tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))), plain::CAVITY);
+                    hard_edge_angle_slider(ui, &mut ed.view.hard_edge_angle);
                     tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
                     tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
                     tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
@@ -1290,6 +1291,36 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
 
     ui.separator();
     subdivision_limit_menu(ui, ed);
+}
+
+/// Hard edge angle. While it is dragged only the number moves; the view
+/// (and the GPU mesh) updates when it is released, so a large mesh is
+/// rebuilt once rather than on every frame of the drag.
+fn hard_edge_angle_slider(ui: &mut Ui, angle: &mut f32) {
+    let id = ui.scope_id().with("hard_edge_angle_draft");
+    let mut value = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or(*angle);
+    let slider = egui::Slider::new(&mut value, 0.0..=180.0)
+        .step_by(1.0)
+        .text("Hard edge angle")
+        .custom_formatter(|v, _| if v >= 179.5 { "Off".to_string() } else { format!("{v:.0}°") })
+        .custom_parser(|s| {
+            let t = s.trim().trim_end_matches(['°', 'º']).trim();
+            if t.eq_ignore_ascii_case("off") { Some(180.0) } else { t.parse().ok() }
+        });
+    let r = tips::hover(ui.add(crate::widgets::Bar(slider)), plain::HARD_EDGE);
+    // Commit when the drag ends or the number is typed. A plain redraw of
+    // the menu must not round the saved angle (a hand-edited 55.5 stays).
+    if r.dragged() {
+        ui.data_mut(|d| d.insert_temp(id, value));
+    } else if r.drag_stopped() || r.changed() {
+        ui.data_mut(|d| d.remove::<f32>(id));
+        let next = value.round().clamp(0.0, 180.0);
+        if (next - *angle).abs() > 1e-3 {
+            *angle = next;
+        }
+    } else {
+        ui.data_mut(|d| d.remove::<f32>(id));
+    }
 }
 
 /// The interface scale slider. While it is dragged only the number moves;
