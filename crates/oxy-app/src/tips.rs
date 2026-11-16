@@ -101,6 +101,7 @@ commands! {
     Solo => "Solo piece / show all", "Alt+S", "Show only the active piece, or show every piece again.";
     Merge => "Merge and remesh visible pieces", "", "Fuse all visible pieces into the active one with a voxel remesh: one closed surface with new, even triangles. Use Join to keep the pieces as they are.";
     Join => "Join visible pieces", "", "Combine the active piece and the other visible pieces into one piece, exactly as they are: no remesh. Each piece keeps its own face groups, so you can still hide or select it.";
+    MergeDown => "Merge down", "", "Join the active piece with the piece below it in the list, exactly as they are: no remesh. One undo step.";
     SplitGroups => "Split by face groups", "", "Turn each face group into its own piece.";
     SplitLoose => "Split into loose parts", "", "Turn each separate surface into its own piece.";
     Lod => "Make LOD chain", "", "Add three lighter copies, at 1/2, 1/4 and 1/8 of the triangles.";
@@ -717,7 +718,9 @@ pub mod plain {
     pub const PIECE_HIDE: &str = "Hide this piece. Hidden pieces are not sculpted or exported.";
     pub const PIECE_SHOW: &str = "Show this piece again.";
     pub const PIECE_RENAME: &str = "The active piece. Edit the name here.";
-    pub const PIECE_ACTIVATE: &str = "Make this piece the one you sculpt. You can also Alt+click it in the view.";
+    pub const GIZMO_PIECES: &str = "The active piece and the pieces you Ctrl/Cmd+clicked in the Pieces list move, turn and scale together about their middle, as one undo step. Masked parts of each stay put.";
+    pub const GIZMO_ONE_PIECE: &str = "Drop the other picked pieces: the gizmo moves just the active piece again.";
+    pub const PIECE_ACTIVATE: &str = "Make this piece the one you sculpt. You can also Alt+click it in the view. Ctrl/Cmd+click picks it as well, so the transform gizmo moves it with the active piece.";
     pub const PRESETS: &str = "Saved brushes: use one, save the current brush, or share it as a code or a file.";
     pub const PRESET_NAME: &str = "Name to save the current brush under.";
     pub const PRESET_SAVE: &str = "Save the current brush, including its size, strength, falloff and alpha.";
@@ -981,6 +984,8 @@ pub mod plain {
         PIECE_SHOW,
         PIECE_RENAME,
         PIECE_ACTIVATE,
+        GIZMO_PIECES,
+        GIZMO_ONE_PIECE,
         PRESETS,
         PRESET_NAME,
         PRESET_SAVE,
