@@ -5,6 +5,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Fixed
+- **Undo while editing a tube undoes the tube's own edits** ([#271](https://github.com/crisprintsstuff/OxyBrush/issues/271)). An open tube isn't in the history until it's accepted, so Ctrl/Cmd+Z undid the last change outside it. Now Undo and Redo step through the tube's points, thickness, profile and shape settings, one step per drag, click or slider, while the tube is open. Undo past its first edit closes the tube, without touching the scene; after that, and after Accept, Undo works on the scene again.
+- **Mirror in the tube profile editor adds and removes points on both sides** ([#273](https://github.com/crisprintsstuff/OxyBrush/issues/273)). Clicking the outline added a point on one side only, so the profile stopped being symmetric.
 - **The wireframe shows low-poly primitives as quads again** ([#270](https://github.com/crisprintsstuff/OxyBrush/issues/270)). Since 4.0.0-beta.14 shades hard edges flat, a box or cylinder from Insert Primitive showed a diagonal across every quad in the wireframe, as if it were made of triangles, while Poly Edit counted quads. The wireframe now follows the polygons as before.
 
 ## [4.0.0-beta.14] - 2026-11-15

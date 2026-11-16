@@ -3867,11 +3867,21 @@ impl Editor {
     /// Undo: the whole scene's last change, or with Preferences > General >
     /// "Undo works on the active piece" on, the active piece's last change.
     pub fn undo(&mut self) {
+        // An open tube isn't in the history until it's accepted: undo its
+        // own edits instead (#271).
+        if self.tube.is_some() {
+            self.tube_undo();
+            return;
+        }
         if self.undo_per_piece { self.undo_piece() } else { self.undo_scene() }
     }
 
     /// Redo, following the same choice as [`Self::undo`].
     pub fn redo(&mut self) {
+        if self.tube.is_some() {
+            self.tube_redo();
+            return;
+        }
         if self.undo_per_piece { self.redo_piece() } else { self.redo_scene() }
     }
 
@@ -8890,6 +8900,53 @@ mod tests {
     }
 
     #[test]
+    fn undo_while_a_tube_is_open_undoes_the_tubes_own_edits() {
+        let mut e = editor();
+        let sphere = e.scene.active().mesh.positions.clone();
+        let labels = e.history.undo_labels().count();
+        e.open_tube(vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.5, 1.4, 0.0)], 0.05, None);
+        e.tube_settle(false);
+        // Two gestures: a profile, then a thickness.
+        e.tube.as_mut().unwrap().profile = Some(oxy_mesh::primitives::TubeProfile {
+            points: vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(0.0, 1.0)],
+            smooth: false,
+        });
+        // Still dragging: no step yet. Let go: one step.
+        e.tube_settle(true);
+        assert!(!e.tube_redo());
+        e.tube_settle(false);
+        e.tube.as_mut().unwrap().radii = vec![0.2, 0.2];
+        e.tube_settle(false);
+        // Undo (Ctrl+Z) steps back through the tube, not the scene.
+        e.undo();
+        assert_eq!(e.tube.as_ref().unwrap().radii, vec![0.05, 0.05]);
+        assert!(e.tube.as_ref().unwrap().profile.is_some());
+        e.undo();
+        assert!(e.tube.as_ref().unwrap().profile.is_none());
+        assert_eq!(e.history.undo_labels().count(), labels, "the scene's history is untouched");
+        assert_eq!(e.scene.active().mesh.positions, sphere);
+        e.redo();
+        assert!(e.tube.as_ref().unwrap().profile.is_some());
+        // A new edit clears what could be redone.
+        e.tube.as_mut().unwrap().sides = 9;
+        e.tube_settle(false);
+        assert!(!e.tube_redo());
+        // Past the tube's first edit, Undo closes it, without touching the scene.
+        e.undo();
+        e.undo();
+        assert!(e.tube.is_some(), "still open after undoing its steps");
+        e.undo();
+        assert!(e.tube.is_none(), "the next Undo closes it");
+        assert_eq!(e.history.undo_labels().count(), labels);
+        e.open_tube(vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.5, 1.4, 0.0)], 0.05, None);
+        // Once the tube is accepted, Undo is the scene's again: it removes the tube.
+        e.accept_tube();
+        assert_eq!(e.scene.pieces.len(), 2);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+    }
+
+    #[test]
     fn a_sharp_tube_corner_is_kept_after_accept_and_edit() {
         let mut e = editor();
         let points = vec![Vec3::new(-0.5, 1.2, 0.0), Vec3::new(0.0, 1.5, 0.0), Vec3::new(0.5, 1.2, 0.0)];
@@ -8963,7 +9020,8 @@ mod tests {
         e.redo();
         assert_eq!(e.scene.active().tube_recipe().unwrap().sides, 8);
 
-        // Undo while editing closes the edit first, with the faces shown.
+        // Undo while editing, with no edits to the tube, closes the edit,
+        // with the faces shown.
         e.edit_tube();
         e.undo();
         assert!(e.tube.is_none());
