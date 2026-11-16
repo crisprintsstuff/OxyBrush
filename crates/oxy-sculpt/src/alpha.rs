@@ -101,6 +101,13 @@ impl BuiltinAlpha {
 }
 
 impl Alpha {
+    /// The 16-bit value a project stores for one pixel (`65535` = full
+    /// strength). This is the rounding `.oxb` uses, so a hash of these
+    /// values still matches after the alpha is saved and opened.
+    pub fn quantize_u16(v: f32) -> u16 {
+        (v.clamp(0.0, 1.0) * 65535.0).round().clamp(0.0, 65535.0) as u16
+    }
+
     /// Build from 8-bit luminance (e.g. a grayscale PNG). Non-square images
     /// are resampled into a square.
     pub fn from_luma(name: impl Into<String>, width: u32, height: u32, luma: &[u8]) -> Option<Alpha> {

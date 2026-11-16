@@ -37,7 +37,7 @@
 use crate::editor::Editor;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
-use oxy_sculpt::recipe::alpha_fingerprint;
+use oxy_sculpt::recipe::AlphaLookup;
 use oxy_sculpt::{BrushKind, StrokeRecipe};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
@@ -76,8 +76,9 @@ pub struct LivingStroke {
     applied: f32,
     /// What was drawn, so the stroke can be made again with other settings
     /// or on another surface (RFC 0025). None for strokes made before
-    /// recipes, with dynamic detail, by curves or whole-piece tools, and
-    /// for copies and halves of strokes.
+    /// recipes, with dynamic detail on (whether or not the mesh was
+    /// rebuilt), and for copies and halves. Curve Move and whole-piece
+    /// tools are not recorded at all.
     pub recipe: Option<Arc<StrokeRecipe>>,
 }
 
@@ -1228,9 +1229,10 @@ impl Editor {
                 let factor = group.and_then(|g| self.living.group(g)).map_or(1.0, StrokeGroup::factor);
                 // The recipe, when it reads and its alpha is still among
                 // the alphas (they're saved with the project).
-                let find = |name: &str, size: u32, print: u64| {
-                    alphas.iter().find(|a| a.name == name && a.size == size && alpha_fingerprint(a) == print).cloned()
-                };
+                // Version 2 matches the stored pixels and ignores the name.
+                // Version 1 (the first recipe build) still matches a built-in
+                // by name and the old fingerprint.
+                let find = |query: AlphaLookup| alphas.iter().find(|a| query.matches(a)).cloned();
                 let recipe = (!s.recipe.is_empty())
                     .then(|| StrokeRecipe::from_bytes(&s.recipe, &find))
                     .and_then(|r| r.map_err(|e| log::warn!("a stroke's recipe was not loaded: {e}")).ok())
@@ -2184,6 +2186,59 @@ mod tests {
         stroke(&mut e, 340.0);
         assert_eq!(e.living.strokes.last().unwrap().group, None);
         assert!(e.living.note.as_deref().is_some_and(|n| n.contains("hidden")));
+    }
+
+    #[test]
+    fn undo_then_redo_keeps_the_recipe() {
+        let mut e = editor();
+        let base = e.scene.active().mesh.clone();
+        stroke(&mut e, 300.0);
+        let sculpted = positions(&e);
+        let events = e.living.strokes[0].recipe.as_ref().unwrap().events.clone();
+        e.undo();
+        e.living_sync();
+        assert!(e.living.strokes[0].undone);
+        assert!(e.living.strokes[0].recipe.is_some(), "undo keeps the recipe");
+        e.redo();
+        e.living_sync();
+        assert!(!e.living.strokes[0].undone);
+        assert_eq!(e.living.strokes[0].recipe.as_ref().unwrap().events, events);
+        let mut again = base;
+        e.living.strokes[0].recipe.as_ref().unwrap().replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, sculpted);
+    }
+
+    #[test]
+    fn a_captured_alpha_keeps_its_recipe_after_save_and_open() {
+        let mut e = editor();
+        // Not on the 1/65535 grid, as a capture's depth samples aren't.
+        let mut data = vec![0.1f32; 16 * 16];
+        data[3] = 0.1234567;
+        data[20] = 0.987654;
+        let capture = oxy_sculpt::Alpha { name: "Capture 1".into(), size: 16, data };
+        let id = oxy_sculpt::recipe::alpha_fingerprint(&capture);
+        e.alphas.push(Arc::new(capture));
+        e.alpha = Some(e.alphas.len() - 1);
+        stroke(&mut e, 300.0);
+        let before = e.living.strokes[0].recipe.clone().expect("recorded with the capture");
+        assert!(before.alpha.is_some());
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        let mut decoded = oxy_doc::format::decode(&bytes).unwrap();
+        assert_eq!(decoded.alphas.len(), 1);
+        // Renaming in the file must not drop the recipe: identity is the pixels.
+        decoded.alphas[0].name = "Renamed capture".into();
+        let alphas = std::mem::take(&mut decoded.alphas);
+        let mut f = Editor::for_tests();
+        f.living.enabled = true;
+        // The same order as opening a project.
+        f.adopt_alphas(alphas);
+        f.replace_document(oxy_doc::Scene::from_data(decoded).unwrap(), None);
+        let pid = f.scene.active().id;
+        let loaded = f.living.listed(pid)[0].recipe.clone().expect("the recipe survived save and open");
+        let alpha = loaded.alpha.as_ref().expect("the capture was found under its new name");
+        assert_eq!(alpha.alpha.name, "Renamed capture");
+        assert_eq!(oxy_sculpt::recipe::alpha_fingerprint(&alpha.alpha), id);
+        assert_eq!(loaded.events, before.events);
     }
 
     #[test]

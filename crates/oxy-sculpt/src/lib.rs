@@ -810,8 +810,27 @@ impl Stroke {
         self
     }
 
+    /// Stop keeping a recipe. Recording stops; [`Stroke::take_recipe`]
+    /// then returns None. Used when dynamic detail is on: the triangles
+    /// may change under the stroke, so it is excluded whether or not this
+    /// stroke happens to rebuild the mesh.
+    pub fn discard_recipe(&mut self) {
+        self.log = None;
+    }
+
+    /// Pretend recent dabs took `ms` milliseconds, so the next samples
+    /// plan spacing from that instead of the clock. Tests use it to force
+    /// a spacing scale above 1 without depending on how fast the machine is.
+    pub fn assume_dab_ms(&mut self, ms: f32) {
+        let Some(b) = &mut self.budget else { return };
+        let ms = if ms.is_finite() { ms.max(0.0) } else { 0.0 };
+        b.recent = [ms; 8];
+        b.count = b.recent.len();
+    }
+
     /// The recipe of the stroke so far, if it was recorded and nothing
-    /// happened that a recipe can't repeat (the mesh rebuilt under it).
+    /// happened that a recipe can't repeat (the mesh rebuilt under it, or
+    /// [`Stroke::discard_recipe`]).
     /// RETURNS: None when not recording; recording stops.
     pub fn take_recipe(&mut self) -> Option<StrokeRecipe> {
         let events = self.log.take()?;
@@ -902,8 +921,10 @@ impl Stroke {
     /// `old_count` for vertices that didn't exist before. Per-vertex stroke
     /// state follows its vertices; state of removed vertices is dropped.
     pub fn remap_vertices(&mut self, source: &[u32], old_count: usize) {
-        // The triangles changed under the stroke: its inputs alone no
-        // longer say what it did.
+        // The triangles changed under the stroke, so its inputs alone no
+        // longer say what it did. Dynamic detail also drops the recipe
+        // when the stroke starts; this catches a rebuild that still
+        // reached here.
         self.log = None;
         let mut new_of_old = vec![u32::MAX; old_count];
         for (new, &old) in source.iter().enumerate() {

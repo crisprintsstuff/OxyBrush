@@ -65,4 +65,34 @@ fn main() {
             (verts / 1000.0) as u32
         );
     }
+    // The same strokes while a recipe is recorded (one event per sample).
+    println!("-- with recording --");
+    for (kind, radius, with_alpha, focal_shift, gravity) in [
+        (BrushKind::Draw, 0.1, false, 0.0, 0.0),
+        (BrushKind::Draw, 0.3, false, 0.0, 0.0),
+        (BrushKind::Draw, 0.3, true, 0.0, 0.0),
+        (BrushKind::Clay, 0.3, false, 0.0, 0.0),
+        (BrushKind::Crease, 0.3, false, 0.0, 0.0),
+    ] {
+        let settings = BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, ..Default::default() };
+        let stamp =
+            with_alpha.then(|| AlphaStamp { alpha: alpha.clone(), rotation: 0.0, follow_stroke: true, up: Vec3::Y });
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(stamp).with_recording();
+        let n = 60;
+        let t = Instant::now();
+        for i in 0..=n {
+            let a = i as f32 / n as f32 * 1.2 - 0.6;
+            let p = Vec3::new(a.sin(), 0.0, a.cos());
+            stroke.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 1.0 }, &mut |_, _| {});
+        }
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        let _ = stroke.take_recipe();
+        println!(
+            "{:?}{} r={radius} recording: {} dabs, {:.2} ms/dab",
+            kind,
+            if with_alpha { "+alpha" } else { "" },
+            stroke.dab_count(),
+            ms / stroke.dab_count() as f64
+        );
+    }
 }
