@@ -6,6 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 - **One transform gizmo for move, turn and scale.** T now shows a gizmo with all three at once, so you no longer press T to switch between them: arrows and squares move, rings turn (the outer ring around the view), cubes partway along each axis scale along it, and the circle round the centre scales evenly. T again hides it. The gizmo bar shows the moved, turned and scaled totals together, and can still show **Move**, **Rotate** or **Scale** on its own (and W/E in the single-key shortcut preset still do). Each drag is one undo step named for what it did.
+### Fixed
+- **The wireframe shows low-poly primitives as quads again** ([#270](https://github.com/crisprintsstuff/OxyBrush/issues/270)). Since 4.0.0-beta.14 shades hard edges flat, a box or cylinder from Insert Primitive showed a diagonal across every quad in the wireframe, as if it were made of triangles, while Poly Edit counted quads. The wireframe now follows the polygons as before.
 
 ## [4.0.0-beta.14] - 2026-11-15
 
