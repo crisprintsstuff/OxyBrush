@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+- **The wireframe shows low-poly primitives as quads again** ([#270](https://github.com/crisprintsstuff/OxyBrush/issues/270)). Since 4.0.0-beta.14 shades hard edges flat, a box or cylinder from Insert Primitive showed a diagonal across every quad in the wireframe, as if it were made of triangles, while Poly Edit counted quads. The wireframe now follows the polygons as before.
+
 ## [4.0.0-beta.14] - 2026-11-15
 
 ### Added
