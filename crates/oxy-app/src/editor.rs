@@ -672,6 +672,8 @@ pub enum Drag {
     PolyEdit(Box<crate::polyedit::PolyDrag>),
     /// The transform gizmo on Poly Edit's picked faces, edges or points.
     PolyGizmo(Box<crate::polyedit::PolyGizmoDrag>),
+    /// The transform gizmo over several picked pieces (#274).
+    MultiGizmo(Box<crate::pieces_ops::MultiGizmoDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -1239,6 +1241,9 @@ pub struct Editor {
     pub custom_gizmo_pivot: Option<Vec3>,
     /// User-customized gizmo rotation / orientation basis.
     pub custom_gizmo_rotation: Option<Mat3>,
+    /// Pieces picked with Ctrl/Cmd+click in the Pieces list, by id, that
+    /// the transform gizmo moves along with the active piece.
+    pub piece_pick: Vec<u64>,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -1564,6 +1569,7 @@ impl Default for Editor {
             gizmo_session: None,
             custom_gizmo_pivot: None,
             custom_gizmo_rotation: None,
+            piece_pick: Vec::new(),
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
@@ -2352,6 +2358,10 @@ impl Editor {
             return;
         }
         if self.retopo_pointer_down(p) || self.poly_pointer_down(p) {
+            return;
+        }
+        if self.gizmo.is_some() && self.poly_edit.is_none() && self.gizmo_pieces().len() > 1 && self.multi_gizmo_down(p)
+        {
             return;
         }
         if self.gizmo.is_some() && self.start_gizmo_drag(p) {
@@ -3264,6 +3274,10 @@ impl Editor {
                 true
             }
             Drag::Gizmo(_) => self.gizmo_to(pos),
+            Drag::MultiGizmo(_) => {
+                self.multi_gizmo_moved(pos);
+                true
+            }
             Drag::Select { points, lasso, .. } => {
                 if *lasso {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
@@ -3507,6 +3521,10 @@ impl Editor {
                     }
                 }
             }
+            g @ Drag::MultiGizmo(_) => {
+                self.drag = g;
+                self.multi_gizmo_up();
+            }
             Drag::GizmoSnapOrMask { hit, .. } => {
                 self.snap_gizmo_to_surface(hit.point, hit.normal);
             }
@@ -3568,6 +3586,10 @@ impl Editor {
         }
         if matches!(self.drag, Drag::PolyEdit(_) | Drag::PolyGizmo(_)) {
             self.poly_cancel_drag();
+            return;
+        }
+        if matches!(self.drag, Drag::MultiGizmo(_)) {
+            self.multi_gizmo_cancel();
             return;
         }
         match std::mem::replace(&mut self.drag, Drag::None) {
@@ -6398,6 +6420,19 @@ impl Editor {
             self.status = "Join needs the active piece plus at least one more visible piece".into();
             return;
         }
+        self.join_pieces(joined, "Join");
+    }
+
+    /// Join pieces `joined` (indices, the active one among them) into one,
+    /// as they are, in the active piece's place: one undo step labelled
+    /// `label`. Used by Join and Merge down.
+    pub(crate) fn join_pieces(&mut self, mut joined: Vec<usize>, label: &str) {
+        let active = self.scene.active_index();
+        joined.sort_unstable();
+        joined.dedup();
+        if joined.len() < 2 || !joined.contains(&active) {
+            return;
+        }
         self.pointer_up();
         // The active piece first, so its face groups keep their numbers.
         let order = std::iter::once(active).chain(joined.iter().copied().filter(|&i| i != active));
@@ -6421,7 +6456,7 @@ impl Editor {
         if let Some(i) = self.scene.index_of(id) {
             self.scene.set_active(i);
         }
-        self.history.record_compound(format!("Join {} pieces", joined.len()), steps);
+        self.history.record_compound(format!("{label} {} pieces", joined.len()), steps);
         self.status = format!(
             "Joined {} pieces into one{}",
             joined.len(),
@@ -6737,6 +6772,7 @@ impl Editor {
         // While dragging, the gizmo follows the transformed pivot.
         let (pivot, rot) = match &self.drag {
             Drag::PolyGizmo(g) => (g.pivot + g.current.translate, g.rotation),
+            Drag::MultiGizmo(g) => (g.pivot + g.current.translate, Mat3::IDENTITY),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     (g.pivot + g.current.translate, g.current.linear * g.rotation)
@@ -6744,6 +6780,8 @@ impl Editor {
                     (g.pivot + g.current.translate, g.rotation)
                 }
             }
+            // Several pieces turn about the world axes.
+            _ if self.poly_edit.is_none() && self.gizmo_pieces().len() > 1 => (base_pivot, Mat3::IDENTITY),
             _ => (base_pivot, self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY)),
         };
         let size = self.canvas_size();
@@ -6824,6 +6862,10 @@ impl Editor {
         // In Poly Edit: the middle of the picked elements (none: no gizmo).
         if self.poly_edit.is_some() {
             return self.poly_gizmo_pivot();
+        }
+        // Several pieces picked: the middle of them all.
+        if self.gizmo_pieces().len() > 1 {
+            return self.multi_gizmo_pivot();
         }
         let id = self.scene.active().id;
         // A pivot kept for another piece doesn't apply to this one.
@@ -9483,6 +9525,83 @@ mod tests {
         e.split_masked();
         assert_eq!(e.scene.pieces.len(), 1);
         assert!(e.status.contains("whole piece is masked"), "{}", e.status);
+    }
+
+    #[test]
+    fn merge_down_joins_the_active_piece_with_the_one_below() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        assert_eq!(e.scene.pieces.len(), 3);
+        // Hidden pieces still merge down: it's about the list, not the view.
+        e.scene.pieces[1].visible = false;
+        e.scene.set_active(0);
+        let (t0, t1) = (e.scene.pieces[0].mesh.triangle_count(), e.scene.pieces[1].mesh.triangle_count());
+        let third = e.scene.pieces[2].id;
+        e.merge_down();
+        assert!(e.job.is_none(), "no background remesh");
+        assert_eq!(e.scene.pieces.len(), 2, "{}", e.status);
+        assert_eq!(e.scene.active_index(), 0, "the merged piece keeps the active one's place");
+        assert_eq!(e.scene.active().mesh.triangle_count(), t0 + t1);
+        assert_eq!(e.scene.pieces[1].id, third, "the third piece is left alone");
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3, "one undo step");
+        // The last piece has nothing below it.
+        e.scene.set_active(2);
+        e.merge_down();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.status.contains("no piece below"), "{}", e.status);
+    }
+
+    #[test]
+    fn the_gizmo_moves_picked_pieces_together_in_one_undo_step() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.scene.set_active(0);
+        // Move the copy aside, so the two have a middle between them.
+        let shift = Vec3::new(0.0, 1.5, 0.0);
+        e.scene.pieces[1].mesh.positions.iter_mut().for_each(|p| *p += shift);
+        let all: Vec<u32> = (0..e.scene.pieces[1].mesh.vertex_count() as u32).collect();
+        e.scene.pieces[1].mesh.update_after_move(&all);
+        let one = e.gizmo_base_pivot().unwrap();
+        e.toggle_piece_pick(1);
+        assert_eq!(e.gizmo_pieces(), vec![0, 1]);
+        e.toggle_gizmo(GizmoMode::Move);
+        let both = e.gizmo_base_pivot().unwrap();
+        assert!(both.y > one.y + 0.5, "the pivot is between the pieces: {one} → {both}");
+        let before: Vec<Vec<Vec3>> = e.scene.pieces.iter().map(|p| p.mesh.positions.clone()).collect();
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[0].expect("X axis handle");
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::MultiGizmo(_)));
+        e.pointer_moved(end + Vec2::new(40.0, 0.0));
+        e.pointer_up();
+        for (k, p) in e.scene.pieces.iter().enumerate() {
+            let d = p.mesh.positions[0] - before[k][0];
+            assert!(d.x > 0.01 && d.y.abs() < 1e-4 && d.z.abs() < 1e-4, "piece {k} moved along X: {d}");
+        }
+        // One undo puts both back.
+        e.undo();
+        for (k, p) in e.scene.pieces.iter().enumerate() {
+            assert_eq!(p.mesh.positions, before[k], "piece {k}");
+        }
+        // Escape mid-drag puts them back too, with nothing to undo.
+        e.redo();
+        let moved: Vec<Vec<Vec3>> = e.scene.pieces.iter().map(|p| p.mesh.positions.clone()).collect();
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[0].unwrap();
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + Vec2::new(30.0, 0.0));
+        e.cancel_drag();
+        for (k, p) in e.scene.pieces.iter().enumerate() {
+            assert_eq!(p.mesh.positions, moved[k], "piece {k}");
+        }
+        // A plain click on a piece in the list drops the pick (the UI does
+        // this); with one piece the ordinary gizmo is back.
+        e.piece_pick.clear();
+        assert_eq!(e.gizmo_pieces(), vec![0]);
     }
 
     #[test]
