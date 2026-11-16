@@ -59,7 +59,24 @@ pub struct TubeEdit {
     built: Option<TubeKey>,
     /// The last press on a point and when, to spot a double-click.
     last_press: Option<(usize, std::time::Instant)>,
+    /// The open tube's own undo history (#271): Undo and Redo step
+    /// through it while the tube is open, instead of the scene's.
+    history: TubeHistory,
 }
+
+/// Undo and redo for the open tube. Each finished gesture (a drag in the
+/// viewport or the profile editor, a slider, a click) is one step: once
+/// nothing is held, a tube that differs from its last settled state pushes
+/// that state.
+#[derive(Default)]
+struct TubeHistory {
+    undo: Vec<TubeKey>,
+    redo: Vec<TubeKey>,
+    settled: Option<TubeKey>,
+}
+
+/// Most steps the open tube remembers.
+const TUBE_UNDO_STEPS: usize = 100;
 
 #[derive(Clone, PartialEq)]
 struct TubeKey {
@@ -110,6 +127,21 @@ impl TubeEdit {
         data.positions.extend(mirrored);
         data.triangles.extend(flipped);
         Mesh::from_data(MeshData { positions: data.positions, triangles: data.triangles, ..Default::default() })
+    }
+
+    /// Put the tube back to `k` (an undo or redo step).
+    fn restore(&mut self, k: TubeKey) {
+        self.points = k.points;
+        self.radii = k.radii;
+        self.sharp = k.sharp;
+        self.sides = k.sides;
+        self.caps = k.caps;
+        self.shape = k.shape;
+        self.profile = k.profile;
+        self.mirror = k.mirror;
+        self.selected = self.selected.filter(|&i| i < self.points.len());
+        self.profile_drag = None;
+        self.last_press = None;
     }
 
     /// Remove control point `i` (the tube keeps at least two).
@@ -257,6 +289,7 @@ impl Editor {
             into: Some(id),
             built: None,
             last_press: None,
+            history: TubeHistory::default(),
         };
         tube.update();
         self.tube = Some(tube);
@@ -272,6 +305,59 @@ impl Editor {
         if mesh.triangle_count() == before.len() && mesh.hidden() != before.as_slice() {
             mesh.set_hidden(before.clone());
         }
+    }
+
+    /// Record a step of the open tube's history once its gesture is over
+    /// (`held`: a mouse button or drag is still going). Called every frame
+    /// while the Tube window is open.
+    pub fn tube_settle(&mut self, held: bool) {
+        let Some(t) = &mut self.tube else { return };
+        let now = t.key();
+        match &t.history.settled {
+            None => t.history.settled = Some(now),
+            Some(s) if !held && *s != now => {
+                let before = t.history.settled.replace(now).expect("matched Some");
+                t.history.undo.push(before);
+                if t.history.undo.len() > TUBE_UNDO_STEPS {
+                    t.history.undo.remove(0);
+                }
+                t.history.redo.clear();
+            }
+            _ => {}
+        }
+    }
+
+    /// Undo the open tube's last step. With none left, close the tube
+    /// (as before it was opened) and return false.
+    pub fn tube_undo(&mut self) -> bool {
+        self.tube_settle(false);
+        let Some(t) = &mut self.tube else { return false };
+        let Some(before) = t.history.undo.pop() else {
+            // Nothing left in the tube: step back to before it was opened.
+            // The scene's own undo waits for the next Undo.
+            self.cancel_tube();
+            self.status = "Tube closed: nothing left to undo in it".into();
+            return false;
+        };
+        t.history.redo.push(t.key());
+        t.history.settled = Some(before.clone());
+        t.restore(before);
+        self.status = "Tube: undone".into();
+        true
+    }
+
+    /// Redo the open tube's last undone step. False when there's none.
+    pub fn tube_redo(&mut self) -> bool {
+        let Some(t) = &mut self.tube else { return false };
+        let Some(after) = t.history.redo.pop() else {
+            self.status = "Nothing to redo in this tube".into();
+            return false;
+        };
+        t.history.undo.push(t.key());
+        t.history.settled = Some(after.clone());
+        t.restore(after);
+        self.status = "Tube: redone".into();
+        true
     }
 
     pub fn update_tube(&mut self) {
@@ -516,6 +602,7 @@ impl Editor {
         let mut tube = TubeEdit {
             sharp,
             last_press: None,
+            history: TubeHistory::default(),
             // Replaced by `update` below, with the tube's shape.
             preview: primitives::tube(&points, &radii, 3, false),
             points,
