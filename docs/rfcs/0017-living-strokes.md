@@ -220,6 +220,9 @@ As built for phase 3:
   additive model has been enough for the cases reported so far; it stays a
   candidate if testers hit its limits (fading a stroke that later strokes
   smoothed over).
+  [RFC 0025](0025-editable-and-portable-strokes.md) proposes keeping each
+  stroke's inputs, to edit a stroke afterwards and to place saved strokes
+  on other models.
 
 ## Open questions
 
