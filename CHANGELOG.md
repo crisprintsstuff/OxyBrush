@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.16] - 2026-11-16
+
 ### Added
 - **Edit a stroke's settings** ([RFC 0025](docs/rfcs/0025-editable-and-portable-strokes.md)). In the Strokes panel, **Edit…** (or double-click a stroke) opens its brush, Raise or Carve, size, strength, falloff, alpha and spacing. Changing one sculpts that stroke again; strokes made after it stay as they were. A slider shows a lighter preview while you drag and applies the full stroke when you let go. Each change is an undo step. Esc puts the stroke back as it was when you opened Edit. A stroke that can't be edited says why: it was made before this version kept what was drawn, Living strokes was off, dynamic detail was on, it is a mirrored copy or one side of a split, or it came from Curve Move, Deform or the gizmo (those aren't strokes).
 - **Living strokes remember what was drawn** ([RFC 0025](docs/rfcs/0025-editable-and-portable-strokes.md), first step). With Living strokes on, each brush stroke also keeps its path, pressure and brush settings, and running them again makes exactly the same stroke. Saved with the project in a new optional `STRI` section; older versions skip it and keep the strokes as before. Curve strokes, stamps, lines and a freehand stroke you keep instead of editing as a curve are remembered, including a captured or imported alpha after you save and open the project. Strokes made with dynamic detail on (whether or not the mesh was rebuilt), Curve Move, and whole-piece tools (Deform, the gizmo) aren't.

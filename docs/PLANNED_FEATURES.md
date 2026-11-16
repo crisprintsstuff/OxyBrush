@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.15](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.16](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -104,6 +104,11 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.16:** living strokes remember what was drawn, including
+  curves, stamps, lines and a captured alpha, Edit… to sculpt a stroke
+  again with a new brush, Raise or Carve, size, strength, falloff, alpha
+  or spacing, and an adjustable hard-edge angle (40° by default; 180° is
+  Off).
 - **4.0.0-beta.15:** one transform gizmo for move, turn and scale, the
   gizmo in Poly Edit with Shift+drag to extrude, Poly Edit soft selection,
   moving several pieces together, Merge down, and sharp or smooth corners
