@@ -9,7 +9,8 @@ use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
 use oxy_sculpt::{
-    Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeRecipe, StrokeSample, Symmetry,
+    Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, StoredChange, Stroke, StrokeRecipe,
+    StrokeSample, Symmetry,
 };
 use oxy_topo::RemeshOptions;
 use std::path::{Path, PathBuf};
@@ -834,6 +835,9 @@ pub enum JobResult {
     Primitive(String, Mesh),
     /// A captured alpha (Capture from view), to add and select.
     Alpha(Alpha),
+    /// A stroke re-sculpted with new settings (RFC 0025). `mesh` is the
+    /// piece afterwards; the stroke `id` takes `change` as its stored change.
+    Resculpt { id: u64, mesh: Mesh, change: StoredChange },
     /// A WebAssembly plugin command finished (RFC 0011).
     Plugin(Box<crate::wasm_plugins::PluginJob>),
     /// A subdivision level change: the new active-level mesh, the stack,
@@ -6542,6 +6546,7 @@ impl Editor {
                 self.add_alpha(alpha);
                 self.status = format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s");
             }
+            Ok(JobResult::Resculpt { id, mesh, change }) => self.finish_resculpt_job(id, mesh, change),
             Ok(JobResult::MadeReal(name, mesh, copies)) => {
                 let name = self.scene.unique_name(&name);
                 let tris = mesh.triangle_count();

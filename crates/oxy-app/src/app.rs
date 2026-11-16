@@ -1364,6 +1364,12 @@ impl App {
 
     fn run_demo(&mut self) {
         // A few deterministic strokes so automated screenshots show sculpting.
+        // A screenshot also opens Edit on the last stroke, so the image shows
+        // the stroke settings panel.
+        if self.auto.screenshot.is_some() {
+            self.editor.set_living_strokes(true);
+            self.editor.living.show = true;
+        }
         let ed = &mut self.editor;
         let [x, y, w, h] = ed.canvas;
         let c = Vec2::new(x + w * 0.5, y + h * 0.5);
@@ -1407,6 +1413,17 @@ impl App {
         ed.brush_kind = oxy_sculpt::BrushKind::Draw;
         ed.pointer = Some(c + Vec2::new(0.9, 0.1) * s);
         ed.status = "Demo strokes applied".into();
+        if ed.living.show
+            && let Some(id) = ed
+                .living
+                .strokes
+                .iter()
+                .rev()
+                .find(|s| s.recipe.is_some() && s.piece == ed.scene.pieces[0].id)
+                .map(|s| s.id)
+        {
+            let _ = ed.living_open_edit(id);
+        }
     }
 }
 

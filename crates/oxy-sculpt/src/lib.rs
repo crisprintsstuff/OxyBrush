@@ -15,7 +15,7 @@ pub mod wire;
 pub use alpha::{Alpha, BuiltinAlpha};
 pub use falloff::{Falloff, shift_exponent};
 pub use preset::BrushPreset;
-pub use recipe::{RecipeEvent, StrokeRecipe};
+pub use recipe::{RecipeEvent, StoredChange, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 
 use glam::{Mat3, Vec2, Vec3};
 use oxy_mesh::Mesh;
