@@ -712,6 +712,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 egui::Panel::bottom(format!("shelf_{key}")).resizable(false).exact_size(height).show(ui, |ui| {
                     ui.horizontal_top(|ui| {
                         current_tiles(ui, ed);
+                        if ed.poly_edit.is_some() {
+                            ui.vertical(|ui| poly_mode_buttons(ui, ed));
+                        }
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
                         }
@@ -735,6 +738,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 panel.resizable(false).show(ui, |ui| {
                     ui.add_space(6.0);
                     current_tiles(ui, ed);
+                    poly_mode_buttons(ui, ed);
                     ui.add_space(4.0);
                     if ed.layout == UiLayout::Touch {
                         // Always visible: there are no modifier keys on a tablet.
@@ -2677,6 +2681,37 @@ const CURRENT_TILE: f32 = 58.0;
 fn narrow_shelf_width(layout: UiLayout) -> f32 {
     let tile = if layout == UiLayout::Touch { 66.0 } else { CURRENT_TILE };
     tile + 26.0
+}
+
+/// While Poly Edit is open: buttons for what it works on, under the
+/// current tiles at the top of the shelf (#275). The same as keys 1-4.
+fn poly_mode_buttons(ui: &mut Ui, ed: &mut Editor) {
+    use crate::polyedit::ElementMode;
+    let Some(mode) = ed.poly_edit.as_ref().map(|pe| pe.mode) else { return };
+    let stacked = ed.narrow_shelf && ed.shelf != ShelfPosition::Bottom;
+    let mut buttons = |ui: &mut Ui| {
+        for m in ElementMode::ALL {
+            let icon = match m {
+                ElementMode::Faces => Icon::ModeFaces,
+                ElementMode::Edges => Icon::ModeEdges,
+                ElementMode::Points => Icon::ModePoints,
+                ElementMode::Auto => Icon::ModeAuto,
+            };
+            let tip = format!("{} ({}): {}", m.label(), m.key(), m.help());
+            if widgets::icon_button(ui, icon, mode == m, true, &tip).clicked() {
+                ed.set_poly_mode(m);
+            }
+        }
+    };
+    ui.add_space(4.0);
+    if stacked {
+        ui.vertical_centered(|ui| buttons(ui));
+    } else {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new("Poly Edit").weak().small());
+            buttons(ui);
+        });
+    }
 }
 
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
