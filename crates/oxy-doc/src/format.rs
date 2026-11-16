@@ -132,10 +132,15 @@
 //! - `STRI` (optional, since 4.0.0-beta.16): what was drawn for the strokes
 //!   of the **preceding** `STRK` (their recipes, RFC 0025), in the same
 //!   order: `count:u32` then per stroke `len:u32 bytes:u8*len`, `len` 0 for
-//!   a stroke without one. The bytes are an `oxy_sculpt::StrokeRecipe`
-//!   (layout in `StrokeRecipe::to_bytes`), opaque to this crate. Written
-//!   only when some stroke has a recipe. Older readers skip it: their
-//!   strokes can be faded and removed as before, not re-sculpted.
+//!   a stroke without one. The bytes are an `oxy_sculpt::StrokeRecipe`,
+//!   opaque to this crate. Each recipe starts with `OXSR` and its own
+//!   version byte (1: an alpha is named and a sample of its raw sample
+//!   bits; 2: an alpha is a hash of every pixel quantized to the 16-bit
+//!   values `ALPH` stores, and the name is not an identity). The section
+//!   layout is unchanged, so a reader that skips unknown sections still
+//!   skips `STRI`, and a reader of version 1 recipes still reads them. A
+//!   newer recipe version drops that stroke's recipe and keeps the stroke.
+//!   Written only when some stroke has a recipe.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into

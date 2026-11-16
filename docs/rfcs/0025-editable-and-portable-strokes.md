@@ -1,6 +1,6 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: accepted (decisions by the maintainer, 2026-11-16); not built yet
+Status: accepted (decisions by the maintainer, 2026-11-16). Phase 1 (recipes) is implemented; phases 2–6 are not built yet.
 
 ## Summary
 
@@ -40,8 +40,9 @@ other sculpting apps don't offer.
   add or remove points, and the stroke follows.
 - Each change is one undo step. Esc cancels the edit.
 - A stroke without a recipe says why it can't be edited: it was made
-  before this version, with living strokes' recipes turned off, or by a
-  whole-piece tool (Deform, the gizmo).
+  before this version, with dynamic detail on, or by Curve Move or a
+  whole-piece tool (Deform, the gizmo). Curve Move and those tools are
+  not in the stroke list.
 
 ### Details
 
@@ -70,7 +71,7 @@ StrokeRecipe {
     settings: BrushSettings,        // brush, size, strength, falloff, …
     invert: bool,
     symmetry: Symmetry, center: Vec3,
-    alpha: Option<AlphaRef>,        // by content hash; the image is in the project
+    alpha: Option<AlphaRef>,        // by a hash of the stored pixels, not the name
     view: Vec3,                     // camera forward, for screen-space brushes
     paint: Option<Vec3>,
     samples: Vec<StrokeSample>,     // position, normal, pressure
@@ -86,9 +87,20 @@ StrokeRecipe {
   stored changes. It's kept on the stroke's record and saved in a new
   skippable `.oxb` section, `STRI`, after `STRK`. Older versions skip it
   and keep the strokes as they are today (fadeable, not editable).
-- **Not recorded:** strokes made with dynamic detail on (the triangles
-  change under the stroke), Curve Move, and whole-piece tools. They stay
-  living strokes without a recipe.
+- **Not recorded:** strokes made with dynamic detail on. The triangles
+  may change under the stroke, so the recipe is left off whether or not
+  this stroke happened to rebuild the mesh. When the mesh is rebuilt the
+  stroke is baked with that topology change, as any stroke is; when it
+  isn't, the stroke stays in the list and can be faded, without a recipe.
+- **Not living strokes:** Curve Move and whole-piece tools (Deform, the
+  gizmo). Curve stroke mode, Stamp, Line, and a freehand stroke kept
+  when you answer "no" to "edit this stroke as a curve?" are recorded,
+  including each curve point's size and strength.
+- **Alpha identity** is a hash of every pixel quantized to the 16-bit
+  values the project stores, not the alpha's name and not a sample of
+  the in-memory floats (those change when a captured alpha is saved and
+  opened). The recipe bytes are versioned (`OXSR` version 2); version 1
+  is still read.
 
 ### Re-sculpting one stroke
 
@@ -166,9 +178,12 @@ bundled starter details, if any, are made for OxyBrush (CC0).
 
 ## Phases
 
-1. **Recipes:** record and save them (`STRI`), with a test that replaying
+1. **Recipes:** ✅ record and save them (`STRI`), with a test that replaying
    a recipe reproduces the stroke exactly. No visible change except a
-   memory figure.
+   memory figure. Curve strokes, stamps, lines and a declined
+   "edit as a curve?" are included. Dynamic detail is excluded whether
+   or not the mesh was rebuilt. An alpha is identified by its stored
+   pixels, so a capture still matches after save and open.
 2. **Edit settings:** the Edit… panel, re-sculpting one stroke.
 3. **Edit path:** the path as a curve.
 4. **Details in a project:** Save as detail, place with move, turn and

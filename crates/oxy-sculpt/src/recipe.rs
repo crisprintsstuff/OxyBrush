@@ -44,12 +44,38 @@ pub struct StrokeRecipe {
     pub events: Vec<RecipeEvent>,
 }
 
-/// Looks an alpha up by name, size and [`alpha_fingerprint`].
-pub type AlphaFinder<'a> = dyn Fn(&str, u32, u64) -> Option<Arc<Alpha>> + 'a;
+/// How a saved recipe names its alpha.
+#[derive(Debug, Clone, Copy)]
+pub enum AlphaLookup<'a> {
+    /// Recipe version 1: the name, the size, and a fingerprint of up to
+    /// 4096 raw sample bits. Kept so a project saved by the first recipe
+    /// build still finds a built-in alpha.
+    Legacy { name: &'a str, size: u32, fingerprint: u64 },
+    /// Recipe version 2: the size and a hash of every pixel quantized the
+    /// way a project stores it. The name is not an identity.
+    Content { size: u32, id: u64 },
+}
+
+impl AlphaLookup<'_> {
+    /// Whether `alpha` is the one this lookup names.
+    pub fn matches(&self, alpha: &Alpha) -> bool {
+        match *self {
+            AlphaLookup::Legacy { name, size, fingerprint } => {
+                alpha.name == name && alpha.size == size && legacy_alpha_fingerprint(alpha) == fingerprint
+            }
+            AlphaLookup::Content { size, id } => alpha.size == size && alpha_fingerprint(alpha) == id,
+        }
+    }
+}
+
+/// Looks an alpha up from how the recipe named it.
+pub type AlphaFinder<'a> = dyn Fn(AlphaLookup<'_>) -> Option<Arc<Alpha>> + 'a;
 
 /// Bytes a saved recipe starts with, and the layout version after them.
 const MAGIC: &[u8; 4] = b"OXSR";
-const VERSION: u8 = 1;
+/// 1 named an alpha by name plus a sample of raw bits. 2 names it by a
+/// hash of every pixel as stored (16-bit), and does not use the name.
+const VERSION: u8 = 2;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -88,7 +114,7 @@ impl StrokeRecipe {
     /// The recipe as bytes, for saving.
     ///
     /// ```text
-    /// "OXSR"  version:u8 (1)
+    /// "OXSR"  version:u8 (2; 1 is still read)
     /// brush:text  falloff:text  shape:text          keys as in brush presets
     /// radius strength focal_shift spacing auto_smooth gravity spray
     ///   noise_scale crease_pinch : f32 each
@@ -96,18 +122,26 @@ impl StrokeRecipe {
     ///               8 invert, 16 grab_through, 32 has alpha
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
-    /// [alpha: name:text size:u32 fingerprint:u64 rotation:f32 follow:u8 up:f32*3]
+    /// [alpha: name:text size:u32 id:u64 rotation:f32 follow:u8 up:f32*3]
     /// events:u32 then per event  tag:u8
     ///   0 sample:   position:f32*3 normal:f32*3 pressure:f32 spacing:f32 strength:f32 max_dabs:u32
     ///   1 stamp:    position:f32*3 normal:f32*3 pressure:f32 repeats:u32
     ///   2 modulate: size:f32 strength:f32
     /// ```
-    /// `text` is `len:u32` then UTF-8. The alpha's image isn't stored: it is
-    /// found again by name, size and [`alpha_fingerprint`].
+    /// `text` is `len:u32` then UTF-8. The alpha's image isn't stored.
+    /// Version 2's `id` is [`alpha_fingerprint`] (every pixel as stored);
+    /// the name is kept for the error text and is not part of the identity.
+    /// Version 1's `id` is a sample of the raw sample bits, matched with
+    /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
+        self.encode(VERSION)
+    }
+
+    /// `version` is 1 or 2. Tests write version 1 to check it still reads.
+    fn encode(&self, version: u8) -> Vec<u8> {
         let mut b = Vec::with_capacity(96 + self.events.len() * 41);
         b.extend_from_slice(MAGIC);
-        b.push(VERSION);
+        b.push(version);
         let s = &self.settings;
         for key in [preset::kind_key(s.kind), preset::falloff_key(s.falloff), preset::shape_key(s.insert_shape)] {
             put_text(&mut b, key);
@@ -147,7 +181,8 @@ impl StrokeRecipe {
         if let Some(a) = &self.alpha {
             put_text(&mut b, &a.alpha.name);
             b.extend_from_slice(&a.alpha.size.to_le_bytes());
-            b.extend_from_slice(&alpha_fingerprint(&a.alpha).to_le_bytes());
+            let id = if version <= 1 { legacy_alpha_fingerprint(&a.alpha) } else { alpha_fingerprint(&a.alpha) };
+            b.extend_from_slice(&id.to_le_bytes());
             put_f32(&mut b, a.rotation);
             b.push(u8::from(a.follow_stroke));
             put_vec3(&mut b, a.up);
@@ -183,18 +218,18 @@ impl StrokeRecipe {
     }
 
     /// Read a recipe written by [`StrokeRecipe::to_bytes`]. `find_alpha`
-    /// looks an alpha up by name, size and fingerprint.
+    /// looks an alpha up from [`AlphaLookup`].
     ///
     /// RETURNS: an error for damaged bytes, a newer layout, a brush this
     /// version doesn't know, or an alpha that can't be found (the stroke
-    /// then simply has no recipe).
+    /// then simply has no recipe). Version 1 and version 2 are both read.
     pub fn from_bytes(bytes: &[u8], find_alpha: &AlphaFinder) -> Result<StrokeRecipe, String> {
         let mut r = Reader { data: bytes, pos: 0 };
         if r.take(4)? != MAGIC {
             return Err("not a stroke recipe".into());
         }
         let version = r.u8()?;
-        if version != VERSION {
+        if version != 1 && version != VERSION {
             return Err(format!("stroke recipe version {version} is newer than this version reads"));
         }
         let kind = preset::kind_from_key(&r.text()?).ok_or("unknown brush")?;
@@ -243,7 +278,12 @@ impl StrokeRecipe {
             let rotation = r.f32()?;
             let follow_stroke = r.u8()? != 0;
             let up = r.vec3()?;
-            let alpha = find_alpha(&name, size, fingerprint).ok_or_else(|| format!("alpha {name:?} not found"))?;
+            let lookup = if version == 1 {
+                AlphaLookup::Legacy { name: &name, size, fingerprint }
+            } else {
+                AlphaLookup::Content { size, id: fingerprint }
+            };
+            let alpha = find_alpha(lookup).ok_or_else(|| format!("alpha {name:?} not found"))?;
             Some(AlphaStamp { alpha, rotation, follow_stroke, up })
         } else {
             None
@@ -287,10 +327,28 @@ impl StrokeRecipe {
     }
 }
 
-/// A quick fingerprint of an alpha's image, to tell apart alphas with the
-/// same name and size: FNV-1a over up to 4096 evenly spaced values (hashing
-/// every value of a 4096 px alpha for every stroke would be slow).
+/// Identity of an alpha by the pixels a project actually stores: FNV-1a
+/// over every value quantized to 16-bit, then the size. The name is not
+/// included. A captured or imported alpha still matches after save and
+/// open, because those files store the same 16-bit values and read them
+/// back with `u16 as f32 / 65535`.
 pub fn alpha_fingerprint(alpha: &Alpha) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for &v in &alpha.data {
+        for byte in Alpha::quantize_u16(v).to_le_bytes() {
+            h ^= u64::from(byte);
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h ^= u64::from(alpha.size);
+    h.wrapping_mul(0x0000_0100_0000_01b3)
+}
+
+/// Recipe version 1's fingerprint: FNV-1a over up to 4096 evenly spaced
+/// raw sample bits. It does not survive the 16-bit save of a custom alpha,
+/// which is why version 2 replaced it. Built-in alphas are regenerated, so
+/// a version 1 recipe of one of those still matches.
+fn legacy_alpha_fingerprint(alpha: &Alpha) -> u64 {
     let step = (alpha.data.len() / 4096).max(1);
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     for v in alpha.data.iter().step_by(step) {
@@ -435,9 +493,9 @@ mod tests {
 
             // And after a trip through bytes.
             let bytes = recipe.to_bytes();
-            let find = |name: &str, size: u32, print: u64| {
+            let find = |q: AlphaLookup| {
                 let a = BuiltinAlpha::Scales.generate(64);
-                (a.name == name && a.size == size && alpha_fingerprint(&a) == print).then(|| Arc::new(a))
+                q.matches(&a).then(|| Arc::new(a))
             };
             let loaded = StrokeRecipe::from_bytes(&bytes, &find).expect("reads back");
             assert_eq!(loaded.events, recipe.events);
@@ -483,7 +541,7 @@ mod tests {
             events: vec![RecipeEvent::Modulation { size: 1.0, strength: 1.0 }],
         };
         let bytes = recipe.to_bytes();
-        let none = |_: &str, _: u32, _: u64| None;
+        let none = |_: AlphaLookup| None;
         assert!(StrokeRecipe::from_bytes(&bytes, &none).is_ok());
         assert!(StrokeRecipe::from_bytes(&bytes[..bytes.len() - 3], &none).is_err(), "cut short");
         let mut newer = bytes.clone();
@@ -503,5 +561,264 @@ mod tests {
             ..recipe
         };
         assert!(StrokeRecipe::from_bytes(&with_alpha.to_bytes(), &none).is_err());
+    }
+
+    /// Replay `stroke` (already recorded, samples not yet added) over `samples`
+    /// and check a second run from the recipe, and from its bytes, matches.
+    fn assert_replays(mut stroke: Stroke, base: &Mesh, samples: &[StrokeSample]) {
+        let mut live = base.clone();
+        sculpt(&mut stroke, &mut live, samples);
+        let recipe = stroke.take_recipe().expect("recorded");
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, live.positions);
+        assert_eq!(again.color, live.color);
+        assert_eq!(again.mask, live.mask);
+        let find = |_: AlphaLookup| None;
+        let loaded = StrokeRecipe::from_bytes(&recipe.to_bytes(), &find).expect("reads back");
+        let mut third = base.clone();
+        loaded.replay(&mut third, &mut |_, _| {});
+        assert_eq!(third.positions, live.positions);
+        assert_eq!(third.color, live.color);
+        assert_eq!(third.mask, live.mask);
+    }
+
+    #[test]
+    fn a_widened_spacing_scale_is_what_gets_replayed() {
+        let base = primitives::icosphere(5, 1.0);
+        let settings =
+            BrushSettings { radius: 0.25, spacing: 0.1, strength: 0.8, pressure_strength: false, ..Default::default() };
+        let a = StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 };
+        let b = StrokeSample { position: Vec3::new(0.55, 0.8, 0.0).normalize(), normal: Vec3::Y, pressure: 1.0 };
+        let run = |force_slow: bool| {
+            let mut mesh = base.clone();
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_recording();
+            if force_slow {
+                stroke = stroke.with_budget(1.0);
+                stroke.assume_dab_ms(50.0);
+            }
+            sculpt(&mut stroke, &mut mesh, &[a, b]);
+            (mesh, stroke.dab_count(), stroke.take_recipe().expect("recorded"))
+        };
+        let (wide_mesh, wide_dabs, recipe) = run(true);
+        let (plain_mesh, plain_dabs, _) = run(false);
+        let scales: Vec<f32> = recipe
+            .events
+            .iter()
+            .filter_map(|e| match e {
+                RecipeEvent::Sample { spacing, .. } => Some(*spacing),
+                _ => None,
+            })
+            .collect();
+        assert!(scales.iter().any(|k| *k > 1.0), "spacing was widened: {scales:?}");
+        assert!(wide_dabs < plain_dabs, "widening placed fewer dabs: {wide_dabs} vs {plain_dabs}");
+        assert_ne!(wide_mesh.positions, plain_mesh.positions, "widening changed the stroke");
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, wide_mesh.positions);
+        let loaded = StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_: AlphaLookup| None).unwrap();
+        let mut third = base.clone();
+        loaded.replay(&mut third, &mut |_, _| {});
+        assert_eq!(third.positions, wide_mesh.positions);
+    }
+
+    #[test]
+    fn paint_mask_symmetry_and_grab_brushes_replay() {
+        let base = primitives::icosphere(4, 1.0);
+        let samples = path(12);
+        // Paint changes color and not position.
+        let paint = Stroke::new(
+            BrushSettings { kind: BrushKind::Paint, radius: 0.3, strength: 1.0, ..Default::default() },
+            Symmetry::default(),
+            false,
+        )
+        .with_paint_color(Vec3::new(0.15, 0.4, 0.85))
+        .with_recording();
+        let mut painted = base.clone();
+        let mut stroke = paint;
+        sculpt(&mut stroke, &mut painted, &samples);
+        assert!(painted.color.iter().any(|c| c.x < 0.5), "the color landed");
+        assert_eq!(painted.positions, base.positions, "paint does not move the surface");
+        let recipe = stroke.take_recipe().unwrap();
+        assert_eq!(recipe.paint, Vec3::new(0.15, 0.4, 0.85));
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.color, painted.color);
+        assert_eq!(again.positions, painted.positions);
+
+        // A mask holds the masked side still, and the mask itself is unchanged.
+        let mut masked = base.clone();
+        for (v, m) in masked.mask.iter_mut().enumerate() {
+            if masked.positions[v].x > 0.0 {
+                *m = 1.0;
+            }
+        }
+        let mask_before = masked.mask.clone();
+        let mut held = masked.clone();
+        let mut stroke = Stroke::new(
+            BrushSettings { radius: 0.35, strength: 1.0, ..Default::default() },
+            Symmetry::default(),
+            false,
+        )
+        .with_recording();
+        sculpt(&mut stroke, &mut held, &samples);
+        assert_eq!(held.mask, mask_before, "a Draw stroke does not change the mask");
+        assert!(
+            mask_before.iter().enumerate().all(|(v, m)| *m < 1.0 || held.positions[v] == masked.positions[v]),
+            "fully masked points stay put"
+        );
+        let recipe = stroke.take_recipe().unwrap();
+        let mut again = masked.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, held.positions);
+        assert_eq!(again.mask, held.mask);
+        let _ = mask_before;
+
+        // The Mask brush changes the mask.
+        assert_replays(
+            Stroke::new(
+                BrushSettings { kind: BrushKind::Mask, radius: 0.3, strength: 1.0, ..Default::default() },
+                Symmetry::default(),
+                false,
+            )
+            .with_recording(),
+            &base,
+            &samples,
+        );
+
+        // Mirror about a centre that is not the origin.
+        let center = Vec3::new(2.5, -0.4, 0.7);
+        let mut data = base.to_data();
+        for p in &mut data.positions {
+            *p += center;
+        }
+        let off = Mesh::from_data(data);
+        let off_samples: Vec<StrokeSample> = samples
+            .iter()
+            .map(|s| StrokeSample { position: s.position + center, normal: s.normal, pressure: s.pressure })
+            .collect();
+        let mut live = off.clone();
+        let mut stroke = Stroke::new(
+            BrushSettings { radius: 0.3, strength: 0.8, ..Default::default() },
+            Symmetry { x: true, ..Default::default() },
+            false,
+        )
+        .with_symmetry_center(center)
+        .with_recording();
+        sculpt(&mut stroke, &mut live, &off_samples);
+        let recipe = stroke.take_recipe().unwrap();
+        assert_eq!(recipe.center, center);
+        let moved = |side: f32| {
+            live.positions
+                .iter()
+                .zip(&off.positions)
+                .any(|(p, o)| (p.x - center.x) * side > 0.05 && p.distance(*o) > 1e-4)
+        };
+        assert!(moved(1.0) && moved(-1.0), "both sides of the off-centre mirror moved");
+        let mut again = off.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, live.positions);
+
+        // Radial copies around Y.
+        let mut live = base.clone();
+        let mut stroke = Stroke::new(
+            BrushSettings { radius: 0.22, strength: 0.9, ..Default::default() },
+            Symmetry { radial: 6, radial_axis: Axis::Y, ..Default::default() },
+            false,
+        )
+        .with_recording();
+        sculpt(&mut stroke, &mut live, &samples);
+        let recipe = stroke.take_recipe().unwrap();
+        assert_eq!(recipe.symmetry.radial, 6);
+        let mut plain = base.clone();
+        let mut one = Stroke::new(
+            BrushSettings { radius: 0.22, strength: 0.9, ..Default::default() },
+            Symmetry::default(),
+            false,
+        );
+        sculpt(&mut one, &mut plain, &samples);
+        let moved_points = |m: &Mesh, from: &Mesh| -> usize {
+            (0..m.positions.len()).filter(|&i| m.positions[i].distance(from.positions[i]) > 1e-5).count()
+        };
+        assert!(moved_points(&live, &base) > moved_points(&plain, &base), "radial copies reach more of the surface");
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        assert_eq!(again.positions, live.positions);
+
+        // Grab-like brushes: the drag between samples is the stroke.
+        let drag = [
+            StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 },
+            StrokeSample { position: Vec3::new(0.25, 0.95, 0.05).normalize(), normal: Vec3::Y, pressure: 1.0 },
+        ];
+        for kind in [BrushKind::TopoMove, BrushKind::KelvinTwist, BrushKind::KelvinScale] {
+            let mut live = base.clone();
+            let mut stroke = Stroke::new(
+                BrushSettings { kind, radius: 0.4, strength: 1.0, ..Default::default() },
+                Symmetry::default(),
+                false,
+            )
+            .with_view(Vec3::NEG_Z)
+            .with_recording();
+            sculpt(&mut stroke, &mut live, &drag);
+            assert_ne!(live.positions, base.positions, "{kind:?} moved the surface");
+            let recipe = stroke.take_recipe().unwrap();
+            let mut again = base.clone();
+            recipe.replay(&mut again, &mut |_, _| {});
+            assert_eq!(again.positions, live.positions, "{kind:?} replays exactly");
+        }
+    }
+
+    #[test]
+    fn a_saved_alpha_matches_after_quantizing_and_renaming() {
+        let mut raw = vec![0.1f32; 64];
+        raw[0] = 0.1234567;
+        raw[9] = 0.987654;
+        raw[40] = 0.5;
+        let original = Alpha { name: "Capture 1".into(), size: 8, data: raw.clone() };
+        let id = alpha_fingerprint(&original);
+        let mut renamed = original.clone();
+        renamed.name = "Not the saved name".into();
+        assert_eq!(alpha_fingerprint(&renamed), id, "the name is not part of the identity");
+        // What opening the project does: store u16, read back as f32.
+        let stored: Vec<f32> = raw.iter().map(|&v| Alpha::quantize_u16(v) as f32 / 65535.0).collect();
+        let loaded_alpha = Alpha { name: "Capture 1".into(), size: 8, data: stored };
+        assert_eq!(alpha_fingerprint(&loaded_alpha), id, "the stored pixels still match");
+        assert_ne!(
+            legacy_alpha_fingerprint(&original),
+            legacy_alpha_fingerprint(&loaded_alpha),
+            "the old raw-bit fingerprint does not survive the save"
+        );
+        // Every stored code round-trips, so the hash can't drift on open.
+        for q in 0u32..=65535 {
+            let v = q as f32 / 65535.0;
+            assert_eq!(u32::from(Alpha::quantize_u16(v)), q);
+        }
+        let recipe = StrokeRecipe {
+            settings: BrushSettings::default(),
+            invert: false,
+            symmetry: Symmetry::default(),
+            center: Vec3::ZERO,
+            view: Vec3::ZERO,
+            grab_through: false,
+            paint: Vec3::ONE,
+            alpha: Some(AlphaStamp {
+                alpha: Arc::new(original.clone()),
+                rotation: 0.2,
+                follow_stroke: true,
+                up: Vec3::Y,
+            }),
+            events: vec![],
+        };
+        let found = Arc::new(loaded_alpha);
+        let find = |q: AlphaLookup| q.matches(&found).then(|| found.clone());
+        let back = StrokeRecipe::from_bytes(&recipe.to_bytes(), &find).expect("version 2 finds the renamed pixels");
+        assert!(back.alpha.is_some());
+        // Version 1 still reads, and still needs the name plus the old fingerprint.
+        let v1 = recipe.encode(1);
+        assert_eq!(v1[4], 1);
+        assert!(StrokeRecipe::from_bytes(&v1, &find).is_err(), "version 1 does not match the quantized image");
+        let exact = Arc::new(original);
+        let find_v1 = |q: AlphaLookup| q.matches(&exact).then(|| exact.clone());
+        assert!(StrokeRecipe::from_bytes(&v1, &find_v1).is_ok(), "version 1 still reads the original image");
     }
 }

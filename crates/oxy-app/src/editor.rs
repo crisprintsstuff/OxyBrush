@@ -8,7 +8,9 @@ use oxy_doc::{Piece, Scene, autosave, format};
 use oxy_history::{History, Step};
 use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
-use oxy_sculpt::{Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeSample, Symmetry};
+use oxy_sculpt::{
+    Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, Stroke, StrokeRecipe, StrokeSample, Symmetry,
+};
 use oxy_topo::RemeshOptions;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
@@ -94,6 +96,9 @@ pub struct HoldWatch {
     pub path: Vec<Vec2>,
     pub still_at: Vec2,
     pub still_since: std::time::Instant,
+    /// What was drawn, kept when the stroke is paused to ask whether to
+    /// edit it as a curve, so answering "no" still records a recipe.
+    recipe: Option<StrokeRecipe>,
 }
 
 /// The last freehand stroke, so it can be reopened as a curve, a Curve Move
@@ -2523,7 +2528,7 @@ impl Editor {
             return;
         }
         let radius = self.world_radius(hit.point, self.brush_radius_pt);
-        let stroke = Box::new(self.new_stroke(kind, invert, radius, 0.0));
+        let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
         let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
         let dyn_topo = self.dyntopo_for(kind).then(|| {
             let piece = self.scene.active();
@@ -2539,6 +2544,14 @@ impl Editor {
                 capped: false,
             })
         });
+        // Dynamic detail may rebuild the triangles under the stroke, so its
+        // inputs no longer say what it did. Leave the recipe off even when
+        // this particular stroke doesn't happen to rebuild the mesh: the
+        // exclusion is "dynamic detail was on", not "the mesh changed".
+        if dyn_topo.is_some() {
+            stroke.discard_recipe();
+        }
+        let stroke = Box::new(stroke);
         let lazy = (self.stabilizer_pt > 0.0 && !kind.is_grab_like()).then_some(p);
         // Brushes that could be drawn as a curve may turn into one if the
         // pointer is held still. (Not with dynamic detail: the stroke can't
@@ -2551,7 +2564,14 @@ impl Editor {
         // The path is kept for every such stroke: holding still turns it into a
         // curve (with the setting on), and Edit > Last stroke can reopen it.
         let hold = (curve_capable && dyn_topo.is_none()).then(|| {
-            Box::new(HoldWatch { kind, invert, path: vec![p], still_at: p, still_since: std::time::Instant::now() })
+            Box::new(HoldWatch {
+                kind,
+                invert,
+                path: vec![p],
+                still_at: p,
+                still_since: std::time::Instant::now(),
+                recipe: None,
+            })
         });
         self.drag =
             Drag::Stroke { stroke, grab_plane: (hit.point, self.camera.forward()), lazy, queued: None, hold, dyn_topo };
@@ -3098,7 +3118,7 @@ impl Editor {
             .map(|a| oxy_doc::AlphaData {
                 name: a.name.clone(),
                 size: a.size,
-                data: a.data.iter().map(|v| (v.clamp(0.0, 1.0) * 65535.0).round() as u16).collect(),
+                data: a.data.iter().copied().map(Alpha::quantize_u16).collect(),
             })
             .collect()
     }
@@ -3106,7 +3126,7 @@ impl Editor {
     /// Add the alphas a project was saved with, skipping any already in the
     /// list (same name and pixels), so opening a project again doesn't
     /// duplicate them. Later captures are numbered after its captures.
-    fn adopt_alphas(&mut self, saved: Vec<oxy_doc::AlphaData>) {
+    pub(crate) fn adopt_alphas(&mut self, saved: Vec<oxy_doc::AlphaData>) {
         for a in saved {
             let n = (a.size as usize).pow(2);
             if a.size == 0 || a.data.len() != n {
@@ -3762,7 +3782,8 @@ impl Editor {
         let history = &mut self.history;
         stroke.stamp(&mut piece.mesh, sample, STAMP_REPEATS, &mut |m, c| history.touch(m, c));
         if commit {
-            self.history.commit();
+            let recipe = stroke.take_recipe();
+            self.commit_living_stroke(kind, recipe);
         }
     }
 
@@ -3801,7 +3822,18 @@ impl Editor {
         for s in samples {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
         }
+        let recipe = stroke.take_recipe();
+        self.commit_living_stroke(kind, recipe);
+    }
+
+    /// Commit the open history step and, when it changed the mesh, record a
+    /// living stroke with `recipe` (none when the stroke can't be repeated).
+    fn commit_living_stroke(&mut self, kind: BrushKind, recipe: Option<StrokeRecipe>) {
+        let before = self.history.revision();
         self.history.commit();
+        if self.history.revision() != before {
+            self.living_record(kind, recipe);
+        }
     }
 
     fn finish_select(&mut self, action: SelectAction, points: Vec<Vec2>, lasso: bool, click_group: Option<u32>) {
@@ -4219,8 +4251,10 @@ impl Editor {
         }) {
             Ok(Some(scene)) => {
                 let n = scene.pieces.len();
-                self.replace_document(scene, Some(path.to_path_buf()));
+                // Before the strokes load: a recipe finds its alpha by the
+                // pixels saved with the project, which aren't in the list yet.
                 self.adopt_alphas(alphas);
+                self.replace_document(scene, Some(path.to_path_buf()));
                 self.link = Link::detect(path, &self.scene);
                 self.protect_path(path);
                 self.remember_recent(path);
@@ -4718,8 +4752,9 @@ impl Editor {
             Scene::from_data(d)
         }) {
             Ok(Some(scene)) => {
-                self.replace_document(scene, None);
+                // Same order as opening: alphas first, so recipes can find them.
                 self.adopt_alphas(alphas);
+                self.replace_document(scene, None);
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
@@ -5066,12 +5101,15 @@ impl Editor {
         {
             return false;
         }
-        let Drag::Stroke { hold: Some(h), .. } = std::mem::replace(&mut self.drag, Drag::None) else {
+        let Drag::Stroke { mut stroke, hold: Some(h), .. } = std::mem::replace(&mut self.drag, Drag::None) else {
             unreachable!("checked above")
         };
+        let mut h = *h;
         if self.hold_to_curve_ask {
-            // Ask first; the stroke stays as drawn until the answer.
-            self.hold_offer = Some(*h);
+            // Ask first; the stroke stays as drawn until the answer. Keep
+            // what was drawn so answering "no" can still record a recipe.
+            h.recipe = stroke.take_recipe();
+            self.hold_offer = Some(h);
             self.status = "Edit this stroke as a curve? Enter: yes, Esc: no".into();
             return true;
         }
@@ -5095,8 +5133,9 @@ impl Editor {
             self.history.revert_pending(&mut self.scene);
             self.begin_curve(h.kind, h.invert, &h.path);
         } else {
-            self.history.commit();
-            self.status = format!("Kept the {} stroke", h.kind.label());
+            let kind = h.kind;
+            self.commit_living_stroke(kind, h.recipe);
+            self.status = format!("Kept the {} stroke", kind.label());
         }
     }
 
@@ -5283,8 +5322,8 @@ impl Editor {
             stroke.set_modulation(size, strength);
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
         }
-        self.history.commit();
-        self.living_record(c.kind, None);
+        let recipe = stroke.take_recipe();
+        self.commit_living_stroke(c.kind, recipe);
         self.status = format!("Applied curve stroke ({})", c.kind.label());
     }
 
@@ -13466,5 +13505,158 @@ mod tests {
         assert!((left + right).abs() < 1e-3 * right.abs().max(1.0), "the left moves left as far: {left} vs {right}");
         e.undo();
         assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    fn with_living() -> Editor {
+        let mut e = editor();
+        e.living.enabled = true;
+        e.symmetry = Symmetry::default();
+        e
+    }
+
+    /// The newest recipe, replayed on `base`, matches the piece now.
+    fn replay_matches(e: &Editor, base: &Mesh) {
+        let recipe = e.living.strokes.iter().rev().find_map(|s| s.recipe.clone()).expect("a recipe");
+        let mut again = base.clone();
+        recipe.replay(&mut again, &mut |_, _| {});
+        let mesh = &e.scene.active().mesh;
+        assert_eq!(again.positions, mesh.positions);
+        assert_eq!(again.color, mesh.color);
+        assert_eq!(again.mask, mesh.mask);
+    }
+
+    #[test]
+    fn curve_stamp_line_and_a_declined_hold_keep_a_recipe() {
+        let mut e = with_living();
+        let base = e.scene.active().mesh.clone();
+        draw_curve(&mut e);
+        e.curve.as_mut().unwrap().weights[0] = (1.8, 0.4);
+        e.update_curve();
+        e.accept_curve();
+        let recipe = e.living.strokes.last().unwrap().recipe.clone().unwrap();
+        assert!(
+            recipe.events.iter().any(|ev| {
+                matches!(ev, oxy_sculpt::RecipeEvent::Modulation { size, strength } if *size > 1.2 && *strength < 0.9)
+            }),
+            "the curve point's size and strength are in the recipe"
+        );
+        replay_matches(&e, &base);
+
+        for mode in [StrokeMode::Stamp, StrokeMode::Line] {
+            let mut e = with_living();
+            e.stroke_mode = mode;
+            let base = e.scene.active().mesh.clone();
+            drag(&mut e, Vec2::new(360.0, 300.0), Vec2::new(460.0, 280.0));
+            assert_eq!(e.living.strokes.len(), 1, "{mode:?}");
+            replay_matches(&e, &base);
+        }
+
+        let mut e = with_living();
+        e.hold_to_curve_ask = true;
+        let base = e.scene.active().mesh.clone();
+        e.pointer = Some(Vec2::new(340.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        for i in 1..=20 {
+            e.pointer_moved(Vec2::new(340.0 + i as f32 * 4.0, 300.0));
+        }
+        assert!(e.tick_hold(Instant::now() + HOLD_TO_CURVE * 2));
+        e.pointer_up();
+        e.answer_hold_offer(false);
+        assert_eq!(e.living.strokes.len(), 1);
+        replay_matches(&e, &base);
+    }
+
+    #[test]
+    fn paint_symmetry_and_grab_brushes_keep_a_recipe() {
+        let mut e = with_living();
+        e.brush_kind = BrushKind::Paint;
+        e.paint_color = Vec3::new(0.2, 0.55, 0.1);
+        let base = e.scene.active().mesh.clone();
+        drag(&mut e, Vec2::new(360.0, 300.0), Vec2::new(450.0, 310.0));
+        assert!(e.scene.active().mesh.color.iter().any(|c| c.x < 0.9), "paint landed");
+        assert_eq!(e.living.strokes[0].recipe.as_ref().unwrap().paint, e.paint_color);
+        replay_matches(&e, &base);
+
+        let mut e = with_living();
+        e.symmetry.x = true;
+        e.scene.active_mut().symmetry_center = Some(Vec3::new(0.35, 0.0, 0.0));
+        let base = e.scene.active().mesh.clone();
+        drag(&mut e, Vec2::new(470.0, 280.0), Vec2::new(500.0, 330.0));
+        let recipe = e.living.strokes.last().unwrap().recipe.clone().unwrap();
+        assert_eq!(recipe.center, Vec3::new(0.35, 0.0, 0.0));
+        replay_matches(&e, &base);
+
+        let mut e = with_living();
+        e.symmetry.radial = 5;
+        e.symmetry.radial_axis = oxy_sculpt::Axis::Y;
+        let base = e.scene.active().mesh.clone();
+        drag(&mut e, Vec2::new(470.0, 300.0), Vec2::new(500.0, 340.0));
+        assert_eq!(e.living.strokes.last().unwrap().recipe.as_ref().unwrap().symmetry.radial, 5);
+        replay_matches(&e, &base);
+
+        for kind in [BrushKind::TopoMove, BrushKind::KelvinTwist, BrushKind::KelvinScale] {
+            let mut e = with_living();
+            e.brush_kind = kind;
+            e.brush_radius_pt = 80.0;
+            let base = e.scene.active().mesh.clone();
+            drag(&mut e, Vec2::new(400.0, 280.0), Vec2::new(460.0, 340.0));
+            assert!(e.living.strokes.last().and_then(|s| s.recipe.clone()).is_some(), "{kind:?}");
+            assert_ne!(e.scene.active().mesh.positions, base.positions, "{kind:?} moved the surface");
+            replay_matches(&e, &base);
+        }
+    }
+
+    #[test]
+    fn dynamic_detail_curve_move_and_the_gizmo_are_not_recipes() {
+        // The mesh is rebuilt: no living stroke, so no recipe.
+        let mut e = dyntopo_editor();
+        e.living.enabled = true;
+        let before = e.scene.active().mesh.triangle_count();
+        short_stroke(&mut e);
+        e.living_sync();
+        assert!(e.scene.active().mesh.triangle_count() > before);
+        assert!(e.living.strokes.iter().all(|s| s.recipe.is_none()));
+
+        // Dynamic detail is on, but this stroke doesn't rebuild the mesh.
+        // It is still recorded without a recipe.
+        let mut e = with_living();
+        e.dyntopo = true;
+        let (o, d) = e.camera.ray(Vec2::new(400.0, 300.0), e.canvas_size());
+        let hit = e.scene.active().mesh.raycast(o, d).expect("the view hits the sphere");
+        let radius = e.world_radius(hit.point, e.brush_radius_pt);
+        let edge = {
+            let mesh = &e.scene.active().mesh;
+            let p = mesh.triangles[hit.triangle as usize].map(|v| mesh.positions[v as usize]);
+            ((p[0] - p[1]).length() + (p[1] - p[2]).length() + (p[2] - p[0]).length()) / 3.0
+        };
+        let ratio = edge / (radius * 0.5);
+        e.dyntopo_detail = ratio.clamp(0.1, 1.0).log(0.1).clamp(0.0, 1.0);
+        let tris = e.scene.active().mesh.triangle_count();
+        drag(&mut e, Vec2::new(380.0, 300.0), Vec2::new(440.0, 300.0));
+        e.living_sync();
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris, "detail {ratio:.3} did not rebuild");
+        assert!(e.living.strokes.iter().any(|s| s.listed()), "the stroke is still editable");
+        assert!(e.living.strokes.iter().all(|s| s.recipe.is_none()), "but it has no recipe");
+
+        let mut e = rod_editor();
+        e.living.enabled = true;
+        draw_along_rod(&mut e);
+        let last = e.curve.as_ref().unwrap().points.len() - 1;
+        let end = e.camera.project(e.curve.as_ref().unwrap().points[last].0, e.canvas_size()).unwrap();
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + Vec2::new(0.0, -80.0));
+        e.pointer_up();
+        e.accept_curve();
+        assert!(e.scene.active().mesh.positions.iter().any(|p| p.y > 0.3));
+        assert!(e.living.strokes.iter().all(|s| s.recipe.is_none()), "Curve Move is not a recipe");
+
+        let mut e = with_living();
+        e.toggle_gizmo(GizmoMode::Move);
+        let layout = e.gizmo_layout().expect("gizmo");
+        let end = layout.axes[0].expect("X handle");
+        drag(&mut e, end, end + (end - layout.center));
+        assert!(e.history.can_undo());
+        assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
     }
 }
