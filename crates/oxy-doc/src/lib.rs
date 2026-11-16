@@ -408,6 +408,10 @@ pub struct SavedStroke {
     pub deltas: Vec<Vec3>,
     /// Color change per point; empty when the stroke didn't paint.
     pub colors: Vec<Vec3>,
+    /// The `STRI` section: what was drawn, as the bytes of an
+    /// `oxy_sculpt::StrokeRecipe` (RFC 0025), kept opaque here. Empty when
+    /// the stroke has none.
+    pub recipe: Vec<u8>,
 }
 
 impl SavedStrokes {

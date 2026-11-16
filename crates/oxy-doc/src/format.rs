@@ -129,6 +129,13 @@
 //!   `encode_strokes` for the layout. The piece's surface already includes
 //!   every stroke, so older readers skip it and open the project as it
 //!   looks, with the strokes fixed in place.
+//! - `STRI` (optional, since 4.0.0-beta.16): what was drawn for the strokes
+//!   of the **preceding** `STRK` (their recipes, RFC 0025), in the same
+//!   order: `count:u32` then per stroke `len:u32 bytes:u8*len`, `len` 0 for
+//!   a stroke without one. The bytes are an `oxy_sculpt::StrokeRecipe`
+//!   (layout in `StrokeRecipe::to_bytes`), opaque to this crate. Written
+//!   only when some stroke has a recipe. Older readers skip it: their
+//!   strokes can be faded and removed as before, not re-sculpted.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into
@@ -266,6 +273,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
             sections.push((*b"STRK", encode_strokes(st)));
+            if st.strokes.iter().any(|s| !s.recipe.is_empty()) {
+                sections.push((*b"STRI", encode_stroke_recipes(st)));
+            }
         }
         if !p.mesh.uv.is_empty() && p.mesh.uv.len() == p.mesh.triangles.len() {
             let mut b = Vec::with_capacity(4 + p.mesh.uv.len() * 24);
@@ -657,6 +667,20 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring damaged strokes on piece {:?}: {e}", piece.name),
                 }
             }
+            b"STRI" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STRI before any piece".into()))?;
+                match (decode_stroke_recipes(&raw), &mut piece.strokes) {
+                    (Ok(list), Some(st)) if list.len() == st.strokes.len() => {
+                        for (s, recipe) in st.strokes.iter_mut().zip(list) {
+                            s.recipe = recipe;
+                        }
+                    }
+                    (Ok(_), _) => {
+                        log::warn!("ignoring stroke recipes that don't match the strokes of piece {:?}", piece.name)
+                    }
+                    (Err(e), _) => log::warn!("ignoring damaged stroke recipes on piece {:?}: {e}", piece.name),
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -722,6 +746,29 @@ fn encode_strokes(st: &crate::SavedStrokes) -> Vec<u8> {
     b
 }
 
+fn encode_stroke_recipes(st: &crate::SavedStrokes) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.extend_from_slice(&(st.strokes.len() as u32).to_le_bytes());
+    for s in &st.strokes {
+        b.extend_from_slice(&(s.recipe.len() as u32).to_le_bytes());
+        b.extend_from_slice(&s.recipe);
+    }
+    b
+}
+
+/// RETURNS: per stroke, its recipe's bytes (empty: none).
+fn decode_stroke_recipes(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, 4)?;
+    (0..count)
+        .map(|_| {
+            let n = r.u32()? as usize;
+            Ok(r.take(n)?.to_vec())
+        })
+        .collect()
+}
+
 fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes> {
     let mut r = Reader { data: raw, pos: 0 };
     let vertices = r.u32()?;
@@ -775,7 +822,16 @@ fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes
             return Err(Error::Corrupt("stroke strength is not a number".into()));
         }
         let group = (flags & 1 != 0).then_some(group).filter(|g| groups.iter().any(|x| x.id == *g));
-        strokes.push(crate::SavedStroke { brush, made, strength, group, vertices: vs, deltas, colors });
+        strokes.push(crate::SavedStroke {
+            brush,
+            made,
+            strength,
+            group,
+            vertices: vs,
+            deltas,
+            colors,
+            recipe: Vec::new(),
+        });
     }
     Ok(crate::SavedStrokes { vertices, groups, strokes })
 }
@@ -1748,11 +1804,14 @@ mod tests {
             vertices: picks.clone(),
             deltas: picks.iter().map(|&v| Vec3::splat(v as f32)).collect(),
             colors: Vec::new(),
+            // Any bytes: this crate keeps a recipe as it is.
+            recipe: vec![1, 2, 3, 250],
         };
         let painted = SavedStroke {
             brush: "paint".into(),
             group: None,
             colors: picks.iter().map(|&v| Vec3::new(v as f32, 0.0, 1.0)).collect(),
+            recipe: Vec::new(),
             ..stroke.clone()
         };
         let group = SavedStrokeGroup { id: 7, name: "Wrinkles".into(), strength: 1.25, visible: false };
@@ -1784,6 +1843,17 @@ mod tests {
         assert_eq!(st.strokes.len(), 2);
         assert_eq!(st.strokes[0].group, Some(7));
         assert_eq!(st.strokes[1].group, None);
+        // Recipes come back with their strokes (STRI), one of them empty.
+        assert_eq!(bytes.windows(4).filter(|w| w == b"STRI").count(), 1);
+        assert_eq!(st.strokes[0].recipe, vec![1, 2, 3, 250]);
+        assert!(st.strokes[1].recipe.is_empty());
+        // A reader without STRI (4.0.0-beta.15) keeps the strokes, without recipes.
+        let mut older = bytes.clone();
+        let i = older.windows(4).position(|w| w == b"STRI").unwrap();
+        older[i..i + 4].copy_from_slice(b"ZZZZ");
+        let kept = decode(&older).unwrap().pieces.remove(0).into_piece();
+        let kept = kept.strokes.as_ref().expect("strokes still load");
+        assert!(kept.strokes.len() == 2 && kept.strokes.iter().all(|s| s.recipe.is_empty()));
         for s in &st.strokes {
             assert!(s.vertices.windows(2).all(|w| w[0] < w[1]), "sorted");
             assert_eq!(s.vertices.len(), picks.len());

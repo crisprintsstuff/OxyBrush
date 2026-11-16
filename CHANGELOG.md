@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Living strokes remember what was drawn** ([RFC 0025](docs/rfcs/0025-editable-and-portable-strokes.md), first step). With Living strokes on, each brush stroke also keeps its path, pressure and brush settings, and running them again makes exactly the same stroke. Nothing looks different yet: this is what editing a stroke afterwards, and placing saved strokes on other models, will be built on. Saved with the project in a new optional `STRI` section; older versions skip it and keep the strokes as before. Strokes made with dynamic detail, curve strokes and whole-piece tools aren't remembered this way.
+
 ## [4.0.0-beta.15] - 2026-11-16
 
 ### Added
