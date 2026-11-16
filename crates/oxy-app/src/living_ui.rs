@@ -4,7 +4,10 @@
 //! section (`layers_section`) shows the layers and opens this window.
 
 use crate::editor::Editor;
+use crate::living::{StrokeSetting, stroke_brush_editable};
 use egui::RichText;
+use oxy_sculpt::{BrushKind, Falloff};
+use std::sync::Arc;
 
 /// How long ago, in a few characters.
 fn ago(made: std::time::SystemTime) -> String {
@@ -31,7 +34,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         .resizable(true)
         .show(ctx, |ui| {
             if !ed.living.enabled {
-                ui.label("Living strokes is off. With it on, each stroke you make stays editable here: fade it, delete it or see it on its own, without undoing what came after.");
+                ui.label("Living strokes is off, so strokes can't be edited. With it on, each stroke you make stays editable here: fade it, change its brush, size or strength, delete it or see it on its own, without undoing what came after.");
                 ui.add_space(4.0);
                 if ui.button("Turn on Living strokes").clicked() {
                     ed.set_living_strokes(true);
@@ -50,7 +53,14 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     (s.id, s.brush.label().to_string(), ago(s.made), s.vertices.len(), s.strength, group)
                 })
                 .collect();
+            let cancel = ed.living_edit_id().is_some()
+                && ed.living.renaming.is_none()
+                && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            if cancel {
+                ed.living_cancel_edit();
+            }
             ui.label(RichText::new(format!("{} on {name}", plural(rows.len(), "stroke"))).strong());
+            edit_section(ui, ed);
             if let Some(note) = &ed.living.note {
                 ui.label(RichText::new(note).weak().small());
             }
@@ -69,7 +79,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         if (*strength - 1.0).abs() > 1e-3 { format!("  ·  {:.0}%", strength * 100.0) } else { String::new() },
                         group.as_ref().map_or(String::new(), |g| format!("  ·  [{g}]"))
                     );
-                    if ui.selectable_label(selected, text).clicked() {
+                    let row = ui.selectable_label(selected, text);
+                    if row.double_clicked() {
+                        let _ = ed.living_open_edit(*id);
+                    } else if row.clicked() {
                         if shift_or_ctrl {
                             if !ed.living.selected.remove(id) {
                                 ed.living.selected.insert(*id);
@@ -104,6 +117,15 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 });
                 ui.horizontal(|ui| {
+                    let one = ed.living.selected.len() == 1;
+                    if ui
+                        .add_enabled(one, egui::Button::new("Edit…"))
+                        .on_hover_text("Change this stroke's brush, Raise or Carve, size, strength, falloff, alpha or spacing. The stroke is sculpted again; later strokes stay as they are. Esc cancels.")
+                        .clicked()
+                        && let Some(id) = ed.living.selected.iter().next().copied()
+                    {
+                        let _ = ed.living_open_edit(id);
+                    }
                     if ui.button("Delete").on_hover_text("Take the selected strokes' change off the surface; later strokes stay. Undo brings it back.").clicked() {
                         ed.living_delete_selected();
                     }
@@ -199,6 +221,112 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     if !open {
         ed.living.show = false;
     }
+}
+
+/// Brush, Raise/Carve, size, strength, falloff, alpha and spacing for the
+/// stroke being edited. Changing one re-sculpts it.
+fn edit_section(ui: &mut egui::Ui, ed: &mut Editor) {
+    let Some(id) = ed.living_edit_id() else { return };
+    ui.add_space(4.0);
+    ui.separator();
+    if let Some(reason) = ed.living_edit_block().map(str::to_owned) {
+        ui.label(RichText::new("Can't edit this stroke").strong());
+        ui.label(reason);
+        if ui.button("Close").clicked() {
+            ed.living_close_edit();
+        }
+        ui.separator();
+        return;
+    }
+    let Some(mut recipe) = ed.living_edit_recipe().cloned() else { return };
+    ui.label(RichText::new(format!("Edit {}", recipe.settings.kind.label())).strong());
+    ui.label(RichText::new("Later strokes stay as they are. Esc cancels.").weak().small());
+    egui::Grid::new(format!("stroke_edit_{id}")).num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
+        ui.label("Brush");
+        egui::ComboBox::from_id_salt("stroke_edit_brush").selected_text(recipe.settings.kind.label()).show_ui(
+            ui,
+            |ui| {
+                for kind in BrushKind::ALL.into_iter().filter(|kind| stroke_brush_editable(*kind)) {
+                    if ui.selectable_value(&mut recipe.settings.kind, kind, kind.label()).clicked() {
+                        ed.living_edit_setting(StrokeSetting::Brush(kind), false);
+                    }
+                }
+            },
+        );
+        ui.end_row();
+        ui.label("Direction");
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!recipe.invert, "Raise").clicked() {
+                ed.living_edit_setting(StrokeSetting::Invert(false), false);
+            }
+            if ui.selectable_label(recipe.invert, "Carve").clicked() {
+                ed.living_edit_setting(StrokeSetting::Invert(true), false);
+            }
+        });
+        ui.end_row();
+        drag_row(ui, ed, "Size", recipe.settings.radius, ed.world_radius_range(), StrokeSetting::Radius);
+        drag_row(ui, ed, "Strength", recipe.settings.strength, 0.01..=1.0, StrokeSetting::Strength);
+        ui.label("Falloff");
+        egui::ComboBox::from_id_salt("stroke_edit_falloff").selected_text(recipe.settings.falloff.label()).show_ui(
+            ui,
+            |ui| {
+                for falloff in Falloff::ALL {
+                    if ui.selectable_value(&mut recipe.settings.falloff, falloff, falloff.label()).clicked() {
+                        ed.living_edit_setting(StrokeSetting::Falloff(falloff), false);
+                    }
+                }
+            },
+        );
+        ui.end_row();
+        ui.label("Alpha");
+        let current = recipe.alpha.as_ref().map(|stamp| stamp.alpha.name.clone()).unwrap_or_else(|| "None".into());
+        let names: Vec<String> = ed.alphas.iter().map(|alpha| alpha.name.clone()).collect();
+        let selected = ed
+            .alphas
+            .iter()
+            .position(|alpha| recipe.alpha.as_ref().is_some_and(|stamp| Arc::ptr_eq(&stamp.alpha, alpha)));
+        egui::ComboBox::from_id_salt("stroke_edit_alpha").selected_text(current).show_ui(ui, |ui| {
+            if ui.selectable_label(selected.is_none(), "None").clicked() {
+                ed.living_edit_setting(StrokeSetting::Alpha(None), false);
+            }
+            for (index, name) in names.iter().enumerate() {
+                if ui.selectable_label(selected == Some(index), name).clicked() {
+                    ed.living_edit_setting(StrokeSetting::Alpha(Some(index)), false);
+                }
+            }
+        });
+        ui.end_row();
+        drag_row(ui, ed, "Spacing", recipe.settings.spacing, 0.02..=1.0, StrokeSetting::Spacing);
+    });
+    ui.horizontal(|ui| {
+        if ui.button("Done").on_hover_text("Keep these settings. Each change is already an undo step.").clicked() {
+            ed.living_close_edit();
+        }
+        if ui.button("Cancel").on_hover_text("Put the stroke back as it was when Edit opened.").clicked() {
+            ed.living_cancel_edit();
+        }
+    });
+    ui.separator();
+}
+
+fn drag_row(
+    ui: &mut egui::Ui,
+    ed: &mut Editor,
+    label: &str,
+    value: f32,
+    range: std::ops::RangeInclusive<f32>,
+    setting: impl Fn(f32) -> StrokeSetting,
+) {
+    ui.label(label);
+    let mut value = value;
+    let response = ui.add(crate::widgets::Bar(egui::Slider::new(&mut value, range).max_decimals(2)));
+    if response.changed() && response.dragged() {
+        ed.living_edit_setting(setting(value), true);
+    }
+    if response.drag_stopped() || (response.changed() && !response.dragged()) {
+        ed.living_edit_setting(setting(value), false);
+    }
+    ui.end_row();
 }
 
 /// The groups of the piece, each a row like a layer: eye, name, strength,

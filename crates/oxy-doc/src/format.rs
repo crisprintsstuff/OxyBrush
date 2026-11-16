@@ -136,11 +136,15 @@
 //!   opaque to this crate. Each recipe starts with `OXSR` and its own
 //!   version byte (1: an alpha is named and a sample of its raw sample
 //!   bits; 2: an alpha is a hash of every pixel quantized to the 16-bit
-//!   values `ALPH` stores, and the name is not an identity). The section
-//!   layout is unchanged, so a reader that skips unknown sections still
-//!   skips `STRI`, and a reader of version 1 recipes still reads them. A
-//!   newer recipe version drops that stroke's recipe and keeps the stroke.
-//!   Written only when some stroke has a recipe.
+//!   values `ALPH` stores, and the name is not an identity). A blob that
+//!   starts with `OXNR` and one tag byte is not a recipe: it says why the
+//!   stroke can't be edited (1 dynamic detail, 2 a mirrored copy or a split
+//!   side, 3 a whole-piece tool). Older readers of `STRI` treat that blob
+//!   as a recipe they can't read and keep the stroke without one. The
+//!   section layout is unchanged, so a reader that skips unknown sections
+//!   still skips `STRI`, and a reader of version 1 recipes still reads them.
+//!   A newer recipe version drops that stroke's recipe and keeps the stroke.
+//!   Written when some stroke has a recipe or a reason.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
 //! older versions. Files are written to a temporary file and renamed into

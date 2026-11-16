@@ -33,18 +33,122 @@
 //! the strokes whose share changed. "Keep only where unmasked" changes a
 //! stroke's own deltas (times `1 - mask`), and is undone by putting the old
 //! deltas back. Strokes are saved with the project in the `STRK` section.
+//!
+//! Edit settings (RFC 0025) re-sculpts one stroke: that stroke and every
+//! later stroke come off the surface, the edited recipe is run, and the
+//! later strokes go back as they were stored. The undo step holds the old
+//! recipe and the old stored change.
 
 use crate::editor::Editor;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
 use oxy_sculpt::recipe::AlphaLookup;
-use oxy_sculpt::{BrushKind, StrokeRecipe};
+use oxy_sculpt::{AlphaStamp, BrushKind, Falloff, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 
 /// Changes smaller than this (world units, or color 0..1) aren't recorded.
 const EPS: f32 = 1e-7;
+
+/// A re-sculpt whose estimate is over this leaves the UI thread. Two frames
+/// at 60 Hz.
+const RESCULPT_JOB_MS: f32 = 32.0;
+
+/// Why a listed stroke has no recipe, so Edit can say so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoRecipe {
+    /// Saved before recipes, or the recipe bytes didn't load.
+    BeforeThisVersion,
+    /// Living strokes is off, so nothing can be re-sculpted.
+    LivingOff,
+    /// Dynamic detail was on, whether or not this stroke rebuilt the mesh.
+    DynamicDetail,
+    /// Curve Move, Deform, or the gizmo: they aren't strokes.
+    WholePiece,
+    /// A mirror copy, or one side of a stroke that was split.
+    Copy,
+}
+
+impl NoRecipe {
+    /// What Edit shows for this reason.
+    pub fn message(self) -> &'static str {
+        match self {
+            NoRecipe::BeforeThisVersion => {
+                "This stroke was made before this version kept what was drawn, so its settings can't be edited. It can still be faded or deleted."
+            }
+            NoRecipe::LivingOff => {
+                "Living strokes is off, so strokes can't be edited. Turn it on in Preferences > General. Strokes made while it was off aren't listed."
+            }
+            NoRecipe::DynamicDetail => {
+                "This stroke was made with dynamic detail on, which changes the triangles under it, so its settings can't be edited. It can still be faded or deleted."
+            }
+            NoRecipe::WholePiece => {
+                "Curve Move, Deform and the gizmo change the whole piece, so they aren't strokes and their settings can't be edited here."
+            }
+            NoRecipe::Copy => {
+                "This is a mirrored copy, or one side of a stroke that was split, not the stroke that was drawn, so its settings can't be edited. Edit the original, or fade this one."
+            }
+        }
+    }
+
+    /// Bytes stored in `STRI` in place of a recipe: `OXNR` and a tag.
+    /// Empty means [`NoRecipe::BeforeThisVersion`] (what older files have).
+    fn to_marker(self) -> Option<Vec<u8>> {
+        let tag = match self {
+            NoRecipe::DynamicDetail => 1,
+            NoRecipe::Copy => 2,
+            NoRecipe::WholePiece => 3,
+            NoRecipe::BeforeThisVersion | NoRecipe::LivingOff => return None,
+        };
+        Some(vec![b'O', b'X', b'N', b'R', tag])
+    }
+
+    fn from_marker(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() == 5 && &bytes[..4] == b"OXNR" {
+            match bytes[4] {
+                1 => Some(Self::DynamicDetail),
+                2 => Some(Self::Copy),
+                3 => Some(Self::WholePiece),
+                _ => None,
+            }
+        } else {
+            None
+        }
+    }
+}
+
+/// One setting in the stroke Edit panel.
+#[derive(Clone, Copy, Debug)]
+pub enum StrokeSetting {
+    Brush(BrushKind),
+    /// Raise (false) or Carve (true): the stroke's invert.
+    Invert(bool),
+    /// Brush size, world units.
+    Radius(f32),
+    /// Brush strength, 0..=1. The list's strength slider is the fade.
+    Strength(f32),
+    Falloff(Falloff),
+    /// Dab spacing as a fraction of the size.
+    Spacing(f32),
+    /// An alpha from the editor's list, or none.
+    Alpha(Option<usize>),
+}
+
+/// Brushes a re-sculpt can run. The others aren't dab strokes.
+pub fn stroke_brush_editable(kind: BrushKind) -> bool {
+    !matches!(
+        kind,
+        BrushKind::Mask
+            | BrushKind::PaintGroups
+            | BrushKind::CurveMove
+            | BrushKind::InsertPrimitive
+            | BrushKind::Tube
+            | BrushKind::PlaneClip
+            | BrushKind::LineSplit
+            | BrushKind::CutAway
+    )
+}
 
 /// One recorded stroke.
 #[derive(Clone, Debug)]
@@ -80,6 +184,8 @@ pub struct LivingStroke {
     /// rebuilt), and for copies and halves. Curve Move and whole-piece
     /// tools are not recorded at all.
     pub recipe: Option<Arc<StrokeRecipe>>,
+    /// Why `recipe` is missing, when it is. None when the stroke can be edited.
+    no_recipe: Option<NoRecipe>,
 }
 
 impl LivingStroke {
@@ -146,6 +252,53 @@ struct PanelEdit {
     strokes: Vec<(u64, Snap, Snap)>,
     groups: (Vec<StrokeGroup>, Vec<StrokeGroup>),
     data: Vec<(u64, Data, Data)>,
+    /// A re-sculpt: the stroke's points, change and recipe, before and after.
+    bodies: Vec<(u64, EditBody, EditBody)>,
+}
+
+/// A stroke's stored change and recipe, for an edit's undo step.
+#[derive(Clone, Debug)]
+struct EditBody {
+    vertices: Vec<u32>,
+    deltas: Vec<Vec3>,
+    colors: Vec<Vec3>,
+    recipe: Arc<StrokeRecipe>,
+    brush: BrushKind,
+}
+
+/// The stroke whose settings are open in the Strokes panel.
+struct StrokeEdit {
+    id: u64,
+    /// Settings the panel shows. None when the stroke can't be edited.
+    draft: Option<StrokeRecipe>,
+    /// Set while a slider drag hasn't been committed.
+    drag: Option<StrokeDrag>,
+    /// Undo entries this session committed, oldest first.
+    steps: Vec<u64>,
+    /// Why the controls are replaced by an explanation.
+    blocked: Option<String>,
+}
+
+/// Strengths aren't what's dragged here: the mesh shows a live re-sculpt,
+/// and `from` is the stroke as it was when the drag started.
+struct StrokeDrag {
+    from: EditBody,
+    last: Instant,
+    cost: Duration,
+    /// A preview has changed the mesh from `from`.
+    dirty: bool,
+}
+
+/// A re-sculpt running off the UI thread. The mesh is back at `from` until
+/// the result arrives.
+struct ResculptWait {
+    id: u64,
+    from: EditBody,
+    recipe: StrokeRecipe,
+    cancelled: bool,
+    /// Committed steps of this session to undo if the edit is cancelled
+    /// before the result arrives.
+    undo_on_cancel: usize,
 }
 
 /// Strokes set to 0 by Solo, with the strengths to put back.
@@ -192,6 +345,11 @@ pub struct Living {
     /// The layer new strokes go into (sculpt layers made ahead of time).
     pub target: Option<Target>,
     drag_from: Option<DragFrom>,
+    /// Edit settings for one stroke (RFC 0025). The panel reads it through
+    /// [`Editor::living_edit_id`].
+    editing: Option<StrokeEdit>,
+    /// A re-sculpt waiting on a background job.
+    resculpt_wait: Option<ResculptWait>,
 }
 
 /// Where new strokes go: a sculpt layer chosen before sculpting.
@@ -292,6 +450,7 @@ impl Living {
             applied: 0.0,
             // A copy or a half isn't what the recipe draws.
             recipe: None,
+            no_recipe: Some(NoRecipe::Copy),
             ..from.clone()
         }
     }
@@ -306,6 +465,8 @@ impl Living {
         self.drag_from = None;
         self.renaming = None;
         self.target = None;
+        self.editing = None;
+        self.resculpt_wait = None;
     }
 }
 
@@ -318,6 +479,10 @@ impl Editor {
         }
         self.living.enabled = on;
         if !on {
+            self.living.editing = None;
+            if let Some(wait) = &mut self.living.resculpt_wait {
+                wait.cancelled = true;
+            }
             let n = self.living.strokes.iter().filter(|s| s.listed()).count();
             self.living.clear();
             self.status = format!("Living strokes off; {n} stroke(s) baked into the surface");
@@ -383,6 +548,7 @@ impl Editor {
             undone: false,
             group: None,
             applied: 1.0,
+            no_recipe: recipe.is_none().then_some(NoRecipe::DynamicDetail),
             recipe: recipe.map(Arc::new),
         });
         self.living_record_into_target(piece_id);
@@ -487,9 +653,29 @@ impl Editor {
                 s.colors.clone_from(c);
             }
         }
+        for (id, before, after) in &e.bodies {
+            if let Some(s) = strokes.iter_mut().find(|s| s.id == *id) {
+                let body = if undone { before } else { after };
+                s.vertices.clone_from(&body.vertices);
+                s.deltas.clone_from(&body.deltas);
+                s.colors.clone_from(&body.colors);
+                s.recipe = Some(Arc::clone(&body.recipe));
+                s.brush = body.brush;
+                s.no_recipe = None;
+            }
+        }
         groups.retain(|g| g.piece != e.piece);
         groups.extend(if undone { e.groups.0.iter() } else { e.groups.1.iter() }.cloned());
         living.drag_from = None;
+        if let Some(edit) = &mut living.editing {
+            edit.drag = None;
+            if let Some(stroke) = strokes.iter().find(|s| s.id == edit.id)
+                && let Some(recipe) = &stroke.recipe
+            {
+                edit.draft = Some(recipe.as_ref().clone());
+                edit.blocked = None;
+            }
+        }
     }
 
     /// Call every frame (and before panel changes): drop records that no
@@ -532,6 +718,18 @@ impl Editor {
             && self.living.group(*g).is_none()
         {
             self.living.renaming = None;
+        }
+        if self.living.editing.as_ref().is_some_and(|edit| !ids.contains(&edit.id)) {
+            self.living.editing = None;
+        }
+        let keep: Vec<u64> = self
+            .living
+            .editing
+            .as_ref()
+            .map(|edit| edit.steps.iter().copied().filter(|id| self.history.can_undo_id(*id)).collect())
+            .unwrap_or_default();
+        if let Some(edit) = &mut self.living.editing {
+            edit.steps = keep;
         }
         if !baked.is_empty() {
             self.living.note = Some(format!(
@@ -700,6 +898,7 @@ impl Editor {
                 strokes: changed,
                 groups: (groups_before, groups_after),
                 data: data_log,
+                bodies: Vec::new(),
             });
         }
         true
@@ -1135,7 +1334,11 @@ impl Editor {
                 vertices: rows.iter().map(|r| r.0).collect(),
                 deltas: rows.iter().map(|r| r.1).collect(),
                 colors: if s.colors.is_empty() { Vec::new() } else { rows.iter().map(|r| r.2).collect() },
-                recipe: s.recipe.as_ref().map_or_else(Vec::new, |r| r.to_bytes()),
+                recipe: match (&s.recipe, s.no_recipe) {
+                    (Some(recipe), _) => recipe.to_bytes(),
+                    (None, Some(why)) => why.to_marker().unwrap_or_default(),
+                    (None, None) => Vec::new(),
+                },
             });
         }
         if strokes.is_empty() {
@@ -1233,10 +1436,19 @@ impl Editor {
                 // Version 1 (the first recipe build) still matches a built-in
                 // by name and the old fingerprint.
                 let find = |query: AlphaLookup| alphas.iter().find(|a| query.matches(a)).cloned();
-                let recipe = (!s.recipe.is_empty())
-                    .then(|| StrokeRecipe::from_bytes(&s.recipe, &find))
-                    .and_then(|r| r.map_err(|e| log::warn!("a stroke's recipe was not loaded: {e}")).ok())
-                    .map(Arc::new);
+                let (recipe, no_recipe) = if s.recipe.is_empty() {
+                    (None, Some(NoRecipe::BeforeThisVersion))
+                } else if let Some(why) = NoRecipe::from_marker(&s.recipe) {
+                    (None, Some(why))
+                } else {
+                    match StrokeRecipe::from_bytes(&s.recipe, &find) {
+                        Ok(recipe) => (Some(Arc::new(recipe)), None),
+                        Err(e) => {
+                            log::warn!("a stroke's recipe was not loaded: {e}");
+                            (None, Some(NoRecipe::BeforeThisVersion))
+                        }
+                    }
+                };
                 self.living.strokes.push(LivingStroke {
                     id,
                     piece: p.id,
@@ -1254,6 +1466,7 @@ impl Editor {
                     group,
                     applied: s.strength * factor,
                     recipe,
+                    no_recipe,
                 });
                 taken += 1;
             }
@@ -1452,6 +1665,491 @@ impl Editor {
         }
         Ok(self.status.clone())
     }
+}
+
+impl Editor {
+    /// The explanation Edit is showing, when the stroke can't be re-sculpted.
+    pub fn living_edit_block(&self) -> Option<&str> {
+        self.living.editing.as_ref().and_then(|edit| edit.blocked.as_deref())
+    }
+
+    /// The recipe the Edit panel is changing, when the stroke can be edited.
+    pub fn living_edit_recipe(&self) -> Option<&StrokeRecipe> {
+        self.living.editing.as_ref().and_then(|edit| edit.draft.as_ref())
+    }
+
+    /// The stroke open in Edit, if any.
+    pub fn living_edit_id(&self) -> Option<u64> {
+        self.living.editing.as_ref().map(|edit| edit.id)
+    }
+
+    /// Open Edit for stroke `id`. A stroke without a recipe opens on the
+    /// reason it can't be changed. Esc ([`Self::living_cancel_edit`]) puts
+    /// the stroke back as it was when Edit opened.
+    pub fn living_open_edit(&mut self, id: u64) -> Result<(), String> {
+        if !self.living.enabled {
+            return Err(NoRecipe::LivingOff.message().to_string());
+        }
+        self.living_edit_finish();
+        let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id && s.listed()) else {
+            return Err("That stroke isn't in the list.".into());
+        };
+        if let Some(why) = stroke.no_recipe.filter(|_| stroke.recipe.is_none()) {
+            self.living.editing = Some(StrokeEdit {
+                id,
+                draft: None,
+                drag: None,
+                steps: Vec::new(),
+                blocked: Some(why.message().to_string()),
+            });
+            self.living.selected.clear();
+            self.living.selected.insert(id);
+            return Ok(());
+        }
+        let Some(recipe) = stroke.recipe.clone() else {
+            self.living.editing = Some(StrokeEdit {
+                id,
+                draft: None,
+                drag: None,
+                steps: Vec::new(),
+                blocked: Some(NoRecipe::BeforeThisVersion.message().to_string()),
+            });
+            return Ok(());
+        };
+        self.living.editing =
+            Some(StrokeEdit { id, draft: Some(recipe.as_ref().clone()), drag: None, steps: Vec::new(), blocked: None });
+        self.living.selected.clear();
+        self.living.selected.insert(id);
+        Ok(())
+    }
+
+    /// Keep the edits made so far and close the panel section.
+    pub fn living_close_edit(&mut self) {
+        self.living_edit_finish();
+        self.living.editing = None;
+    }
+
+    /// Esc: drop the edit in progress and undo every change this Edit made.
+    pub fn living_cancel_edit(&mut self) {
+        let Some(edit) = self.living.editing.take() else {
+            if let Some(wait) = &mut self.living.resculpt_wait {
+                wait.cancelled = true;
+            }
+            return;
+        };
+        if edit.drag.as_ref().is_some_and(|drag| drag.dirty) {
+            let from = edit.drag.unwrap().from;
+            self.restore_edit_body(edit.id, &from);
+        }
+        if let Some(wait) = &mut self.living.resculpt_wait {
+            wait.cancelled = true;
+            wait.undo_on_cancel = edit.steps.len();
+            self.status = "Stroke edit cancelled".into();
+            return;
+        }
+        self.undo_edit_steps(&edit.steps);
+        self.status = "Stroke edit cancelled".into();
+    }
+
+    /// Change one setting. `preview` is a slider drag: the surface updates
+    /// at a reduced rate, and the full stroke is applied when the drag ends
+    /// (`preview` false).
+    pub fn living_edit_setting(&mut self, setting: StrokeSetting, preview: bool) {
+        if self.living.editing.as_ref().is_some_and(|edit| edit.blocked.is_some()) {
+            return;
+        }
+        if self.job.is_some() {
+            self.status = "Wait for the stroke edit to finish".into();
+            return;
+        }
+        let Some(id) = self.living.editing.as_ref().map(|edit| edit.id) else { return };
+        let Some(mut draft) = self.living.editing.as_ref().and_then(|edit| edit.draft.clone()) else { return };
+        apply_setting(&mut draft, setting, &self.alphas);
+        if self.living.editing.as_ref().is_some_and(|edit| edit.drag.is_none())
+            && let Some(from) = self.edit_body(id)
+        {
+            self.living.editing.as_mut().unwrap().drag = Some(StrokeDrag {
+                from,
+                last: Instant::now() - Duration::from_secs(1),
+                cost: Duration::ZERO,
+                dirty: false,
+            });
+        }
+        if let Some(edit) = &mut self.living.editing {
+            edit.draft = Some(draft.clone());
+        }
+        if preview {
+            let throttled = self.living.editing.as_ref().is_some_and(|edit| {
+                edit.drag.as_ref().is_some_and(|drag| {
+                    drag.dirty && drag.last.elapsed() < drag.cost.mul_f32(1.5).max(Duration::from_millis(50))
+                })
+            });
+            if throttled {
+                return;
+            }
+            let shown = preview_recipe(&draft);
+            let started = Instant::now();
+            self.resculpt_now(id, &shown, false);
+            if let Some(drag) = self.living.editing.as_mut().and_then(|edit| edit.drag.as_mut()) {
+                drag.cost = started.elapsed();
+                drag.last = Instant::now();
+                drag.dirty = true;
+            }
+            return;
+        }
+        // The drag's full result, from the surface the drag started on.
+        let drag = self.living.editing.as_mut().and_then(|edit| edit.drag.take());
+        let dirty = drag.as_ref().is_some_and(|drag| drag.dirty);
+        let Some(from) = drag.map(|drag| drag.from).or_else(|| self.edit_body(id)) else { return };
+        if recipe_same(&from.recipe, &draft) {
+            if dirty {
+                self.restore_edit_body(id, &from);
+            }
+            return;
+        }
+        draft.retarget_plan(&from.recipe.settings);
+        if let Some(edit) = &mut self.living.editing {
+            edit.draft = Some(draft.clone());
+        }
+        if dirty {
+            self.restore_edit_body(id, &from);
+        }
+        if replay_estimate_ms(&draft) > RESCULPT_JOB_MS {
+            self.start_resculpt_job(id, from, draft);
+        } else {
+            self.commit_resculpt(id, from, &draft);
+        }
+    }
+
+    /// Commit a slider drag that is still open. Done and switching strokes
+    /// call this.
+    pub fn living_edit_finish(&mut self) {
+        let pending = self.living.editing.as_ref().is_some_and(|edit| edit.drag.is_some());
+        if !pending {
+            return;
+        }
+        let Some(draft) = self.living.editing.as_ref().and_then(|edit| edit.draft.clone()) else { return };
+        // Re-apply the draft as a finished change. The setting is already on the draft.
+        self.living_edit_setting(setting_of(&draft), false);
+    }
+
+    /// The background re-sculpt finished. `mesh` is the piece after it.
+    pub(crate) fn finish_resculpt_job(&mut self, id: u64, new_mesh: oxy_mesh::Mesh, change: oxy_sculpt::StoredChange) {
+        let Some(wait) = self.living.resculpt_wait.take() else { return };
+        if wait.cancelled || wait.id != id || self.living.strokes.iter().all(|s| s.id != id) {
+            self.undo_edit_steps_n(wait.undo_on_cancel);
+            self.status = "Stroke edit cancelled".into();
+            return;
+        }
+        let Some(index) =
+            self.scene.index_of(self.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0))
+        else {
+            return;
+        };
+        let mesh = &self.scene.pieces[index].mesh;
+        if mesh.vertex_count() != new_mesh.vertex_count() {
+            self.status = "The piece changed while the stroke was being edited".into();
+            return;
+        }
+        let painted = mesh.is_painted() || wait.recipe.settings.kind == BrushKind::Paint;
+        let pid = self.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0);
+        self.history.begin_with("Edit stroke", pid, mesh, painted);
+        let mesh = &mut self.scene.pieces[index].mesh;
+        let mut chunks = Vec::new();
+        for (i, chunk) in mesh.chunks.iter().enumerate() {
+            let range = chunk.vertices.start as usize..chunk.vertices.end as usize;
+            let pos = mesh.positions[range.clone()] != new_mesh.positions[range.clone()];
+            let color = painted
+                && mesh.color.len() == mesh.positions.len()
+                && mesh.color[range.clone()] != new_mesh.color[range.clone()];
+            if pos || color {
+                chunks.push(i as u32);
+            }
+        }
+        if chunks.is_empty() {
+            chunks.push(0);
+        }
+        for &chunk in &chunks {
+            self.history.touch(mesh, chunk);
+        }
+        for &chunk in &chunks {
+            let range = mesh.chunks[chunk as usize].vertices.clone();
+            let range = range.start as usize..range.end as usize;
+            mesh.positions[range.clone()].copy_from_slice(&new_mesh.positions[range.clone()]);
+            if painted && mesh.color.len() == mesh.positions.len() {
+                mesh.color[range.clone()].copy_from_slice(&new_mesh.color[range]);
+            }
+        }
+        let moved: Vec<u32> = chunks
+            .iter()
+            .flat_map(|&chunk| {
+                let range = mesh.chunks[chunk as usize].vertices.clone();
+                range.collect::<Vec<_>>()
+            })
+            .collect();
+        mesh.update_after_move(&moved);
+        mesh.tighten_bounds();
+        if painted {
+            mesh.mark_all_dirty();
+        }
+        self.history.commit();
+        let after = EditBody {
+            vertices: change.vertices,
+            deltas: change.deltas,
+            colors: change.colors,
+            recipe: Arc::new(wait.recipe.clone()),
+            brush: wait.recipe.settings.kind,
+        };
+        self.write_edit_body(id, &after);
+        self.note_edit(id, pid, wait.from, after);
+        self.status = format!("Edited the {} stroke", wait.recipe.settings.kind.label());
+    }
+
+    fn start_resculpt_job(&mut self, id: u64, from: EditBody, recipe: StrokeRecipe) {
+        let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id) else { return };
+        let pid = stroke.piece;
+        let applied = stroke.applied;
+        let own = surface_of(stroke);
+        let later = self.later_changes(id);
+        let Some(index) = self.scene.index_of(pid) else { return };
+        let mesh = self.scene.pieces[index].mesh.clone();
+        let recipe_job = recipe.clone();
+        self.living.resculpt_wait = Some(ResculptWait { id, from, recipe, cancelled: false, undo_on_cancel: 0 });
+        self.start_job("Edit stroke".into(), Vec::new(), move || {
+            let mut mesh = mesh;
+            let change = resculpt(&mut mesh, &own, &later, applied, &recipe_job, &mut |_, _| {});
+            Ok(crate::editor::JobResult::Resculpt { id, mesh, change })
+        });
+        if self.job.is_none() {
+            // start_job refused (another job). The surface is already back
+            // at `from`; drop the wait so the next change can try again.
+            self.living.resculpt_wait = None;
+        }
+    }
+
+    fn commit_resculpt(&mut self, id: u64, from: EditBody, recipe: &StrokeRecipe) {
+        let Some(pid) = self.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece) else { return };
+        self.resculpt_now(id, recipe, true);
+        let Some(after) = self.edit_body(id) else { return };
+        // resculpt_now with history already committed the mesh step and
+        // recorded the body. Nothing else to do when it did.
+        let _ = (pid, from, after);
+    }
+
+    /// Run `recipe` on the surface in place of stroke `id`. When `record`
+    /// is set, the change is one undo step from the surface as it is now
+    /// (the caller has put back the pre-edit stroke).
+    fn resculpt_now(&mut self, id: u64, recipe: &StrokeRecipe, record: bool) {
+        let from = record.then(|| self.edit_body(id)).flatten();
+        let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id) else { return };
+        let pid = stroke.piece;
+        let applied = stroke.applied;
+        let had_color = stroke.colors.iter().any(|c| *c != Vec3::ZERO);
+        let own = surface_of(stroke);
+        let later = self.later_changes(id);
+        let Some(index) = self.scene.index_of(pid) else { return };
+        let painted =
+            had_color || recipe.settings.kind == BrushKind::Paint || self.scene.pieces[index].mesh.is_painted();
+        if record {
+            let mesh = &self.scene.pieces[index].mesh;
+            self.history.begin_with("Edit stroke", pid, mesh, painted);
+            let mesh = &self.scene.pieces[index].mesh;
+            if let Some(&chunk) = own.vertices.first().and_then(|&v| mesh.vertex_chunk_of(v)) {
+                self.history.touch(mesh, chunk);
+            } else if !mesh.chunks.is_empty() {
+                self.history.touch(mesh, 0);
+            }
+        }
+        let change = if record {
+            let history = &mut self.history;
+            let mesh = &mut self.scene.pieces[index].mesh;
+            resculpt(mesh, &own, &later, applied, recipe, &mut |mesh, chunk| history.touch(mesh, chunk))
+        } else {
+            let mesh = &mut self.scene.pieces[index].mesh;
+            resculpt(mesh, &own, &later, applied, recipe, &mut |_, _| {})
+        };
+        if record {
+            self.history.commit();
+        }
+        let after = EditBody {
+            vertices: change.vertices,
+            deltas: change.deltas,
+            colors: change.colors,
+            recipe: Arc::new(recipe.clone()),
+            brush: recipe.settings.kind,
+        };
+        self.write_edit_body(id, &after);
+        if record {
+            if let Some(from) = from {
+                self.note_edit(id, pid, from, after);
+            }
+            let label = recipe.settings.kind.label();
+            self.status = format!("Edited the {label} stroke");
+        }
+    }
+
+    fn note_edit(&mut self, id: u64, pid: u64, from: EditBody, after: EditBody) {
+        let Some(entry) = self.history.newest_id() else { return };
+        let groups = self.living.groups_of_piece(pid);
+        self.living.edits.push(PanelEdit {
+            entry,
+            piece: pid,
+            strokes: Vec::new(),
+            groups: (groups.clone(), groups),
+            data: Vec::new(),
+            bodies: vec![(id, from, after)],
+        });
+        if let Some(edit) = &mut self.living.editing {
+            edit.steps.push(entry);
+        }
+    }
+
+    fn edit_body(&self, id: u64) -> Option<EditBody> {
+        let stroke = self.living.strokes.iter().find(|s| s.id == id)?;
+        Some(EditBody {
+            vertices: stroke.vertices.clone(),
+            deltas: stroke.deltas.clone(),
+            colors: stroke.colors.clone(),
+            recipe: Arc::clone(stroke.recipe.as_ref()?),
+            brush: stroke.brush,
+        })
+    }
+
+    fn write_edit_body(&mut self, id: u64, body: &EditBody) {
+        let Some(stroke) = self.living.strokes.iter_mut().find(|s| s.id == id) else { return };
+        stroke.vertices.clone_from(&body.vertices);
+        stroke.deltas.clone_from(&body.deltas);
+        stroke.colors.clone_from(&body.colors);
+        stroke.recipe = Some(Arc::clone(&body.recipe));
+        stroke.brush = body.brush;
+        stroke.no_recipe = None;
+    }
+
+    /// Put `body` back on the surface, replacing whatever the stroke stores now.
+    fn restore_edit_body(&mut self, id: u64, body: &EditBody) {
+        let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id) else { return };
+        let applied = stroke.applied;
+        let current = SurfaceChange {
+            vertices: stroke.vertices.clone(),
+            deltas: stroke.deltas.clone(),
+            colors: stroke.colors.clone(),
+            applied,
+        };
+        let pid = stroke.piece;
+        let Some(index) = self.scene.index_of(pid) else { return };
+        let mesh = &mut self.scene.pieces[index].mesh;
+        add_change(mesh, &current.vertices, &current.deltas, &current.colors, -applied);
+        add_change(mesh, &body.vertices, &body.deltas, &body.colors, applied);
+        let mut moved = current.vertices.clone();
+        moved.extend_from_slice(&body.vertices);
+        moved.sort_unstable();
+        moved.dedup();
+        mesh.update_after_move(&moved);
+        if !current.colors.is_empty() || !body.colors.is_empty() {
+            mesh.mark_all_dirty();
+        }
+        self.write_edit_body(id, body);
+    }
+
+    fn later_changes(&self, id: u64) -> Vec<SurfaceChange> {
+        let Some(index) = self.living.strokes.iter().position(|s| s.id == id) else { return Vec::new() };
+        let piece = self.living.strokes[index].piece;
+        self.living.strokes[index + 1..]
+            .iter()
+            .filter(|s| s.piece == piece && !s.undone && s.applied != 0.0)
+            .map(surface_of)
+            .collect()
+    }
+
+    fn undo_edit_steps(&mut self, steps: &[u64]) {
+        let mut left: Vec<u64> = steps.iter().copied().filter(|id| self.history.can_undo_id(*id)).collect();
+        while let Some(id) = left.last().copied() {
+            if self.history.newest_id() != Some(id) {
+                self.status = "Couldn't cancel every stroke edit: undo what you did after it first".into();
+                break;
+            }
+            let revision = self.history.revision();
+            left.pop();
+            self.undo();
+            if self.history.revision() == revision {
+                break;
+            }
+        }
+    }
+
+    fn undo_edit_steps_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.undo();
+        }
+    }
+}
+
+fn surface_of(stroke: &LivingStroke) -> SurfaceChange {
+    SurfaceChange {
+        vertices: stroke.vertices.clone(),
+        deltas: stroke.deltas.clone(),
+        colors: stroke.colors.clone(),
+        applied: stroke.applied,
+    }
+}
+
+fn recipe_same(a: &StrokeRecipe, b: &StrokeRecipe) -> bool {
+    a.settings == b.settings && a.invert == b.invert && alpha_same(&a.alpha, &b.alpha)
+}
+
+fn alpha_same(a: &Option<AlphaStamp>, b: &Option<AlphaStamp>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => {
+            Arc::ptr_eq(&a.alpha, &b.alpha)
+                && a.rotation == b.rotation
+                && a.follow_stroke == b.follow_stroke
+                && a.up == b.up
+        }
+        _ => false,
+    }
+}
+
+fn apply_setting(recipe: &mut StrokeRecipe, setting: StrokeSetting, alphas: &[Arc<oxy_sculpt::Alpha>]) {
+    match setting {
+        StrokeSetting::Brush(kind) if stroke_brush_editable(kind) => recipe.settings.kind = kind,
+        StrokeSetting::Brush(_) => {}
+        StrokeSetting::Invert(invert) => recipe.invert = invert,
+        StrokeSetting::Radius(radius) => recipe.settings.radius = radius.max(1e-6),
+        StrokeSetting::Strength(strength) => recipe.settings.strength = strength.clamp(0.0, 1.0),
+        StrokeSetting::Falloff(falloff) => recipe.settings.falloff = falloff,
+        StrokeSetting::Spacing(spacing) => recipe.settings.spacing = spacing.clamp(0.02, 1.0),
+        StrokeSetting::Alpha(None) => recipe.alpha = None,
+        StrokeSetting::Alpha(Some(index)) => {
+            if let Some(alpha) = alphas.get(index).cloned() {
+                let (rotation, follow, up) = recipe
+                    .alpha
+                    .as_ref()
+                    .map(|stamp| (stamp.rotation, stamp.follow_stroke, stamp.up))
+                    .unwrap_or((0.0, true, Vec3::Y));
+                recipe.alpha = Some(AlphaStamp { alpha, rotation, follow_stroke: follow, up });
+            }
+        }
+    }
+}
+
+/// A coarser recipe for a live drag when the full stroke would take longer
+/// than a couple of frames. The committed recipe is unchanged.
+fn preview_recipe(recipe: &StrokeRecipe) -> StrokeRecipe {
+    let estimate = replay_estimate_ms(recipe);
+    if estimate <= RESCULPT_JOB_MS {
+        return recipe.clone();
+    }
+    let mut coarse = recipe.clone();
+    let scale = (estimate / RESCULPT_JOB_MS).clamp(1.0, 8.0);
+    coarse.settings.spacing = (coarse.settings.spacing * scale).clamp(0.02, 1.0);
+    coarse
+}
+
+/// A setting that describes `recipe`, so finishing a drag can re-enter
+/// [`Editor::living_edit_setting`] without a second source of truth.
+fn setting_of(recipe: &StrokeRecipe) -> StrokeSetting {
+    StrokeSetting::Radius(recipe.settings.radius)
 }
 
 /// Move strokes `ids` into `group` (None: out of any group), folding their
@@ -2252,5 +2950,263 @@ mod tests {
         e.living_sync();
         assert!(e.living.target.is_none());
         assert!(e.living.groups_of(pid).is_empty());
+    }
+
+    fn max_err(a: &[Vec3], b: &[Vec3]) -> f32 {
+        a.iter().zip(b).map(|(x, y)| (*x - *y).length()).fold(0.0, f32::max)
+    }
+
+    /// The surface before `old`, by taking `old` and `later` off `surface`,
+    /// then the edited recipe sculpted there plus `later`'s stored change.
+    fn resculpted(
+        surface: &oxy_mesh::Mesh,
+        old: &LivingStroke,
+        later: &LivingStroke,
+        recipe: &StrokeRecipe,
+    ) -> Vec<Vec3> {
+        let mut mesh = surface.clone();
+        super::add_change(&mut mesh, &old.vertices, &old.deltas, &old.colors, -old.applied);
+        super::add_change(&mut mesh, &later.vertices, &later.deltas, &later.colors, -later.applied);
+        recipe.replay(&mut mesh, &mut |_, _| {});
+        super::add_change(&mut mesh, &later.vertices, &later.deltas, &later.colors, later.applied);
+        mesh.positions
+    }
+
+    #[test]
+    #[allow(clippy::type_complexity)]
+    fn editing_settings_matches_sculpting_the_recipe_again() {
+        // (label, make the edited setting). Each case is a new sphere.
+        let cases: &[(&str, fn(&StrokeRecipe) -> StrokeSetting)] = &[
+            ("size", |r| StrokeSetting::Radius(r.settings.radius * 1.8)),
+            ("strength", |r| StrokeSetting::Strength((r.settings.strength * 0.4).clamp(0.05, 0.95))),
+            ("invert", |r| StrokeSetting::Invert(!r.invert)),
+            ("falloff", |r| {
+                StrokeSetting::Falloff(if r.settings.falloff == Falloff::Constant {
+                    Falloff::Sharp
+                } else {
+                    Falloff::Constant
+                })
+            }),
+            ("spacing", |r| StrokeSetting::Spacing(if r.settings.spacing > 0.2 { 0.05 } else { 0.45 })),
+            ("brush", |_| StrokeSetting::Brush(BrushKind::Clay)),
+        ];
+        for (name, setting) in cases {
+            let mut e = editor();
+            let base = e.scene.active().mesh.clone();
+            stroke(&mut e, 280.0);
+            stroke(&mut e, 330.0);
+            assert_eq!(e.living.strokes.len(), 2, "{name}");
+            let id = e.living.strokes[0].id;
+            let before = positions(&e);
+            let surface = e.scene.active().mesh.clone();
+            let old = e.living.strokes[0].clone();
+            let later = e.living.strokes[1].clone();
+            let later_bytes = later.recipe.as_ref().unwrap().to_bytes();
+            e.living_open_edit(id).expect(name);
+            e.living_edit_setting(setting(&old.recipe.clone().unwrap()), false);
+            assert_eq!(e.living.strokes[1].deltas, later.deltas, "{name}: later stroke unchanged");
+            assert_eq!(e.living.strokes[1].vertices, later.vertices, "{name}");
+            assert_eq!(e.living.strokes[1].recipe.as_ref().unwrap().to_bytes(), later_bytes, "{name}");
+            let edited = e.living.strokes[0].recipe.clone().unwrap();
+            let err = max_err(&positions(&e), &resculpted(&surface, &old, &later, &edited));
+            assert!(err < 1e-4, "{name}: re-sculpt vs fresh replay at that point in history, worst {err}");
+            // That point in history is the surface before the first stroke.
+            let mut peeled = surface.clone();
+            super::add_change(&mut peeled, &old.vertices, &old.deltas, &old.colors, -old.applied);
+            super::add_change(&mut peeled, &later.vertices, &later.deltas, &later.colors, -later.applied);
+            assert!(
+                max_err(&peeled.positions, &base.positions) < 1e-4,
+                "{name}: history is the surface before the stroke"
+            );
+            assert!(max_err(&positions(&e), &before) > 1e-3, "{name} changed the surface");
+        }
+    }
+
+    #[test]
+    fn editing_the_alpha_resculpts() {
+        let mut e = editor();
+        e.alpha = Some(e.alphas.iter().position(|a| a.name == "Scales").expect("scales"));
+        stroke(&mut e, 300.0);
+        stroke(&mut e, 340.0);
+        let id = e.living.strokes[0].id;
+        assert!(e.living.strokes[0].recipe.as_ref().unwrap().alpha.is_some());
+        let surface = e.scene.active().mesh.clone();
+        let old = e.living.strokes[0].clone();
+        let later = e.living.strokes[1].clone();
+        let bumps = e.alphas.iter().position(|a| a.name == "Bumps").expect("bumps");
+        e.living_open_edit(id).unwrap();
+        e.living_edit_setting(StrokeSetting::Alpha(Some(bumps)), false);
+        let edited = e.living.strokes[0].recipe.clone().unwrap();
+        assert_eq!(edited.alpha.as_ref().unwrap().alpha.name, "Bumps");
+        let err = max_err(&positions(&e), &resculpted(&surface, &old, &later, &edited));
+        assert!(err < 1e-4, "alpha edit, worst {err}");
+    }
+
+    #[test]
+    fn an_edit_undoes_redoes_and_esc_puts_it_back() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        stroke(&mut e, 340.0);
+        let id = e.living.strokes[0].id;
+        let before = positions(&e);
+        let radius = e.living.strokes[0].recipe.as_ref().unwrap().settings.radius;
+        e.living_open_edit(id).unwrap();
+        // A drag previews, and Esc before release restores exactly.
+        e.living_edit_setting(StrokeSetting::Radius(radius * 2.0), true);
+        assert!(max_err(&positions(&e), &before) > 1e-3);
+        e.living_cancel_edit();
+        assert!(max_err(&positions(&e), &before) < 1e-5, "Esc during a drag");
+        assert!(e.living_edit_id().is_none());
+        assert!((e.living.strokes[0].recipe.as_ref().unwrap().settings.radius - radius).abs() < 1e-6);
+
+        e.living_open_edit(id).unwrap();
+        e.living_edit_setting(StrokeSetting::Radius(radius * 1.6), true);
+        e.living_edit_setting(StrokeSetting::Radius(radius * 1.6), false);
+        e.living_edit_setting(StrokeSetting::Strength(0.25), false);
+        let edited = positions(&e);
+        assert!((e.living.strokes[0].recipe.as_ref().unwrap().settings.strength - 0.25).abs() < 1e-6);
+        e.undo();
+        assert!(
+            (e.living.strokes[0].recipe.as_ref().unwrap().settings.strength - 0.25).abs() > 1e-3,
+            "undo drops the strength edit"
+        );
+        e.undo();
+        assert!(max_err(&positions(&e), &before) < 1e-5, "undo both edits");
+        assert!((e.living.strokes[0].recipe.as_ref().unwrap().settings.radius - radius).abs() < 1e-6);
+        e.redo();
+        e.redo();
+        assert!(max_err(&positions(&e), &edited) < 1e-5, "redo both edits");
+
+        e.living_cancel_edit();
+        assert!(max_err(&positions(&e), &before) < 1e-5, "Esc undoes the edits made in this Edit");
+        assert!(e.living_edit_id().is_none());
+    }
+
+    #[test]
+    fn an_edited_stroke_saves_and_opens() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        let radius = e.living.strokes[0].recipe.as_ref().unwrap().settings.radius * 1.5;
+        e.living_open_edit(id).unwrap();
+        e.living_edit_setting(StrokeSetting::Radius(radius), false);
+        e.living_close_edit();
+        let kept = positions(&e);
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        let mut f = Editor::for_tests();
+        f.living.enabled = true;
+        f.replace_document(oxy_doc::Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap(), None);
+        // Opening rebuilds the mesh, so points can come back in another order.
+        let order = f.scene.active().mesh.source_vertices().to_vec();
+        let reordered: Vec<Vec3> = order.iter().map(|&i| kept[i as usize]).collect();
+        assert!(close(&positions(&f), &reordered), "the edited surface round-trips");
+        let loaded = f.living.strokes[0].recipe.as_ref().unwrap();
+        assert!((loaded.settings.radius - radius).abs() < 1e-5);
+        assert!(f.living_open_edit(f.living.strokes[0].id).is_ok());
+        assert!(f.living_edit_block().is_none(), "a saved edit can be edited again");
+    }
+
+    #[test]
+    fn strokes_without_a_recipe_say_why() {
+        // Dynamic detail on, and this stroke doesn't rebuild the mesh.
+        let mut e = editor();
+        e.dyntopo = true;
+        let (o, d) = e.camera.ray(Vec2::new(400.0, 300.0), e.canvas_size());
+        let hit = e.scene.active().mesh.raycast(o, d).expect("hit");
+        let radius = e.world_radius(hit.point, e.brush_radius_pt);
+        let edge = {
+            let mesh = &e.scene.active().mesh;
+            let p = mesh.triangles[hit.triangle as usize].map(|v| mesh.positions[v as usize]);
+            ((p[0] - p[1]).length() + (p[1] - p[2]).length() + (p[2] - p[0]).length()) / 3.0
+        };
+        e.dyntopo_detail = (edge / (radius * 0.5)).clamp(0.1, 1.0).log(0.1).clamp(0.0, 1.0);
+        let tris = e.scene.active().mesh.triangle_count();
+        stroke(&mut e, 300.0);
+        e.living_sync();
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris, "the mesh was not rebuilt");
+        let id = e.living.strokes.iter().find(|s| s.listed()).expect("listed").id;
+        e.living_open_edit(id).unwrap();
+        assert!(e.living_edit_block().unwrap().contains("dynamic detail"), "{}", e.living_edit_block().unwrap());
+
+        // Made before recipes: the stored change is there, the recipe isn't.
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        e.living.strokes[0].recipe = None;
+        e.living.strokes[0].no_recipe = Some(NoRecipe::BeforeThisVersion);
+        e.living_open_edit(id).unwrap();
+        assert!(e.living_edit_block().unwrap().contains("before this version"));
+
+        // Living strokes off.
+        let err = {
+            let mut e = editor();
+            stroke(&mut e, 300.0);
+            let id = e.living.strokes[0].id;
+            e.set_living_strokes(false);
+            e.living_open_edit(id).unwrap_err()
+        };
+        assert!(err.contains("Living strokes is off"), "{err}");
+
+        // A mirrored copy isn't the stroke that was drawn.
+        let mut e = editor();
+        stroke(&mut e, 280.0);
+        let original = e.living.strokes[0].id;
+        e.living.selected.insert(original);
+        e.living_mirror_selected(0);
+        let copy = e.living.strokes.iter().find(|s| s.id != original).expect("copy").id;
+        e.living_open_edit(copy).unwrap();
+        assert!(e.living_edit_block().unwrap().contains("mirrored copy"), "{}", e.living_edit_block().unwrap());
+        // The original still edits, and the copy's stored change stays put.
+        let copy_deltas = e.living.strokes.iter().find(|s| s.id == copy).unwrap().deltas.clone();
+        e.living_open_edit(original).unwrap();
+        let radius = e.living_edit_recipe().unwrap().settings.radius;
+        e.living_edit_setting(StrokeSetting::Radius(radius * 1.5), false);
+        assert_eq!(e.living.strokes.iter().find(|s| s.id == copy).unwrap().deltas, copy_deltas);
+
+        // Whole-piece tools aren't strokes.
+        assert!(NoRecipe::WholePiece.message().contains("Curve Move"));
+        assert!(NoRecipe::WholePiece.message().contains("Deform"));
+        assert!(NoRecipe::WholePiece.message().contains("gizmo"));
+        assert!(!stroke_brush_editable(BrushKind::CurveMove));
+        let mut e = editor();
+        e.deform_once(oxy_mesh::deform::Deformer::Inflate, [true; 3], 0.5);
+        assert!(e.living.strokes.is_empty(), "Deform is not a stroke");
+        let mut e = editor();
+        e.toggle_gizmo(crate::pose::GizmoMode::Move);
+        let layout = e.gizmo_layout().expect("gizmo");
+        let end = layout.axes[0].expect("X handle");
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + (end - layout.center));
+        e.pointer_up();
+        assert!(e.living.strokes.is_empty(), "the gizmo is not a stroke");
+    }
+
+    #[test]
+    fn a_mirrored_stroke_is_edited_on_both_sides() {
+        let mut e = editor();
+        e.symmetry.x = true;
+        let base = e.scene.active().mesh.clone();
+        stroke(&mut e, 300.0);
+        stroke(&mut e, 340.0);
+        let id = e.living.strokes[0].id;
+        assert!(e.living.strokes[0].recipe.as_ref().unwrap().symmetry.x);
+        let surface = e.scene.active().mesh.clone();
+        let old = e.living.strokes[0].clone();
+        let later = e.living.strokes[1].clone();
+        let radius = old.recipe.as_ref().unwrap().settings.radius;
+        e.living_open_edit(id).unwrap();
+        e.living_edit_setting(StrokeSetting::Radius(radius * 1.7), false);
+        let edited = e.living.strokes[0].recipe.clone().unwrap();
+        assert!(edited.symmetry.x, "the mirror stays part of the stroke");
+        let err = max_err(&positions(&e), &resculpted(&surface, &old, &later, &edited));
+        assert!(err < 1e-4, "both sides, worst {err}");
+        let moved = |sign: f32| {
+            base.positions
+                .iter()
+                .zip(positions(&e))
+                .any(|(was, now)| was.x.signum() == sign && (*was - now).length() > 1e-3)
+        };
+        assert!(moved(1.0) && moved(-1.0), "the edit moves both sides");
     }
 }

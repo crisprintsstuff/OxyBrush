@@ -13,7 +13,7 @@ in the app.
 
 > Every stroke stays editable, even after you've sculpted on top of it.
 
-**Status:** in the app as an option, off by default (Preferences > General, then Layers > Strokes… (right panel)): fade, delete and solo past strokes, keep part of a stroke, group strokes into layers, and strokes saved with the project. Next: access for plugins and local AI agents, and extras like copying a stroke to the other side.
+**Status:** in the app as an option, off by default (Preferences > General, then Layers > Strokes… (right panel)): fade, delete and solo past strokes, keep part of a stroke, group strokes into layers, strokes saved with the project, and Edit… to change a stroke's brush, size, strength, falloff, alpha or spacing and sculpt it again. Next: saving a group of strokes and placing it on another model.
 
 Today, once a stroke is done it's part of the model. If a wrinkle you made
 twenty minutes ago is too deep, you either undo everything since, or sculpt

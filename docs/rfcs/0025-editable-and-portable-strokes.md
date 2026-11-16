@@ -1,6 +1,6 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: accepted (decisions by the maintainer, 2026-11-16). Phase 1 (recipes) is implemented; phases 2–6 are not built yet.
+Status: accepted (decisions by the maintainer, 2026-11-16). Phases 1 and 2 are built (recipes, then Edit settings). Phases 3–6 are not.
 
 ## Summary
 
@@ -184,7 +184,7 @@ bundled starter details, if any, are made for OxyBrush (CC0).
    "edit as a curve?" are included. Dynamic detail is excluded whether
    or not the mesh was rebuilt. An alpha is identified by its stored
    pixels, so a capture still matches after save and open.
-2. **Edit settings:** the Edit… panel, re-sculpting one stroke.
+2. **Edit settings:** ✅ the Edit… panel, re-sculpting one stroke. Later strokes keep their stored change. A slider previews at a reduced rate and applies the full stroke when the drag ends; a long stroke runs off the UI thread. Esc cancels. A stroke with no recipe says why.
 3. **Edit path:** the path as a curve.
 4. **Details in a project:** Save as detail, place with move, turn and
    scale, mirror.

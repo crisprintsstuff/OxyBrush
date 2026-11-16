@@ -13,6 +13,7 @@
 use crate::{Alpha, AlphaStamp, Axis, BrushSettings, Stroke, StrokeSample, Symmetry, preset};
 use glam::Vec3;
 use oxy_mesh::Mesh;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// One input to a stroke, in the order they came.
@@ -324,6 +325,205 @@ impl StrokeRecipe {
             alpha,
             events,
         })
+    }
+
+    /// After the brush size or spacing changes, raise each sample's dab cap
+    /// by the factor the step shrank, so the new spacing can place the dabs
+    /// it asks for. A cap that was unlimited stays unlimited. Call this once
+    /// on the edited recipe, from the settings it had before the edit.
+    pub fn retarget_plan(&mut self, previous: &BrushSettings) {
+        let old_step = (previous.radius * previous.spacing).max(1e-6);
+        let new_step = (self.settings.radius * self.settings.spacing).max(1e-6);
+        let scale = old_step / new_step;
+        if (scale - 1.0).abs() < 1e-3 {
+            return;
+        }
+        for event in &mut self.events {
+            if let RecipeEvent::Sample { max_dabs, .. } = event
+                && *max_dabs != u32::MAX
+            {
+                let n = (*max_dabs as f32 * scale).ceil().clamp(1.0, 1_000_000.0);
+                *max_dabs = n as u32;
+            }
+        }
+    }
+}
+
+/// What a stroke did to the surface: the points it changed, and the full
+/// position and color change at each (not scaled by a fade).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StoredChange {
+    pub vertices: Vec<u32>,
+    pub deltas: Vec<Vec3>,
+    pub colors: Vec<Vec3>,
+}
+
+/// A stored change and how much of it is on the surface now (its fade times
+/// its group's strength).
+#[derive(Clone, Debug)]
+pub struct SurfaceChange {
+    pub vertices: Vec<u32>,
+    pub deltas: Vec<Vec3>,
+    pub colors: Vec<Vec3>,
+    pub applied: f32,
+}
+
+/// A rough upper bound on how long [`StrokeRecipe::replay`] takes, in
+/// milliseconds. About half a millisecond a dab, which is what a large mesh
+/// costs; a smaller mesh finishes sooner. A sample whose dab cap was
+/// unlimited counts as one dab (freehand samples are already close together).
+pub fn replay_estimate_ms(recipe: &StrokeRecipe) -> f32 {
+    let dabs: u64 = recipe
+        .events
+        .iter()
+        .map(|event| match event {
+            RecipeEvent::Sample { max_dabs, .. } => {
+                if *max_dabs == u32::MAX {
+                    1
+                } else {
+                    (*max_dabs).clamp(1, 64) as u64
+                }
+            }
+            RecipeEvent::Stamp { repeats, .. } => u64::from((*repeats).max(1)),
+            RecipeEvent::Modulation { .. } => 0,
+        })
+        .sum();
+    dabs as f32 * 0.5
+}
+
+/// Re-sculpt `recipe` in place of one stroke (RFC 0025).
+///
+/// `mesh` is the surface as it is now. `stroke` is the change being
+/// replaced, and `later` are the strokes made after it, each with the share
+/// currently on the surface. Those shares are subtracted, `recipe` is run,
+/// and the later shares are added back unchanged. The difference the replay
+/// made is the new stored change. `applied` is how much of that new change
+/// stays on the surface (1 keeps the whole replay).
+///
+/// `touch(mesh, chunk)` runs before a chunk is first changed, including the
+/// sparse adds, so undo can snapshot the surface from before the edit.
+///
+/// RETURNS: the new stored change, at full strength.
+pub fn resculpt(
+    mesh: &mut Mesh,
+    stroke: &SurfaceChange,
+    later: &[SurfaceChange],
+    applied: f32,
+    recipe: &StrokeRecipe,
+    touch: &mut dyn FnMut(&Mesh, u32),
+) -> StoredChange {
+    let mut seen = HashSet::new();
+    touch_vertices(mesh, &stroke.vertices, touch, &mut seen);
+    for share in later {
+        touch_vertices(mesh, &share.vertices, touch, &mut seen);
+    }
+    add_share(mesh, stroke, -stroke.applied);
+    for share in later {
+        add_share(mesh, share, -share.applied);
+    }
+
+    // Chunks as they were after the subtract and before the replay: the
+    // surface the new stroke is sculpted on.
+    let mut before: HashMap<u32, (Vec<Vec3>, Vec<Vec3>)> = HashMap::new();
+    {
+        let mut on_touch = |mesh: &Mesh, chunk: u32| {
+            touch(mesh, chunk);
+            before.entry(chunk).or_insert_with(|| snapshot_chunk(mesh, chunk));
+        };
+        recipe.replay(mesh, &mut on_touch);
+    }
+
+    let painted = mesh.color.len() == mesh.positions.len();
+    let mut rows: Vec<(u32, Vec3, Vec3)> = Vec::new();
+    for (chunk, (positions, colors)) in &before {
+        let range = mesh.chunks[*chunk as usize].vertices.clone();
+        for (k, v) in range.enumerate() {
+            let delta = mesh.positions[v as usize] - positions[k];
+            let color = if painted && colors.len() == positions.len() {
+                mesh.color[v as usize] - colors[k]
+            } else {
+                Vec3::ZERO
+            };
+            if delta != Vec3::ZERO || color != Vec3::ZERO {
+                rows.push((v, delta, color));
+            }
+        }
+    }
+    rows.sort_unstable_by_key(|row| row.0);
+
+    // A fade other than 1 keeps that share of the new stroke, written from
+    // the pre-replay positions so it doesn't depend on adding the change twice.
+    if (applied - 1.0).abs() > 1e-5 {
+        let by_vertex: HashMap<u32, (Vec3, Vec3)> = rows.iter().map(|row| (row.0, (row.1, row.2))).collect();
+        for (chunk, (positions, colors)) in &before {
+            let range = mesh.chunks[*chunk as usize].vertices.clone();
+            for (k, v) in range.enumerate() {
+                let (delta, color) = by_vertex.get(&v).copied().unwrap_or((Vec3::ZERO, Vec3::ZERO));
+                mesh.positions[v as usize] = positions[k] + delta * applied;
+                if painted && colors.len() == positions.len() {
+                    mesh.color[v as usize] = (colors[k] + color * applied).clamp(Vec3::ZERO, Vec3::ONE);
+                }
+            }
+        }
+    }
+
+    for share in later {
+        add_share(mesh, share, share.applied);
+    }
+
+    let mut moved = stroke.vertices.clone();
+    moved.extend(rows.iter().map(|row| row.0));
+    for share in later {
+        moved.extend_from_slice(&share.vertices);
+    }
+    moved.sort_unstable();
+    moved.dedup();
+    mesh.update_after_move(&moved);
+    if rows.iter().any(|row| row.2 != Vec3::ZERO) {
+        mesh.mark_all_dirty();
+    }
+    mesh.tighten_bounds();
+
+    let any_color = rows.iter().any(|row| row.2 != Vec3::ZERO);
+    StoredChange {
+        vertices: rows.iter().map(|row| row.0).collect(),
+        deltas: rows.iter().map(|row| row.1).collect(),
+        colors: if any_color { rows.iter().map(|row| row.2).collect() } else { Vec::new() },
+    }
+}
+
+fn touch_vertices(mesh: &Mesh, vertices: &[u32], touch: &mut dyn FnMut(&Mesh, u32), seen: &mut HashSet<u32>) {
+    for &v in vertices {
+        if let Some(&chunk) = mesh.vertex_chunk_of(v)
+            && seen.insert(chunk)
+        {
+            touch(mesh, chunk);
+        }
+    }
+}
+
+fn snapshot_chunk(mesh: &Mesh, chunk: u32) -> (Vec<Vec3>, Vec<Vec3>) {
+    let range = mesh.chunks[chunk as usize].vertices.clone();
+    let range = range.start as usize..range.end as usize;
+    let colors = if mesh.color.len() == mesh.positions.len() { mesh.color[range.clone()].to_vec() } else { Vec::new() };
+    (mesh.positions[range].to_vec(), colors)
+}
+
+fn add_share(mesh: &mut Mesh, share: &SurfaceChange, scale: f32) {
+    if scale == 0.0 {
+        return;
+    }
+    for (j, &v) in share.vertices.iter().enumerate() {
+        let index = v as usize;
+        if index >= mesh.positions.len() {
+            continue;
+        }
+        mesh.positions[index] += share.deltas[j] * scale;
+        if let Some(color) = share.colors.get(j)
+            && index < mesh.color.len()
+        {
+            mesh.color[index] = (mesh.color[index] + *color * scale).clamp(Vec3::ZERO, Vec3::ONE);
+        }
     }
 }
 
@@ -820,5 +1020,74 @@ mod tests {
         let exact = Arc::new(original);
         let find_v1 = |q: AlphaLookup| q.matches(&exact).then(|| exact.clone());
         assert!(StrokeRecipe::from_bytes(&v1, &find_v1).is_ok(), "version 1 still reads the original image");
+    }
+
+    /// Positions after a stroke, minus the positions before it, for the
+    /// points that moved.
+    fn stored(before: &Mesh, after: &Mesh) -> SurfaceChange {
+        let mut rows: Vec<(u32, Vec3)> = before
+            .positions
+            .iter()
+            .zip(&after.positions)
+            .enumerate()
+            .filter(|(_, (a, b))| *a != *b)
+            .map(|(i, (a, b))| (i as u32, *b - *a))
+            .collect();
+        rows.sort_unstable_by_key(|row| row.0);
+        SurfaceChange {
+            vertices: rows.iter().map(|row| row.0).collect(),
+            deltas: rows.iter().map(|row| row.1).collect(),
+            colors: Vec::new(),
+            applied: 1.0,
+        }
+    }
+
+    #[test]
+    fn resculpting_one_stroke_leaves_the_later_stroke_stored() {
+        let base = primitives::icosphere(4, 1.0);
+        let samples = path(24);
+        let settings = BrushSettings { radius: 0.22, strength: 0.8, ..Default::default() };
+        let mut mesh = base.clone();
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_recording();
+        sculpt(&mut stroke, &mut mesh, &samples);
+        let recipe = stroke.take_recipe().unwrap();
+        let first = stored(&base, &mesh);
+        let after_first = mesh.clone();
+
+        let later_samples: Vec<StrokeSample> = samples
+            .iter()
+            .map(|sample| StrokeSample {
+                position: (sample.position + Vec3::new(0.0, 0.05, 0.2)).normalize(),
+                normal: (sample.position + Vec3::new(0.0, 0.05, 0.2)).normalize(),
+                pressure: sample.pressure,
+            })
+            .collect();
+        let mut second = Stroke::new(settings, Symmetry::default(), false);
+        sculpt(&mut second, &mut mesh, &later_samples);
+        let later = stored(&after_first, &mesh);
+        assert!(!later.vertices.is_empty());
+
+        let mut edited = recipe.clone();
+        edited.settings.radius = 0.4;
+        edited.settings.strength = 0.3;
+        edited.retarget_plan(&recipe.settings);
+        let mut peeled = mesh.clone();
+        super::add_share(&mut peeled, &first, -1.0);
+        super::add_share(&mut peeled, &later, -1.0);
+        let peel = peeled.positions.iter().zip(&base.positions).map(|(a, b)| (*a - *b).length()).fold(0.0f32, f32::max);
+        let mut again = mesh.clone();
+        let new = resculpt(&mut again, &first, std::slice::from_ref(&later), 1.0, &edited, &mut |_, _| {});
+        assert_ne!(new.deltas, first.deltas);
+
+        assert!(peel < 1e-5, "taking the strokes off returns the surface they were drawn on (worst {peel})");
+        // Replay on that surface, not on a saved copy: a few ulps in the base
+        // can move a vertex across a dab's edge.
+        let mut fresh = peeled;
+        edited.replay(&mut fresh, &mut |_, _| {});
+        super::add_share(&mut fresh, &later, later.applied);
+        fresh.update_after_move(&new.vertices);
+        for (a, b) in fresh.positions.iter().zip(&again.positions) {
+            assert!((*a - *b).length() < 1e-5, "re-sculpt matches a fresh replay plus the later stroke");
+        }
     }
 }
