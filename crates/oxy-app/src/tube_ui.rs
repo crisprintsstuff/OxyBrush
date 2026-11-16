@@ -104,6 +104,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
         });
+    // One undo step per finished gesture, in the window or the viewport.
+    let held = ctx.input(|i| i.pointer.any_down()) || !matches!(ed.drag, Drag::None);
+    ed.tube_settle(held);
     if cancel {
         ed.cancel_tube();
     } else if accept {
@@ -173,6 +176,53 @@ fn mirror_partner(points: &[glam::Vec2], i: usize) -> Option<usize> {
         .filter(|&(_, d)| d < 0.15)
         .min_by(|a, b| a.1.total_cmp(&b.1))
         .map(|(j, _)| j)
+}
+
+/// Add a profile point at `at` on the side after point `side`, and with
+/// `mirror`, its twin across the vertical axis on the matching side (#273).
+/// RETURNS: the new point's index (the twin's is found by
+/// [`mirror_partner`]).
+fn add_profile_point(points: &mut Vec<glam::Vec2>, side: usize, at: glam::Vec2, mirror: bool) -> usize {
+    let mut i = side + 1;
+    points.insert(i, at);
+    if mirror && at.x.abs() >= 0.03 {
+        let image = glam::Vec2::new(-at.x, at.y);
+        let n = points.len();
+        // The side nearest the image, not counting the two halves of the
+        // side just split.
+        let twin_side = (0..n)
+            .filter(|&k| k != i && (k + 1) % n != i)
+            .map(|k| {
+                let (a, b) = (points[k], points[(k + 1) % n]);
+                let ab = b - a;
+                let f = ((image - a).dot(ab) / ab.length_squared().max(1e-9)).clamp(0.0, 1.0);
+                (k, (a + ab * f).distance(image))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((k, _)) = twin_side {
+            points.insert(k + 1, image);
+            if k < i {
+                i += 1;
+            }
+        }
+    }
+    i
+}
+
+/// Remove profile point `i`, and with `mirror` its twin too, keeping at
+/// least three points.
+fn remove_profile_point(points: &mut Vec<glam::Vec2>, i: usize, mirror: bool) {
+    let twin = if mirror { mirror_partner(points, i).filter(|&j| j != i) } else { None };
+    match twin {
+        Some(j) if points.len() > 4 => {
+            points.remove(i.max(j));
+            points.remove(i.min(j));
+        }
+        _ if points.len() > 3 => {
+            points.remove(i);
+        }
+        _ => {}
+    }
 }
 
 /// The Tube window's Profile: presets, and the cross-section drawn on a
@@ -261,10 +311,8 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
     if let Some(s) = resp.interact_pointer_pos() {
         let remove = resp.secondary_clicked() || (alt && resp.clicked());
         if remove {
-            if let Some(i) = near_point(&profile, s)
-                && profile.points.len() > 3
-            {
-                profile.points.remove(i);
+            if let Some(i) = near_point(&profile, s) {
+                remove_profile_point(&mut profile.points, i, tube.profile_mirror);
             }
         } else if resp.drag_started() || (resp.clicked() && tube.profile_drag.is_none()) {
             let hit = near_point(&profile, s).or_else(|| {
@@ -279,10 +327,7 @@ fn profile_editor(ui: &mut egui::Ui, tube: &mut crate::tube::TubeEdit) {
                         (d <= reach).then_some((i, d))
                     })
                     .min_by(|a, b| a.1.total_cmp(&b.1))
-                    .map(|(i, _)| {
-                        profile.points.insert(i + 1, to_profile(s));
-                        i + 1
-                    })
+                    .map(|(i, _)| add_profile_point(&mut profile.points, i, to_profile(s), tube.profile_mirror))
             });
             if let Some(i) = hit {
                 let partner = if tube.profile_mirror { mirror_partner(&profile.points, i) } else { None };
@@ -421,5 +466,41 @@ pub fn overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
         } else {
             painter.circle(at, size, fill, edge);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use glam::Vec2;
+
+    #[test]
+    fn with_mirror_a_profile_point_is_added_and_removed_on_both_sides() {
+        // A square, symmetric about the vertical axis.
+        let mut pts = vec![Vec2::new(-1.0, -1.0), Vec2::new(1.0, -1.0), Vec2::new(1.0, 1.0), Vec2::new(-1.0, 1.0)];
+        // A point on the right side (between points 1 and 2).
+        let i = add_profile_point(&mut pts, 1, Vec2::new(1.0, 0.3), true);
+        assert_eq!(pts.len(), 6, "its twin is added too: {pts:?}");
+        assert_eq!(pts[i], Vec2::new(1.0, 0.3));
+        let twin = mirror_partner(&pts, i).expect("a twin");
+        assert_eq!(pts[twin], Vec2::new(-1.0, 0.3), "on the left side");
+        // The twin sits between the left side's corners, keeping the outline in order.
+        let n = pts.len();
+        let (before, after) = (pts[(twin + n - 1) % n], pts[(twin + 1) % n]);
+        assert!(before.x == -1.0 && after.x == -1.0, "{pts:?}");
+        // Removing one removes both.
+        remove_profile_point(&mut pts, i, true);
+        assert_eq!(pts.len(), 4);
+        // On the axis there's no twin; without mirror, one point only.
+        let mut pts2 = pts.clone();
+        add_profile_point(&mut pts2, 0, Vec2::new(0.0, -1.0), true);
+        assert_eq!(pts2.len(), 5);
+        let mut pts3 = pts.clone();
+        add_profile_point(&mut pts3, 1, Vec2::new(1.0, 0.3), false);
+        assert_eq!(pts3.len(), 5);
+        // Never fewer than three points.
+        let mut tri = vec![Vec2::new(-1.0, -0.6), Vec2::new(1.0, -0.6), Vec2::new(0.0, 1.0)];
+        remove_profile_point(&mut tri, 0, true);
+        assert_eq!(tri.len(), 3);
     }
 }
