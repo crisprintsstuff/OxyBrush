@@ -11,12 +11,12 @@
 //! and Poly Edit models didn't.
 //!
 //! What: around each vertex, faces that share an edge through it and meet
-//! at no more than [`SPLIT_ANGLE_DEG`] join one fan. A vertex with more
-//! than one fan keeps its own index for the first and gets a copy per
-//! other fan, appended after the mesh's vertices; the triangles of those
-//! fans use the copies. The split is found when the GPU mesh is rebuilt
-//! (topology or face change); while sculpting moves the vertices, only the
-//! fans' normals are recomputed.
+//! at no more than the angle passed to [`HardEdges::find`] join one fan. A
+//! vertex with more than one fan keeps its own index for the first and gets
+//! a copy per other fan, appended after the mesh's vertices; the triangles
+//! of those fans use the copies. The split is found when the GPU mesh is
+//! rebuilt (topology, face or angle change); while sculpting moves the
+//! vertices, only the fans' normals are recomputed.
 //!
 //! This only changes how the viewport draws the mesh: the mesh, exports
 //! and brushes keep the one normal per vertex.
@@ -26,9 +26,17 @@ use oxy_mesh::Mesh;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
-/// Faces meeting at more than this angle get a hard edge. Smooth enough
-/// that a six-sided cylinder still shades round, sharp enough for a box.
-pub const SPLIT_ANGLE_DEG: f32 = 60.0;
+/// Default hard-edge angle, in degrees. Faces that meet more sharply than
+/// this get their own normals. A six-sided cylinder (faces 60° apart) and
+/// an eight-sided one (45°) shade flat along their length; nine or more
+/// sides stay smooth. 180° keeps every edge smooth.
+pub const DEFAULT_SPLIT_ANGLE_DEG: f32 = 40.0;
+
+/// Clamp a hard-edge angle to `0..=180`. Anything that isn't a finite angle
+/// turns hard edges off (180°): smooth every edge.
+pub(crate) fn clamp_split_angle(degrees: f32) -> f32 {
+    if degrees.is_finite() { degrees.clamp(0.0, 180.0) } else { 180.0 }
+}
 
 /// One smooth fan of faces around a split vertex.
 #[derive(Debug, Clone, PartialEq)]
@@ -57,13 +65,26 @@ pub struct HardEdges {
 
 impl HardEdges {
     /// Find the hard edges of `mesh`.
-    pub fn find(mesh: &Mesh) -> Self {
+    ///
+    /// `split_angle_deg` is the angle, in degrees, above which two faces
+    /// that share an edge get separate normals. 180° (and anything that
+    /// isn't a smaller finite angle) keeps every edge smooth. `cos(180°)`
+    /// is not exactly −1, so that case returns no splits instead of
+    /// comparing cosines.
+    pub fn find(mesh: &Mesh, split_angle_deg: f32) -> Self {
         let base = mesh.positions.len() as u32;
-        let split_cos = SPLIT_ANGLE_DEG.to_radians().cos();
-        // Quick filter: a vertex can only have a hard edge if one of its
-        // faces turns well away from its averaged normal (half the split
-        // angle, less a margin). Smooth sculpts have none.
-        let candidate_cos = (SPLIT_ANGLE_DEG * 0.4).to_radians().cos();
+        let split_angle_deg = clamp_split_angle(split_angle_deg);
+        if split_angle_deg >= 180.0 {
+            return HardEdges { base, ..Default::default() };
+        }
+        let split_cos = split_angle_deg.to_radians().cos();
+        // Quick filter. Two faces meet at an angle no larger than the sum
+        // of their angles to the vertex normal, so if every face sits
+        // within 0.4 of the split angle of that normal, no pair can exceed
+        // the split (0.4 + 0.4 < 1). A vertex is a candidate only when one
+        // face turns further away than that. Smooth sculpts have none, and
+        // the walk over fans stays off the per-frame path.
+        let candidate_cos = (split_angle_deg * 0.4).to_radians().cos();
         let mut candidates: Vec<u32> = mesh
             .triangles
             .par_iter()
@@ -153,7 +174,12 @@ fn fans_around(mesh: &Mesh, v: u32, split_cos: f32) -> Vec<Vec<u32>> {
             let tj = mesh.triangles[tris[j] as usize];
             // Another corner in common besides `v`: they share an edge through it.
             let shares = ti.iter().any(|&a| a != v && tj.contains(&a));
-            if shares && normals[i].dot(normals[j]) >= split_cos {
+            // A regular polygon's corner comes out a fraction of a degree
+            // over the exact angle in f32 (a hexagon's 60° is 60.000004°,
+            // and its normal dot is 0.4999999 against cos(60°) = 0.5). The
+            // slack keeps a corner that meets the angle smooth. 1e-5 of
+            // cosine is under 0.01° around 40°–90°.
+            if shares && normals[i].dot(normals[j]) + 1.0e-5 >= split_cos {
                 let (a, b) = (root(&mut parent, i), root(&mut parent, j));
                 parent[a] = b;
             }
@@ -178,7 +204,7 @@ mod tests {
     #[test]
     fn a_box_gets_one_normal_per_face_at_its_corners() {
         let cube = primitives::cube(1, 1.0);
-        let h = HardEdges::find(&cube);
+        let h = HardEdges::find(&cube, DEFAULT_SPLIT_ANGLE_DEG);
         // Eight corners, three faces each: three fans, two of them copies.
         assert_eq!(h.copies(), 16);
         assert_eq!(h.fans.len(), 24);
@@ -205,10 +231,41 @@ mod tests {
     }
 
     #[test]
-    fn smooth_shapes_and_gentle_low_poly_stay_smooth() {
-        assert!(HardEdges::find(&primitives::uv_sphere(32, 16, 1.0)).is_empty());
-        assert!(HardEdges::find(&primitives::cube(64, 1.0)).copies() > 0, "a dense box still has hard edges");
-        // A low-poly sphere's faces meet at well under 60 degrees.
-        assert!(HardEdges::find(&primitives::uv_sphere(8, 6, 1.0)).is_empty());
+    fn smooth_shapes_stay_smooth_at_the_default_angle() {
+        let angle = DEFAULT_SPLIT_ANGLE_DEG;
+        assert!(HardEdges::find(&primitives::uv_sphere(32, 16, 1.0), angle).is_empty());
+        assert!(HardEdges::find(&primitives::cube(64, 1.0), angle).copies() > 0, "a dense box still has hard edges");
+        // 12 segments and 8 rings: 30° around the equator and 22.5° from
+        // pole to pole, both under 40°. An 8×6 sphere meets at 45° around
+        // the equator and would split.
+        assert!(HardEdges::find(&primitives::uv_sphere(12, 8, 1.0), angle).is_empty());
+    }
+
+    #[test]
+    fn the_split_angle_decides_which_corners_are_hard() {
+        // Open cylinders, so only the angle between side faces matters. A
+        // closed cylinder's caps meet the sides at 90°, and that rim stays
+        // hard at 60°.
+        let hex = primitives::cylinder_with(6, 1, 1.0, 2.0, false);
+        assert!(!HardEdges::find(&hex, 40.0).is_empty(), "faces 60° apart split at 40°");
+        assert!(HardEdges::find(&hex, 60.0).is_empty(), "faces meeting at exactly 60° stay smooth");
+        let oct = primitives::cylinder_with(8, 1, 1.0, 2.0, false);
+        assert!(!HardEdges::find(&oct, 40.0).is_empty(), "faces 45° apart split at 40°");
+        assert!(HardEdges::find(&oct, 60.0).is_empty(), "45° stays smooth at 60°");
+        let twelve = primitives::cylinder_with(12, 1, 1.0, 2.0, false);
+        assert!(HardEdges::find(&twelve, 40.0).is_empty(), "30° between faces stays smooth at 40°");
+        // Nine sides meet at exactly 40°, which joins (the split is "more than").
+        let nine = primitives::cylinder_with(9, 1, 1.0, 2.0, false);
+        assert!(HardEdges::find(&nine, 40.0).is_empty(), "nine sides stay smooth at 40°");
+
+        let cube = primitives::cube(1, 1.0);
+        assert!(!HardEdges::find(&cube, DEFAULT_SPLIT_ANGLE_DEG).is_empty(), "a box splits at the default");
+        assert!(HardEdges::find(&cube, 180.0).is_empty(), "180° turns hard edges off");
+        assert!(HardEdges::find(&cube, f32::NAN).is_empty(), "a bad angle turns hard edges off");
+        assert!(HardEdges::find(&hex, 180.0).is_empty());
+        // The caps of a closed six-sided cylinder are still a hard edge at 60°.
+        let closed = primitives::cylinder(6, 1.0, 2.0);
+        assert!(!HardEdges::find(&closed, 60.0).is_empty());
+        assert!(HardEdges::find(&closed, 180.0).is_empty());
     }
 }

@@ -679,6 +679,7 @@ pub mod plain {
     pub const DEFORM_USE_MASK: &str = "On: masked parts stay put and partly masked parts move partly. Off: the deformers move the whole visible piece.";
     pub const SLIDER_SIZE: &str = "How thick slider bars are. Thick bars are easier to see and to hit with a pen; the rest of the interface keeps its size.";
     pub const AUTOSAVE: &str = "How often a recovery copy is written, or Off to disable it.";
+    pub const HARD_EDGE: &str = "Faces that meet more sharply than this shade flat, so a box stays crisp and a smooth sculpt stays smooth. 180° (Off) keeps every edge smooth. The view updates when you let go. Remembered; not saved in the project.";
     pub const AO: &str = "Darkens places other parts of the surface shade, such as folds and the inside of ears.";
     pub const CAVITY: &str = "Darkens creases and pores and brightens edges, so fine detail reads clearly.";
     pub const LEVELS: &str = "Subdivision levels: sculpt big shapes on low levels and fine detail on high ones.";

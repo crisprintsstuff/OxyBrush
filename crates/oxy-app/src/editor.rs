@@ -1862,6 +1862,7 @@ impl Editor {
             update_last_check: self.updater.last_check,
             update_skip: self.updater.skip.clone(),
             flat_shading: self.view.flat_shading,
+            hard_edge_angle: self.view.hard_edge_angle,
             show_vertex_color: self.view.show_vertex_color,
             inactive_look: self.view.inactive_look,
             inactive_strength: self.view.inactive_strength,
@@ -2137,6 +2138,7 @@ impl Editor {
         self.updater.last_check = s.update_last_check;
         self.updater.skip = s.update_skip.clone();
         self.view.flat_shading = s.flat_shading;
+        self.view.hard_edge_angle = s.hard_edge_angle;
         self.view.show_vertex_color = s.show_vertex_color;
         self.view.inactive_look = s.inactive_look;
         self.view.inactive_strength = s.inactive_strength;
@@ -11772,6 +11774,7 @@ mod tests {
             update_last_check: 42,
             update_skip: "1.2.3".into(),
             flat_shading: true,
+            hard_edge_angle: 75.0,
             show_vertex_color: false,
             inactive_look: oxy_render::InactiveLook::Tint,
             inactive_strength: 0.3,
@@ -11856,6 +11859,7 @@ mod tests {
         // Reset does not put the other preferences back.
         assert_eq!(e.layout, UiLayout::Touch);
         assert!(e.view.flat_shading);
+        assert_eq!(e.view.hard_edge_angle, 75.0);
         assert!(!e.view.show_vertex_color);
         assert_eq!(e.view.inactive_look, oxy_render::InactiveLook::Tint);
         assert_eq!((e.view.inactive_strength, e.view.inactive_color), (0.3, [0.8, 0.1, 0.1]));
