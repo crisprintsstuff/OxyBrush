@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **The transform gizmo in Poly Edit** ([#272](https://github.com/crisprintsstuff/OxyBrush/issues/272)). With faces, edges or points picked, T (or **Gizmo: All / Move / Rotate / Scale** in the Poly Edit window) puts the gizmo in the middle of them, and its handles move, turn and scale just what's picked. **Shift+drag** extrudes picked faces or border edges first and moves the new ones, or on a scale handle insets the picked faces. The new geometry stays picked, so you can keep extruding. Mirror moves the other side too; each drag is one undo step and Esc cancels it.
+
 ### Changed
 - **One transform gizmo for move, turn and scale.** T now shows a gizmo with all three at once, so you no longer press T to switch between them: arrows and squares move, rings turn (the outer ring around the view), cubes partway along each axis scale along it, and the circle round the centre scales evenly. T again hides it. The gizmo bar shows the moved, turned and scaled totals together, and can still show **Move**, **Rotate** or **Scale** on its own (and W/E in the single-key shortcut preset still do). Each drag is one undo step named for what it did.
 

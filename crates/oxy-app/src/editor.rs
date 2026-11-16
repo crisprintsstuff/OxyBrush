@@ -670,6 +670,8 @@ pub enum Drag {
     Retopo(Box<crate::retopo::RetopoDrag>),
     /// A drag in the Poly Edit tool (RFC 0018).
     PolyEdit(Box<crate::polyedit::PolyDrag>),
+    /// The transform gizmo on Poly Edit's picked faces, edges or points.
+    PolyGizmo(Box<crate::polyedit::PolyGizmoDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -2344,6 +2346,11 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
+        // In Poly Edit the gizmo works on the picked elements, and comes
+        // before the tool's own clicks.
+        if self.poly_edit.is_some() && self.gizmo.is_some() && self.poly_gizmo_down(p) {
+            return;
+        }
         if self.retopo_pointer_down(p) || self.poly_pointer_down(p) {
             return;
         }
@@ -3152,7 +3159,8 @@ impl Editor {
             | Drag::TubePoint { .. }
             | Drag::TubeRadius { .. }
             | Drag::Retopo(_)
-            | Drag::PolyEdit(_) => true,
+            | Drag::PolyEdit(_)
+            | Drag::PolyGizmo(_) => true,
             Drag::Orbit => {
                 // Orbit around the cursor: the pivot is picked where the
                 // press was, on the drag's first move.
@@ -3558,7 +3566,7 @@ impl Editor {
             self.retopo_cancel_drag();
             return;
         }
-        if matches!(self.drag, Drag::PolyEdit(_)) {
+        if matches!(self.drag, Drag::PolyEdit(_) | Drag::PolyGizmo(_)) {
             self.poly_cancel_drag();
             return;
         }
@@ -6718,6 +6726,7 @@ impl Editor {
         let base_pivot = self.gizmo_base_pivot()?;
         // While dragging, the gizmo follows the transformed pivot.
         let (pivot, rot) = match &self.drag {
+            Drag::PolyGizmo(g) => (g.pivot + g.current.translate, g.rotation),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     (g.pivot + g.current.translate, g.current.linear * g.rotation)
@@ -6802,6 +6811,10 @@ impl Editor {
     /// The gizmo pivot when not dragging: the one you placed, or the mask
     /// edge / centre of what moves (cached per edit).
     pub(crate) fn gizmo_base_pivot(&mut self) -> Option<Vec3> {
+        // In Poly Edit: the middle of the picked elements (none: no gizmo).
+        if self.poly_edit.is_some() {
+            return self.poly_gizmo_pivot();
+        }
         let id = self.scene.active().id;
         // A pivot kept for another piece doesn't apply to this one.
         if self.kept_pivot_of.is_some_and(|k| k != id) {

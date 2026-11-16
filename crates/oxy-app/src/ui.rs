@@ -3079,6 +3079,18 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             }
                         }
                         ui.separator();
+                        // In Poly Edit the gizmo works on what's picked:
+                        // the piece's pivot, operators and totals don't apply.
+                        let poly = ed.poly_edit.is_some();
+                        if poly {
+                            ui.label(RichText::new("On what's picked · Shift+drag extrudes").weak().small());
+                            ui.separator();
+                            tips::hover(ui.toggle_value(&mut ed.gizmo_snap, "Snap"), plain::GIZMO_SNAP);
+                            if tips::hover(ui.button("Done"), plain::GIZMO_DONE).clicked() {
+                                ed.gizmo = None;
+                            }
+                            return;
+                        }
                         tips::hover(
                             ui.label(RichText::new("Masked parts stay put").weak().small()),
                             plain::GIZMO_MASKED,
@@ -3100,8 +3112,10 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ed.gizmo = None;
                         }
                     });
-                    gizmo_numeric_row(ui, ed, mode);
-                    gizmo_absolute_row(ui, ed);
+                    if ed.poly_edit.is_none() {
+                        gizmo_numeric_row(ui, ed, mode);
+                        gizmo_absolute_row(ui, ed);
+                    }
                 });
         });
     let Some(layout) = ed.gizmo_layout() else { return };
