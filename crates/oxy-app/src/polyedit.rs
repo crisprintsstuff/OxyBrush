@@ -282,6 +282,24 @@ pub struct PolyEdit {
     pub smooth_shown: u32,
     /// Levels for Subdivide (smooth) and Smooth and sculpt.
     pub subdivide_levels: u32,
+    /// Soft selection (#275): the gizmo also moves points near the pick,
+    /// less the further they are, out to `soft_radius` (a fraction of the
+    /// piece's size); `soft_falloff` runs from 0 (soft, a gentle slope) to
+    /// 1 (sharp, most of the effect close to the pick).
+    pub soft: bool,
+    pub soft_radius: f32,
+    pub soft_falloff: f32,
+}
+
+/// How much a point `d` from the pick moves with soft selection, out to
+/// `radius`, from 1 at the pick to 0 at the radius: a smoothstep, raised
+/// to a power from 1 (soft) to 4 (sharp) by `falloff`.
+pub fn soft_weight(d: f32, radius: f32, falloff: f32) -> f32 {
+    if radius <= 0.0 || d >= radius {
+        return 0.0;
+    }
+    let t = 1.0 - d / radius;
+    (t * t * (3.0 - 2.0 * t)).powf(1.0 + 3.0 * falloff.clamp(0.0, 1.0))
 }
 
 /// The first pick of a two-click action.
@@ -377,6 +395,9 @@ pub struct PolyGizmoDrag {
     mirror_x: Option<f32>,
     /// Points on the mirror plane stay on it.
     on_plane: Vec<bool>,
+    /// How much each of `verts` moves (1 for the pick, less for soft
+    /// selection's neighbours).
+    weight: Vec<f32>,
     pub(crate) current: crate::pose::Transform,
     /// "Move 2 faces", "Extrude 2 faces", …
     what: String,
@@ -449,6 +470,9 @@ impl Editor {
             smooth: None,
             smooth_shown: 0,
             subdivide_levels: 1,
+            soft: false,
+            soft_radius: 0.25,
+            soft_falloff: 0.0,
             mode: ElementMode::default(),
             selected: Vec::new(),
             selected_topology: 0,
@@ -1563,6 +1587,40 @@ impl Editor {
         pts
     }
 
+    /// With soft selection on: the points near the pick (not in it) and
+    /// how much each moves with it, by its distance to the nearest picked
+    /// point. Empty when it's off or nothing is picked.
+    pub fn poly_soft_weights(&self) -> Vec<(u32, f32)> {
+        let Some(pe) = self.poly_edit.as_ref() else { return Vec::new() };
+        if !pe.soft {
+            return Vec::new();
+        }
+        let (Some(c), Some(i)) = (self.poly_cage(), self.poly_piece_index()) else { return Vec::new() };
+        let picked = self.poly_gizmo_points();
+        if picked.is_empty() {
+            return Vec::new();
+        }
+        let radius = pe.soft_radius * self.scene.pieces[i].mesh.bounds().extent().length().max(1e-6);
+        let pts: Vec<Vec3> = picked.iter().map(|&v| c.positions[v as usize]).collect();
+        // A quick bound first: nothing further than the radius from the
+        // picked points' box can move.
+        let (lo, hi) =
+            pts.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(a, b), &p| (a.min(p), b.max(p)));
+        let (lo, hi) = (lo - Vec3::splat(radius), hi + Vec3::splat(radius));
+        let mut out = Vec::new();
+        for (v, &p) in c.positions.iter().enumerate() {
+            if p.cmplt(lo).any() || p.cmpgt(hi).any() || picked.binary_search(&(v as u32)).is_ok() {
+                continue;
+            }
+            let d = pts.iter().map(|q| q.distance(p)).fold(f32::MAX, f32::min);
+            let w = soft_weight(d, radius, pe.soft_falloff);
+            if w > 1e-4 {
+                out.push((v as u32, w));
+            }
+        }
+        out
+    }
+
     /// Where the gizmo sits in Poly Edit: the middle of the picked points.
     pub(crate) fn poly_gizmo_pivot(&self) -> Option<Vec3> {
         let pts = self.poly_gizmo_points();
@@ -1635,6 +1693,26 @@ impl Editor {
             let (n, kind) = self.poly_pick_count();
             (pts, format!("{} {n} {kind}", mode.label()), false)
         };
+        // Soft selection's neighbours move too (not when extruding: only the
+        // new geometry moves then).
+        let mut verts = verts;
+        let mut weight = vec![1.0; verts.len()];
+        if !made {
+            let side = mirror.map(|(cx, _)| (layout.pivot.x - cx).signum());
+            for (v, w) in self.poly_soft_weights() {
+                // With Mirror, the far side's neighbours follow as twins.
+                if let (Some((cx, tol)), Some(side)) = (mirror, side)
+                    && let Some(cage) = self.scene.pieces[i].cage.as_ref()
+                {
+                    let x = cage.positions[v as usize].x - cx;
+                    if x.abs() > tol && x.signum() != side {
+                        continue;
+                    }
+                }
+                verts.push(v);
+                weight.push(w);
+            }
+        }
         let Some(cage) = self.scene.pieces[i].cage.as_ref() else { return true };
         // Mirror twins of the points that move, following their source.
         let mut twins = Vec::new();
@@ -1665,6 +1743,7 @@ impl Editor {
             twins,
             mirror_x: mirror.map(|(cx, _)| cx),
             on_plane,
+            weight,
             current: crate::pose::Transform::IDENTITY,
             what,
             before_mesh,
@@ -1701,8 +1780,9 @@ impl Editor {
             .iter()
             .zip(&g.start_pos)
             .zip(&g.on_plane)
-            .map(|((&v, &s), &on)| {
-                let mut q = t.apply(g.pivot, s);
+            .zip(&g.weight)
+            .map(|(((&v, &s), &on), &w)| {
+                let mut q = s + (t.apply(g.pivot, s) - s) * w;
                 if on && let Some(cx) = g.mirror_x {
                     q.x = cx;
                 }
@@ -1739,9 +1819,20 @@ impl Editor {
             return;
         }
         let Some(cage) = self.scene.pieces[i].cage.clone() else { return };
-        self.poly_commit(&format!("Poly Edit: {}", g.what), g.before_mesh, g.before_cage, cage);
-        // Pick what was moved, in the current kind, on the new mesh.
-        let moved_set: std::collections::HashSet<u32> = g.verts.iter().copied().collect();
+        let Some(order) = self.poly_commit_order(&format!("Poly Edit: {}", g.what), g.before_mesh, g.before_cage, cage)
+        else {
+            return;
+        };
+        // Pick what was moved, in the current kind, on the new mesh (the
+        // pick itself, not soft selection's neighbours), by its new numbers.
+        let core: Vec<u32> = g
+            .verts
+            .iter()
+            .zip(&g.weight)
+            .filter(|&(_, &w)| w >= 1.0)
+            .filter_map(|(&v, _)| order.get(v as usize).copied())
+            .collect();
+        let moved_set: std::collections::HashSet<u32> = core.iter().copied().collect();
         let topology = self.scene.pieces[i].mesh.topology_version();
         let Some(c) = self.scene.pieces[i].cage.clone() else { return };
         if let Some(pe) = self.poly_edit.as_mut() {
@@ -1767,18 +1858,31 @@ impl Editor {
                 pe.picked_edges = edges;
             }
             if !pe.picked_points.is_empty() {
-                pe.picked_points = g.verts.clone();
+                pe.picked_points = core;
             }
         }
         self.status = format!("{} (one undo step)", g.what);
     }
 
     /// Put `cage` in place (rebuilding the mesh) as one undo step.
-    fn poly_commit(&mut self, label: &str, before_mesh: Mesh, before_cage: Option<Cage>, mut cage: Cage) {
-        let Some(i) = self.poly_piece_index() else { return };
-        let Some(mesh) = cage.build_mesh() else {
+    fn poly_commit(&mut self, label: &str, before_mesh: Mesh, before_cage: Option<Cage>, cage: Cage) {
+        self.poly_commit_order(label, before_mesh, before_cage, cage);
+    }
+
+    /// [`Self::poly_commit`], returning how the points were renumbered:
+    /// the mesh keeps its vertices in its own (chunk) order and the cage
+    /// follows it, so old point `v` is `order[v]` afterwards.
+    fn poly_commit_order(
+        &mut self,
+        label: &str,
+        before_mesh: Mesh,
+        before_cage: Option<Cage>,
+        mut cage: Cage,
+    ) -> Option<Vec<u32>> {
+        let i = self.poly_piece_index()?;
+        let Some((mesh, order)) = cage.build_mesh_with_order() else {
             self.status = "Poly Edit can't delete every face of a piece; delete the piece instead".into();
-            return;
+            return None;
         };
         let piece = &mut self.scene.pieces[i];
         piece.mesh = mesh;
@@ -1789,6 +1893,7 @@ impl Editor {
         if let Some(pe) = self.poly_edit.as_mut() {
             pe.pending = None;
         }
+        Some(order)
     }
 }
 
@@ -2134,6 +2239,125 @@ mod tests {
         e.modifiers.shift = false;
         assert_eq!(cage(&e).faces.len(), faces + 1, "one new face from the edge");
         assert_eq!(e.poly_picked_edges().len(), 1, "the new border edge is picked");
+    }
+
+    #[test]
+    fn soft_weight_falls_from_the_pick_to_the_radius() {
+        assert_eq!(soft_weight(0.0, 1.0, 0.0), 1.0);
+        assert_eq!(soft_weight(1.0, 1.0, 0.0), 0.0);
+        assert_eq!(soft_weight(2.0, 1.0, 0.5), 0.0);
+        let (soft, sharp) = (soft_weight(0.5, 1.0, 0.0), soft_weight(0.5, 1.0, 1.0));
+        assert!((soft - 0.5).abs() < 1e-6, "{soft}");
+        assert!(sharp < soft * 0.2, "sharp keeps most of the movement close: {sharp}");
+        let mut last = 1.0;
+        for k in 1..=20 {
+            let w = soft_weight(k as f32 / 20.0, 1.0, 0.3);
+            assert!(w <= last, "falls steadily");
+            last = w;
+        }
+    }
+
+    #[test]
+    fn soft_selection_drags_neighbours_less_the_further_they_are() {
+        use crate::pose::GizmoMode;
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(10, 2.0)));
+        e.camera.yaw = 0.5;
+        e.camera.pitch = 0.6;
+        e.camera.frame(e.scene.bounds());
+        start(&mut e);
+        e.poly_edit.as_mut().unwrap().mode = ElementMode::Points;
+        let c = cage(&e).clone();
+        let centre_v = (0..c.positions.len() as u32)
+            .min_by(|&a, &b| c.positions[a as usize].length().total_cmp(&c.positions[b as usize].length()));
+        let v = centre_v.unwrap();
+        assert!(c.positions[v as usize].length() < 1e-4);
+        e.poly_toggle_pick(Some(Element::Point(v)));
+        {
+            let pe = e.poly_edit.as_mut().unwrap();
+            pe.soft = true;
+            pe.soft_radius = 0.3; // 0.3 × the plane's diagonal (~2.83): about 0.85
+            pe.soft_falloff = 0.0;
+        }
+        // The radius is a share of the piece's size, before it bulges.
+        let radius = 0.3 * e.scene.active().mesh.bounds().extent().length();
+        let weights = e.poly_soft_weights();
+        assert!(!weights.is_empty() && weights.iter().all(|&(_, w)| w > 0.0 && w < 1.0));
+        assert!(weights.iter().all(|&(u, _)| u != v), "the pick itself isn't in the list");
+        e.gizmo = Some(GizmoMode::Move);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[1].expect("Y arrow");
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        // Committing renumbers the points (the mesh keeps its own order), so
+        // find each one by where it was across the plane (x, z don't change).
+        let after = cage(&e).clone();
+        let find = |p: Vec3| {
+            after
+                .positions
+                .iter()
+                .position(|q| (q.x - p.x).abs() < 1e-5 && (q.z - p.z).abs() < 1e-5)
+                .expect("every point is still there")
+        };
+        let rise = |u: u32| after.positions[find(c.positions[u as usize])].y - c.positions[u as usize].y;
+        let top = rise(v);
+        assert!(top > 0.1, "the pick moves fully: {top}");
+        for u in 0..c.positions.len() as u32 {
+            let d = c.positions[u as usize].distance(c.positions[v as usize]);
+            let r = rise(u);
+            if u == v {
+                continue;
+            }
+            if d >= radius {
+                assert!(r.abs() < 1e-6, "far points stay: {d} {r}");
+            } else {
+                assert!((r - top * soft_weight(d, radius, 0.0)).abs() < 1e-4, "{d}: {r}");
+            }
+        }
+        // The pick is still just that point (by its new number).
+        let now = e.poly_picked_points().to_vec();
+        assert_eq!(now.len(), 1);
+        let p = after.positions[now[0] as usize];
+        assert!(p.x.abs() < 1e-5 && p.z.abs() < 1e-5 && p.y > 0.1, "{p}");
+        // One undo step puts the whole bulge back.
+        e.undo();
+        assert!(cage(&e).positions.iter().all(|p| p.y.abs() < 1e-6), "flat again");
+
+        // With Mirror, a pick off the centre line bulges both sides alike.
+        let mut e2 = editor();
+        e2.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(10, 2.0)));
+        e2.camera.yaw = 0.5;
+        e2.camera.pitch = 0.6;
+        e2.camera.frame(e2.scene.bounds());
+        start(&mut e2);
+        let c2 = cage(&e2).clone();
+        let off = (0..c2.positions.len() as u32)
+            .find(|&u| (c2.positions[u as usize] - Vec3::new(0.6, 0.0, 0.0)).length() < 1e-4)
+            .unwrap();
+        {
+            let pe = e2.poly_edit.as_mut().unwrap();
+            pe.mode = ElementMode::Points;
+            pe.mirror = true;
+            pe.soft = true;
+            pe.soft_radius = 0.15;
+        }
+        e2.poly_toggle_pick(Some(Element::Point(off)));
+        e2.gizmo = Some(GizmoMode::Move);
+        let layout = e2.gizmo_layout().unwrap();
+        let end = layout.axes[1].unwrap();
+        drag(&mut e2, end, end + (end - layout.center) * 0.5);
+        let a = cage(&e2).clone();
+        let y_at = |x: f32, z: f32| {
+            a.positions.iter().find(|q| (q.x - x).abs() < 1e-5 && (q.z - z).abs() < 1e-5).map(|q| q.y).unwrap()
+        };
+        let mut raised = 0;
+        for p in c2.positions.iter().filter(|p| p.x > 0.0) {
+            let (ra, rb) = (y_at(p.x, p.z), y_at(-p.x, p.z));
+            assert!((ra - rb).abs() < 1e-4, "symmetric at {p}: {ra} vs {rb}");
+            if ra > 1e-3 {
+                raised += 1;
+            }
+        }
+        assert!(raised > 1, "the pick and some neighbours rose");
     }
 
     #[test]

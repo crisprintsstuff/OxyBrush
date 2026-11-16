@@ -291,6 +291,13 @@ pub enum Icon {
     PanelRight,
     /// The same with the panel on the left.
     PanelLeft,
+    /// Poly Edit element modes (#275): a grid of faces with one filled,
+    /// with one edge thick, with its corners as dots, and both together
+    /// (Auto: what's under the pointer decides).
+    ModeFaces,
+    ModeEdges,
+    ModePoints,
+    ModeAuto,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -546,6 +553,38 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             }
             for v in [0.42, 0.72] {
                 p.line_segment([at(-1.0, v), at(1.0, v)], thin);
+            }
+        }
+        Icon::ModeFaces | Icon::ModeEdges | Icon::ModePoints | Icon::ModeAuto => {
+            // A 2×2 grid of quads, seen a little from above.
+            let thin = Stroke::new(s.width * 0.6, c.gamma_multiply(0.55));
+            let at = |u: f32, v: f32| ctr + vec2((u - 0.5) * 1.5 * r + (v - 0.5) * 0.25 * r, (v - 0.5) * 1.3 * r);
+            for k in 0..3 {
+                let t = k as f32 / 2.0;
+                p.line_segment([at(t, 0.0), at(t, 1.0)], thin);
+                p.line_segment([at(0.0, t), at(1.0, t)], thin);
+            }
+            if matches!(icon, Icon::ModeFaces | Icon::ModeAuto) {
+                let quad = vec![at(0.5, 0.0), at(1.0, 0.0), at(1.0, 0.5), at(0.5, 0.5)];
+                p.add(Shape::convex_polygon(quad, c.gamma_multiply(0.85), Stroke::NONE));
+            }
+            if icon == Icon::ModeEdges {
+                p.line_segment([at(0.0, 0.5), at(1.0, 0.5)], Stroke::new(s.width * 1.6, c));
+            }
+            if matches!(icon, Icon::ModePoints | Icon::ModeAuto) {
+                for (u, v) in [
+                    (0.0, 0.0),
+                    (0.5, 0.0),
+                    (1.0, 0.0),
+                    (0.0, 0.5),
+                    (0.5, 0.5),
+                    (1.0, 0.5),
+                    (0.0, 1.0),
+                    (0.5, 1.0),
+                    (1.0, 1.0),
+                ] {
+                    p.circle_filled(at(u, v), s.width * 1.1, c);
+                }
             }
         }
         Icon::PanelRight | Icon::PanelLeft => {

@@ -79,6 +79,34 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 }
             });
+            // Soft selection: the gizmo also moves points near the pick.
+            if let Some(pe) = ed.poly_edit.as_mut() {
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut pe.soft, "Soft selection").on_hover_text(
+                        "The gizmo also moves points near what's picked, less the further they are, for smooth bulges and bends instead of sharp steps. The dots show how much each moves.",
+                    );
+                });
+                if pe.soft {
+                    egui::Grid::new("poly_soft").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+                        ui.label("   Radius").on_hover_text("How far it reaches, as a share of the piece's size");
+                        ui.add(crate::widgets::Bar(
+                            egui::Slider::new(&mut pe.soft_radius, 0.02..=1.5).logarithmic(true),
+                        ));
+                        ui.end_row();
+                        ui.label("   Falloff").on_hover_text(
+                            "Soft: a long gentle slope. Sharp: most of the movement close to the pick, fading quickly.",
+                        );
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("soft").weak().small());
+                            ui.add(crate::widgets::Bar(
+                                egui::Slider::new(&mut pe.soft_falloff, 0.0..=1.0).show_value(false),
+                            ));
+                            ui.label(RichText::new("sharp").weak().small());
+                        });
+                        ui.end_row();
+                    });
+                }
+            }
             if ed.gizmo.is_some() && picked == 0 {
                 ui.label(
                     RichText::new("Ctrl/Cmd+click faces, edges or points to put the gizmo on them.").weak().small(),
@@ -312,6 +340,9 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     let picked_edges = ed.poly_picked_edges().to_vec();
     let picked_points = ed.poly_picked_points().to_vec();
     let mode = ed.poly_edit.as_ref().map_or(ElementMode::Auto, |pe| pe.mode);
+    // Soft selection's reach, while the gizmo is up (not mid-drag, when
+    // the points are moving anyway).
+    let soft = if ed.gizmo.is_some() && matches!(ed.drag, Drag::None) { ed.poly_soft_weights() } else { Vec::new() };
     let Some(c) = ed.poly_cage() else { return };
     let painter = ui.painter_at(canvas);
     let ppp = ed.pixels_per_point.max(0.1);
@@ -407,6 +438,14 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     for &v in &picked_points {
         if let Some(pv) = screen.get(v as usize).copied().flatten() {
             painter.circle_filled(pv, 5.0, PICKED);
+        }
+    }
+    // Soft selection: a dot per point that moves with the pick, larger and
+    // warmer the more it moves.
+    for &(v, w) in &soft {
+        if let Some(pv) = screen.get(v as usize).copied().flatten() {
+            let col = Color32::from_rgb(255, (200.0 - 140.0 * w) as u8, 60).gamma_multiply(0.4 + 0.6 * w);
+            painter.circle_filled(pv, 2.0 + 3.0 * w, col);
         }
     }
     // The first pick of a bridge or split, until the second.
