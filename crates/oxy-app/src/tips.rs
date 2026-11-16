@@ -136,9 +136,10 @@ commands! {
     MaskBorder => "Mask border", "", "Mask the edge of the visible surface: the border of an open mesh, and the edge of what's left when part of it is hidden. The rest is unmasked. Grow the mask to widen it.";
     MaskGroupBorders => "Mask group borders", "", "Mask the lines where face groups meet. The rest is unmasked. Grow the mask to widen them.";
     ShowMask => "Show / hide mask", "M", "Show or hide the mask tint.";
-    GizmoMove => "Transform: move", "T", "Move the active piece. Masked parts stay put. T cycles the gizmo.";
-    GizmoRotate => "Transform: rotate", "", "Rotate the active piece. Masked parts stay put. T cycles the gizmo.";
-    GizmoScale => "Transform: scale", "", "Scale the active piece. Masked parts stay put. T cycles the gizmo.";
+    GizmoAll => "Transform gizmo", "T", "Move, turn and scale the active piece with one gizmo: arrows and squares move, rings turn, cubes and the circle round the centre scale. Masked parts stay put. The same key hides it.";
+    GizmoMove => "Transform: move", "", "Move the active piece. Masked parts stay put. T shows the gizmo with move, turn and scale together.";
+    GizmoRotate => "Transform: rotate", "", "Rotate the active piece. Masked parts stay put. T shows the gizmo with move, turn and scale together.";
+    GizmoScale => "Transform: scale", "", "Scale the active piece. Masked parts stay put. T shows the gizmo with move, turn and scale together.";
     GizmoMirrorX => "Mirror X", "", "Flip the active piece across the gizmo's X plane, through the pivot. Works on the whole piece (no mask).";
     GizmoMirrorY => "Mirror Y", "", "Flip the active piece across the gizmo's Y plane, through the pivot. Works on the whole piece (no mask).";
     GizmoMirrorZ => "Mirror Z", "", "Flip the active piece across the gizmo's Z plane, through the pivot. Works on the whole piece (no mask).";
@@ -254,6 +255,7 @@ impl Cmd {
             Cmd::Strength => CommandId::StrengthUp,
             Cmd::SymX => CommandId::SymmetryX,
             Cmd::Lasso => CommandId::SelectionLasso,
+            Cmd::GizmoAll => CommandId::GizmoCycle,
             Cmd::GizmoMove => CommandId::GizmoMove,
             Cmd::GizmoRotate => CommandId::GizmoRotate,
             Cmd::GizmoScale => CommandId::GizmoScale,
@@ -553,6 +555,7 @@ pub fn matcap_tip(m: MatcapPreset) -> &'static str {
 
 pub fn gizmo_mode_tip(m: GizmoMode) -> String {
     match m {
+        GizmoMode::Combined => format!("All in one. {}", Cmd::GizmoAll.tip()),
         GizmoMode::Move => Cmd::GizmoMove.tip(),
         GizmoMode::Rotate => Cmd::GizmoRotate.tip(),
         GizmoMode::Scale => Cmd::GizmoScale.tip(),
@@ -560,7 +563,7 @@ pub fn gizmo_mode_tip(m: GizmoMode) -> String {
 }
 
 pub fn gizmo_handle_tip(mode: GizmoMode, handle: Handle) -> &'static str {
-    match (mode, handle) {
+    match crate::pose::operation(mode, handle) {
         (GizmoMode::Move, Handle::Axis(0)) => "Drag to move left and right. Masked parts stay put.",
         (GizmoMode::Move, Handle::Axis(1)) => "Drag to move up and down. Masked parts stay put.",
         (GizmoMode::Move, Handle::Axis(2)) => "Drag to move forward and back. Masked parts stay put.",
@@ -578,7 +581,7 @@ pub fn gizmo_handle_tip(mode: GizmoMode, handle: Handle) -> &'static str {
         (GizmoMode::Move, Handle::Plane(_)) => "Drag to move in this plane (along both of its axes). Shift snaps.",
         (GizmoMode::Scale, Handle::Plane(_)) => "Drag to scale along both axes of this plane. Shift snaps.",
         (GizmoMode::Rotate, Handle::Plane(_)) => "Drag to spin around the view direction.",
-        (_, Handle::Axis(_)) => "Drag this handle. Masked parts stay put.",
+        _ => "Drag this handle. Masked parts stay put.",
     }
 }
 

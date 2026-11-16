@@ -670,6 +670,8 @@ pub enum Drag {
     Retopo(Box<crate::retopo::RetopoDrag>),
     /// A drag in the Poly Edit tool (RFC 0018).
     PolyEdit(Box<crate::polyedit::PolyDrag>),
+    /// The transform gizmo on Poly Edit's picked faces, edges or points.
+    PolyGizmo(Box<crate::polyedit::PolyGizmoDrag>),
     /// Box or lasso selection; `points` are physical px (rect uses first and last).
     Select {
         action: SelectAction,
@@ -756,6 +758,9 @@ pub struct PointerSlider {
 
 /// State of a gizmo drag: the mesh as it was, and how each vertex follows.
 pub struct GizmoDrag {
+    /// What the drag does (for the combined gizmo, the grabbed handle's
+    /// own operation; see `pose::operation`).
+    mode: GizmoMode,
     handle: Handle,
     start: Vec2,
     pivot: Vec3,
@@ -2341,6 +2346,11 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
+        // In Poly Edit the gizmo works on the picked elements, and comes
+        // before the tool's own clicks.
+        if self.poly_edit.is_some() && self.gizmo.is_some() && self.poly_gizmo_down(p) {
+            return;
+        }
         if self.retopo_pointer_down(p) || self.poly_pointer_down(p) {
             return;
         }
@@ -3149,7 +3159,8 @@ impl Editor {
             | Drag::TubePoint { .. }
             | Drag::TubeRadius { .. }
             | Drag::Retopo(_)
-            | Drag::PolyEdit(_) => true,
+            | Drag::PolyEdit(_)
+            | Drag::PolyGizmo(_) => true,
             Drag::Orbit => {
                 // Orbit around the cursor: the pivot is picked where the
                 // press was, on the drag's first move.
@@ -3369,8 +3380,8 @@ impl Editor {
     pub fn gizmo_to(&mut self, pos: Vec2) -> bool {
         let snap = (self.gizmo_snap || self.modifiers.shift).then_some(self.gizmo_snap_steps);
         let (mode, right, up, forward) = match &self.drag {
-            Drag::Gizmo(_) => (
-                self.gizmo.unwrap_or(GizmoMode::Move),
+            Drag::Gizmo(g) => (
+                g.mode,
                 self.camera.forward().cross(self.camera.up()).normalize_or(Vec3::X),
                 self.camera.up(),
                 self.camera.forward(),
@@ -3479,7 +3490,7 @@ impl Editor {
                     // turns with it), instead of snapping back to where it was.
                     if self.custom_gizmo_pivot.is_some() {
                         self.custom_gizmo_pivot = Some(g.pivot + g.current.translate);
-                        if self.gizmo == Some(GizmoMode::Rotate) {
+                        if g.mode == GizmoMode::Rotate {
                             self.custom_gizmo_rotation = Some(g.current.linear * g.rotation);
                         }
                     }
@@ -3555,7 +3566,7 @@ impl Editor {
             self.retopo_cancel_drag();
             return;
         }
-        if matches!(self.drag, Drag::PolyEdit(_)) {
+        if matches!(self.drag, Drag::PolyEdit(_) | Drag::PolyGizmo(_)) {
             self.poly_cancel_drag();
             return;
         }
@@ -6725,6 +6736,7 @@ impl Editor {
         let base_pivot = self.gizmo_base_pivot()?;
         // While dragging, the gizmo follows the transformed pivot.
         let (pivot, rot) = match &self.drag {
+            Drag::PolyGizmo(g) => (g.pivot + g.current.translate, g.rotation),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     (g.pivot + g.current.translate, g.current.linear * g.rotation)
@@ -6740,6 +6752,7 @@ impl Editor {
         let axis_dirs = [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z];
         let ends = axis_dirs.map(|a| self.camera.project(pivot + a * length, size));
         let axes = ends.map(|e| e.filter(|e| e.distance(center) > 12.0 * self.pixels_per_point));
+        let combined = mode == GizmoMode::Combined;
         // Plane squares for Move and Scale, hidden when seen edge-on.
         let planes: [Option<Vec2>; 3] = std::array::from_fn(|a| {
             if mode == GizmoMode::Rotate {
@@ -6752,8 +6765,11 @@ impl Editor {
                 .then(|| self.camera.project(pivot + (axis_dirs[b] + axis_dirs[c]) * length * pose::PLANE_AT, size))
                 .flatten()
         });
-        // Rotate: rings around each axis, and an outer ring for the view axis.
-        let rings = (mode == GizmoMode::Rotate).then(|| {
+        // Rotate: rings around each axis, and an outer ring for the view
+        // axis. The combined gizmo draws its rings a little inside the
+        // arrow tips, so the tips stay free to grab.
+        let ring_at = if combined { pose::COMBINED_RING_AT } else { 1.0 };
+        let rings = (mode == GizmoMode::Rotate || combined).then(|| {
             let toward = if self.camera.orthographic {
                 -self.camera.forward()
             } else {
@@ -6763,7 +6779,7 @@ impl Editor {
             let ring = |a: usize| {
                 let (b, c) = pose::plane_axes(a);
                 let (u, v) = (axis_dirs[b], axis_dirs[c]);
-                let at = |t: f32| pivot + (u * t.cos() + v * t.sin()) * length;
+                let at = |t: f32| pivot + (u * t.cos() + v * t.sin()) * length * ring_at;
                 let points: Vec<(Vec2, bool)> = (0..pose::RING_SAMPLES)
                     .map(|k| {
                         let w = at(k as f32 * step);
@@ -6789,13 +6805,26 @@ impl Editor {
             let length_px = pose::HANDLE_PT * self.pixels_per_point;
             pose::Rings { points: [p0, p1, p2], tangents: [t0, t1, t2], view_radius: length_px * 1.25 }
         });
-        let (axes, planes) = if rings.is_some() { ([None; 3], [None; 3]) } else { (axes, planes) };
-        Some(pose::Layout { pivot, center, axes, planes, axis_dirs, length, rings })
+        let (axes, planes) = if mode == GizmoMode::Rotate { ([None; 3], [None; 3]) } else { (axes, planes) };
+        // The combined gizmo's scale cubes along each axis, and the even
+        // scale circle round the centre.
+        let cubes: [Option<Vec2>; 3] = std::array::from_fn(|a| {
+            if !combined || axes[a].is_none() {
+                return None;
+            }
+            self.camera.project(pivot + axis_dirs[a] * length * pose::CUBE_AT, size)
+        });
+        let scale_ring = combined.then_some(pose::SCALE_RING_PT * self.pixels_per_point);
+        Some(pose::Layout { pivot, center, axes, planes, axis_dirs, length, rings, cubes, scale_ring })
     }
 
     /// The gizmo pivot when not dragging: the one you placed, or the mask
     /// edge / centre of what moves (cached per edit).
     pub(crate) fn gizmo_base_pivot(&mut self) -> Option<Vec3> {
+        // In Poly Edit: the middle of the picked elements (none: no gizmo).
+        if self.poly_edit.is_some() {
+            return self.poly_gizmo_pivot();
+        }
         let id = self.scene.active().id;
         // A pivot kept for another piece doesn't apply to this one.
         if self.kept_pivot_of.is_some_and(|k| k != id) {
@@ -6852,7 +6881,8 @@ impl Editor {
             }
         }
 
-        let mode = self.gizmo.unwrap_or(GizmoMode::Move);
+        // What this handle does: for the combined gizmo, its own operation.
+        let (mode, handle) = pose::operation(self.gizmo.unwrap_or(GizmoMode::Move), handle);
         let world_per_px = self.camera.world_per_pixel(layout.pivot, self.canvas_size().y);
         let piece = self.scene.active_mut();
 
@@ -6866,12 +6896,12 @@ impl Editor {
         }
 
         let weights = pose::weights(&piece.mesh);
-        let screen_axis = match (&layout.rings, handle) {
+        let screen_axis = match (mode, handle) {
             // Rotate: the ring's tangent where it was grabbed, or (outer
             // ring) where it was grabbed relative to the pivot.
-            (Some(r), Handle::Axis(a)) => r.tangent_at(a, local),
-            (Some(_), Handle::Center) => Some(local - layout.center),
-            (None, Handle::Axis(a)) => layout.axes[a].map(|e| e - layout.center),
+            (GizmoMode::Rotate, Handle::Axis(a)) => layout.rings.as_ref().and_then(|r| r.tangent_at(a, local)),
+            (GizmoMode::Rotate, Handle::Center) => Some(local - layout.center),
+            (_, Handle::Axis(a)) => layout.axes[a].map(|e| e - layout.center),
             _ => None,
         };
         let screen_plane = match handle {
@@ -6904,6 +6934,7 @@ impl Editor {
         let mirror = if reposition_pivot { pose::GizmoMirror::NONE } else { self.gizmo_mirror() };
 
         self.drag = Drag::Gizmo(Box::new(GizmoDrag {
+            mode,
             handle,
             start: p,
             pivot: layout.pivot,
@@ -7294,14 +7325,14 @@ impl Editor {
                 E::None
             }
             C::GizmoCycle => {
+                // One gizmo for all three: arrows move, rings turn, cubes
+                // scale. The gizmo bar still offers each on its own.
                 self.gizmo = match self.gizmo {
-                    None => Some(GizmoMode::Move),
-                    Some(GizmoMode::Move) => Some(GizmoMode::Rotate),
-                    Some(GizmoMode::Rotate) => Some(GizmoMode::Scale),
-                    Some(GizmoMode::Scale) => None,
+                    None => Some(GizmoMode::Combined),
+                    Some(_) => None,
                 };
                 self.status = match self.gizmo {
-                    Some(m) => format!("{} gizmo (same key for the next mode)", m.label()),
+                    Some(_) => "Transform gizmo: arrows move, rings turn, cubes scale (the same key hides it)".into(),
                     None => "Gizmo off".into(),
                 };
                 E::None
@@ -11827,6 +11858,84 @@ mod tests {
             Drag::Gizmo(g) => g.current,
             _ => panic!("no gizmo drag"),
         }
+    }
+
+    #[test]
+    fn t_shows_one_gizmo_that_moves_turns_and_scales() {
+        let mut e = editor();
+        e.camera.yaw = 0.6;
+        e.camera.pitch = 0.4;
+        e.perform_command(CommandId::GizmoCycle);
+        assert_eq!(e.gizmo, Some(GizmoMode::Combined));
+        let layout = e.gizmo_layout().unwrap();
+        assert!(layout.axes.iter().all(Option::is_some), "arrows");
+        assert!(layout.cubes.iter().all(Option::is_some), "scale cubes");
+        assert!(layout.rings.is_some(), "rings");
+        assert!(layout.scale_ring.is_some(), "even-scale circle");
+        let size = e.canvas_size();
+
+        // The X arrow moves along X.
+        let end = layout.axes[0].unwrap();
+        assert_eq!(layout.pick(end, 6.0), Some(Handle::Axis(0)));
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + (end - layout.center) * 0.5);
+        let t = gizmo_current(&e);
+        assert!(t.translate.x > 0.0 && t.linear == Mat3::IDENTITY, "{t:?}");
+        e.cancel_drag();
+
+        // The Y cube scales along Y.
+        let cube = layout.cubes[1].unwrap();
+        assert_eq!(layout.pick(cube, 6.0), Some(Handle::ScaleAxis(1)));
+        e.pointer = Some(cube);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(cube + (cube - layout.center) * 0.5);
+        let t = gizmo_current(&e);
+        let y = t.linear * layout.axis_dirs[1];
+        assert!(y.length() > 1.2 && t.translate == Vec3::ZERO, "{t:?}");
+        assert!((t.linear * layout.axis_dirs[0] - layout.axis_dirs[0]).length() < 1e-5, "X unchanged");
+        e.cancel_drag();
+
+        // The Z ring turns around Z, following the pointer.
+        // Grab it away from the arrows, cubes and squares (those win when
+        // they're within reach), where it moves most on screen.
+        let rings = layout.rings.clone().unwrap();
+        let reach = pose::PICK_PT * e.pixels_per_point;
+        let handles: Vec<Vec2> =
+            layout.axes.iter().chain(&layout.cubes).chain(&layout.planes).flatten().copied().collect();
+        let k = (0..pose::RING_SAMPLES)
+            .filter(|&k| rings.points[2][k].1)
+            .filter(|&k| handles.iter().all(|h| h.distance(rings.points[2][k].0) > reach * 1.5))
+            .max_by(|&a, &b| rings.tangents[2][a].length().total_cmp(&rings.tangents[2][b].length()))
+            .unwrap();
+        let grab = rings.points[2][k].0;
+        assert_eq!(layout.pick(grab, reach), Some(Handle::Ring(2)));
+        let tangent = rings.tangents[2][k].normalize();
+        e.pointer = Some(grab);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(grab + tangent * 15.0);
+        let t = gizmo_current(&e);
+        let z = layout.axis_dirs[2];
+        assert!((t.linear * z - z).length() < 1e-4, "turns around Z");
+        assert!((t.linear * layout.axis_dirs[0] - layout.axis_dirs[0]).length() > 1e-3, "and does turn");
+        // The ring point under the pointer follows it.
+        let step = std::f32::consts::TAU / pose::RING_SAMPLES as f32;
+        let (b, c) = pose::plane_axes(2);
+        let th = k as f32 * step;
+        let world = layout.pivot
+            + (layout.axis_dirs[b] * th.cos() + layout.axis_dirs[c] * th.sin())
+                * layout.length
+                * pose::COMBINED_RING_AT;
+        let moved = e.camera.project(t.apply(layout.pivot, world), size).unwrap();
+        // (Along an arc: a short drag stays within a couple of pixels.)
+        assert!(moved.distance(grab + tangent * 15.0) < 2.5, "{moved} vs {}", grab + tangent * 15.0);
+        // Release: one undo step, named for what it did.
+        e.pointer_up();
+        assert_eq!(e.history.undo_labels().last(), Some("Rotate"));
+
+        // T again hides it.
+        e.perform_command(CommandId::GizmoCycle);
+        assert_eq!(e.gizmo, None);
     }
 
     #[test]

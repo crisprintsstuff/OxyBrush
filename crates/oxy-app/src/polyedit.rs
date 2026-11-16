@@ -354,6 +354,40 @@ pub struct PolyDrag {
 /// point or an edge rather than the face around it.
 pub const PICK_PT: f32 = 8.0;
 
+/// A drag of the transform gizmo on the picked faces, edges or points
+/// (#272). Shift at the press extrudes (faces, border edges) or insets
+/// (faces, on a scale handle) first, then transforms the new points.
+pub struct PolyGizmoDrag {
+    /// The handle's own operation (see `pose::operation`).
+    mode: crate::pose::GizmoMode,
+    handle: crate::pose::Handle,
+    start: Vec2,
+    pub(crate) pivot: Vec3,
+    pub(crate) rotation: glam::Mat3,
+    axis_dirs: [Vec3; 3],
+    length: f32,
+    screen_axis: Option<Vec2>,
+    screen_plane: Option<(Vec2, Vec2)>,
+    world_per_px: f32,
+    /// The points it moves and where they started; mirror twins follow
+    /// their source (an index into `verts`) mirrored across `mirror_x`.
+    verts: Vec<u32>,
+    start_pos: Vec<Vec3>,
+    twins: Vec<(u32, usize)>,
+    mirror_x: Option<f32>,
+    /// Points on the mirror plane stay on it.
+    on_plane: Vec<bool>,
+    pub(crate) current: crate::pose::Transform,
+    /// "Move 2 faces", "Extrude 2 faces", …
+    what: String,
+    /// The piece before the drag (and before an extrude), for undo and Esc.
+    before_mesh: Mesh,
+    before_cage: Option<Cage>,
+    /// It extruded or inset at the press: worth keeping even unmoved? No,
+    /// but it already changed the topology, so a still click undoes it.
+    made: bool,
+}
+
 impl Editor {
     /// Open the tool on the active piece, making its polygons from its mesh
     /// if it has none yet.
@@ -1348,6 +1382,10 @@ impl Editor {
 
     /// Pointer moved: move the dragged points. True if handled.
     pub(crate) fn poly_pointer_moved(&mut self, pos: Vec2) -> bool {
+        if matches!(self.drag, Drag::PolyGizmo(_)) {
+            self.poly_gizmo_moved(pos);
+            return true;
+        }
         let Drag::PolyEdit(d) = &mut self.drag else { return false };
         let delta = pos - d.start;
         if delta.length() > 2.0 {
@@ -1411,6 +1449,10 @@ impl Editor {
     /// Let go: keep what the drag did as one undo step. A press without a
     /// drag changes nothing (except an inserted loop, which stays).
     pub(crate) fn poly_pointer_up(&mut self) -> bool {
+        if matches!(self.drag, Drag::PolyGizmo(_)) {
+            self.poly_gizmo_up();
+            return true;
+        }
         if !matches!(self.drag, Drag::PolyEdit(_)) {
             return false;
         }
@@ -1484,6 +1526,16 @@ impl Editor {
 
     /// Escape during a drag: put everything back.
     pub(crate) fn poly_cancel_drag(&mut self) {
+        if matches!(self.drag, Drag::PolyGizmo(_)) {
+            let Drag::PolyGizmo(g) = std::mem::replace(&mut self.drag, Drag::None) else { unreachable!() };
+            if let Some(i) = self.poly_piece_index() {
+                let piece = &mut self.scene.pieces[i];
+                piece.mesh = g.before_mesh;
+                piece.cage = g.before_cage;
+            }
+            self.status = "Poly Edit: cancelled".into();
+            return;
+        }
         let Drag::PolyEdit(d) = std::mem::replace(&mut self.drag, Drag::None) else { return };
         if let Some(i) = self.poly_piece_index() {
             let piece = &mut self.scene.pieces[i];
@@ -1491,6 +1543,234 @@ impl Editor {
             piece.cage = d.before_cage;
         }
         self.status = "Poly Edit: cancelled".into();
+    }
+
+    /// The cage points the gizmo moves: the picked faces' corners, edges'
+    /// ends or points, sorted (empty: nothing picked).
+    fn poly_gizmo_points(&self) -> Vec<u32> {
+        let Some(c) = self.poly_cage() else { return Vec::new() };
+        let mut pts: Vec<u32> = self
+            .poly_selection()
+            .iter()
+            .filter(|&&f| f < c.faces.len())
+            .flat_map(|&f| corners(&c.faces[f]).iter().copied())
+            .chain(self.poly_picked_edges().iter().flat_map(|e| e.iter().copied()))
+            .chain(self.poly_picked_points().iter().copied())
+            .filter(|&v| (v as usize) < c.positions.len())
+            .collect();
+        pts.sort_unstable();
+        pts.dedup();
+        pts
+    }
+
+    /// Where the gizmo sits in Poly Edit: the middle of the picked points.
+    pub(crate) fn poly_gizmo_pivot(&self) -> Option<Vec3> {
+        let pts = self.poly_gizmo_points();
+        let c = self.poly_cage()?;
+        (!pts.is_empty()).then(|| pts.iter().map(|&v| c.positions[v as usize]).sum::<Vec3>() / pts.len() as f32)
+    }
+
+    /// A press on the gizmo while Poly Edit is open. True if it took it.
+    pub(crate) fn poly_gizmo_down(&mut self, p: Vec2) -> bool {
+        let Some(layout) = self.gizmo_layout() else { return false };
+        let local = self.canvas_local(p);
+        let Some(handle) = layout.pick(local, crate::pose::PICK_PT * self.pixels_per_point) else { return false };
+        use crate::pose::{GizmoMode, Handle};
+        let (mode, handle) = crate::pose::operation(self.gizmo.unwrap_or(GizmoMode::Move), handle);
+        let screen_axis = match (mode, handle) {
+            (GizmoMode::Rotate, Handle::Axis(a)) => layout.rings.as_ref().and_then(|r| r.tangent_at(a, local)),
+            (GizmoMode::Rotate, Handle::Center) => Some(local - layout.center),
+            (_, Handle::Axis(a)) => layout.axes[a].map(|e| e - layout.center),
+            _ => None,
+        };
+        let size = self.canvas_size();
+        let screen_plane = match handle {
+            Handle::Plane(a) => {
+                let (b, c) = crate::pose::plane_axes(a);
+                let end = |i: usize| self.camera.project(layout.pivot + layout.axis_dirs[i] * layout.length, size);
+                end(b).zip(end(c)).map(|(u, v)| (u - layout.center, v - layout.center))
+            }
+            _ => None,
+        };
+        let world_per_px = self.camera.world_per_pixel(layout.pivot, size.y);
+        let Some((i, before_mesh, before_cage)) = self.poly_before() else { return false };
+        let Some(mut cage) = before_cage.clone() else { return false };
+        let faces = self.poly_selection().to_vec();
+        let edges = self.poly_picked_edges().to_vec();
+        let each = self.poly_edit.as_ref().is_some_and(|pe| pe.each);
+        let mirror = self.poly_mirror();
+        let n_faces = |n: usize| format!("{n} face(s)");
+        // Shift: make new geometry first (faces: extrude, or inset on a
+        // scale handle; border edges: extrude), and move that.
+        let (verts, what, made) = if self.modifiers.shift && !faces.is_empty() {
+            let faces = match mirror {
+                Some((cx, tol)) => polyedit::with_mirror(&cage, &faces, cx, tol),
+                None => faces.clone(),
+            };
+            let (op, mut slide) = if mode == GizmoMode::Scale {
+                ("Inset", polyedit::inset(&mut cage, &faces, each).0)
+            } else {
+                ("Extrude", polyedit::extrude(&mut cage, &faces, each).0)
+            };
+            if !self.poly_rebuild(i, cage, &mut slide) {
+                return true;
+            }
+            (slide.verts, format!("{op} {}", n_faces(faces.len())), true)
+        } else if self.modifiers.shift && !edges.is_empty() {
+            let edges = match mirror {
+                Some((cx, tol)) => polyedit::edges_with_mirror(&cage, &edges, cx, tol),
+                None => edges.clone(),
+            };
+            let (mut slide, made) = polyedit::extrude_border(&mut cage, &edges);
+            if made.is_empty() {
+                self.status = "Only border edges (the edge of a hole or open surface) extrude".into();
+                return true;
+            }
+            if !self.poly_rebuild(i, cage, &mut slide) {
+                return true;
+            }
+            (slide.verts, format!("Extrude {} edge(s)", edges.len()), true)
+        } else {
+            let pts = self.poly_gizmo_points();
+            let (n, kind) = self.poly_pick_count();
+            (pts, format!("{} {n} {kind}", mode.label()), false)
+        };
+        let Some(cage) = self.scene.pieces[i].cage.as_ref() else { return true };
+        // Mirror twins of the points that move, following their source.
+        let mut twins = Vec::new();
+        let mut on_plane = vec![false; verts.len()];
+        if let Some((cx, tol)) = mirror {
+            for (k, &v) in verts.iter().enumerate() {
+                match polyedit::mirror_point(cage, v, cx, tol) {
+                    Some(w) if w == v => on_plane[k] = true,
+                    Some(w) if !verts.contains(&w) && !twins.iter().any(|&(t, _)| t == w) => twins.push((w, k)),
+                    _ => {}
+                }
+            }
+        }
+        let start_pos = verts.iter().map(|&v| cage.positions[v as usize]).collect();
+        self.drag = Drag::PolyGizmo(Box::new(PolyGizmoDrag {
+            mode,
+            handle,
+            start: p,
+            pivot: layout.pivot,
+            rotation: self.custom_gizmo_rotation.unwrap_or(glam::Mat3::IDENTITY),
+            axis_dirs: layout.axis_dirs,
+            length: layout.length,
+            screen_axis,
+            screen_plane,
+            world_per_px,
+            verts,
+            start_pos,
+            twins,
+            mirror_x: mirror.map(|(cx, _)| cx),
+            on_plane,
+            current: crate::pose::Transform::IDENTITY,
+            what,
+            before_mesh,
+            before_cage,
+            made,
+        }));
+        true
+    }
+
+    fn poly_gizmo_moved(&mut self, pos: Vec2) {
+        let right = self.camera.forward().cross(self.camera.up()).normalize_or(Vec3::X);
+        let (up, forward) = (self.camera.up(), self.camera.forward());
+        // Shift belongs to extrude here, so only the Snap button snaps.
+        let snap = self.gizmo_snap.then_some(self.gizmo_snap_steps);
+        let Drag::PolyGizmo(g) = &mut self.drag else { return };
+        let input = crate::pose::DragInput {
+            mode: g.mode,
+            handle: g.handle,
+            delta: pos - g.start,
+            screen_axis: g.screen_axis,
+            screen_plane: g.screen_plane,
+            axis_dirs: g.axis_dirs,
+            length: g.length,
+            right,
+            up,
+            forward,
+            world_per_px: g.world_per_px,
+            snap,
+        };
+        let t = crate::pose::drag_transform(&input);
+        g.current = t;
+        let mut moves: Vec<(u32, Vec3)> = g
+            .verts
+            .iter()
+            .zip(&g.start_pos)
+            .zip(&g.on_plane)
+            .map(|((&v, &s), &on)| {
+                let mut q = t.apply(g.pivot, s);
+                if on && let Some(cx) = g.mirror_x {
+                    q.x = cx;
+                }
+                (v, q)
+            })
+            .collect();
+        if let Some(cx) = g.mirror_x {
+            for &(w, k) in &g.twins {
+                let q = moves[k].1;
+                moves.push((w, Vec3::new(2.0 * cx - q.x, q.y, q.z)));
+            }
+        }
+        let what = g.what.clone();
+        self.poly_set_points(&moves);
+        self.status = format!("{what} (Esc cancels)");
+    }
+
+    /// Let go of the gizmo: one undo step, and the moved geometry stays
+    /// picked so the next drag (or Shift+drag) carries on from it.
+    fn poly_gizmo_up(&mut self) {
+        let Drag::PolyGizmo(g) = std::mem::replace(&mut self.drag, Drag::None) else { return };
+        let g = *g;
+        let Some(i) = self.poly_piece_index() else { return };
+        let moved = g.current != crate::pose::Transform::IDENTITY;
+        if !moved && !g.made {
+            return;
+        }
+        if !moved {
+            // Extruded but not moved: nothing visible, so take it back.
+            let piece = &mut self.scene.pieces[i];
+            piece.mesh = g.before_mesh;
+            piece.cage = g.before_cage;
+            self.status = "Drag a gizmo handle to extrude".into();
+            return;
+        }
+        let Some(cage) = self.scene.pieces[i].cage.clone() else { return };
+        self.poly_commit(&format!("Poly Edit: {}", g.what), g.before_mesh, g.before_cage, cage);
+        // Pick what was moved, in the current kind, on the new mesh.
+        let moved_set: std::collections::HashSet<u32> = g.verts.iter().copied().collect();
+        let topology = self.scene.pieces[i].mesh.topology_version();
+        let Some(c) = self.scene.pieces[i].cage.clone() else { return };
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.selected_topology = topology;
+            if !pe.selected.is_empty() || g.made && pe.picked_edges.is_empty() && pe.picked_points.is_empty() {
+                pe.selected = (0..c.faces.len())
+                    .filter(|&f| corners(&c.faces[f]).iter().all(|v| moved_set.contains(v)))
+                    .collect();
+            }
+            if !pe.picked_edges.is_empty() {
+                let mut edges = Vec::new();
+                for f in &c.faces {
+                    let k = corners(f);
+                    for j in 0..k.len() {
+                        let (a, b) = (k[j], k[(j + 1) % k.len()]);
+                        if moved_set.contains(&a) && moved_set.contains(&b) {
+                            edges.push(edge_key(a, b));
+                        }
+                    }
+                }
+                edges.sort_unstable();
+                edges.dedup();
+                pe.picked_edges = edges;
+            }
+            if !pe.picked_points.is_empty() {
+                pe.picked_points = g.verts.clone();
+            }
+        }
+        self.status = format!("{} (one undo step)", g.what);
     }
 
     /// Put `cage` in place (rebuilding the mesh) as one undo step.
@@ -1702,6 +1982,158 @@ mod tests {
 
     fn cage(e: &Editor) -> &Cage {
         e.poly_cage().expect("the tool has a cage")
+    }
+
+    /// The cube's face pointing most along `dir`.
+    fn face_towards(e: &Editor, dir: Vec3) -> usize {
+        let c = cage(e);
+        (0..c.faces.len())
+            .max_by(|&a, &b| polyedit::face_normal(c, a).dot(dir).total_cmp(&polyedit::face_normal(c, b).dot(dir)))
+            .unwrap()
+    }
+
+    #[test]
+    fn the_gizmo_moves_picked_faces_and_shift_extrudes_or_insets_them() {
+        use crate::pose::GizmoMode;
+        // Move: the picked face's corners go along X, nothing else moves.
+        let mut e = editor();
+        start(&mut e);
+        let front = face_towards(&e, Vec3::Z);
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        e.gizmo = Some(GizmoMode::Combined);
+        let before = cage(&e).positions.clone();
+        let corners_of: Vec<u32> = corners(&cage(&e).faces[front]).to_vec();
+        let layout = e.gizmo_layout().expect("a gizmo on the picked face");
+        assert!((layout.pivot - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-4, "{}", layout.pivot);
+        let end = layout.axes[0].expect("X arrow");
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        let c = cage(&e);
+        assert_eq!(c.faces.len(), 6);
+        for (v, (old, new)) in before.iter().zip(&c.positions).enumerate() {
+            if corners_of.contains(&(v as u32)) {
+                assert!(new.x > old.x + 0.1 && (new.y - old.y).abs() < 1e-5, "{old} -> {new}");
+            } else {
+                assert_eq!(old, new, "only the picked face moves");
+            }
+        }
+        assert!(e.history.undo_labels().last().unwrap().starts_with("Poly Edit: Move"));
+        e.undo();
+        assert_eq!(cage(&e).positions, before);
+
+        // Shift+drag an arrow: extrude, then move the new face; it stays picked.
+        let mut e = editor();
+        start(&mut e);
+        let front = face_towards(&e, Vec3::Z);
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        e.gizmo = Some(GizmoMode::Combined);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[1].expect("Y arrow");
+        e.modifiers.shift = true;
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        e.modifiers.shift = false;
+        assert_eq!(cage(&e).faces.len(), 10, "four walls added");
+        assert!(e.history.undo_labels().last().unwrap().starts_with("Poly Edit: Extrude 1"));
+        let picked = e.poly_selection().to_vec();
+        assert_eq!(picked.len(), 1, "the extruded face stays picked");
+        let top = polyedit::face_center(cage(&e), picked[0]);
+        assert!(top.y > 0.1 && (top.z - 0.5).abs() < 1e-3, "moved up: {top}");
+        // The gizmo follows it for the next drag.
+        assert!((e.gizmo_layout().unwrap().pivot - top).length() < 1e-4);
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+
+        // Shift+drag the even-scale circle: inset.
+        let mut e = editor();
+        start(&mut e);
+        let front = face_towards(&e, Vec3::Z);
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        e.gizmo = Some(GizmoMode::Combined);
+        let layout = e.gizmo_layout().unwrap();
+        let ring = layout.center + Vec2::new(layout.scale_ring.unwrap(), 0.0);
+        assert_eq!(layout.pick(ring, 6.0), Some(crate::pose::Handle::ScaleAll));
+        e.modifiers.shift = true;
+        drag(&mut e, ring, ring - Vec2::new(60.0, 0.0));
+        e.modifiers.shift = false;
+        let c = cage(&e);
+        assert_eq!(c.faces.len(), 10, "inset rim of four faces");
+        let inner = e.poly_selection().to_vec();
+        assert_eq!(inner.len(), 1);
+        let (lo, hi) = corners(&c.faces[inner[0]])
+            .iter()
+            .map(|&v| c.positions[v as usize].x)
+            .fold((f32::MAX, f32::MIN), |(a, b), x| (a.min(x), b.max(x)));
+        assert!(hi - lo < 0.9, "the inner face is smaller: {lo}..{hi}");
+
+        // Esc during a Shift+drag takes the extrusion back too.
+        let mut e = editor();
+        start(&mut e);
+        e.poly_toggle_pick(Some(Element::Face(face_towards(&e, Vec3::Z), [0, 0])));
+        e.gizmo = Some(GizmoMode::Combined);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[1].unwrap();
+        e.modifiers.shift = true;
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(end + (end - layout.center) * 0.5);
+        assert_eq!(cage(&e).faces.len(), 10, "shown while dragging");
+        e.cancel_drag();
+        e.modifiers.shift = false;
+        assert_eq!(cage(&e).faces.len(), 6);
+        assert_eq!(e.history.undo_labels().count(), 0);
+
+        // A still click with Shift extrudes nothing.
+        let mut e = editor();
+        start(&mut e);
+        e.poly_toggle_pick(Some(Element::Face(face_towards(&e, Vec3::Z), [0, 0])));
+        e.gizmo = Some(GizmoMode::Move);
+        let at = e.gizmo_layout().unwrap().axes[0].unwrap();
+        e.modifiers.shift = true;
+        drag(&mut e, at, at);
+        assert_eq!(cage(&e).faces.len(), 6);
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn the_gizmo_moves_points_with_their_mirror_twins_and_extrudes_border_edges() {
+        use crate::pose::GizmoMode;
+        // A point on the right with Mirror on: its twin on the left follows, mirrored.
+        let mut e = editor();
+        start(&mut e);
+        e.poly_edit.as_mut().unwrap().mirror = true;
+        let c = cage(&e);
+        let v = (0..c.positions.len() as u32).find(|&v| c.positions[v as usize].x > 0.4).unwrap();
+        let p = c.positions[v as usize];
+        let twin = (0..c.positions.len() as u32)
+            .find(|&w| (c.positions[w as usize] - Vec3::new(-p.x, p.y, p.z)).length() < 1e-5)
+            .unwrap();
+        e.poly_toggle_pick(Some(Element::Point(v)));
+        e.gizmo = Some(GizmoMode::Move);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[0].unwrap();
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        let c = cage(&e);
+        let (a, b) = (c.positions[v as usize], c.positions[twin as usize]);
+        assert!(a.x > p.x + 0.1, "{p} -> {a}");
+        assert!((b - Vec3::new(-a.x, a.y, a.z)).length() < 1e-5, "the twin is mirrored: {a} {b}");
+
+        // A border edge of an open plane, with Shift: new faces come out of it.
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(1, 1.0)));
+        e.camera.frame(e.scene.bounds());
+        start(&mut e);
+        let c = cage(&e);
+        let faces = c.faces.len();
+        let k = corners(&c.faces[0]).to_vec();
+        e.poly_edit.as_mut().unwrap().mode = ElementMode::Edges;
+        e.poly_toggle_pick(Some(Element::Edge(k[0], k[1], 0.5)));
+        e.gizmo = Some(GizmoMode::Move);
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes.iter().flatten().next().copied().expect("an arrow");
+        e.modifiers.shift = true;
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        e.modifiers.shift = false;
+        assert_eq!(cage(&e).faces.len(), faces + 1, "one new face from the edge");
+        assert_eq!(e.poly_picked_edges().len(), 1, "the new border edge is picked");
     }
 
     #[test]

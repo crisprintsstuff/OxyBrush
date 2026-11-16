@@ -13,16 +13,20 @@ use rayon::prelude::*;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GizmoMode {
+    /// Move, rotate and scale handles together: arrows move, rings turn,
+    /// cubes scale (T).
+    Combined,
     Move,
     Rotate,
     Scale,
 }
 
 impl GizmoMode {
-    pub const ALL: [GizmoMode; 3] = [GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale];
+    pub const ALL: [GizmoMode; 4] = [GizmoMode::Combined, GizmoMode::Move, GizmoMode::Rotate, GizmoMode::Scale];
 
     pub fn label(self) -> &'static str {
         match self {
+            GizmoMode::Combined => "All",
             GizmoMode::Move => "Move",
             GizmoMode::Rotate => "Rotate",
             GizmoMode::Scale => "Scale",
@@ -38,6 +42,28 @@ pub enum Handle {
     /// The plane spanned by the two axes other than this one.
     Plane(usize),
     Center,
+    /// The combined gizmo's own handles: a ring turns around its axis, the
+    /// outer ring around the view, a cube scales along its axis and the
+    /// circle round the centre scales evenly. Single-mode gizmos use Axis
+    /// and Center for those (see [`operation`]).
+    Ring(usize),
+    ViewRing,
+    ScaleAxis(usize),
+    ScaleAll,
+}
+
+/// What dragging `handle` does in `mode`, as a single mode's handle: the
+/// combined gizmo's rings rotate, its cubes and centre circle scale, and
+/// the rest moves.
+pub fn operation(mode: GizmoMode, handle: Handle) -> (GizmoMode, Handle) {
+    match handle {
+        Handle::Ring(a) => (GizmoMode::Rotate, Handle::Axis(a)),
+        Handle::ViewRing => (GizmoMode::Rotate, Handle::Center),
+        Handle::ScaleAxis(a) => (GizmoMode::Scale, Handle::Axis(a)),
+        Handle::ScaleAll => (GizmoMode::Scale, Handle::Center),
+        h if mode == GizmoMode::Combined => (GizmoMode::Move, h),
+        h => (mode, h),
+    }
 }
 
 /// The two axes spanning the plane of `Handle::Plane(a)`.
@@ -55,6 +81,12 @@ pub const AXES: [Vec3; 3] = [Vec3::X, Vec3::Y, Vec3::Z];
 pub const HANDLE_PT: f32 = 80.0;
 /// How close (logical points) the pointer must be to grab a handle.
 pub const PICK_PT: f32 = 14.0;
+/// The combined gizmo: where the scale cubes sit along each axis and the
+/// rings' radius (fractions of the axis length), and the radius of the
+/// even-scale circle round the centre (logical points).
+pub const CUBE_AT: f32 = 0.62;
+pub const COMBINED_RING_AT: f32 = 0.82;
+pub const SCALE_RING_PT: f32 = 21.0;
 
 /// Where the gizmo is drawn: canvas-local physical pixels.
 #[derive(Debug, Clone, PartialEq)]
@@ -73,6 +105,10 @@ pub struct Layout {
     pub length: f32,
     /// Rotate mode: the three axis rings and the outer view ring.
     pub rings: Option<Rings>,
+    /// The combined gizmo: each axis's scale cube, and the radius of the
+    /// even-scale circle round the centre (physical px). None otherwise.
+    pub cubes: [Option<Vec2>; 3],
+    pub scale_ring: Option<f32>,
 }
 
 /// Samples around each axis ring, from angle 0 in steps of `2π / RING_SAMPLES`.
@@ -107,8 +143,58 @@ impl Rings {
 }
 
 impl Layout {
+    /// The combined gizmo's handle under `p`: the point handles (arrow
+    /// tips, cubes, plane squares) first, then the centre dot and the even
+    /// scale circle round it, then the rings.
+    fn pick_combined(&self, p: Vec2, pick_px: f32, scale_radius: f32) -> Option<Handle> {
+        let mut best: Option<(f32, Handle)> = None;
+        let consider = |best: &mut Option<(f32, Handle)>, d: f32, h: Handle| {
+            if d < pick_px && best.is_none_or(|(bd, _)| d < bd) {
+                *best = Some((d, h));
+            }
+        };
+        for a in 0..3 {
+            if let Some(e) = self.axes[a] {
+                consider(&mut best, e.distance(p), Handle::Axis(a));
+            }
+            if let Some(c) = self.cubes[a] {
+                consider(&mut best, c.distance(p), Handle::ScaleAxis(a));
+            }
+            if let Some(q) = self.planes[a] {
+                consider(&mut best, q.distance(p), Handle::Plane(a));
+            }
+        }
+        if best.is_some() {
+            return best.map(|(_, h)| h);
+        }
+        // The centre dot moves; the circle just outside it scales evenly.
+        let dc = self.center.distance(p);
+        let dot = (scale_radius * 0.55).min(pick_px);
+        if dc < dot {
+            return Some(Handle::Center);
+        }
+        if (dc - scale_radius).abs() < (scale_radius - dot).min(pick_px * 0.6) {
+            return Some(Handle::ScaleAll);
+        }
+        let r = self.rings.as_ref()?;
+        for (a, pts) in r.points.iter().enumerate() {
+            for i in 0..pts.len() {
+                let (p0, f0) = pts[i];
+                let (p1, f1) = pts[(i + 1) % pts.len()];
+                if f0 && f1 {
+                    consider(&mut best, segment_distance(p, p0, p1), Handle::Ring(a));
+                }
+            }
+        }
+        consider(&mut best, (dc - r.view_radius).abs(), Handle::ViewRing);
+        best.map(|(_, h)| h)
+    }
+
     /// The handle under `p` (canvas-local physical px), if any.
     pub fn pick(&self, p: Vec2, pick_px: f32) -> Option<Handle> {
+        if let Some(radius) = self.scale_ring {
+            return self.pick_combined(p, pick_px, radius);
+        }
         let mut best: Option<(f32, Handle)> = None;
         if let Some(r) = &self.rings {
             // Rotate: the near half of each axis ring, then the outer ring.
@@ -386,7 +472,7 @@ pub fn drag_transform(i: &DragInput) -> Transform {
     };
     let snap_angle = |a: f32| snap.map_or(a, |s| round_to(a, s.angle));
     let snap_factor = |f: f32| snap.map_or(f, |s| 1.0 + round_to(f - 1.0, s.scale)).max(0.05);
-    match (i.mode, i.handle) {
+    match operation(i.mode, i.handle) {
         (GizmoMode::Move, Handle::Axis(a)) => {
             let t = i.screen_axis.map_or(0.0, along) * i.length;
             Transform { translate: snap_move(i.axis_dirs[a] * t), ..Transform::IDENTITY }
@@ -457,6 +543,9 @@ pub fn drag_transform(i: &DragInput) -> Transform {
             let f = snap_factor(1.0 + (i.delta.x - i.delta.y) / 200.0);
             Transform { linear: Mat3::from_diagonal(Vec3::splat(f)), ..Transform::IDENTITY }
         }
+        // `operation` never gives these back.
+        (GizmoMode::Combined, _)
+        | (_, Handle::Ring(_) | Handle::ViewRing | Handle::ScaleAxis(_) | Handle::ScaleAll) => Transform::IDENTITY,
     }
 }
 
@@ -700,11 +789,65 @@ mod tests {
             axis_dirs: AXES,
             length: 1.0,
             rings: None,
+            cubes: [None; 3],
+            scale_ring: None,
         };
         assert_eq!(l.pick(Vec2::new(178.0, 102.0), 14.0), Some(Handle::Axis(0)));
         assert_eq!(l.pick(Vec2::new(103.0, 98.0), 14.0), Some(Handle::Center));
         assert_eq!(l.pick(Vec2::new(132.0, 72.0), 14.0), Some(Handle::Plane(2)));
         assert_eq!(l.pick(Vec2::new(140.0, 140.0), 14.0), None);
+    }
+
+    #[test]
+    fn the_combined_gizmo_picks_move_rotate_and_scale_handles() {
+        let c = Vec2::new(200.0, 200.0);
+        // A ring round the Z axis (in the screen plane), radius 82, all facing us.
+        let ring: Vec<(Vec2, bool)> = (0..RING_SAMPLES)
+            .map(|k| {
+                let t = k as f32 * std::f32::consts::TAU / RING_SAMPLES as f32;
+                (c + Vec2::new(t.cos(), t.sin()) * 82.0, true)
+            })
+            .collect();
+        let empty = || vec![(c, false); RING_SAMPLES];
+        let l = Layout {
+            pivot: Vec3::ZERO,
+            center: c,
+            axes: [Some(c + Vec2::new(100.0, 0.0)), Some(c + Vec2::new(0.0, -100.0)), None],
+            planes: [None, None, Some(c + Vec2::new(38.0, -38.0))],
+            axis_dirs: AXES,
+            length: 1.0,
+            rings: Some(Rings {
+                points: [empty(), empty(), ring],
+                tangents: [vec![Vec2::ZERO; RING_SAMPLES], vec![Vec2::ZERO; RING_SAMPLES], vec![Vec2::X; RING_SAMPLES]],
+                view_radius: 125.0,
+            }),
+            cubes: [Some(c + Vec2::new(62.0, 0.0)), Some(c + Vec2::new(0.0, -62.0)), None],
+            scale_ring: Some(21.0),
+        };
+        let pick = |x: f32, y: f32| l.pick(c + Vec2::new(x, y), 14.0);
+        assert_eq!(pick(99.0, 1.0), Some(Handle::Axis(0)), "arrow tip: move");
+        assert_eq!(pick(62.0, 2.0), Some(Handle::ScaleAxis(0)), "cube: scale");
+        assert_eq!(pick(37.0, -37.0), Some(Handle::Plane(2)), "square: move in a plane");
+        assert_eq!(pick(3.0, 2.0), Some(Handle::Center), "dot: move in the view");
+        assert_eq!(pick(0.0, 21.0), Some(Handle::ScaleAll), "circle round the dot: scale evenly");
+        assert_eq!(pick(-58.0, 58.0), Some(Handle::Ring(2)), "ring: turn");
+        assert_eq!(pick(-125.0, 0.0), Some(Handle::ViewRing), "outer ring: turn around the view");
+        assert_eq!(pick(-40.0, 30.0), None);
+        // Each handle does its own job.
+        let m = GizmoMode::Combined;
+        assert_eq!(operation(m, Handle::Axis(1)), (GizmoMode::Move, Handle::Axis(1)));
+        assert_eq!(operation(m, Handle::Ring(2)), (GizmoMode::Rotate, Handle::Axis(2)));
+        assert_eq!(operation(m, Handle::ViewRing), (GizmoMode::Rotate, Handle::Center));
+        assert_eq!(operation(m, Handle::ScaleAxis(0)), (GizmoMode::Scale, Handle::Axis(0)));
+        assert_eq!(operation(m, Handle::ScaleAll), (GizmoMode::Scale, Handle::Center));
+        assert_eq!(operation(GizmoMode::Rotate, Handle::Axis(0)), (GizmoMode::Rotate, Handle::Axis(0)));
+        // A drag on a cube scales; on the dot, moves.
+        let mut i = input(m, Handle::ScaleAxis(0), Vec2::new(100.0, 0.0));
+        i.screen_axis = Some(Vec2::new(100.0, 0.0));
+        let t = drag_transform(&i);
+        assert!((t.linear.x_axis.x - 2.0).abs() < 1e-4 && t.translate == Vec3::ZERO, "{t:?}");
+        let t = drag_transform(&input(m, Handle::Center, Vec2::new(10.0, 0.0)));
+        assert!(t.translate.length() > 0.0 && t.linear == Mat3::IDENTITY);
     }
 
     #[test]

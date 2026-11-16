@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **The transform gizmo in Poly Edit** ([#272](https://github.com/crisprintsstuff/OxyBrush/issues/272)). With faces, edges or points picked, T (or **Gizmo: All / Move / Rotate / Scale** in the Poly Edit window) puts the gizmo in the middle of them, and its handles move, turn and scale just what's picked. **Shift+drag** extrudes picked faces or border edges first and moves the new ones, or on a scale handle insets the picked faces. The new geometry stays picked, so you can keep extruding. Mirror moves the other side too; each drag is one undo step and Esc cancels it.
+
+### Changed
+- **One transform gizmo for move, turn and scale.** T now shows a gizmo with all three at once, so you no longer press T to switch between them: arrows and squares move, rings turn (the outer ring around the view), cubes partway along each axis scale along it, and the circle round the centre scales evenly. T again hides it. The gizmo bar shows the moved, turned and scaled totals together, and can still show **Move**, **Rotate** or **Scale** on its own (and W/E in the single-key shortcut preset still do). Each drag is one undo step named for what it did.
 ### Fixed
 - **Undo while editing a tube undoes the tube's own edits** ([#271](https://github.com/crisprintsstuff/OxyBrush/issues/271)). An open tube isn't in the history until it's accepted, so Ctrl/Cmd+Z undid the last change outside it. Now Undo and Redo step through the tube's points, thickness, profile and shape settings, one step per drag, click or slider, while the tube is open. Undo past its first edit closes the tube, without touching the scene; after that, and after Accept, Undo works on the scene again.
 - **Mirror in the tube profile editor adds and removes points on both sides** ([#273](https://github.com/crisprintsstuff/OxyBrush/issues/273)). Clicking the outline added a point on one side only, so the profile stopped being symmetric.

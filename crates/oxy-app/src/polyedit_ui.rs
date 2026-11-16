@@ -62,6 +62,30 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 });
             }
+            // The transform gizmo on what's picked (#272): T or these.
+            ui.horizontal(|ui| {
+                use crate::pose::GizmoMode;
+                ui.label("Gizmo").on_hover_text(
+                    "Move, turn or scale what's picked with the transform gizmo. Shift+drag extrudes picked faces or border edges first (on a scale handle, insets faces).",
+                );
+                for (m, label) in [
+                    (GizmoMode::Combined, "All"),
+                    (GizmoMode::Move, "Move"),
+                    (GizmoMode::Rotate, "Rotate"),
+                    (GizmoMode::Scale, "Scale"),
+                ] {
+                    if ui.selectable_label(ed.gizmo == Some(m), label).clicked() {
+                        ed.gizmo = if ed.gizmo == Some(m) { None } else { Some(m) };
+                    }
+                }
+            });
+            if ed.gizmo.is_some() && picked == 0 {
+                ui.label(
+                    RichText::new("Ctrl/Cmd+click faces, edges or points to put the gizmo on them.").weak().small(),
+                );
+            } else if ed.gizmo.is_some() {
+                ui.label(RichText::new("Shift+drag the gizmo to extrude (or inset, when scaling).").weak().small());
+            }
             let Some(pe) = ed.poly_edit.as_mut() else { return };
             let mode = pe.mode;
             if mode.shows(ElementMode::Faces) {
