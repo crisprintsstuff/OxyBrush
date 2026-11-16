@@ -1,6 +1,6 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: proposed (decisions needed from the maintainer, see "Open questions")
+Status: accepted (decisions by the maintainer, 2026-11-16); not built yet
 
 ## Summary
 
@@ -177,19 +177,19 @@ bundled starter details, if any, are made for OxyBrush (CC0).
 6. **Later:** geodesic mapping for details that wrap; Replay later
    strokes.
 
-## Open questions
+## Decisions
 
-- **Later strokes when one is edited.** Proposed: keep them as stored (the
-  additive model, fast), with exact replay as a later, optional action.
-  The alternative is always replaying them, which is exact but slow on
-  long lists.
-- **Recipes on by default?** Proposed: on whenever Living strokes is on
-  (they're small). The alternative is a separate option.
-- **Where details live.** Proposed: a Details section in the Strokes
-  window, stored in the user's settings folder like presets, plus
-  Export/Import. The alternative is a separate Details window.
-- **Symmetric strokes in a detail.** Proposed: a detail keeps one side
-  only, and the target's Mirror setting decides whether it's doubled.
+The maintainer chose the proposed option for each (2026-11-16):
+
+- **Later strokes when one is edited** keep their stored change (the
+  additive model, fast), with exact replay as a later, optional action,
+  rather than always being replayed.
+- **Recipes** are recorded whenever Living strokes is on (they're small),
+  without a separate option.
+- **Details live** in a Details section of the Strokes window, stored in
+  the user's settings folder like presets, plus Export/Import.
+- **Symmetric strokes in a detail:** a detail keeps one side only, and
+  the target's Mirror setting decides whether it's doubled.
 
 ## Not included
 
