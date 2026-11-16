@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.15] - 2026-11-16
+
 ### Added
 - **Sharp or smooth corners point by point in tube profiles.** Double-click a point in the Profile editor to make it a sharp corner (its handle turns square), and again to round it; with Mirror its partner changes too. **All smooth** and **All sharp** replace the Smooth checkbox. The **D-shape** preset now has a flat bottom with sharp corners and a round top. Saved with the project in a new optional `TPRC` section; older versions keep such a tube as ordinary triangles.
 - **Merge down** ([#274](https://github.com/crisprintsstuff/OxyBrush/issues/274)): a button in the Pieces panel (and in the command palette) joins the active piece with the piece below it in the list, exactly as they are, like Join does for every visible piece. One undo step.
