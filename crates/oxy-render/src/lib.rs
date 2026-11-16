@@ -1177,36 +1177,8 @@ impl ViewportRenderer {
                 contents: index_contents,
                 usage: wgpu::BufferUsages::INDEX,
             });
-            let (line_indices, line_index_count): (Vec<[u32; 2]>, u32) = {
-                let tris_slice: &[[u32; 3]] = match &indices {
-                    Some(vis) => vis,
-                    None => &mesh.triangles,
-                };
-                // Quad diagonals and edges inside n-gons are left out, so
-                // the wireframe shows the polygons.
-                if mesh.quad_count() == 0 && mesh.ngon_edges().is_empty() {
-                    let mut lines = Vec::with_capacity(tris_slice.len() * 3);
-                    for tri in tris_slice {
-                        lines.push([tri[0], tri[1]]);
-                        lines.push([tri[1], tri[2]]);
-                        lines.push([tri[2], tri[0]]);
-                    }
-                    let count = lines.len() as u32 * 2;
-                    (lines, count)
-                } else {
-                    let mut lines = Vec::with_capacity(tris_slice.len() * 2);
-                    for tri in tris_slice {
-                        for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
-                            let edge = if u < v { [u, v] } else { [v, u] };
-                            if !mesh.is_inner_edge(edge) {
-                                lines.push(edge);
-                            }
-                        }
-                    }
-                    let count = lines.len() as u32 * 2;
-                    (lines, count)
-                }
-            };
+            let line_indices = wire_lines(mesh);
+            let line_index_count = line_indices.len() as u32 * 2;
             let line_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy line indices"),
                 contents: if line_indices.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&line_indices) },
@@ -1663,6 +1635,34 @@ fn rgba(c: [f64; 3]) -> [f32; 4] {
     [c[0] as f32, c[1] as f32, c[2] as f32, 1.0]
 }
 
+/// The wireframe's lines: each visible triangle's edges, leaving out quad
+/// diagonals and edges inside n-gons so the wireframe shows the polygons.
+///
+/// Built from the mesh's own corners, not the drawing indices: hard edges
+/// point some corners at copies (#265), and the copies aren't in the mesh,
+/// so quad diagonals wouldn't be recognised and every quad would show as
+/// two triangles (#270). Copies sit where their vertex is, so the lines
+/// look the same.
+fn wire_lines(mesh: &Mesh) -> Vec<[u32; 2]> {
+    let hidden = mesh.any_hidden();
+    let visible = mesh.triangles.iter().enumerate().filter(|&(t, _)| !hidden || !mesh.hidden()[t]).map(|(_, t)| t);
+    let polygons = mesh.quad_count() > 0 || !mesh.ngon_edges().is_empty();
+    let mut lines = Vec::with_capacity(mesh.triangles.len() * if polygons { 2 } else { 3 });
+    for tri in visible {
+        for (u, v) in [(tri[0], tri[1]), (tri[1], tri[2]), (tri[2], tri[0])] {
+            if !polygons {
+                lines.push([u, v]);
+                continue;
+            }
+            let edge = if u < v { [u, v] } else { [v, u] };
+            if !mesh.is_inner_edge(edge) {
+                lines.push(edge);
+            }
+        }
+    }
+    lines
+}
+
 fn vertex(mesh: &Mesh, i: usize, lut: &[u32]) -> GpuVertex {
     // When the shader uses primitive_index (exact_face_colors), per-vertex group color
     // is unused, so passing an empty lut completely skips face color calculations.
@@ -1715,6 +1715,21 @@ mod tests {
         assert_eq!(h.center, f.center);
         // Nothing to fit: no grid.
         assert!(FloorGrid::fit([f32::INFINITY; 3], [f32::NEG_INFINITY; 3]).is_none());
+    }
+
+    #[test]
+    fn the_wireframe_shows_a_low_poly_box_as_quads_even_with_hard_edges() {
+        // #270: a box has hard edges at every corner (copies in the drawing
+        // indices), but its wireframe is still 12 edges, no diagonals.
+        let cube = oxy_mesh::primitives::cube(1, 1.0);
+        assert!(cube.quad_count() > 0);
+        let lines = wire_lines(&cube);
+        let mut unique: Vec<[u32; 2]> = lines.iter().map(|&[a, b]| [a.min(b), a.max(b)]).collect();
+        unique.sort();
+        unique.dedup();
+        assert_eq!(unique.len(), 12, "{unique:?}");
+        // Every line is between the mesh's own vertices.
+        assert!(lines.iter().flatten().all(|&v| (v as usize) < cube.positions.len()));
     }
 
     #[test]
