@@ -3126,6 +3126,24 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             }
                             return;
                         }
+                        // Several pieces picked: they move together, about
+                        // their middle; the one-piece pivot and totals don't apply.
+                        let pieces = ed.gizmo_pieces().len();
+                        if pieces > 1 {
+                            tips::hover(
+                                ui.label(RichText::new(format!("{pieces} pieces together")).weak().small()),
+                                plain::GIZMO_PIECES,
+                            );
+                            ui.separator();
+                            tips::hover(ui.toggle_value(&mut ed.gizmo_snap, "Snap"), plain::GIZMO_SNAP);
+                            if tips::hover(ui.button("One piece"), plain::GIZMO_ONE_PIECE).clicked() {
+                                ed.piece_pick.clear();
+                            }
+                            if tips::hover(ui.button("Done"), plain::GIZMO_DONE).clicked() {
+                                ed.gizmo = None;
+                            }
+                            return;
+                        }
                         tips::hover(
                             ui.label(RichText::new("Masked parts stay put").weak().small()),
                             plain::GIZMO_MASKED,
@@ -3147,7 +3165,7 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ed.gizmo = None;
                         }
                     });
-                    if ed.poly_edit.is_none() {
+                    if ed.poly_edit.is_none() && ed.gizmo_pieces().len() < 2 {
                         gizmo_numeric_row(ui, ed, mode);
                         gizmo_absolute_row(ui, ed);
                     }
@@ -4404,15 +4422,23 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
 fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
+    let mut pick = None;
+    let command = ui.input(|i| i.modifiers.command);
     let sources: Vec<u64> = ed.scene.pieces.iter().flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
+    let picked: Vec<bool> = (0..ed.scene.pieces.len()).map(|i| ed.piece_picked(i)).collect();
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
         let (fill, stroke) = if i == active {
             widgets::selected_look(ui.visuals(), 0.18)
+        } else if picked[i] {
+            // Picked with Ctrl/Cmd+click: moves with the active piece.
+            // A faint outline, quieter than the active piece's look.
+            let accent = ui.visuals().selection.stroke.color;
+            (accent.linear_multiply(0.06), EStroke::new(1.0, accent.linear_multiply(0.45)))
         } else {
             (Color32::TRANSPARENT, EStroke::NONE)
         };
         // Without the outline in the other themes, as before.
-        let stroke = if widgets::studio_style() { stroke } else { EStroke::NONE };
+        let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
         egui::Frame::new()
             .fill(fill)
             .stroke(stroke)
@@ -4433,17 +4459,28 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                     } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE)
                         .clicked()
                     {
-                        select = Some(i);
+                        if command {
+                            pick = Some(i);
+                        } else {
+                            select = Some(i);
+                        }
                     }
                     ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
                     if sources.contains(&p.id) {
                         tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
                     }
+                    if picked[i] {
+                        tips::hover(ui.label(RichText::new("picked").weak().small()), plain::GIZMO_PIECES);
+                    }
                 });
             });
     }
+    if let Some(i) = pick {
+        ed.toggle_piece_pick(i);
+    }
     if let Some(i) = select {
         ed.scene.set_active(i);
+        ed.piece_pick.clear();
     }
     ui.horizontal_wrapped(|ui| {
         tips::menu(ui, "+ Add", plain::ADD, |ui| {
@@ -4483,6 +4520,10 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
         if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Join", Cmd::Join).clicked() {
             ed.join_visible();
+        }
+        let below = active + 1 < ed.scene.pieces.len();
+        if tips::button_on(ui, !busy && below, "Merge down", Cmd::MergeDown).clicked() {
+            ed.merge_down();
         }
         if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Merge + remesh", Cmd::Merge).clicked() {
             ed.merge_visible();

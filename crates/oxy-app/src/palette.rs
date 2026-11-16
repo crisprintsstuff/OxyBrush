@@ -136,6 +136,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
         cmd(ed, Cmd::Solo, "pieces isolate", Editor::solo_active),
         cmd(ed, Cmd::Join, "pieces combine merge attach together one", Editor::join_visible),
+        cmd(ed, Cmd::MergeDown, "pieces join combine below next layer", Editor::merge_down),
         cmd(ed, Cmd::Merge, "pieces union combine fuse remesh voxel", Editor::merge_visible),
         cmd(ed, Cmd::SplitGroups, "pieces separate", |e| e.split_active(false)),
         cmd(ed, Cmd::SplitLoose, "pieces separate islands", |e| e.split_active(true)),
