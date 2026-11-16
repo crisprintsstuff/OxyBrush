@@ -168,12 +168,15 @@ impl TubeRecipe {
     }
 
     /// Which tube section holds this tube's real triangle count: the
-    /// newest one it needs (0 `TUBE`, 1 `TUBX`, 2 `TUBC`, 3 `TUBP`). The
+    /// newest one it needs (0 `TUBE`, 1 `TUBX`, 2 `TUBC`, 3 `TUBP`, 4
+    /// `TPRC`). The
     /// older ones get 0, so a version that can't read the newer section
     /// keeps the tube as ordinary triangles instead of reopening it
     /// without the shape, corners or profile it was made with.
     pub fn count_section(&self) -> u8 {
-        if self.profile.is_some() {
+        if self.profile.as_ref().is_some_and(|p| p.has_corners()) {
+            4
+        } else if self.profile.is_some() {
             3
         } else if self.has_corners() {
             2

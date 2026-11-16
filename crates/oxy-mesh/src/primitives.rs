@@ -1000,14 +1000,29 @@ pub fn tube_cornered(points: &[Vec3], radii: &[f32], sharp: &[bool], sides: u32,
 /// outline through `points`, in units of the tube's radius around its
 /// centre line (x across, y up as seen looking along the tube). Sharp
 /// outlines keep their corners; smooth ones are a closed curve through the
-/// points. `None` in [`tube_profiled`] is the round tube.
-#[derive(Debug, Clone, PartialEq)]
+/// points, except at the points marked `sharp`, where it runs straight in
+/// and out again: a corner. `None` in [`tube_profiled`] is the round tube.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TubeProfile {
     pub points: Vec<glam::Vec2>,
     pub smooth: bool,
+    /// Per point, whether a smooth outline has a corner there. Empty (or
+    /// shorter than `points`) means smooth; ignored when `smooth` is off.
+    pub sharp: Vec<bool>,
 }
 
 impl TubeProfile {
+    /// Whether point `i` is a corner: every point of a sharp outline, the
+    /// marked ones of a smooth one.
+    pub fn is_sharp(&self, i: usize) -> bool {
+        !self.smooth || self.sharp.get(i).copied().unwrap_or(false)
+    }
+
+    /// Whether a smooth outline has corners at some of its points.
+    pub fn has_corners(&self) -> bool {
+        self.smooth && self.sharp.iter().take(self.points.len()).any(|&s| s)
+    }
+
     /// The outline as `count` points around it (at least one per point of
     /// a sharp outline, on its corners), counter-clockwise, so the tube's
     /// faces point outward whichever way the points were drawn.
@@ -1020,10 +1035,16 @@ impl TubeProfile {
         let p = &self.points;
         let mut out: Vec<Vec2> = if self.smooth {
             // A closed uniform Catmull-Rom curve, then even spacing along it.
+            // At a corner the span's outer control point is mirrored through
+            // it, so the curve leaves (and arrives) heading straight along
+            // the side, as on a sharp outline.
             let steps = 16;
+            let corner = |i: usize| self.is_sharp(i % n);
             let mut dense = Vec::with_capacity(n * steps + 1);
             for i in 0..n {
-                let (p0, p1, p2, p3) = (p[(i + n - 1) % n], p[i], p[(i + 1) % n], p[(i + 2) % n]);
+                let (p1, p2) = (p[i], p[(i + 1) % n]);
+                let p0 = if corner(i) { 2.0 * p1 - p2 } else { p[(i + n - 1) % n] };
+                let p3 = if corner(i + 1) { 2.0 * p2 - p1 } else { p[(i + 2) % n] };
                 for k in 0..steps {
                     let t = k as f32 / steps as f32;
                     let (t2, t3) = (t * t, t * t * t);
@@ -1036,20 +1057,29 @@ impl TubeProfile {
                 }
             }
             dense.push(dense[0]);
-            even_along(&dense, count)
+            let corners: Vec<usize> = (0..n).filter(|&i| corner(i)).collect();
+            if corners.is_empty() {
+                even_along(&dense, count)
+            } else {
+                // Each run from one corner to the next gets points spread
+                // evenly along it, starting on its corner, so every corner
+                // is a point of the ring.
+                let runs: Vec<Vec<Vec2>> = (0..corners.len())
+                    .map(|r| {
+                        let (a, b) = (corners[r], corners[(r + 1) % corners.len()]);
+                        let spans = if b > a { b - a } else { b + n - a };
+                        (0..=spans * steps).map(|k| dense[(a * steps + k) % (n * steps)]).collect()
+                    })
+                    .collect();
+                let len: Vec<f32> =
+                    runs.iter().map(|run| run.windows(2).map(|w| w[0].distance(w[1])).sum::<f32>()).collect();
+                let extra = share_by_length(&len, count - corners.len());
+                runs.iter().zip(extra).flat_map(|(run, e)| even_along(run, e + 1)).collect()
+            }
         } else {
             // Every corner, then the rest spread over the sides by length.
             let len: Vec<f32> = (0..n).map(|i| p[i].distance(p[(i + 1) % n])).collect();
-            let total: f32 = len.iter().sum::<f32>().max(1e-6);
-            let spare = count - n;
-            let mut extra: Vec<usize> = len.iter().map(|l| (l / total * spare as f32).floor() as usize).collect();
-            let left = spare - extra.iter().sum::<usize>();
-            // Hand out what rounding left to the longest sides.
-            let mut order: Vec<usize> = (0..n).collect();
-            order.sort_by(|&a, &b| len[b].total_cmp(&len[a]));
-            for &i in order.iter().cycle().take(left) {
-                extra[i] += 1;
-            }
+            let extra = share_by_length(&len, count - n);
             let mut out = Vec::with_capacity(count);
             for i in 0..n {
                 let (a, b) = (p[i], p[(i + 1) % n]);
@@ -1067,8 +1097,23 @@ impl TubeProfile {
     }
 }
 
-/// `count` points evenly spaced along the closed polyline `line` (whose
-/// last point repeats its first).
+/// Share `spare` points among sides of lengths `len`, by length, the
+/// rounding left over going to the longest sides.
+fn share_by_length(len: &[f32], spare: usize) -> Vec<usize> {
+    let total: f32 = len.iter().sum::<f32>().max(1e-6);
+    let mut extra: Vec<usize> = len.iter().map(|l| (l / total * spare as f32).floor() as usize).collect();
+    let left = spare - extra.iter().sum::<usize>();
+    let mut order: Vec<usize> = (0..len.len()).collect();
+    order.sort_by(|&a, &b| len[b].total_cmp(&len[a]));
+    for &i in order.iter().cycle().take(left) {
+        extra[i] += 1;
+    }
+    extra
+}
+
+/// `count` points evenly spaced along the polyline `line`, from its start
+/// and short of its end (for a closed outline, its last point repeats its
+/// first).
 fn even_along(line: &[glam::Vec2], count: usize) -> Vec<glam::Vec2> {
     let mut length = vec![0.0f32];
     for w in line.windows(2) {
@@ -1245,6 +1290,7 @@ mod tube_tests {
         let square = TubeProfile {
             points: vec![Vec2::new(-1.0, 1.0), Vec2::new(1.0, 1.0), Vec2::new(1.0, -1.0), Vec2::new(-1.0, -1.0)],
             smooth: false,
+            sharp: Vec::new(),
         };
         let ring = square.ring(16);
         assert_eq!(ring.len(), 16);
@@ -1278,6 +1324,53 @@ mod tube_tests {
         let braid = TubeShape { braid: true, braid_turns: 2.0, spread: 0.3, ..Default::default() };
         let m = tube_profiled(&pts, &r, &[], 8, true, braid, Some(&square));
         assert!(watertight(&m) && signed_volume(&m) > 0.0);
+    }
+
+    #[test]
+    fn a_smooth_profile_keeps_corners_at_its_sharp_points() {
+        use glam::Vec2;
+        // A D: flat along the bottom, round over the top.
+        let d = TubeProfile {
+            points: vec![
+                Vec2::new(-1.0, -0.4),
+                Vec2::new(1.0, -0.4),
+                Vec2::new(0.85, 0.25),
+                Vec2::new(0.4, 0.6),
+                Vec2::new(-0.4, 0.6),
+                Vec2::new(-0.85, 0.25),
+            ],
+            smooth: true,
+            sharp: vec![true, true, false, false, false, false],
+        };
+        assert!(d.has_corners() && d.is_sharp(0) && !d.is_sharp(2));
+        let ring = d.ring(40);
+        assert_eq!(ring.len(), 40);
+        // Both corners are points of the ring.
+        for c in &d.points[..2] {
+            assert!(ring.iter().any(|p| p.distance(*c) < 1e-5), "corner {c} kept");
+        }
+        // The bottom between them is straight: every ring point down there
+        // is on the line, none bulges below it.
+        assert!(ring.iter().all(|p| p.y > -0.4 - 1e-4), "nothing below the flat bottom");
+        let bottom = ring.iter().filter(|p| (p.y + 0.4).abs() < 1e-4).count();
+        assert!(bottom >= 6, "{bottom} points on the flat bottom");
+        // Without the corners the same points make a curve that dips below.
+        let soft = TubeProfile { sharp: Vec::new(), ..d.clone() };
+        assert!(!soft.has_corners());
+        assert!(soft.ring(40).iter().any(|p| p.y < -0.42), "a smooth bottom bulges");
+        // A tube with it is closed and points outward.
+        let pts = [Vec3::ZERO, Vec3::new(0.0, 2.0, 0.0)];
+        let m = tube_profiled(&pts, &[0.5, 0.5], &[], 24, true, TubeShape::default(), Some(&d));
+        assert!(watertight(&m) && signed_volume(&m) > 0.0);
+        // One corner only, and every point sharp, work too.
+        let one = TubeProfile { sharp: vec![false, true], ..d.clone() };
+        assert_eq!(one.ring(30).len(), 30);
+        assert!(one.ring(30).iter().any(|p| p.distance(d.points[1]) < 1e-5));
+        let all = TubeProfile { sharp: vec![true; 6], ..d.clone() };
+        let flat = TubeProfile { smooth: false, sharp: Vec::new(), ..d.clone() };
+        for (a, b) in all.ring(30).iter().zip(flat.ring(30)) {
+            assert!(a.distance(b) < 1e-3, "all sharp is the straight-sided outline");
+        }
     }
 
     #[test]
