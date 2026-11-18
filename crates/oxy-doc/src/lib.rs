@@ -470,6 +470,12 @@ impl Scene {
         Self { pieces: vec![first], active: 0 }
     }
 
+    /// A scene with no pieces. File > New > Empty scene starts here, and a
+    /// saved empty project opens as one.
+    pub fn empty() -> Self {
+        Self { pieces: Vec::new(), active: 0 }
+    }
+
     pub fn active_index(&self) -> usize {
         self.active.min(self.pieces.len().saturating_sub(1))
     }
@@ -480,13 +486,24 @@ impl Scene {
         }
     }
 
+    /// The active piece. Panics when the scene has none; use [`try_active`]
+    /// on a path that can run with an empty scene.
     pub fn active(&self) -> &Piece {
-        &self.pieces[self.active_index()]
+        self.try_active().expect("scene has no pieces")
     }
 
     pub fn active_mut(&mut self) -> &mut Piece {
+        self.try_active_mut().expect("scene has no pieces")
+    }
+
+    /// The active piece, or `None` when the scene is empty.
+    pub fn try_active(&self) -> Option<&Piece> {
+        self.pieces.get(self.active_index())
+    }
+
+    pub fn try_active_mut(&mut self) -> Option<&mut Piece> {
         let i = self.active_index();
-        &mut self.pieces[i]
+        self.pieces.get_mut(i)
     }
 
     pub fn index_of(&self, id: u64) -> Option<usize> {
@@ -532,10 +549,10 @@ impl Scene {
         SceneData { pieces, active: self.active_index(), alphas: Vec::new() }
     }
 
-    /// Returns None for a scene without pieces.
+    /// An empty piece list is an empty scene (File > New > Empty scene).
     pub fn from_data(mut data: SceneData) -> Option<Self> {
         if data.pieces.is_empty() {
-            return None;
+            return Some(Self::empty());
         }
         let saved: Vec<Vec<SavedInstancer>> =
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
@@ -580,5 +597,17 @@ mod tests {
         s.set_active(1);
         s.pieces.pop();
         assert_eq!(s.active_index(), 0);
+    }
+
+    #[test]
+    fn an_empty_scene_has_no_active_piece_and_round_trips() {
+        let s = Scene::empty();
+        assert!(s.pieces.is_empty());
+        assert!(s.try_active().is_none());
+        assert!(s.bounds().is_empty());
+        assert_eq!(s.triangle_count(), 0);
+        let back = Scene::from_data(s.to_data()).unwrap();
+        assert!(back.pieces.is_empty());
+        assert!(back.try_active().is_none());
     }
 }

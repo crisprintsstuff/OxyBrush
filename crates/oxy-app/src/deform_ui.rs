@@ -87,6 +87,9 @@ impl Editor {
     /// Start dragging `kind` on the active piece. False (with a status
     /// message) when it can't move.
     pub fn deform_begin(&mut self, kind: Deformer) -> bool {
+        if !self.need_piece() {
+            return false;
+        }
         if self.deform_drag.is_some() {
             self.deform_end();
         }
@@ -302,6 +305,9 @@ impl Editor {
     /// Centre the active piece on the origin and scale it so its longest
     /// side is 2 units, as one undo step. Masked parts stay put.
     pub fn deform_fit_standard_size(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         if self.job_blocks_active() {
             self.status = "Wait for the background job to finish first".into();
             return;

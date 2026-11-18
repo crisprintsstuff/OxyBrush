@@ -164,9 +164,9 @@ impl HeadlessSession {
     }
 
     fn scene_info(&self) -> String {
-        let (name, id) = {
-            let active = self.scene.active();
-            (active.name.clone(), active.id)
+        let (name, id) = match self.scene.try_active() {
+            Some(active) => (active.name.clone(), active.id.to_string()),
+            None => ("none".into(), "none".into()),
         };
         let doc = self.path.as_ref().map_or_else(|| "unsaved".to_string(), |p| p.display().to_string());
         let labels: Vec<&str> = self.history.undo_labels().collect();
@@ -425,6 +425,9 @@ impl HeadlessSession {
     }
 
     fn stroke(&mut self, space: crate::stroke::Space, points: &[Vec3], invert: bool, pressure: f32) -> ToolResult {
+        if self.scene.pieces.is_empty() {
+            return ToolResult::error("no pieces");
+        }
         let view = self.view;
         let kind = self.brush;
         let radius_pt = self.radius_pt;
@@ -468,6 +471,9 @@ impl HeadlessSession {
     }
 
     fn mask(&mut self, op: crate::stroke::MaskOp) -> ToolResult {
+        if self.scene.pieces.is_empty() {
+            return ToolResult::error("no pieces");
+        }
         let label = format!("{AGENT_LABEL}{}", op.label());
         let piece = self.scene.active_mut();
         self.history.begin(&label, piece.id, &piece.mesh);
@@ -489,6 +495,9 @@ impl HeadlessSession {
     }
 
     fn remesh(&mut self, resolution: Option<u32>) -> ToolResult {
+        if self.scene.pieces.is_empty() {
+            return ToolResult::error("no pieces");
+        }
         let resolution = resolution.unwrap_or(self.remesh_resolution).clamp(8, oxy_topo::MAX_RESOLUTION);
         self.remesh_resolution = resolution;
         let mesh = self.scene.active().mesh.clone();
@@ -504,6 +513,9 @@ impl HeadlessSession {
     }
 
     fn decimate(&mut self, keep_percent: Option<f32>, triangles: Option<u32>) -> ToolResult {
+        if self.scene.pieces.is_empty() {
+            return ToolResult::error("no pieces");
+        }
         let mesh = self.scene.active().mesh.clone();
         let target = match (keep_percent, triangles) {
             (_, Some(t)) => t as usize,
@@ -518,6 +530,9 @@ impl HeadlessSession {
     }
 
     fn subdivide(&mut self, smooth: bool) -> ToolResult {
+        if self.scene.pieces.is_empty() {
+            return ToolResult::error("no pieces");
+        }
         let next = self.scene.active().mesh.triangle_count().saturating_mul(4);
         let limit = max_triangles();
         if limit > 0 && next > limit {

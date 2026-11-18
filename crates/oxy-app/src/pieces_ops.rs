@@ -43,6 +43,9 @@ impl Editor {
     /// then the visible pieces picked with Ctrl/Cmd+click. One piece is the
     /// ordinary gizmo; more is a multi-piece transform.
     pub fn gizmo_pieces(&self) -> Vec<usize> {
+        if self.scene.pieces.is_empty() {
+            return Vec::new();
+        }
         let active = self.scene.active_index();
         let mut out = vec![active];
         for &id in &self.piece_pick {

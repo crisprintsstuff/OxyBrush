@@ -42,8 +42,12 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label(RichText::new("Also in Preferences > General. Strokes made before turning it on aren't listed.").weak().small());
                 return;
             }
-            let pid = ed.scene.active().id;
-            let name = ed.scene.active().name.clone();
+            let Some(piece) = ed.scene.try_active() else {
+                ui.label(RichText::new(crate::editor::Editor::NEED_PIECE).weak());
+                return;
+            };
+            let pid = piece.id;
+            let name = piece.name.clone();
             let rows: Vec<(u64, String, String, usize, f32, Option<String>)> = ed
                 .living
                 .listed(pid)
@@ -481,7 +485,10 @@ pub fn layers_section(ui: &mut egui::Ui, ed: &mut Editor) {
         }
         return;
     }
-    let pid = ed.scene.active().id;
+    let Some(pid) = ed.scene.try_active().map(|p| p.id) else {
+        ui.label(RichText::new(crate::editor::Editor::NEED_PIECE).weak().small());
+        return;
+    };
     sculpt_into(ui, ed, pid);
     if ed.living.groups_of(pid).is_empty() {
         ui.label(

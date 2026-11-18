@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Empty scene** (File > New, and the welcome window). Starts a project with no pieces, so you can build it with Insert Primitive, + Add or Import. Saving it and opening it again keeps it empty. A tool that needs a piece says so; framing or a brush stroke on an empty scene does nothing to it.
+
 ## [4.0.0-beta.16] - 2026-11-16
 
 ### Added

@@ -174,6 +174,9 @@ impl Editor {
     /// Open the retopology tool. With a retopology piece active, continue
     /// it over the piece it was drawn on; otherwise draw over the active piece.
     pub fn start_retopo(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         self.cancel_tube();
         if self.poly_edit.is_some() {

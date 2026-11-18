@@ -274,6 +274,8 @@ pub enum Icon {
     Plane,
     /// A standing figure (the human base meshes).
     Human,
+    /// An empty frame: a scene with no pieces.
+    Empty,
     Open,
     Import,
     Orbit,
@@ -432,6 +434,11 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             p.line_segment([ctr + vec2(r * 0.12, -r * 0.36), ctr + vec2(r * 0.5, r * 0.15)], limb);
             p.line_segment([ctr + vec2(-r * 0.09, r * 0.12), ctr + vec2(-r * 0.2, r * 0.9)], limb);
             p.line_segment([ctr + vec2(r * 0.09, r * 0.12), ctr + vec2(r * 0.2, r * 0.9)], limb);
+        }
+        Icon::Empty => {
+            // An empty frame: a scene with nothing in it yet.
+            let frame = Rect::from_center_size(ctr, vec2(r * 1.55, r * 1.25));
+            p.rect_stroke(frame, r * 0.18, s, egui::StrokeKind::Middle);
         }
         Icon::Plane => {
             let w = r * 0.95;

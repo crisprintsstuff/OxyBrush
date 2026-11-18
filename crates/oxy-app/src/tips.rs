@@ -70,6 +70,7 @@ commands! {
     NewPlane => "New plane", "", "Start over with a flat plane. You are asked before unsaved work is discarded.";
     NewHumanFemale => "New human (female)", "", "Start over with a female human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
     NewHumanMale => "New human (male)", "", "Start over with a male human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
+    NewEmpty => "New empty scene", "", "Start over with no pieces, and build the scene up with Insert Primitive, import and the rest. You are asked before unsaved work is discarded.";
     Undo => "Undo", "Ctrl+Z", "Undo the last change.";
     Redo => "Redo", "Ctrl+Shift+Z", "Put back the last change you undid.";
     LastStrokeAsCurve => "Edit last stroke as curve", "", "Take back the stroke you just made and reopen its path as an editable curve with the same brush: drag its points, change size and strength along it, then Enter applies it. Works on Freehand strokes, right after you make them.";
