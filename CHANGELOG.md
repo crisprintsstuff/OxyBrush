@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Group the masked area** (Edge loop at mask border, on by default, [#296](https://github.com/crisprintsstuff/OxyBrush/issues/296)): the triangles inside the mask get a face group of their own, along with the loop, so that area can be isolated afterwards. With Both sides on, the outside keeps its groups. Hidden faces stay out of the new group. It is the same undo step as the loop. Turn the option off to leave the masked area's groups as they were.
+
 ## [4.0.0-beta.16] - 2026-11-16
 
 ### Added
