@@ -1,6 +1,6 @@
 //! Window, GPU and event-loop glue.
 
-use crate::editor::{Editor, Modifiers, PointerButton};
+use crate::editor::{Editor, ExportFormat, Modifiers, PointerButton};
 use crate::keymap::{self, Chord, CommandEffect, CommandId, KeyId};
 use crate::ui::{self, UiAction};
 use glam::Vec2;
@@ -1129,19 +1129,24 @@ impl App {
                 if self.dialog_active {
                     return;
                 }
+                let format = ed.export_format;
                 let name = ed
                     .path
                     .as_ref()
                     .and_then(|p| p.file_stem())
-                    .map(|s| format!("{}.glb", s.to_string_lossy()))
-                    .unwrap_or_else(|| "sculpt.glb".into());
-                let mut dialog = rfd::AsyncFileDialog::new()
-                    .add_filter("glTF binary (games, engines, Blender)", &["glb"])
-                    .add_filter("glTF (single text file)", &["gltf"])
-                    .add_filter("Wavefront OBJ", &["obj"])
-                    .add_filter("STL (3D printing)", &["stl"])
-                    .add_filter("PLY", &["ply"])
-                    .set_file_name(name);
+                    .map(|s| format!("{}.{}", s.to_string_lossy(), format.extension()))
+                    .unwrap_or_else(|| format!("sculpt.{}", format.extension()));
+                let mut dialog = rfd::AsyncFileDialog::new();
+                if cfg!(target_os = "macos") {
+                    // macOS save panels have no file type list: offer only the
+                    // type chosen in File > Export type.
+                    dialog = dialog.add_filter(format.label(), &[format.extension()]);
+                } else {
+                    for f in std::iter::once(format).chain(ExportFormat::ALL.into_iter().filter(|&f| f != format)) {
+                        dialog = dialog.add_filter(f.label(), &[f.extension()]);
+                    }
+                }
+                dialog = dialog.set_file_name(name);
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
                 }
@@ -1264,6 +1269,7 @@ impl App {
                     };
                 }
                 DialogReply::Export(Some(p)) => {
+                    let p = self.editor.export_format.with_default_extension(&p);
                     self.editor.export(&p);
                 }
                 DialogReply::RunScript(Some(p)) => {
