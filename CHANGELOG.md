@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Sort brushes A–Z** in the Arrange menu lists the brush selector alphabetically (#304).
+
 ## [4.0.0-beta.17] - 2026-11-18
 
 ### Added
