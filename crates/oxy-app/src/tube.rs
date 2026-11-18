@@ -250,7 +250,7 @@ impl Editor {
     /// made with the tube tool and not changed since (sculpting, remeshing
     /// or regrouping it makes it an ordinary part of the mesh).
     pub fn can_edit_tube(&self) -> bool {
-        self.scene.active().tube_recipe().is_some()
+        self.scene.try_active().is_some_and(|p| p.tube_recipe().is_some())
     }
 
     /// Reopen the active piece's most recent tube for editing. Its
@@ -426,13 +426,15 @@ impl Editor {
                 return false;
             }
             // The Tube brush adds into the active piece; the menu tool makes a new one.
-            self.tube_into = (!self.tube_armed && brush).then(|| self.scene.active().id);
+            self.tube_into =
+                (!self.tube_armed && brush).then(|| self.scene.try_active().map(|piece| piece.id)).flatten();
             // Start on the model where it is under the pointer, else on the
-            // view plane through the middle of the active piece.
+            // view plane through the middle of the active piece (the origin
+            // when the scene is empty, so the tube becomes a new piece).
             let anchor = match self.surface_hit_at(p) {
                 Some(hit) => hit.point,
                 None => {
-                    let c = self.scene.active().mesh.bounds().center();
+                    let c = self.scene.try_active().map(|piece| piece.mesh.bounds().center()).unwrap_or(Vec3::ZERO);
                     match self.tube_on_plane(p, c) {
                         Some(w) => w,
                         None => return false,

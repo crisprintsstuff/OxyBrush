@@ -147,8 +147,11 @@
 //!   Written when some stroke has a recipe or a reason.
 //!
 //! Readers skip unknown sections, so new data can be added without breaking
-//! older versions. Files are written to a temporary file and renamed into
-//! place, so a crash never leaves a half-written project.
+//! older versions. A project may contain no `PIEC` sections at all: an empty
+//! scene. Older readers reject that file as damaged ("no pieces"). The
+//! layout of every existing section is unchanged, so a project that has
+//! pieces still opens in older versions. Files are written to a temporary
+//! file and renamed into place, so a crash never leaves a half-written project.
 
 use crate::{PieceData, SceneData};
 use glam::Vec3;
@@ -697,9 +700,7 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
             _ => log::warn!("skipping unknown section {:?}", String::from_utf8_lossy(&tag)),
         }
     }
-    if scene.pieces.is_empty() {
-        return Err(Error::Corrupt("no pieces".into()));
-    }
+    // No `PIEC` sections is an empty scene, not a damaged file.
     Ok(scene)
 }
 
@@ -2608,5 +2609,18 @@ mod tests {
         // to_data keeps it (index 0 is found); from_data drops a self-source.
         let back = Scene::from_data(decode(&encode(&scene.to_data())).unwrap()).unwrap();
         assert!(back.pieces[0].instancers.is_empty());
+    }
+
+    #[test]
+    fn an_empty_scene_saves_and_opens() {
+        let scene = SceneData { pieces: Vec::new(), active: 0, alphas: Vec::new() };
+        let bytes = encode(&scene);
+        let back = decode(&bytes).unwrap();
+        assert!(back.pieces.is_empty());
+        assert_eq!(back.active, 0);
+        // A project that has pieces still reads, including one saved before
+        // empty scenes were allowed.
+        let with = sample();
+        assert_eq!(decode(&encode(&with)).unwrap().pieces.len(), with.pieces.len());
     }
 }

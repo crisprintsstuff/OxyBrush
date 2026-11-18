@@ -529,6 +529,9 @@ impl Editor {
     /// Open the tool on the active piece, making its polygons from its mesh
     /// if it has none yet.
     pub fn start_poly_edit(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         self.cancel_tube();
         if self.retopo.is_some() {

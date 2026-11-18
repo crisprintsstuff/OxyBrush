@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 ### Added
+- **Empty scene** (File > New, and the welcome window). Starts a project with no pieces, so you can build it with Insert Primitive, + Add or Import. Saving it and opening it again keeps it empty. A tool that needs a piece says so; framing or a brush stroke on an empty scene does nothing to it.
 - **Poly Edit: extrude along normals or the gizmo** ([#302](https://github.com/crisprintsstuff/OxyBrush/issues/302)). In the Extrude section, **Along** chooses **Normals** (pull the faces out along their normals, as before) or **Gizmo**. With the gizmo on, the drag follows the gizmo axis it lines up with, the same as Shift+drag on that arrow. **Each face on its own** still gives every face its own walls, and they all move along that one axis. **Mirror across X** moves the other side as a mirror image. With the gizmo hidden, Gizmo falls back to normals and the window says so. The choice stays while Poly Edit is open, like the other options there. Each extrude is one undo step.
 - **Group the masked area** (Edge loop at mask border, on by default, [#296](https://github.com/crisprintsstuff/OxyBrush/issues/296)): the triangles inside the mask get a face group of their own, along with the loop, so that area can be isolated afterwards. With Both sides on, the outside keeps its groups. Hidden faces stay out of the new group. It is the same undo step as the loop. Turn the option off to leave the masked area's groups as they were.
 

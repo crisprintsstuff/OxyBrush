@@ -270,6 +270,9 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
             ed.remesh_active();
         }),
         Action::Decimate { keep_percent, triangles } => {
+            if ed.scene.pieces.is_empty() {
+                return Apply::Done(ToolResult::error("no pieces"));
+            }
             let count = ed.scene.active().mesh.triangle_count().max(1);
             let target = match (keep_percent, triangles) {
                 (_, Some(t)) => t as usize,
@@ -406,9 +409,9 @@ fn blocked(ed: &Editor) -> Option<ToolResult> {
 }
 
 fn scene_info(ed: &Editor) -> String {
-    let (name, id) = {
-        let active = ed.scene.active();
-        (active.name.clone(), active.id)
+    let (name, id) = match ed.scene.try_active() {
+        Some(active) => (active.name.clone(), active.id.to_string()),
+        None => ("none".into(), "none".into()),
     };
     let doc = ed.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unsaved".into());
     let labels: Vec<&str> = ed.history.undo_labels().collect();
@@ -477,6 +480,9 @@ fn find_piece(ed: &Editor, id: Option<u64>, index: Option<usize>, name: Option<&
             [] => Err(format!("no piece named {name}")),
             _ => Err(format!("more than one piece named {name}; pass index or id")),
         };
+    }
+    if ed.scene.pieces.is_empty() {
+        return Err("no pieces".into());
     }
     Ok(ed.scene.active_index())
 }
@@ -594,6 +600,9 @@ fn set_symmetry(
 }
 
 fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pressure: f32) -> ToolResult {
+    if ed.scene.pieces.is_empty() {
+        return ToolResult::error("no pieces");
+    }
     if let Some(err) = blocked(ed) {
         return err;
     }
@@ -658,6 +667,9 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
 }
 
 fn mask(ed: &mut Editor, op: MaskOp) -> ToolResult {
+    if ed.scene.pieces.is_empty() {
+        return ToolResult::error("no pieces");
+    }
     if let Some(err) = blocked(ed) {
         return err;
     }

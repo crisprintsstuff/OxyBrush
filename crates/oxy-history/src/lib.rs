@@ -211,7 +211,8 @@ impl Change {
                     Some(id)
                 }
                 None => {
-                    if *index >= scene.pieces.len() || scene.pieces.len() == 1 {
+                    // Removing the last piece is allowed: the scene can be empty.
+                    if *index >= scene.pieces.len() {
                         return None;
                     }
                     let p = scene.pieces.remove(*index);
@@ -978,5 +979,21 @@ mod tests {
         h.redo(&mut s);
         assert_eq!(s.pieces[0].instancers.len(), 1);
         assert!(!s.pieces[1].visible);
+    }
+
+    #[test]
+    fn undoing_the_only_inserted_piece_leaves_an_empty_scene() {
+        let mut s = Scene::empty();
+        s.pieces.push(Piece::new("Cube", primitives::cube(2, 1.0)));
+        s.set_active(0);
+        let mut h = History::default();
+        h.record("Add cube", Step::Inserted { index: 0 });
+        assert_eq!(s.pieces.len(), 1);
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Add cube"));
+        assert!(s.pieces.is_empty());
+        assert!(s.try_active().is_none());
+        assert_eq!(h.redo(&mut s).as_deref(), Some("Add cube"));
+        assert_eq!(s.pieces.len(), 1);
+        assert_eq!(s.active().name, "Cube");
     }
 }

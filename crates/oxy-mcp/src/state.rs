@@ -142,12 +142,15 @@ pub fn find_piece(scene: &Scene, id: Option<u64>, index: Option<usize>, name: Op
             _ => Err(format!("more than one piece named {name}; pass index or id")),
         };
     }
+    if scene.pieces.is_empty() {
+        return Err("no pieces".into());
+    }
     Ok(scene.active_index())
 }
 
 /// The `scene_state` tool's reply.
 pub fn scene_state(doc: &DocState) -> Value {
-    let active = doc.scene.active_index();
+    let active_id = doc.scene.try_active().map(|p| p.id);
     json!({
         "api_version": API_VERSION,
         "document": {
@@ -155,8 +158,8 @@ pub fn scene_state(doc: &DocState) -> Value {
             "modified": doc.modified,
             "revision": doc.revision,
         },
-        "active_piece": doc.scene.active().id,
-        "pieces": doc.scene.pieces.iter().enumerate().map(|(i, p)| piece_json(i, p, i == active)).collect::<Vec<_>>(),
+        "active_piece": active_id,
+        "pieces": doc.scene.pieces.iter().enumerate().map(|(i, p)| piece_json(i, p, Some(p.id) == active_id)).collect::<Vec<_>>(),
         "bounds": bounds_json(&doc.scene.bounds()),
         "camera": doc.camera.json(),
         "viewport": {
@@ -206,7 +209,7 @@ impl Snapshot {
                     faces: p.mesh.face_version(),
                 })
                 .collect(),
-            active: doc.scene.active().id,
+            active: doc.scene.try_active().map(|p| p.id).unwrap_or(0),
             camera: doc.camera.key(),
             path: doc.path.map(|p| p.display().to_string()),
             modified: doc.modified,

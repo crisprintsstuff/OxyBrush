@@ -115,7 +115,7 @@ impl Editor {
 
     /// Bounds of the vertices the gizmo moves (unmasked, visible).
     fn moving_bounds(&self) -> Option<oxy_mesh::Aabb> {
-        let mesh = &self.scene.active().mesh;
+        let mesh = &self.scene.try_active()?.mesh;
         let mut b = oxy_mesh::Aabb::EMPTY;
         for v in 0..mesh.vertex_count() {
             // Same rule as `pose::weights`: hidden or fully masked points stay.
@@ -130,7 +130,7 @@ impl Editor {
     /// part of the active piece), for the bar's absolute Size and Centre.
     /// Measured again only when the piece changes.
     pub fn gizmo_absolute_bounds(&mut self) -> Option<oxy_mesh::Aabb> {
-        let p = self.scene.active();
+        let p = self.scene.try_active()?;
         let key = (p.id, p.mesh.topology_version(), p.mesh.face_version(), p.mesh.edit_version());
         if let Some((k, b)) = self.gizmo_bounds_cache
             && k == key
@@ -224,6 +224,9 @@ impl Editor {
     /// piece, since its triangles must be turned inside out to keep facing
     /// outward.
     pub fn apply_gizmo_transform(&mut self, label: &str, t: Transform) -> bool {
+        if !self.need_piece() {
+            return false;
+        }
         if self.job_blocks_active() {
             self.status = "Wait for the background job to finish before transforming this piece".into();
             return false;
@@ -283,7 +286,9 @@ impl Editor {
         if !(s.x || s.y || s.z) {
             return pose::GizmoMirror::NONE;
         }
-        let mesh = &self.scene.active().mesh;
+        let Some(mesh) = self.scene.try_active().map(|p| &p.mesh) else {
+            return pose::GizmoMirror::NONE;
+        };
         let weights = pose::weights(mesh);
         let moved = oxy_mesh::Aabb::from_points(
             mesh.positions.iter().zip(&weights).filter(|(_, w)| **w > 0.0).map(|(p, _)| *p),
@@ -468,7 +473,10 @@ impl Editor {
         let Some(s) = self.gizmo_session.take() else { return false };
         let uniform = self.gizmo_numeric.uniform;
         self.gizmo_numeric = Numeric { uniform, ..Numeric::default() };
-        if s.steps == 0 || s.revision != self.history.revision() || self.scene.active().id != s.piece {
+        if s.steps == 0
+            || s.revision != self.history.revision()
+            || self.scene.try_active().map(|p| p.id) != Some(s.piece)
+        {
             return false;
         }
         for _ in 0..s.steps {
