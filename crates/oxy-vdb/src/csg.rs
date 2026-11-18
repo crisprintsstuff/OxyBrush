@@ -22,6 +22,18 @@ pub enum BooleanOp {
 /// - `Difference`: `target` \ `tool`
 /// - `Intersection`: `target` ∩ `tool`
 pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: BooleanOp) {
+    let _ = csg_operation_seam(target, tool, op, 0.0);
+}
+
+/// [`csg_operation`], also returning the weld: voxels where both operands are
+/// active and within `seam_band` (world units) of their own surfaces, and the
+/// combined field is too. That is the curve the two surfaces meet along.
+/// `seam_band <= 0` marks nothing (what [`csg_operation`] asks for).
+///
+/// The band is how a boolean tells its weld from the rest of the shape, so it
+/// can relax only there. A hard edge of one input, away from the other
+/// surface, is not in the band.
+pub fn csg_operation_seam(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: BooleanOp, seam_band: f32) -> Vec<IVec3> {
     let bg_a = target.background;
     let bg_b = tool.background;
     let combined_bg = match op {
@@ -37,8 +49,9 @@ pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: Boolean
     let tool_leaves = &tool.leaves;
 
     let origins_vec: Vec<IVec3> = all_origins.into_iter().collect();
+    let mark_seam = seam_band > 0.0;
 
-    let updated_leaves: Vec<(IVec3, LeafNode)> = origins_vec
+    let updated_leaves: Vec<(IVec3, LeafNode, Vec<IVec3>)> = origins_vec
         .into_par_iter()
         .filter_map(|orig| {
             let leaf_a = target_leaves.get(&orig);
@@ -46,6 +59,7 @@ pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: Boolean
 
             let mut out_leaf = LeafNode::new(orig, combined_bg);
             let mut active_count = 0;
+            let mut seam = Vec::new();
 
             for offset in 0..LEAF_VOXELS {
                 let (va, active_a) =
@@ -82,14 +96,37 @@ pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: Boolean
                     out_leaf.values[offset] = combined_bg;
                     out_leaf.mask.set_off(offset);
                 }
+
+                // Both surfaces nearby, and the result too: the weld, not a
+                // face that belongs to only one operand.
+                if mark_seam
+                    && active_a
+                    && active_b
+                    && va.abs() <= seam_band
+                    && vb.abs() <= seam_band
+                    && v_out.abs() <= seam_band
+                {
+                    let x = (offset & 7) as i32;
+                    let y = ((offset >> 3) & 7) as i32;
+                    let z = ((offset >> 6) & 7) as i32;
+                    seam.push(orig + IVec3::new(x, y, z));
+                }
             }
 
-            if active_count > 0 { Some((orig, out_leaf)) } else { None }
+            if active_count > 0 { Some((orig, out_leaf, seam)) } else { None }
         })
         .collect();
 
     target.background = combined_bg;
-    target.leaves = updated_leaves.into_iter().collect();
+    let mut seam = Vec::new();
+    target.leaves = updated_leaves
+        .into_iter()
+        .map(|(orig, leaf, part)| {
+            seam.extend(part);
+            (orig, leaf)
+        })
+        .collect();
+    seam
 }
 
 /// Union of two VDB level sets in place: `a = a ∪ b`.

@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+- **Boolean welds are even** ([#285](https://github.com/crisprintsstuff/OxyBrush/issues/285)). Adding or subtracting a piece left a rough band of dents where the two surfaces meet, and a second boolean smoothed that band while denting the new one. The join is now relaxed only around the cut, so it comes out even, and edges away from the cut stay as the voxels made them. A later boolean doesn't smooth the earlier join again.
+
 ## [4.0.0-beta.16] - 2026-11-16
 
 ### Added

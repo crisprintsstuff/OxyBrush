@@ -2685,6 +2685,7 @@ dependencies = [
  "oxy-mesh",
  "oxy-vdb",
  "rayon",
+ "rustc-hash 2.1.3",
 ]
 
 [[package]]

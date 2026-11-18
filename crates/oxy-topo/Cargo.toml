@@ -12,6 +12,7 @@ oxy-mesh.workspace = true
 oxy-vdb.workspace = true
 glam.workspace = true
 rayon.workspace = true
+rustc-hash.workspace = true
 
 [lints]
 workspace = true

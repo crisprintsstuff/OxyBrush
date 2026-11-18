@@ -1,6 +1,6 @@
 //! `cargo run --release -p oxy-topo --example topo_timing`
 use oxy_mesh::primitives;
-use oxy_topo::{RemeshOptions, decimate, voxel_remesh};
+use oxy_topo::{BooleanOp, RemeshOptions, boolean_mesh, decimate, voxel_remesh};
 use std::time::Instant;
 
 fn main() {
@@ -36,6 +36,25 @@ fn main() {
         r.triangle_count(),
         t.elapsed().as_secs_f64() * 1e3
     );
+    // Boolean weld relax is only the seam band; this is the whole operation
+    // (both level sets, the CSG, the contour and the weld) at two resolutions.
+    let tool = {
+        let mut d = primitives::icosphere(6, 1.0).to_data();
+        d.positions.iter_mut().for_each(|p| p.x += 1.2);
+        oxy_mesh::Mesh::from_data(d)
+    };
+    let part = primitives::icosphere(6, 1.0);
+    for res in [128u32, 256] {
+        let h = part.bounds().union(&tool.bounds()).extent().max_element() / res as f32;
+        let t = Instant::now();
+        let u = boolean_mesh(&part, &tool, BooleanOp::Union, Some(h)).unwrap();
+        println!(
+            "boolean union {} tris @ {res}: {} tris in {:.0} ms",
+            part.triangle_count(),
+            u.triangle_count(),
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
     let big = primitives::icosphere(8, 1.0);
     let t = Instant::now();
     let d = decimate(&big, big.triangle_count() / 10);

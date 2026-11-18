@@ -15,7 +15,7 @@ pub mod mesh_to_volume;
 pub mod tree;
 pub mod volume_to_mesh;
 
-pub use csg::{BooleanOp, csg_difference, csg_intersection, csg_operation, csg_union};
+pub use csg::{BooleanOp, csg_difference, csg_intersection, csg_operation, csg_operation_seam, csg_union};
 pub use filter::{FilterType, offset, shell, smooth_laplacian};
 pub use mesh_to_volume::{
     MeshToVolumeOptions, SignOverride, Signing, closest_point_on_triangle, mesh_to_level_set, mesh_to_level_set_signed,
@@ -176,6 +176,30 @@ mod tests {
                 p
             );
         }
+    }
+
+    #[test]
+    fn csg_seam_follows_the_intersection_and_not_the_rest() {
+        let a = primitives::icosphere(3, 1.0);
+        let bpos: Vec<Vec3> = a.positions.iter().map(|p| *p + Vec3::X * 1.2).collect();
+        let h = 0.05f32;
+        let opts = MeshToVolumeOptions { voxel_size: h, half_width: 3.5 };
+        let mut ga = mesh_to_level_set(&a.positions, &a.triangles, opts);
+        let gb = mesh_to_level_set(&bpos, &a.triangles, opts);
+        let seam = csg_operation_seam(&mut ga, &gb, BooleanOp::Union, h * 1.5);
+        assert!(seam.len() > 50, "the weld is a band of voxels, got {}", seam.len());
+        let mut far = 0usize;
+        for c in &seam {
+            let p = ga.transform.index_to_world(*c);
+            let radial = Vec3::new(0.0, p.y, p.z).length();
+            let dist = ((p.x - 0.6).powi(2) + (radial - 0.8).powi(2)).sqrt();
+            if dist > h * 3.0 {
+                far += 1;
+            }
+        }
+        assert!(far * 10 < seam.len(), "{far} of {} seam voxels leave the intersection circle", seam.len());
+        let back = ga.transform.world_to_index(Vec3::new(-1.0, 0.0, 0.0));
+        assert!(seam.iter().all(|c| *c != back), "the far side of the first sphere is not the weld");
     }
 
     #[test]
