@@ -2445,9 +2445,20 @@ fn arrange_menu(ui: &mut Ui, current: Arrangement) {
         tips::hover(ui.radio_value(&mut a.quick_bar, *c, c.label()), tips::quick_bar_tip(*c));
     }
     let reset = tips::hover(ui.button("Reset brush order"), plain::RESET_ORDER).clicked();
+    if ui
+        .button("Sort brushes A–Z")
+        .on_hover_text("List the brushes alphabetically (number keys follow the new order)")
+        .clicked()
+    {
+        ui.ctx().data_mut(|d| d.insert_temp(sort_id(), true));
+    }
     if a.shelf != current.shelf || a.panels != current.panels || a.quick_bar != current.quick_bar || reset {
         ui.ctx().data_mut(|d| d.insert_temp(arrange_id(), (a.shelf, a.panels, a.quick_bar, reset)));
     }
+}
+
+fn sort_id() -> egui::Id {
+    egui::Id::unique("oxy_sort_brushes_request")
 }
 
 fn arrange_id() -> egui::Id {
@@ -2456,6 +2467,9 @@ fn arrange_id() -> egui::Id {
 
 /// Apply a choice made in `arrange_menu` (called once per frame).
 fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
+    if ctx.data_mut(|d| d.remove_temp::<bool>(sort_id())).unwrap_or(false) {
+        ed.sort_brushes_alphabetically();
+    }
     let req = ctx.data_mut(|d| d.remove_temp::<(ShelfPosition, PanelSide, QuickBar, bool)>(arrange_id()));
     if let Some((shelf, panels, quick_bar, reset)) = req {
         ed.shelf = shelf;
