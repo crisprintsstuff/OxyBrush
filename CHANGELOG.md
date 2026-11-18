@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- Starting from an empty scene no longer pins the brush size to its minimum with the size on the model: the size range now follows the camera distance until there is something to measure, so the slider and `[` `]` work (#328).
+- The **Floor grid** toggle now works in an empty scene too; the grid is drawn at the origin, sized to the view.
+
 ### Added
 - **Blur and sharpen the mask with a click** (as in ZBrush). Ctrl+click on the model blurs the whole mask and Ctrl+Alt+click sharpens it; dragging still paints or unmasks. With nothing masked, a click still paints a dab.
 

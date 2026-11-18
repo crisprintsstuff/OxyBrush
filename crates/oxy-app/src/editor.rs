@@ -2893,7 +2893,11 @@ impl Editor {
 
     /// A range for the Size slider in world units, from the scene's size.
     pub fn world_radius_range(&self) -> std::ops::RangeInclusive<f32> {
-        let s = self.scene.bounds().extent().length().max(1e-3);
+        let bounds = self.scene.bounds();
+        // With nothing visible (an empty scene) the size comes from the view,
+        // or the range collapses to a sliver and the brush is stuck at it.
+        let size = if bounds.is_empty() { self.camera.distance } else { bounds.extent().length() };
+        let s = size.max(1e-3);
         (s * 0.0005)..=(s * 0.5)
     }
 
@@ -5960,6 +5964,12 @@ impl Editor {
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
+        if b.is_empty() {
+            // An empty scene still gets a floor (when it's switched on),
+            // sized to the view and sitting at the origin.
+            let h = self.camera.distance.max(1e-3) * 0.25;
+            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+        }
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
@@ -14605,6 +14615,30 @@ mod tests {
         drag(&mut e, end, end + (end - layout.center));
         assert!(e.history.can_undo());
         assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
+    }
+
+    #[test]
+    fn brush_size_works_in_an_empty_scene_with_the_size_on_the_model() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        e.set_radius_on_model(true);
+        e.sync_model_radius();
+        let range = e.world_radius_range();
+        assert!(*range.end() > 0.1, "a usable size range: {range:?}");
+        assert!(e.brush_radius_world <= *range.end() && e.brush_radius_pt > 2.0);
+        let before = e.brush_radius_world;
+        e.adjust_radius(1.25);
+        assert!(e.brush_radius_world > before, "] grows the brush");
+        e.adjust_radius(0.8);
+        e.adjust_radius(0.8);
+        assert!(e.brush_radius_world < before, "[ shrinks it");
+    }
+
+    #[test]
+    fn floor_grid_shows_in_an_empty_scene() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
     }
 
     #[test]
