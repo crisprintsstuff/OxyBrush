@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Hide masked** (Visibility menu and the command palette) hides the masked faces (#329).
+- Pressing Alt just before letting go of a mask box or lasso masks everything *outside* it instead (#329).
+
 ## [4.0.0-beta.17] - 2026-11-18
 
 ### Added

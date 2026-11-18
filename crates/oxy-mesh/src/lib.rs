@@ -738,6 +738,14 @@ impl Mesh {
         self.set_hidden(hidden);
     }
 
+    /// Hide the masked triangles (see [`Mesh::masked_faces`]); already hidden
+    /// ones stay hidden.
+    pub fn hide_masked(&mut self) {
+        let masked = self.masked_faces();
+        let hidden = self.hidden.iter().zip(masked).map(|(&h, m)| h || m).collect();
+        self.set_hidden(hidden);
+    }
+
     /// Delete hidden triangles (a topology change).
     pub fn delete_hidden(&self) -> Mesh {
         let mut d = self.to_data();

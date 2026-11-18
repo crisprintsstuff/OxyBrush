@@ -3659,7 +3659,10 @@ impl Editor {
             Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
             Drag::CurveHandle { .. } => {}
             Drag::Select { action, points, lasso, click_group } => {
-                self.finish_select(action, points, lasso, click_group)
+                // Alt pressed after a mask box (not held from the start,
+                // which means unmask) masks everything but the box.
+                let outside = action == SelectAction::Mask && self.modifiers.alt;
+                self.finish_select(action, points, lasso, click_group, outside)
             }
             Drag::MaskGesture { start } => {
                 let moved = self.pointer.is_some_and(|p| p.distance(start) >= 4.0 * self.pixels_per_point.max(0.1));
@@ -3931,7 +3934,14 @@ impl Editor {
         }
     }
 
-    fn finish_select(&mut self, action: SelectAction, points: Vec<Vec2>, lasso: bool, click_group: Option<u32>) {
+    fn finish_select(
+        &mut self,
+        action: SelectAction,
+        points: Vec<Vec2>,
+        lasso: bool,
+        click_group: Option<u32>,
+        outside: bool,
+    ) {
         let is_click = points.len() < 2 || points.iter().all(|p| p.distance(points[0]) < 4.0);
         if is_click {
             match (action, click_group) {
@@ -3964,7 +3974,7 @@ impl Editor {
                 // mirrored box.
                 let center = self.symmetry_center();
                 let transforms = self.symmetry.transforms();
-                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center)));
+                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center))) != outside;
                 // A mask box drawn around none of the model clears the mask.
                 let mesh = &self.scene.active().mesh;
                 let any =
@@ -3976,7 +3986,13 @@ impl Editor {
                     return;
                 }
                 let value = if action == SelectAction::Mask { 1.0 } else { 0.0 };
-                let label = if action == SelectAction::Mask { "Mask selection" } else { "Unmask selection" };
+                let label = if outside {
+                    "Mask outside selection"
+                } else if action == SelectAction::Mask {
+                    "Mask selection"
+                } else {
+                    "Unmask selection"
+                };
                 self.edit_mesh_mask(label, |mesh| {
                     for v in 0..mesh.vertex_count() {
                         if !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]) {
@@ -10728,6 +10744,39 @@ mod tests {
         assert_eq!(masked(&e), 0, "Ctrl+Alt box unmasks");
         e.undo();
         assert_eq!(masked(&e), n);
+    }
+
+    #[test]
+    fn alt_after_a_mask_box_masks_everything_outside_it() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        let (from, to) = (Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        drag(&mut e, from, to);
+        let inside = masked(&e);
+        // Same box, with Alt pressed only before letting go.
+        e.undo();
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(to);
+        e.modifiers.alt = true;
+        e.pointer_up();
+        let total = e.scene.active().mesh.vertex_count();
+        assert_eq!(masked(&e), total - inside, "the complement of the box is masked");
+        assert!(e.history.undo_labels().any(|l| l == "Mask outside selection"));
+    }
+
+    #[test]
+    fn hide_masked_hides_only_the_masked_faces() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        e.edit_faces("Hide masked", oxy_mesh::Mesh::hide_masked);
+        let mesh = &e.scene.active().mesh;
+        let hidden = mesh.hidden().iter().filter(|&&h| h).count();
+        assert!(hidden > 0 && hidden < mesh.triangle_count());
+        assert_eq!(mesh.hidden().iter().zip(mesh.masked_faces()).filter(|(h, m)| **h != *m).count(), 0);
     }
 
     #[test]

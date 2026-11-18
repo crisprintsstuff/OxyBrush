@@ -4098,6 +4098,9 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::hover(ui.button(show_all_label), Cmd::ShowAll.tip_in(&ed.keymap)).clicked() {
         ed.edit_faces("Show all", Mesh::show_all);
     }
+    if tips::button(ui, "Hide masked", Cmd::HideMasked).clicked() {
+        ed.edit_faces("Hide masked", Mesh::hide_masked);
+    }
     if tips::button(ui, "Invert visibility", Cmd::InvertVisibility).clicked() {
         ed.edit_faces("Invert visibility", Mesh::invert_visibility);
     }
