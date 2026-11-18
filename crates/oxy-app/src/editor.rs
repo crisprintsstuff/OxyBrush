@@ -12212,6 +12212,7 @@ mod tests {
         assert!((got - c).abs().max_element() < 0.05, "estimated centre {got}");
         e.symmetry = Symmetry { x: true, ..Default::default() };
         e.brush_kind = BrushKind::Grab;
+        *e.strength_mut(BrushKind::Grab) = 1.0;
         e.brush_radius_pt = 60.0;
         drag(&mut e, Vec2::new(520.0, 300.0), Vec2::new(600.0, 300.0));
         let b = e.scene.active().mesh.bounds();
