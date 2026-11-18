@@ -15,7 +15,8 @@
 //! A drag changes the topology once at the press (for an extrude: the
 //! walls and the cap, at zero height) and then only moves points, so it
 //! stays cheap; letting go records one undo step (`History::record_cage`)
-//! and Escape puts everything back.
+//! and Escape puts everything back. Extrude moves along the faces' normals,
+//! or, with the gizmo showing, along the gizmo axis the drag lines up with.
 
 use crate::editor::{Drag, Editor};
 use glam::{Vec2, Vec3};
@@ -62,7 +63,7 @@ impl FaceAction {
     pub fn help(self) -> &'static str {
         match self {
             FaceAction::Extrude => {
-                "Drag to pull the faces out (or push them in) with walls around them. Touching faces move out as one block unless Each face on its own is on."
+                "Drag to pull the faces out (or push them in) with walls around them. Along: Normals follows the faces; Gizmo follows the gizmo axis your drag lines up with. Touching faces move out as one block unless Each face on its own is on."
             }
             FaceAction::Inset => {
                 "Drag to put a rim of faces inside the faces' edges; drag further for a wider rim. Touching faces get one rim around them all unless Each face on its own is on."
@@ -78,6 +79,40 @@ impl FaceAction {
                 "Click to even out the spacing of the faces' points, keeping them on the surface. Click again for more."
             }
             FaceAction::Delete => "Click to delete the faces, leaving a hole.",
+        }
+    }
+}
+
+/// Which way an Extrude drag moves the new faces. Remembered with the other
+/// Poly Edit options for as long as the tool is open.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ExtrudeAlong {
+    /// Along the faces' normals (`polyedit::extrude`, drag mapped in
+    /// `poly_face_down`). Today's behaviour.
+    #[default]
+    Normals,
+    /// Along the gizmo axis the drag lines up with, the same motion as
+    /// Shift+drag on that arrow. With the gizmo hidden, the drag falls
+    /// back to normals.
+    Gizmo,
+}
+
+impl ExtrudeAlong {
+    pub const ALL: [ExtrudeAlong; 2] = [ExtrudeAlong::Normals, ExtrudeAlong::Gizmo];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ExtrudeAlong::Normals => "Normals",
+            ExtrudeAlong::Gizmo => "Gizmo",
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            ExtrudeAlong::Normals => "Pull the faces out along their normals.",
+            ExtrudeAlong::Gizmo => {
+                "Pull the faces out along the gizmo axis your drag lines up with, as Shift+drag on that arrow does. With the gizmo hidden, this falls back to normals."
+            }
         }
     }
 }
@@ -244,6 +279,11 @@ pub struct PolyEdit {
     pub point_action: PointAction,
     /// Extrude and inset each face on its own instead of as one region.
     pub each: bool,
+    /// Extrude along face normals, or along the gizmo axis the drag follows.
+    pub extrude_along: ExtrudeAlong,
+    /// Gizmo axis index the last gizmo extrude locked onto, so Repeat can
+    /// use it (a Repeat has no drag to choose an axis from).
+    pub extrude_gizmo_axis: Option<usize>,
     /// Do the same to the mirrored elements across the piece's X symmetry plane.
     pub mirror: bool,
     /// Bridge: rows of faces along the tube, and extra steps of twist.
@@ -369,6 +409,79 @@ pub struct PolyDrag {
     click_keeps: bool,
     before_mesh: Mesh,
     before_cage: Option<Cage>,
+    /// Set for an extrude that follows the gizmo. The axis stays unset
+    /// until the drag is long enough to see which axis it lines up with.
+    gizmo_extrude: Option<GizmoExtrude>,
+}
+
+/// One extrude constrained to the gizmo, like Shift+drag on an arrow.
+struct GizmoExtrude {
+    /// World direction of each gizmo axis (the gizmo's orientation).
+    axes: [Vec3; 3],
+    /// Unit screen direction of the positive axis, when it doesn't point
+    /// straight at the viewer.
+    screen: [Option<Vec2>; 3],
+    world_per_px: f32,
+    /// Per slid point: the dragged side, its mirror image, or the plane.
+    side: Vec<ExtrudeSide>,
+    locked: Option<usize>,
+}
+
+/// Where a slid point sits relative to the X mirror plane.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ExtrudeSide {
+    /// Moves with the drag.
+    Source,
+    /// Mirror image: the world-X part of the move is flipped, so the two
+    /// sides stay symmetric.
+    Mirror,
+    /// On the mirror plane: no world-X movement, so it stays on the plane.
+    Plane,
+}
+
+/// The gizmo axis `delta` lines up with: the one whose on-screen direction
+/// takes the largest share of the drag. An earlier axis wins a tie. None
+/// when every axis points at the viewer.
+fn gizmo_drag_axis(screen: &[Option<Vec2>; 3], delta: Vec2) -> Option<usize> {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, dir) in screen.iter().enumerate() {
+        let Some(dir) = dir else { continue };
+        let along = delta.dot(*dir).abs();
+        if best.is_none_or(|(_, best_along)| along > best_along) {
+            best = Some((i, along));
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
+/// The gizmo axis nearest `normal` (either way along it).
+fn nearest_gizmo_axis(axes: [Vec3; 3], normal: Vec3) -> usize {
+    (0..3).max_by(|&a, &b| axes[a].dot(normal).abs().total_cmp(&axes[b].dot(normal).abs())).unwrap_or(0)
+}
+
+/// Which side of the mirror `v` is on, for a gizmo extrude of `faces`
+/// started on `dragged`.
+///
+/// Each face on its own still builds separate walls (`extrude`'s `each`);
+/// the gizmo itself is one direction for the whole drag, so every cap
+/// travels along the same axis. Mirror images travel by the mirrored
+/// move. A face sitting on the plane moves as one piece.
+fn extrude_side(cage: &Cage, faces: &[usize], dragged: usize, v: u32, mirror: Option<(f32, f32)>) -> ExtrudeSide {
+    let Some((cx, tol)) = mirror else { return ExtrudeSide::Source };
+    if dragged >= cage.faces.len() {
+        return ExtrudeSide::Source;
+    }
+    let src = polyedit::face_center(cage, dragged).x - cx;
+    if src.abs() <= tol {
+        return ExtrudeSide::Source;
+    }
+    let x = cage.positions.get(v as usize).map(|p| p.x - cx).unwrap_or(0.0);
+    if x.abs() <= tol {
+        return ExtrudeSide::Plane;
+    }
+    let owner = faces.iter().copied().find(|&f| f < cage.faces.len() && cage.faces[f].corners.contains(&v));
+    let center_x = owner.map(|f| polyedit::face_center(cage, f).x - cx).unwrap_or(x);
+    if center_x.signum() != src.signum() { ExtrudeSide::Mirror } else { ExtrudeSide::Source }
 }
 
 /// Screen distance (logical points) within which the pointer picks a
@@ -461,6 +574,8 @@ impl Editor {
             edge_reach: EdgeReach::One,
             point_action: PointAction::Move,
             each: false,
+            extrude_along: ExtrudeAlong::Normals,
+            extrude_gizmo_axis: None,
             mirror: self.symmetry.x,
             bridge_segments: 1,
             bridge_twist: 0,
@@ -999,6 +1114,7 @@ impl Editor {
             click_keeps,
             before_mesh,
             before_cage,
+            gizmo_extrude: None,
         }));
     }
 
@@ -1015,7 +1131,7 @@ impl Editor {
 
     fn poly_face_down(&mut self, p: Vec2, face: usize, edge: [u32; 2]) {
         let Some(pe) = self.poly_edit.as_ref() else { return };
-        let (action, each) = (pe.action, pe.each);
+        let (action, each, along) = (pe.action, pe.each, pe.extrude_along);
         let faces = self.poly_faces(face, edge);
         let Some((i, before_mesh, before_cage)) = self.poly_before() else { return };
         let Some(mut cage) = before_cage.clone() else { return };
@@ -1096,19 +1212,93 @@ impl Editor {
             }
             _ => polyedit::move_faces(&cage, &faces),
         };
+        // Gizmo extrude keeps the walls from `extrude` and then moves the
+        // caps along a gizmo axis instead of along these normals. The axis
+        // is chosen once the drag has a direction (see `poly_pointer_moved`).
+        // With the gizmo hidden, Gizmo falls back to the normals path.
+        let gizmo_extrude = (action == FaceAction::Extrude && along == ExtrudeAlong::Gizmo && self.gizmo.is_some())
+            .then(|| self.gizmo_extrude_for(&cage, face, &faces, &slide));
         if action != FaceAction::Move && !self.poly_rebuild(i, cage, &mut slide) {
             return;
         }
-        let (axis, scale) = match action {
-            // Inset widens the rim to the right.
-            FaceAction::Inset => (Vec2::X, self.poly_axis(center, normal, Vec2::X).1),
-            // Facing the camera: drag up for out.
-            _ => self.poly_axis(center, normal, -Vec2::Y),
+        let (axis, scale) = if gizmo_extrude.is_some() {
+            // Replaced when the drag locks onto an axis. Until then the
+            // directions below are zero, so nothing slides.
+            (-Vec2::Y, 1.0)
+        } else {
+            match action {
+                // Inset widens the rim to the right.
+                FaceAction::Inset => (Vec2::X, self.poly_axis(center, normal, Vec2::X).1),
+                // Facing the camera: drag up for out.
+                _ => self.poly_axis(center, normal, -Vec2::Y),
+            }
         };
         let what = format!("{} {count} face(s)", action.label());
         self.poly_start_drag(p, what, slide, axis, scale, 0.0, false, before_mesh, before_cage);
+        if let Some(g) = gizmo_extrude
+            && let Drag::PolyEdit(d) = &mut self.drag
+        {
+            d.slide.dir.fill(Vec3::ZERO);
+            d.gizmo_extrude = Some(g);
+        }
         // A bevel can't go inwards past its own walls.
         self.poly_drag_meta(0, (action == FaceAction::Bevel).then_some((0.0, f32::INFINITY)));
+    }
+
+    /// Screen direction of each gizmo axis at `at`, and world units per pixel.
+    fn gizmo_screen_axes(&self, at: Vec3, axes: [Vec3; 3]) -> ([Option<Vec2>; 3], f32) {
+        let size = self.canvas_size();
+        let scale = self.camera.world_per_pixel(at, size.y).max(1e-6);
+        let origin = self.camera.project(at, size);
+        let screen = axes.map(|dir| {
+            let end = self.camera.project(at + dir * scale * 50.0, size);
+            match (origin, end) {
+                (Some(a), Some(b)) if a.distance(b) > 10.0 => Some((b - a).normalize()),
+                _ => None,
+            }
+        });
+        (screen, scale)
+    }
+
+    /// The gizmo constraint for an extrude that has just been built on `cage`.
+    fn gizmo_extrude_for(&self, cage: &Cage, dragged: usize, faces: &[usize], slide: &Slide) -> GizmoExtrude {
+        let rot = self.custom_gizmo_rotation.unwrap_or(glam::Mat3::IDENTITY);
+        let axes = [rot * Vec3::X, rot * Vec3::Y, rot * Vec3::Z];
+        let at = if dragged < cage.faces.len() { polyedit::face_center(cage, dragged) } else { Vec3::ZERO };
+        let (screen, world_per_px) = self.gizmo_screen_axes(at, axes);
+        let mirror = self.poly_mirror();
+        let side = slide.verts.iter().map(|&v| extrude_side(cage, faces, dragged, v, mirror)).collect();
+        GizmoExtrude { axes, screen, world_per_px, side, locked: None }
+    }
+
+    /// Lock a gizmo extrude onto `axis` and point its slide that way.
+    /// Mirror images take the X-flipped move; points on the plane stay on it.
+    fn lock_gizmo_extrude(&mut self, axis: usize) {
+        let Drag::PolyEdit(d) = &mut self.drag else { return };
+        let axis = axis.min(2);
+        let applied = d.gizmo_extrude.as_mut().map(|g| {
+            g.locked = Some(axis);
+            let dirs: Vec<Vec3> = g
+                .side
+                .iter()
+                .map(|side| {
+                    let mut v = g.axes[axis];
+                    match side {
+                        ExtrudeSide::Mirror => v.x = -v.x,
+                        ExtrudeSide::Plane => v.x = 0.0,
+                        ExtrudeSide::Source => {}
+                    }
+                    v
+                })
+                .collect();
+            (g.screen[axis].unwrap_or(-Vec2::Y), g.world_per_px, dirs)
+        });
+        let Some((screen, scale, dirs)) = applied else { return };
+        d.axis = screen;
+        d.scale = scale;
+        for (dir, v) in d.slide.dir.iter_mut().zip(dirs) {
+            *dir = v;
+        }
     }
 
     fn poly_edge_down(&mut self, p: Vec2, a: u32, b: u32, t: f32) {
@@ -1362,6 +1552,7 @@ impl Editor {
                     click_keeps: false,
                     before_mesh,
                     before_cage,
+                    gizmo_extrude: None,
                 }));
             }
         }
@@ -1390,15 +1581,25 @@ impl Editor {
             }
         };
         let last = self.poly_edit.as_ref().and_then(|pe| pe.last[kind]);
+        // Repeat has no drag, so a gizmo extrude reuses the last axis (or
+        // the one nearest this face) instead of waiting for a pointer move.
+        let fallback_normal = match self.poly_element_at(p) {
+            Some(Element::Face(f, _)) => self.poly_cage().map(|c| polyedit::face_normal(c, f)).unwrap_or(Vec3::Y),
+            _ => Vec3::Y,
+        };
         self.poly_pointer_down(p);
-        let Drag::PolyEdit(d) = &mut self.drag else {
+        let (is_slide, free) = match &self.drag {
+            Drag::PolyEdit(d) => (true, d.free.is_some()),
+            _ => (false, false),
+        };
+        if !is_slide {
             // A click action already happened (or nothing did).
             if matches!(self.drag, Drag::Orbit) {
                 self.drag = Drag::None;
             }
             return;
-        };
-        if d.free.is_some() {
+        }
+        if free {
             self.poly_cancel_drag();
             self.status = "Repeat: points are moved by hand".into();
             return;
@@ -1408,6 +1609,19 @@ impl Editor {
             self.status = "Repeat: drag once first, then Y repeats that amount".into();
             return;
         };
+        let axes = match &self.drag {
+            Drag::PolyEdit(drag) => drag.gizmo_extrude.as_ref().filter(|g| g.locked.is_none()).map(|g| g.axes),
+            _ => None,
+        };
+        if let Some(axes) = axes {
+            let axis = self
+                .poly_edit
+                .as_ref()
+                .and_then(|pe| pe.extrude_gizmo_axis)
+                .unwrap_or_else(|| nearest_gizmo_axis(axes, fallback_normal));
+            self.lock_gizmo_extrude(axis);
+        }
+        let Drag::PolyEdit(d) = &mut self.drag else { return };
         d.amount = amount.clamp(d.range.0, d.range.1);
         d.moved = true;
         let (slide, amount) = (d.slide.clone(), d.amount);
@@ -1420,6 +1634,22 @@ impl Editor {
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_moved(pos);
             return true;
+        }
+        // A gizmo extrude picks its axis from the drag, then slides along it.
+        let start_and_screen = match &self.drag {
+            Drag::PolyEdit(d) => {
+                let screen = d.gizmo_extrude.as_ref().filter(|g| g.locked.is_none()).map(|g| g.screen);
+                Some((d.start, screen))
+            }
+            _ => None,
+        };
+        let Some((start, unlocked)) = start_and_screen else { return false };
+        let delta = pos - start;
+        if let Some(screen) = unlocked {
+            if delta.length() <= 2.0 {
+                return true;
+            }
+            self.lock_gizmo_extrude(gizmo_drag_axis(&screen, delta).unwrap_or(0));
         }
         let Drag::PolyEdit(d) = &mut self.drag else { return false };
         let delta = pos - d.start;
@@ -1544,6 +1774,9 @@ impl Editor {
             && let Some(pe) = self.poly_edit.as_mut()
         {
             pe.last[d.kind] = Some(d.amount);
+            if let Some(axis) = d.gizmo_extrude.as_ref().and_then(|g| g.locked) {
+                pe.extrude_gizmo_axis = Some(axis);
+            }
         }
         let piece = &mut self.scene.pieces[i];
         piece.mesh.tighten_bounds();
@@ -2432,6 +2665,161 @@ mod tests {
         e.pointer_moved(centre() + Vec2::new(0.0, -60.0));
         assert_eq!(cage(&e).faces.len(), 10, "shown while dragging");
         e.cancel_drag();
+        assert_eq!(cage(&e).faces.len(), 6);
+    }
+
+    #[test]
+    fn gizmo_drag_axis_picks_the_screen_direction_and_keeps_ties() {
+        let screen = [Some(Vec2::X), Some(-Vec2::Y), None];
+        assert_eq!(gizmo_drag_axis(&screen, Vec2::new(0.0, -10.0)), Some(1));
+        assert_eq!(gizmo_drag_axis(&screen, Vec2::new(10.0, 0.0)), Some(0));
+        // An equal share keeps the earlier axis.
+        assert_eq!(gizmo_drag_axis(&screen, Vec2::new(5.0, -5.0)), Some(0));
+        assert_eq!(gizmo_drag_axis(&[None, None, None], Vec2::X), None);
+        assert_eq!(nearest_gizmo_axis([Vec3::X, Vec3::Y, Vec3::Z], Vec3::new(0.2, -0.9, 0.1)), 1);
+    }
+
+    /// The front cap after an extrude (the face keeps its index).
+    fn cap_center(e: &Editor, face: usize) -> Vec3 {
+        polyedit::face_center(cage(e), face)
+    }
+
+    #[test]
+    fn extrude_along_normals_or_the_gizmo_and_the_choice_is_kept() {
+        use crate::pose::GizmoMode;
+        // Normals: drag up pulls the front face out along +Z (it faces the camera).
+        let mut e = editor();
+        start(&mut e);
+        assert_eq!(e.poly_edit.as_ref().unwrap().extrude_along, ExtrudeAlong::Normals);
+        let front = face_towards(&e, Vec3::Z);
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -80.0));
+        let c = cap_center(&e, front);
+        assert!(c.z > 0.55 && c.y.abs() < 1e-3, "along the normal: {c}");
+        assert_eq!(e.history.undo_labels().count(), 1);
+        assert!(e.history.undo_labels().last().unwrap().starts_with("Poly Edit: Extrude"));
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+
+        // Gizmo chosen, but the gizmo is hidden: the same drag follows the normals.
+        e.poly_edit.as_mut().unwrap().extrude_along = ExtrudeAlong::Gizmo;
+        assert!(e.gizmo.is_none());
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -80.0));
+        let c = cap_center(&e, front);
+        assert!(c.z > 0.55 && c.y.abs() < 1e-3, "gizmo hidden, so normals: {c}");
+        e.undo();
+
+        // Gizmo showing: drag up follows the axis that points up (world +Y).
+        e.gizmo = Some(GizmoMode::Move);
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -80.0));
+        let c = cap_center(&e, front);
+        assert!(c.y > 0.05 && (c.z - 0.5).abs() < 1e-3 && c.x.abs() < 1e-3, "along the gizmo's up axis: {c}");
+        assert_eq!(cage(&e).faces.len(), 10);
+        polyedit::validate(cage(&e)).unwrap();
+        assert_eq!(e.history.undo_labels().count(), 1, "one undo step");
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+
+        // A gizmo turned 20° about X: the up-drag follows one of its axes, so
+        // the cap leans (both Y and Z change) instead of going straight up or
+        // straight out along the face.
+        e.custom_gizmo_rotation = Some(glam::Mat3::from_rotation_x(20.0_f32.to_radians()));
+        drag(&mut e, centre(), centre() + Vec2::new(0.0, -80.0));
+        let c = cap_center(&e, front);
+        let moved = c - Vec3::new(0.0, 0.0, 0.5);
+        let rot = glam::Mat3::from_rotation_x(20.0_f32.to_radians());
+        let along_gizmo = [Vec3::X, Vec3::Y, Vec3::Z]
+            .map(|a| rot * a)
+            .into_iter()
+            .any(|axis| moved.cross(axis).length() < 1e-3 && moved.dot(axis).abs() > 0.05);
+        assert!(along_gizmo && moved.y.abs() > 0.02 && moved.z.abs() > 0.02 && moved.x.abs() < 1e-3, "{c}");
+        assert_eq!(e.history.undo_labels().count(), 1);
+        e.undo();
+
+        // Kept while the tool is open, including across other actions, and a
+        // fresh open starts on Normals again, like the other options.
+        assert_eq!(e.poly_edit.as_ref().unwrap().extrude_along, ExtrudeAlong::Gizmo);
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Inset;
+        e.poly_edit.as_mut().unwrap().action = FaceAction::Extrude;
+        assert_eq!(e.poly_edit.as_ref().unwrap().extrude_along, ExtrudeAlong::Gizmo);
+        e.finish_poly_edit();
+        e.start_poly_edit();
+        assert_eq!(e.poly_edit.as_ref().unwrap().extrude_along, ExtrudeAlong::Normals);
+    }
+
+    #[test]
+    fn gizmo_extrude_with_each_face_and_mirror_is_one_undo_step() {
+        use crate::pose::GizmoMode;
+        // Each face: the front and the top each get walls, and both move
+        // along the one gizmo axis, not along their own normals.
+        let mut e = editor();
+        start(&mut e);
+        let front = face_towards(&e, Vec3::Z);
+        let top = face_towards(&e, Vec3::Y);
+        {
+            let pe = e.poly_edit.as_mut().unwrap();
+            pe.extrude_along = ExtrudeAlong::Gizmo;
+            pe.each = true;
+            pe.selected = vec![front, top];
+            pe.selected_topology = e.scene.active().mesh.topology_version();
+        }
+        e.gizmo = Some(GizmoMode::Combined);
+        // The gizmo sits on the pick, so a press in the middle grabs a handle.
+        // This is the face drag, which is what Along applies to.
+        let edge = {
+            let c = cage(&e);
+            [c.faces[front].corners[0], c.faces[front].corners[1]]
+        };
+        e.poly_face_down(centre(), front, edge);
+        e.pointer_moved(centre() + Vec2::new(0.0, -80.0));
+        e.pointer_up();
+        assert_eq!(cage(&e).faces.len(), 14, "two faces, four walls each: {}", e.status);
+        polyedit::validate(cage(&e)).unwrap();
+        let (f, t) = (cap_center(&e, front), cap_center(&e, top));
+        assert!((f.z - 0.5).abs() < 1e-3 && f.y > 0.05, "front moved up, not out: {f}");
+        assert!(t.z.abs() < 1e-3 && t.y > 0.55, "top moved up too: {t}");
+        assert!((f.y - (t.y - 0.5)).abs() < 1e-3, "the same distance: {f} vs {t}");
+        assert_eq!(e.history.undo_labels().count(), 1);
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+
+        // Mirror: dragging along X pushes the two side faces apart, and
+        // dragging up lifts them together. Each drag is one undo step.
+        let mut e = editor();
+        start(&mut e);
+        let side = face_towards(&e, Vec3::X);
+        let other = face_towards(&e, -Vec3::X);
+        {
+            let pe = e.poly_edit.as_mut().unwrap();
+            pe.extrude_along = ExtrudeAlong::Gizmo;
+            pe.each = true;
+            pe.mirror = true;
+        }
+        e.gizmo = Some(GizmoMode::Move);
+        let edge = {
+            let c = cage(&e);
+            [c.faces[side].corners[0], c.faces[side].corners[1]]
+        };
+        e.poly_face_down(centre(), side, edge);
+        e.pointer_moved(centre() + Vec2::new(80.0, 0.0));
+        e.pointer_up();
+        assert_eq!(cage(&e).faces.len(), 14, "both sides extruded: {}", e.status);
+        polyedit::validate(cage(&e)).unwrap();
+        let (a, b) = (cap_center(&e, side), cap_center(&e, other));
+        assert!(a.x > 0.55 && b.x < -0.55, "pushed apart: {a} {b}");
+        assert!(a.y.abs() < 1e-3 && b.y.abs() < 1e-3 && a.z.abs() < 1e-3 && b.z.abs() < 1e-3, "{a} {b}");
+        assert!((a.x + b.x).abs() < 1e-3, "symmetric: {a} {b}");
+        assert_eq!(e.history.undo_labels().count(), 1);
+        e.undo();
+
+        e.poly_face_down(centre(), side, edge);
+        e.pointer_moved(centre() + Vec2::new(0.0, -80.0));
+        e.pointer_up();
+        let (a, b) = (cap_center(&e, side), cap_center(&e, other));
+        assert!(a.y > 0.05 && b.y > 0.05, "both lifted: {a} {b}");
+        assert!((a.x - 0.5).abs() < 1e-3 && (b.x + 0.5).abs() < 1e-3, "not pulled sideways: {a} {b}");
+        assert!((a.y - b.y).abs() < 1e-3, "the same lift: {a} {b}");
+        assert_eq!(e.history.undo_labels().count(), 1);
+        e.undo();
         assert_eq!(cage(&e).faces.len(), 6);
     }
 

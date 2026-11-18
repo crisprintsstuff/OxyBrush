@@ -1,7 +1,7 @@
 //! The Poly Edit window and the polygons drawn over the viewport (RFC 0018).
 
 use crate::editor::{Drag, Editor};
-use crate::polyedit::{EdgeAction, ElementMode, FaceAction, Pending, PointAction, outline_edges};
+use crate::polyedit::{EdgeAction, ElementMode, ExtrudeAlong, FaceAction, Pending, PointAction, outline_edges};
 use egui::{Color32, RichText, Stroke};
 use glam::Vec2;
 use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
@@ -114,6 +114,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             } else if ed.gizmo.is_some() {
                 ui.label(RichText::new("Shift+drag the gizmo to extrude (or inset, when scaling).").weak().small());
             }
+            let gizmo_showing = ed.gizmo.is_some();
             let Some(pe) = ed.poly_edit.as_mut() else { return };
             let mode = pe.mode;
             if mode.shows(ElementMode::Faces) {
@@ -136,6 +137,16 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.checkbox(&mut pe.each, "Each face on its own")
                         .on_hover_text("Extrude, inset and bevel every face separately, instead of touching faces as one block");
                     ui.end_row();
+                    if pe.action == FaceAction::Extrude {
+                        ui.label("Along");
+                        ui.horizontal(|ui| {
+                            for along in ExtrudeAlong::ALL {
+                                ui.selectable_value(&mut pe.extrude_along, along, along.label())
+                                    .on_hover_text(along.help());
+                            }
+                        });
+                        ui.end_row();
+                    }
                     if pe.action == FaceAction::Bridge {
                         ui.label("Rows");
                         ui.add(egui::DragValue::new(&mut pe.bridge_segments).range(1..=64))
@@ -147,6 +158,17 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         ui.end_row();
                     }
                 });
+                if pe.action == FaceAction::Extrude && pe.extrude_along == ExtrudeAlong::Gizmo {
+                    ui.label(
+                        RichText::new(if gizmo_showing {
+                            "Drag along a gizmo axis to extrude that way. Each face on its own still builds separate walls, and they all move along that axis."
+                        } else {
+                            "The gizmo is hidden, so this extrudes along the normals. Turn the gizmo on (T, or Gizmo above) to extrude along it."
+                        })
+                        .weak()
+                        .small(),
+                    );
+                }
                 if let Some(Pending::BridgeFrom(_)) = pe.pending {
                     ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
                 }
