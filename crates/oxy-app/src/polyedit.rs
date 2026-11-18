@@ -289,6 +289,9 @@ pub struct PolyEdit {
     pub soft: bool,
     pub soft_radius: f32,
     pub soft_falloff: f32,
+    /// Where a plain press on empty space started: released without a drag
+    /// it clears the pick, dragged it only orbits and keeps the pick.
+    empty_press: Option<Vec2>,
 }
 
 /// How much a point `d` from the pick moves with soft selection, out to
@@ -480,6 +483,7 @@ impl Editor {
             picked_points: Vec::new(),
             loop_pair: false,
             groups_seen: 0,
+            empty_press: None,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -908,6 +912,9 @@ impl Editor {
             return false;
         }
         self.poly_sync();
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.empty_press = None;
+        }
         let element = self.poly_element_at(p);
         // Ctrl/Cmd+click picks faces to act on together (empty space clears).
         if self.modifiers.ctrl {
@@ -915,8 +922,12 @@ impl Editor {
             return true;
         }
         let Some(element) = element else {
-            // Not on the piece: orbit, as with any tool.
+            // Not on the piece: orbit, as with any tool. A click that never
+            // drags also clears the pick (see `poly_pointer_up`).
             self.drag = Drag::Orbit;
+            if let Some(pe) = self.poly_edit.as_mut() {
+                pe.empty_press = Some(p);
+            }
             return true;
         };
         match element {
@@ -1473,6 +1484,13 @@ impl Editor {
     /// Let go: keep what the drag did as one undo step. A press without a
     /// drag changes nothing (except an inserted loop, which stays).
     pub(crate) fn poly_pointer_up(&mut self) -> bool {
+        let press = self.poly_edit.as_mut().and_then(|pe| pe.empty_press.take());
+        if let (Some(p0), Some(p)) = (press, self.pointer)
+            && matches!(self.drag, Drag::Orbit)
+            && p0.distance(p) < 5.0 * self.pixels_per_point
+        {
+            self.poly_toggle_pick(None);
+        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_up();
             return true;
@@ -2095,6 +2113,20 @@ mod tests {
         (0..c.faces.len())
             .max_by(|&a, &b| polyedit::face_normal(c, a).dot(dir).total_cmp(&polyedit::face_normal(c, b).dot(dir)))
             .unwrap()
+    }
+
+    #[test]
+    fn clicking_empty_space_clears_the_pick_but_orbiting_keeps_it() {
+        let mut e = editor();
+        start(&mut e);
+        let front = face_towards(&e, Vec3::Z);
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        let corner = Vec2::new(5.0, 5.0);
+        assert!(e.poly_element_at(corner).is_none());
+        drag(&mut e, corner, corner + Vec2::new(60.0, 20.0));
+        assert_eq!(e.poly_selection(), [front], "orbiting is not a click");
+        drag(&mut e, corner, corner);
+        assert!(e.poly_selection().is_empty(), "a click off the model clears the pick");
     }
 
     #[test]
