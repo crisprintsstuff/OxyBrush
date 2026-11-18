@@ -1,8 +1,9 @@
 # RFC 0026: Parts Bin
 
-Status: Draft. The owner decided scale, per-side fade and delete, refusing
-a drop while dynamic detail is on, and the symmetry-plane prompt
-(2026-11-18). The other questions at the end are still open.
+Status: Accepted. On 2026-11-18 the owner confirmed the four RFC 0025
+amendments below, as well as scale, per-side fade and delete, refusing a
+drop while dynamic detail is on, the symmetry-plane prompt, and the
+remaining decisions recorded at the end.
 
 ## Summary
 
@@ -54,8 +55,8 @@ Use these as they stand:
   not define that walk. Placement uses the projection until phase 6
   exists, then uses the walk for the same parts.
 
-Four proposals here differ from decisions in RFC 0025. They are
-amendments for the maintainer, and open questions at the end.
+The following four amendments to RFC 0025 were confirmed by the owner on
+2026-11-18 and are recorded in Decisions below.
 
 1. **Where the library is shown.** RFC 0025 puts details in a Details
    section of the Strokes window. This RFC shows that same library as
@@ -146,7 +147,9 @@ A mirrored drop writes both sides into the same group and marks the
 group linked. Each side has its own recipes. The mirror side's samples
 are the source samples reflected through the piece's symmetry plane.
 Both recipes are replayed with symmetry off, so the brush engine does
-not mirror them again.
+not mirror them again. A mirrored pair is linked by default, so edits
+propagate in either direction. The user can choose **Unlink** to turn
+off that propagation; undo of Unlink restores it.
 
 While the link is on, an edit on either side is applied to the other
 in the same undo step:
@@ -178,7 +181,8 @@ side's recipe. Deleting the last stroke on one side clears the link,
 and the status line reads "The other side was deleted, so this part
 is no longer linked."
 
-**Unlink** clears the link flag and does not move the mesh. **Edit…**,
+**Unlink** is the user's choice to stop linked edits; it clears the
+link flag and does not move the mesh. **Edit…**,
 **Edit path**, and **Move on surface** then affect the side you
 change. Fade and delete of a stroke were already per side. The two
 placement records still name each other. The group stays one group,
@@ -229,13 +233,12 @@ rebuilding the mesh, booleans, and the other topology changes in RFC
 0017. The Strokes window uses the note it already shows.
 
 The drop itself must not bake the strokes it just added. A drop while
-dynamic detail is on is refused, as decided below. If the part's new
-strokes would not fit in the living-strokes memory budget without
-baking those strokes, the drop is refused and the budget is named.
-The budget pass today bakes the oldest strokes until the total fits;
-a placed part is the newest work, and this rule stops that pass from
-discarding it to make the drop fit. Whether to refuse in that budget
-case is still an open question.
+dynamic detail is on is refused, as decided below. Placed part strokes
+use a separate Parts memory pool, with a user-adjustable limit, rather
+than the ordinary living-strokes budget. If a placement would exceed
+the Parts memory limit, the drop is refused without changing the mesh.
+The status line says: "Parts memory limit reached. Raise the limit in
+Preferences or remove placed parts to free space."
 
 ## How it works
 
@@ -277,11 +280,8 @@ same app folder name the presets use (`OxyBrush` on Windows,
 | Linux | `$XDG_DATA_HOME/oxybrush/parts`, or `~/.local/share/oxybrush/parts` |
 | macOS | `~/Library/Application Support/oxybrush/parts` |
 
-Settings stay in the config directory (`settings.txt`). RFC 0025 said
-details live "in the user's settings folder like presets". The preset
-code uses this data directory, not `settings.txt`. This RFC follows
-the preset code. That wording is an open question only if the
-maintainer wanted the config directory instead.
+Settings stay in the config directory (`settings.txt`). The Parts Bin
+uses the app's data directory, beside brush presets, as decided below.
 
 Nothing in the folder is fetched or uploaded. The updater and the
 local MCP server are unchanged.
@@ -398,11 +398,11 @@ part does not keep following the brush.
 
 **Twist** is a rotation around the surface normal. The part's recorded
 starting direction, projected into the tangent plane, maps to the
-twist direction. At the start of a drag that direction is the camera's
-right, projected into the tangent plane (the camera's up if the right
-is nearly along the normal), so the part appears as you are looking at
-it. The twist handle orbits it. The committed frame is stored with the
-placement, so opening the project does not depend on the camera.
+twist direction. At the start of a drag that direction is a stable
+world axis projected into the tangent plane, with a deterministic
+alternate if it is nearly along the normal. It does not depend on the
+camera. The twist handle orbits it. The committed frame is stored with
+the placement.
 
 The preview matches **Edit…**. `replay_estimate_ms` is about half a
 millisecond a dab. At or under 32 ms, the preview runs the real
@@ -618,8 +618,8 @@ strokes that were left out stay on the piece, unchanged.
 - Opening the bin reads `library.txt` and the PNG files. Recipes are
   read when a drag starts.
 - The thumbnail is one offscreen draw per save, not per frame.
-- Placed recipes count toward the existing living-strokes memory
-  budget. The library on disk does not.
+- Placed part recipes count toward the separate, user-adjustable Parts
+  memory limit. The library on disk does not.
 - The implementation reports `dab_timing` for a multi-stroke replay.
   The bar to aim at: on a mesh of about a million triangles, a part of
   a few thousand dabs stays inside the preview rule above. The numbers
@@ -647,22 +647,25 @@ not a second implementation beside them.
 2. **The strip.** The data-folder library, thumbnails, slots, paging,
    category filter, drag onto the mesh, the Place one / Mirror pair
    choice, the on-plane rule, and the curvature, size, mask, dynamic
-   detail and subdivision messages. Import and export of
-   `.oxydetail`. Tests: the library name cannot leave the folder;
+   detail, subdivision and Parts memory-limit messages. Import and
+   export of `.oxydetail`. Tests: the library name cannot leave the folder;
    atomic replace leaves no `.tmp` behind; a drop records one undo
    step and a cancel records none; a mirrored drop has recipes on
    both sides and symmetry off; a drop on the plane asks, and Cancel
    leaves the mesh unchanged; One centered copy puts the footprint
    midpoint on the plane; Mirror, halves match meets on the plane; a
    drop while dynamic detail is on does not change the mesh and shows
-   its reason.
+   its reason; a drop that would exceed the Parts memory limit does
+   not change the mesh, bake ordinary strokes, or use more than the
+   cap, and explains how to raise the limit or free Parts memory.
 
 3. **After the drop.** Move on surface (move, turn, scale) as one
    re-sculpt and one undo step. The `PART` section round-trips, and a
    reader that skips `PART` still loads `STRK` and `STRI`. Linked
    **Edit…**, **Edit path**, and **Move on surface** propagate to the
    other side in the same undo step. Fading or deleting one stroke
-   does not. Unlink stops the linked edits and keeps both recipes.
+   does not. Unlink lets the user disable linked edits and keeps both
+   recipes.
    **Save back to bin** and **Save
    as new part** write only when asked, and an Edit… test asserts the
    library file is byte-for-byte unchanged. A later non-part stroke
@@ -693,9 +696,10 @@ Headless, beside the checks above:
   unknown section still loads the strokes; a newer `PART` version is
   skipped; `.oxydetail` round-trip once its layout is fixed in the
   RFC 0025 phase 5 work.
-- `oxy-app`: the editor tests named in the phases, including the
-  budget refusal when the part alone exceeds the budget, and the
-  sentence for each refused stroke.
+- `oxy-app`: the editor tests named in the phases, including refusal
+  when a part would exceed the Parts memory limit, no mesh change on
+  refusal, and the message explaining how to raise the limit or free
+  Parts memory.
 - The thumbnail has no golden image. When the strip exists, a
   headless screenshot (`--screenshot`) is taken of a bin with one
   part, for a person to look at. A unit test asserts that a part
@@ -734,8 +738,8 @@ GPU dependency.
 - Thumbnail colours will differ between GPUs. The PNG is a cache, not
   a format invariant.
 - Saving the positive side of a symmetric stroke may keep the half the
-  user does not think of as the original. The rule is deterministic;
-  the open question asks for confirmation.
+  user does not think of as the original. The rule is deterministic and
+  stated in the save behavior.
 
 ## Alternatives considered
 
@@ -799,45 +803,39 @@ The owner decided these on 2026-11-18.
   footprint is narrower than that), the drop asks **One centered
   copy** or **Mirror, halves match**. The answer is not remembered.
   Esc or **Cancel** cancels the drop and records nothing.
-
-## Open questions
-
-For the maintainer. The proposals above are what the draft specifies
-until these are answered.
-
-1. **Library UI.** Confirm the amendment: one library, shown as the
-   Parts Bin strip, with **Save as part…** and the placed group in the
-   Strokes window, and no separate Details section.
-2. **Mirror choice.** Confirm the amendment: the file keeps one side,
-   and the drop asks Place one or Mirror pair. Mirror X/Y/Z only picks
-   the default axis.
-3. **Commit on drop.** Confirm the amendment: the drop is the undo
-   step, and move, turn and scale remain available as later steps,
-   with a `PART` record, rather than a modal Accept that ends the
-   place.
-4. **Recipes on both sides.** Confirm the amendment: a mirrored part
-   stores a recipe on each side and stays linked, while an ordinary
-   Mirror copy still has no recipe.
-5. **Default twist.** The camera's right projected into the tangent
-   plane, or a stable world axis so the result does not depend on the
-   view?
-6. **Saving back.** Both **Save back to bin** (with a confirm) and
-   **Save as new part**, or only Save as new, so the library is
-   append-only?
-7. **Which side is saved.** The positive side of the mirror axis
-   (positive X if several axes were on), and radial strokes refused.
-   Is that the half to keep?
-8. **Folder.** The data directory beside brush presets, as written,
-   or the config directory because RFC 0025 said "settings folder"?
-9. **Budget.** Refuse a drop whose own strokes would not fit in the
-   living-strokes budget, rather than baking them immediately?
-10. **Variations.** The other parts in the same category, as written,
-    or an explicit set you attach to one part?
-11. **Geodesic.** Leave the walk entirely in RFC 0025 phase 6, and
-    have phase 5 of this RFC only switch parts over to it?
-12. **Either side.** Confirm that, while linked, editing the mirror
-    side updates the side you dropped, and not only the other way
-    around.
+- **One Parts Bin library.** There is one library, shown as the Parts
+  Bin strip, with **Save as part…** and placed groups in the Strokes
+  window; there is no separate Details section.
+- **Choose placement at the drop.** The drop asks **Place one** or
+  **Mirror pair**. The piece's Mirror X/Y/Z setting selects the default
+  axis.
+- **Commit on drop.** Dropping commits placement as one undo step.
+  Move, turn and scale remain available afterwards.
+- **Recipes on both mirrored sides.** A mirrored part stores recipes
+  on both linked sides. Ordinary Mirror copies remain unchanged.
+- **Default twist uses a stable world axis.** The initial twist
+  direction is derived from a fixed world axis, not the camera.
+- **Both save commands are available.** **Save back to bin** replaces
+  the part only after confirmation, and **Save as new part** creates a
+  separate library entry.
+- **Keep the positive side.** Saving a symmetric stroke keeps samples
+  on the positive side of its mirror axis; if several axes were on,
+  positive X is kept. Strokes with radial symmetry are refused.
+- **Store parts in the data directory.** The Parts Bin folder sits
+  beside brush presets under the app's data directory.
+- **Same-category parts are variations.** Opening a part shows the
+  other parts in its category as variations.
+- **Defer geodesic mapping to RFC 0025 phase 6.** Until that phase
+  exists, placement and Move on surface use projection.
+- **Linked edit propagation is user-selectable.** Mirrored parts start
+  linked, so edits propagate in either direction. The user can choose
+  **Unlink** to disable propagation; undo restores the linked state.
+- **Parts have a separate memory limit.** Placed part strokes use a
+  dedicated Parts memory pool, separate from the ordinary
+  living-strokes budget. Its limit is user-adjustable. When a new
+  placement would exceed it, refuse the placement without changing
+  the mesh and explain that the user can raise the limit in
+  Preferences or remove placed parts to free space.
 
 ## Not included
 
