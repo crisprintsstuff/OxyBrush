@@ -615,6 +615,12 @@ struct GrabState {
     radius: f32,
 }
 
+/// Drag length, in brush radii, at which Kelvin Grab's elastic response is
+/// down to a half ([`elastic_fade`]). It was 1, which already halved the
+/// response on a one-radius pull, so the brush felt like plain Grab. At 3,
+/// pulls of up to several radii stay no sharper than plain Grab.
+const ELASTIC_FADE_RADII: f32 = 3.0;
+
 /// How much of Kelvin Grab's elastic response to keep for a drag
 /// `drag / radius` brush radii long: all of it for a nudge, less and less
 /// on a long pull.
@@ -626,7 +632,8 @@ struct GrabState {
 /// the rubbery feel of small moves and clean long pulls.
 #[inline]
 fn elastic_fade(drag_over_radius: f32) -> f32 {
-    1.0 / (1.0 + drag_over_radius * drag_over_radius)
+    let q = drag_over_radius / ELASTIC_FADE_RADII;
+    1.0 / (1.0 + q * q)
 }
 
 /// Combine symmetry copies that want to displace the same vertex.
@@ -3202,6 +3209,10 @@ mod tests {
         for dir in [Vec3::new(-0.3, 1.0, 0.5), Vec3::new(0.5, 1.0, 0.6), Vec3::new(1.0, 1.0, 0.0)] {
             let kelvin = sharpest_fold(&long_pull(BrushKind::KelvinGrab, dir, 1.2));
             let grab = sharpest_fold(&long_pull(BrushKind::Grab, dir, 1.2));
+            assert!(
+                sharpest_fold(&long_pull(BrushKind::KelvinGrab, dir, 2.0)) < 90.0,
+                "no fold-over on a long pull along {dir}"
+            );
             assert!(kelvin < 90.0, "no fold-over: {kelvin:.0}° along {dir}");
             assert!(kelvin <= grab + 5.0, "about as smooth as Grab: {kelvin:.0}° vs {grab:.0}° along {dir}");
         }
@@ -3211,7 +3222,8 @@ mod tests {
     fn kelvin_grab_keeps_its_elastic_response_on_small_moves() {
         assert_eq!(elastic_fade(0.0), 1.0);
         assert!(elastic_fade(0.2) > 0.95, "a nudge is fully elastic");
-        assert!(elastic_fade(3.0) < 0.15, "a long pull mostly isn't");
+        assert!(elastic_fade(1.0) > 0.85, "a one-radius pull still feels elastic");
+        assert!(elastic_fade(8.0) < 0.25, "a very long pull mostly isn't");
         // A nudge sideways: the point behind the brush (opposite the drag)
         // is pulled along more than one beside it at the same distance,
         // which a plain falloff wouldn't do (the Kelvinlet's r r^T term).
