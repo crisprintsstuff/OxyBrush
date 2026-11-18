@@ -2763,7 +2763,13 @@ mod tests {
         let xsym = Symmetry { x: true, ..Default::default() };
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         let mut s = Stroke::new(settings, xsym, false).with_view(-Vec3::Z);
         let p0 = Vec3::new(0.25, 0.0, (1.0 - 0.25 * 0.25_f32).sqrt());
         s.add_sample(&mut mesh, StrokeSample { position: p0, normal: p0.normalize(), pressure: 1.0 }, &mut |_, _| {});
@@ -2794,7 +2800,13 @@ mod tests {
         // the fade keeps neighbours together.
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         assert!(settings.front_faces_only);
         let p0 = Vec3::new(0.97, 0.0, (1.0 - 0.97f32 * 0.97).sqrt());
         let mut s = Stroke::new(settings, Symmetry::default(), false).with_view(-Vec3::Z);
