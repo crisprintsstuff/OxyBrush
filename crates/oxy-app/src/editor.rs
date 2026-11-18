@@ -5936,6 +5936,12 @@ impl Editor {
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
+        if b.is_empty() {
+            // An empty scene still gets a floor (when it's switched on),
+            // sized to the view and sitting at the origin.
+            let h = self.camera.distance.max(1e-3) * 0.25;
+            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+        }
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
@@ -14562,6 +14568,13 @@ mod tests {
         e.adjust_radius(0.8);
         e.adjust_radius(0.8);
         assert!(e.brush_radius_world < before, "[ shrinks it");
+    }
+
+    #[test]
+    fn floor_grid_shows_in_an_empty_scene() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
     }
 
     #[test]
