@@ -233,7 +233,10 @@ impl Editor {
     /// Show command `command` of plugin `slot` as a live preview on the
     /// active piece, with its panel open for Accept and Cancel.
     pub fn start_plugin_preview(&mut self, slot: usize, command: usize) {
-        let piece = self.scene.active().id;
+        let Some(piece) = self.scene.try_active().map(|p| p.id) else {
+            self.status = Self::NEED_PIECE.into();
+            return;
+        };
         let revision = self.history.revision();
         let Some(p) = self.wasm_plugins.get_mut(slot) else { return };
         p.show_panel = true;
@@ -246,8 +249,13 @@ impl Editor {
     /// panel closed, and run again those whose settings changed. Called each
     /// frame; runs only when nothing else is running.
     pub fn update_plugin_previews(&mut self) {
+        let Some(active) = self.scene.try_active().map(|p| p.id) else {
+            for p in &mut self.wasm_plugins {
+                p.preview = None;
+            }
+            return;
+        };
         let revision = self.history.revision();
-        let active = self.scene.active().id;
         let mut rerun = None;
         for (i, p) in self.wasm_plugins.iter_mut().enumerate() {
             let Some(pv) = &p.preview else { continue };
@@ -357,7 +365,7 @@ impl Editor {
             },
             vertex_counts: self.scene.pieces.iter().map(|p| p.mesh.vertex_count()).collect(),
             triangle_counts: self.scene.pieces.iter().map(|p| p.mesh.triangle_count()).collect(),
-            active: self.scene.active_index(),
+            active: if self.scene.pieces.is_empty() { usize::MAX } else { self.scene.active_index() },
             scene_json: if caps.read_scene {
                 oxy_mcp::state::scene_state(&crate::agent::doc_state(self)).to_string()
             } else {

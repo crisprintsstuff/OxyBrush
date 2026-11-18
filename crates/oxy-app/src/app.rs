@@ -670,7 +670,7 @@ impl App {
         // applied: draw it in the piece's place, looking like the piece.
         let curve_piece = ed.preview_in_place();
         g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
-        let active = ed.scene.active().id;
+        let active = ed.scene.try_active().map(|p| p.id).unwrap_or(0);
         // Pieces with their own material: give each distinct one a slot.
         let piece_key = |p: &oxy_doc::Piece| -> Option<String> {
             if p.id == active && ed.preview_piece_material.is_some() {

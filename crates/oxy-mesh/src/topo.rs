@@ -268,7 +268,11 @@ pub fn drop_specks(positions: &mut Vec<Vec3>, triangles: &mut Vec<[u32; 3]>, siz
 /// as border; open borders and edges with more than two triangles are
 /// left alone. New points copy the mask and color of the point they split
 /// from. The strips get a new face group, so the loop can be found again
-/// (Ctrl+Shift+click to isolate it). UVs are dropped (like subdivision).
+/// (Ctrl+Shift+click to isolate it). With `group_masked`, the visible
+/// chosen triangles get a second new face group, so the masked area can
+/// be isolated too. Triangles on the other side keep their groups, and
+/// hidden faces are left out of the new group. UVs are dropped (like
+/// subdivision).
 ///
 /// RETURNS: the new mesh data and the number of border edges, or None if
 /// the chosen part has no border.
@@ -277,6 +281,7 @@ pub fn edge_loops_at_border(
     chosen: &[bool],
     width: f32,
     both_sides: bool,
+    group_masked: bool,
 ) -> Option<(crate::MeshData, usize)> {
     use std::collections::HashSet;
     let t_count = data.triangles.len();
@@ -398,6 +403,19 @@ pub fn edge_loops_at_border(
             out.groups.push(loop_group);
             out.hidden.push(false);
             out.hidden.push(false);
+        }
+    }
+    // The visible triangles that were inside the mask. The strip keeps
+    // `loop_group`. Outside triangles, including when a loop was added on
+    // that side, and hidden faces keep the groups they had.
+    if group_masked {
+        let inner_group = loop_group.saturating_add(1);
+        // `chosen` has one flag per original triangle, so the strip
+        // appended after them stays on the loop's group.
+        for (t, (group, &is_chosen)) in out.groups.iter_mut().zip(chosen).enumerate() {
+            if is_chosen && !hidden(t) {
+                *group = inner_group;
+            }
         }
     }
     Some((out, border.len()))
@@ -1420,7 +1438,7 @@ mod hole_tests {
             .collect();
         assert!(chosen.iter().any(|&c| c));
         for both in [false, true] {
-            let (out, edges) = edge_loops_at_border(&data, &chosen, 0.3, both).unwrap();
+            let (out, edges) = edge_loops_at_border(&data, &chosen, 0.3, both, false).unwrap();
             let sides = if both { 2 } else { 1 };
             assert_eq!(out.triangles.len(), n + 2 * edges * sides, "two triangles per border edge and side");
             assert!(closed_and_oriented(&out.triangles), "still closed and consistently wound");
@@ -1440,8 +1458,8 @@ mod hole_tests {
     fn edge_loops_need_a_border() {
         let data = crate::primitives::icosphere(1, 1.0).to_data();
         let n = data.triangles.len();
-        assert!(edge_loops_at_border(&data, &vec![false; n], 0.3, true).is_none(), "nothing chosen");
-        assert!(edge_loops_at_border(&data, &vec![true; n], 0.3, true).is_none(), "everything chosen");
+        assert!(edge_loops_at_border(&data, &vec![false; n], 0.3, true, false).is_none(), "nothing chosen");
+        assert!(edge_loops_at_border(&data, &vec![true; n], 0.3, true, false).is_none(), "everything chosen");
     }
 
     #[test]
@@ -1455,9 +1473,66 @@ mod hole_tests {
                 c.x.abs() < 0.5 && c.z.abs() < 0.5
             })
             .collect();
-        let (out, edges) = edge_loops_at_border(&data, &chosen, 0.25, true).unwrap();
+        let (out, edges) = edge_loops_at_border(&data, &chosen, 0.25, true, false).unwrap();
         assert!(edges > 0);
         let y0 = data.positions[0].y;
         assert!(out.positions.iter().all(|p| (p.y - y0).abs() < 1e-6), "a flat panel stays flat");
+    }
+
+    #[test]
+    fn edge_loops_group_the_masked_area_and_leave_the_outside_and_hidden() {
+        let mut data = crate::primitives::icosphere(2, 1.0).to_data();
+        let n = data.triangles.len();
+        let y: Vec<f32> =
+            data.triangles.iter().map(|t| t.iter().map(|&v| data.positions[v as usize].y).sum::<f32>() / 3.0).collect();
+        let chosen: Vec<bool> = y.iter().map(|&h| h > 0.5).collect();
+        assert!(chosen.iter().any(|&c| c) && chosen.iter().any(|&c| !c));
+        data.groups = (0..n)
+            .map(|t| {
+                if chosen[t] {
+                    4
+                } else if y[t] >= 0.0 {
+                    1
+                } else {
+                    2
+                }
+            })
+            .collect();
+        // One hidden face inside the mask and one far outside it.
+        let hide_in = chosen.iter().position(|&c| c).unwrap();
+        let hide_out = y.iter().position(|&h| h < -0.5).unwrap();
+        assert!(!chosen[hide_out]);
+        data.hidden = vec![false; n];
+        data.hidden[hide_in] = true;
+        data.hidden[hide_out] = true;
+
+        let (off, _) = edge_loops_at_border(&data, &chosen, 0.3, true, false).unwrap();
+        assert_eq!(&off.groups[..n], &data.groups[..], "with the option off, every original group stays");
+        let loop_off = off.groups[n];
+        assert!(off.groups[n..].iter().all(|&g| g == loop_off));
+        assert!(data.groups.iter().all(|&g| g != loop_off));
+
+        for both in [false, true] {
+            let (out, edges) = edge_loops_at_border(&data, &chosen, 0.3, both, true).unwrap();
+            let sides = if both { 2 } else { 1 };
+            let inner: Vec<u32> = (0..n).filter(|&t| chosen[t] && !data.hidden[t]).map(|t| out.groups[t]).collect();
+            assert!(!inner.is_empty());
+            assert!(inner.iter().all(|&g| g == inner[0]), "the visible masked triangles share one group");
+            let inner_group = inner[0];
+            assert!(data.groups.iter().all(|&g| g != inner_group), "that group is new");
+            let loop_group = out.groups[n];
+            assert_ne!(loop_group, inner_group, "the loop strip is its own group");
+            assert!(out.groups[n..].iter().all(|&g| g == loop_group));
+            assert_eq!(out.groups.len(), n + 2 * edges * sides);
+            for (((&was_chosen, &was_hidden), &before), &after) in
+                chosen.iter().zip(&data.hidden).zip(&data.groups).zip(&out.groups)
+            {
+                if was_chosen && !was_hidden {
+                    assert_eq!(after, inner_group);
+                } else {
+                    assert_eq!(after, before, "outside and hidden keep their groups ({both})");
+                }
+            }
+        }
     }
 }

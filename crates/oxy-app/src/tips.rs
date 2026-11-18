@@ -70,6 +70,7 @@ commands! {
     NewPlane => "New plane", "", "Start over with a flat plane. You are asked before unsaved work is discarded.";
     NewHumanFemale => "New human (female)", "", "Start over with a female human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
     NewHumanMale => "New human (male)", "", "Start over with a male human base mesh, standing, about 10,600 quads with face groups for the body parts (from Blender's Human Base Meshes, CC0). You are asked before unsaved work is discarded.";
+    NewEmpty => "New empty scene", "", "Start over with no pieces, and build the scene up with Insert Primitive, import and the rest. You are asked before unsaved work is discarded.";
     Undo => "Undo", "Ctrl+Z", "Undo the last change.";
     Redo => "Redo", "Ctrl+Shift+Z", "Put back the last change you undid.";
     LastStrokeAsCurve => "Edit last stroke as curve", "", "Take back the stroke you just made and reopen its path as an editable curve with the same brush: drag its points, change size and strength along it, then Enter applies it. Works on Freehand strokes, right after you make them.";
@@ -91,7 +92,7 @@ commands! {
     DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";
     DeformRepeat => "Repeat on this piece", "", "Apply the last deformer again, with the same amount and axes.";
     DeformRepeatOthers => "Repeat on other pieces", "", "Apply the last deformer to every other visible piece, each around its own middle. One undo step.";
-    PolyEdit => "Poly Edit (model polygons)", "", "Model the active low-polygon piece by its faces, edges and points: extrude, inset, bevel, bridge, slide and insert loops, and more. Reach spreads an action to a face loop, a face group, a flat region or the whole island. Start from a primitive, a retopology mesh or any low-polygon piece.";
+    PolyEdit => "Poly Edit (model polygons)", "", "Model the active low-polygon piece by its faces, edges and points: extrude (along normals or the gizmo), inset, bevel, bridge, slide and insert loops, and more. Reach spreads an action to a face loop, a face group, a flat region or the whole island. Start from a primitive, a retopology mesh or any low-polygon piece.";
     Retopology => "Retopology (draw quads)", "", "Draw a new low-polygon mesh of quads by hand over the active piece: click to place points on its surface, Shift+click between them to make quads. The result is a new piece, saved with the project, and exports as quads.";
     AddTube => "Draw a tube", "", "Drag a path from the model or empty space to get a tube along it. Drag its points to shape it, Shift+drag a point to change its thickness, then Accept to add it as a new piece.";
     EditTube => "Edit tube", "", "Reopen the active piece's most recent tube to change its path, thickness, sides or caps. Accept replaces it, as one undo step. A tube that was sculpted, remeshed or regrouped since is an ordinary part of the mesh and can't be edited this way.";
@@ -209,7 +210,7 @@ commands! {
     ShrinkMask => "Shrink mask", "", "Pull the mask inward by one ring of vertices.";
     SubdivideOnce => "Subdivide (single mesh)", "", "Smooth-subdivide the mesh once. This removes existing subdivision levels.";
     SubdivideMasked => "Subdivide masked", "", "Split only the masked triangles into four, for more resolution where you need it (a feather, a face) without subdividing the whole piece. Their neighbours are split just enough to keep the surface closed. Smooth on curves the new points with the surface; existing points never move. Removes existing subdivision levels.";
-    EdgeLoopMask => "Edge loop at mask border", "", "Add a loop of quads along the border of the mask: support loops that keep a hard edge crisp when you subdivide or smooth. Both sides puts a loop on each side of the border; Width is how far each loop sits from it, as a share of the faces next to it. The loop gets its own face group. Removes existing subdivision levels.";
+    EdgeLoopMask => "Edge loop at mask border", "", "Add a loop of quads along the border of the mask: support loops that keep a hard edge crisp when you subdivide or smooth. Both sides puts a loop on each side of the border; Width is how far each loop sits from it, as a share of the faces next to it. The loop gets its own face group, and Group the masked area (on by default) gives the triangles inside the mask one too, so that area can be isolated. The outside keeps its groups. Hidden faces are left out. Removes existing subdivision levels.";
     PaintBrush => "Paint brush", "", "Switch to the Paint brush and color the surface without moving it.";
     Back => "Back view", "", "Look at the back of the model.";
     Left => "Left view", "", "Look at the left side of the model.";
@@ -868,6 +869,7 @@ pub mod plain {
     pub const INSTANCE_REMOVE: &str = "Remove these copies. The piece they copied is shown again as an ordinary piece.";
     pub const EDGE_LOOP_BOTH: &str = "On: a loop on each side of the mask border (the crispest edge after subdividing). Off: one loop, inside the masked part.";
     pub const EDGE_LOOP_WIDTH: &str = "How far each loop sits from the mask border, as a share of the faces next to it: small for a tight, sharp edge, larger for a softer one.";
+    pub const EDGE_LOOP_GROUP: &str = "On: the triangles inside the mask get a face group of their own, as well as the loop, so that area can be isolated. The outside keeps its groups, and hidden faces are left out. Off: only the new loop gets a face group.";
     pub const UNITS: &str = "How lengths are shown: millimetres (volumes in cubic centimetres) or inches (cubic inches). Used by the Measure plugin and by plugins that ask.";
     pub const SCENE_UNIT: &str = "How big one scene unit is, in millimetres (25.4 for inches). The same scale as the 3D print window. The starting sphere is 2 units across.";
     pub const SECTION_LAYERS: &str = "Sculpt layers of the active piece (with Living strokes on): pick the layer new strokes go into, fade, hide or delete a whole layer, and open the full stroke list.";
