@@ -277,6 +277,12 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
+            BrushKind::InsertPrimitive
+            | BrushKind::Tube
+            | BrushKind::PaintGroups
+            | BrushKind::PlaneClip
+            | BrushKind::LineSplit
+            | BrushKind::CutAway => 1.0,
             BrushKind::Grab
             | BrushKind::SnakeHook
             | BrushKind::TopoMove
@@ -284,13 +290,9 @@ impl BrushKind {
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
             | BrushKind::CurveMove
-            | BrushKind::InsertPrimitive
-            | BrushKind::Tube
-            | BrushKind::PaintGroups
-            | BrushKind::PlaneClip
-            | BrushKind::LineSplit
-            | BrushKind::CutAway => 1.0,
-            BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
+            | BrushKind::Pinch
+            | BrushKind::Polish
+            | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
             BrushKind::Paint => 0.6,
@@ -355,7 +357,7 @@ impl Default for BrushSettings {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -1763,6 +1765,12 @@ fn blend_snake_hook(
 /// Pinch and Crease slide vertices toward each copy. Copies are read from
 /// the pre-dab surface and blended like a drag, so the overlap follows the
 /// stronger copy instead of being pulled both ways at once.
+///
+/// Crease and Sharp Crease blend only the slide across the surface. The
+/// groove along the normal is summed instead: blending it shrinks a vertex
+/// on the mirror plane (both copies equally strong) to one copy's depth
+/// while its neighbours, reached by different dabs over the stroke, keep
+/// more, a ridge along the plane. A sum is smooth across it.
 #[allow(clippy::too_many_arguments)]
 fn blend_symmetry_copies(
     mesh: &mut Mesh,
@@ -1774,7 +1782,9 @@ fn blend_symmetry_copies(
     alpha: Option<&Alpha>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
-    let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
+    let grooves = settings.kind != BrushKind::Pinch;
+    // (weighted slide, sum of weights, strongest weight, summed groove)
+    let mut acc: HashMap<u32, (Vec3, f32, f32, Vec3)> = HashMap::new();
     let mut chunks = Vec::new();
     for &m in copies {
         let dab = base.transformed(m, origin);
@@ -1783,13 +1793,22 @@ fn blend_symmetry_copies(
             continue;
         }
         chunks.extend(ch);
+        let area_normal = area_normal_of(mesh, &affected, dab.normal);
+        let normal = if settings.kind == BrushKind::SharpCrease {
+            (area_normal - dab.direction * area_normal.dot(dab.direction)).try_normalize().unwrap_or(area_normal)
+        } else {
+            area_normal
+        };
         let weight_of: HashMap<u32, f32> = affected.iter().copied().collect();
         for (v, p) in target_positions(mesh, settings, invert, &dab, &affected) {
             let w = weight_of[&v];
-            let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0));
-            e.0 += p - mesh.positions[v as usize];
+            let delta = p - mesh.positions[v as usize];
+            let groove = if grooves { normal * (delta - dab.sag * w).dot(normal) } else { Vec3::ZERO };
+            let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0, Vec3::ZERO));
+            e.0 += delta - groove;
             e.1 += w;
             e.2 = e.2.max(w);
+            e.3 += groove;
         }
     }
     if acc.is_empty() {
@@ -1801,8 +1820,8 @@ fn blend_symmetry_copies(
         touch(mesh, c);
     }
     let moved: Vec<u32> = acc.keys().copied().collect();
-    for (v, (weighted, sum_w, max_w)) in &acc {
-        mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w);
+    for (v, (weighted, sum_w, max_w, groove)) in &acc {
+        mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w) + *groove;
     }
     mesh.update_after_move(&moved);
 }
@@ -1886,6 +1905,22 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn movement_brush_defaults_are_moderate_and_front_face_filter_is_off() {
+        for kind in [
+            BrushKind::Grab,
+            BrushKind::SnakeHook,
+            BrushKind::TopoMove,
+            BrushKind::KelvinGrab,
+            BrushKind::KelvinTwist,
+            BrushKind::KelvinScale,
+            BrushKind::CurveMove,
+        ] {
+            assert_eq!(kind.default_strength(), 0.5, "{kind:?}");
+        }
+        assert!(!BrushSettings::default().front_faces_only);
+    }
 
     #[test]
     fn every_insert_shape_sits_on_its_base_facing_up() {
@@ -2752,7 +2787,13 @@ mod tests {
         let xsym = Symmetry { x: true, ..Default::default() };
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         let mut s = Stroke::new(settings, xsym, false).with_view(-Vec3::Z);
         let p0 = Vec3::new(0.25, 0.0, (1.0 - 0.25 * 0.25_f32).sqrt());
         s.add_sample(&mut mesh, StrokeSample { position: p0, normal: p0.normalize(), pressure: 1.0 }, &mut |_, _| {});
@@ -2783,7 +2824,13 @@ mod tests {
         // the fade keeps neighbours together.
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         assert!(settings.front_faces_only);
         let p0 = Vec3::new(0.97, 0.0, (1.0 - 0.97f32 * 0.97).sqrt());
         let mut s = Stroke::new(settings, Symmetry::default(), false).with_view(-Vec3::Z);
@@ -3049,6 +3096,36 @@ mod tests {
         let at_centre = (after.positions[centre] - before.positions[centre]).length();
         assert!(seam < at_centre + 1e-3, "seam ran ahead of the brush ({seam} > {at_centre})");
         assert!(after.positions[origin].x.abs() < 1e-3);
+    }
+
+    fn crease_across_plane(kind: BrushKind, sym: Symmetry) -> (Mesh, Mesh) {
+        let mut mesh = primitives::plane(80, 2.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind, radius: 0.3, strength: 1.0, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, false).with_view(-Vec3::Y);
+        for k in 0..=40 {
+            let x = -0.6 + 1.2 * k as f32 / 40.0;
+            let sample = StrokeSample { position: Vec3::new(x, 0.0, 0.0), normal: Vec3::Y, pressure: 1.0 };
+            s.add_sample(&mut mesh, sample, &mut |_, _| {});
+        }
+        (before, mesh)
+    }
+
+    #[test]
+    fn crease_brushes_have_no_harsh_line_on_the_mirror_plane() {
+        // A stroke across the plane used to leave a ridge along it: the
+        // plane's vertices were blended down to one copy's depth while their
+        // neighbours kept two copies' worth.
+        let sym = Symmetry { x: true, ..Default::default() };
+        for kind in [BrushKind::Crease, BrushKind::SharpCrease] {
+            let (before, after) = crease_across_plane(kind, sym);
+            let depth = |x: f32| {
+                let i = vertex_at(&before, Vec3::new(x, 0.0, 0.0));
+                before.positions[i].y - after.positions[i].y
+            };
+            let (plane, near) = (depth(0.0), depth(0.1));
+            assert!(plane > near * 0.95, "{kind:?} ridge on the plane: {plane} vs {near}");
+        }
     }
 
     #[test]

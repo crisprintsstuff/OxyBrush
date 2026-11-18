@@ -71,7 +71,7 @@ impl BrushPreset {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -377,6 +377,7 @@ mod tests {
 
     #[test]
     fn text_round_trip_and_tolerant_parsing() {
+        assert!(!BrushPreset::new("Default", BrushKind::Draw).front_faces_only);
         let p = sample();
         assert_eq!(BrushPreset::from_text(&p.to_text()).unwrap(), p);
         // A name with '=' survives (split at the first '=').
