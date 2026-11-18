@@ -848,18 +848,34 @@ pub enum Pending {
     Revert,
 }
 
-/// Long-running topology work on a background thread.
+/// Long-running work on a background thread (remesh, a large import, …).
 pub struct Job {
     pub label: String,
     pub started: Instant,
-    /// Piece receiving the result.
+    /// Piece receiving the result. An import that only adds pieces leaves
+    /// this unused, including when the scene is empty.
     target: u64,
     /// Other pieces consumed by the job (merged away on success).
     consumed: Vec<u64>,
     /// The job holds the target piece's subdivision levels (moved out of
     /// the piece while it runs), so saving must wait for it.
     holds_levels: bool,
+    /// Prepended to undo labels this job records (an agent's "Agent: ").
+    pub(crate) undo_prefix: String,
     rx: mpsc::Receiver<Result<JobResult, String>>,
+}
+
+/// Meshes read from files, ready to add as pieces.
+struct LoadedImport {
+    path: PathBuf,
+    parts: Vec<(String, Mesh)>,
+}
+
+/// The outcome of reading a batch of mesh files. Failures are skipped;
+/// they do not discard the files that read.
+pub struct ImportRead {
+    loaded: Vec<LoadedImport>,
+    failed: Vec<(PathBuf, String)>,
 }
 
 /// What a background job produces for its target piece.
@@ -887,6 +903,8 @@ pub enum JobResult {
         multires: Option<oxy_mesh::multires::Multires>,
         previous: Option<oxy_mesh::multires::Multires>,
     },
+    /// Files read for Import, applied on the UI thread as new pieces.
+    Imported(ImportRead),
 }
 
 /// A change to the active piece's subdivision levels.
@@ -2690,6 +2708,12 @@ impl Editor {
     /// takes, so a dense mesh still gets dabs in between; `force` refines
     /// now.
     fn dyntopo_step(&mut self, ahead: Option<Vec3>, force: bool) {
+        // Most pointer-ups are not a dynamic-detail stroke. Check that
+        // before asking for the active piece: an empty scene has none,
+        // and Redo of an import into one still runs pointer_up.
+        if !matches!(self.drag, Drag::Stroke { dyn_topo: Some(_), .. }) {
+            return;
+        }
         let center = self.symmetry_center();
         let transforms = self.symmetry.transforms();
         let max_triangles = self.max_triangles;
@@ -4439,6 +4463,44 @@ impl Editor {
         }
     }
 
+    /// Several files dropped on the window, or handed over by the system
+    /// together. One mesh file opens as before. Several mesh files are
+    /// imported as pieces of the current project, in one undo step. A
+    /// project, add-on or link manifest still opens on its own.
+    pub(crate) fn open_dropped(&mut self, paths: &[PathBuf]) {
+        self.show_welcome = false;
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() == 1 {
+            self.open(&paths[0]);
+            return;
+        }
+        let mut meshes = Vec::new();
+        for path in paths {
+            if opens_as_document(path) {
+                self.open(path);
+            } else {
+                meshes.push(path.clone());
+            }
+        }
+        if meshes.is_empty() {
+            return;
+        }
+        // Opening a project with unsaved work asks first. Importing into
+        // the scene that question is about to replace would throw the
+        // meshes away, so wait until that answer is in.
+        if self.pending.is_some() {
+            let n = meshes.len();
+            self.status = format!(
+                "{n} dropped mesh file{} not imported yet: answer the save question first",
+                if n == 1 { " was" } else { "s were" }
+            );
+            return;
+        }
+        self.import_paths(&meshes);
+    }
+
     /// Put `path` at the top of the recent-files list.
     pub fn remember_recent(&mut self, path: &Path) {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -4457,48 +4519,156 @@ impl Editor {
         }
     }
 
-    /// Import a mesh file. Each object in it becomes its own piece (one
-    /// undo step for all of them).
+    /// Import one mesh file. Each object in it becomes its own piece.
+    /// Several files go through [`Self::import_paths`].
     pub fn import(&mut self, path: &Path) {
-        match oxy_io::import_pieces(path) {
-            Ok(parts) => {
-                self.pointer_up();
-                let scene_before = self.scene.bounds();
-                let tris: usize = parts.iter().map(|(_, m)| m.triangle_count()).sum();
-                let n = parts.len();
-                let mut steps = Vec::with_capacity(n);
-                for (name, mesh) in parts {
-                    let index = self.scene.pieces.len();
-                    let name = self.scene.unique_name(&name);
-                    let mut piece = Piece::new(name, mesh);
-                    ensure_symmetry_center(&mut piece);
-                    self.scene.pieces.push(piece);
-                    steps.push(Step::Inserted { index });
-                }
-                // Make the first imported piece active.
-                self.scene.set_active(self.scene.pieces.len() - n);
-                self.history.record_compound("Import", steps);
-                let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
-                self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
-                let first = self.scene.pieces.len() - n;
-                let size = |b: oxy_mesh::Aabb| (b.max - b.min).max_element();
-                let imported =
-                    self.scene.pieces[first..].iter().fold(oxy_mesh::Aabb::EMPTY, |a, p| a.union(&p.mesh.bounds()));
-                let factor = self.import_scale.or_else(|| import_unit_scale(size(imported), size(scene_before)));
-                if let Some(factor) = factor {
-                    self.import_scale = Some(factor);
-                    self.scale_pieces(first, factor);
-                    self.status = format!(
-                        "Imported {} ({tris} triangles{pieces}), scaled by {factor} to match the scene: its file uses other units. Undo once to keep its original size.",
-                        path.display()
-                    );
-                }
-                self.camera.frame(self.scene.bounds());
-                self.protect_path(path);
-                self.remember_recent(path);
-            }
-            Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
+        self.import_paths(&[path.to_path_buf()]);
+    }
+
+    /// Import mesh files as pieces of the current project.
+    ///
+    /// Each object in each file becomes its own piece. Every file that
+    /// reads is one undo step together. A file that fails is skipped, and
+    /// the status line names it. Native open panels don't promise the
+    /// order the files were clicked (Windows' item array is unspecified;
+    /// the macOS panel and the Linux portal only promise a list), so the
+    /// files are taken in case-insensitive name order.
+    ///
+    /// A batch whose overall size is far from the scene is fitted with one
+    /// scale factor, the same rule as a single file, so a small part stays
+    /// in proportion to a large one. Fitting is a second undo step covering
+    /// the whole batch: one Undo restores the sizes from the files, and the
+    /// next removes every piece the batch added.
+    ///
+    /// Files that add up to [`IMPORT_BACKGROUND_BYTES`] or more are read on
+    /// the worker the status bar already shows for a remesh.
+    pub(crate) fn import_paths(&mut self, paths: &[PathBuf]) {
+        let paths = order_import_paths(paths);
+        if paths.is_empty() {
+            return;
         }
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        if import_runs_on_worker(&paths) {
+            self.start_import_job(paths);
+        } else {
+            self.finish_import(read_imports(&paths));
+        }
+    }
+
+    /// Read `paths` off the UI thread and add the pieces when the read ends.
+    fn start_import_job(&mut self, paths: Vec<PathBuf>) {
+        self.release_pointer();
+        let n = paths.len();
+        let label = if n == 1 {
+            let name = paths[0]
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| paths[0].display().to_string());
+            format!("Importing {name}")
+        } else {
+            format!("Importing {n} files")
+        };
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("oxy-import".into())
+            .spawn(move || {
+                let _ = tx.send(Ok(JobResult::Imported(read_imports(&paths))));
+            })
+            .expect("spawn worker thread");
+        let target = self.scene.pieces.get(self.scene.active_index()).map(|p| p.id).unwrap_or(0);
+        self.status = format!("{label}…");
+        self.job = Some(Job {
+            label,
+            started: Instant::now(),
+            target,
+            consumed: Vec::new(),
+            holds_levels: false,
+            undo_prefix: String::new(),
+            rx,
+        });
+    }
+
+    /// Add the pieces from a finished read. Returns how many undo steps
+    /// were recorded (the import, and the fit when the batch was scaled).
+    fn finish_import(&mut self, read: ImportRead) -> usize {
+        let ImportRead { loaded, failed } = read;
+        if loaded.is_empty() {
+            self.status = if failed.len() == 1 {
+                format!("Could not import {}: {}", failed[0].0.display(), failed[0].1)
+            } else if failed.is_empty() {
+                "Nothing to import".into()
+            } else {
+                format!("Could not import any file: {}", format_import_failures(&failed))
+            };
+            return 0;
+        }
+        self.release_pointer();
+        // The scene as it is now, before the new pieces, so the scale
+        // compares the batch with what was already here. An empty scene
+        // has no size to compare with, and the files stay as they are.
+        let scene_size = aabb_span(self.scene.bounds());
+        let before = self.history.revision();
+        let file_count = loaded.len();
+        let mut only_path = None;
+        let mut tris = 0usize;
+        let mut piece_count = 0usize;
+        let first = self.scene.pieces.len();
+        let mut steps = Vec::new();
+        for LoadedImport { path, parts } in loaded {
+            if file_count == 1 {
+                only_path = Some(path.clone());
+            }
+            self.protect_path(&path);
+            self.remember_recent(&path);
+            for (name, mesh) in parts {
+                tris += mesh.triangle_count();
+                piece_count += 1;
+                let index = self.scene.pieces.len();
+                let name = self.scene.unique_name(&name);
+                let mut piece = Piece::new(name, mesh);
+                ensure_symmetry_center(&mut piece);
+                self.scene.pieces.push(piece);
+                steps.push(Step::Inserted { index });
+            }
+        }
+        if steps.is_empty() {
+            self.status = format!("Could not import any file: {}", format_import_failures(&failed));
+            return 0;
+        }
+        // The first imported piece becomes the active one.
+        self.scene.set_active(first);
+        // Every file in the batch is one undo step. Fitting, when it
+        // happens, is a second step covering those same pieces, so one
+        // Undo puts the whole batch back at the size in the files.
+        self.history.record_compound("Import", steps);
+        let imported = self.scene.pieces[first..].iter().fold(oxy_mesh::Aabb::EMPTY, |a, p| a.union(&p.mesh.bounds()));
+        // One factor for the whole batch, from the longest side of
+        // everything just imported (the same measure as a single file).
+        // Scaling each file on its own would shrink a large mesh and
+        // leave a small part from the same drop at full size, so the two
+        // would no longer fit together. A factor already chosen for this
+        // project still wins, so a later import matches the first.
+        let factor = self.import_scale.or_else(|| import_unit_scale(aabb_span(imported), scene_size));
+        if let Some(factor) = factor {
+            self.import_scale = Some(factor);
+            self.scale_pieces(first, factor);
+        }
+        self.camera.frame(self.scene.bounds());
+        self.status = import_status(file_count, only_path.as_deref(), tris, piece_count, &failed, factor);
+        (self.history.revision().wrapping_sub(before)) as usize
+    }
+
+    /// End a drag before the document changes. `pointer_up` tightens the
+    /// active piece's bounds, which an empty scene does not have.
+    fn release_pointer(&mut self) {
+        if self.scene.pieces.is_empty() {
+            self.drag = Drag::None;
+            return;
+        }
+        self.pointer_up();
     }
 
     /// Scale pieces `first..` about the origin by `factor`, as one undo step
@@ -5940,8 +6110,10 @@ impl Editor {
     /// Whether a running background job is rebuilding the active piece, so
     /// edits to it must wait (they would be overwritten by the result).
     pub fn job_blocks_active(&self) -> bool {
-        let Some(id) = self.scene.try_active().map(|p| p.id) else { return false };
-        self.job.as_ref().is_some_and(|j| j.target == id || j.consumed.contains(&id))
+        let Some(job) = &self.job else { return false };
+        // An import into an empty scene has nothing active to sculpt until it lands.
+        let Some(active) = self.scene.try_active() else { return true };
+        job.target == active.id || job.consumed.contains(&active.id)
     }
 
     /// Add a subdivision level on top and switch to it.
@@ -6205,7 +6377,15 @@ impl Editor {
             })
             .expect("spawn worker thread");
         self.status = format!("{label}…");
-        self.job = Some(Job { label, started: Instant::now(), target, consumed, holds_levels: false, rx });
+        self.job = Some(Job {
+            label,
+            started: Instant::now(),
+            target,
+            consumed,
+            holds_levels: false,
+            undo_prefix: String::new(),
+            rx,
+        });
     }
 
     /// Voxel-remesh the active piece.
@@ -6805,6 +6985,13 @@ impl Editor {
                 self.scene.set_active(target_index);
                 self.history.record_compound(job.label.clone(), steps);
                 self.status = format!("{}: {tris} triangles in {secs:.1} s", job.label);
+            }
+            Ok(JobResult::Imported(read)) => {
+                let prefix = job.undo_prefix.clone();
+                let n = self.finish_import(read);
+                if !prefix.is_empty() && n > 0 {
+                    self.history.prefix_recent_undo(&prefix, n);
+                }
             }
             Err(e) => self.status = format!("{} failed: {e}", job.label),
         }
@@ -7953,6 +8140,98 @@ fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, sid
         })
         .collect();
     bands.into_iter().flatten().map(|z| z.is_finite().then_some(z)).collect()
+}
+
+/// Imports whose files add up to this many bytes or more are read off the
+/// UI thread, on the same job the status bar already shows. Smaller ones
+/// finish inline, so a couple of small files don't flash a progress line.
+const IMPORT_BACKGROUND_BYTES: u64 = 1024 * 1024;
+
+fn import_runs_on_worker(paths: &[PathBuf]) -> bool {
+    let bytes = paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
+    bytes >= IMPORT_BACKGROUND_BYTES
+}
+
+/// Case-insensitive file name, then the full path. Native file dialogs
+/// and drag-and-drop lists do not promise click order, so a batch is
+/// imported in the order a file list sorted by name would show.
+fn order_import_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut paths = paths.to_vec();
+    let key = |p: &Path| {
+        p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_else(|| p.to_string_lossy().to_lowercase())
+    };
+    paths.sort_by(|a, b| key(a).cmp(&key(b)).then_with(|| a.cmp(b)));
+    paths
+}
+
+fn read_imports(paths: &[PathBuf]) -> ImportRead {
+    let mut loaded = Vec::new();
+    let mut failed = Vec::new();
+    for path in paths {
+        match oxy_io::import_pieces(path) {
+            Ok(parts) if !parts.is_empty() => loaded.push(LoadedImport { path: path.clone(), parts }),
+            Ok(_) => failed.push((path.clone(), "contains no pieces".into())),
+            Err(e) => failed.push((path.clone(), e.to_string())),
+        }
+    }
+    ImportRead { loaded, failed }
+}
+
+fn format_import_failures(failed: &[(PathBuf, String)]) -> String {
+    failed
+        .iter()
+        .map(|(path, err)| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            format!("{name} ({err})")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn import_status(
+    files: usize,
+    only_path: Option<&Path>,
+    tris: usize,
+    pieces: usize,
+    failed: &[(PathBuf, String)],
+    factor: Option<f32>,
+) -> String {
+    let piece_note = if pieces == 1 { String::new() } else { format!(", {pieces} pieces") };
+    let what = if files == 1 {
+        only_path.map(|p| p.display().to_string()).unwrap_or_else(|| "1 file".into())
+    } else {
+        format!("{files} files")
+    };
+    let mut status = match factor {
+        Some(factor) if files == 1 => format!(
+            "Imported {what} ({tris} triangles{piece_note}), scaled by {factor} to match the scene: its file uses other units. Undo once to keep its original size."
+        ),
+        Some(factor) => format!(
+            "Imported {what} ({tris} triangles{piece_note}), scaled by {factor} to match the scene. Every file in the batch uses that one factor, taken from the batch's overall size (or the factor already chosen for this project), so the files keep their sizes relative to each other. Undo once to keep the original sizes."
+        ),
+        None => format!("Imported {what} ({tris} triangles{piece_note})"),
+    };
+    if !failed.is_empty() {
+        status.push_str(". Could not read ");
+        status.push_str(&format_import_failures(failed));
+    }
+    status
+}
+
+/// Longest side of a box, or 0 when it is empty (an empty scene, or a
+/// mesh with no positions).
+fn aabb_span(b: oxy_mesh::Aabb) -> f32 {
+    if b.is_empty() { 0.0 } else { (b.max - b.min).max_element() }
+}
+
+/// A project, add-on or link manifest, which a drop opens rather than
+/// imports as mesh pieces.
+fn opens_as_document(path: &Path) -> bool {
+    let ext = |e: &str| path.extension().is_some_and(|x| x.eq_ignore_ascii_case(e));
+    ext(format::EXTENSION) || ext(oxy_plugin::addon::EXTENSION) || crate::bridge::is_manifest(path)
 }
 
 pub(crate) fn import_unit_scale(imported: f32, scene: f32) -> Option<f32> {
@@ -12881,6 +13160,183 @@ mod tests {
         // A new document forgets the factor.
         e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
         assert_eq!(e.import_scale, None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn tri_obj(object: &str, origin: i32, span: i32) -> String {
+        format!("o {object}\nv {origin} 0 0\nv {} 0 0\nv {origin} {span} 0\nf 1 2 3\n", origin + span)
+    }
+
+    fn import_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("oxy-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn import_paths_are_sorted_by_name_because_dialogs_do_not_promise_click_order() {
+        let paths = vec![PathBuf::from("/tmp/Zed.OBJ"), PathBuf::from("/tmp/aye.obj"), PathBuf::from("/tmp/Mid.obj")];
+        let names: Vec<_> =
+            order_import_paths(&paths).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["aye.obj", "Mid.obj", "Zed.OBJ"]);
+        let same = vec![PathBuf::from("/b/part.obj"), PathBuf::from("/a/part.obj")];
+        assert_eq!(order_import_paths(&same)[0], PathBuf::from("/a/part.obj"));
+    }
+
+    #[test]
+    fn importing_several_files_adds_every_piece_in_name_order_as_one_undo() {
+        let dir = import_dir("import-many");
+        let z = dir.join("z.obj");
+        let a = dir.join("a.obj");
+        let m = dir.join("m.obj");
+        std::fs::write(&z, tri_obj("Zed", 0, 1)).unwrap();
+        std::fs::write(&a, tri_obj("Aye", 2, 1)).unwrap();
+        std::fs::write(&m, tri_obj("Mid", 4, 1)).unwrap();
+        let mut e = editor();
+        e.show_welcome = true;
+        // Passed in click order that is not name order. The dialog and a
+        // drop both go through import_paths, which sorts by name.
+        e.import_paths(&[z.clone(), a.clone(), m.clone()]);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Mid", "Zed"]);
+        assert_eq!(e.scene.active().name, "Aye", "the first file in name order is active");
+        assert!(e.status.contains("3 files"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "one undo removes every file in the batch");
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 4);
+        // A drop of the same files is the same batch, and closes Home.
+        e.undo();
+        e.show_welcome = true;
+        e.open_dropped(&[z, m, a]);
+        assert!(!e.show_welcome);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Mid", "Zed"]);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_bad_file_among_good_ones_is_skipped_and_the_rest_are_one_undo() {
+        let dir = import_dir("import-bad");
+        let a = dir.join("a.obj");
+        let bad = dir.join("bad.obj");
+        let z = dir.join("z.obj");
+        std::fs::write(&a, tri_obj("Aye", 0, 1)).unwrap();
+        std::fs::write(&bad, "this is not a mesh\n").unwrap();
+        std::fs::write(&z, tri_obj("Zed", 3, 1)).unwrap();
+        let mut e = editor();
+        e.import_paths(&[z, bad, a]);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Zed"]);
+        assert!(e.status.contains("bad.obj"), "{}", e.status);
+        assert!(e.status.starts_with("Imported"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_batch_is_fitted_with_one_factor_so_relative_sizes_stay() {
+        let dir = import_dir("import-batch-scale");
+        // 5 units on its own is within 8× of the 2-unit sphere, so it would
+        // not be scaled. 60 units would. Together they must share one factor
+        // from the batch's overall size, or the eye would stay five times
+        // too big next to the head.
+        let eye = dir.join("eye.obj");
+        let head = dir.join("head.obj");
+        std::fs::write(&eye, tri_obj("Eye", 10, 5)).unwrap();
+        std::fs::write(&head, tri_obj("Head", 0, 60)).unwrap();
+        let size = |e: &Editor, i: usize| {
+            let b = e.scene.pieces[i].mesh.bounds();
+            (b.max - b.min).max_element()
+        };
+        let mut e = editor();
+        e.import_paths(&[head, eye]);
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!((size(&e, 1) - 0.5).abs() < 1e-4, "eye scaled by the batch factor: {}", size(&e, 1));
+        assert!((size(&e, 2) - 6.0).abs() < 1e-4, "head scaled by the same factor: {}", size(&e, 2));
+        let eye_min = e.scene.pieces[1].mesh.bounds().min;
+        // The triangle sits on y = 0, x = 10..15. Scaling about the origin
+        // by 0.1 puts that corner at x = 1, not a translation of the piece.
+        assert!((eye_min - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-3, "scaled about the origin: {eye_min:?}");
+        assert!(e.status.contains("scaled by 0.1"), "{}", e.status);
+        assert!(e.status.contains("relative"), "{}", e.status);
+        assert_eq!(e.import_scale, Some(0.1));
+        let labels: Vec<_> = e.history.undo_labels().collect();
+        assert_eq!(labels, ["Import", "Fit import to scene"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!((size(&e, 1) - 5.0).abs() < 1e-3, "one undo restores the whole batch: {}", size(&e, 1));
+        assert!((size(&e, 2) - 60.0).abs() < 1e-3, "head restored with it: {}", size(&e, 2));
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "the next undo removes every file");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn importing_into_an_empty_scene_works_and_undo_clears_it() {
+        let dir = import_dir("import-empty");
+        let a = dir.join("a.obj");
+        let z = dir.join("z.obj");
+        std::fs::write(&a, tri_obj("Aye", 0, 1)).unwrap();
+        std::fs::write(&z, tri_obj("Zed", 2, 1)).unwrap();
+        let mut e = editor();
+        e.scene.pieces.clear();
+        e.import_paths(&[z.clone(), a.clone()]);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.pieces[0].name, "Aye");
+        assert_eq!(e.scene.pieces[1].name, "Zed");
+        assert!(!e.status.contains("scaled"), "an empty scene has no size to fit to: {}", e.status);
+        e.undo();
+        assert!(e.scene.pieces.is_empty(), "undo returns to the empty scene");
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        // A single huge file into an empty scene is not fitted either.
+        e.scene.pieces.clear();
+        e.history.clear();
+        e.import_scale = None;
+        let huge = dir.join("huge.obj");
+        std::fs::write(&huge, tri_obj("Huge", 0, 60)).unwrap();
+        e.import(&huge);
+        assert_eq!(e.scene.pieces.len(), 1);
+        let b = e.scene.pieces[0].mesh.bounds();
+        assert!(((b.max - b.min).max_element() - 60.0).abs() < 1e-3, "kept the file's size");
+        assert!(e.import_scale.is_none());
+        e.undo();
+        assert!(e.scene.pieces.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_large_import_runs_as_a_background_job_and_undoes_as_one_step() {
+        let dir = import_dir("import-job");
+        let mut big = String::from("o Big\n# ");
+        big.push_str(&"a".repeat(IMPORT_BACKGROUND_BYTES as usize));
+        big.push_str("\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        let big_path = dir.join("big.obj");
+        std::fs::write(&big_path, big).unwrap();
+        let small = dir.join("small.obj");
+        std::fs::write(&small, tri_obj("Small", 2, 1)).unwrap();
+        let bad = dir.join("bad.obj");
+        std::fs::write(&bad, "nope\n").unwrap();
+        let mut e = editor();
+        e.import_paths(&[small, big_path, bad]);
+        assert!(e.job.is_some(), "the read is still running, or waiting to be applied");
+        assert!(e.job.as_ref().unwrap().label.contains("Importing"), "{}", e.job.as_ref().unwrap().label);
+        assert_eq!(e.scene.pieces.len(), 1, "nothing is added until the job finishes");
+        wait_job(&mut e);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Big", "Small"]);
+        assert!(e.status.contains("bad.obj"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
         std::fs::remove_dir_all(dir).ok();
     }
 

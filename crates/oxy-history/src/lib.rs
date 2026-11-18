@@ -211,7 +211,9 @@ impl Change {
                     Some(id)
                 }
                 None => {
-                    // Removing the last piece is allowed: the scene can be empty.
+                    // Undo of an insert removes that piece, including when it
+                    // is the last one, so the scene can be empty. Deleting
+                    // the last piece from the Pieces panel is still refused.
                     if *index >= scene.pieces.len() {
                         return None;
                     }
@@ -982,18 +984,16 @@ mod tests {
     }
 
     #[test]
-    fn undoing_the_only_inserted_piece_leaves_an_empty_scene() {
+    fn undoing_the_only_insert_leaves_the_scene_empty() {
         let mut s = Scene::empty();
-        s.pieces.push(Piece::new("Cube", primitives::cube(2, 1.0)));
-        s.set_active(0);
+        s.pieces.push(Piece::new("Imported", primitives::icosphere(1, 1.0)));
         let mut h = History::default();
-        h.record("Add cube", Step::Inserted { index: 0 });
-        assert_eq!(s.pieces.len(), 1);
-        assert_eq!(h.undo(&mut s).as_deref(), Some("Add cube"));
-        assert!(s.pieces.is_empty());
+        h.record("Import", Step::Inserted { index: 0 });
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Import"));
+        assert!(s.pieces.is_empty(), "an import into an empty scene undoes back to empty");
         assert!(s.try_active().is_none());
-        assert_eq!(h.redo(&mut s).as_deref(), Some("Add cube"));
+        assert_eq!(h.redo(&mut s).as_deref(), Some("Import"));
         assert_eq!(s.pieces.len(), 1);
-        assert_eq!(s.active().name, "Cube");
+        assert_eq!(s.active().name, "Imported");
     }
 }
