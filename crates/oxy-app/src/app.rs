@@ -106,12 +106,15 @@ pub struct App {
     dialog_rx: std::sync::mpsc::Receiver<DialogReply>,
     dialog_tx: std::sync::mpsc::Sender<DialogReply>,
     dialog_active: bool,
+    /// Files from one drop. winit reports each path as its own event;
+    /// they are imported together once the event loop is idle.
+    pending_drops: Vec<PathBuf>,
 }
 
 #[derive(Debug)]
 enum DialogReply {
     Open(Option<PathBuf>),
-    Import(Option<PathBuf>),
+    Import(Option<Vec<PathBuf>>),
     Save { path: Option<PathBuf>, and_continue: bool },
     SaveAs(Option<PathBuf>),
     LoadMatcap(Option<PathBuf>),
@@ -243,6 +246,7 @@ impl App {
             dialog_rx,
             dialog_tx,
             dialog_active: false,
+            pending_drops: Vec::new(),
         }
     }
 
@@ -951,6 +955,25 @@ impl App {
         });
     }
 
+    /// Several files from one dialog. `pick_files` is rfd's multi-select,
+    /// so Shift-click and Ctrl/Cmd-click work in the native panel.
+    fn spawn_files<F>(&mut self, future: F, map: impl FnOnce(Option<Vec<PathBuf>>) -> DialogReply + Send + 'static)
+    where
+        F: std::future::Future<Output = Option<Vec<rfd::FileHandle>>> + Send + 'static,
+    {
+        self.dialog_active = true;
+        let tx = self.dialog_tx.clone();
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let handles = pollster::block_on(future);
+            let paths = handles.map(|hs| hs.into_iter().map(|h| h.path().to_path_buf()).collect());
+            let _ = tx.send(map(paths));
+            if let Some(proxy) = proxy {
+                let _ = proxy.send_event(());
+            }
+        });
+    }
+
     fn run_action(&mut self, action: UiAction) {
         let ed = &mut self.editor;
         match action {
@@ -1038,7 +1061,8 @@ impl App {
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
                 }
-                self.spawn_dialog(dialog.pick_file(), DialogReply::Import);
+                dialog = dialog.set_title("Import meshes");
+                self.spawn_files(dialog.pick_files(), DialogReply::Import);
             }
             UiAction::LoadMatcap => {
                 if self.dialog_active {
@@ -1185,8 +1209,8 @@ impl App {
                 DialogReply::Open(Some(p)) => {
                     self.editor.open(&p);
                 }
-                DialogReply::Import(Some(p)) => {
-                    self.editor.import(&p);
+                DialogReply::Import(Some(paths)) if !paths.is_empty() => {
+                    self.editor.import_paths(&paths);
                 }
                 DialogReply::Save { path: Some(p), and_continue } => {
                     let p = if p.extension().is_none() { p.with_extension(oxy_doc::format::EXTENSION) } else { p };
@@ -1283,6 +1307,23 @@ impl App {
             if let Some(g) = &self.gfx {
                 g.window.request_redraw();
             }
+        }
+    }
+
+    /// Import or open every file queued from the current drop.
+    fn flush_dropped_files(&mut self) {
+        if self.pending_drops.is_empty() {
+            return;
+        }
+        let paths = std::mem::take(&mut self.pending_drops);
+        if paths.len() == 1 {
+            log::info!("opening {} (dropped or opened by the system)", paths[0].display());
+        } else {
+            log::info!("importing {} dropped files", paths.len());
+        }
+        self.editor.open_dropped(&paths);
+        if let Some(g) = &self.gfx {
+            g.window.request_redraw();
         }
     }
 
@@ -1470,6 +1511,10 @@ impl ApplicationHandler for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        // A drop of several files arrives as one DroppedFile event per
+        // path, in a single burst. Import them together once that burst
+        // has been delivered, instead of one undo step per file.
+        self.flush_dropped_files();
         self.sync_agent();
         self.poll_agent();
         self.poll_plugin();
@@ -1601,9 +1646,11 @@ impl ApplicationHandler for App {
             }
             // A file dropped on the window, or (macOS) one the system asked
             // OxyBrush to open: a double-click in Finder, Open With, the Dock.
+            // Several files in one drop are queued and imported together
+            // when the event loop goes idle (`flush_dropped_files`).
             WindowEvent::DroppedFile(path) => {
-                log::info!("opening {} (dropped or opened by the system)", path.display());
-                self.editor.open(path);
+                log::info!("queued {} (dropped or opened by the system)", path.display());
+                self.pending_drops.push(path.clone());
                 redraw = true;
             }
             WindowEvent::Resized(_) => {

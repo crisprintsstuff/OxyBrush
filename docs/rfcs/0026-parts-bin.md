@@ -20,8 +20,9 @@ and the thumbnail. It does not add a second file format or a second way
 to re-sculpt.
 
 A part is not an inserted mesh: it has no vertices, topology or
-subdivision stack of its own. It is sculpted from strokes on the
-existing surface, not separate geometry joined to the piece.
+subdivision stack of its own. An ear or arm made this way is sculpted
+from strokes on the existing surface; it is not separate geometry joined
+to the piece.
 
 ## Why
 
@@ -62,20 +63,15 @@ Use these as they stand:
 The following four amendments to RFC 0025 were confirmed by the owner on
 2026-11-18 and are recorded in Decisions below.
 
-1. **Where the library is shown.** RFC 0025 puts details in a Details
-   section of the Strokes window. This RFC shows that same library as
-   the Parts Bin strip. The Strokes window keeps **Save as part…** and
-   lists the placed strokes as a group. There is one library, not a
-   Details list and a bin.
-2. **Who chooses the mirror.** RFC 0025 stores one side, and the
-   target's Mirror X/Y/Z decides whether placement doubles it. This RFC
-   still stores one side. The drop asks **Place one** or **Mirror
-   pair**. The piece's Mirror toggles only supply the default axis.
-3. **When a place is committed.** RFC 0025 commits on Accept, after
-   move, turn and scale handles. This RFC commits on the drop, as one
-   undo step, and leaves move, turn and scale available afterwards.
-   The part has to stay editable once it is on the model. The handles
-   are the same ones.
+1. **Where the library is shown.** One shared library is shown as the
+   Parts Bin strip, not a separate Details list. The Strokes window keeps
+   **Save as part…** and lists the placed strokes as a group.
+2. **Who chooses the mirror.** The file stores one side. The drop asks
+   **Place one** or **Mirror pair**; the piece's Mirror toggles only
+   supply the default axis.
+3. **When a place is committed.** The drop commits as one undo step,
+   with move, turn and scale available afterwards, rather than a modal
+   Accept that ends placement.
 4. **A mirrored copy's recipe.** Mirror copy today stores no recipe
    (`OXNR` tag 2): Edit… tells you to edit the original. A mirrored
    **part** stores a recipe on both sides, so both stay editable, and
@@ -229,7 +225,9 @@ make the two sides different; saving back does not combine them. The
 source side's remaining recipes are saved, including their brush
 settings, but living-stroke and group fade multipliers are not part of
 the recipe file. If either multiplier differs from 100%, the
-confirmation warns that the fade will not be saved.
+confirmation warns that the fade will not be saved. Deleting a
+source-side stroke is intentional and omits that recipe; a missing
+recipe due to baking is not treated as an intentional deletion.
 
 Save in the source placement's anchor frame, preserving its orientation
 rather than reflecting it to the positive axis. Asymmetric targets can
@@ -811,6 +809,9 @@ GPU dependency.
 - People will expect the bin to update when they edit the placed
   part. The confirm on **Save back to bin** is there so it never
   happens quietly. The risk is that the command is hard to find.
+- Resolution recommendations are estimates, not a way to recover fine
+  detail on a coarse target. Switching levels also bakes living strokes;
+  the warning must come before the user commits to the switch.
 - The two sides of a linked pair can sit at different strengths,
   while **Edit…** still changes both. That follows the decision that
   fade and delete are per side. A later edit updates the faint side's
@@ -868,6 +869,14 @@ GPU dependency.
 
 The owner decided these on 2026-11-18.
 
+- **One library.** Show it as the Parts Bin strip, not a separate
+  Details section in the Strokes window.
+- **Mirror choice on drop.** Keep one side in the file; ask whether to
+  place one or a mirrored pair. Mirror X/Y/Z supplies the default axis.
+- **Commit on drop.** Record one undo step and keep move, turn and
+  scale available afterward.
+- **Recipes on both sides.** A mirrored part has linked recipes on both
+  sides; ordinary Mirror copies remain unchanged.
 - **Default scale follows the brush.** The part's reference radius,
   the first saved stroke's brush radius, is drawn at the current
   brush's world radius. Other strokes scale by the same factor.

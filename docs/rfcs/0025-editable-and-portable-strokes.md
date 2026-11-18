@@ -1,6 +1,8 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: accepted (decisions by the maintainer, 2026-11-16). Phases 1 and 2 are built (recipes, then Edit settings). Phases 3–6 are not.
+Status: accepted (decisions by the maintainer, 2026-11-16; Parts Bin
+amendments confirmed 2026-11-18). Phases 1 and 2 are built (recipes,
+then Edit settings). Phases 3–6 are not.
 
 ## Summary
 
@@ -46,15 +48,18 @@ other sculpting apps don't offer.
 
 ### Details
 
-- **Save as detail…** on selected strokes or a group asks for a name and
-  adds it to the **Details** list (a section of the Strokes window), with a
-  small picture.
-- **Place:** pick a detail and click a model. A preview is sculpted where
-  you click, following the surface. Drag to move it, and use the handles to
-  turn and scale it. Accept adds its strokes as living strokes, in a group
-  named after the detail, as one undo step. They can then be faded and
-  edited like any strokes.
-- Mirror X/Y/Z places it on the other side too.
+- **Save as part…** on selected strokes or a group asks for a name and
+  adds it to the shared Parts Bin library, shown as a strip with
+  thumbnails. The Strokes window lists the placed strokes as a group;
+  there is no separate Details list.
+- **Place:** drag a part onto the model and choose one copy or a
+  mirrored pair. The committed drop adds its living strokes as a group
+  in one undo step. Move, turn and scale remain available afterward.
+  The piece's Mirror X/Y/Z toggles supply the default axis; they do not
+  decide whether the part is mirrored. Drops on the symmetry plane use
+  the prompt specified in RFC 0026.
+- A mirrored part has a recipe on each side, linked for editing until
+  unlinked. Ordinary Mirror copies of strokes remain unchanged.
 - **Export… / Import…** write and read a detail as a file
   (`.oxydetail`), to share it like a brush preset.
 
@@ -186,25 +191,31 @@ bundled starter details, if any, are made for OxyBrush (CC0).
    pixels, so a capture still matches after save and open.
 2. **Edit settings:** ✅ the Edit… panel, re-sculpting one stroke. Later strokes keep their stored change. A slider previews at a reduced rate and applies the full stroke when the drag ends; a long stroke runs off the UI thread. Esc cancels. A stroke with no recipe says why.
 3. **Edit path:** the path as a curve.
-4. **Details in a project:** Save as detail, place with move, turn and
+4. **Details in a project:** Save as part, place with move, turn and
    scale, mirror.
-5. **Detail files:** export, import, the Details list across projects.
+5. **Detail files:** export, import, the Parts Bin library across projects.
 6. **Later:** geodesic mapping for details that wrap; Replay later
    strokes.
 
 ## Decisions
 
-The maintainer chose the proposed option for each (2026-11-16):
+The maintainer chose these on 2026-11-16, with the Parts Bin amendments
+confirmed on 2026-11-18:
 
 - **Later strokes when one is edited** keep their stored change (the
   additive model, fast), with exact replay as a later, optional action,
   rather than always being replayed.
 - **Recipes** are recorded whenever Living strokes is on (they're small),
   without a separate option.
-- **Details live** in a Details section of the Strokes window, stored in
-  the user's settings folder like presets, plus Export/Import.
-- **Symmetric strokes in a detail:** a detail keeps one side only, and
-  the target's Mirror setting decides whether it's doubled.
+- **Details live** in one shared library shown as the Parts Bin strip,
+  with Export/Import, not a separate Strokes window list.
+- **Symmetric strokes in a detail:** a detail keeps one side only. At
+  drop, the user chooses one copy or a mirrored pair; Mirror X/Y/Z
+  supplies the default axis.
+- **Placement commits on drop** as one undo step, with move, turn and
+  scale still available afterward rather than a modal Accept.
+- **Mirrored parts** keep a recipe for each side and link them for
+  editing. Ordinary Mirror copies of strokes are unchanged.
 
 ## Not included
 
@@ -213,7 +224,6 @@ The maintainer chose the proposed option for each (2026-11-16):
   recipes; a separate RFC).
 - A shared online library of details.
 
-[RFC 0026](0026-parts-bin.md) (draft) proposes the Parts Bin as the way
-phases 4 and 5 are shown: a library strip, a drop onto the model, and a
-placed detail that stays editable. It asks the maintainer to confirm
-four amendments to the decisions above.
+[RFC 0026](0026-parts-bin.md) (draft) specifies the Parts Bin for phases
+4 and 5, including the confirmed amendments above and the remaining open
+design questions.
