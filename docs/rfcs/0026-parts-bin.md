@@ -1,6 +1,8 @@
 # RFC 0026: Parts Bin
 
-Status: Draft.
+Status: Draft. The owner decided scale, per-side fade and delete, refusing
+a drop while dynamic detail is on, and the symmetry-plane prompt
+(2026-11-18). The other questions at the end are still open.
 
 ## Summary
 
@@ -153,23 +155,36 @@ in the same undo step:
   both.
 - **Edit path** mirrors the new path through the plane and re-sculpts
   the partner.
-- **Move on surface** moves the side you grab; the other side stays its
-  mirror. The eyes do not come apart. Dragging the anchor onto the
-  mirror plane stops at the plane, with the on-plane sentence below.
-  Unlink first to move one side across.
+- **Move on surface** moves, turns and scales the part. The other side
+  stays the mirror, so the two sides do not come apart. Ending that
+  move within the symmetry-plane tolerance asks the same prompt as a
+  drop there. Cancel puts the part back where the move started.
 
-**Unlink** clears the link flag and does not move the mesh. The two
-placement records still name each other, and edits, fades and moves no
-longer propagate. Each side keeps its recipes. Undo of unlink restores
-the flag. Nothing links them again on its own. A command to link them
-again is not in these phases.
+Fade and delete of a stroke apply to that side only. The link does
+not copy them. The link covers **Edit…**, **Edit path**, and move,
+turn and scale. It does not cover the strength slider or Delete on a
+stroke row.
 
-The proposal for a single stroke inside a linked group: **Edit…**,
-**Edit path** and **Move on surface** stay linked. Fading or deleting
-one stroke inside the group does too, until you unlink, so one eye
-cannot drift. Fading the group already fades both, because they share
-the group. Whether a single stroke's strength or delete should instead
-affect only that stroke is an open question.
+The Strokes window shows one group, named after the part. While the
+link is on, the group row says Linked. The group's strength, Solo and
+Delete cover both sides, because they act on the whole group. Each
+stroke row has its own strength slider and Delete, and those change
+that stroke only. **Edit…** on a row says: "This change also applies
+to the matching stroke on the other side. Fade and delete do not."
+
+Fading one side to zero hides that side and leaves the other in
+place. The link stays, so a later **Edit…** still updates the hidden
+side's recipe. Deleting the last stroke on one side clears the link,
+and the status line reads "The other side was deleted, so this part
+is no longer linked."
+
+**Unlink** clears the link flag and does not move the mesh. **Edit…**,
+**Edit path**, and **Move on surface** then affect the side you
+change. Fade and delete of a stroke were already per side. The two
+placement records still name each other. The group stays one group,
+so its strength slider still covers every stroke in it. Undo of
+unlink restores the flag. Nothing links them again on its own. A
+command to link them again is not in these phases.
 
 ### The bin entry does not change on its own
 
@@ -213,13 +228,14 @@ a subdivision change (including switching levels), dynamic detail
 rebuilding the mesh, booleans, and the other topology changes in RFC
 0017. The Strokes window uses the note it already shows.
 
-The drop itself must not bake the strokes it just added. Placement is
-refused while dynamic detail is on. If the part's new strokes would
-not fit in the living-strokes memory budget without baking those
-strokes, the drop is refused and the budget is named. The budget pass
-today bakes the oldest strokes until the total fits; a placed part is
-the newest work, and this rule stops that pass from discarding it to
-make the drop fit. See the open questions.
+The drop itself must not bake the strokes it just added. A drop while
+dynamic detail is on is refused, as decided below. If the part's new
+strokes would not fit in the living-strokes memory budget without
+baking those strokes, the drop is refused and the budget is named.
+The budget pass today bakes the oldest strokes until the total fits;
+a placed part is the newest work, and this rule stops that pass from
+discarding it to make the drop fit. Whether to refuse in that budget
+case is still an open question.
 
 ## How it works
 
@@ -313,7 +329,9 @@ preview stays up until you choose.
   lists X, Y and Z, and X is the default.
 
 Hovering **Mirror pair** previews the second side. Choosing either one
-commits. Esc cancels.
+commits. Esc cancels. If the drop is within the symmetry-plane
+tolerance below, this choice is replaced by the on-plane prompt. Esc
+and Cancel there cancel the drop.
 
 The replay, after the preview is reverted:
 
@@ -341,13 +359,42 @@ walk is not specified again here.
 
 ### Scale, twist, and the live preview
 
-**Scale 1** is the recorded size: offsets times the stored radius, and
-the stored brush radii. When a drag starts, the scale is set so the
-first stroke's radius matches the current brush radius
-(`current radius / recorded radius`). The scale handle, a drag away
-from the anchor in the tangent plane, edits that factor. **Original
-size** on the drop choice sets the factor back to 1. Move on surface
-starts from the scale the part was placed at.
+The default scale follows the current brush, not the size recorded in
+the file. The reference radius is the first saved stroke's brush
+radius, and it is the detail's size unit: offsets in the file are
+divided by it. On place that radius is drawn at the brush's current
+world radius `R`:
+
+```text
+scale        = R / reference radius
+world offset = stored offset × R
+new radius   = recorded radius × scale
+```
+
+A stroke that was twice the reference radius lands at twice the
+current brush. The scale handle, a drag away from the anchor in the
+tangent plane, edits the factor after that start. **Original size**
+on the drop choice sets the scale to 1, which is the recorded size.
+It is available, and it is not the default. If the reference radius
+is missing or not positive, the scale is 1. **Move on surface**
+starts from the scale the part was placed at, not from the brush
+again.
+
+**Size: On the model** changes which world radius `R` is. It does not
+turn the default off.
+
+- **On the model** (Brush settings > Size > On the model) stores the
+  brush as a size on the model, in scene units. `R` is that size.
+  Zooming during the drag does not change the part.
+- **On screen** is the default. The brush is a size on screen, and
+  `R` is that size converted to world units at the surface under the
+  pointer, the same conversion a stroke uses. Zooming in makes the
+  brush cover less of the model, so the part gets smaller. The
+  preview uses the world radius at the pointer, and the part tracks
+  the brush while you drag.
+
+The scale written into `PART` is the one at commit. Afterwards the
+part does not keep following the brush.
 
 **Twist** is a rotation around the surface normal. The part's recorded
 starting direction, projected into the tangent plane, maps to the
@@ -383,12 +430,14 @@ same sentence covers a mesh smaller than the part. The scale is never
 changed silently to make it fit.
 
 **Dynamic detail.** Strokes made with it on have no recipe, whether or
-not that stroke rebuilt the mesh, so they cannot be saved (phase 1 and
-2 of RFC 0025). Placing while it is on is refused: "Turn dynamic
-detail off to place a part. Placing has to leave strokes you can edit,
-and dynamic detail rebuilds the triangles." The drop does not turn it
-off for you. Later, turning it on and refining can still bake the
-part, and the existing bake note says so.
+not that stroke rebuilt the mesh, so they cannot be saved. That is
+the phase 1 and 2 rule: dynamic detail changes the triangles, so the
+stroke cannot be edited. A drop while it is on is refused for the
+same reason, and the mesh is unchanged. The status line reads
+"Dynamic detail is on, which changes the triangles, so this part
+can't be placed. Turn it off." The drop does not turn it off for
+you. Later, turning it on and refining can still bake the part, and
+the existing bake note says so.
 
 **Subdivision levels.** The part is replayed on the active level only.
 The drop does not add a level and does not change triangles. If the
@@ -414,22 +463,50 @@ the curvature rules.
 
 Radial symmetry is not a drop choice. The axes are X, Y and Z.
 
-**On the symmetry plane.** The tolerance is the larger of the mean
-edge length at the drop and 1% of the part's extent along the axis.
-If the anchor is within that tolerance of the plane, or the mapped
-samples are not all on one side of it (samples on the plane count as
-the near side), **Mirror pair** is unavailable. The choice is only
-**Place one**, with "The drop is on the mirror plane, so this is
-placed once." Two copies are not stacked.
+**On the symmetry plane.** The footprint is the part's mapped samples
+at the current scale, before this adjustment. Its width along the
+mirror axis is the distance from its lowest sample to its highest
+along that axis. The tolerance is 5% of that width. When the width
+is shorter than the mean edge at the drop, the tolerance is that
+mean edge, so a stamp still counts as on the plane. The drop is on
+the plane when the anchor is within that tolerance of it.
+
+Every such drop asks. The last answer is not reused. The usual
+**Place one** / **Mirror pair** choice is replaced by a prompt at
+the pointer:
+
+```text
+On the mirror plane, X
+[ One centered copy ]
+[ Mirror, halves match ]
+[ Cancel ]
+```
+
+The axis is the one **Mirror pair** would have used. When none or
+several of Mirror X/Y/Z are on, the prompt lists X, Y and Z, with X
+selected. Esc or **Cancel** cancels the drop. The preview comes off,
+the mesh is as it was before the drag, and nothing is recorded.
+
+- **One centered copy** shifts the part along the mirror axis until
+  the midpoint of the footprint lies on the plane, then places it
+  once. Samples may lie on both sides. There is no second side and
+  no link.
+- **Mirror, halves match** shifts the part along the axis until it
+  lies on one side and the sample closest to the plane lies on the
+  plane. The side is the one that already holds more of the
+  footprint, and the positive side when the two are equal. Samples
+  the shift brings across the plane move with the part. That side is
+  then mirrored through the plane as a linked pair. The two halves
+  meet on the plane, and each is the reflection of the other.
 
 ### Undo
 
 | Action | Undo step |
 |---|---|
-| Drop, Place one or Mirror pair | One step, "Place *name*" |
+| Drop: Place one, Mirror pair, One centered copy, or Mirror, halves match | One step, "Place *name*" |
 | Move, turn or scale on the surface | One step, "Move *name*" |
 | Edit…, Edit path, fade, delete, Mirror, Unlink | One step each, as the Strokes window already records |
-| Preview, Esc, a refused drop | None |
+| Preview, Esc, Cancel on the on-plane prompt, a refused drop | None |
 
 The place step snapshots every chunk the replay touches before it
 changes them (`History::touch`), then commits the mesh, the new
@@ -574,14 +651,19 @@ not a second implementation beside them.
    `.oxydetail`. Tests: the library name cannot leave the folder;
    atomic replace leaves no `.tmp` behind; a drop records one undo
    step and a cancel records none; a mirrored drop has recipes on
-   both sides and symmetry off; a drop on the plane has one side; a
-   drop while dynamic detail is on does not change the mesh.
+   both sides and symmetry off; a drop on the plane asks, and Cancel
+   leaves the mesh unchanged; One centered copy puts the footprint
+   midpoint on the plane; Mirror, halves match meets on the plane; a
+   drop while dynamic detail is on does not change the mesh and shows
+   its reason.
 
 3. **After the drop.** Move on surface (move, turn, scale) as one
    re-sculpt and one undo step. The `PART` section round-trips, and a
    reader that skips `PART` still loads `STRK` and `STRI`. Linked
-   edits propagate to the other side in the same undo step; Unlink
-   stops that and keeps both recipes. **Save back to bin** and **Save
+   **Edit…**, **Edit path**, and **Move on surface** propagate to the
+   other side in the same undo step. Fading or deleting one stroke
+   does not. Unlink stops the linked edits and keeps both recipes.
+   **Save back to bin** and **Save
    as new part** write only when asked, and an Edit… test asserts the
    library file is byte-for-byte unchanged. A later non-part stroke
    survives a move as stored. Edit path needs no extra work in this
@@ -636,9 +718,10 @@ GPU dependency.
 - People will expect the bin to update when they edit the placed
   part. The confirm on **Save back to bin** is there so it never
   happens quietly. The risk is that the command is hard to find.
-- A linked fade of one inner stroke may feel sticky. Unlink is the
-  escape, and the open question asks whether that fade should be
-  unlinked by default.
+- The two sides of a linked pair can sit at different strengths,
+  while **Edit…** still changes both. That follows the decision that
+  fade and delete are per side. A later edit updates the faint side's
+  recipe and leaves its strength as it was.
 - An old version skips `PART`. The model looks right, and per-stroke
   Edit… still works where `STRI` is read. Whole-part move and the
   link do not. That is acceptable, and it should be stated in the
@@ -688,6 +771,35 @@ GPU dependency.
   it inside the first drop delays a shippable projection that matches
   the written detail design.
 
+## Decisions
+
+The owner decided these on 2026-11-18.
+
+- **Default scale follows the brush.** The part's reference radius,
+  the first saved stroke's brush radius, is drawn at the current
+  brush's world radius. Other strokes scale by the same factor.
+  **Original size** remains a choice and is not the default.
+  **Size: On the model** selects that world radius: on the model it
+  is the stored scene-unit size and zoom does not change the part; on
+  screen it is the screen size converted at the drop, so zooming in
+  makes the part smaller. See "Scale, twist, and the live preview".
+- **Fade and delete are per side.** On a linked pair, the link covers
+  **Edit…**, **Edit path**, and move, turn and scale. The strength
+  slider and Delete on a stroke row affect that side only. The group
+  row still fades, solos and deletes both sides. The **Edit…** text
+  says the change applies to the other side and that fade and delete
+  do not.
+- **Dynamic detail refuses the drop.** The status line reads "Dynamic
+  detail is on, which changes the triangles, so this part can't be
+  placed. Turn it off." The mesh is unchanged. This is the same rule
+  as phases 1 and 2: those strokes are not editable, and a placed
+  part has to stay editable.
+- **On the symmetry plane, ask every time.** Within 5% of the part's
+  footprint along the mirror axis (or one mean edge, when the
+  footprint is narrower than that), the drop asks **One centered
+  copy** or **Mirror, halves match**. The answer is not remembered.
+  Esc or **Cancel** cancels the drop and records nothing.
+
 ## Open questions
 
 For the maintainer. The proposals above are what the draft specifies
@@ -706,37 +818,26 @@ until these are answered.
 4. **Recipes on both sides.** Confirm the amendment: a mirrored part
    stores a recipe on each side and stays linked, while an ordinary
    Mirror copy still has no recipe.
-5. **Default scale.** Brush-relative (the first stroke matches the
-   current brush), with Original size as a choice, or recorded size
-   as the default?
-6. **Default twist.** The camera's right projected into the tangent
+5. **Default twist.** The camera's right projected into the tangent
    plane, or a stable world axis so the result does not depend on the
    view?
-7. **What the link covers.** Should fading or deleting a single stroke
-   inside a linked pair affect the other side, or only Edit…, Edit
-   path and Move on surface?
-8. **Saving back.** Both **Save back to bin** (with a confirm) and
+6. **Saving back.** Both **Save back to bin** (with a confirm) and
    **Save as new part**, or only Save as new, so the library is
    append-only?
-9. **Dynamic detail.** Refuse the drop while it is on, as written, or
-   turn it off for that replay and say so?
-10. **Which side is saved.** The positive side of the mirror axis
-    (positive X if several axes were on), and radial strokes refused.
-    Is that the half to keep?
-11. **Folder.** The data directory beside brush presets, as written,
-    or the config directory because RFC 0025 said "settings folder"?
-12. **Budget.** Refuse a drop whose own strokes would not fit in the
-    living-strokes budget, rather than baking them immediately?
-13. **Variations.** The other parts in the same category, as written,
+7. **Which side is saved.** The positive side of the mirror axis
+   (positive X if several axes were on), and radial strokes refused.
+   Is that the half to keep?
+8. **Folder.** The data directory beside brush presets, as written,
+   or the config directory because RFC 0025 said "settings folder"?
+9. **Budget.** Refuse a drop whose own strokes would not fit in the
+   living-strokes budget, rather than baking them immediately?
+10. **Variations.** The other parts in the same category, as written,
     or an explicit set you attach to one part?
-14. **Geodesic.** Leave the walk entirely in RFC 0025 phase 6, and
+11. **Geodesic.** Leave the walk entirely in RFC 0025 phase 6, and
     have phase 5 of this RFC only switch parts over to it?
-15. **Either side.** Confirm that, while linked, editing the mirror
+12. **Either side.** Confirm that, while linked, editing the mirror
     side updates the side you dropped, and not only the other way
     around.
-16. **On the plane.** Confirm that a drop on the symmetry plane places
-    a single copy and explains why, including when the mapped samples
-    would fall on both sides.
 
 ## Not included
 
