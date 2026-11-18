@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Blur and sharpen the mask with a click** (as in ZBrush). Ctrl+click on the model blurs the whole mask and Ctrl+Alt+click sharpens it; dragging still paints or unmasks. With nothing masked, a click still paints a dab.
+
 ## [4.0.0-beta.17] - 2026-11-18
 
 ### Added
