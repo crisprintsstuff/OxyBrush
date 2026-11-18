@@ -741,6 +741,15 @@ pub enum Drag {
         hit: oxy_mesh::RayHit,
         ray_dir: Vec3,
     },
+    /// Click with the mask key on the model blurs the whole mask (with the
+    /// invert key too: sharpens it, as in ZBrush); dragging beyond the
+    /// threshold paints the mask (or unmasks) instead.
+    MaskBlurOrPaint {
+        start: Vec2,
+        hit: oxy_mesh::RayHit,
+        ray_dir: Vec3,
+        sharpen: bool,
+    },
     /// Click with Alt on mesh while Gizmo is active snaps pivot;
     /// dragging beyond threshold falls through to carve brush stroke.
     GizmoSnapOrCarve {
@@ -1860,6 +1869,7 @@ impl Editor {
                 | Drag::Select { .. }
                 | Drag::PendingStroke
                 | Drag::GizmoSnapOrMask { .. }
+                | Drag::MaskBlurOrPaint { .. }
                 | Drag::GizmoSnapOrCarve { .. }
         )
     }
@@ -2528,6 +2538,17 @@ impl Editor {
             self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
             return;
         }
+        // Mask key on the model, with something masked: a click blurs the
+        // mask (invert key too: sharpens it), a drag paints it. With nothing
+        // masked a click still paints a dab, as it always did.
+        if m.ctrl
+            && let Some(hit) = active_hit
+            && !self.job_blocks_active()
+            && self.scene.active().mesh.mask.iter().any(|&v| v > 0.0)
+        {
+            self.drag = Drag::MaskBlurOrPaint { start: p, hit, ray_dir: d, sharpen: m.alt };
+            return;
+        }
         // Mask key on empty space. The box gesture blurs on a click; the clear
         // gesture inverts on a click and clears on a drag.
         if m.ctrl && active_hit.is_none() {
@@ -2878,7 +2899,11 @@ impl Editor {
 
     /// A range for the Size slider in world units, from the scene's size.
     pub fn world_radius_range(&self) -> std::ops::RangeInclusive<f32> {
-        let s = self.scene.bounds().extent().length().max(1e-3);
+        let bounds = self.scene.bounds();
+        // With nothing visible (an empty scene) the size comes from the view,
+        // or the range collapses to a sliver and the brush is stuck at it.
+        let size = if bounds.is_empty() { self.camera.distance } else { bounds.extent().length() };
+        let s = size.max(1e-3);
         (s * 0.0005)..=(s * 0.5)
     }
 
@@ -3417,7 +3442,7 @@ impl Editor {
                 true
             }
             Drag::Stroke { .. } => self.stroke_to(pos),
-            Drag::GizmoSnapOrMask { start, hit, ray_dir } => {
+            Drag::GizmoSnapOrMask { start, hit, ray_dir } | Drag::MaskBlurOrPaint { start, hit, ray_dir, .. } => {
                 if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
@@ -3650,6 +3675,13 @@ impl Editor {
             }
             Drag::GizmoSnapOrMask { hit, .. } => {
                 self.snap_gizmo_to_surface(hit.point, hit.normal);
+            }
+            Drag::MaskBlurOrPaint { sharpen, .. } => {
+                if sharpen {
+                    self.edit_mesh_mask("Sharpen mask", Mesh::sharpen_mask);
+                } else {
+                    self.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
+                }
             }
             Drag::GizmoSnapOrCarve { hit, .. } => {
                 self.custom_gizmo_pivot = Some(hit.point);
@@ -5938,6 +5970,12 @@ impl Editor {
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
+        if b.is_empty() {
+            // An empty scene still gets a floor (when it's switched on),
+            // sized to the view and sitting at the origin.
+            let h = self.camera.distance.max(1e-3) * 0.25;
+            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+        }
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
@@ -12942,6 +12980,42 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_click_on_the_model_blurs_the_mask_and_ctrl_alt_click_sharpens_it() {
+        let mut e = editor();
+        e.scene
+            .active_mut()
+            .mesh
+            .mask
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, m)| *m = if i % 2 == 0 { 1.0 } else { 0.0 });
+        let at = Vec2::new(400.0, 300.0);
+        let click = |e: &mut Editor, alt: bool| {
+            e.pointer = Some(at);
+            e.modifiers.ctrl = true;
+            e.modifiers.alt = alt;
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_up();
+            e.modifiers.ctrl = false;
+            e.modifiers.alt = false;
+        };
+        let soft = |e: &Editor| e.scene.active().mesh.mask.iter().filter(|&&m| m > 0.01 && m < 0.99).count();
+        assert_eq!(soft(&e), 0);
+        click(&mut e, false);
+        assert!(soft(&e) > 0, "blur softens the edges: {}", e.status);
+        let blurred = soft(&e);
+        click(&mut e, true);
+        assert!(soft(&e) < blurred, "sharpen firms them up again");
+        e.undo();
+        assert_eq!(soft(&e), blurred);
+
+        // Nothing masked: a click paints a dab instead.
+        let mut e = editor();
+        click(&mut e, false);
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0));
+    }
+
+    #[test]
     fn gizmo_ctrl_click_mesh_snaps_pivot_and_aligns_normal() {
         let mut e = editor();
         e.toggle_gizmo(GizmoMode::Move);
@@ -14556,6 +14630,30 @@ mod tests {
         let names: Vec<String> = e.brush_order.iter().map(|k| k.label().to_lowercase()).collect();
         assert!(names.windows(2).all(|w| w[0] <= w[1]), "{names:?}");
         assert_eq!(e.brush_order.len(), BrushKind::ALL.len());
+    }
+
+    #[test]
+    fn brush_size_works_in_an_empty_scene_with_the_size_on_the_model() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        e.set_radius_on_model(true);
+        e.sync_model_radius();
+        let range = e.world_radius_range();
+        assert!(*range.end() > 0.1, "a usable size range: {range:?}");
+        assert!(e.brush_radius_world <= *range.end() && e.brush_radius_pt > 2.0);
+        let before = e.brush_radius_world;
+        e.adjust_radius(1.25);
+        assert!(e.brush_radius_world > before, "] grows the brush");
+        e.adjust_radius(0.8);
+        e.adjust_radius(0.8);
+        assert!(e.brush_radius_world < before, "[ shrinks it");
+    }
+
+    #[test]
+    fn floor_grid_shows_in_an_empty_scene() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
     }
 
     #[test]
