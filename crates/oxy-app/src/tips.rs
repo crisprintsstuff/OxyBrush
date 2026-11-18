@@ -126,6 +126,7 @@ commands! {
     GroupFromMask => "Group from mask", "Ctrl+W", "Give the masked faces their own face group. With nothing masked, Ctrl+W groups the visible faces instead.";
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
+    HideMasked => "Hide masked", "", "Hide the masked faces, so only the unmasked part stays visible. Show all brings them back.";
     InvertVisibility => "Invert visibility", "", "Swap which faces are hidden.";
     InvertMask => "Invert mask", "Ctrl+Shift+I", "Swap masked and unmasked areas of the visible surface (hidden parts keep their mask). Also Ctrl+click on empty space.";
     FillMask => "Fill mask", "", "Mask the whole visible surface (hidden parts keep their mask). Then unmask where you want to sculpt, or Invert to clear it.";

@@ -12,6 +12,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 - **Blur and sharpen the mask with a click** (as in ZBrush). Ctrl+click on the model blurs the whole mask and Ctrl+Alt+click sharpens it; dragging still paints or unmasks. With nothing masked, a click still paints a dab.
 - **Sort brushes A–Z** in the Arrange menu lists the brush selector alphabetically (#304).
+- **Hide masked** (Visibility menu and the command palette) hides the masked faces (#329).
+- Pressing Alt just before letting go of a mask box or lasso masks everything *outside* it instead (#329).
 
 ## [4.0.0-beta.17] - 2026-11-18
 

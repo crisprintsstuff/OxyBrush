@@ -195,6 +195,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             e.edit_faces("Group by islands", oxy_mesh::Mesh::groups_from_islands)
         }),
         cmd(ed, Cmd::ShowAll, "visibility unhide", |e| e.edit_faces("Show all", oxy_mesh::Mesh::show_all)),
+        cmd(ed, Cmd::HideMasked, "visibility masking", |e| e.edit_faces("Hide masked", oxy_mesh::Mesh::hide_masked)),
         cmd(ed, Cmd::InvertVisibility, "hide show", |e| {
             e.edit_faces("Invert visibility", oxy_mesh::Mesh::invert_visibility)
         }),
