@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.16](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.17](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -15,7 +15,7 @@ in the app.
 
 **Status:** in the app as an option, off by default (Preferences > General, then Layers > Strokes… (right panel)): fade, delete and solo past strokes, keep part of a stroke, group strokes into layers, strokes saved with the project, and Edit… to change a stroke's brush, size, strength, falloff, alpha or spacing and sculpt it again. Next: saving a group of strokes and placing it on another model.
 
-A draft, [RFC 0026](rfcs/0026-parts-bin.md), describes how that library would look. Saved details (a set of eyes, an ear, an arm) sit in a **Parts Bin**: a strip of thumbnails along the bottom of the view. You drag one onto the model and choose a mirrored pair or a single copy. Once it is placed it is a group of strokes, so you can fade it, change it with Edit…, and move it on the surface afterwards. The saved copy in the bin changes only when you ask to save it back. Nothing in that draft is in the app yet.
+The accepted [RFC 0026](rfcs/0026-parts-bin.md) describes how that library would look. Saved details (a set of eyes, an ear, an arm) sit in a **Parts Bin**: a strip of thumbnails along the bottom of the view. You drag one onto the model and choose a mirrored pair or a single copy. Once it is placed it is a group of strokes, so you can fade it, change it with Edit…, and move it on the surface afterwards. The saved copy in the bin changes only when you ask to save it back. Nothing in that RFC is in the app yet.
 
 Today, once a stroke is done it's part of the model. If a wrinkle you made
 twenty minutes ago is too deep, you either undo everything since, or sculpt
@@ -112,6 +112,10 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.17:** empty scenes, batch import, gizmo-axis Poly Edit extrude,
+  masked-area face groups, export type selection, smoother window resizing,
+  updated brush defaults, and fixes for crease symmetry, Kelvin Grab, Poly Edit
+  picks and grouping visible islands.
 - **4.0.0-beta.16:** living strokes remember what was drawn, including
   curves, stamps, lines and a captured alpha, Edit… to sculpt a stroke
   again with a new brush, Raise or Carve, size, strength, falloff, alpha
