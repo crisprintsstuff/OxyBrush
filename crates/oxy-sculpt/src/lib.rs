@@ -1368,9 +1368,13 @@ fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: 
             // Translational Kelvin state with Poisson's ratio nu = 0.45.
             // As nu -> 0.5, deformation is strictly volume-preserving (incompressible).
             let nu = 0.45f32;
-            let b_factor = 1.0 / (2.0 * (1.0 - nu));
-            let c_diag = epsilon / r_eps;
-            let c_outer = b_factor * epsilon / r_eps3;
+            // Paper's grab: u = [(a-b)/r_e + a e^2/(2 r_e^3)] I f + b/r_e^3 r r^T f,
+            // with a = 1 and b = a / (4 (1 - nu)), scaled so the centre moves
+            // exactly by the drag (value at r = 0 is (1.5a - b) / e).
+            let b = 1.0 / (4.0 * (1.0 - nu));
+            let norm = epsilon / (1.5 - b);
+            let c_diag = norm * ((1.0 - b) / r_eps + eps2 / (2.0 * r_eps3));
+            let c_outer = norm * b / r_eps3;
             let outer = Mat3::from_cols(r_vec * r_vec.x, r_vec * r_vec.y, r_vec * r_vec.z);
             (Mat3::IDENTITY * c_diag, outer * c_outer)
         }
