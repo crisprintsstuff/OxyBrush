@@ -6301,6 +6301,7 @@ fn edge_loop_menu(ui: &mut Ui, ed: &mut Editor) {
             ui.close();
         }
         tips::check_plain(ui, &mut ed.edge_loop_both_sides, "Both sides", plain::EDGE_LOOP_BOTH);
+        tips::check_plain(ui, &mut ed.edge_loop_group_masked, "Group the masked area", plain::EDGE_LOOP_GROUP);
         ui.horizontal(|ui| {
             tips::hover(ui.label("Width"), plain::EDGE_LOOP_WIDTH);
             tips::hover(

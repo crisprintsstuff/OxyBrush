@@ -209,7 +209,7 @@ commands! {
     ShrinkMask => "Shrink mask", "", "Pull the mask inward by one ring of vertices.";
     SubdivideOnce => "Subdivide (single mesh)", "", "Smooth-subdivide the mesh once. This removes existing subdivision levels.";
     SubdivideMasked => "Subdivide masked", "", "Split only the masked triangles into four, for more resolution where you need it (a feather, a face) without subdividing the whole piece. Their neighbours are split just enough to keep the surface closed. Smooth on curves the new points with the surface; existing points never move. Removes existing subdivision levels.";
-    EdgeLoopMask => "Edge loop at mask border", "", "Add a loop of quads along the border of the mask: support loops that keep a hard edge crisp when you subdivide or smooth. Both sides puts a loop on each side of the border; Width is how far each loop sits from it, as a share of the faces next to it. The loop gets its own face group. Removes existing subdivision levels.";
+    EdgeLoopMask => "Edge loop at mask border", "", "Add a loop of quads along the border of the mask: support loops that keep a hard edge crisp when you subdivide or smooth. Both sides puts a loop on each side of the border; Width is how far each loop sits from it, as a share of the faces next to it. The loop gets its own face group, and Group the masked area (on by default) gives the triangles inside the mask one too, so that area can be isolated. The outside keeps its groups. Hidden faces are left out. Removes existing subdivision levels.";
     PaintBrush => "Paint brush", "", "Switch to the Paint brush and color the surface without moving it.";
     Back => "Back view", "", "Look at the back of the model.";
     Left => "Left view", "", "Look at the left side of the model.";
@@ -868,6 +868,7 @@ pub mod plain {
     pub const INSTANCE_REMOVE: &str = "Remove these copies. The piece they copied is shown again as an ordinary piece.";
     pub const EDGE_LOOP_BOTH: &str = "On: a loop on each side of the mask border (the crispest edge after subdividing). Off: one loop, inside the masked part.";
     pub const EDGE_LOOP_WIDTH: &str = "How far each loop sits from the mask border, as a share of the faces next to it: small for a tight, sharp edge, larger for a softer one.";
+    pub const EDGE_LOOP_GROUP: &str = "On: the triangles inside the mask get a face group of their own, as well as the loop, so that area can be isolated. The outside keeps its groups, and hidden faces are left out. Off: only the new loop gets a face group.";
     pub const UNITS: &str = "How lengths are shown: millimetres (volumes in cubic centimetres) or inches (cubic inches). Used by the Measure plugin and by plugins that ask.";
     pub const SCENE_UNIT: &str = "How big one scene unit is, in millimetres (25.4 for inches). The same scale as the 3D print window. The starting sphere is 2 units across.";
     pub const SECTION_LAYERS: &str = "Sculpt layers of the active piece (with Living strokes on): pick the layer new strokes go into, fade, hide or delete a whole layer, and open the full stroke list.";

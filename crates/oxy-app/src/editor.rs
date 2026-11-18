@@ -1380,10 +1380,13 @@ pub struct Editor {
     /// The piece the Pieces panel's Boolean row combines with (the last one
     /// picked, while it exists).
     pub boolean_with: Option<u64>,
-    /// Edge loop at mask border: a loop on both sides, and how far from
-    /// the border (share of the neighbouring faces).
+    /// Edge loop at mask border: a loop on both sides, how far from the
+    /// border (share of the neighbouring faces), and whether the masked
+    /// area gets a face group of its own. Kept for the session, like the
+    /// other two.
     pub edge_loop_both_sides: bool,
     pub edge_loop_width: f32,
+    pub edge_loop_group_masked: bool,
     /// The piece the Instances section copies onto the active piece.
     pub instance_pick: Option<u64>,
     /// Edit source (surface instances): the source shown alone.
@@ -1667,6 +1670,7 @@ impl Default for Editor {
             boolean_with: None,
             edge_loop_both_sides: true,
             edge_loop_width: 0.25,
+            edge_loop_group_masked: true,
             instance_pick: None,
             editing_source: None,
             instancer_before: None,
@@ -6002,7 +6006,9 @@ impl Editor {
     /// triangles whose three corners are all at least half masked, so a
     /// face group masked with Ctrl+M gives exactly that group's border),
     /// on both sides with the option on:
-    /// support loops for hard edges. One undo step; removes subdivision
+    /// support loops for hard edges. With Group the masked area, those
+    /// visible triangles also get a new face group (the outside keeps its
+    /// groups; hidden faces stay out). One undo step; removes subdivision
     /// levels, like Subdivide masked.
     pub fn edge_loop_masked(&mut self) {
         let data = self.scene.active().mesh.to_data();
@@ -6020,9 +6026,13 @@ impl Editor {
                 "Nothing masked: mask the part whose edge should be sharp first (Ctrl+M masks a face group)".into();
             return;
         }
-        let Some((out, edges)) =
-            oxy_mesh::topo::edge_loops_at_border(&data, &chosen, self.edge_loop_width, self.edge_loop_both_sides)
-        else {
+        let Some((out, edges)) = oxy_mesh::topo::edge_loops_at_border(
+            &data,
+            &chosen,
+            self.edge_loop_width,
+            self.edge_loop_both_sides,
+            self.edge_loop_group_masked,
+        ) else {
             self.status = "The masked part has no border to put a loop along (everything visible is masked)".into();
             return;
         };
@@ -6036,10 +6046,14 @@ impl Editor {
         }
         let added = out.triangles.len() - data.triangles.len();
         let sides = if self.edge_loop_both_sides { "on both sides of" } else { "inside" };
+        let grouped = if self.edge_loop_group_masked {
+            "the loop and the masked area each in a new face group"
+        } else {
+            "the loop in a new face group"
+        };
         self.replace_active_mesh("Edge loop at mask border", Mesh::from_data(out));
-        self.status = format!(
-            "Added an edge loop {sides} the mask border: {edges} edges, {added} new triangles, in a new face group"
-        );
+        self.status =
+            format!("Added an edge loop {sides} the mask border: {edges} edges, {added} new triangles, {grouped}");
     }
 
     /// Fill every hole (open boundary) in the active piece with a smooth
@@ -13412,13 +13426,178 @@ mod tests {
         assert!(one > before, "{}", e.status);
         assert!(e.status.contains("inside the mask border"), "{}", e.status);
         let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
-        assert_eq!(groups.len(), 2, "the loop is a face group of its own");
+        assert_eq!(groups.len(), 3, "the loop and the masked area are face groups of their own");
+        assert!(e.status.contains("masked area"), "{}", e.status);
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), before, "one undo step");
+        assert!(e.scene.active().mesh.groups().iter().all(|&g| g == 0), "the new groups undo with the loop");
         e.edge_loop_both_sides = true;
         e.edge_loop_masked();
         let both = e.scene.active().mesh.triangle_count();
         assert_eq!(both - before, 2 * (one - before), "a loop on each side");
+    }
+
+    /// Mask vertices above `y` fully and the rest not at all.
+    fn mask_above(e: &mut Editor, y: f32) {
+        let mask: Vec<f32> = e.scene.active().mesh.positions.iter().map(|p| if p.y > y { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+    }
+
+    /// Face groups of the triangles that existed before the loop, in that
+    /// mesh's order, and of the strip the loop appended after them.
+    fn groups_after_loop(e: &Editor, before: usize) -> (Vec<u32>, Vec<u32>) {
+        let mesh = &e.scene.active().mesh;
+        let mut original = vec![None; before];
+        let mut strip = Vec::new();
+        for (i, &src) in mesh.source_triangles().iter().enumerate() {
+            let g = mesh.groups()[i];
+            let src = src as usize;
+            if src < before {
+                assert!(original[src].is_none(), "triangle {src} duplicated");
+                original[src] = Some(g);
+            } else {
+                strip.push(g);
+            }
+        }
+        (original.into_iter().map(|g| g.expect("an original triangle was dropped")).collect(), strip)
+    }
+
+    #[test]
+    fn edge_loop_gives_the_masked_area_its_own_group() {
+        let mut e = editor();
+        assert!(e.edge_loop_group_masked, "on by default");
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let inside = |t: &[u32; 3]| t.iter().all(|&v| positions[v as usize].y > 0.3);
+        let hide_in = triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| inside(t))
+            .max_by(|(_, a), (_, b)| {
+                let y = |t: &[u32; 3]| t.iter().map(|&v| positions[v as usize].y).sum::<f32>();
+                y(a).partial_cmp(&y(b)).unwrap()
+            })
+            .unwrap()
+            .0;
+        let hide_out = triangles.iter().position(|t| t.iter().all(|&v| positions[v as usize].y < -0.5)).unwrap();
+        let mut hidden = vec![false; n];
+        hidden[hide_in] = true;
+        hidden[hide_out] = true;
+        let groups: Vec<u32> = triangles.iter().map(|t| if inside(t) { 4 } else { 1 }).collect();
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_both_sides = false;
+        e.edge_loop_masked();
+        assert_eq!(e.history.undo_labels().count(), 1, "the group is part of the loop's undo step");
+        assert_eq!(e.history.undo_labels().last(), Some("Edge loop at mask border"));
+        let masked: Vec<bool> = triangles.iter().enumerate().map(|(t, tri)| inside(tri) && t != hide_in).collect();
+        let (original, strip) = groups_after_loop(&e, n);
+        let inner_group = original[masked.iter().position(|&c| c).unwrap()];
+        assert!(masked.iter().zip(&original).filter(|(c, _)| **c).all(|(_, g)| *g == inner_group));
+        assert_ne!(inner_group, 4, "the masked area gets a new group, not the one it had");
+        assert!(groups.iter().all(|&g| g != inner_group));
+        assert!(!strip.is_empty());
+        assert!(strip.iter().all(|&g| g == strip[0] && g != inner_group));
+        for (t, &g) in original.iter().enumerate() {
+            if masked[t] {
+                assert_eq!(g, inner_group);
+            } else {
+                assert_eq!(g, groups[t], "outside and hidden faces stay");
+            }
+        }
+        assert_eq!(original[hide_in], 4, "a hidden face inside the mask is excluded");
+        assert_eq!(original[hide_out], 1);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn edge_loop_group_masked_off_keeps_the_inner_groups() {
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        e.edge_loop_group_masked = false;
+        e.edge_loop_both_sides = false;
+        e.edge_loop_masked();
+        let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
+        assert_eq!(groups.len(), 2, "only the loop is a new group");
+        assert!(e.status.contains("the loop in a new face group"), "{}", e.status);
+        assert!(!e.status.contains("masked area"), "{}", e.status);
+
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let groups: Vec<u32> =
+            triangles.iter().map(|t| if t.iter().all(|&v| positions[v as usize].y > 0.3) { 4 } else { 1 }).collect();
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_group_masked = false;
+        e.edge_loop_masked();
+        let (original, strip) = groups_after_loop(&e, n);
+        assert_eq!(original, groups, "the masked area keeps the group it had");
+        assert!(!strip.is_empty());
+        assert!(strip.iter().all(|&g| g == strip[0]));
+        assert!(!groups.contains(&strip[0]));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn edge_loop_both_sides_keeps_the_outside_groups() {
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let inside = |t: &[u32; 3]| t.iter().all(|&v| positions[v as usize].y > 0.3);
+        let hide_in = triangles.iter().position(&inside).unwrap();
+        let hide_out = triangles.iter().position(|t| t.iter().all(|&v| positions[v as usize].y < -0.5)).unwrap();
+        let mut hidden = vec![false; n];
+        hidden[hide_in] = true;
+        hidden[hide_out] = true;
+        let groups: Vec<u32> = triangles
+            .iter()
+            .map(|t| {
+                if inside(t) {
+                    4
+                } else {
+                    let x: f32 = t.iter().map(|&v| positions[v as usize].x).sum();
+                    if x >= 0.0 { 1 } else { 2 }
+                }
+            })
+            .collect();
+        assert!(groups.contains(&1) && groups.contains(&2));
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_both_sides = true;
+        e.edge_loop_group_masked = true;
+        e.edge_loop_masked();
+        assert_eq!(e.history.undo_labels().count(), 1, "both sides and the new group are one step");
+        assert!(e.status.contains("on both sides"), "{}", e.status);
+        let masked: Vec<bool> = triangles.iter().enumerate().map(|(t, tri)| inside(tri) && t != hide_in).collect();
+        let (original, strip) = groups_after_loop(&e, n);
+        let inner_group = original[masked.iter().position(|&c| c).unwrap()];
+        assert_ne!(inner_group, 1);
+        assert_ne!(inner_group, 2);
+        assert_ne!(inner_group, 4);
+        for (t, &g) in original.iter().enumerate() {
+            if masked[t] {
+                assert_eq!(g, inner_group, "the inside is one new group");
+            } else {
+                assert_eq!(g, groups[t], "the outside keeps its groups, hidden faces included");
+            }
+        }
+        assert!(strip.iter().all(|&g| g == strip[0] && g != inner_group && g != 1 && g != 2));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.history.undo_labels().count(), 0);
     }
 
     /// Groups of the active piece's triangles, and how many have `g`.
