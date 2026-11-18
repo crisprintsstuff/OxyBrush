@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- Starting from an empty scene no longer pins the brush size to its minimum with the size on the model: the size range now follows the camera distance until there is something to measure, so the slider and `[` `]` work (#328).
+
 ## [4.0.0-beta.17] - 2026-11-18
 
 ### Added
