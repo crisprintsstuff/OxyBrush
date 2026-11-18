@@ -11,13 +11,17 @@ A **Parts Bin**: a library of saved details (a set of eyes, an ear, an
 arm) that you drag from a strip along the bottom of the viewport onto a
 model. On drop you choose a mirrored pair or a single copy. The part is
 sculpted again at that spot from its stroke recipes, and it stays fully
-editable afterwards as living strokes.
+editable afterwards as living strokes until an operation bakes them.
 
 This builds on [RFC 0025](0025-editable-and-portable-strokes.md) phases 4
 and 5. A part **is** a detail from that RFC, saved as `.oxydetail`. The
 bin adds the library on disk, the strip, the drag, the choice at drop,
 and the thumbnail. It does not add a second file format or a second way
 to re-sculpt.
+
+A part is not an inserted mesh: it has no vertices, topology or
+subdivision stack of its own. It is sculpted from strokes on the
+existing surface, not separate geometry joined to the piece.
 
 ## Why
 
@@ -151,6 +155,15 @@ not mirror them again. A mirrored pair is linked by default, so edits
 propagate in either direction. The user can choose **Unlink** to turn
 off that propagation; undo of Unlink restores it.
 
+The side placed from the bin is the **source side**, even when it is on
+the negative side of the axis. The other is the **mirror side**. These
+roles follow the placements, not their current coordinates, and survive
+moving, unlinking, saving and reopening. When Mirror is added to a
+single placed part, that existing placement is the source. For
+**Mirror, halves match**, the half placed before reflection is the
+source. An edit initiated on the mirror side updates the source side
+while linked; it does not make the mirror side the source.
+
 While the link is on, an edit on either side is applied to the other
 in the same undo step:
 
@@ -204,6 +217,38 @@ A linked pair saves one side, which is all a part file stores. If the
 library file has been deleted or renamed out of reach, **Save back to
 bin** offers **Save as new part** instead. Closing the project, saving
 the `.oxb`, or editing the part does not write the library.
+
+For a pair, **Save back to bin** uses the source side's current recipes,
+even if the last edit was made on the mirror side or the pair was
+unlinked. It keeps the original bin entry's handedness, not whichever
+side happens to be positive. If the entire source side was deleted, the
+command refuses to replace the entry and explains why; it does not
+silently substitute the mirror side. The user can instead explicitly
+save the remaining side as a new part. Per-side deletes and fades can
+make the two sides different; saving back does not combine them. The
+source side's remaining recipes are saved, including their brush
+settings, but living-stroke and group fade multipliers are not part of
+the recipe file. If either multiplier differs from 100%, the
+confirmation warns that the fade will not be saved.
+
+Save in the source placement's anchor frame, preserving its orientation
+rather than reflecting it to the positive axis. Asymmetric targets can
+still make the two replayed results look different; this rule preserves
+the recipes' handedness, not a guarantee of identical surfaces.
+
+The file contains recipes and alphas, not the piece's mesh, its active
+level or any subdivision levels. The thumbnail is only a picture. On a
+later placement the recipes are replayed on the new target's active
+level, so the result can vary with its surface and resolution. Later
+sculpting outside the part's stroke group is not captured by saving its
+recipes.
+
+Save back requires the source side's recipes to still be editable. A
+subdivision change or another bake can remove them; in that case the
+command cannot reconstruct them from the visible surface and must not
+overwrite the bin entry with an incomplete part. Saving the project
+keeps the baked surface, but does not restore those recipes. Save back
+before the level change if the edited recipes are needed in the bin.
 
 ### Later strokes, and the additive model
 
@@ -439,14 +484,36 @@ can't be placed. Turn it off." The drop does not turn it off for
 you. Later, turning it on and refining can still bake the part, and
 the existing bake note says so.
 
-**Subdivision levels.** The part is replayed on the active level only.
-The drop does not add a level and does not change triangles. If the
-piece has more than one level, the status line names it: "This part is
-placed on level 3. Switching levels fixes strokes in place." If the
-part's smallest brush radius is shorter than the mean edge at the
-drop, the line adds: "This level is coarser than the part. Add a
-subdivision level for a closer result." Adding a level remains your
-action. It bakes strokes already on the piece, as it does today.
+**Subdivision levels.** The piece, not the part, owns the subdivision
+stack. The part is replayed on the active level only. The drop does not
+add a level or change triangles. The piece's multiresolution machinery
+syncs its levels as it does for other sculpting; this is not a mapping
+of a part's base and detail levels onto the piece, nor a guarantee that
+the part's detail can be represented at every level.
+
+Before committing the drop, compare the part's smallest scaled brush
+radius with the local mean edge length at the drop on each existing
+level, using the surface before the preview sculpt. Recommend the
+coarsest measured level where the radius is at least the mean edge
+length. If all levels can be measured and none qualifies, say that a
+new subdivision level may give a closer result. If the drop point cannot
+be mapped to a level well enough to measure it, do not recommend that
+level; disclose that the estimate is incomplete, or unavailable if none
+can be measured. If no measured level qualifies but some cannot be
+measured, say that there is no suitable measured level rather than
+claiming that no suitable level exists. This is a resolution heuristic,
+not a promise that the shape will match: local topology, curvature and
+the target surface also matter.
+
+The app does not switch or add levels automatically. Show the current
+level and the recommendation before the drop; the user can cancel and
+choose a level first. Warn that switching or adding a level bakes
+existing living strokes on the piece. After placement, switching or
+adding a level also bakes the part: the shape remains on the piece but
+its living strokes, whole-part editing and recipe-based save back are
+no longer available. Coarser levels may not visibly represent all of
+the detail. If the active level is coarser than the heuristic, the drop
+is still allowed with a warning.
 
 ### Mirroring
 
@@ -538,14 +605,17 @@ per placed part:
   scale:f32                      # 1 = recorded size
   detail_size:f32                # the radius the file divided by
   content:u8*32                  # SHA-256 of the .oxydetail at drop, or 32 zero bytes
-  flags:u8                       # bit 0: linked
+  flags:u8                       # bit 0: linked; bit 1: source side
   mirror_axis:u8                 # 0 none, 1 X, 2 Y, 3 Z
   partner:u64                    # the other placed part's id, else 0
 ```
 
-A single copy has `mirror_axis` 0, `partner` 0 and the link flag clear.
-A pair is two records, each naming the other, both linked, with the
-same axis. **Save back to bin** finds the library file by the SHA-256
+A single copy has `mirror_axis` 0, `partner` 0, the source-side flag set
+and the link flag clear. A pair is two records, each naming the other,
+both linked, with the same axis; exactly the placement made from the bin
+has the source-side flag. Unlink does not change these roles. If an
+entire side is deleted, the survivor retains its role even though its
+partner is gone. **Save back to bin** finds the library file by the SHA-256
 (`hash.` in `library.txt`). The file name is a hint; the hash wins
 after a rename. The hash identifies a local file. It is not a security
 check. `library.txt` is not copied into the `.oxb`.
@@ -605,6 +675,9 @@ do, it saves nothing.
 
 A mixed selection reports how many were left out and the reasons. The
 strokes that were left out stay on the piece, unchanged.
+The mirror side of a **placed part** is an exception to the ordinary
+Mirror copy rule: it has its own recipes and can explicitly be saved as
+a new part. It is not silently substituted for the source on save back.
 
 ## Performance
 
@@ -617,6 +690,9 @@ strokes that were left out stay on the piece, unchanged.
   `Editor::start_job`. One job covers the whole part, in stroke order.
 - Opening the bin reads `library.txt` and the PNG files. Recipes are
   read when a drag starts.
+- The subdivision recommendation is computed for the drop, not on the
+  per-dab path. Measuring existing levels must not mutate the piece or
+  switch its active level; expensive work runs off the UI thread.
 - The thumbnail is one offscreen draw per save, not per frame.
 - Placed part recipes count toward the separate, user-adjustable Parts
   memory limit. The library on disk does not.
@@ -657,7 +733,11 @@ not a second implementation beside them.
    drop while dynamic detail is on does not change the mesh and shows
    its reason; a drop that would exceed the Parts memory limit does
    not change the mesh, bake ordinary strokes, or use more than the
-   cap, and explains how to raise the limit or free Parts memory.
+   cap, and explains how to raise the limit or free Parts memory. The
+   subdivision recommendation tests cover scaled brush radii, a
+   suitable existing level, no suitable level and an unmeasurable
+   level; neither the estimate nor the drop silently switches or adds
+   a level.
 
 3. **After the drop.** Move on surface (move, turn, scale) as one
    re-sculpt and one undo step. The `PART` section round-trips, and a
@@ -670,7 +750,13 @@ not a second implementation beside them.
    as new part** write only when asked, and an Edit… test asserts the
    library file is byte-for-byte unchanged. A later non-part stroke
    survives a move as stored. Edit path needs no extra work in this
-   phase: it applies when RFC 0025 phase 3 ships.
+   phase: it applies when RFC 0025 phase 3 ships. Tests place an
+   asymmetric part on the negative side, edit its mirror, save and
+   reopen, then save back and check the original handedness. They also
+   cover unlink, source-side fade and deletion, deletion of the whole
+   source side, and refusal to overwrite after baking. A level change
+   bakes the sculpt into the piece and ends the part's editability; a
+   bin save before the change remains usable on another piece.
 
 4. **Housekeeping.** Rename, delete, reorder, categories, and the
    variations in the open slot. Tests: delete removes the library file
@@ -716,6 +802,9 @@ GPU dependency.
   sculpt surprises you. The full replay on drop, and Esc on the job,
   are the mitigation. The `dab_timing` numbers will show if the 32 ms
   bar is too low.
+- Resolution recommendations are estimates, not a way to recover fine
+  detail on a coarse target. Switching levels also bakes living strokes;
+  the warning must come before the user commits to the switch.
 - Projection stretches a part that wraps. The warning is honest, and
   the geodesic walk is the real fix. Shipping the warning without the
   walk is a known limit.
@@ -818,9 +907,11 @@ The owner decided these on 2026-11-18.
 - **Both save commands are available.** **Save back to bin** replaces
   the part only after confirmation, and **Save as new part** creates a
   separate library entry.
-- **Keep the positive side.** Saving a symmetric stroke keeps samples
-  on the positive side of its mirror axis; if several axes were on,
-  positive X is kept. Strokes with radial symmetry are refused.
+- **Keep the positive side for new parts.** When saving new parts from
+  originally symmetric strokes, keep samples on the positive side of
+  the mirror axis; if several axes were on, positive X is kept. Strokes
+  with radial symmetry are refused. This does not change the source-side
+  rule for saving a placed pair back.
 - **Store parts in the data directory.** The Parts Bin folder sits
   beside brush presets under the app's data directory.
 - **Same-category parts are variations.** Opening a part shows the
@@ -836,6 +927,16 @@ The owner decided these on 2026-11-18.
   placement would exceed it, refuse the placement without changing
   the mesh and explain that the user can raise the limit in
   Preferences or remove placed parts to free space.
+- **Parts are strokes, not meshes.** A part has no vertices, topology
+  or subdivision levels of its own; its recipes are replayed on the
+  target piece's active level.
+- **Keep bin-entry handedness on save back.** Save back uses the
+  placed pair's source side, regardless of which side was edited or
+  where it lies relative to the mirror plane. If the source side is
+  gone, do not silently replace it with its mirror.
+- **Subdivision levels belong to the piece.** Recommend a suitable
+  existing level before placement, but never switch or add levels
+  automatically. A level change bakes the part's living strokes.
 
 ## Not included
 
