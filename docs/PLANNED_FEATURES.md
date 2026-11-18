@@ -15,6 +15,8 @@ in the app.
 
 **Status:** in the app as an option, off by default (Preferences > General, then Layers > Strokes… (right panel)): fade, delete and solo past strokes, keep part of a stroke, group strokes into layers, strokes saved with the project, and Edit… to change a stroke's brush, size, strength, falloff, alpha or spacing and sculpt it again. Next: saving a group of strokes and placing it on another model.
 
+A draft, [RFC 0026](rfcs/0026-parts-bin.md), describes how that library would look. Saved details (a set of eyes, an ear, an arm) sit in a **Parts Bin**: a strip of thumbnails along the bottom of the view. You drag one onto the model and choose a mirrored pair or a single copy. Once it is placed it is a group of strokes, so you can fade it, change it with Edit…, and move it on the surface afterwards. The saved copy in the bin changes only when you ask to save it back. Nothing in that draft is in the app yet.
+
 Today, once a stroke is done it's part of the model. If a wrinkle you made
 twenty minutes ago is too deep, you either undo everything since, or sculpt
 over it. Other sculpting apps work the same way: you can plan ahead with

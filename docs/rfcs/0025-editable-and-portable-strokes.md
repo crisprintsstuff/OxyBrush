@@ -212,3 +212,8 @@ The maintainer chose the proposed option for each (2026-11-16):
 - Strokes that survive remesh or subdivision (they could be replayed from
   recipes; a separate RFC).
 - A shared online library of details.
+
+[RFC 0026](0026-parts-bin.md) (draft) proposes the Parts Bin as the way
+phases 4 and 5 are shown: a library strip, a drop onto the model, and a
+placed detail that stays editable. It asks the maintainer to confirm
+four amendments to the decisions above.
