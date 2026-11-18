@@ -71,7 +71,7 @@ impl BrushPreset {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,

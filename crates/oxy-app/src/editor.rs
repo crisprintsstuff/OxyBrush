@@ -1413,7 +1413,7 @@ impl Default for Editor {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             stroke_mode: StrokeMode::Freehand,
             stabilizer_pt: 0.0,
