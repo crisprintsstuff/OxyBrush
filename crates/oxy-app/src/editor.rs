@@ -2155,6 +2155,12 @@ impl Editor {
     }
 
     /// Brush for number key `n` (1–9, then 0 for the tenth), in shelf order.
+    /// Reorder the brush list by name (the number keys follow the new order).
+    pub fn sort_brushes_alphabetically(&mut self) {
+        self.brush_order.sort_by_key(|k| k.label().to_lowercase());
+        self.status = "Brushes sorted A–Z".into();
+    }
+
     pub fn brush_for_number_key(&self, n: u32) -> Option<BrushKind> {
         let i = if n == 0 { 9 } else { n as usize - 1 };
         self.brush_order.get(i).copied()
@@ -14615,6 +14621,15 @@ mod tests {
         drag(&mut e, end, end + (end - layout.center));
         assert!(e.history.can_undo());
         assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
+    }
+
+    #[test]
+    fn brushes_sort_alphabetically() {
+        let mut e = editor();
+        e.sort_brushes_alphabetically();
+        let names: Vec<String> = e.brush_order.iter().map(|k| k.label().to_lowercase()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "{names:?}");
+        assert_eq!(e.brush_order.len(), BrushKind::ALL.len());
     }
 
     #[test]
