@@ -1784,12 +1784,17 @@ fn blend_symmetry_copies(
             continue;
         }
         chunks.extend(ch);
-        let normal = area_normal_of(mesh, &affected, dab.normal);
+        let area_normal = area_normal_of(mesh, &affected, dab.normal);
+        let normal = if settings.kind == BrushKind::SharpCrease {
+            (area_normal - dab.direction * area_normal.dot(dab.direction)).try_normalize().unwrap_or(area_normal)
+        } else {
+            area_normal
+        };
         let weight_of: HashMap<u32, f32> = affected.iter().copied().collect();
         for (v, p) in target_positions(mesh, settings, invert, &dab, &affected) {
             let w = weight_of[&v];
             let delta = p - mesh.positions[v as usize];
-            let groove = if grooves { normal * delta.dot(normal) } else { Vec3::ZERO };
+            let groove = if grooves { normal * (delta - dab.sag * w).dot(normal) } else { Vec3::ZERO };
             let e = acc.entry(v).or_insert((Vec3::ZERO, 0.0, 0.0, Vec3::ZERO));
             e.0 += delta - groove;
             e.1 += w;
