@@ -104,6 +104,12 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
   and back ([RFC 0021](rfcs/0021-gaussian-splats.md), proposed).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
+### Several projects at once
+- **Tabs:** several projects open in one window. Each keeps its model, its
+  undo history, the tool you were using and the camera. Draft:
+  [RFC 0027](rfcs/0027-tabbed-projects.md). Nothing in that draft is in the
+  app yet.
+
 ## Recently shipped (for context)
 
 - **4.0.0-beta.16:** living strokes remember what was drawn, including
