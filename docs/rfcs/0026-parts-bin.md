@@ -1,7 +1,8 @@
 # RFC 0026: Parts Bin
 
 Status: Draft. The owner decided scale, per-side fade and delete, refusing
-a drop while dynamic detail is on, and the symmetry-plane prompt
+a drop while dynamic detail is on, the symmetry-plane prompt, and keeping
+parts stroke-based, and confirmed the four RFC 0025 amendments
 (2026-11-18). The other questions at the end are still open.
 
 ## Summary
@@ -17,6 +18,11 @@ and 5. A part **is** a detail from that RFC, saved as `.oxydetail`. The
 bin adds the library on disk, the strip, the drag, the choice at drop,
 and the thumbnail. It does not add a second file format or a second way
 to re-sculpt.
+
+A part is not an inserted mesh: it has no vertices, topology or
+subdivision stack of its own. An ear or arm made this way is sculpted
+from strokes on the existing surface; it is not separate geometry joined
+to the piece.
 
 ## Why
 
@@ -54,23 +60,17 @@ Use these as they stand:
   not define that walk. Placement uses the projection until phase 6
   exists, then uses the walk for the same parts.
 
-Four proposals here differ from decisions in RFC 0025. They are
-amendments for the maintainer, and open questions at the end.
+The maintainer confirmed these four amendments to RFC 0025:
 
-1. **Where the library is shown.** RFC 0025 puts details in a Details
-   section of the Strokes window. This RFC shows that same library as
-   the Parts Bin strip. The Strokes window keeps **Save as part…** and
-   lists the placed strokes as a group. There is one library, not a
-   Details list and a bin.
-2. **Who chooses the mirror.** RFC 0025 stores one side, and the
-   target's Mirror X/Y/Z decides whether placement doubles it. This RFC
-   still stores one side. The drop asks **Place one** or **Mirror
-   pair**. The piece's Mirror toggles only supply the default axis.
-3. **When a place is committed.** RFC 0025 commits on Accept, after
-   move, turn and scale handles. This RFC commits on the drop, as one
-   undo step, and leaves move, turn and scale available afterwards.
-   The part has to stay editable once it is on the model. The handles
-   are the same ones.
+1. **Where the library is shown.** One shared library is shown as the
+   Parts Bin strip, not a separate Details list. The Strokes window keeps
+   **Save as part…** and lists the placed strokes as a group.
+2. **Who chooses the mirror.** The file stores one side. The drop asks
+   **Place one** or **Mirror pair**; the piece's Mirror toggles only
+   supply the default axis.
+3. **When a place is committed.** The drop commits as one undo step,
+   with move, turn and scale available afterwards, rather than a modal
+   Accept that ends placement.
 4. **A mirrored copy's recipe.** Mirror copy today stores no recipe
    (`OXNR` tag 2): Edit… tells you to edit the original. A mirrored
    **part** stores a recipe on both sides, so both stay editable, and
@@ -148,6 +148,15 @@ are the source samples reflected through the piece's symmetry plane.
 Both recipes are replayed with symmetry off, so the brush engine does
 not mirror them again.
 
+The side placed from the bin is the **source side**, even when it is on
+the negative side of the axis. The other is the **mirror side**. These
+roles follow the placements, not their current coordinates, and survive
+moving, unlinking, saving and reopening the project. A change initiated
+on the mirror side updates the source side while linked; it does not
+make the mirror side the source. When Mirror is added to a single placed
+part, that existing placement is the source. For **Mirror, halves
+match**, the half placed before reflection is the source.
+
 While the link is on, an edit on either side is applied to the other
 in the same undo step:
 
@@ -200,6 +209,40 @@ A linked pair saves one side, which is all a part file stores. If the
 library file has been deleted or renamed out of reach, **Save back to
 bin** offers **Save as new part** instead. Closing the project, saving
 the `.oxb`, or editing the part does not write the library.
+
+For a pair, **Save back to bin** uses the source side's current recipes,
+even if the last edit was made on the mirror side or the pair was
+unlinked. It keeps the original bin entry's handedness, not whichever
+side happens to be positive. If the entire source side was deleted, the
+command refuses to replace the entry and explains why; it does not
+silently substitute the mirror side. The user can instead explicitly
+save the remaining side as a new part. Per-side deletes and fades can
+make the two sides different; saving back does not combine them. The
+source side's remaining recipes are saved, including their brush
+settings, but living-stroke and group fade multipliers are not part of
+the recipe file. If either multiplier differs from 100%, the confirmation
+warns that the fade will not be saved. Deleting a source-side stroke is
+intentional and omits that recipe; a missing recipe due to baking is
+not treated as an intentional deletion.
+
+Save in the source placement's anchor frame, preserving its orientation
+rather than reflecting it to the positive axis. Asymmetric targets can
+still make the two replayed results look different; this rule preserves
+the recipes' handedness, not a guarantee of identical surfaces.
+
+The file contains recipes and alphas, not the piece's mesh, its active
+level or any subdivision levels. The thumbnail is only a picture. On a
+later placement the recipes are replayed on the new target's active
+level, so the result can vary with its surface and resolution. Later
+sculpting outside the part's stroke group is not captured by saving its
+recipes.
+
+Save back requires the source side's recipes to still be editable. A
+subdivision change or another bake can remove them; in that case the
+command cannot reconstruct them from the visible surface and must not
+overwrite the bin entry with an incomplete part. Saving the project
+keeps the baked surface, but does not restore those recipes. Save back
+before the level change if the edited recipes are needed in the bin.
 
 ### Later strokes, and the additive model
 
@@ -439,14 +482,36 @@ can't be placed. Turn it off." The drop does not turn it off for
 you. Later, turning it on and refining can still bake the part, and
 the existing bake note says so.
 
-**Subdivision levels.** The part is replayed on the active level only.
-The drop does not add a level and does not change triangles. If the
-piece has more than one level, the status line names it: "This part is
-placed on level 3. Switching levels fixes strokes in place." If the
-part's smallest brush radius is shorter than the mean edge at the
-drop, the line adds: "This level is coarser than the part. Add a
-subdivision level for a closer result." Adding a level remains your
-action. It bakes strokes already on the piece, as it does today.
+**Subdivision levels.** The piece, not the part, owns the subdivision
+stack. The part is replayed on the active level only. The drop does not
+add a level or change triangles. The piece's multiresolution machinery
+syncs its levels as it does for other sculpting; this is not a mapping
+of a part's base and detail levels onto the piece, nor a guarantee that
+the part's detail can be represented at every level.
+
+Before committing the drop, compare the part's smallest scaled brush
+radius with the local mean edge length at the drop on each existing
+level, using the surface before the preview sculpt. Recommend the
+coarsest measured level where the radius is at least the mean edge
+length. If all levels can be measured and none qualifies, say that a
+new subdivision level may give a closer result. If the drop point cannot
+be mapped to a level well enough to measure it, do not recommend that
+level; disclose that the estimate is incomplete, or unavailable if none
+can be measured. If no measured level qualifies but some cannot be
+measured, say that there is no suitable measured level rather than
+claiming that no suitable level exists. This is a resolution heuristic,
+not a promise that the shape will match: local topology, curvature and
+the target surface also matter.
+
+The app does not switch or add levels automatically. Show the current
+level and the recommendation before the drop; the user can cancel and
+choose a level first. Warn that switching or adding a level bakes
+existing living strokes on the piece. After placement, switching or
+adding a level also bakes the part: the shape remains on the piece but
+its living strokes, whole-part editing and recipe-based save back are
+no longer available. Coarser levels may not visibly represent all of
+the detail. If the active level is coarser than the heuristic, the drop
+is still allowed with a warning.
 
 ### Mirroring
 
@@ -538,14 +603,17 @@ per placed part:
   scale:f32                      # 1 = recorded size
   detail_size:f32                # the radius the file divided by
   content:u8*32                  # SHA-256 of the .oxydetail at drop, or 32 zero bytes
-  flags:u8                       # bit 0: linked
+  flags:u8                       # bit 0: linked; bit 1: source side
   mirror_axis:u8                 # 0 none, 1 X, 2 Y, 3 Z
   partner:u64                    # the other placed part's id, else 0
 ```
 
-A single copy has `mirror_axis` 0, `partner` 0 and the link flag clear.
-A pair is two records, each naming the other, both linked, with the
-same axis. **Save back to bin** finds the library file by the SHA-256
+A single copy has `mirror_axis` 0, `partner` 0, the source-side flag set
+and the link flag clear. A pair is two records, each naming the other,
+both linked, with the same axis; exactly the placement made from the bin
+has the source-side flag. Unlink does not change these roles. If an
+entire side is deleted, the survivor retains its role even though its
+partner is gone. **Save back to bin** finds the library file by the SHA-256
 (`hash.` in `library.txt`). The file name is a hint; the hash wins
 after a rename. The hash identifies a local file. It is not a security
 check. `library.txt` is not copied into the `.oxb`.
@@ -605,6 +673,9 @@ do, it saves nothing.
 
 A mixed selection reports how many were left out and the reasons. The
 strokes that were left out stay on the piece, unchanged.
+The mirror side of a **placed part** is an exception to the ordinary
+Mirror copy rule: it has its own recipes and can explicitly be saved as
+a new part. It is not silently substituted for the source on save back.
 
 ## Performance
 
@@ -617,6 +688,9 @@ strokes that were left out stay on the piece, unchanged.
   `Editor::start_job`. One job covers the whole part, in stroke order.
 - Opening the bin reads `library.txt` and the PNG files. Recipes are
   read when a drag starts.
+- The subdivision recommendation is computed for the drop, not on the
+  per-dab path. Measuring existing levels must not mutate the piece or
+  switch its active level; expensive work runs off the UI thread.
 - The thumbnail is one offscreen draw per save, not per frame.
 - Placed recipes count toward the existing living-strokes memory
   budget. The library on disk does not.
@@ -655,7 +729,10 @@ not a second implementation beside them.
    leaves the mesh unchanged; One centered copy puts the footprint
    midpoint on the plane; Mirror, halves match meets on the plane; a
    drop while dynamic detail is on does not change the mesh and shows
-   its reason.
+   its reason. Tests for the subdivision recommendation cover scaled
+   brush radii, a suitable existing level, no suitable level and an
+   unmeasurable level; neither the estimate nor the drop silently
+   switches or adds a level.
 
 3. **After the drop.** Move on surface (move, turn, scale) as one
    re-sculpt and one undo step. The `PART` section round-trips, and a
@@ -667,7 +744,13 @@ not a second implementation beside them.
    as new part** write only when asked, and an Edit… test asserts the
    library file is byte-for-byte unchanged. A later non-part stroke
    survives a move as stored. Edit path needs no extra work in this
-   phase: it applies when RFC 0025 phase 3 ships.
+   phase: it applies when RFC 0025 phase 3 ships. Tests place an
+   asymmetric part on the negative side, edit its mirror, save and
+   reopen, then save back and check the original handedness. They also
+   cover unlink, source-side fade and deletion, deletion of the whole
+   source side, and refusal to overwrite after baking. A level change
+   bakes the sculpt into the piece and ends the part's editability; a
+   bin save before the change remains usable on another piece.
 
 4. **Housekeeping.** Rename, delete, reorder, categories, and the
    variations in the open slot. Tests: delete removes the library file
@@ -718,6 +801,9 @@ GPU dependency.
 - People will expect the bin to update when they edit the placed
   part. The confirm on **Save back to bin** is there so it never
   happens quietly. The risk is that the command is hard to find.
+- Resolution recommendations are estimates, not a way to recover fine
+  detail on a coarse target. Switching levels also bakes living strokes;
+  the warning must come before the user commits to the switch.
 - The two sides of a linked pair can sit at different strengths,
   while **Edit…** still changes both. That follows the decision that
   fade and delete are per side. A later edit updates the faint side's
@@ -775,6 +861,14 @@ GPU dependency.
 
 The owner decided these on 2026-11-18.
 
+- **One library.** Show it as the Parts Bin strip, not a separate
+  Details section in the Strokes window.
+- **Mirror choice on drop.** Keep one side in the file; ask whether to
+  place one or a mirrored pair. Mirror X/Y/Z supplies the default axis.
+- **Commit on drop.** Record one undo step and keep move, turn and
+  scale available afterward.
+- **Recipes on both sides.** A mirrored part has linked recipes on both
+  sides; ordinary Mirror copies remain unchanged.
 - **Default scale follows the brush.** The part's reference radius,
   the first saved stroke's brush radius, is drawn at the current
   brush's world radius. Other strokes scale by the same factor.
@@ -799,43 +893,40 @@ The owner decided these on 2026-11-18.
   footprint is narrower than that), the drop asks **One centered
   copy** or **Mirror, halves match**. The answer is not remembered.
   Esc or **Cancel** cancels the drop and records nothing.
+- **Parts are strokes, not meshes.** A part has no subdivision levels;
+  it replays on the target piece's active level. The app recommends
+  resolution without automatically changing levels. A level change
+  bakes the part's living strokes.
+- **Keep the bin entry's handedness.** Saving a placed pair back uses
+  the side derived directly from the bin, regardless of which side was
+  edited or which side of the axis it occupies. If that side is gone,
+  do not silently overwrite the entry from its mirror.
 
 ## Open questions
 
 For the maintainer. The proposals above are what the draft specifies
 until these are answered.
 
-1. **Library UI.** Confirm the amendment: one library, shown as the
-   Parts Bin strip, with **Save as part…** and the placed group in the
-   Strokes window, and no separate Details section.
-2. **Mirror choice.** Confirm the amendment: the file keeps one side,
-   and the drop asks Place one or Mirror pair. Mirror X/Y/Z only picks
-   the default axis.
-3. **Commit on drop.** Confirm the amendment: the drop is the undo
-   step, and move, turn and scale remain available as later steps,
-   with a `PART` record, rather than a modal Accept that ends the
-   place.
-4. **Recipes on both sides.** Confirm the amendment: a mirrored part
-   stores a recipe on each side and stays linked, while an ordinary
-   Mirror copy still has no recipe.
-5. **Default twist.** The camera's right projected into the tangent
+1. **Default twist.** The camera's right projected into the tangent
    plane, or a stable world axis so the result does not depend on the
    view?
-6. **Saving back.** Both **Save back to bin** (with a confirm) and
+2. **Saving back.** Both **Save back to bin** (with a confirm) and
    **Save as new part**, or only Save as new, so the library is
    append-only?
-7. **Which side is saved.** The positive side of the mirror axis
-   (positive X if several axes were on), and radial strokes refused.
-   Is that the half to keep?
-8. **Folder.** The data directory beside brush presets, as written,
+3. **Saving new symmetric strokes.** For strokes originally drawn on a
+   piece, rather than a pair placed from the bin, keep the positive side
+   of the mirror axis (positive X if several axes were on), and refuse
+   radial strokes. Is that the half to keep? This does not change the
+   source-side rule for saving a placed pair back.
+4. **Folder.** The data directory beside brush presets, as written,
    or the config directory because RFC 0025 said "settings folder"?
-9. **Budget.** Refuse a drop whose own strokes would not fit in the
+5. **Budget.** Refuse a drop whose own strokes would not fit in the
    living-strokes budget, rather than baking them immediately?
-10. **Variations.** The other parts in the same category, as written,
+6. **Variations.** The other parts in the same category, as written,
     or an explicit set you attach to one part?
-11. **Geodesic.** Leave the walk entirely in RFC 0025 phase 6, and
+7. **Geodesic.** Leave the walk entirely in RFC 0025 phase 6, and
     have phase 5 of this RFC only switch parts over to it?
-12. **Either side.** Confirm that, while linked, editing the mirror
+8. **Either side.** Confirm that, while linked, editing the mirror
     side updates the side you dropped, and not only the other way
     around.
 
