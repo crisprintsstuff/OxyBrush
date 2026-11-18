@@ -377,6 +377,7 @@ mod tests {
 
     #[test]
     fn text_round_trip_and_tolerant_parsing() {
+        assert!(!BrushPreset::new("Default", BrushKind::Draw).front_faces_only);
         let p = sample();
         assert_eq!(BrushPreset::from_text(&p.to_text()).unwrap(), p);
         // A name with '=' survives (split at the first '=').

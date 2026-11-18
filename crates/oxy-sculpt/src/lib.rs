@@ -277,19 +277,19 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
+            BrushKind::InsertPrimitive
+            | BrushKind::Tube
+            | BrushKind::PaintGroups
+            | BrushKind::PlaneClip
+            | BrushKind::LineSplit
+            | BrushKind::CutAway => 1.0,
             BrushKind::Grab
             | BrushKind::SnakeHook
             | BrushKind::TopoMove
             | BrushKind::KelvinGrab
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
-            | BrushKind::InsertPrimitive
-            | BrushKind::Tube
-            | BrushKind::PaintGroups
-            | BrushKind::PlaneClip
-            | BrushKind::LineSplit
-            | BrushKind::CutAway => 1.0,
-            BrushKind::CurveMove
+            | BrushKind::CurveMove
             | BrushKind::Pinch
             | BrushKind::Polish
             | BrushKind::PlanarTrim => 0.5,

@@ -8355,6 +8355,7 @@ mod tests {
     #[test]
     fn remembering_brush_settings_can_be_turned_off() {
         let defaults = editor();
+        assert!(!defaults.front_faces_only);
         let mut e = editor();
         e.brush_kind = BrushKind::ClayStrips;
         e.brush_radius_pt = 77.0;
