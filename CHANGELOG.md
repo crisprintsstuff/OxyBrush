@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Import several files at once** ([#311](https://github.com/crisprintsstuff/OxyBrush/issues/311)). The Import dialog takes more than one file (Shift-click or Ctrl/Cmd-click), and dropping several files on the window does the same. Each object in each file becomes its own piece, and the whole batch is one undo step. Files are imported in name order, because the system file dialog doesn't promise the order they were clicked. A file that can't be read is skipped and named in the status bar; the rest still import, including into an empty scene. When the batch is fitted to the scene, every file uses the same scale factor (from the batch's overall size, or the factor already chosen for this project), so a small part stays in proportion to a large one; one Undo restores the original sizes and a second removes the batch. A large import runs in the background, with the same progress line as a remesh.
+
 ## [4.0.0-beta.16] - 2026-11-16
 
 ### Added

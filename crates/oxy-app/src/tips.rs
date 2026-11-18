@@ -60,7 +60,7 @@ macro_rules! commands {
 
 commands! {
     Open => "Open…", "Ctrl+O", "Open a saved project or a mesh file.";
-    Import => "Import mesh as piece…", "Ctrl+I", "Add a glTF, OBJ, STL or PLY file as new pieces.";
+    Import => "Import mesh as piece…", "Ctrl+I", "Add one or more glTF, OBJ, STL or PLY files as new pieces. Shift-click or Ctrl/Cmd-click to pick several; dropping several files on the window does the same. Each file's objects become pieces, in one undo step.";
     Save => "Save", "Ctrl+S", "Save the project to its current file.";
     SaveAs => "Save as…", "Ctrl+Shift+S", "Save the project to a new file.";
     SendBack => "Send back to OxyCharacter", "", "Save to the file OxyCharacter opened, so it picks up your changes. Works even after Save As.";
