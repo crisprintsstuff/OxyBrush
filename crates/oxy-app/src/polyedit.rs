@@ -292,6 +292,11 @@ pub struct PolyEdit {
     /// Where a plain press on empty space started: released without a drag
     /// it clears the pick, dragged it only orbits and keeps the pick.
     empty_press: Option<Vec2>,
+    /// A gizmo pivot you placed (Alt+click or Alt+drag), with the points
+    /// picked when you did: it applies only to that pick.
+    pivot: Option<(Vec3, Vec<u32>)>,
+    /// The gizmo's Z follows the picked elements' average normal.
+    pub normal_axes: bool,
 }
 
 /// How much a point `d` from the pick moves with soft selection, out to
@@ -410,6 +415,18 @@ pub struct PolyGizmoDrag {
     /// It extruded or inset at the press: worth keeping even unmoved? No,
     /// but it already changed the topology, so a still click undoes it.
     made: bool,
+    /// Alt: only the pivot (move) or the axes (rotate) change; no geometry.
+    reposition: bool,
+    /// The pivot was one you placed: it moves along with the points.
+    custom_pivot: bool,
+}
+
+impl PolyGizmoDrag {
+    /// The pivot and axes the gizmo is drawn with during the drag.
+    pub(crate) fn shown(&self) -> (Vec3, glam::Mat3) {
+        let rot = if self.reposition { self.current.linear * self.rotation } else { self.rotation };
+        (self.pivot + self.current.translate, rot)
+    }
 }
 
 impl Editor {
@@ -487,6 +504,8 @@ impl Editor {
             loop_pair: false,
             groups_seen: 0,
             empty_press: None,
+            pivot: None,
+            normal_axes: false,
         });
         let name = self.scene.active().name.clone();
         self.status = format!("Poly Edit on {name}: drag a face to extrude it, click an edge to insert a loop");
@@ -1643,17 +1662,123 @@ impl Editor {
     }
 
     /// Where the gizmo sits in Poly Edit: the middle of the picked points.
+    /// A pivot you placed stays while the same points are picked.
     pub(crate) fn poly_gizmo_pivot(&self) -> Option<Vec3> {
         let pts = self.poly_gizmo_points();
         let c = self.poly_cage()?;
-        (!pts.is_empty()).then(|| pts.iter().map(|&v| c.positions[v as usize]).sum::<Vec3>() / pts.len() as f32)
+        if pts.is_empty() {
+            return None;
+        }
+        if let Some((p, at)) = self.poly_edit.as_ref().and_then(|pe| pe.pivot.as_ref())
+            && *at == pts
+        {
+            return Some(*p);
+        }
+        Some(pts.iter().map(|&v| c.positions[v as usize]).sum::<Vec3>() / pts.len() as f32)
+    }
+
+    /// The average normal of what is picked: faces' own normals, and for
+    /// edges and points the normals of the faces around them.
+    fn poly_gizmo_normal(&self) -> Option<Vec3> {
+        let c = self.poly_cage()?;
+        let picked = self.poly_gizmo_points();
+        let faces = self.poly_selection();
+        let mut sum = Vec3::ZERO;
+        if faces.is_empty() {
+            for (f, face) in c.faces.iter().enumerate().filter(|(f, _)| *f < c.faces.len()) {
+                if corners(face).iter().any(|v| picked.binary_search(v).is_ok()) {
+                    sum += oxy_mesh::polyedit::face_normal(c, f);
+                }
+            }
+        } else {
+            for &f in faces.iter().filter(|&&f| f < c.faces.len()) {
+                sum += oxy_mesh::polyedit::face_normal(c, f);
+            }
+        }
+        sum.try_normalize()
+    }
+
+    /// The gizmo's axes in Poly Edit: along the picked normal if asked
+    /// (and there is one), else the world or view axes set for the gizmo.
+    pub(crate) fn poly_gizmo_rotation(&self) -> glam::Mat3 {
+        if self.poly_edit.as_ref().is_some_and(|pe| pe.normal_axes)
+            && let Some(n) = self.poly_gizmo_normal()
+        {
+            return crate::gizmo_ops::basis_from_normal(n);
+        }
+        self.custom_gizmo_rotation.unwrap_or(glam::Mat3::IDENTITY)
+    }
+
+    /// Axes choice for the gizmo while Poly Edit is open.
+    pub(crate) fn set_poly_gizmo_orientation(&mut self, o: crate::gizmo_ops::Orientation) {
+        use crate::gizmo_ops::Orientation;
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        pe.normal_axes = o == Orientation::Normal;
+        match o {
+            Orientation::Normal => {
+                self.status = "Gizmo axes: along the normal of what's picked".into();
+            }
+            Orientation::World => {
+                self.custom_gizmo_rotation = None;
+                self.status = "Gizmo axes: world".into();
+            }
+            Orientation::View => {
+                let back = -self.camera.forward();
+                let right = self.camera.up().cross(back).normalize_or(Vec3::X);
+                let up = back.cross(right).normalize_or(Vec3::Y);
+                self.custom_gizmo_rotation = Some(glam::Mat3::from_cols(right, up, back));
+                self.status = "Gizmo axes: aligned to the view".into();
+            }
+        }
+    }
+
+    /// Put the gizmo back at the middle of the pick, with world axes.
+    pub fn poly_reset_gizmo(&mut self) {
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.pivot = None;
+            pe.normal_axes = false;
+        }
+        self.custom_gizmo_rotation = None;
+        self.status = "Gizmo pivot and axes reset".into();
+    }
+
+    /// Whether the Poly Edit gizmo has been moved or turned off its default.
+    pub fn poly_gizmo_customized(&self) -> bool {
+        self.custom_gizmo_rotation.is_some()
+            || self.poly_edit.as_ref().is_some_and(|pe| pe.pivot.is_some() || pe.normal_axes)
+    }
+
+    /// Alt+click: put the gizmo pivot on the point, edge middle or face
+    /// centre under window pixel `p`, whatever the picking mode.
+    pub fn poly_snap_pivot(&mut self, p: Vec2) -> bool {
+        let Some(mode) = self.poly_edit.as_ref().map(|pe| pe.mode) else { return false };
+        self.poly_edit.as_mut().unwrap().mode = ElementMode::Auto;
+        let element = self.poly_element_at(p);
+        self.poly_edit.as_mut().unwrap().mode = mode;
+        let (Some(element), Some(c)) = (element, self.poly_cage()) else { return false };
+        let (at, what) = match element {
+            Element::Point(v) => (c.positions[v as usize], "point"),
+            Element::Edge(a, b, _) => ((c.positions[a as usize] + c.positions[b as usize]) * 0.5, "edge"),
+            Element::Face(f, _) => (oxy_mesh::polyedit::face_center(c, f), "face"),
+        };
+        let pts = self.poly_gizmo_points();
+        if pts.is_empty() {
+            return false;
+        }
+        if let Some(pe) = self.poly_edit.as_mut() {
+            pe.pivot = Some((at, pts));
+        }
+        self.status = format!("Gizmo pivot snapped to the {what}");
+        true
     }
 
     /// A press on the gizmo while Poly Edit is open. True if it took it.
     pub(crate) fn poly_gizmo_down(&mut self, p: Vec2) -> bool {
         let Some(layout) = self.gizmo_layout() else { return false };
         let local = self.canvas_local(p);
-        let Some(handle) = layout.pick(local, crate::pose::PICK_PT * self.pixels_per_point) else { return false };
+        let Some(handle) = layout.pick(local, crate::pose::PICK_PT * self.pixels_per_point) else {
+            return self.modifiers.alt && !self.modifiers.ctrl && self.poly_snap_pivot(p);
+        };
         use crate::pose::{GizmoMode, Handle};
         let (mode, handle) = crate::pose::operation(self.gizmo.unwrap_or(GizmoMode::Move), handle);
         let screen_axis = match (mode, handle) {
@@ -1679,9 +1804,16 @@ impl Editor {
         let each = self.poly_edit.as_ref().is_some_and(|pe| pe.each);
         let mirror = self.poly_mirror();
         let n_faces = |n: usize| format!("{n} face(s)");
+        // Alt: move or turn the gizmo itself, not the geometry.
+        let reposition = self.modifiers.alt || self.brush_roles().alt;
+        let picked = self.poly_gizmo_points();
+        let custom_pivot =
+            self.poly_edit.as_ref().and_then(|pe| pe.pivot.as_ref()).is_some_and(|(_, at)| *at == picked);
         // Shift: make new geometry first (faces: extrude, or inset on a
         // scale handle; border edges: extrude), and move that.
-        let (verts, what, made) = if self.modifiers.shift && !faces.is_empty() {
+        let (verts, what, made) = if reposition {
+            (Vec::new(), "Moving the gizmo pivot".to_owned(), false)
+        } else if self.modifiers.shift && !faces.is_empty() {
             let faces = match mirror {
                 Some((cx, tol)) => polyedit::with_mirror(&cage, &faces, cx, tol),
                 None => faces.clone(),
@@ -1718,7 +1850,7 @@ impl Editor {
         // new geometry moves then).
         let mut verts = verts;
         let mut weight = vec![1.0; verts.len()];
-        if !made {
+        if !made && !reposition {
             let side = mirror.map(|(cx, _)| (layout.pivot.x - cx).signum());
             for (v, w) in self.poly_soft_weights() {
                 // With Mirror, the far side's neighbours follow as twins.
@@ -1753,7 +1885,7 @@ impl Editor {
             handle,
             start: p,
             pivot: layout.pivot,
-            rotation: self.custom_gizmo_rotation.unwrap_or(glam::Mat3::IDENTITY),
+            rotation: self.poly_gizmo_rotation(),
             axis_dirs: layout.axis_dirs,
             length: layout.length,
             screen_axis,
@@ -1770,6 +1902,8 @@ impl Editor {
             before_mesh,
             before_cage,
             made,
+            reposition,
+            custom_pivot,
         }));
         true
     }
@@ -1794,7 +1928,16 @@ impl Editor {
             world_per_px: g.world_per_px,
             snap,
         };
-        let t = crate::pose::drag_transform(&input);
+        let mut t = crate::pose::drag_transform(&input);
+        if g.reposition {
+            // Scaling means nothing for a pivot.
+            if g.mode == crate::pose::GizmoMode::Scale {
+                t = crate::pose::Transform::IDENTITY;
+            }
+            g.current = t;
+            self.status = "Moving the gizmo (Alt held); Esc cancels".into();
+            return;
+        }
         g.current = t;
         let mut moves: Vec<(u32, Vec3)> = g
             .verts
@@ -1828,6 +1971,24 @@ impl Editor {
         let g = *g;
         let Some(i) = self.poly_piece_index() else { return };
         let moved = g.current != crate::pose::Transform::IDENTITY;
+        if g.reposition {
+            if moved {
+                let at = g.pivot + g.current.translate;
+                let turned = g.mode == crate::pose::GizmoMode::Rotate;
+                let pts = self.poly_gizmo_points();
+                if let Some(pe) = self.poly_edit.as_mut() {
+                    pe.pivot = Some((at, pts));
+                    if turned {
+                        pe.normal_axes = false;
+                    }
+                }
+                if turned {
+                    self.custom_gizmo_rotation = Some(g.current.linear * g.rotation);
+                }
+                self.status = "Gizmo repositioned".into();
+            }
+            return;
+        }
         if !moved && !g.made {
             return;
         }
@@ -1880,6 +2041,12 @@ impl Editor {
             }
             if !pe.picked_points.is_empty() {
                 pe.picked_points = core;
+            }
+        }
+        if g.custom_pivot {
+            let pts = self.poly_gizmo_points();
+            if let Some(pe) = self.poly_edit.as_mut() {
+                pe.pivot = Some((g.pivot + g.current.translate, pts));
             }
         }
         self.status = format!("{} (one undo step)", g.what);
@@ -2130,6 +2297,54 @@ mod tests {
         assert_eq!(e.poly_selection(), [front], "orbiting is not a click");
         drag(&mut e, corner, corner);
         assert!(e.poly_selection().is_empty(), "a click off the model clears the pick");
+    }
+
+    #[test]
+    fn the_poly_gizmo_can_align_to_the_picked_normal_and_move_its_pivot() {
+        use crate::gizmo_ops::Orientation;
+        use crate::pose::GizmoMode;
+        let mut e = editor();
+        start(&mut e);
+        let side = face_towards(&e, Vec3::X);
+        e.poly_toggle_pick(Some(Element::Face(side, [0, 0])));
+        e.gizmo = Some(GizmoMode::Move);
+        let basis = |e: &Editor| e.poly_gizmo_rotation();
+        assert_eq!(basis(&e), glam::Mat3::IDENTITY);
+        e.set_gizmo_orientation(Orientation::Normal);
+        assert!((basis(&e).z_axis - Vec3::X).length() < 1e-4, "Z along the face normal");
+        assert!(e.poly_gizmo_customized());
+
+        // Alt+click a corner: the pivot snaps to it, geometry stays.
+        let before = cage(&e).positions.clone();
+        let corner = corners(&cage(&e).faces[side])[0];
+        let at = cage(&e).positions[corner as usize];
+        let spot = e.poly_screen(cage(&e), corner).unwrap();
+        let spot = spot + (centre() - spot).normalize() * 2.0;
+        e.modifiers.alt = true;
+        e.pointer = Some(spot);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        e.modifiers.alt = false;
+        assert!((e.gizmo_layout().unwrap().pivot - at).length() < 1e-4, "{}", e.status);
+        assert_eq!(cage(&e).positions, before);
+
+        // Alt+drag an arrow moves the pivot only.
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[2].expect("normal arrow");
+        e.modifiers.alt = true;
+        drag(&mut e, end, end + (end - layout.center) * 0.5);
+        e.modifiers.alt = false;
+        assert_eq!(cage(&e).positions, before);
+        assert!((e.gizmo_layout().unwrap().pivot - at).length() > 0.05);
+
+        // Picking something else drops the placed pivot; reset clears axes.
+        let front = face_towards(&e, Vec3::Z);
+        e.poly_toggle_pick(Some(Element::Face(side, [0, 0])));
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        let centre = e.poly_gizmo_pivot().unwrap();
+        assert!((centre - Vec3::new(0.0, 0.0, 0.5)).length() < 1e-4, "{centre}");
+        e.poly_reset_gizmo();
+        assert!(!e.poly_gizmo_customized());
     }
 
     #[test]
