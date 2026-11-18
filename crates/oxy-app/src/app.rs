@@ -583,7 +583,18 @@ impl App {
             self.applied_theme = Some(theme_key);
         }
 
-        let raw = g.egui_state.take_egui_input(&g.window);
+        // A redraw can arrive after the window changed size but before its
+        // resize event. Use one size for the surface and egui's layout, and
+        // avoid waiting for the GPU on every intermediate resize event.
+        let size = g.window.inner_size();
+        let (frame_size, screen_rect) = frame_dimensions(size, egui_winit::pixels_per_point(&self.egui_ctx, &g.window));
+        if [g.config.width, g.config.height] != frame_size {
+            g.config.width = frame_size[0];
+            g.config.height = frame_size[1];
+            g.surface.configure(&g.device, &g.config);
+        }
+        let mut raw = g.egui_state.take_egui_input(&g.window);
+        raw.screen_rect = screen_rect;
         let mut action = None;
         let mut canvas = egui::Rect::NOTHING;
         let ed = &mut self.editor;
@@ -1589,10 +1600,7 @@ impl ApplicationHandler for App {
                 self.editor.open(path);
                 redraw = true;
             }
-            WindowEvent::Resized(size) => {
-                g.config.width = size.width.max(1);
-                g.config.height = size.height.max(1);
-                g.surface.configure(&g.device, &g.config);
+            WindowEvent::Resized(_) => {
                 redraw = true;
                 remember_window(&mut self.editor, &g.window);
             }
@@ -2080,6 +2088,15 @@ impl PenPress {
     }
 }
 
+fn frame_dimensions(size: winit::dpi::PhysicalSize<u32>, pixels_per_point: f32) -> ([u32; 2], Option<egui::Rect>) {
+    let pixels = [size.width.max(1), size.height.max(1)];
+    if size.width == 0 || size.height == 0 {
+        return (pixels, None);
+    }
+    let points = egui::vec2(size.width as f32, size.height as f32) / pixels_per_point;
+    (pixels, Some(egui::Rect::from_min_size(egui::Pos2::ZERO, points)))
+}
+
 /// Note the window's size, position and maximized state for next time.
 /// While it's maximized (or full screen) the normal size and position are
 /// kept, so un-maximizing next session goes back to them.
@@ -2105,10 +2122,29 @@ fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PEN_HOLD, PenPress, note_held_key};
+    use super::{PEN_HOLD, PenPress, frame_dimensions, note_held_key};
     use glam::Vec2;
+    use winit::dpi::PhysicalSize;
     use winit::event::ElementState::{Pressed, Released};
     use winit::keyboard::{KeyCode, PhysicalKey};
+
+    #[test]
+    fn frame_dimensions_keep_layout_in_step_with_surface() {
+        for (size, scale) in [
+            (PhysicalSize::new(1440, 900), 1.0),
+            (PhysicalSize::new(1439, 900), 1.5),
+            (PhysicalSize::new(1600, 1000), 2.0),
+        ] {
+            let (pixels, rect) = frame_dimensions(size, scale);
+            let rect = rect.unwrap();
+            assert_eq!(pixels, [size.width, size.height]);
+            assert_eq!(rect.min, egui::Pos2::ZERO);
+            assert!((rect.width() * scale - size.width as f32).abs() < 0.001);
+            assert!((rect.height() * scale - size.height as f32).abs() < 0.001);
+        }
+        assert_eq!(frame_dimensions(PhysicalSize::new(0, 900), 1.0), ([1, 900], None));
+        assert_eq!(frame_dimensions(PhysicalSize::new(1440, 0), 1.0), ([1440, 1], None));
+    }
 
     #[test]
     fn tab_and_space_are_tracked_while_held() {
