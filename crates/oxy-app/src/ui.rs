@@ -3179,6 +3179,10 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
                             ui.label(RichText::new("On what's picked · Shift+drag extrudes").weak().small());
                             ui.separator();
                             tips::hover(ui.toggle_value(&mut ed.gizmo_snap, "Snap"), plain::GIZMO_SNAP);
+                            poly_gizmo_axes_menu(ui, ed);
+                            if ed.poly_gizmo_customized() && ui.button("Reset pivot").clicked() {
+                                ed.poly_reset_gizmo();
+                            }
                             if tips::hover(ui.button("Done"), plain::GIZMO_DONE).clicked() {
                                 ed.gizmo = None;
                             }
@@ -3341,6 +3345,27 @@ fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
         };
         tips::show_at(ctx, at, tips::gizmo_handle_tip(mode, handle));
     }
+}
+
+/// Pivot and axes for the Poly Edit gizmo.
+fn poly_gizmo_axes_menu(ui: &mut Ui, ed: &mut Editor) {
+    use crate::gizmo_ops::Orientation;
+    ui.menu_button("Pivot & axes", |ui| {
+        ui.label(RichText::new("Axes").strong());
+        for (label, o) in [
+            ("World", Orientation::World),
+            ("Align to view", Orientation::View),
+            ("Along the picked normal", Orientation::Normal),
+        ] {
+            if ui.button(label).clicked() {
+                ed.set_gizmo_orientation(o);
+                ui.close();
+            }
+        }
+        ui.separator();
+        ui.label(RichText::new("Alt+click a point, edge or face: pivot snaps to it").weak().small());
+        ui.label(RichText::new("Alt+drag a handle: move or turn the gizmo only").weak().small());
+    });
 }
 
 /// Pivot and orientation choices for the transform gizmo.
