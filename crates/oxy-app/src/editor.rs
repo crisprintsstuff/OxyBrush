@@ -1413,7 +1413,7 @@ impl Default for Editor {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             stroke_mode: StrokeMode::Freehand,
             stabilizer_pt: 0.0,
@@ -8355,6 +8355,7 @@ mod tests {
     #[test]
     fn remembering_brush_settings_can_be_turned_off() {
         let defaults = editor();
+        assert!(!defaults.front_faces_only);
         let mut e = editor();
         e.brush_kind = BrushKind::ClayStrips;
         e.brush_radius_pt = 77.0;
@@ -12211,6 +12212,7 @@ mod tests {
         assert!((got - c).abs().max_element() < 0.05, "estimated centre {got}");
         e.symmetry = Symmetry { x: true, ..Default::default() };
         e.brush_kind = BrushKind::Grab;
+        *e.strength_mut(BrushKind::Grab) = 1.0;
         e.brush_radius_pt = 60.0;
         drag(&mut e, Vec2::new(520.0, 300.0), Vec2::new(600.0, 300.0));
         let b = e.scene.active().mesh.bounds();

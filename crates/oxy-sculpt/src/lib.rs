@@ -277,6 +277,12 @@ impl BrushKind {
     pub fn default_strength(self) -> f32 {
         match self {
             BrushKind::Smooth => 0.5,
+            BrushKind::InsertPrimitive
+            | BrushKind::Tube
+            | BrushKind::PaintGroups
+            | BrushKind::PlaneClip
+            | BrushKind::LineSplit
+            | BrushKind::CutAway => 1.0,
             BrushKind::Grab
             | BrushKind::SnakeHook
             | BrushKind::TopoMove
@@ -284,13 +290,9 @@ impl BrushKind {
             | BrushKind::KelvinTwist
             | BrushKind::KelvinScale
             | BrushKind::CurveMove
-            | BrushKind::InsertPrimitive
-            | BrushKind::Tube
-            | BrushKind::PaintGroups
-            | BrushKind::PlaneClip
-            | BrushKind::LineSplit
-            | BrushKind::CutAway => 1.0,
-            BrushKind::Pinch | BrushKind::Polish | BrushKind::PlanarTrim => 0.5,
+            | BrushKind::Pinch
+            | BrushKind::Polish
+            | BrushKind::PlanarTrim => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
             BrushKind::Paint => 0.6,
@@ -355,7 +357,7 @@ impl Default for BrushSettings {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
-            front_faces_only: true,
+            front_faces_only: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -1881,6 +1883,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn movement_brush_defaults_are_moderate_and_front_face_filter_is_off() {
+        for kind in [
+            BrushKind::Grab,
+            BrushKind::SnakeHook,
+            BrushKind::TopoMove,
+            BrushKind::KelvinGrab,
+            BrushKind::KelvinTwist,
+            BrushKind::KelvinScale,
+            BrushKind::CurveMove,
+        ] {
+            assert_eq!(kind.default_strength(), 0.5, "{kind:?}");
+        }
+        assert!(!BrushSettings::default().front_faces_only);
+    }
+
+    #[test]
     fn every_insert_shape_sits_on_its_base_facing_up() {
         for shape in InsertShape::ALL {
             let m = shape.build_mesh();
@@ -2745,7 +2763,13 @@ mod tests {
         let xsym = Symmetry { x: true, ..Default::default() };
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         let mut s = Stroke::new(settings, xsym, false).with_view(-Vec3::Z);
         let p0 = Vec3::new(0.25, 0.0, (1.0 - 0.25 * 0.25_f32).sqrt());
         s.add_sample(&mut mesh, StrokeSample { position: p0, normal: p0.normalize(), pressure: 1.0 }, &mut |_, _| {});
@@ -2776,7 +2800,13 @@ mod tests {
         // the fade keeps neighbours together.
         let mut mesh = primitives::icosphere(5, 1.0);
         let before = mesh.clone();
-        let settings = BrushSettings { kind: BrushKind::Grab, radius: 0.5, strength: 1.0, ..Default::default() };
+        let settings = BrushSettings {
+            kind: BrushKind::Grab,
+            radius: 0.5,
+            strength: 1.0,
+            front_faces_only: true,
+            ..Default::default()
+        };
         assert!(settings.front_faces_only);
         let p0 = Vec3::new(0.97, 0.0, (1.0 - 0.97f32 * 0.97).sqrt());
         let mut s = Stroke::new(settings, Symmetry::default(), false).with_view(-Vec3::Z);
