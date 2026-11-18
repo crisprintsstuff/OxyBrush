@@ -21,6 +21,46 @@ use std::time::{Duration, Instant};
 #[allow(dead_code)]
 pub const MAX_TRIANGLES: usize = 24_000_000;
 
+/// A file type Export can write.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ExportFormat {
+    #[default]
+    Glb,
+    Gltf,
+    Obj,
+    Stl,
+    Ply,
+}
+
+impl ExportFormat {
+    pub const ALL: [ExportFormat; 5] = [Self::Glb, Self::Gltf, Self::Obj, Self::Stl, Self::Ply];
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Self::Glb => "glb",
+            Self::Gltf => "gltf",
+            Self::Obj => "obj",
+            Self::Stl => "stl",
+            Self::Ply => "ply",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Glb => "glTF binary (games, engines, Blender)",
+            Self::Gltf => "glTF (single text file)",
+            Self::Obj => "Wavefront OBJ",
+            Self::Stl => "STL (3D printing)",
+            Self::Ply => "PLY",
+        }
+    }
+
+    /// The path with this type's extension when it has none.
+    pub fn with_default_extension(self, path: &Path) -> PathBuf {
+        if path.extension().is_none() { path.with_extension(self.extension()) } else { path.to_path_buf() }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PointerButton {
     Primary,
@@ -1277,6 +1317,9 @@ pub struct Editor {
     pub agent_label: String,
     /// How glTF/GLB exports are compressed (File menu, Preferences > General).
     pub gltf_compression: oxy_io::GltfCompression,
+    /// File type Export proposes. Native macOS save panels (as rfd opens
+    /// them) have no file type list, so the type is chosen here.
+    pub export_format: ExportFormat,
     /// The Python plugin running now, by name, for the status bar.
     pub plugin_running: Option<String>,
     /// Set by the Disconnect button; the app rotates the token and clears it.
@@ -1590,6 +1633,7 @@ impl Default for Editor {
             agent_connected: false,
             agent_label: oxy_mcp::AGENT_LABEL.to_owned(),
             gltf_compression: oxy_io::GltfCompression::None,
+            export_format: ExportFormat::default(),
             plugin_running: None,
             agent_disconnect: false,
             plugins: crate::plugins::discover_plugins(),
@@ -7787,6 +7831,14 @@ fn base_mesh(bytes: &[u8]) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn export_without_an_extension_takes_the_chosen_type() {
+        let p = Path::new("/tmp/robot");
+        assert_eq!(ExportFormat::Stl.with_default_extension(p), Path::new("/tmp/robot.stl"));
+        let typed = Path::new("/tmp/robot.obj");
+        assert_eq!(ExportFormat::Stl.with_default_extension(typed), typed, "a typed extension wins");
+    }
 
     fn editor() -> Editor {
         let mut e =

@@ -521,6 +521,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
                     action = Some(UiAction::Export);
                 }
+                ui.menu_button(format!("Export type: .{}", ed.export_format.extension()), |ui| {
+                    for f in crate::editor::ExportFormat::ALL {
+                        ui.radio_value(&mut ed.export_format, f, f.label());
+                    }
+                })
+                .response
+                .on_hover_text("The file type Export proposes. A different extension typed in the dialog wins.");
                 ui.menu_button(format!("glTF compression: {}", ed.gltf_compression.key()), |ui| {
                     gltf_compression_choice(ui, ed);
                 })
