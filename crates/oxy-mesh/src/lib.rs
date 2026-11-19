@@ -205,7 +205,6 @@ pub struct Mesh {
     source_triangle: Vec<u32>,
     vertex_triangles: Csr,
     vertex_chunk: Vec<u32>,
-    triangle_chunk: Vec<u32>,
     dirty: Vec<bool>,
     /// Chunks whose bounds were only grown during a stroke (still correct,
     /// possibly loose); `tighten_bounds` recomputes them exactly.
@@ -302,10 +301,6 @@ impl Mesh {
         for (ci, c) in chunks.iter().enumerate() {
             vertex_chunk[c.vertices.start as usize..c.vertices.end as usize].fill(ci as u32);
         }
-        let mut triangle_chunk = vec![0u32; triangles.len()];
-        for (ci, c) in chunks.iter().enumerate() {
-            triangle_chunk[c.triangles.start as usize..c.triangles.end as usize].fill(ci as u32);
-        }
 
         let vertex_triangles = Csr::vertex_triangles(vcount, &triangles);
 
@@ -327,7 +322,6 @@ impl Mesh {
             triangles,
             vertex_triangles,
             vertex_chunk,
-            triangle_chunk,
             topology_version: NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed),
             vert_stamp: Stamps::new(vcount),
             stamp: 0,
@@ -1580,6 +1574,12 @@ impl Mesh {
         self.vertex_chunk[v as usize]
     }
 
+    /// The chunk that owns triangle `t`.
+    #[inline(always)]
+    pub fn triangle_chunk(&self, t: u32) -> u32 {
+        (t as usize / CHUNK_TRIANGLES) as u32
+    }
+
     /// Chunks whose bounds intersect the sphere. Owned vertices of other chunks
     /// are guaranteed to lie outside it.
     pub fn chunks_in_sphere(&self, center: Vec3, radius: f32) -> Vec<u32> {
@@ -1674,7 +1674,7 @@ impl Mesh {
             for &v in part {
                 let p = self.positions[v as usize];
                 for &t in self.vertex_triangles.get(v as usize) {
-                    let c = self.triangle_chunk[t as usize];
+                    let c = self.triangle_chunk(t);
                     if last.0 != c {
                         let i = acc.iter().position(|e| e.0 == c).unwrap_or_else(|| {
                             acc.push((c, Aabb::EMPTY));
@@ -1799,7 +1799,6 @@ impl Mesh {
             ("source_triangle", v(&self.source_triangle)),
             ("vertex_triangles", self.vertex_triangles.bytes()),
             ("vertex_chunk", v(&self.vertex_chunk)),
-            ("triangle_chunk", v(&self.triangle_chunk)),
             ("dirty", v(&self.dirty)),
             ("loose_bounds", v(&self.loose_bounds)),
             ("vert_stamp", v(&self.vert_stamp.0)),
@@ -2674,6 +2673,17 @@ mod tests {
         m.tighten_bounds();
         for (c, e) in m.chunks.iter().zip(&exact) {
             assert!((c.aabb.min - e.min).length() < 1e-5 && (c.aabb.max - e.max).length() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn triangle_chunk_matches_chunk_triangles() {
+        let m = primitives::icosphere(5, 1.0);
+        assert!(m.chunks.len() > 1);
+        for (ci, chunk) in m.chunks.iter().enumerate() {
+            for t in chunk.triangles.clone() {
+                assert_eq!(m.triangle_chunk(t), ci as u32);
+            }
         }
     }
 

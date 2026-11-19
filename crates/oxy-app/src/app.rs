@@ -727,8 +727,11 @@ impl App {
         // Poly Edit shows the piece's polygon edges as a depth-tested
         // wireframe, so the surface in front hides the edges behind it.
         let poly_wire = ed.poly_wire_piece();
+        let all_wires = ed.view.wireframe && ed.view.wireframe_opacity > 0.001;
         for p in ed.scene.pieces.iter_mut() {
-            g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle);
+            let piece_wire = (all_wires || Some(p.id) == poly_wire)
+                && p.mesh.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
+            g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
                 items.push(oxy_render::DrawItem {
@@ -761,7 +764,7 @@ impl App {
         self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
         g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
         if let Some(preview) = ed.preview_mesh_mut() {
-            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle);
+            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle, false);
             // A piece shown in place (a curve stroke) keeps its material.
             let material = curve_piece.map_or(0, slot_of);
             items.push(oxy_render::DrawItem {

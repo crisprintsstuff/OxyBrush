@@ -16,6 +16,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 - Section headings in the Studio theme (the settings panel) are shown as written, "Like This", instead of in all capitals.
 
+### Fixed
+
+- **High-poly stability and crash prevention at extreme triangle counts**:
+  - Gated wireframe index generation so line buffers are only generated and uploaded when wireframe is active and triangle count is <= 10M triangles, eliminating up to 4.8 GB of host RAM and 4.8 GB GPU buffer allocation per mesh rebuild and preventing 32-bit integer overflow and GPU driver buffer allocation crashes.
+  - Enforced GPU `max_storage_buffer_binding_size` (128 MB) on `face_colors` storage buffers with fallback to per-vertex color, preventing driver validation crashes on meshes with >33.5M triangles.
+  - Guarded mesh vertex and index buffer creations against GPU `max_buffer_size`.
+  - Removed redundant `triangle_chunk` vector from `Mesh`, reducing RAM usage by 4 bytes per triangle (saving 800 MB at 200M triangles and 2.4 GB at 600M triangles).
+
 ## [4.0.0-beta.18] - 2026-11-18
 
 ### Fixed
