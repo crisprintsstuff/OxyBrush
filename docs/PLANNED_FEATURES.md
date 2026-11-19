@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.17](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
+[4.0.0-beta.18](https://github.com/crisprintsstuff/OxyBrush/releases/latest);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -112,6 +112,9 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ## Recently shipped (for context)
 
+- **4.0.0-beta.18:** mask blur and sharpen with Ctrl+click, Hide masked,
+  Alt-to-mask-outside for mask boxes and lassos, Sort brushes A–Z, and
+  brush size and Floor grid fixes in an empty scene.
 - **4.0.0-beta.17:** empty scenes, batch import, gizmo-axis Poly Edit extrude,
   masked-area face groups, export type selection, smoother window resizing,
   updated brush defaults, and fixes for crease symmetry, Kelvin Grab, Poly Edit
