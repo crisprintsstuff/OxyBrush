@@ -804,6 +804,7 @@ pub mod plain {
     pub const PRESSURE_DRIVER: &str = "Your tablet driver (Wacom, Huion, XP-Pen) may have its own pressure curve too. Keep that one straight and set the curve here, or the two add up.";
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
+    pub const ALPHA_INVERT: &str = "Invert the alpha image: white becomes black and black becomes white.";
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
     pub const REVERT_CONFIRM: &str =
         "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
@@ -1011,6 +1012,7 @@ pub mod plain {
         PRESSURE_CURVE,
         ALPHA_ROTATION,
         ALPHA_FOLLOW,
+        ALPHA_INVERT,
         RADIAL,
         RADIAL_AXIS,
         SYM_RECENTER,

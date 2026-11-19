@@ -300,6 +300,14 @@ fn edit_section(ui: &mut egui::Ui, ed: &mut Editor) {
             }
         });
         ui.end_row();
+        if let Some(stamp) = &recipe.alpha {
+            ui.label("Invert alpha");
+            let mut invert = stamp.invert;
+            if ui.checkbox(&mut invert, "").clicked() {
+                ed.living_edit_setting(StrokeSetting::AlphaInvert(invert), false);
+            }
+            ui.end_row();
+        }
         drag_row(ui, ed, "Spacing", recipe.settings.spacing, 0.02..=1.0, StrokeSetting::Spacing);
     });
     ui.horizontal(|ui| {

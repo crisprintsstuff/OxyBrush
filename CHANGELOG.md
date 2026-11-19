@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Option to invert brush alphas** ([#339](https://github.com/crisprintsstuff/OxyBrush/issues/339)). The **Invert alpha** toggle flips the alpha values (white becomes black and black becomes white) during strokes, in presets, and in the Living Strokes edit panel. The thumbnail updates live to reflect the inversion.
+
 ### Changed
 
 - Section headings in the Studio theme (the settings panel) are shown as written, "Like This", instead of in all capitals.
