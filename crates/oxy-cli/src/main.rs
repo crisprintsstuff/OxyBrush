@@ -19,7 +19,7 @@ oxybrush-cli: headless OxyBrush tools
 USAGE:
   oxybrush-cli info     <input>
   oxybrush-cli convert  <input> <output>
-  oxybrush-cli remesh   <input> <output> [--resolution N]        (8-320, default 128)
+  oxybrush-cli remesh   <input> <output> [--resolution N] [--adaptivity N] [--preserve-volume]
   oxybrush-cli decimate <input> <output> (--keep PERCENT | --triangles N)
   oxybrush-cli lod      <input> <output-prefix> [--levels N] [--format EXT]
   oxybrush-cli split    <input> <output-folder> [--by groups|parts] [--format EXT]
@@ -115,7 +115,14 @@ fn run(args: &[String]) -> Result<String, String> {
             need(2)?;
             let resolution = flag_num(args, "--resolution")?.unwrap_or(128.0) as u32;
             let adaptivity = flag_num(args, "--adaptivity")?.unwrap_or(0.0) as f32;
-            let opts = oxy_topo::RemeshOptions { resolution, smooth_passes: 1, adaptivity, ..Default::default() };
+            let preserve_volume = args.iter().any(|a| a == "--preserve-volume");
+            let opts = oxy_topo::RemeshOptions {
+                resolution,
+                smooth_passes: 1,
+                adaptivity,
+                preserve_volume,
+                ..Default::default()
+            };
             let pieces = map_meshes(load(Path::new(pos[0]))?, |m| {
                 oxy_topo::voxel_remesh(&[m], opts).map_err(|e| e.to_string())
             })?;
@@ -374,7 +381,10 @@ mod tests {
         // OBJ round trip, then decimate to a percentage.
         let msg = run(&args(&["decimate", &d("out.obj"), &d("light.stl"), "--keep", "25%"])).unwrap();
         assert!(msg.contains("light.stl"), "{msg}");
-        assert!(run(&args(&["remesh", &d("in.oxb"), &d("remeshed.oxb"), "--resolution", "48"])).is_ok());
+        assert!(
+            run(&args(&["remesh", &d("in.oxb"), &d("remeshed.oxb"), "--resolution", "48", "--preserve-volume"]))
+                .is_ok()
+        );
         assert!(run(&args(&["info", &d("remeshed.oxb")])).unwrap().contains("2 piece(s)"));
         // LOD files.
         let lod = run(&args(&["lod", &d("in.oxb"), &d("lods/hero"), "--levels", "2", "--format", "ply"])).unwrap();

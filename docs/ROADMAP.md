@@ -147,6 +147,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - Symmetrize welds only points that lie on the middle plane: parts that don't reach the middle (two eyes, say) are mirrored but not joined, and both halves share the same face groups
 - Decimation takes about a second for a million triangles (runs in the background)
 - Open surfaces remesh to a thin shell; the Regular Grid engine is capped at resolution 320 (the default sparse engine goes to 1024)
+- Voxel remesh Preserve volume option prevents shrinkage and loss of silhouette mass over successive remeshes
 - Subdivision levels: changes above 1M triangles run in the background (the piece can't be edited or saved until they finish); remesh, decimate and single subdivide remove the levels (undo restores them)
 - Saving to network drives: the fallbacks were tested only with simulated failures, not on a real SMB share
 - Touch gestures (pinch, two-finger orbit and undo) and pen pressure are implemented but untested on real touchscreens and most tablets; Linux pen pressure relies on the tablet's pressure axis being labelled "Abs Pressure"

@@ -1220,13 +1220,7 @@ mod tube_tests {
     use super::*;
 
     pub(super) fn signed_volume(m: &Mesh) -> f32 {
-        m.triangles
-            .iter()
-            .map(|t| {
-                let [a, b, c] = t.map(|v| m.positions[v as usize]);
-                a.dot(b.cross(c)) / 6.0
-            })
-            .sum()
+        m.signed_volume()
     }
 
     #[test]

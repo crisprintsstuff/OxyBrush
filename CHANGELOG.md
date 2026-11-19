@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Preserve volume option in voxel remesh** ([#354](https://github.com/crisprintsstuff/OxyBrush/issues/354)). When enabled, remeshing projects vertices back to the level-set zero crossing and applies volume-calibrated normal adjustment to compensate for voxelization chord loss and smoothing shrinkage. Successive remeshes retain their silhouette, mass, and volume without shrinking or squashing. Also available in the CLI via `--preserve-volume`.
+
 ## [4.0.0-beta.19] - 2026-11-19
 
 ### Added

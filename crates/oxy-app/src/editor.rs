@@ -1046,6 +1046,8 @@ pub struct Editor {
     /// Surface area of the active piece, cached by (piece, history revision).
     remesh_area: Option<((u64, u64), f32)>,
     pub remesh_adaptivity: f32,
+    /// Preserve volume and silhouette when voxel remeshing (prevents model shrinkage).
+    pub remesh_preserve_volume: bool,
     /// Remesh into a wall around the surface instead of filling it.
     pub remesh_shell: bool,
     /// The wall's thickness (scene units) and side.
@@ -1522,6 +1524,7 @@ impl Default for Editor {
             remesh_resolution: 128,
             remesh_area: None,
             remesh_adaptivity: 0.0,
+            remesh_preserve_volume: false,
             remesh_shell: false,
             remesh_shell_thickness: 0.05,
             remesh_shell_side: oxy_topo::ShellSide::default(),
@@ -6511,6 +6514,7 @@ impl Editor {
                 thickness: self.remesh_shell_thickness.max(1e-4),
                 side: self.remesh_shell_side,
             }),
+            preserve_volume: self.remesh_preserve_volume,
         }
     }
 
@@ -12237,6 +12241,19 @@ mod tests {
         assert_eq!(e.scene.pieces.len(), 1, "{}", e.status);
         e.undo();
         assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn remesh_preserve_volume_option() {
+        let mut e = editor();
+        e.remesh_resolution = 32;
+        let orig_vol = e.scene.active().mesh.signed_volume();
+        e.remesh_preserve_volume = true;
+        e.remesh_active();
+        wait_job(&mut e);
+        let preserved_vol = e.scene.active().mesh.signed_volume();
+        let diff = (preserved_vol - orig_vol).abs() / orig_vol;
+        assert!(diff < 0.005, "remesh with preserve_volume should keep volume within 0.5%: diff={diff}");
     }
 
     #[test]
