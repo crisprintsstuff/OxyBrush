@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+- **Poly Edit gizmo axes and pivot** ([#324](https://github.com/crisprintsstuff/OxyBrush/issues/324)). The gizmo bar's **Pivot & axes** menu aligns the axes to the world, the view, or the average normal of what is picked. Alt+click a point, edge or face to snap the pivot to it; Alt+drag a handle to move or turn the gizmo without moving geometry. **Reset pivot** puts it back.
+
 ### Changed
 
 - Section headings in the Studio theme (the settings panel) are shown as written, "Like This", instead of in all capitals.

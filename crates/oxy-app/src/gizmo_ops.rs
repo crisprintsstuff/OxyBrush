@@ -105,6 +105,17 @@ pub enum Orientation {
     World,
     /// Right, up and towards you, as the view is now.
     View,
+    /// Z along the average normal of what is picked (Poly Edit).
+    Normal,
+}
+
+/// Axes with Z along `normal` (X and Y any perpendicular pair).
+pub fn basis_from_normal(normal: Vec3) -> Mat3 {
+    let z = normal.normalize_or(Vec3::Z);
+    let ref_axis = if z.y.abs() < 0.99 { Vec3::Y } else { Vec3::X };
+    let x = ref_axis.cross(z).normalize();
+    let y = z.cross(x).normalize();
+    Mat3::from_cols(x, y, z)
 }
 
 impl Editor {
@@ -200,8 +211,12 @@ impl Editor {
     }
 
     pub fn set_gizmo_orientation(&mut self, o: Orientation) {
+        if self.poly_edit.is_some() {
+            self.set_poly_gizmo_orientation(o);
+            return;
+        }
         self.custom_gizmo_rotation = match o {
-            Orientation::World => None,
+            Orientation::World | Orientation::Normal => None,
             Orientation::View => {
                 let back = -self.camera.forward();
                 let right = self.camera.up().cross(back).normalize_or(Vec3::X);
@@ -214,7 +229,7 @@ impl Editor {
             self.custom_gizmo_pivot = self.gizmo_base_pivot();
         }
         self.status = match o {
-            Orientation::World => "Gizmo axes: world".into(),
+            Orientation::World | Orientation::Normal => "Gizmo axes: world".into(),
             Orientation::View => "Gizmo axes: aligned to the view".into(),
         };
     }
