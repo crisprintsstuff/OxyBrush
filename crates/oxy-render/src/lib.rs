@@ -344,6 +344,14 @@ pub const ITEM_WIREFRAME_OPACITY: f32 = 0.9;
 /// 32-bit integer overflows and driver allocation crashes.
 pub const MAX_WIREFRAME_TRIANGLES: usize = 10_000_000;
 
+/// Maximum number of triangles in a single GPU draw call partition.
+///
+/// Splitting draw calls and index buffers into bounded chunks (1,048,576 triangles,
+/// 12 MB index buffer, 4 MB face colors slice) ensures that neither index buffers nor
+/// storage buffer bindings ever exceed hardware limits (such as the standard 128 MB
+/// max_storage_buffer_binding_size limit) and prevents VRAM allocation fragmentation.
+pub const PARTITION_TRIANGLES: usize = 1_048_576;
+
 /// Per-instance data: a model matrix (source space to world), as four
 /// columns (vertex slot 1, shader locations 5 to 8).
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
@@ -364,14 +372,21 @@ struct InstanceSet {
     count: u32,
 }
 
-struct GpuMesh {
-    vertices: wgpu::Buffer,
+/// One bounded draw call partition of an index buffer and its face colors bind group.
+struct GpuPartition {
     indices: wgpu::Buffer,
     index_count: u32,
+    bind_group: wgpu::BindGroup,
+}
+
+struct GpuMesh {
+    vertices: wgpu::Buffer,
+    partitions: Vec<GpuPartition>,
+    total_index_count: u32,
     line_indices: wgpu::Buffer,
     line_index_count: u32,
     piece_uniforms: wgpu::Buffer,
-    bind_group: wgpu::BindGroup,
+    wire_bind_group: wgpu::BindGroup,
     topology_version: u64,
     face_version: u64,
     group_lut: Vec<u32>,
@@ -1220,26 +1235,77 @@ impl ViewportRenderer {
                 face_colors.as_slice()
             };
 
-            let index_contents: &[u8] = match &indices {
-                Some(vis) if vis.is_empty() => &[0u8; 12],
-                Some(vis) => bytemuck::cast_slice(vis),
-                None if mesh.triangles.is_empty() => &[0u8; 12],
-                None => bytemuck::cast_slice(&mesh.triangles),
-            };
-            let index_bytes = index_contents.len() as u64;
-            if index_bytes > max_buf_size {
-                eprintln!(
-                    "oxy-render: Mesh indices size ({} MB) exceeds GPU limit ({} MB). Rebuild skipped.",
-                    index_bytes / (1024 * 1024),
-                    max_buf_size / (1024 * 1024)
-                );
-                return 0;
-            }
-            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oxy indices"),
-                contents: index_contents,
-                usage: wgpu::BufferUsages::INDEX,
+            let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("oxy face colors"),
+                contents: bytemuck::cast_slice(face_colors_slice),
+                usage: wgpu::BufferUsages::STORAGE,
             });
+            let piece_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("oxy piece uniforms"),
+                size: std::mem::size_of::<PieceUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+
+            let triangles_slice: &[[u32; 3]] = match &indices {
+                Some(vis) => vis.as_slice(),
+                None => mesh.triangles.as_slice(),
+            };
+
+            let partitions: Vec<GpuPartition> = if triangles_slice.is_empty() {
+                let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("oxy indices empty"),
+                    contents: &[0u8; 12],
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("oxy piece bind group empty"),
+                    layout: &self.piece_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: piece_uniforms.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: faces.as_entire_binding() },
+                    ],
+                });
+                vec![GpuPartition { indices: index_buffer, index_count: 0, bind_group }]
+            } else {
+                triangles_slice
+                    .chunks(PARTITION_TRIANGLES)
+                    .enumerate()
+                    .map(|(chunk_idx, tri_chunk)| {
+                        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                            label: Some(&format!("oxy indices part {chunk_idx}")),
+                            contents: bytemuck::cast_slice(tri_chunk),
+                            usage: wgpu::BufferUsages::INDEX,
+                        });
+                        let part_tri_count = tri_chunk.len();
+                        let part_index_count = (part_tri_count * 3) as u32;
+
+                        let t_start = chunk_idx * PARTITION_TRIANGLES;
+                        let face_offset = (t_start * 4) as u64;
+                        let face_size = (part_tri_count * 4) as u64;
+
+                        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some(&format!("oxy piece bind group part {chunk_idx}")),
+                            layout: &self.piece_layout,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: piece_uniforms.as_entire_binding() },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                        buffer: &faces,
+                                        offset: face_offset,
+                                        size: wgpu::BufferSize::new(face_size),
+                                    }),
+                                },
+                            ],
+                        });
+                        GpuPartition { indices: index_buffer, index_count: part_index_count, bind_group }
+                    })
+                    .collect()
+            };
+
+            let wire_bind_group = partitions[0].bind_group.clone();
+
             let (line_index_buffer, line_index_count) = if want_wireframe {
                 let line_indices = wire_lines(mesh);
                 let count = line_indices.len() as u32 * 2;
@@ -1257,35 +1323,16 @@ impl ViewportRenderer {
                 });
                 (buf, 0)
             };
-            let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oxy face colors"),
-                contents: bytemuck::cast_slice(face_colors_slice),
-                usage: wgpu::BufferUsages::STORAGE,
-            });
-            let piece_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("oxy piece uniforms"),
-                size: std::mem::size_of::<PieceUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("oxy piece bind group"),
-                layout: &self.piece_layout,
-                entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: piece_uniforms.as_entire_binding() },
-                    wgpu::BindGroupEntry { binding: 1, resource: faces.as_entire_binding() },
-                ],
-            });
             self.meshes.insert(
                 id,
                 GpuMesh {
                     vertices,
-                    indices: index_buffer,
-                    index_count,
+                    partitions,
+                    total_index_count: index_count,
                     line_indices: line_index_buffer,
                     line_index_count,
                     piece_uniforms,
-                    bind_group,
+                    wire_bind_group,
                     topology_version: mesh.topology_version(),
                     face_version: mesh.face_version(),
                     group_lut: if self.exact_face_colors { Vec::new() } else { lut },
@@ -1584,7 +1631,7 @@ impl ViewportRenderer {
             let mut instanced = None;
             for item in items {
                 let Some(gpu) = self.meshes.get(&item.id) else { continue };
-                if gpu.index_count == 0 || item.preview {
+                if gpu.total_index_count == 0 || item.preview {
                     continue;
                 }
                 let Some(count) = self.bind_instances(
@@ -1596,8 +1643,12 @@ impl ViewportRenderer {
                     continue;
                 };
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-                pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu.index_count, 0, 0..count);
+                for part in &gpu.partitions {
+                    if part.index_count > 0 {
+                        pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..part.index_count, 0, 0..count);
+                    }
+                }
             }
         }
         // With shading off, the matcap pass draws straight into the window
@@ -1628,7 +1679,7 @@ impl ViewportRenderer {
             let mut instanced = None;
             for item in items {
                 let Some(gpu) = self.meshes.get(&item.id) else { continue };
-                if gpu.index_count == 0 {
+                if gpu.total_index_count == 0 {
                     continue;
                 }
                 let Some(count) =
@@ -1636,10 +1687,14 @@ impl ViewportRenderer {
                 else {
                     continue;
                 };
-                pass.set_bind_group(1, &gpu.bind_group, &[]);
                 pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-                pass.set_index_buffer(gpu.indices.slice(..), wgpu::IndexFormat::Uint32);
-                pass.draw_indexed(0..gpu.index_count, 0, 0..count);
+                for part in &gpu.partitions {
+                    if part.index_count > 0 {
+                        pass.set_bind_group(1, &part.bind_group, &[]);
+                        pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
+                        pass.draw_indexed(0..part.index_count, 0, 0..count);
+                    }
+                }
             }
             if settings.floor.is_some() {
                 // After the pieces, so the model hides the grid behind it.
@@ -1662,7 +1717,7 @@ impl ViewportRenderer {
                     ) else {
                         continue;
                     };
-                    pass.set_bind_group(1, &gpu.bind_group, &[]);
+                    pass.set_bind_group(1, &gpu.wire_bind_group, &[]);
                     pass.set_vertex_buffer(0, gpu.vertices.slice(..));
                     pass.set_index_buffer(gpu.line_indices.slice(..), wgpu::IndexFormat::Uint32);
                     pass.draw_indexed(0..gpu.line_index_count, 0, 0..count);
@@ -1895,5 +1950,23 @@ mod tests {
         // well within standard 2.0 GB GPU max_buffer_size and 4.0 GB u32::MAX.
         let max_wire_bytes = MAX_WIREFRAME_TRIANGLES as u64 * 6 * 4;
         assert!(max_wire_bytes < 2_000_000_000);
+    }
+
+    #[test]
+    fn partition_triangles_bounds_and_alignment() {
+        assert_eq!(PARTITION_TRIANGLES, 1_048_576);
+        // Each partition's index buffer size:
+        let part_index_bytes = PARTITION_TRIANGLES as u64 * 3 * 4;
+        assert_eq!(part_index_bytes, 12_582_912); // ~12 MB
+        assert!(part_index_bytes < 32 * 1024 * 1024);
+
+        // Face colors byte offset per partition:
+        let part_face_bytes = PARTITION_TRIANGLES as u64 * 4;
+        assert_eq!(part_face_bytes, 4_194_304); // 4 MB
+        assert!(part_face_bytes < 128 * 1024 * 1024); // well within 128 MB max_storage_buffer_binding_size
+
+        // Storage buffer offset alignment in WebGPU is at most 256 bytes:
+        assert_eq!(part_face_bytes % 256, 0);
+        assert_eq!(part_face_bytes % 512, 0);
     }
 }

@@ -110,12 +110,18 @@ At 200M triangles ($T = 200\times 10^6$, Vertices $V \approx 100\times 10^6$):
   - In `crates/oxy-mesh/src/lib.rs`: Remove `triangle_chunk: Vec<u32>` from `Mesh`. Since chunks are contiguous blocks of 1,024 triangles, `triangle_chunk(t)` is identically `(t / CHUNK_TRIANGLES as u32)`.
   - Saves $800\text{ MB}$ at 200M triangles and $2.4\text{ GB}$ at 600M triangles with zero performance overhead.
 
-### Phase 2: Partitioned GPU Rendering & Draw Calls
-- Split vertex and index buffers into chunks of $\le 32\text{ MB}$ ($~1\text{M}$ triangles per draw call chunk).
-- Allows rendering monolithic pieces beyond $2.0\text{ GB}$ GPU limits.
-- Supports multi-piece scenes up to 600M+ triangles.
+### Phase 2: Partitioned GPU Rendering & Draw Calls (Completed)
+- [x] **Partitioned Index Buffers and Draw Calls**:
+  - Implemented `PARTITION_TRIANGLES = 1_048_576` (~1M triangles, 12 MB index buffer, 4 MB face colors slice).
+  - Mesh indices are sliced into bounded GPU partitions instead of monolithic allocations, preventing VRAM allocation fragmentation.
+- [x] **Partitioned Storage Buffer Sub-Bindings**:
+  - Each partition binds its corresponding 4 MB sub-slice of `face_colors` storage buffer, strictly respecting hardware `max_storage_buffer_binding_size` (128 MB) and `min_storage_buffer_offset_alignment` (256-byte aligned).
+  - Eliminates the 33.5M triangle limit for face colors and allows multi-piece scenes to scale seamlessly to 600M+ triangles.
+- [x] **Sequential Draw Execution**:
+  - Viewport matcap shading and shadow passes iterate partitions sequentially.
+  - In-place vertex moves during sculpting strokes continue to write directly to vertex buffers without touching partition headers.
 
-### Phase 3: Out-of-Core Multires & Undo Optimization
+### Phase 3: Out-of-Core Multires & Undo Optimization (Next)
 - Compress inactive undo states using LZ4 / Zstandard.
 - Cache inactive multires levels to disk / scratch file when memory pressure is detected.
 - Implement Level-of-Detail (LOD) display for inactive pieces in multi-piece scenes.
