@@ -300,6 +300,8 @@ pub enum Icon {
     ModeEdges,
     ModePoints,
     ModeAuto,
+    /// Drag handle grip (two vertical columns of dots).
+    Grip,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -607,7 +609,39 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
             };
             p.rect_filled(strip.shrink(s.width), r * 0.08, c.gamma_multiply(0.45));
         }
+        Icon::Grip => {
+            let dx = r * 0.35;
+            let dy = r * 0.5;
+            let dot_r = (r * 0.15).clamp(1.0, 2.0);
+            for x in [-dx, dx] {
+                for y in [-dy, 0.0, dy] {
+                    p.circle_filled(pos2(ctr.x + x, ctr.y + y), dot_r, c);
+                }
+            }
+        }
     }
+}
+
+/// Drag handle with grip dots for reordering items (e.g. pieces in the scene).
+pub fn drag_handle(ui: &mut Ui, tooltip: &str) -> Response {
+    let size = vec2(14.0, ui.spacing().interact_size.y.max(22.0));
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let fg = if response.hovered() || response.dragged() {
+            v.text_color()
+        } else {
+            v.weak_text_color().linear_multiply(0.55)
+        };
+        paint_icon(ui.painter(), rect.shrink(1.0), Icon::Grip, fg);
+    }
+    if response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    } else if response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    }
+    crate::tips::hover(response, tooltip)
 }
 
 /// Square icon button with hover highlight, tooltip and screen-reader label.

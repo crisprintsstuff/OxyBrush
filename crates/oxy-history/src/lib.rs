@@ -64,6 +64,11 @@ enum Change {
         piece: u64,
         visible: bool,
     },
+    /// A piece was moved from one position to another in the pieces list.
+    Reorder {
+        from: usize,
+        to: usize,
+    },
     /// Several changes applied as one; order alternates on each swap.
     Compound(Vec<Change>),
 }
@@ -76,6 +81,8 @@ pub enum Step {
     Inserted { index: usize },
     /// `piece` was removed from `index`.
     Removed { index: usize, piece: Box<Piece> },
+    /// A piece was moved from `from` to `to` in the pieces list.
+    Reordered { from: usize, to: usize },
     /// The piece's mesh and retopology cage were replaced; these are the old ones.
     Cage { piece: u64, previous: Mesh, previous_cage: Option<Cage> },
     /// The piece's surface instancers changed; these are the old ones.
@@ -97,6 +104,7 @@ impl From<Step> for Change {
             }
             Step::Instancers { piece, previous } => Change::Instancers { piece, list: previous },
             Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
+            Step::Reordered { from, to } => Change::Reorder { from: to, to: from },
         }
     }
 }
@@ -113,7 +121,7 @@ impl Change {
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
-            Change::Piece { .. } => None,
+            Change::Piece { .. } | Change::Reorder { .. } => None,
             Change::Compound(c) => {
                 let first = c.first()?.single_piece()?;
                 c.iter().all(|x| x.single_piece() == Some(first)).then_some(first)
@@ -133,6 +141,7 @@ impl Change {
             | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
             Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
+            Change::Reorder { .. } => true,
             Change::Compound(c) => c.iter().any(|x| x.touches(id)),
         }
     }
@@ -148,7 +157,7 @@ impl Change {
             }
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
-            Change::Visible { .. } => 16,
+            Change::Visible { .. } | Change::Reorder { .. } => 16,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Cage { mesh, cage, .. } => {
                 mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
@@ -230,6 +239,18 @@ impl Change {
                 p.cage = std::mem::replace(cage, current).map(|b| *b);
                 p.mesh.mark_all_dirty();
                 Some(*piece)
+            }
+            Change::Reorder { from, to } => {
+                if *from < scene.pieces.len() && *to < scene.pieces.len() && *from != *to {
+                    let active_id = scene.try_active().map(|p| p.id);
+                    let piece = scene.pieces.remove(*from);
+                    scene.pieces.insert(*to, piece);
+                    if let Some(i) = active_id.and_then(|id| scene.index_of(id)) {
+                        scene.set_active(i);
+                    }
+                    std::mem::swap(from, to);
+                }
+                None
             }
             Change::Compound(changes) => {
                 let mut last = None;
@@ -995,5 +1016,39 @@ mod tests {
         assert_eq!(h.redo(&mut s).as_deref(), Some("Import"));
         assert_eq!(s.pieces.len(), 1);
         assert_eq!(s.active().name, "Imported");
+    }
+
+    #[test]
+    fn reordering_pieces_round_trips_through_undo_redo() {
+        let mut s = scene();
+        s.pieces.push(Piece::new("b", primitives::icosphere(0, 0.2)));
+        s.pieces.push(Piece::new("c", primitives::icosphere(0, 0.3)));
+        s.set_active(1); // "b" is active
+        let mut h = History::default();
+
+        // Move piece 2 ("c") to index 0: list becomes ["c", "Sphere", "b"]
+        let p = s.pieces.remove(2);
+        s.pieces.insert(0, p);
+        s.set_active(2); // "b" is now at index 2
+        h.record_compound("Reorder", vec![Step::Reordered { from: 2, to: 0 }]);
+
+        assert_eq!(s.pieces[0].name, "c");
+        assert_eq!(s.pieces[1].name, "Sphere");
+        assert_eq!(s.pieces[2].name, "b");
+        assert_eq!(s.active_index(), 2);
+
+        // Undo restores ["Sphere", "b", "c"] and "b" at index 1
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Reorder"));
+        assert_eq!(s.pieces[0].name, "Sphere");
+        assert_eq!(s.pieces[1].name, "b");
+        assert_eq!(s.pieces[2].name, "c");
+        assert_eq!(s.active_index(), 1);
+
+        // Redo restores ["c", "Sphere", "b"]
+        assert_eq!(h.redo(&mut s).as_deref(), Some("Reorder"));
+        assert_eq!(s.pieces[0].name, "c");
+        assert_eq!(s.pieces[1].name, "Sphere");
+        assert_eq!(s.pieces[2].name, "b");
+        assert_eq!(s.active_index(), 2);
     }
 }

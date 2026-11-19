@@ -10304,6 +10304,100 @@ mod tests {
     }
 
     #[test]
+    fn reorder_piece_moves_item_in_list_and_undo_redo_round_trips() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.scene.pieces[1].name = "Piece 1".into();
+        e.duplicate_active(false);
+        e.scene.pieces[2].name = "Piece 2".into();
+        e.scene.pieces[0].name = "Piece 0".into();
+        e.scene.set_active(1); // "Piece 1" is active
+
+        // Reorder Piece 2 (index 2) to index 0: ["Piece 2", "Piece 0", "Piece 1"]
+        e.reorder_piece(2, 0);
+        assert_eq!(e.scene.pieces[0].name, "Piece 2");
+        assert_eq!(e.scene.pieces[1].name, "Piece 0");
+        assert_eq!(e.scene.pieces[2].name, "Piece 1");
+        assert_eq!(e.scene.active_index(), 2, "active piece follows its move");
+
+        // Undo restores ["Piece 0", "Piece 1", "Piece 2"] and active index 1
+        e.undo();
+        assert_eq!(e.scene.pieces[0].name, "Piece 0");
+        assert_eq!(e.scene.pieces[1].name, "Piece 1");
+        assert_eq!(e.scene.pieces[2].name, "Piece 2");
+        assert_eq!(e.scene.active_index(), 1);
+
+        // Redo restores ["Piece 2", "Piece 0", "Piece 1"] and active index 2
+        e.redo();
+        assert_eq!(e.scene.pieces[0].name, "Piece 2");
+        assert_eq!(e.scene.pieces[1].name, "Piece 0");
+        assert_eq!(e.scene.pieces[2].name, "Piece 1");
+        assert_eq!(e.scene.active_index(), 2);
+    }
+
+    #[test]
+    fn join_picked_combines_only_picked_pieces_without_affecting_others() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        assert_eq!(e.scene.pieces.len(), 3);
+        e.scene.pieces[0].name = "Piece 0".into();
+        e.scene.pieces[1].name = "Piece 1".into();
+        e.scene.pieces[2].name = "Piece 2".into();
+
+        e.scene.set_active(0);
+        // Pick only Piece 2 (not Piece 1)
+        e.toggle_piece_pick(2);
+        assert_eq!(e.gizmo_pieces(), vec![0, 2]);
+
+        let (t0, t2) = (e.scene.pieces[0].mesh.triangle_count(), e.scene.pieces[2].mesh.triangle_count());
+        let middle_id = e.scene.pieces[1].id;
+
+        e.join_picked();
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.active().mesh.triangle_count(), t0 + t2);
+        assert_eq!(e.scene.pieces[1].id, middle_id, "unpicked piece was untouched");
+        assert!(e.piece_pick.is_empty(), "pick is cleared after join");
+
+        // Undo restores all 3 pieces
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert_eq!(e.scene.pieces[0].name, "Piece 0");
+        assert_eq!(e.scene.pieces[1].name, "Piece 1");
+        assert_eq!(e.scene.pieces[2].name, "Piece 2");
+    }
+
+    #[test]
+    fn isolate_piece_toggles_between_isolated_and_all_visible() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.scene.pieces.iter().all(|p| p.visible));
+
+        // Isolate piece 1: only piece 1 visible
+        e.isolate_piece(1);
+        assert!(!e.scene.pieces[0].visible);
+        assert!(e.scene.pieces[1].visible);
+        assert!(!e.scene.pieces[2].visible);
+
+        // Isolate piece 1 again: all pieces visible
+        e.isolate_piece(1);
+        assert!(e.scene.pieces.iter().all(|p| p.visible));
+
+        // Isolate piece 2 when piece 0 was hidden: only piece 2 visible
+        e.scene.pieces[0].visible = false;
+        e.isolate_piece(2);
+        assert!(!e.scene.pieces[0].visible);
+        assert!(!e.scene.pieces[1].visible);
+        assert!(e.scene.pieces[2].visible);
+
+        // Isolate piece 2 again: all pieces visible
+        e.isolate_piece(2);
+        assert!(e.scene.pieces.iter().all(|p| p.visible));
+    }
+
+    #[test]
     fn parametric_primitives_are_low_poly_unless_remeshed() {
         let mut e = editor();
         // The Add menu opens a window with a low-poly preview; nothing is added yet.

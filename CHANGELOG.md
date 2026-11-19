@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Reorder pieces by drag-and-drop** ([#297](https://github.com/crisprintsstuff/OxyBrush/issues/297)). In the Pieces panel, drag any piece up or down by its grip handle (or drag its name button) to reorder it in the scene. A drop line indicates where the piece will land, and undo restores its previous position.
+- **Join picked pieces** ([#297](https://github.com/crisprintsstuff/OxyBrush/issues/297), [#284](https://github.com/crisprintsstuff/OxyBrush/issues/284)). Ctrl/Cmd+click pieces in the Pieces list to pick multiple pieces, then click **Join picked** to combine them as they are without booleans or remeshing.
+- **Isolate piece with Alt-click** ([#297](https://github.com/crisprintsstuff/OxyBrush/issues/297)). Alt-clicking the eye icon of any piece isolates that piece by hiding all others; Alt-clicking it again restores visibility for all pieces in the scene.
+
 ### Changed
 
 - Section headings in the Studio theme (the settings panel) are shown as written, "Like This", instead of in all capitals.
