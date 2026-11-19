@@ -250,4 +250,56 @@ impl Editor {
             self.status = format!("Merged {below} into {}", self.scene.active().name);
         }
     }
+
+    /// Move the piece at index `from` to index `to`, updating the active index
+    /// and recording the move in undo history (#297).
+    pub fn reorder_piece(&mut self, from: usize, to: usize) {
+        if from >= self.scene.pieces.len() || to >= self.scene.pieces.len() || from == to {
+            return;
+        }
+        let active_id = self.scene.try_active().map(|p| p.id);
+        let name = self.scene.pieces[from].name.clone();
+        let piece = self.scene.pieces.remove(from);
+        self.scene.pieces.insert(to, piece);
+        if let Some(i) = active_id.and_then(|id| self.scene.index_of(id)) {
+            self.scene.set_active(i);
+        }
+        self.history.record_compound(format!("Reorder {name}"), vec![Step::Reordered { from, to }]);
+        self.status = format!("Moved {name} in the Pieces list");
+    }
+
+    /// Join the picked pieces (the active piece plus pieces picked with
+    /// Ctrl/Cmd+click) into one piece as they are (no booleans or remesh),
+    /// as one undo step (#297, #284).
+    pub fn join_picked(&mut self) {
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let pieces = self.gizmo_pieces();
+        if pieces.len() < 2 {
+            self.status =
+                "Join picked needs the active piece plus at least one picked piece (Cmd+click to pick)".into();
+            return;
+        }
+        self.join_pieces(pieces, "Join picked");
+        self.piece_pick.clear();
+    }
+
+    /// Show only piece `idx`; if only piece `idx` is already visible, show all pieces (#297).
+    pub fn isolate_piece(&mut self, idx: usize) {
+        if idx >= self.scene.pieces.len() {
+            return;
+        }
+        let solo = self.scene.pieces.iter().enumerate().all(|(i, p)| p.visible == (i == idx));
+        for (i, p) in self.scene.pieces.iter_mut().enumerate() {
+            p.visible = solo || i == idx;
+        }
+        let name = &self.scene.pieces[idx].name;
+        self.status = if solo {
+            "Showing all pieces".into()
+        } else {
+            format!("Isolated {name} (Alt-click eye icon again to show all)")
+        };
+    }
 }

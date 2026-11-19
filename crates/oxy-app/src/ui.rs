@@ -3963,6 +3963,9 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.make_lod_chain(3);
     }
     ui.separator();
+    if ed.gizmo_pieces().len() > 1 && tips::button_on(ui, !busy, "Join picked", Cmd::JoinPicked).clicked() {
+        ed.join_picked();
+    }
     if tips::button_on(ui, !busy, "Join visible", Cmd::Join).clicked() {
         ed.join_visible();
     }
@@ -4547,11 +4550,36 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct PieceDrag(usize);
+
+/// Drag-and-drop reordering for piece row `i`. Returns (from, to) when a
+/// dragged piece is dropped on this row.
+fn reorder_piece_row(ui: &Ui, r: &egui::Response, i: usize) -> Option<(usize, usize)> {
+    let pointer = ui.ctx().pointer_interact_pos()?;
+    let after = pointer.y > r.rect.center().y;
+    if r.dnd_hover_payload::<PieceDrag>().is_some_and(|from| from.0 != i) {
+        let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
+        let p = ui.painter();
+        let y = if after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
+        p.hline(r.rect.x_range(), y, stroke);
+    }
+    let from = r.dnd_release_payload::<PieceDrag>()?.0;
+    let mut to = if after { i + 1 } else { i };
+    if from < to {
+        to -= 1;
+    }
+    (from != to).then_some((from, to))
+}
+
 fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     let mut pick = None;
+    let mut isolate = None;
+    let mut moved = None;
     let command = ui.input(|i| i.modifiers.command);
+    let alt = ui.input(|i| i.modifiers.alt);
     let sources: Vec<u64> = ed.scene.pieces.iter().flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
     let picked: Vec<bool> = (0..ed.scene.pieces.len()).map(|i| ed.piece_picked(i)).collect();
     for (i, p) in ed.scene.pieces.iter_mut().enumerate() {
@@ -4567,30 +4595,45 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         };
         // Without the outline in the other themes, as before.
         let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
-        egui::Frame::new()
+        let mut row_dragged = false;
+        let frame_resp = egui::Frame::new()
             .fill(fill)
             .stroke(stroke)
             .corner_radius(widgets::rounding(6.0))
             .inner_margin(egui::Margin::symmetric(2, 1))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
+                    if grip.dragged() {
+                        grip.dnd_set_drag_payload(PieceDrag(i));
+                        row_dragged = true;
+                    }
                     let (icon, tip) =
                         if p.visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
                     if widgets::icon_button(ui, icon, false, true, tip).clicked() {
-                        p.visible = !p.visible;
+                        if alt {
+                            isolate = Some(i);
+                        } else {
+                            p.visible = !p.visible;
+                        }
                     }
                     if i == active {
                         tips::hover(
                             ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(130.0)),
                             plain::PIECE_RENAME,
                         );
-                    } else if tips::hover(ui.add(egui::Button::selectable(false, &p.name)), plain::PIECE_ACTIVATE)
-                        .clicked()
-                    {
-                        if command {
-                            pick = Some(i);
-                        } else {
-                            select = Some(i);
+                    } else {
+                        let btn = ui.add(egui::Button::selectable(false, &p.name).sense(egui::Sense::click_and_drag()));
+                        let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
+                        if btn.dragged() {
+                            btn.dnd_set_drag_payload(PieceDrag(i));
+                            row_dragged = true;
+                        } else if btn.clicked() {
+                            if command {
+                                pick = Some(i);
+                            } else {
+                                select = Some(i);
+                            }
                         }
                     }
                     ui.label(RichText::new(fmt_count(p.mesh.triangle_count())).weak().small());
@@ -4601,7 +4644,20 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         tips::hover(ui.label(RichText::new("picked").weak().small()), plain::GIZMO_PIECES);
                     }
                 });
-            });
+            })
+            .response;
+        if row_dragged {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if let Some(m) = reorder_piece_row(ui, &frame_resp, i) {
+            moved = Some(m);
+        }
+    }
+    if let Some((from, to)) = moved {
+        ed.reorder_piece(from, to);
+    }
+    if let Some(i) = isolate {
+        ed.isolate_piece(i);
     }
     if let Some(i) = pick {
         ed.toggle_piece_pick(i);
@@ -4649,7 +4705,14 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
             ed.delete_active();
         }
-        if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Join", Cmd::Join).clicked() {
+        let has_pick = ed.gizmo_pieces().len() > 1;
+        if has_pick {
+            let n = ed.gizmo_pieces().len();
+            let label = format!("Join picked ({n})");
+            if tips::button_on(ui, !busy, &label, Cmd::JoinPicked).clicked() {
+                ed.join_picked();
+            }
+        } else if tips::button_on(ui, !busy && ed.scene.pieces.len() > 1, "Join", Cmd::Join).clicked() {
             ed.join_visible();
         }
         let below = active + 1 < ed.scene.pieces.len();
