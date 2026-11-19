@@ -44,7 +44,7 @@ fn main() {
 
     let mut renderer = ViewportRenderer::new(&device, &queue, format);
     let mut mesh = oxy_mesh::primitives::icosphere(7, 1.0);
-    renderer.sync(&device, &queue, 1, &mut mesh, oxy_render::DEFAULT_SPLIT_ANGLE_DEG);
+    renderer.sync(&device, &queue, 1, &mut mesh, oxy_render::DEFAULT_SPLIT_ANGLE_DEG, false);
     let mut camera = Camera::default();
     camera.frame(mesh.bounds());
     let items = [DrawItem { id: 1, active: true, preview: false, material: 0, instances: None, wireframe: false }];

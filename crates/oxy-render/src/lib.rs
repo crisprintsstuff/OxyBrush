@@ -336,6 +336,14 @@ pub struct DrawItem {
 /// wireframe is off.
 pub const ITEM_WIREFRAME_OPACITY: f32 = 0.9;
 
+/// Maximum number of triangles for which a wireframe index buffer is generated.
+///
+/// On meshes denser than 10 million triangles, individual edges are sub-pixel,
+/// generating over 60 million line indices (exceeding standard GPU buffer limits
+/// and driver memory thresholds). Skipping wireframe on extreme meshes prevents
+/// 32-bit integer overflows and driver allocation crashes.
+pub const MAX_WIREFRAME_TRIANGLES: usize = 10_000_000;
+
 /// Per-instance data: a model matrix (source space to world), as four
 /// columns (vertex slot 1, shader locations 5 to 8).
 const INSTANCE_ATTRIBUTES: [wgpu::VertexAttribute; 4] =
@@ -372,6 +380,7 @@ struct GpuMesh {
     /// The hard-edge angle this mesh was built with. A different angle
     /// rebuilds it; the same angle does not.
     split_angle: f32,
+    wireframe: bool,
 }
 
 pub struct ViewportRenderer {
@@ -1123,8 +1132,10 @@ impl ViewportRenderer {
         id: u64,
         mesh: &mut Mesh,
         split_angle_deg: f32,
+        wireframe: bool,
     ) -> usize {
         let split_angle_deg = hard_edges::clamp_split_angle(split_angle_deg);
+        let want_wireframe = wireframe && mesh.triangle_count() <= MAX_WIREFRAME_TRIANGLES;
         let rebuild = self.meshes.get(&id).is_none_or(|g| {
             g.topology_version != mesh.topology_version()
                 || g.face_version != mesh.face_version()
@@ -1133,7 +1144,10 @@ impl ViewportRenderer {
         if rebuild {
             let max_group = mesh.groups().iter().copied().max().unwrap_or(0) as usize;
             let lut: Vec<u32> = (0..=max_group).map(|g| group_color(g as u32)).collect();
-            let vertex_lut: &[u32] = if self.exact_face_colors { &[] } else { &lut };
+            let max_storage_size = device.limits().max_storage_buffer_binding_size as usize;
+            let max_faces = max_storage_size / std::mem::size_of::<u32>();
+            let vertex_lut: &[u32] =
+                if self.exact_face_colors && mesh.triangle_count() <= max_faces { &[] } else { &lut };
             let m: &Mesh = mesh;
             let mut verts: Vec<GpuVertex> =
                 (0..mesh.vertex_count()).into_par_iter().map(|i| vertex(m, i, vertex_lut)).collect();
@@ -1149,6 +1163,16 @@ impl ViewportRenderer {
                     debug_assert_eq!(f.gpu as usize, verts.len());
                     verts.push(v);
                 }
+            }
+            let max_buf_size = device.limits().max_buffer_size;
+            let verts_bytes = (verts.len() * std::mem::size_of::<GpuVertex>()) as u64;
+            if verts_bytes > max_buf_size {
+                eprintln!(
+                    "oxy-render: Mesh vertices size ({} MB) exceeds GPU limit ({} MB). Rebuild skipped.",
+                    verts_bytes / (1024 * 1024),
+                    max_buf_size / (1024 * 1024)
+                );
+                return 0;
             }
             let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy vertices"),
@@ -1188,7 +1212,13 @@ impl ViewportRenderer {
                 }
                 fc
             };
-            let face_colors_slice = if face_colors.is_empty() { &[0u32] } else { face_colors.as_slice() };
+            let face_colors_slice = if face_colors.is_empty() {
+                &[0u32]
+            } else if face_colors.len() > max_faces {
+                &face_colors[..max_faces]
+            } else {
+                face_colors.as_slice()
+            };
 
             let index_contents: &[u8] = match &indices {
                 Some(vis) if vis.is_empty() => &[0u8; 12],
@@ -1196,18 +1226,37 @@ impl ViewportRenderer {
                 None if mesh.triangles.is_empty() => &[0u8; 12],
                 None => bytemuck::cast_slice(&mesh.triangles),
             };
+            let index_bytes = index_contents.len() as u64;
+            if index_bytes > max_buf_size {
+                eprintln!(
+                    "oxy-render: Mesh indices size ({} MB) exceeds GPU limit ({} MB). Rebuild skipped.",
+                    index_bytes / (1024 * 1024),
+                    max_buf_size / (1024 * 1024)
+                );
+                return 0;
+            }
             let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy indices"),
                 contents: index_contents,
                 usage: wgpu::BufferUsages::INDEX,
             });
-            let line_indices = wire_lines(mesh);
-            let line_index_count = line_indices.len() as u32 * 2;
-            let line_index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("oxy line indices"),
-                contents: if line_indices.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&line_indices) },
-                usage: wgpu::BufferUsages::INDEX,
-            });
+            let (line_index_buffer, line_index_count) = if want_wireframe {
+                let line_indices = wire_lines(mesh);
+                let count = line_indices.len() as u32 * 2;
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("oxy line indices"),
+                    contents: if line_indices.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&line_indices) },
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                (buf, count)
+            } else {
+                let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("oxy dummy line indices"),
+                    contents: &[0u8; 8],
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                (buf, 0)
+            };
             let faces = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("oxy face colors"),
                 contents: bytemuck::cast_slice(face_colors_slice),
@@ -1242,9 +1291,29 @@ impl ViewportRenderer {
                     group_lut: if self.exact_face_colors { Vec::new() } else { lut },
                     hard,
                     split_angle: split_angle_deg,
+                    wireframe: want_wireframe,
                 },
             );
             return mesh.take_dirty().len();
+        } else if let Some(gpu) = self.meshes.get_mut(&id) {
+            if want_wireframe && (gpu.line_index_count == 0 || !gpu.wireframe) {
+                let lines = wire_lines(mesh);
+                gpu.line_index_count = lines.len() as u32 * 2;
+                gpu.line_indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("oxy line indices"),
+                    contents: if lines.is_empty() { &[0u8; 8] } else { bytemuck::cast_slice(&lines) },
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                gpu.wireframe = true;
+            } else if !want_wireframe && gpu.wireframe {
+                gpu.line_indices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("oxy dummy line indices"),
+                    contents: &[0u8; 8],
+                    usage: wgpu::BufferUsages::INDEX,
+                });
+                gpu.line_index_count = 0;
+                gpu.wireframe = false;
+            }
         }
         let gpu = &self.meshes[&id];
         let dirty = mesh.take_dirty();
@@ -1817,5 +1886,14 @@ mod tests {
                 assert_ne!(a, b);
             }
         }
+    }
+
+    #[test]
+    fn max_wireframe_triangles_constant_and_safety_limit() {
+        assert_eq!(MAX_WIREFRAME_TRIANGLES, 10_000_000);
+        // At 10M triangles, 6 indices per triangle as u32 is 240 MB,
+        // well within standard 2.0 GB GPU max_buffer_size and 4.0 GB u32::MAX.
+        let max_wire_bytes = MAX_WIREFRAME_TRIANGLES as u64 * 6 * 4;
+        assert!(max_wire_bytes < 2_000_000_000);
     }
 }
