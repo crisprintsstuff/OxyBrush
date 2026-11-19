@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- **Deform window title bar dragging** ([#351](https://github.com/crisprintsstuff/OxyBrush/issues/351)): Prevented scrolled-away deformer sliders from triggering deformations when dragging the window by its title bar. Hit-testing for quick flicks is now strictly bounded to the scroll viewport's visible clip rectangle and ignores drags of other widgets or windows.
+
 ## [4.0.0-beta.19] - 2026-11-19
 
 ### Added

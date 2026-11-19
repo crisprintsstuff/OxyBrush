@@ -32,7 +32,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.18](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Blur or sharpen the mask with Ctrl+click, hide the masked faces, mask outside a box or lasso with Alt, and sort the brush list A–Z. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+> **Beta:** [v4.0.0-beta.19](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Sculpt dense meshes up to 200M+ triangles with partitioned GPU rendering, bounded draw calls, and compressed undo history. Reorder pieces by drag-and-drop, join picked pieces, isolate a piece with Alt-click, align Poly Edit gizmo axes, and invert brush alphas. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
 
 **Highlights**
 
@@ -248,7 +248,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.18 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.19 |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, deform window ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅ · layers ⏳ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
