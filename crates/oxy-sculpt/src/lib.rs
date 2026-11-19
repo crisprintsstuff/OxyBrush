@@ -369,16 +369,30 @@ impl Default for BrushSettings {
 }
 
 /// An alpha applied to a stroke, and how it is oriented on the surface.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AlphaStamp {
     pub alpha: Arc<Alpha>,
     /// Extra rotation around the dab normal, radians.
     pub rotation: f32,
     /// Align the alpha's x axis with the stroke direction.
     pub follow_stroke: bool,
+    /// Invert the alpha: 0 becomes 1 and 1 becomes 0 inside the alpha square.
+    pub invert: bool,
     /// World "up" used to orient the alpha when not following the stroke
     /// (typically the camera's up vector, so the alpha appears upright).
     pub up: Vec3,
+}
+
+impl AlphaStamp {
+    /// Bilinear sample at `uv` in `-1..=1`. 0 outside. If `invert` is true,
+    /// inside values are inverted (1 − v).
+    pub fn sample(&self, uv: Vec2) -> f32 {
+        if uv.x.abs() > 1.0 || uv.y.abs() > 1.0 {
+            return 0.0;
+        }
+        let v = self.alpha.sample(uv);
+        if self.invert { (1.0 - v).clamp(0.0, 1.0) } else { v }
+    }
 }
 
 /// Axis for radial symmetry.
@@ -1125,22 +1139,13 @@ impl Stroke {
             base.strength *= 1.0 - spray * 0.5 * self.random();
             base = base.rotated((self.random() - 0.5) * std::f32::consts::TAU * spray);
         }
-        let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
+        let alpha = self.alpha.clone();
         let copies = self.transforms.clone();
         // Where two symmetry copies cover the same vertex, blend their
         // displacements. Writing one after the other lets the second copy
         // chase vertices the first copy already moved, and the overlap tears.
         if copies.len() > 1 && kind == BrushKind::SnakeHook {
-            blend_snake_hook(
-                mesh,
-                &self.settings,
-                self.invert,
-                &base,
-                &copies,
-                self.sym_center,
-                alpha.as_deref(),
-                touch,
-            );
+            blend_snake_hook(mesh, &self.settings, self.invert, &base, &copies, self.sym_center, alpha.as_ref(), touch);
         } else if copies.len() > 1 && matches!(kind, BrushKind::Pinch | BrushKind::Crease | BrushKind::SharpCrease) {
             blend_symmetry_copies(
                 mesh,
@@ -1149,7 +1154,7 @@ impl Stroke {
                 &base,
                 &copies,
                 self.sym_center,
-                alpha.as_deref(),
+                alpha.as_ref(),
                 touch,
             );
         } else {
@@ -1160,7 +1165,7 @@ impl Stroke {
                     &self.settings,
                     self.invert,
                     &dab,
-                    alpha.as_deref(),
+                    alpha.as_ref(),
                     self.paint,
                     &mut self.layer,
                     touch,
@@ -1220,7 +1225,7 @@ impl Stroke {
         let Some(grab) = &self.grab else {
             // First sample: capture the vertices under each transformed brush.
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
-            let alpha = self.alpha.as_ref().map(|a| a.alpha.clone());
+            let alpha = self.alpha.clone();
             let topological = self.settings.kind == BrushKind::TopoMove;
             let through = self.grab_through && self.view != Vec3::ZERO && !topological;
             let captured: Vec<(Mat3, Vec3, Vec<GrabHit>)> = self
@@ -1234,7 +1239,7 @@ impl Stroke {
                     } else {
                         for c in mesh.chunks_in_sphere(d.center, reach(self.settings.kind, &d, alpha.is_some())) {
                             for v in mesh.chunks[c as usize].vertices.clone() {
-                                if let Some(w) = vertex_weight(mesh, &self.settings, &d, alpha.as_deref(), v) {
+                                if let Some(w) = vertex_weight(mesh, &self.settings, &d, alpha.as_ref(), v) {
                                     verts.push((v, w, mesh.positions[v as usize]));
                                 }
                             }
@@ -1480,7 +1485,7 @@ fn reach(kind: BrushKind, dab: &Dab, has_alpha: bool) -> f32 {
 }
 
 /// Falloff weight × alpha × (1 − mask) for a vertex, or None if outside the brush.
-fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option<&Alpha>, v: u32) -> Option<f32> {
+fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option<&AlphaStamp>, v: u32) -> Option<f32> {
     if mesh.is_vertex_hidden(v) {
         return None;
     }
@@ -1559,7 +1564,7 @@ fn gather_affected(
     mesh: &Mesh,
     settings: &BrushSettings,
     dab: &Dab,
-    alpha: Option<&Alpha>,
+    alpha: Option<&AlphaStamp>,
 ) -> (Vec<u32>, Vec<(u32, f32)>) {
     let settings = *settings;
     let query =
@@ -1729,7 +1734,7 @@ fn blend_snake_hook(
     base: &Dab,
     copies: &[Mat3],
     origin: Vec3,
-    alpha: Option<&Alpha>,
+    alpha: Option<&AlphaStamp>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
@@ -1783,7 +1788,7 @@ fn blend_symmetry_copies(
     base: &Dab,
     copies: &[Mat3],
     origin: Vec3,
-    alpha: Option<&Alpha>,
+    alpha: Option<&AlphaStamp>,
     touch: &mut dyn FnMut(&Mesh, u32),
 ) {
     let grooves = settings.kind != BrushKind::Pinch;
@@ -1838,7 +1843,7 @@ fn apply_kernel(
     settings: &BrushSettings,
     invert: bool,
     dab: &Dab,
-    alpha: Option<&Alpha>,
+    alpha: Option<&AlphaStamp>,
     paint: Vec3,
     layer: &mut LayerState,
     touch: &mut dyn FnMut(&Mesh, u32),
@@ -2578,6 +2583,7 @@ mod tests {
             alpha: Arc::new(BuiltinAlpha::Stripes.generate(128)),
             rotation: 0.0,
             follow_stroke: false,
+            invert: false,
             up: Vec3::Z,
         };
         Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp)).add_sample(
@@ -2597,6 +2603,31 @@ mod tests {
             spread(&hs),
             spread(&hp)
         );
+    }
+
+    #[test]
+    fn alpha_invert_flips_dab_displacement() {
+        let mut normal_plane = primitives::plane(60, 2.0);
+        let mut inverted_plane = normal_plane.clone();
+        let settings = BrushSettings { radius: 0.5, strength: 1.0, falloff: Falloff::Constant, ..Default::default() };
+        let sample = StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 };
+        let alpha = Arc::new(BuiltinAlpha::Bumps.generate(64));
+        let stamp_normal =
+            AlphaStamp { alpha: alpha.clone(), rotation: 0.0, follow_stroke: false, invert: false, up: Vec3::Z };
+        let stamp_inverted = AlphaStamp { alpha, rotation: 0.0, follow_stroke: false, invert: true, up: Vec3::Z };
+        Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp_normal)).add_sample(
+            &mut normal_plane,
+            sample,
+            &mut |_, _| {},
+        );
+        Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp_inverted)).add_sample(
+            &mut inverted_plane,
+            sample,
+            &mut |_, _| {},
+        );
+        let yn = normal_plane.positions.iter().find(|p| p.x.abs() < 0.05 && p.z.abs() < 0.05).map(|p| p.y).unwrap();
+        let yi = inverted_plane.positions.iter().find(|p| p.x.abs() < 0.05 && p.z.abs() < 0.05).map(|p| p.y).unwrap();
+        assert!(yn != yi, "normal height ({yn}) and inverted height ({yi}) should differ");
     }
 
     #[test]

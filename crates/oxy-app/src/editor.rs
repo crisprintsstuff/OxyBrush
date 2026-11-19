@@ -1020,6 +1020,7 @@ pub struct Editor {
     pub alpha: Option<usize>,
     pub alpha_rotation_deg: f32,
     pub alpha_follow_stroke: bool,
+    pub alpha_invert: bool,
     /// Box/lasso selections use a lasso instead of a rectangle.
     pub selection_lasso: bool,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
@@ -1506,6 +1507,7 @@ impl Default for Editor {
             alpha: None,
             alpha_rotation_deg: 0.0,
             alpha_follow_stroke: false,
+            alpha_invert: false,
             selection_lasso: false,
             request_load_alpha: false,
             request_export_alpha: false,
@@ -2985,6 +2987,7 @@ impl Editor {
                 alpha: a.clone(),
                 rotation: self.alpha_rotation_deg.to_radians() + extra_rotation,
                 follow_stroke: self.alpha_follow_stroke,
+                invert: self.alpha_invert,
                 up: self.camera.up(),
             });
         let stroke = Stroke::new(settings, self.symmetry, invert)
@@ -3068,6 +3071,7 @@ impl Editor {
             alpha: self.alpha.and_then(|i| self.alphas.get(i)).map(|a| a.name.clone()),
             alpha_rotation_deg: self.alpha_rotation_deg,
             alpha_follow_stroke: self.alpha_follow_stroke,
+            alpha_invert: self.alpha_invert,
             insert_shape: self.insert_shape,
         }
     }
@@ -3094,6 +3098,7 @@ impl Editor {
         self.pressure_gamma = p.pressure_gamma;
         self.alpha_rotation_deg = p.alpha_rotation_deg;
         self.alpha_follow_stroke = p.alpha_follow_stroke;
+        self.alpha_invert = p.alpha_invert;
         self.status = format!("Brush preset: {}", p.name);
         self.alpha = match &p.alpha {
             None => None,
@@ -13252,6 +13257,7 @@ mod tests {
         e.stroke_mode = StrokeMode::Line;
         e.stabilizer_pt = 40.0;
         e.alpha = e.alphas.iter().position(|a| a.name == "Cracks");
+        e.alpha_invert = true;
         let p = e.capture_preset("  Deep cracks ");
         assert_eq!(p.name, "Deep cracks");
         let code = p.to_code();
@@ -13264,6 +13270,7 @@ mod tests {
         assert_eq!(f.stroke_mode, StrokeMode::Line);
         assert_eq!(f.stabilizer_pt, 40.0);
         assert_eq!(f.alpha.map(|i| f.alphas[i].name.clone()).as_deref(), Some("Cracks"));
+        assert!(f.alpha_invert);
         assert_eq!(f.presets.len(), 1, "a pasted code is kept in the library");
         // Same name replaces; delete removes.
         f.save_preset("Deep cracks");

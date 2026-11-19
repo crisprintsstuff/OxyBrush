@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Option to invert brush alphas** ([#339](https://github.com/crisprintsstuff/OxyBrush/issues/339)). The **Invert alpha** toggle flips the alpha values (white becomes black and black becomes white) during strokes, in presets, and in the Living Strokes edit panel. The thumbnail updates live to reflect the inversion.
 - **Poly Edit gizmo axes and pivot** ([#324](https://github.com/crisprintsstuff/OxyBrush/issues/324)). The gizmo bar's **Pivot & axes** menu aligns the axes to the world, the view, or the average normal of what is picked. Alt+click a point, edge or face to snap the pivot to it; Alt+drag a handle to move or turn the gizmo without moving geometry. **Reset pivot** puts it back.
 - **Reorder pieces by drag-and-drop** ([#297](https://github.com/crisprintsstuff/OxyBrush/issues/297)). In the Pieces panel, drag any piece up or down by its grip handle (or drag its name button) to reorder it in the scene. A drop line indicates where the piece will land, and undo restores its previous position.
 - **Join picked pieces** ([#297](https://github.com/crisprintsstuff/OxyBrush/issues/297), [#284](https://github.com/crisprintsstuff/OxyBrush/issues/284)). Ctrl/Cmd+click pieces in the Pieces list to pick multiple pieces, then click **Join picked** to combine them as they are without booleans or remeshing.

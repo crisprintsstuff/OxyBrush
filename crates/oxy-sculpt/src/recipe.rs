@@ -76,7 +76,7 @@ pub type AlphaFinder<'a> = dyn Fn(AlphaLookup<'_>) -> Option<Arc<Alpha>> + 'a;
 const MAGIC: &[u8; 4] = b"OXSR";
 /// 1 named an alpha by name plus a sample of raw bits. 2 names it by a
 /// hash of every pixel as stored (16-bit), and does not use the name.
-const VERSION: u8 = 2;
+const VERSION: u8 = 3;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -187,6 +187,9 @@ impl StrokeRecipe {
             put_f32(&mut b, a.rotation);
             b.push(u8::from(a.follow_stroke));
             put_vec3(&mut b, a.up);
+            if version >= 3 {
+                b.push(u8::from(a.invert));
+            }
         }
         b.extend_from_slice(&(self.events.len() as u32).to_le_bytes());
         let put_sample = |b: &mut Vec<u8>, s: &StrokeSample| {
@@ -230,7 +233,7 @@ impl StrokeRecipe {
             return Err("not a stroke recipe".into());
         }
         let version = r.u8()?;
-        if version != 1 && version != VERSION {
+        if version != 1 && version != 2 && version != VERSION {
             return Err(format!("stroke recipe version {version} is newer than this version reads"));
         }
         let kind = preset::kind_from_key(&r.text()?).ok_or("unknown brush")?;
@@ -279,13 +282,14 @@ impl StrokeRecipe {
             let rotation = r.f32()?;
             let follow_stroke = r.u8()? != 0;
             let up = r.vec3()?;
+            let invert = if version >= 3 { r.u8()? != 0 } else { false };
             let lookup = if version == 1 {
                 AlphaLookup::Legacy { name: &name, size, fingerprint }
             } else {
                 AlphaLookup::Content { size, id: fingerprint }
             };
             let alpha = find_alpha(lookup).ok_or_else(|| format!("alpha {name:?} not found"))?;
-            Some(AlphaStamp { alpha, rotation, follow_stroke, up })
+            Some(AlphaStamp { alpha, rotation, follow_stroke, invert, up })
         } else {
             None
         };
@@ -669,6 +673,7 @@ mod tests {
                 alpha: Arc::new(BuiltinAlpha::Scales.generate(64)),
                 rotation: 0.3,
                 follow_stroke: true,
+                invert: false,
                 up: Vec3::Y,
             };
             let mut live = base.clone();
@@ -756,6 +761,7 @@ mod tests {
                 alpha: Arc::new(BuiltinAlpha::Noise.generate(32)),
                 rotation: 0.0,
                 follow_stroke: false,
+                invert: false,
                 up: Vec3::Y,
             }),
             ..recipe
@@ -1005,14 +1011,19 @@ mod tests {
                 alpha: Arc::new(original.clone()),
                 rotation: 0.2,
                 follow_stroke: true,
+                invert: true,
                 up: Vec3::Y,
             }),
             events: vec![],
         };
         let found = Arc::new(loaded_alpha);
         let find = |q: AlphaLookup| q.matches(&found).then(|| found.clone());
-        let back = StrokeRecipe::from_bytes(&recipe.to_bytes(), &find).expect("version 2 finds the renamed pixels");
-        assert!(back.alpha.is_some());
+        let back = StrokeRecipe::from_bytes(&recipe.to_bytes(), &find).expect("version 3 finds the renamed pixels");
+        assert!(back.alpha.as_ref().is_some_and(|a| a.invert));
+        // Version 2 encodes without invert byte and decodes with invert = false.
+        let v2 = recipe.encode(2);
+        let back_v2 = StrokeRecipe::from_bytes(&v2, &find).expect("version 2 reads");
+        assert_eq!(back_v2.alpha.as_ref().map(|a| a.invert), Some(false));
         // Version 1 still reads, and still needs the name plus the old fingerprint.
         let v1 = recipe.encode(1);
         assert_eq!(v1[4], 1);

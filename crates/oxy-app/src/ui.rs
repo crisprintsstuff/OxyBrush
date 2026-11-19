@@ -4330,12 +4330,22 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     });
 }
 
-/// Preview of an alpha (texture cached per alpha name).
-fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha) {
-    let id = egui::Id::unique(("alpha_tex", alpha.name.as_str(), alpha.size));
+/// Preview of an alpha (texture cached per alpha name and invert state).
+fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha, invert: bool) {
+    let id = egui::Id::unique(("alpha_tex", alpha.name.as_str(), alpha.size, invert));
     let tex = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
-        let img = egui::ColorImage::from_gray([alpha.size as usize, alpha.size as usize], &alpha.to_luma8());
-        let t = ui.ctx().load_texture(format!("alpha {}", alpha.name), img, egui::TextureOptions::LINEAR);
+        let mut pixels = alpha.to_luma8();
+        if invert {
+            for p in &mut pixels {
+                *p = 255 - *p;
+            }
+        }
+        let img = egui::ColorImage::from_gray([alpha.size as usize, alpha.size as usize], &pixels);
+        let t = ui.ctx().load_texture(
+            format!("alpha {} (invert: {invert})", alpha.name),
+            img,
+            egui::TextureOptions::LINEAR,
+        );
         ui.ctx().data_mut(|d| d.insert_temp(id, t.clone()));
         t
     });
@@ -5119,7 +5129,7 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
     match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
         Some(a) => {
             ui.horizontal(|ui| {
-                alpha_thumbnail(ui, &a);
+                alpha_thumbnail(ui, &a, ed.alpha_invert);
                 ui.vertical(|ui| {
                     tips::hover(
                         ui.add(crate::widgets::Bar(
@@ -5128,6 +5138,7 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
                         plain::ALPHA_ROTATION,
                     );
                     tips::check_plain(ui, &mut ed.alpha_follow_stroke, "Follow stroke direction", plain::ALPHA_FOLLOW);
+                    tips::check_plain(ui, &mut ed.alpha_invert, "Invert alpha", plain::ALPHA_INVERT);
                     ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
                 });
             });

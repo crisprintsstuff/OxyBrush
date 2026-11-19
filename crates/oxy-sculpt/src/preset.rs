@@ -54,6 +54,7 @@ pub struct BrushPreset {
     pub alpha: Option<String>,
     pub alpha_rotation_deg: f32,
     pub alpha_follow_stroke: bool,
+    pub alpha_invert: bool,
     /// Shape used when kind is BrushKind::InsertPrimitive.
     pub insert_shape: crate::InsertShape,
 }
@@ -83,6 +84,7 @@ impl BrushPreset {
             alpha: None,
             alpha_rotation_deg: 0.0,
             alpha_follow_stroke: false,
+            alpha_invert: false,
             insert_shape: crate::InsertShape::Sphere,
         }
     }
@@ -113,6 +115,7 @@ impl BrushPreset {
         kv("alpha", self.alpha.as_deref().map(one_line).unwrap_or_default());
         kv("alpha_rotation_deg", self.alpha_rotation_deg.to_string());
         kv("alpha_follow_stroke", self.alpha_follow_stroke.to_string());
+        kv("alpha_invert", self.alpha_invert.to_string());
         kv("insert_shape", shape_key(self.insert_shape).into());
         s
     }
@@ -187,6 +190,9 @@ impl BrushPreset {
         }
         if let Some(b) = flag("alpha_follow_stroke") {
             p.alpha_follow_stroke = b;
+        }
+        if let Some(b) = flag("alpha_invert") {
+            p.alpha_invert = b;
         }
         if let Some(s) = get("insert_shape").and_then(shape_from_key) {
             p.insert_shape = s;
