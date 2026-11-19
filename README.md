@@ -2,9 +2,6 @@
   <img src="docs/images/banner.png" alt="OxyBrush — Open-Source 3D Digital Sculpting App" width="100%">
 </p>
 
-<h1 align="center">OxyBrush</h1>
-
-<p align="center"><strong>Open-source digital sculpting. Sculpt 3D models like digital clay.</strong></p>
 
 <p align="center">
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="release" src="https://img.shields.io/github/v/release/crisprintsstuff/OxyBrush?include_prereleases&logo=github&label=release"></a>
