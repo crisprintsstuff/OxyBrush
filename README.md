@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="packaging/icons/oxybrush-128.png" alt="OxyBrush icon" width="96">
+  <img src="docs/images/banner.png" alt="OxyBrush — Open-Source 3D Digital Sculpting App" width="100%">
 </p>
 
 <h1 align="center">OxyBrush</h1>
