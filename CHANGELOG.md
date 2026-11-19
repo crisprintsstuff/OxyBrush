@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Preserve volume option in voxel remesh** ([#354](https://github.com/crisprintsstuff/OxyBrush/issues/354)). When enabled, remeshing projects vertices back to the level-set zero crossing and applies volume-calibrated normal adjustment to compensate for voxelization chord loss and smoothing shrinkage. Successive remeshes retain their silhouette, mass, and volume without shrinking or squashing. Also available in the CLI via `--preserve-volume`.
 ### Fixed
 
 - **Deform window title bar dragging** ([#351](https://github.com/crisprintsstuff/OxyBrush/issues/351)): Prevented scrolled-away deformer sliders from triggering deformations when dragging the window by its title bar. Hit-testing for quick flicks is now strictly bounded to the scroll viewport's visible clip rectangle and ignores drags of other widgets or windows.

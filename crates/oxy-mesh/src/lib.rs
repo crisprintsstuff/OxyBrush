@@ -131,6 +131,29 @@ impl MeshData {
         self.uv.iter_mut().for_each(|u| u.swap(1, 2));
     }
 
+    /// Enclosed signed volume (positive when faces point outward; zero for
+    /// open or flat surfaces).
+    pub fn signed_volume(&self) -> f32 {
+        self.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| self.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    /// Total surface area of all triangles.
+    pub fn surface_area(&self) -> f32 {
+        self.triangles
+            .iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| self.positions[v as usize]);
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum()
+    }
+
     /// Put several meshes side by side in one, unchanged: no welding, no
     /// remeshing. Every part keeps its triangles, mask, visibility and vertex
     /// color, and its face groups move up past the previous parts' so no two
@@ -355,6 +378,30 @@ impl Mesh {
             color: if self.is_painted() { self.color.clone() } else { Vec::new() },
             uv: self.uv.clone(),
         }
+    }
+
+    /// Enclosed signed volume (positive when faces point outward; zero for
+    /// open or flat surfaces). Computed via the divergence theorem over all
+    /// triangles.
+    pub fn signed_volume(&self) -> f32 {
+        self.triangles
+            .par_iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| self.positions[v as usize]);
+                a.dot(b.cross(c)) / 6.0
+            })
+            .sum()
+    }
+
+    /// Total surface area of all triangles.
+    pub fn surface_area(&self) -> f32 {
+        self.triangles
+            .par_iter()
+            .map(|t| {
+                let [a, b, c] = t.map(|v| self.positions[v as usize]);
+                (b - a).cross(c - a).length() * 0.5
+            })
+            .sum()
     }
 
     // ---- UVs (RFC 0020) ----

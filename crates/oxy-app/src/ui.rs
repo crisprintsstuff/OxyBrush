@@ -5269,6 +5269,12 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     ui.horizontal(|ui| {
         tips::hover(
+            ui.add_enabled(!ed.remesh_shell, egui::Checkbox::new(&mut ed.remesh_preserve_volume, "Preserve volume")),
+            "Keep the model's volume and silhouette from shrinking when remeshing",
+        );
+    });
+    ui.horizontal(|ui| {
+        tips::hover(
             ui.checkbox(&mut ed.remesh_shell, "Shell"),
             "Make a wall of the thickness below around the surface instead of filling it: an open sheet gets a thickness, a closed model comes out hollow. Off: closed models are filled, and holes are patched first.",
         );

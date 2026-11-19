@@ -1278,13 +1278,7 @@ mod hole_tests {
     }
 
     fn signed_volume(d: &MeshData) -> f32 {
-        d.triangles
-            .iter()
-            .map(|t| {
-                let [a, b, c] = t.map(|v| d.positions[v as usize]);
-                a.dot(b.cross(c)) / 6.0
-            })
-            .sum()
+        d.signed_volume()
     }
 
     #[test]

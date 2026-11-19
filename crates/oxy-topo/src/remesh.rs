@@ -50,11 +50,21 @@ pub struct RemeshOptions {
     /// Make a wall of this thickness around the surface instead of filling
     /// it (None: closed surfaces are filled, holes closed).
     pub shell: Option<Shell>,
+    /// Preserve volume: compensate for discretization and smoothing shrinkage
+    /// so the remeshed model maintains its original enclosed volume and silhouette.
+    pub preserve_volume: bool,
 }
 
 impl Default for RemeshOptions {
     fn default() -> Self {
-        Self { resolution: 128, smooth_passes: 1, adaptivity: 0.0, engine: RemeshEngine::Vdb, shell: None }
+        Self {
+            resolution: 128,
+            smooth_passes: 1,
+            adaptivity: 0.0,
+            engine: RemeshEngine::Vdb,
+            shell: None,
+            preserve_volume: false,
+        }
     }
 }
 
@@ -127,11 +137,21 @@ pub struct VdbRemeshOptions {
     pub offset: f32,
     /// See [`RemeshOptions::shell`].
     pub shell: Option<Shell>,
+    /// See [`RemeshOptions::preserve_volume`].
+    pub preserve_volume: bool,
 }
 
 impl Default for VdbRemeshOptions {
     fn default() -> Self {
-        Self { voxel_size: None, resolution: 128, adaptivity: 0.0, smooth_passes: 1, offset: 0.0, shell: None }
+        Self {
+            voxel_size: None,
+            resolution: 128,
+            adaptivity: 0.0,
+            smooth_passes: 1,
+            offset: 0.0,
+            shell: None,
+            preserve_volume: false,
+        }
     }
 }
 
@@ -194,6 +214,7 @@ pub fn voxel_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh, Remes
                 smooth_passes: opts.smooth_passes,
                 offset: 0.0,
                 shell: opts.shell,
+                preserve_volume: opts.preserve_volume,
             },
         ),
         RemeshEngine::RegularGrid => regular_grid_remesh(&filled, opts),
@@ -354,6 +375,22 @@ pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, Reme
     )
     .ok_or(RemeshError::NoSurface)?;
 
+    if opts.preserve_volume && opts.shell.is_none() {
+        mesh.refresh_all();
+        // 1. Project vertices to level set zero crossing
+        mesh.positions.par_iter_mut().zip(&mesh.normals).for_each(|(p, n)| {
+            let d = grid.eval_trilinear(*p);
+            *p -= *n * d;
+        });
+        mesh.refresh_all();
+
+        // 2. Volume-calibrated normal adjustment for discretization chord loss
+        let target_vol: f32 = meshes.iter().map(|m| m.signed_volume()).sum();
+        if target_vol > 0.0 {
+            restore_volume(&mut mesh, target_vol, 0.5 * h);
+        }
+    }
+
     if opts.adaptivity > 0.0 {
         let decimate_ratio = (1.0 - opts.adaptivity * 0.7).clamp(0.2, 0.99);
         let target_tris = ((mesh.triangle_count() as f32 * decimate_ratio) as usize).max(4);
@@ -457,7 +494,34 @@ pub fn regular_grid_remesh(meshes: &[&Mesh], opts: RemeshOptions) -> Result<Mesh
     if opts.smooth_passes > 0 {
         mesh.refresh_all();
     }
+    if opts.preserve_volume && opts.shell.is_none() {
+        let target_vol: f32 = meshes.iter().map(|m| m.signed_volume()).sum();
+        if target_vol > 0.0 {
+            restore_volume(&mut mesh, target_vol, 0.5 * h);
+        }
+    }
     Ok(mesh)
+}
+
+/// Adjust vertices along their normals so the mesh's signed volume matches
+/// `target_volume` (compensating for voxel chord loss and smoothing shrinkage).
+fn restore_volume(mesh: &mut Mesh, target_volume: f32, max_step: f32) {
+    for _ in 0..3 {
+        let current_vol = mesh.signed_volume();
+        let diff = target_volume - current_vol;
+        if diff.abs() < 1e-4 * target_volume {
+            break;
+        }
+        let area = mesh.surface_area();
+        if area <= 1e-6 {
+            break;
+        }
+        let delta = (diff / area).clamp(-max_step, max_step);
+        mesh.positions.par_iter_mut().zip(&mesh.normals).for_each(|(p, n)| {
+            *p += *n * delta;
+        });
+        mesh.refresh_all();
+    }
 }
 
 /// Narrow-band signed distance for one triangle soup (band-clamped).
@@ -784,6 +848,69 @@ mod tests {
         m.vertex_count() as i64 - edges.len() as i64 + m.triangle_count() as i64
     }
 
+    #[test]
+    fn remesh_preserve_volume_prevents_shrinkage() {
+        let sphere = primitives::icosphere(4, 1.0);
+        let orig_vol = sphere.signed_volume();
+
+        // Without volume preservation: successive remeshes steadily lose volume
+        let mut unpreserved = sphere.clone();
+        for _ in 0..5 {
+            unpreserved = voxel_remesh(
+                &[&unpreserved],
+                RemeshOptions { resolution: 32, smooth_passes: 1, preserve_volume: false, ..Default::default() },
+            )
+            .unwrap();
+        }
+        let unpreserved_vol = unpreserved.signed_volume();
+        assert!(
+            unpreserved_vol < orig_vol * 0.98,
+            "without volume preservation, repeated remeshing should shrink: {unpreserved_vol} vs {orig_vol}"
+        );
+
+        // With volume preservation: volume is retained across repeated remeshes
+        let mut preserved = sphere.clone();
+        for _ in 0..5 {
+            preserved = voxel_remesh(
+                &[&preserved],
+                RemeshOptions { resolution: 32, smooth_passes: 1, preserve_volume: true, ..Default::default() },
+            )
+            .unwrap();
+        }
+        let preserved_vol = preserved.signed_volume();
+        let diff = (preserved_vol - orig_vol).abs() / orig_vol;
+        assert!(
+            diff < 0.005,
+            "with volume preservation, volume error should be < 0.5%: diff={diff}, preserved={preserved_vol}, orig={orig_vol}"
+        );
+    }
+
+    #[test]
+    fn remesh_preserve_volume_works_on_both_engines() {
+        let cyl = primitives::cylinder(16, 0.5, 2.0);
+        let orig_vol = cyl.signed_volume();
+
+        for engine in [RemeshEngine::Vdb, RemeshEngine::RegularGrid] {
+            let res = if engine == RemeshEngine::Vdb { 64 } else { 48 };
+            let r = voxel_remesh(
+                &[&cyl],
+                RemeshOptions {
+                    resolution: res,
+                    smooth_passes: 1,
+                    engine,
+                    preserve_volume: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let vol = r.signed_volume();
+            let diff = (vol - orig_vol).abs() / orig_vol;
+            assert!(
+                diff < 0.015,
+                "{engine:?} cylinder volume preservation error should be < 1.5%: diff={diff}, vol={vol}, orig={orig_vol}"
+            );
+        }
+    }
     #[test]
     fn sphere_remesh_is_closed_and_outward() {
         let s = primitives::icosphere(3, 1.0);
