@@ -34,7 +34,11 @@ pub fn section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
         return;
     }
-    let host = ed.scene.active();
+    let Some(host_id) = ed.scene.try_active().map(|p| p.id) else {
+        ui.label(RichText::new(crate::editor::Editor::NEED_PIECE).weak().small());
+        return;
+    };
+    let host = ed.scene.get(host_id).expect("active piece");
     if let Some(h) = ed.instance_host_of(host.id) {
         ui.label(
             RichText::new(format!("{} is the source of copies on {}. Edit it from there.", host.name, h.name))

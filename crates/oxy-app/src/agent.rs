@@ -3,7 +3,7 @@
 //! The listener runs on its own thread and only queues a call. This module
 //! runs that call between frames, so the user keeps sculpting. A mutating
 //! call waits out an in-progress stroke, gizmo drag or selection. Remesh,
-//! decimate and subdivide use the editor's background jobs.
+//! decimate, subdivide and a large import use the editor's background jobs.
 
 use crate::editor::{Editor, Pending};
 use oxy_mcp::{
@@ -150,7 +150,10 @@ impl Inbox {
                 self.pending_job = Some(reply);
             } else {
                 let text = ed.status.clone();
-                let failed = text.contains("failed") || text.starts_with("Wait") || text.starts_with("Another");
+                let failed = text.contains("failed")
+                    || text.starts_with("Wait")
+                    || text.starts_with("Another")
+                    || text.starts_with("Could not");
                 let result = if failed { ToolResult::error(text) } else { ToolResult::ok(text) };
                 let _ = reply.send(result);
             }
@@ -220,9 +223,9 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
         Action::ListPieces => Apply::Done(ToolResult::ok(list_pieces(ed))),
         Action::PieceInfo { id, index, name } => Apply::Done(piece_info(ed, id, index, name.as_deref())),
         Action::SelectPiece { id, index, name } => Apply::Done(select_piece(ed, id, index, name.as_deref())),
-        Action::Open { path, discard } => Apply::Done(open(ed, &path, discard)),
+        Action::Open { path, discard } => open(ed, &path, discard),
         Action::Save { path } => Apply::Done(save(ed, path)),
-        Action::Import { path } => Apply::Done(import(ed, &path)),
+        Action::Import { path } => import_action(ed, &path),
         Action::Export { path } => Apply::Done(export(ed, &path)),
         Action::AddPrimitive { kind } => {
             let before = ed.history.revision();
@@ -270,6 +273,9 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
             ed.remesh_active();
         }),
         Action::Decimate { keep_percent, triangles } => {
+            if ed.scene.pieces.is_empty() {
+                return Apply::Done(ToolResult::error("no pieces"));
+            }
             let count = ed.scene.active().mesh.triangle_count().max(1);
             let target = match (keep_percent, triangles) {
                 (_, Some(t)) => t as usize,
@@ -406,9 +412,9 @@ fn blocked(ed: &Editor) -> Option<ToolResult> {
 }
 
 fn scene_info(ed: &Editor) -> String {
-    let (name, id) = {
-        let active = ed.scene.active();
-        (active.name.clone(), active.id)
+    let (name, id) = match ed.scene.try_active() {
+        Some(active) => (active.name.clone(), active.id.to_string()),
+        None => ("none".into(), "none".into()),
     };
     let doc = ed.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "unsaved".into());
     let labels: Vec<&str> = ed.history.undo_labels().collect();
@@ -478,6 +484,9 @@ fn find_piece(ed: &Editor, id: Option<u64>, index: Option<usize>, name: Option<&
             _ => Err(format!("more than one piece named {name}; pass index or id")),
         };
     }
+    if ed.scene.pieces.is_empty() {
+        return Err("no pieces".into());
+    }
     Ok(ed.scene.active_index())
 }
 
@@ -510,17 +519,17 @@ fn select_piece(ed: &mut Editor, id: Option<u64>, index: Option<usize>, name: Op
     }
 }
 
-fn open(ed: &mut Editor, path: &std::path::Path, discard: bool) -> ToolResult {
+fn open(ed: &mut Editor, path: &std::path::Path, discard: bool) -> Apply {
     let project = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(oxy_doc::format::EXTENSION));
     if project {
         if ed.is_modified() && !discard {
-            return ToolResult::error("unsaved changes; save, or pass discard: true");
+            return Apply::Done(ToolResult::error("unsaved changes; save, or pass discard: true"));
         }
         ed.perform(Pending::OpenProject(path.to_path_buf()));
         let status = ed.status.clone();
-        if status.starts_with("Opened") { ToolResult::ok(status) } else { ToolResult::error(status) }
+        Apply::Done(if status.starts_with("Opened") { ToolResult::ok(status) } else { ToolResult::error(status) })
     } else {
-        import(ed, path)
+        import_action(ed, path)
     }
 }
 
@@ -535,12 +544,26 @@ fn save(ed: &mut Editor, path: Option<std::path::PathBuf>) -> ToolResult {
     if ed.save(&path) { ToolResult::ok(ed.status.clone()) } else { ToolResult::error(ed.status.clone()) }
 }
 
-fn import(ed: &mut Editor, path: &std::path::Path) -> ToolResult {
+fn import_action(ed: &mut Editor, path: &std::path::Path) -> Apply {
+    if ed.job.is_some() {
+        return Apply::Done(ToolResult::error("another operation is still running"));
+    }
     let before = ed.history.revision();
     ed.import(path);
-    tag(ed, before);
-    let status = ed.status.clone();
-    if status.starts_with("Imported") { ToolResult::ok(status) } else { ToolResult::error(status) }
+    if ed.job.is_some() {
+        if let Some(job) = ed.job.as_mut() {
+            job.undo_prefix.clone_from(&ed.agent_label);
+        }
+        Apply::PendingJob
+    } else {
+        tag(ed, before);
+        let status = ed.status.clone();
+        if status.starts_with("Imported") {
+            Apply::Done(ToolResult::ok(status))
+        } else {
+            Apply::Done(ToolResult::error(status))
+        }
+    }
 }
 
 fn export(ed: &mut Editor, path: &std::path::Path) -> ToolResult {
@@ -594,6 +617,9 @@ fn set_symmetry(
 }
 
 fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pressure: f32) -> ToolResult {
+    if ed.scene.pieces.is_empty() {
+        return ToolResult::error("no pieces");
+    }
     if let Some(err) = blocked(ed) {
         return err;
     }
@@ -658,6 +684,9 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
 }
 
 fn mask(ed: &mut Editor, op: MaskOp) -> ToolResult {
+    if ed.scene.pieces.is_empty() {
+        return ToolResult::error("no pieces");
+    }
     if let Some(err) = blocked(ed) {
         return err;
     }

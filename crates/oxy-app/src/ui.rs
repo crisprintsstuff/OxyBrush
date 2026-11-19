@@ -479,6 +479,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ("Plane", "plane", Cmd::NewPlane),
                         ("Human (female)", "human_female", Cmd::NewHumanFemale),
                         ("Human (male)", "human_male", Cmd::NewHumanMale),
+                        ("Empty scene", "empty", Cmd::NewEmpty),
                     ] {
                         if tips::button(ui, label, cmd).clicked() {
                             ed.request(Pending::New(which));
@@ -518,7 +519,15 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ed.send_back_link(true);
                     }
                 }
-                if tips::button_km(ui, &ed.keymap, "Export visible…", Cmd::Export).clicked() {
+                if tips::button_on_km(
+                    ui,
+                    &ed.keymap,
+                    ed.scene.pieces.iter().any(|p| p.visible),
+                    "Export visible…",
+                    Cmd::Export,
+                )
+                .clicked()
+                {
                     action = Some(UiAction::Export);
                 }
                 ui.menu_button(format!("Export type: .{}", ed.export_format.extension()), |ui| {
@@ -1040,7 +1049,10 @@ fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
 
         ui.separator();
         ui.label(RichText::new("Split with alignment pins").strong());
-        let bounds = ed.scene.active().mesh.bounds();
+        let Some(bounds) = ed.scene.try_active().map(|p| p.mesh.bounds()) else {
+            ui.label(RichText::new(Editor::NEED_PIECE).weak().small());
+            return;
+        };
         let (min_val, max_val) = match ed.print_split_axis {
             oxy_topo::SplitAxis::X => (bounds.min.x, bounds.max.x),
             oxy_topo::SplitAxis::Y => (bounds.min.y, bounds.max.y),
@@ -1127,7 +1139,10 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
     let report = ed.manifold_report();
     egui::Window::new("Topology diagnostics").open(&mut open).default_width(340.0).resizable(false).show(ctx, |ui| {
         let (good, warn) = (good_color(ui), ui.visuals().warn_fg_color);
-        let active = ed.scene.active();
+        let Some(active) = ed.scene.try_active() else {
+            ui.label(RichText::new(Editor::NEED_PIECE).weak());
+            return;
+        };
         ui.label(RichText::new(&active.name).strong());
         ui.label(
             RichText::new(format!("{} points, {} triangles", active.mesh.vertex_count(), active.mesh.triangle_count()))
@@ -2151,7 +2166,7 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
                     }
                     ui.separator();
                 }
-                let active = ed.scene.active().mesh.triangle_count();
+                let active = ed.scene.try_active().map(|p| p.mesh.triangle_count()).unwrap_or(0);
                 let total = ed.scene.triangle_count();
                 let limit_tip = if ed.max_triangles > 0 {
                     format!(
@@ -2430,9 +2445,20 @@ fn arrange_menu(ui: &mut Ui, current: Arrangement) {
         tips::hover(ui.radio_value(&mut a.quick_bar, *c, c.label()), tips::quick_bar_tip(*c));
     }
     let reset = tips::hover(ui.button("Reset brush order"), plain::RESET_ORDER).clicked();
+    if ui
+        .button("Sort brushes A–Z")
+        .on_hover_text("List the brushes alphabetically (number keys follow the new order)")
+        .clicked()
+    {
+        ui.ctx().data_mut(|d| d.insert_temp(sort_id(), true));
+    }
     if a.shelf != current.shelf || a.panels != current.panels || a.quick_bar != current.quick_bar || reset {
         ui.ctx().data_mut(|d| d.insert_temp(arrange_id(), (a.shelf, a.panels, a.quick_bar, reset)));
     }
+}
+
+fn sort_id() -> egui::Id {
+    egui::Id::unique("oxy_sort_brushes_request")
 }
 
 fn arrange_id() -> egui::Id {
@@ -2441,6 +2467,9 @@ fn arrange_id() -> egui::Id {
 
 /// Apply a choice made in `arrange_menu` (called once per frame).
 fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
+    if ctx.data_mut(|d| d.remove_temp::<bool>(sort_id())).unwrap_or(false) {
+        ed.sort_brushes_alphabetically();
+    }
     let req = ctx.data_mut(|d| d.remove_temp::<(ShelfPosition, PanelSide, QuickBar, bool)>(arrange_id()));
     if let Some((shelf, panels, quick_bar, reset)) = req {
         ed.shelf = shelf;
@@ -2883,7 +2912,9 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
         {
             ed.material_for_piece = false;
         }
-        let name = ed.scene.active().name.clone();
+        let Some(name) = ed.scene.try_active().map(|p| p.name.clone()) else {
+            return;
+        };
         if ui
             .selectable_label(ed.material_for_piece, format!("{name} only"))
             .on_hover_text("Pick a material for the active piece alone. It's saved with the project.")
@@ -2893,7 +2924,7 @@ fn material_target(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     if ed.material_for_piece
-        && ed.scene.active().material.is_some()
+        && ed.scene.try_active().is_some_and(|p| p.material.is_some())
         && ui
             .small_button("Use the scene's material")
             .on_hover_text("The active piece goes back to showing the scene's material.")
@@ -3127,6 +3158,9 @@ const AXIS_COLORS: [Color32; 3] =
 
 /// Transform gizmo over the model, plus its mode bar at the bottom of the viewport.
 fn transform_gizmo(ctx: &egui::Context, ed: &mut Editor, canvas: egui::Rect) {
+    if ed.scene.pieces.is_empty() {
+        return;
+    }
     let Some(mode) = ed.gizmo else { return };
     egui::Area::new(egui::Id::unique("gizmo_bar"))
         .pivot(egui::Align2::CENTER_BOTTOM)
@@ -3700,8 +3734,22 @@ fn idle_hint(ed: &Editor, from_empty: bool) -> String {
 fn status_bar(ui: &mut Ui, ed: &mut Editor) {
     egui::Panel::bottom("status").show(ui, |ui| {
         ui.horizontal(|ui| {
-            let m = &ed.scene.active().mesh;
-            ui.label(RichText::new(&ed.scene.active().name).strong());
+            let Some(active) = ed.scene.try_active() else {
+                ui.label(RichText::new("Empty scene").strong());
+                ui.label(RichText::new("no pieces").weak());
+                ui.separator();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(context_hint(ed)).weak());
+                    if ed.job.is_none() {
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            tips::hover(ui.add(egui::Label::new(&ed.status).truncate()), ed.status.clone());
+                        });
+                    }
+                });
+                return;
+            };
+            let m = &active.mesh;
+            ui.label(RichText::new(&active.name).strong());
             let (quads, tris) = m.quad_and_triangle_counts();
             let count_label = if quads > 0 && tris == 0 {
                 format!("{} quads", fmt_count(quads))
@@ -3937,8 +3985,12 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.decimate_active();
     }
     tips::menu(ui, "Boolean", plain::BOOLEAN_MENU, |ui| {
+        let Some(active_id) = ed.scene.try_active().map(|p| p.id) else {
+            ui.label(RichText::new("Needs a piece").weak());
+            return;
+        };
         let other_pieces: Vec<(u64, String)> =
-            ed.scene.pieces.iter().filter(|p| p.id != ed.scene.active().id).map(|p| (p.id, p.name.clone())).collect();
+            ed.scene.pieces.iter().filter(|p| p.id != active_id).map(|p| (p.id, p.name.clone())).collect();
         if other_pieces.is_empty() {
             ui.label(RichText::new("Needs a second piece").weak());
         } else {
@@ -4059,6 +4111,9 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     let show_all_label = format!("Show all  ({}+{}+click empty)", ed.keymap.mask.label(), ed.keymap.smooth.label());
     if tips::hover(ui.button(show_all_label), Cmd::ShowAll.tip_in(&ed.keymap)).clicked() {
         ed.edit_faces("Show all", Mesh::show_all);
+    }
+    if tips::button(ui, "Hide masked", Cmd::HideMasked).clicked() {
+        ed.edit_faces("Hide masked", Mesh::hide_masked);
     }
     if tips::button(ui, "Invert visibility", Cmd::InvertVisibility).clicked() {
         ed.edit_faces("Invert visibility", Mesh::invert_visibility);
@@ -4415,7 +4470,7 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
     let layers_open = ed.living.enabled;
     widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| crate::living_ui::layers_section(ui, ed));
-    let has_copies = !ed.scene.active().instancers.is_empty() || ed.editing_source.is_some();
+    let has_copies = ed.scene.try_active().is_some_and(|p| !p.instancers.is_empty()) || ed.editing_source.is_some();
     widgets::section(ui, "Instances", plain::SECTION_INSTANCES, has_copies, |ui| {
         crate::instances_ui::section(ui, ed, busy)
     });
@@ -4520,6 +4575,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.scene.set_active(i);
         ed.piece_pick.clear();
     }
+    if ed.scene.pieces.is_empty() {
+        ui.label(RichText::new("No pieces yet. + Add, Insert Primitive or Import starts one.").weak().small());
+    }
     ui.horizontal_wrapped(|ui| {
         tips::menu(ui, "+ Add", plain::ADD, |ui| {
             for (label, which, cmd) in [
@@ -4550,7 +4608,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
             ed.edit_tube();
         }
-        if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
+        if tips::button_on(ui, !ed.scene.pieces.is_empty(), "Duplicate", Cmd::Duplicate).clicked() {
             ed.duplicate_active(false);
         }
         if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
@@ -4573,7 +4631,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 /// Booleans in the Pieces panel: the piece to combine with, and what to
 /// do with it. The active piece is the one that changes.
 fn boolean_row(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    let active = ed.scene.active().id;
+    let Some(active) = ed.scene.try_active().map(|p| p.id) else { return };
     let others: Vec<(u64, String)> =
         ed.scene.pieces.iter().filter(|p| p.id != active).map(|p| (p.id, p.name.clone())).collect();
     if others.is_empty() {
@@ -5038,10 +5096,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         tips::check_plain(ui, &mut ed.dyntopo, "Add detail as you sculpt", &Cmd::DynDetail.tip_in(&ed.keymap));
     });
     if ed.dyntopo {
-        let levels = {
-            let p = ed.scene.active();
-            p.multires.as_ref().is_some_and(|m| m.is_bound_to(&p.mesh))
-        };
+        let levels = ed.scene.try_active().is_some_and(|p| p.multires.as_ref().is_some_and(|m| m.is_bound_to(&p.mesh)));
         ui.add_enabled_ui(!levels, |ui| {
             ui.horizontal(|ui| {
                 ui.label("Detail");
@@ -5149,8 +5204,9 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 );
             }
         });
-        let h = ed.scene.active().mesh.bounds().extent().max_element() / ed.remesh_resolution.max(1) as f32;
-        if ed.remesh_shell_thickness < 1.5 * h {
+        let h =
+            ed.scene.try_active().map(|p| p.mesh.bounds().extent().max_element() / ed.remesh_resolution.max(1) as f32);
+        if h.is_some_and(|h| ed.remesh_shell_thickness < 1.5 * h) {
             ui.label(
                 RichText::new("Thinner than about two voxels: raise the resolution for a clean wall")
                     .small()
@@ -5229,11 +5285,26 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn history_section(ui: &mut Ui, ed: &mut Editor) {
-    let id = ed.scene.active().id;
+    let Some(active) = ed.scene.try_active() else {
+        ui.label(RichText::new("No piece yet").weak());
+        let undo: Vec<String> = ed.history.undo_labels().map(str::to_owned).collect();
+        let redo: Vec<String> = ed.history.redo_labels().map(str::to_owned).collect();
+        if undo.is_empty() && redo.is_empty() {
+            ui.label(RichText::new("No history yet").weak());
+        }
+        for l in history_rows(&undo, &redo) {
+            match l {
+                HistoryRow::Undone(l) => ui.label(RichText::new(l).weak().italics()),
+                HistoryRow::Done(l) => ui.label(l),
+            };
+        }
+        return;
+    };
+    let id = active.id;
     let piece_only = ui.ctx().data(|d| d.get_temp::<bool>(egui::Id::unique("history_piece_only"))).unwrap_or(false);
     let mut only = piece_only;
     tips::hover(
-        ui.checkbox(&mut only, format!("Only {}", ed.scene.active().name)),
+        ui.checkbox(&mut only, format!("Only {}", active.name)),
         "Show only the changes to the active piece. Ctrl+Alt+Z undoes those one by one.",
     );
     if only != piece_only {
@@ -5606,6 +5677,7 @@ fn welcome(ctx: &egui::Context, ed: &mut Editor, action: &mut Option<UiAction>) 
                     (Icon::Plane, "Plane", "Reliefs, tiles", "plane", Cmd::NewPlane),
                     (Icon::Human, "Female", "Human base mesh", "human_female", Cmd::NewHumanFemale),
                     (Icon::Human, "Male", "Human base mesh", "human_male", Cmd::NewHumanMale),
+                    (Icon::Empty, "Empty", "Start from nothing", "empty", Cmd::NewEmpty),
                 ] {
                     if widgets::card(ui, icon, title, sub, &cmd.tip()).clicked() {
                         ed.request(Pending::New(which));
@@ -5804,7 +5876,7 @@ fn draw_symmetry_planes(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
     ui.ctx().request_repaint();
     let c = ed.symmetry_center();
-    let b = ed.scene.active().mesh.bounds();
+    let Some(b) = ed.scene.try_active().map(|p| p.mesh.bounds()) else { return };
     // Reach a little past the piece on every side, around the centre.
     let half = (b.max - c).max(c - b.min) * 1.1;
     let painter = ui.painter().with_clip_rect(canvas);
@@ -6301,6 +6373,7 @@ fn edge_loop_menu(ui: &mut Ui, ed: &mut Editor) {
             ui.close();
         }
         tips::check_plain(ui, &mut ed.edge_loop_both_sides, "Both sides", plain::EDGE_LOOP_BOTH);
+        tips::check_plain(ui, &mut ed.edge_loop_group_masked, "Group the masked area", plain::EDGE_LOOP_GROUP);
         ui.horizontal(|ui| {
             tips::hover(ui.label("Width"), plain::EDGE_LOOP_WIDTH);
             tips::hover(
@@ -7215,5 +7288,26 @@ mod tests {
 
         let removed = ed.clean_mesh();
         assert_eq!(removed, 0);
+    }
+
+    #[test]
+    fn an_empty_scene_draws_without_panicking() {
+        let mut ed = Editor::default();
+        ed.perform(Pending::New("empty"));
+        assert!(ed.scene.pieces.is_empty());
+        ed.show_welcome = false;
+        ed.show_panels = true;
+        ed.dyntopo = true;
+        ed.radius_on_model = true;
+        ed.pointer = Some(Vec2::new(700.0, 400.0));
+        ed.gizmo = Some(crate::pose::GizmoMode::Combined);
+        ed.show_deform = true;
+        ed.show_diagnostics = true;
+        ed.show_print_dialog = true;
+        ed.tube_armed = true;
+        ed.living.enabled = true;
+        ed.living.show = true;
+        run_frames(&mut ed, 2);
+        assert!(ed.scene.pieces.is_empty());
     }
 }

@@ -32,7 +32,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.16](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+> **Beta:** [v4.0.0-beta.18](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Blur or sharpen the mask with Ctrl+click, hide the masked faces, mask outside a box or lasso with Alt, and sort the brush list A–Z. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
 
 **Highlights**
 
@@ -62,7 +62,7 @@ Each release has `SHA256SUMS.txt` for verifying downloads.
 
 ## Getting started
 
-The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube, plane, or a female or male human base mesh), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work, and **File > Revert** reloads the project as you last saved it. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
+The first time OxyBrush starts, a welcome window helps you pick a starting shape (sphere, cube, plane, a female or male human base mesh, or an empty scene), open a project or import a mesh, and choose a layout. **File > Close project** brings it back, after asking to save unsaved work, and **File > Revert** reloads the project as you last saved it. Hover over any brush or control for a short explanation and its shortcut; on a touch screen, press and hold it.
 
 ![The welcome window with starter shapes and the basic controls](docs/images/welcome.png)
 
@@ -132,7 +132,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 ### Detail and topology
 
 - **Subdivision levels:** add levels, sculpt broad shapes on a low level and fine detail on a high one; edits on a low level carry the higher-level detail along. For more resolution in one area only, mask it and use **Subdivide masked** (Mask and Mesh menus; step by step in [Adding detail to one part of a model](docs/guides/detail-on-one-part.md)). Levels are **quads** by default (Catmull–Clark, so a quad base mesh keeps its edge loops and exports as quads at every level, with Poly Edit creases kept sharp), or triangles (Loop) if you choose ([RFC 0019](docs/rfcs/0019-quad-subdivision.md)). Turn **Smooth** off to split faces without rounding the shape (linear subdivision), per level. Levels are saved in the project and covered by undo, with a configurable triangle limit (`max_triangles`).
-- **Edge loop at mask border** (Mask and Mesh menus): adds support loops along the edge of the mask, on one or both sides, at a width you choose, in a face group of their own, so a hard edge stays crisp when you subdivide or smooth. Mask a face group (Ctrl+M) to put the loop exactly around it.
+- **Edge loop at mask border** (Mask and Mesh menus): adds support loops along the edge of the mask, on one or both sides, at a width you choose, in a face group of their own, so a hard edge stays crisp when you subdivide or smooth. **Group the masked area** (on by default) also gives the triangles inside the mask a face group, so that area can be isolated; the outside keeps its groups and hidden faces stay out. Mask a face group (Ctrl+M) to put the loop exactly around it.
 - **Dynamic detail:** turn it on in the Topology section and brushes add triangles where they need more detail and remove ones that became too small, so you can build a shape from a plain sphere without remeshing. Works best up to a few hundred thousand triangles ([RFC 0006](docs/rfcs/0006-dynamic-detail.md)). It is off on pieces with subdivision levels; **Keep this level only** turns the level you see into the piece's mesh so it works again.
 - **Voxel remesh:** rebuilds a piece with even triangles, on a sparse voxel grid that reaches 1024+ voxels across with little memory. Parts that overlap, or a surface sculpted through itself, come out as one solid, and holes are patched first. **Shell** makes a wall of a chosen thickness instead (outward, both sides or inward): a sheet gets a thickness, a closed model comes out hollow. An **Adaptivity** slider uses fewer triangles on flat areas, and quad output exports as quads in OBJ.
 - **Surface instances** (the right panel's **Instances** section): copy a piece onto every face or point of another, or one face group, as live copies that follow the surface as you sculpt. **Edit source** changes all of them at once; choose which way they face, their size, lift and random variation; **Make real** turns them into ordinary mesh ([RFC 0022](docs/rfcs/0022-surface-instances.md)).
@@ -177,7 +177,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 - **Projects:** `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Autosave** every 2 minutes (adjustable) and **crash recovery** on the next launch.
 - **UVs** from OBJ and glTF files are kept per face corner through sculpting, saving and export (OBJ, glTF/GLB), so a model can go on to texturing or baking; rebuilding the triangles (remesh, dynamic detail, subdivision levels for now) drops them, with a note.
-- **Import:** glTF (`.glb`, `.gltf`; each mesh in the scene becomes a piece where the scene places it, including meshopt- and quantization-compressed files; not Draco), OBJ, STL and PLY (each object becomes its own piece; broken material files don't stop an import). Vertex colors come in too: OBJ colors after each vertex (`v x y z r g b`, 0–1 or 0–255) or in `#MRGB` comment blocks, and PLY `red green blue`; and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; one Undo keeps the original size.
+- **Import:** glTF (`.glb`, `.gltf`; each mesh in the scene becomes a piece where the scene places it, including meshopt- and quantization-compressed files; not Draco), OBJ, STL and PLY (each object becomes its own piece; broken material files don't stop an import). The Import dialog and a drop onto the window can take several files at once (Shift-click or Ctrl/Cmd-click): each file's objects become pieces, in one undo step, in name order, and a file that can't be read is skipped and named. Vertex colors come in too: OBJ colors after each vertex (`v x y z r g b`, 0–1 or 0–255) or in `#MRGB` comment blocks, and PLY `red green blue`; and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; several files imported together share that one factor so their relative sizes stay. One Undo keeps the original size.
 - **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL or binary PLY, one object per piece.
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4 and 1/8 of the triangles), and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting.
 
@@ -209,6 +209,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+drag on empty space | Mask a rectangle or lasso, mirrored when symmetry is on (Ctrl+Alt: unmask; a box around nothing clears the mask; Ctrl+click: invert the mask) |
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it) |
 | `L` | Rectangle / lasso selection |
+| Ctrl+click on the model | Blur the mask (Ctrl+Alt+click: sharpen it); dragging paints the mask as before |
 | Ctrl+M | Mask the face group under the cursor |
 | Ctrl+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
@@ -247,7 +248,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.16 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.18 |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, touch layout ✅, performance first pass ✅ · rebuilding lower levels, 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, deform window ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅ · layers ⏳ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |

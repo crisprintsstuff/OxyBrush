@@ -211,7 +211,10 @@ impl Change {
                     Some(id)
                 }
                 None => {
-                    if *index >= scene.pieces.len() || scene.pieces.len() == 1 {
+                    // Undo of an insert removes that piece, including when it
+                    // is the last one, so the scene can be empty. Deleting
+                    // the last piece from the Pieces panel is still refused.
+                    if *index >= scene.pieces.len() {
                         return None;
                     }
                     let p = scene.pieces.remove(*index);
@@ -978,5 +981,19 @@ mod tests {
         h.redo(&mut s);
         assert_eq!(s.pieces[0].instancers.len(), 1);
         assert!(!s.pieces[1].visible);
+    }
+
+    #[test]
+    fn undoing_the_only_insert_leaves_the_scene_empty() {
+        let mut s = Scene::empty();
+        s.pieces.push(Piece::new("Imported", primitives::icosphere(1, 1.0)));
+        let mut h = History::default();
+        h.record("Import", Step::Inserted { index: 0 });
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Import"));
+        assert!(s.pieces.is_empty(), "an import into an empty scene undoes back to empty");
+        assert!(s.try_active().is_none());
+        assert_eq!(h.redo(&mut s).as_deref(), Some("Import"));
+        assert_eq!(s.pieces.len(), 1);
+        assert_eq!(s.active().name, "Imported");
     }
 }

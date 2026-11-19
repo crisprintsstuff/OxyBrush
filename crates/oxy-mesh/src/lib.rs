@@ -738,6 +738,14 @@ impl Mesh {
         self.set_hidden(hidden);
     }
 
+    /// Hide the masked triangles (see [`Mesh::masked_faces`]); already hidden
+    /// ones stay hidden.
+    pub fn hide_masked(&mut self) {
+        let masked = self.masked_faces();
+        let hidden = self.hidden.iter().zip(masked).map(|(&h, m)| h || m).collect();
+        self.set_hidden(hidden);
+    }
+
     /// Delete hidden triangles (a topology change).
     pub fn delete_hidden(&self) -> Mesh {
         let mut d = self.to_data();
@@ -1354,9 +1362,36 @@ impl Mesh {
         self.set_groups(groups);
     }
 
-    /// One group per connected component.
+    /// One group per connected component of the visible triangles. Hidden
+    /// triangles don't connect anything, so visible parts only joined
+    /// through hidden ones are separate islands; hidden triangles keep their
+    /// group. With nothing hidden the groups are numbered from 0.
     pub fn groups_from_islands(&mut self) {
-        let group = self.island_ids();
+        let first = if self.hidden.iter().any(|&h| h) { self.next_free_group() } else { 0 };
+        let mut group = self.groups.clone();
+        let mut next = first;
+        let mut stack = Vec::new();
+        let mut seen = self.hidden.clone();
+        for seed in 0..self.triangles.len() {
+            if seen[seed] {
+                continue;
+            }
+            seen[seed] = true;
+            group[seed] = next;
+            stack.push(seed as u32);
+            while let Some(t) = stack.pop() {
+                for &v in &self.triangles[t as usize] {
+                    for &n in self.vertex_triangles.get(v as usize) {
+                        if !seen[n as usize] {
+                            seen[n as usize] = true;
+                            group[n as usize] = next;
+                            stack.push(n);
+                        }
+                    }
+                }
+            }
+            next += 1;
+        }
         self.set_groups(group);
     }
 
@@ -2397,6 +2432,30 @@ mod tests {
         assert_eq!(m.hidden().iter().filter(|&&h| h).count(), m.triangle_count() / 2);
         let trimmed = m.delete_hidden();
         assert_eq!(trimmed.triangle_count(), m.triangle_count() / 2);
+    }
+
+    #[test]
+    fn group_by_islands_respects_hidden_triangles() {
+        // A flat strip of triangles in one connected surface; hide the middle
+        // so the visible ends are two islands, and the hidden part keeps its group.
+        let mut m = primitives::plane(6, 6.0);
+        let before = m.groups().to_vec();
+        let hidden: Vec<bool> = (0..m.triangle_count())
+            .map(|t| {
+                let c = m.triangles[t].iter().map(|&v| m.positions[v as usize].x).sum::<f32>() / 3.0;
+                c.abs() < 1.0
+            })
+            .collect();
+        assert!(hidden.iter().any(|&h| h));
+        m.set_hidden(hidden.clone());
+        m.groups_from_islands();
+        let left: std::collections::HashSet<u32> =
+            (0..m.triangle_count()).filter(|&t| !hidden[t]).map(|t| m.groups()[t]).collect();
+        assert_eq!(left.len(), 2, "the two visible sides are separate islands");
+        for t in (0..m.triangle_count()).filter(|&t| hidden[t]) {
+            assert_eq!(m.groups()[t], before[t], "hidden triangles keep their group");
+            assert!(!left.contains(&m.groups()[t]));
+        }
     }
 
     #[test]

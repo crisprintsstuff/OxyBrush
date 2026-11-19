@@ -741,6 +741,15 @@ pub enum Drag {
         hit: oxy_mesh::RayHit,
         ray_dir: Vec3,
     },
+    /// Click with the mask key on the model blurs the whole mask (with the
+    /// invert key too: sharpens it, as in ZBrush); dragging beyond the
+    /// threshold paints the mask (or unmasks) instead.
+    MaskBlurOrPaint {
+        start: Vec2,
+        hit: oxy_mesh::RayHit,
+        ray_dir: Vec3,
+        sharpen: bool,
+    },
     /// Click with Alt on mesh while Gizmo is active snaps pivot;
     /// dragging beyond threshold falls through to carve brush stroke.
     GizmoSnapOrCarve {
@@ -848,18 +857,34 @@ pub enum Pending {
     Revert,
 }
 
-/// Long-running topology work on a background thread.
+/// Long-running work on a background thread (remesh, a large import, …).
 pub struct Job {
     pub label: String,
     pub started: Instant,
-    /// Piece receiving the result.
+    /// Piece receiving the result. An import that only adds pieces leaves
+    /// this unused, including when the scene is empty.
     target: u64,
     /// Other pieces consumed by the job (merged away on success).
     consumed: Vec<u64>,
     /// The job holds the target piece's subdivision levels (moved out of
     /// the piece while it runs), so saving must wait for it.
     holds_levels: bool,
+    /// Prepended to undo labels this job records (an agent's "Agent: ").
+    pub(crate) undo_prefix: String,
     rx: mpsc::Receiver<Result<JobResult, String>>,
+}
+
+/// Meshes read from files, ready to add as pieces.
+struct LoadedImport {
+    path: PathBuf,
+    parts: Vec<(String, Mesh)>,
+}
+
+/// The outcome of reading a batch of mesh files. Failures are skipped;
+/// they do not discard the files that read.
+pub struct ImportRead {
+    loaded: Vec<LoadedImport>,
+    failed: Vec<(PathBuf, String)>,
 }
 
 /// What a background job produces for its target piece.
@@ -887,6 +912,8 @@ pub enum JobResult {
         multires: Option<oxy_mesh::multires::Multires>,
         previous: Option<oxy_mesh::multires::Multires>,
     },
+    /// Files read for Import, applied on the UI thread as new pieces.
+    Imported(ImportRead),
 }
 
 /// A change to the active piece's subdivision levels.
@@ -1380,10 +1407,13 @@ pub struct Editor {
     /// The piece the Pieces panel's Boolean row combines with (the last one
     /// picked, while it exists).
     pub boolean_with: Option<u64>,
-    /// Edge loop at mask border: a loop on both sides, and how far from
-    /// the border (share of the neighbouring faces).
+    /// Edge loop at mask border: a loop on both sides, how far from the
+    /// border (share of the neighbouring faces), and whether the masked
+    /// area gets a face group of its own. Kept for the session, like the
+    /// other two.
     pub edge_loop_both_sides: bool,
     pub edge_loop_width: f32,
+    pub edge_loop_group_masked: bool,
     /// The piece the Instances section copies onto the active piece.
     pub instance_pick: Option<u64>,
     /// Edit source (surface instances): the source shown alone.
@@ -1667,6 +1697,7 @@ impl Default for Editor {
             boolean_with: None,
             edge_loop_both_sides: true,
             edge_loop_width: 0.25,
+            edge_loop_group_masked: true,
             instance_pick: None,
             editing_source: None,
             instancer_before: None,
@@ -1805,7 +1836,7 @@ impl Editor {
     /// Surface raycast hit on the active mesh under a physical pixel position.
     pub fn surface_hit_at(&self, pixel: Vec2) -> Option<oxy_mesh::RayHit> {
         let (o, d) = self.camera.ray(self.canvas_local(pixel), self.canvas_size());
-        self.scene.active().mesh.raycast(o, d)
+        self.scene.try_active()?.mesh.raycast(o, d)
     }
 
     pub fn pointer_in_canvas(&self) -> bool {
@@ -1838,6 +1869,7 @@ impl Editor {
                 | Drag::Select { .. }
                 | Drag::PendingStroke
                 | Drag::GizmoSnapOrMask { .. }
+                | Drag::MaskBlurOrPaint { .. }
                 | Drag::GizmoSnapOrCarve { .. }
         )
     }
@@ -2123,6 +2155,12 @@ impl Editor {
     }
 
     /// Brush for number key `n` (1–9, then 0 for the tenth), in shelf order.
+    /// Reorder the brush list by name (the number keys follow the new order).
+    pub fn sort_brushes_alphabetically(&mut self) {
+        self.brush_order.sort_by_key(|k| k.label().to_lowercase());
+        self.status = "Brushes sorted A–Z".into();
+    }
+
     pub fn brush_for_number_key(&self, n: u32) -> Option<BrushKind> {
         let i = if n == 0 { 9 } else { n as usize - 1 };
         self.brush_order.get(i).copied()
@@ -2434,6 +2472,15 @@ impl Editor {
         if self.tube_pointer_down(p) {
             return;
         }
+        // Nothing to sculpt: a press orbits (or pans, if the keymap says so).
+        if self.scene.pieces.is_empty() {
+            if let Some(action) = self.keymap.nav_action(NavButton::Left, self.active_modifiers()) {
+                self.drag = self.drag_for_nav(Some(action), PointerButton::Primary);
+            } else {
+                self.drag = Drag::Orbit;
+            }
+            return;
+        }
         let (kind, _invert) = self.effective_brush();
         if kind.is_curve_cut() {
             if self.job_blocks_active() {
@@ -2489,6 +2536,17 @@ impl Editor {
                 .map(|(_, hit)| self.scene.active().mesh.groups()[hit.triangle as usize]);
             let action = if m.alt { SelectAction::Hide } else { SelectAction::ShowOnly };
             self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
+            return;
+        }
+        // Mask key on the model, with something masked: a click blurs the
+        // mask (invert key too: sharpens it), a drag paints it. With nothing
+        // masked a click still paints a dab, as it always did.
+        if m.ctrl
+            && let Some(hit) = active_hit
+            && !self.job_blocks_active()
+            && self.scene.active().mesh.mask.iter().any(|&v| v > 0.0)
+        {
+            self.drag = Drag::MaskBlurOrPaint { start: p, hit, ray_dir: d, sharpen: m.alt };
             return;
         }
         // Mask key on empty space. The box gesture blurs on a click; the clear
@@ -2677,6 +2735,12 @@ impl Editor {
     /// takes, so a dense mesh still gets dabs in between; `force` refines
     /// now.
     fn dyntopo_step(&mut self, ahead: Option<Vec3>, force: bool) {
+        // Most pointer-ups are not a dynamic-detail stroke. Check that
+        // before asking for the active piece: an empty scene has none,
+        // and Redo of an import into one still runs pointer_up.
+        if !matches!(self.drag, Drag::Stroke { dyn_topo: Some(_), .. }) {
+            return;
+        }
         let center = self.symmetry_center();
         let transforms = self.symmetry.transforms();
         let max_triangles = self.max_triangles;
@@ -2788,7 +2852,10 @@ impl Editor {
                 self.radius_depth = Some(hit.point);
             }
         }
-        let at = self.radius_depth.unwrap_or_else(|| self.scene.active().mesh.bounds().center());
+        let at = self
+            .radius_depth
+            .or_else(|| self.scene.try_active().map(|p| p.mesh.bounds().center()))
+            .unwrap_or(Vec3::ZERO);
         self.world_radius(at, 1.0).max(1e-9)
     }
 
@@ -2832,7 +2899,11 @@ impl Editor {
 
     /// A range for the Size slider in world units, from the scene's size.
     pub fn world_radius_range(&self) -> std::ops::RangeInclusive<f32> {
-        let s = self.scene.bounds().extent().length().max(1e-3);
+        let bounds = self.scene.bounds();
+        // With nothing visible (an empty scene) the size comes from the view,
+        // or the range collapses to a sliver and the brush is stuck at it.
+        let size = if bounds.is_empty() { self.camera.distance } else { bounds.extent().length() };
+        let s = size.max(1e-3);
         (s * 0.0005)..=(s * 0.5)
     }
 
@@ -2928,12 +2999,15 @@ impl Editor {
     /// symmetry centre, or the world origin for pieces that have none (older
     /// files, pieces modelled around the origin).
     pub fn symmetry_center(&self) -> Vec3 {
-        self.scene.active().symmetry_center.unwrap_or(Vec3::ZERO)
+        self.scene.try_active().and_then(|p| p.symmetry_center).unwrap_or(Vec3::ZERO)
     }
 
     /// Move the active piece's symmetry centre to the middle of its shape
     /// (`world` = false) or back to the world origin.
     pub fn recenter_symmetry(&mut self, world: bool) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active_mut();
         let c = if world { Vec3::ZERO } else { piece.mesh.bounds().center() };
         piece.symmetry_center = Some(c);
@@ -3266,7 +3340,7 @@ impl Editor {
             Drag::MaskGesture { .. } => true,
             Drag::PendingStroke => {
                 let (o, d) = self.camera.ray(self.canvas_local(pos), size);
-                if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                if let Some(hit) = self.scene.try_active().and_then(|piece| piece.mesh.raycast(o, d)) {
                     self.start_stroke_at(pos, hit, d);
                 }
                 true
@@ -3277,7 +3351,7 @@ impl Editor {
             }
             Drag::GroupPaint { .. } => {
                 let (o, d) = self.camera.ray(self.canvas_local(pos), size);
-                if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                if let Some(hit) = self.scene.try_active().and_then(|piece| piece.mesh.raycast(o, d)) {
                     self.group_paint_to(hit.point, d);
                 }
                 true
@@ -3368,7 +3442,7 @@ impl Editor {
                 true
             }
             Drag::Stroke { .. } => self.stroke_to(pos),
-            Drag::GizmoSnapOrMask { start, hit, ray_dir } => {
+            Drag::GizmoSnapOrMask { start, hit, ray_dir } | Drag::MaskBlurOrPaint { start, hit, ray_dir, .. } => {
                 if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
@@ -3602,6 +3676,13 @@ impl Editor {
             Drag::GizmoSnapOrMask { hit, .. } => {
                 self.snap_gizmo_to_surface(hit.point, hit.normal);
             }
+            Drag::MaskBlurOrPaint { sharpen, .. } => {
+                if sharpen {
+                    self.edit_mesh_mask("Sharpen mask", Mesh::sharpen_mask);
+                } else {
+                    self.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
+                }
+            }
             Drag::GizmoSnapOrCarve { hit, .. } => {
                 self.custom_gizmo_pivot = Some(hit.point);
                 self.kept_pivot_of = None;
@@ -3616,7 +3697,10 @@ impl Editor {
             Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
             Drag::CurveHandle { .. } => {}
             Drag::Select { action, points, lasso, click_group } => {
-                self.finish_select(action, points, lasso, click_group)
+                // Alt pressed after a mask box (not held from the start,
+                // which means unmask) masks everything but the box.
+                let outside = action == SelectAction::Mask && self.modifiers.alt;
+                self.finish_select(action, points, lasso, click_group, outside)
             }
             Drag::MaskGesture { start } => {
                 let moved = self.pointer.is_some_and(|p| p.distance(start) >= 4.0 * self.pixels_per_point.max(0.1));
@@ -3644,7 +3728,9 @@ impl Editor {
             _ => {}
         }
         // Strokes only grow chunk bounds per dab; tighten them once at the end.
-        self.scene.active_mut().mesh.tighten_bounds();
+        if let Some(piece) = self.scene.try_active_mut() {
+            piece.mesh.tighten_bounds();
+        }
     }
 
     /// Cancel an in-progress drag without applying it (Escape).
@@ -3886,7 +3972,14 @@ impl Editor {
         }
     }
 
-    fn finish_select(&mut self, action: SelectAction, points: Vec<Vec2>, lasso: bool, click_group: Option<u32>) {
+    fn finish_select(
+        &mut self,
+        action: SelectAction,
+        points: Vec<Vec2>,
+        lasso: bool,
+        click_group: Option<u32>,
+        outside: bool,
+    ) {
         let is_click = points.len() < 2 || points.iter().all(|p| p.distance(points[0]) < 4.0);
         if is_click {
             match (action, click_group) {
@@ -3919,7 +4012,7 @@ impl Editor {
                 // mirrored box.
                 let center = self.symmetry_center();
                 let transforms = self.symmetry.transforms();
-                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center)));
+                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center))) != outside;
                 // A mask box drawn around none of the model clears the mask.
                 let mesh = &self.scene.active().mesh;
                 let any =
@@ -3931,7 +4024,13 @@ impl Editor {
                     return;
                 }
                 let value = if action == SelectAction::Mask { 1.0 } else { 0.0 };
-                let label = if action == SelectAction::Mask { "Mask selection" } else { "Unmask selection" };
+                let label = if outside {
+                    "Mask outside selection"
+                } else if action == SelectAction::Mask {
+                    "Mask selection"
+                } else {
+                    "Unmask selection"
+                };
                 self.edit_mesh_mask(label, |mesh| {
                     for v in 0..mesh.vertex_count() {
                         if !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]) {
@@ -3963,7 +4062,7 @@ impl Editor {
     pub fn mask_group_under_pointer(&mut self) {
         let Some(p) = self.pointer else { return };
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
-        match self.scene.active().mesh.raycast(o, d) {
+        match self.scene.try_active().and_then(|piece| piece.mesh.raycast(o, d)) {
             Some(hit) => {
                 let g = self.scene.active().mesh.groups()[hit.triangle as usize];
                 self.edit_mesh_mask("Mask face group", |m| m.mask_group(g));
@@ -4008,6 +4107,9 @@ impl Editor {
     /// Undo the last change to the active piece only, skipping changes to
     /// other pieces (see `History::undo_piece`).
     pub fn undo_piece(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         if !self.prepare_undo(true) {
             return;
         }
@@ -4032,6 +4134,9 @@ impl Editor {
 
     /// Redo the last undone change to the active piece only.
     pub fn redo_piece(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         if !self.prepare_undo(false) {
             return;
         }
@@ -4131,6 +4236,20 @@ impl Editor {
 
     // ---- documents ----
 
+    /// Shown when a tool needs a piece and the scene has none.
+    pub(crate) const NEED_PIECE: &'static str =
+        "No piece yet. Add one with Pieces > + Add, Insert Primitive or Import.";
+
+    /// False, with [`Self::NEED_PIECE`] as the status, when the scene is empty.
+    pub(crate) fn need_piece(&mut self) -> bool {
+        if self.scene.pieces.is_empty() {
+            self.status = Self::NEED_PIECE.into();
+            false
+        } else {
+            true
+        }
+    }
+
     fn primitive(which: &str) -> (String, Mesh) {
         match which {
             "human_female" => ("Human (female)".into(), base_mesh(HUMAN_FEMALE)),
@@ -4158,9 +4277,24 @@ impl Editor {
         match action {
             Pending::Quit => self.quit_now = true,
             Pending::New(which) => {
-                let (name, mesh) = Self::primitive(which);
-                self.status = format!("New document ({})", name.to_lowercase());
-                self.replace_document(Scene::new(Piece::new(name, mesh)), None);
+                self.show_welcome = false;
+                if which == "empty" {
+                    self.gizmo = None;
+                    self.poly_edit = None;
+                    self.retopo = None;
+                    self.cancel_tube();
+                    self.curve = None;
+                    self.extract_preview = None;
+                    self.primitive_edit = None;
+                    self.insert_preview = None;
+                    self.show_deform = false;
+                    self.status = "New document (empty scene)".into();
+                    self.replace_document(Scene::empty(), None);
+                } else {
+                    let (name, mesh) = Self::primitive(which);
+                    self.status = format!("New document ({})", name.to_lowercase());
+                    self.replace_document(Scene::new(Piece::new(name, mesh)), None);
+                }
             }
             Pending::Close => {
                 let closed = self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
@@ -4196,7 +4330,14 @@ impl Editor {
         self.link = None;
         self.bridge = None;
         self.import_scale = None;
-        self.camera.frame(self.scene.bounds());
+        if self.scene.bounds().is_empty() {
+            // Nothing to frame: the view goes back to the default, looking
+            // at the origin, instead of staying on the previous model.
+            self.camera = Camera::default();
+            self.orbit_pivot = None;
+        } else {
+            self.camera.frame(self.scene.bounds());
+        }
         self.reopen_saved_curve();
         self.living_adopt_loaded();
     }
@@ -4376,6 +4517,44 @@ impl Editor {
         }
     }
 
+    /// Several files dropped on the window, or handed over by the system
+    /// together. One mesh file opens as before. Several mesh files are
+    /// imported as pieces of the current project, in one undo step. A
+    /// project, add-on or link manifest still opens on its own.
+    pub(crate) fn open_dropped(&mut self, paths: &[PathBuf]) {
+        self.show_welcome = false;
+        if paths.is_empty() {
+            return;
+        }
+        if paths.len() == 1 {
+            self.open(&paths[0]);
+            return;
+        }
+        let mut meshes = Vec::new();
+        for path in paths {
+            if opens_as_document(path) {
+                self.open(path);
+            } else {
+                meshes.push(path.clone());
+            }
+        }
+        if meshes.is_empty() {
+            return;
+        }
+        // Opening a project with unsaved work asks first. Importing into
+        // the scene that question is about to replace would throw the
+        // meshes away, so wait until that answer is in.
+        if self.pending.is_some() {
+            let n = meshes.len();
+            self.status = format!(
+                "{n} dropped mesh file{} not imported yet: answer the save question first",
+                if n == 1 { " was" } else { "s were" }
+            );
+            return;
+        }
+        self.import_paths(&meshes);
+    }
+
     /// Put `path` at the top of the recent-files list.
     pub fn remember_recent(&mut self, path: &Path) {
         let path = std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
@@ -4394,48 +4573,156 @@ impl Editor {
         }
     }
 
-    /// Import a mesh file. Each object in it becomes its own piece (one
-    /// undo step for all of them).
+    /// Import one mesh file. Each object in it becomes its own piece.
+    /// Several files go through [`Self::import_paths`].
     pub fn import(&mut self, path: &Path) {
-        match oxy_io::import_pieces(path) {
-            Ok(parts) => {
-                self.pointer_up();
-                let scene_before = self.scene.bounds();
-                let tris: usize = parts.iter().map(|(_, m)| m.triangle_count()).sum();
-                let n = parts.len();
-                let mut steps = Vec::with_capacity(n);
-                for (name, mesh) in parts {
-                    let index = self.scene.pieces.len();
-                    let name = self.scene.unique_name(&name);
-                    let mut piece = Piece::new(name, mesh);
-                    ensure_symmetry_center(&mut piece);
-                    self.scene.pieces.push(piece);
-                    steps.push(Step::Inserted { index });
-                }
-                // Make the first imported piece active.
-                self.scene.set_active(self.scene.pieces.len() - n);
-                self.history.record_compound("Import", steps);
-                let pieces = if n == 1 { String::new() } else { format!(", {n} pieces") };
-                self.status = format!("Imported {} ({tris} triangles{pieces})", path.display());
-                let first = self.scene.pieces.len() - n;
-                let size = |b: oxy_mesh::Aabb| (b.max - b.min).max_element();
-                let imported =
-                    self.scene.pieces[first..].iter().fold(oxy_mesh::Aabb::EMPTY, |a, p| a.union(&p.mesh.bounds()));
-                let factor = self.import_scale.or_else(|| import_unit_scale(size(imported), size(scene_before)));
-                if let Some(factor) = factor {
-                    self.import_scale = Some(factor);
-                    self.scale_pieces(first, factor);
-                    self.status = format!(
-                        "Imported {} ({tris} triangles{pieces}), scaled by {factor} to match the scene: its file uses other units. Undo once to keep its original size.",
-                        path.display()
-                    );
-                }
-                self.camera.frame(self.scene.bounds());
-                self.protect_path(path);
-                self.remember_recent(path);
-            }
-            Err(e) => self.status = format!("Could not import {}: {e}", path.display()),
+        self.import_paths(&[path.to_path_buf()]);
+    }
+
+    /// Import mesh files as pieces of the current project.
+    ///
+    /// Each object in each file becomes its own piece. Every file that
+    /// reads is one undo step together. A file that fails is skipped, and
+    /// the status line names it. Native open panels don't promise the
+    /// order the files were clicked (Windows' item array is unspecified;
+    /// the macOS panel and the Linux portal only promise a list), so the
+    /// files are taken in case-insensitive name order.
+    ///
+    /// A batch whose overall size is far from the scene is fitted with one
+    /// scale factor, the same rule as a single file, so a small part stays
+    /// in proportion to a large one. Fitting is a second undo step covering
+    /// the whole batch: one Undo restores the sizes from the files, and the
+    /// next removes every piece the batch added.
+    ///
+    /// Files that add up to [`IMPORT_BACKGROUND_BYTES`] or more are read on
+    /// the worker the status bar already shows for a remesh.
+    pub(crate) fn import_paths(&mut self, paths: &[PathBuf]) {
+        let paths = order_import_paths(paths);
+        if paths.is_empty() {
+            return;
         }
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        if import_runs_on_worker(&paths) {
+            self.start_import_job(paths);
+        } else {
+            self.finish_import(read_imports(&paths));
+        }
+    }
+
+    /// Read `paths` off the UI thread and add the pieces when the read ends.
+    fn start_import_job(&mut self, paths: Vec<PathBuf>) {
+        self.release_pointer();
+        let n = paths.len();
+        let label = if n == 1 {
+            let name = paths[0]
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| paths[0].display().to_string());
+            format!("Importing {name}")
+        } else {
+            format!("Importing {n} files")
+        };
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("oxy-import".into())
+            .spawn(move || {
+                let _ = tx.send(Ok(JobResult::Imported(read_imports(&paths))));
+            })
+            .expect("spawn worker thread");
+        let target = self.scene.pieces.get(self.scene.active_index()).map(|p| p.id).unwrap_or(0);
+        self.status = format!("{label}…");
+        self.job = Some(Job {
+            label,
+            started: Instant::now(),
+            target,
+            consumed: Vec::new(),
+            holds_levels: false,
+            undo_prefix: String::new(),
+            rx,
+        });
+    }
+
+    /// Add the pieces from a finished read. Returns how many undo steps
+    /// were recorded (the import, and the fit when the batch was scaled).
+    fn finish_import(&mut self, read: ImportRead) -> usize {
+        let ImportRead { loaded, failed } = read;
+        if loaded.is_empty() {
+            self.status = if failed.len() == 1 {
+                format!("Could not import {}: {}", failed[0].0.display(), failed[0].1)
+            } else if failed.is_empty() {
+                "Nothing to import".into()
+            } else {
+                format!("Could not import any file: {}", format_import_failures(&failed))
+            };
+            return 0;
+        }
+        self.release_pointer();
+        // The scene as it is now, before the new pieces, so the scale
+        // compares the batch with what was already here. An empty scene
+        // has no size to compare with, and the files stay as they are.
+        let scene_size = aabb_span(self.scene.bounds());
+        let before = self.history.revision();
+        let file_count = loaded.len();
+        let mut only_path = None;
+        let mut tris = 0usize;
+        let mut piece_count = 0usize;
+        let first = self.scene.pieces.len();
+        let mut steps = Vec::new();
+        for LoadedImport { path, parts } in loaded {
+            if file_count == 1 {
+                only_path = Some(path.clone());
+            }
+            self.protect_path(&path);
+            self.remember_recent(&path);
+            for (name, mesh) in parts {
+                tris += mesh.triangle_count();
+                piece_count += 1;
+                let index = self.scene.pieces.len();
+                let name = self.scene.unique_name(&name);
+                let mut piece = Piece::new(name, mesh);
+                ensure_symmetry_center(&mut piece);
+                self.scene.pieces.push(piece);
+                steps.push(Step::Inserted { index });
+            }
+        }
+        if steps.is_empty() {
+            self.status = format!("Could not import any file: {}", format_import_failures(&failed));
+            return 0;
+        }
+        // The first imported piece becomes the active one.
+        self.scene.set_active(first);
+        // Every file in the batch is one undo step. Fitting, when it
+        // happens, is a second step covering those same pieces, so one
+        // Undo puts the whole batch back at the size in the files.
+        self.history.record_compound("Import", steps);
+        let imported = self.scene.pieces[first..].iter().fold(oxy_mesh::Aabb::EMPTY, |a, p| a.union(&p.mesh.bounds()));
+        // One factor for the whole batch, from the longest side of
+        // everything just imported (the same measure as a single file).
+        // Scaling each file on its own would shrink a large mesh and
+        // leave a small part from the same drop at full size, so the two
+        // would no longer fit together. A factor already chosen for this
+        // project still wins, so a later import matches the first.
+        let factor = self.import_scale.or_else(|| import_unit_scale(aabb_span(imported), scene_size));
+        if let Some(factor) = factor {
+            self.import_scale = Some(factor);
+            self.scale_pieces(first, factor);
+        }
+        self.camera.frame(self.scene.bounds());
+        self.status = import_status(file_count, only_path.as_deref(), tris, piece_count, &failed, factor);
+        (self.history.revision().wrapping_sub(before)) as usize
+    }
+
+    /// End a drag before the document changes. `pointer_up` tightens the
+    /// active piece's bounds, which an empty scene does not have.
+    fn release_pointer(&mut self) {
+        if self.scene.pieces.is_empty() {
+            self.drag = Drag::None;
+            return;
+        }
+        self.pointer_up();
     }
 
     /// Scale pieces `first..` about the origin by `factor`, as one undo step
@@ -4509,6 +4796,9 @@ impl Editor {
 
     /// Give the active piece its own material (None: back to the scene's).
     pub fn set_piece_material(&mut self, key: Option<String>) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active_mut();
         if piece.material == key {
             return;
@@ -4573,7 +4863,7 @@ impl Editor {
     /// Whether a picker should show built-in matcap `m` as chosen.
     pub fn is_chosen_matcap(&self, m: MatcapPreset) -> bool {
         if self.material_for_piece {
-            self.scene.active().material.as_deref() == Some(Self::material_key_preset(m).as_str())
+            self.scene.try_active().and_then(|p| p.material.as_deref()) == Some(Self::material_key_preset(m).as_str())
         } else {
             self.custom_matcap.is_none() && self.matcap == m
         }
@@ -4583,7 +4873,7 @@ impl Editor {
     pub fn is_chosen_custom_matcap(&self, i: usize) -> bool {
         if self.material_for_piece {
             let key = self.custom_matcaps.get(i).map(|m| Self::material_key_custom(&m.name));
-            key.is_some() && self.scene.active().material == key
+            key.is_some() && self.scene.try_active().and_then(|p| p.material.clone()) == key
         } else {
             self.custom_matcap == Some(i)
         }
@@ -4707,6 +4997,10 @@ impl Editor {
     /// (morph targets), so the layers can be dialled in Blender or a game
     /// engine; the file shows the surface as it is now.
     pub fn export(&mut self, path: &Path) {
+        if !self.scene.pieces.iter().any(|p| p.visible) {
+            self.status = "Nothing to export: the scene has no visible pieces.".into();
+            return;
+        }
         self.living_sync();
         let gltf = path
             .extension()
@@ -4853,6 +5147,9 @@ impl Editor {
     }
 
     pub fn duplicate_active(&mut self, mirror_x: bool) {
+        if !self.need_piece() {
+            return;
+        }
         let src = self.scene.active();
         let mut data = src.mesh.to_data();
         if mirror_x {
@@ -4930,7 +5227,9 @@ impl Editor {
     /// freehand stroke on the active piece and nothing has changed since.
     pub fn can_reopen_last_stroke(&self) -> bool {
         self.last_stroke.as_ref().is_some_and(|l| {
-            l.piece == self.scene.active().id && l.revision == self.history.revision() && self.job.is_none()
+            self.scene.try_active().is_some_and(|p| l.piece == p.id)
+                && l.revision == self.history.revision()
+                && self.job.is_none()
         })
     }
 
@@ -5102,7 +5401,7 @@ impl Editor {
         }
         if let Some((_, u)) = near {
             let (o, d) = self.camera.ray(local, size);
-            if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+            if let Some(hit) = self.scene.try_active().and_then(|piece| piece.mesh.raycast(o, d)) {
                 let c = self.curve.as_mut().expect("open");
                 let n = c.points.len();
                 let seg = u.floor().max(0.0) as usize;
@@ -5197,7 +5496,7 @@ impl Editor {
             self.curve = None;
             return;
         };
-        if self.scene.active().id != c.piece
+        if self.scene.try_active().map(|p| p.id) != Some(c.piece)
             || piece.mesh.topology_version() != c.topology
             || self.history.revision() != c.revision
         {
@@ -5463,6 +5762,9 @@ impl Editor {
     /// [`Self::accept_extract`]; thickness and smoothing (`extract_thickness`,
     /// `extract_smooth`) update the preview live.
     pub fn begin_extract(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         if self.job_blocks_active() {
             self.status = "Wait for the running operation to finish first".into();
             return;
@@ -5500,7 +5802,7 @@ impl Editor {
     /// when the source piece is gone or no longer active. Called every frame.
     pub fn update_extract_preview(&mut self) {
         let Some(p) = &self.extract_preview else { return };
-        if self.scene.active().id != p.source {
+        if self.scene.try_active().map(|a| a.id) != Some(p.source) {
             self.extract_preview = None;
             self.status = "Extract cancelled: another piece was selected".into();
             return;
@@ -5684,10 +5986,20 @@ impl Editor {
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
+        if b.is_empty() {
+            // An empty scene still gets a floor (when it's switched on),
+            // sized to the view and sitting at the origin.
+            let h = self.camera.distance.max(1e-3) * 0.25;
+            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+        }
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
     pub fn delete_active(&mut self) {
+        if self.scene.pieces.is_empty() {
+            self.status = "No piece to delete.".into();
+            return;
+        }
         if self.job_blocks_active() {
             self.status = "Wait for the running operation to finish before deleting this piece".into();
             return;
@@ -5727,6 +6039,9 @@ impl Editor {
     /// Replace the active piece's mesh with a new topology. Subdivision
     /// levels no longer apply and are removed (undo restores them).
     pub(crate) fn replace_active_mesh(&mut self, label: &str, mesh: Mesh) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         let piece = self.scene.active_mut();
         let id = piece.id;
@@ -5739,13 +6054,13 @@ impl Editor {
 
     /// (active level, level count) of the active piece, if it has levels.
     pub fn multires_level(&self) -> Option<(usize, usize)> {
-        self.scene.active().multires.as_ref().map(|m| (m.active(), m.level_count()))
+        self.scene.try_active()?.multires.as_ref().map(|m| (m.active(), m.level_count()))
     }
 
     /// How the active piece's levels are made: its own scheme when it has
     /// levels, otherwise the one new levels would use.
     pub fn level_scheme(&self) -> oxy_mesh::multires::Scheme {
-        self.scene.active().multires.as_ref().map_or(self.subdivision_scheme, |m| m.scheme())
+        self.scene.try_active().and_then(|p| p.multires.as_ref().map(|m| m.scheme())).unwrap_or(self.subdivision_scheme)
     }
 
     /// A new level stack for `piece` with the chosen scheme (quads read
@@ -5758,6 +6073,9 @@ impl Editor {
     /// Apply a change to the active piece's level stack, producing a new
     /// mesh, as one undoable step.
     fn multires_op(&mut self, label: &str, result_triangles: usize, change: LevelChange) {
+        if !self.need_piece() {
+            return;
+        }
         use oxy_mesh::multires::Multires;
         if self.job.is_some() {
             self.status = "Another operation is still running".into();
@@ -5852,13 +6170,17 @@ impl Editor {
     /// Whether a running background job is rebuilding the active piece, so
     /// edits to it must wait (they would be overwritten by the result).
     pub fn job_blocks_active(&self) -> bool {
-        self.job
-            .as_ref()
-            .is_some_and(|j| j.target == self.scene.active().id || j.consumed.contains(&self.scene.active().id))
+        let Some(job) = &self.job else { return false };
+        // An import into an empty scene has nothing active to sculpt until it lands.
+        let Some(active) = self.scene.try_active() else { return true };
+        job.target == active.id || job.consumed.contains(&active.id)
     }
 
     /// Add a subdivision level on top and switch to it.
     pub fn add_level(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let next = self.next_level_triangles();
         if self.max_triangles > 0 && next > self.max_triangles {
             self.status = format!(
@@ -5876,7 +6198,7 @@ impl Editor {
     /// per triangle with triangle levels; with quad levels two per corner of
     /// each polygon (a quad makes four quads, a triangle three).
     pub fn next_level_triangles(&self) -> usize {
-        let piece = self.scene.active();
+        let Some(piece) = self.scene.try_active() else { return 0 };
         match &piece.multires {
             Some(m) => m.next_level_triangles(),
             None if self.subdivision_scheme == oxy_mesh::multires::Scheme::Loop => piece.mesh.triangle_count() * 4,
@@ -5938,6 +6260,9 @@ impl Editor {
     /// smoothing rules, otherwise faces are split in place and the shape
     /// stays exactly as it is.
     pub fn subdivide(&mut self, smooth: bool) {
+        if !self.need_piece() {
+            return;
+        }
         let quads = self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
         let n = if quads {
             let (q, t) = self.scene.active().mesh.quad_and_triangle_counts();
@@ -5967,6 +6292,9 @@ impl Editor {
     /// border blended in; smoothed with the Smooth toggle. One undo step;
     /// removes subdivision levels, like Subdivide.
     pub fn subdivide_masked(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let mesh = &self.scene.active().mesh;
         let data = mesh.to_data();
         let chosen: Vec<bool> = data
@@ -6002,9 +6330,14 @@ impl Editor {
     /// triangles whose three corners are all at least half masked, so a
     /// face group masked with Ctrl+M gives exactly that group's border),
     /// on both sides with the option on:
-    /// support loops for hard edges. One undo step; removes subdivision
+    /// support loops for hard edges. With Group the masked area, those
+    /// visible triangles also get a new face group (the outside keeps its
+    /// groups; hidden faces stay out). One undo step; removes subdivision
     /// levels, like Subdivide masked.
     pub fn edge_loop_masked(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let data = self.scene.active().mesh.to_data();
         let chosen: Vec<bool> = data
             .triangles
@@ -6020,9 +6353,13 @@ impl Editor {
                 "Nothing masked: mask the part whose edge should be sharp first (Ctrl+M masks a face group)".into();
             return;
         }
-        let Some((out, edges)) =
-            oxy_mesh::topo::edge_loops_at_border(&data, &chosen, self.edge_loop_width, self.edge_loop_both_sides)
-        else {
+        let Some((out, edges)) = oxy_mesh::topo::edge_loops_at_border(
+            &data,
+            &chosen,
+            self.edge_loop_width,
+            self.edge_loop_both_sides,
+            self.edge_loop_group_masked,
+        ) else {
             self.status = "The masked part has no border to put a loop along (everything visible is masked)".into();
             return;
         };
@@ -6036,15 +6373,22 @@ impl Editor {
         }
         let added = out.triangles.len() - data.triangles.len();
         let sides = if self.edge_loop_both_sides { "on both sides of" } else { "inside" };
+        let grouped = if self.edge_loop_group_masked {
+            "the loop and the masked area each in a new face group"
+        } else {
+            "the loop in a new face group"
+        };
         self.replace_active_mesh("Edge loop at mask border", Mesh::from_data(out));
-        self.status = format!(
-            "Added an edge loop {sides} the mask border: {edges} edges, {added} new triangles, in a new face group"
-        );
+        self.status =
+            format!("Added an edge loop {sides} the mask border: {edges} edges, {added} new triangles, {grouped}");
     }
 
     /// Fill every hole (open boundary) in the active piece with a smooth
     /// patch, one undo step.
     pub fn close_holes(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let mut data = self.scene.active().mesh.to_data();
         let closed = topo::close_holes(&mut data);
         if closed == 0 {
@@ -6056,6 +6400,9 @@ impl Editor {
     }
 
     pub fn delete_hidden(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         if !self.scene.active().mesh.any_hidden() {
             self.status = "Nothing is hidden".into();
             return;
@@ -6080,7 +6427,9 @@ impl Editor {
         }
         self.pointer_up();
         let (tx, rx) = mpsc::channel();
-        let target = self.scene.active().id;
+        // A job that adds a piece (a cylinder, a remeshed primitive) has no
+        // target yet when the scene is empty. 0 is not a piece id.
+        let target = self.scene.try_active().map(|p| p.id).unwrap_or(0);
         std::thread::Builder::new()
             .name("oxy-topo".into())
             .spawn(move || {
@@ -6088,7 +6437,15 @@ impl Editor {
             })
             .expect("spawn worker thread");
         self.status = format!("{label}…");
-        self.job = Some(Job { label, started: Instant::now(), target, consumed, holds_levels: false, rx });
+        self.job = Some(Job {
+            label,
+            started: Instant::now(),
+            target,
+            consumed,
+            holds_levels: false,
+            undo_prefix: String::new(),
+            rx,
+        });
     }
 
     /// Voxel-remesh the active piece.
@@ -6096,7 +6453,7 @@ impl Editor {
     /// current resolution makes: dual contouring gives close to three
     /// triangles per voxel-sized patch of surface.
     pub fn remesh_estimate(&mut self) -> usize {
-        let p = self.scene.active();
+        let Some(p) = self.scene.try_active() else { return 0 };
         let key = (p.id, self.history.revision());
         let area = match self.remesh_area {
             Some((k, a)) if k == key => a,
@@ -6135,6 +6492,9 @@ impl Editor {
     }
 
     pub fn remesh_active(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let mesh = self.scene.active().mesh.clone();
         let opts = self.remesh_options();
         self.start_job(format!("Remesh ({})", opts.resolution), Vec::new(), move || {
@@ -6144,6 +6504,9 @@ impl Editor {
 
     /// Remesh all visible pieces into one, replacing the active piece.
     pub fn merge_visible(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let active = self.scene.active().id;
         let visible: Vec<&Piece> = self.scene.pieces.iter().filter(|p| p.visible).collect();
         if visible.len() < 2 || !self.scene.active().visible {
@@ -6161,6 +6524,9 @@ impl Editor {
 
     /// Volumetric CSG boolean between the active piece and another piece.
     pub fn boolean_operation(&mut self, tool_id: u64, op: oxy_topo::BooleanOp) {
+        if !self.need_piece() {
+            return;
+        }
         let active = self.scene.active().id;
         if active == tool_id {
             self.status = "Pick another piece to combine with".into();
@@ -6191,6 +6557,9 @@ impl Editor {
 
     /// Recalculates 3D print dimensions, surface area, watertight volume, and estimated material weights.
     pub fn update_print_dimensions(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active();
         let dims = oxy_topo::calculate_print_dimensions(&piece.mesh, self.print_scale_mm_per_unit);
         self.print_dimensions_cache = Some(dims);
@@ -6198,6 +6567,9 @@ impl Editor {
 
     /// Analyzes local wall thickness and highlights thin regions below threshold in vertex colors.
     pub fn analyze_print_wall_thickness(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active();
         let rep = oxy_topo::analyze_wall_thickness(
             &piece.mesh,
@@ -6238,6 +6610,9 @@ impl Editor {
 
     /// Hollow the active piece with OpenVDB and optional drain holes.
     pub fn hollow_active_piece(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let active = self.scene.active();
         let mesh = active.mesh.clone();
         let bounds = mesh.bounds();
@@ -6268,6 +6643,9 @@ impl Editor {
 
     /// Split active piece along a plane and generate male/female interlocking alignment keys.
     pub fn split_active_piece_with_keys(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let active = self.scene.active();
         let mesh = active.mesh.clone();
         let piece_name = active.name.clone();
@@ -6291,6 +6669,9 @@ impl Editor {
     }
 
     pub fn decimate_active(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let count = self.scene.active().mesh.triangle_count();
         let target = ((count as f32 * self.decimate_percent / 100.0) as usize).max(4);
         self.decimate_to(target);
@@ -6302,6 +6683,9 @@ impl Editor {
     /// along the plane (see [`topo::symmetrize`]). Off the UI thread; one
     /// undo step; subdivision levels are dropped.
     pub fn symmetrize(&mut self, axis: usize, keep_positive: bool) {
+        if !self.need_piece() {
+            return;
+        }
         if self.job_blocks_active() {
             self.status = "Wait for the running operation to finish first".into();
             return;
@@ -6324,6 +6708,9 @@ impl Editor {
 
     /// Decimate the active piece to about `target` triangles, off the UI thread.
     pub fn decimate_to(&mut self, target: usize) {
+        if !self.need_piece() {
+            return;
+        }
         let mesh = self.scene.active().mesh.clone();
         let count = mesh.triangle_count().max(1);
         let target = target.clamp(4, count);
@@ -6335,6 +6722,9 @@ impl Editor {
 
     /// Subdivide off the UI thread. The menu's [`subdivide`](Self::subdivide) stays instant for small meshes.
     pub fn subdivide_background(&mut self, smooth: bool) {
+        if !self.need_piece() {
+            return;
+        }
         let n = self.scene.active().mesh.triangle_count().saturating_mul(4);
         if self.max_triangles > 0 && n > self.max_triangles {
             self.status = format!(
@@ -6353,6 +6743,9 @@ impl Editor {
     /// Add decimated copies of the active piece (LOD1, LOD2, …), each with
     /// half the triangles of the one before. Runs in the background.
     pub fn make_lod_chain(&mut self, levels: usize) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active();
         let (name, mesh) = (piece.name.clone(), piece.mesh.clone());
         let base = mesh.triangle_count();
@@ -6416,6 +6809,9 @@ impl Editor {
 
     /// Move the hidden faces of the active piece into a new piece.
     pub fn split_hidden(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let keys: Vec<u32> = self.scene.active().mesh.hidden().iter().map(|&h| u32::from(h)).collect();
         self.split_off(
             &keys,
@@ -6435,6 +6831,9 @@ impl Editor {
     /// its corners average at least half masked. The mask was the
     /// selection, so both parts come out unmasked.
     pub fn split_masked(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let keys: Vec<u32> = self.scene.active().mesh.masked_faces().into_iter().map(u32::from).collect();
         self.split_off(
             &keys,
@@ -6647,6 +7046,13 @@ impl Editor {
                 self.history.record_compound(job.label.clone(), steps);
                 self.status = format!("{}: {tris} triangles in {secs:.1} s", job.label);
             }
+            Ok(JobResult::Imported(read)) => {
+                let prefix = job.undo_prefix.clone();
+                let n = self.finish_import(read);
+                if !prefix.is_empty() && n > 0 {
+                    self.history.prefix_recent_undo(&prefix, n);
+                }
+            }
             Err(e) => self.status = format!("{} failed: {e}", job.label),
         }
         true
@@ -6658,6 +7064,9 @@ impl Editor {
     /// Ctrl+W: give the masked faces their own face group, or, with
     /// nothing visible masked, every visible face (one undo step either way).
     pub fn group_from_mask_or_visible(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
         let mesh = &self.scene.active().mesh;
         let masked = (0..mesh.triangle_count())
             .any(|t| !mesh.hidden()[t] && mesh.triangles[t].iter().all(|&v| mesh.mask[v as usize] > 0.5));
@@ -6671,6 +7080,9 @@ impl Editor {
     }
 
     pub fn edit_faces(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         let piece = self.scene.active_mut();
         let (groups, hidden) = (piece.mesh.groups().to_vec(), piece.mesh.hidden().to_vec());
@@ -6750,6 +7162,9 @@ impl Editor {
     /// Duplicate unmasked geometry within the active piece, mask the original geometry,
     /// and record the topology modification in history.
     pub fn duplicate_unmasked_geometry(&mut self) -> bool {
+        if !self.need_piece() {
+            return false;
+        }
         let piece = self.scene.active();
         let weights = pose::weights(&piece.mesh);
         let unmasked_count = weights.iter().filter(|&&w| w > 0.0).count();
@@ -6832,6 +7247,9 @@ impl Editor {
         scale: f32,
         shape: oxy_sculpt::InsertShape,
     ) {
+        if !self.need_piece() {
+            return;
+        }
         let piece = self.scene.active();
         let base_mesh = &piece.mesh;
         let prim_mesh = shape.build_mesh();
@@ -6962,7 +7380,7 @@ impl Editor {
         if self.gizmo_pieces().len() > 1 {
             return self.multi_gizmo_pivot();
         }
-        let id = self.scene.active().id;
+        let id = self.scene.try_active()?.id;
         // A pivot kept for another piece doesn't apply to this one.
         if self.kept_pivot_of.is_some_and(|k| k != id) {
             self.custom_gizmo_pivot = None;
@@ -7102,6 +7520,9 @@ impl Editor {
 
     /// Turn the gizmo on in `mode`, or off if it is already in that mode.
     pub fn toggle_gizmo(&mut self, mode: GizmoMode) {
+        if self.gizmo != Some(mode) && !self.need_piece() {
+            return;
+        }
         self.gizmo = if self.gizmo == Some(mode) { None } else { Some(mode) };
         self.status = match self.gizmo {
             Some(m) => {
@@ -7113,6 +7534,9 @@ impl Editor {
 
     /// Run a vertex color operation on the active piece, undoably.
     pub fn edit_color(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         let piece = self.scene.active_mut();
         self.history.begin_with(label, piece.id, &piece.mesh, true);
@@ -7149,13 +7573,23 @@ impl Editor {
 
     /// Run a 2-manifold topology check on the active piece.
     pub fn check_manifold(&self) -> oxy_mesh::topo::ManifoldReport {
-        oxy_mesh::topo::check_manifold(&self.scene.active().mesh)
+        match self.scene.try_active() {
+            Some(p) => oxy_mesh::topo::check_manifold(&p.mesh),
+            None => oxy_mesh::topo::ManifoldReport {
+                is_manifold: true,
+                boundary_edge_count: 0,
+                non_manifold_edge_count: 0,
+                degenerate_triangle_count: 0,
+            },
+        }
     }
 
     /// The active piece's topology report, computed again only when its
     /// triangles have changed (or another piece is active).
     pub fn manifold_report(&mut self) -> oxy_mesh::topo::ManifoldReport {
-        let piece = self.scene.active();
+        let Some(piece) = self.scene.try_active() else {
+            return self.check_manifold();
+        };
         let key = (piece.id, piece.mesh.topology_version());
         match &self.diagnostics_cache {
             Some((k, r)) if *k == key => r.clone(),
@@ -7169,6 +7603,9 @@ impl Editor {
 
     /// Clean zero-area and degenerate triangles on the active piece, undoably.
     pub fn clean_mesh(&mut self) -> usize {
+        if !self.need_piece() {
+            return 0;
+        }
         self.pointer_up();
         let piece = self.scene.active_mut();
         self.history.begin("Clean mesh", piece.id, &piece.mesh);
@@ -7188,6 +7625,9 @@ impl Editor {
 
     /// Run a mask operation on the active piece, undoably.
     pub fn edit_mesh_mask(&mut self, label: &str, f: impl FnOnce(&mut Mesh)) {
+        if !self.need_piece() {
+            return;
+        }
         if !matches!(self.drag, Drag::Select { .. }) {
             self.pointer_up();
         }
@@ -7226,6 +7666,9 @@ impl Editor {
     /// Run a mask command that returns how many points it masked, as one
     /// undo step; when it masks nothing, leave the mask as it was and say why.
     fn mask_feature(&mut self, label: &str, f: impl FnOnce(&mut Mesh) -> usize, nothing: &str) {
+        if !self.need_piece() {
+            return;
+        }
         self.pointer_up();
         let piece = self.scene.active_mut();
         let before = piece.mesh.mask.clone();
@@ -7303,7 +7746,10 @@ impl Editor {
     /// the active one is hidden.
     pub fn frame_active(&mut self) {
         self.orbit_pivot = None;
-        let piece = self.scene.active();
+        let Some(piece) = self.scene.try_active() else {
+            // Nothing to fit: leave the camera where it is.
+            return;
+        };
         if piece.visible && piece.mesh.triangle_count() > 0 {
             self.camera.frame(piece.mesh.bounds());
             self.status = format!("Framed {}", piece.name);
@@ -7754,6 +8200,98 @@ fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, sid
         })
         .collect();
     bands.into_iter().flatten().map(|z| z.is_finite().then_some(z)).collect()
+}
+
+/// Imports whose files add up to this many bytes or more are read off the
+/// UI thread, on the same job the status bar already shows. Smaller ones
+/// finish inline, so a couple of small files don't flash a progress line.
+const IMPORT_BACKGROUND_BYTES: u64 = 1024 * 1024;
+
+fn import_runs_on_worker(paths: &[PathBuf]) -> bool {
+    let bytes = paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
+    bytes >= IMPORT_BACKGROUND_BYTES
+}
+
+/// Case-insensitive file name, then the full path. Native file dialogs
+/// and drag-and-drop lists do not promise click order, so a batch is
+/// imported in the order a file list sorted by name would show.
+fn order_import_paths(paths: &[PathBuf]) -> Vec<PathBuf> {
+    let mut paths = paths.to_vec();
+    let key = |p: &Path| {
+        p.file_name().map(|n| n.to_string_lossy().to_lowercase()).unwrap_or_else(|| p.to_string_lossy().to_lowercase())
+    };
+    paths.sort_by(|a, b| key(a).cmp(&key(b)).then_with(|| a.cmp(b)));
+    paths
+}
+
+fn read_imports(paths: &[PathBuf]) -> ImportRead {
+    let mut loaded = Vec::new();
+    let mut failed = Vec::new();
+    for path in paths {
+        match oxy_io::import_pieces(path) {
+            Ok(parts) if !parts.is_empty() => loaded.push(LoadedImport { path: path.clone(), parts }),
+            Ok(_) => failed.push((path.clone(), "contains no pieces".into())),
+            Err(e) => failed.push((path.clone(), e.to_string())),
+        }
+    }
+    ImportRead { loaded, failed }
+}
+
+fn format_import_failures(failed: &[(PathBuf, String)]) -> String {
+    failed
+        .iter()
+        .map(|(path, err)| {
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+            format!("{name} ({err})")
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+fn import_status(
+    files: usize,
+    only_path: Option<&Path>,
+    tris: usize,
+    pieces: usize,
+    failed: &[(PathBuf, String)],
+    factor: Option<f32>,
+) -> String {
+    let piece_note = if pieces == 1 { String::new() } else { format!(", {pieces} pieces") };
+    let what = if files == 1 {
+        only_path.map(|p| p.display().to_string()).unwrap_or_else(|| "1 file".into())
+    } else {
+        format!("{files} files")
+    };
+    let mut status = match factor {
+        Some(factor) if files == 1 => format!(
+            "Imported {what} ({tris} triangles{piece_note}), scaled by {factor} to match the scene: its file uses other units. Undo once to keep its original size."
+        ),
+        Some(factor) => format!(
+            "Imported {what} ({tris} triangles{piece_note}), scaled by {factor} to match the scene. Every file in the batch uses that one factor, taken from the batch's overall size (or the factor already chosen for this project), so the files keep their sizes relative to each other. Undo once to keep the original sizes."
+        ),
+        None => format!("Imported {what} ({tris} triangles{piece_note})"),
+    };
+    if !failed.is_empty() {
+        status.push_str(". Could not read ");
+        status.push_str(&format_import_failures(failed));
+    }
+    status
+}
+
+/// Longest side of a box, or 0 when it is empty (an empty scene, or a
+/// mesh with no positions).
+fn aabb_span(b: oxy_mesh::Aabb) -> f32 {
+    if b.is_empty() { 0.0 } else { (b.max - b.min).max_element() }
+}
+
+/// A project, add-on or link manifest, which a drop opens rather than
+/// imports as mesh pieces.
+fn opens_as_document(path: &Path) -> bool {
+    let ext = |e: &str| path.extension().is_some_and(|x| x.eq_ignore_ascii_case(e));
+    ext(format::EXTENSION) || ext(oxy_plugin::addon::EXTENSION) || crate::bridge::is_manifest(path)
 }
 
 pub(crate) fn import_unit_scale(imported: f32, scene: f32) -> Option<f32> {
@@ -10253,6 +10791,39 @@ mod tests {
     }
 
     #[test]
+    fn alt_after_a_mask_box_masks_everything_outside_it() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        let (from, to) = (Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        drag(&mut e, from, to);
+        let inside = masked(&e);
+        // Same box, with Alt pressed only before letting go.
+        e.undo();
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(to);
+        e.modifiers.alt = true;
+        e.pointer_up();
+        let total = e.scene.active().mesh.vertex_count();
+        assert_eq!(masked(&e), total - inside, "the complement of the box is masked");
+        assert!(e.history.undo_labels().any(|l| l == "Mask outside selection"));
+    }
+
+    #[test]
+    fn hide_masked_hides_only_the_masked_faces() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        e.edit_faces("Hide masked", oxy_mesh::Mesh::hide_masked);
+        let mesh = &e.scene.active().mesh;
+        let hidden = mesh.hidden().iter().filter(|&&h| h).count();
+        assert!(hidden > 0 && hidden < mesh.triangle_count());
+        assert_eq!(mesh.hidden().iter().zip(mesh.masked_faces()).filter(|(h, m)| **h != *m).count(), 0);
+    }
+
+    #[test]
     fn lasso_hides_and_ctrl_click_inverts_and_empty_box_clears() {
         let mut e = editor();
         e.selection_lasso = true;
@@ -12458,6 +13029,42 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_click_on_the_model_blurs_the_mask_and_ctrl_alt_click_sharpens_it() {
+        let mut e = editor();
+        e.scene
+            .active_mut()
+            .mesh
+            .mask
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, m)| *m = if i % 2 == 0 { 1.0 } else { 0.0 });
+        let at = Vec2::new(400.0, 300.0);
+        let click = |e: &mut Editor, alt: bool| {
+            e.pointer = Some(at);
+            e.modifiers.ctrl = true;
+            e.modifiers.alt = alt;
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_up();
+            e.modifiers.ctrl = false;
+            e.modifiers.alt = false;
+        };
+        let soft = |e: &Editor| e.scene.active().mesh.mask.iter().filter(|&&m| m > 0.01 && m < 0.99).count();
+        assert_eq!(soft(&e), 0);
+        click(&mut e, false);
+        assert!(soft(&e) > 0, "blur softens the edges: {}", e.status);
+        let blurred = soft(&e);
+        click(&mut e, true);
+        assert!(soft(&e) < blurred, "sharpen firms them up again");
+        e.undo();
+        assert_eq!(soft(&e), blurred);
+
+        // Nothing masked: a click paints a dab instead.
+        let mut e = editor();
+        click(&mut e, false);
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0));
+    }
+
+    #[test]
     fn gizmo_ctrl_click_mesh_snaps_pivot_and_aligns_normal() {
         let mut e = editor();
         e.toggle_gizmo(GizmoMode::Move);
@@ -12682,6 +13289,183 @@ mod tests {
         // A new document forgets the factor.
         e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
         assert_eq!(e.import_scale, None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    fn tri_obj(object: &str, origin: i32, span: i32) -> String {
+        format!("o {object}\nv {origin} 0 0\nv {} 0 0\nv {origin} {span} 0\nf 1 2 3\n", origin + span)
+    }
+
+    fn import_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("oxy-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn import_paths_are_sorted_by_name_because_dialogs_do_not_promise_click_order() {
+        let paths = vec![PathBuf::from("/tmp/Zed.OBJ"), PathBuf::from("/tmp/aye.obj"), PathBuf::from("/tmp/Mid.obj")];
+        let names: Vec<_> =
+            order_import_paths(&paths).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["aye.obj", "Mid.obj", "Zed.OBJ"]);
+        let same = vec![PathBuf::from("/b/part.obj"), PathBuf::from("/a/part.obj")];
+        assert_eq!(order_import_paths(&same)[0], PathBuf::from("/a/part.obj"));
+    }
+
+    #[test]
+    fn importing_several_files_adds_every_piece_in_name_order_as_one_undo() {
+        let dir = import_dir("import-many");
+        let z = dir.join("z.obj");
+        let a = dir.join("a.obj");
+        let m = dir.join("m.obj");
+        std::fs::write(&z, tri_obj("Zed", 0, 1)).unwrap();
+        std::fs::write(&a, tri_obj("Aye", 2, 1)).unwrap();
+        std::fs::write(&m, tri_obj("Mid", 4, 1)).unwrap();
+        let mut e = editor();
+        e.show_welcome = true;
+        // Passed in click order that is not name order. The dialog and a
+        // drop both go through import_paths, which sorts by name.
+        e.import_paths(&[z.clone(), a.clone(), m.clone()]);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Mid", "Zed"]);
+        assert_eq!(e.scene.active().name, "Aye", "the first file in name order is active");
+        assert!(e.status.contains("3 files"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "one undo removes every file in the batch");
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 4);
+        // A drop of the same files is the same batch, and closes Home.
+        e.undo();
+        e.show_welcome = true;
+        e.open_dropped(&[z, m, a]);
+        assert!(!e.show_welcome);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Mid", "Zed"]);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_bad_file_among_good_ones_is_skipped_and_the_rest_are_one_undo() {
+        let dir = import_dir("import-bad");
+        let a = dir.join("a.obj");
+        let bad = dir.join("bad.obj");
+        let z = dir.join("z.obj");
+        std::fs::write(&a, tri_obj("Aye", 0, 1)).unwrap();
+        std::fs::write(&bad, "this is not a mesh\n").unwrap();
+        std::fs::write(&z, tri_obj("Zed", 3, 1)).unwrap();
+        let mut e = editor();
+        e.import_paths(&[z, bad, a]);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Aye", "Zed"]);
+        assert!(e.status.contains("bad.obj"), "{}", e.status);
+        assert!(e.status.starts_with("Imported"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_batch_is_fitted_with_one_factor_so_relative_sizes_stay() {
+        let dir = import_dir("import-batch-scale");
+        // 5 units on its own is within 8× of the 2-unit sphere, so it would
+        // not be scaled. 60 units would. Together they must share one factor
+        // from the batch's overall size, or the eye would stay five times
+        // too big next to the head.
+        let eye = dir.join("eye.obj");
+        let head = dir.join("head.obj");
+        std::fs::write(&eye, tri_obj("Eye", 10, 5)).unwrap();
+        std::fs::write(&head, tri_obj("Head", 0, 60)).unwrap();
+        let size = |e: &Editor, i: usize| {
+            let b = e.scene.pieces[i].mesh.bounds();
+            (b.max - b.min).max_element()
+        };
+        let mut e = editor();
+        e.import_paths(&[head, eye]);
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!((size(&e, 1) - 0.5).abs() < 1e-4, "eye scaled by the batch factor: {}", size(&e, 1));
+        assert!((size(&e, 2) - 6.0).abs() < 1e-4, "head scaled by the same factor: {}", size(&e, 2));
+        let eye_min = e.scene.pieces[1].mesh.bounds().min;
+        // The triangle sits on y = 0, x = 10..15. Scaling about the origin
+        // by 0.1 puts that corner at x = 1, not a translation of the piece.
+        assert!((eye_min - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-3, "scaled about the origin: {eye_min:?}");
+        assert!(e.status.contains("scaled by 0.1"), "{}", e.status);
+        assert!(e.status.contains("relative"), "{}", e.status);
+        assert_eq!(e.import_scale, Some(0.1));
+        let labels: Vec<_> = e.history.undo_labels().collect();
+        assert_eq!(labels, ["Import", "Fit import to scene"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!((size(&e, 1) - 5.0).abs() < 1e-3, "one undo restores the whole batch: {}", size(&e, 1));
+        assert!((size(&e, 2) - 60.0).abs() < 1e-3, "head restored with it: {}", size(&e, 2));
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1, "the next undo removes every file");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn importing_into_an_empty_scene_works_and_undo_clears_it() {
+        let dir = import_dir("import-empty");
+        let a = dir.join("a.obj");
+        let z = dir.join("z.obj");
+        std::fs::write(&a, tri_obj("Aye", 0, 1)).unwrap();
+        std::fs::write(&z, tri_obj("Zed", 2, 1)).unwrap();
+        let mut e = editor();
+        e.scene.pieces.clear();
+        e.import_paths(&[z.clone(), a.clone()]);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.pieces[0].name, "Aye");
+        assert_eq!(e.scene.pieces[1].name, "Zed");
+        assert!(!e.status.contains("scaled"), "an empty scene has no size to fit to: {}", e.status);
+        e.undo();
+        assert!(e.scene.pieces.is_empty(), "undo returns to the empty scene");
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 2);
+        // A single huge file into an empty scene is not fitted either.
+        e.scene.pieces.clear();
+        e.history.clear();
+        e.import_scale = None;
+        let huge = dir.join("huge.obj");
+        std::fs::write(&huge, tri_obj("Huge", 0, 60)).unwrap();
+        e.import(&huge);
+        assert_eq!(e.scene.pieces.len(), 1);
+        let b = e.scene.pieces[0].mesh.bounds();
+        assert!(((b.max - b.min).max_element() - 60.0).abs() < 1e-3, "kept the file's size");
+        assert!(e.import_scale.is_none());
+        e.undo();
+        assert!(e.scene.pieces.is_empty());
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_large_import_runs_as_a_background_job_and_undoes_as_one_step() {
+        let dir = import_dir("import-job");
+        let mut big = String::from("o Big\n# ");
+        big.push_str(&"a".repeat(IMPORT_BACKGROUND_BYTES as usize));
+        big.push_str("\nv 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n");
+        let big_path = dir.join("big.obj");
+        std::fs::write(&big_path, big).unwrap();
+        let small = dir.join("small.obj");
+        std::fs::write(&small, tri_obj("Small", 2, 1)).unwrap();
+        let bad = dir.join("bad.obj");
+        std::fs::write(&bad, "nope\n").unwrap();
+        let mut e = editor();
+        e.import_paths(&[small, big_path, bad]);
+        assert!(e.job.is_some(), "the read is still running, or waiting to be applied");
+        assert!(e.job.as_ref().unwrap().label.contains("Importing"), "{}", e.job.as_ref().unwrap().label);
+        assert_eq!(e.scene.pieces.len(), 1, "nothing is added until the job finishes");
+        wait_job(&mut e);
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Sphere", "Big", "Small"]);
+        assert!(e.status.contains("bad.obj"), "{}", e.status);
+        assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
         std::fs::remove_dir_all(dir).ok();
     }
 
@@ -13412,13 +14196,178 @@ mod tests {
         assert!(one > before, "{}", e.status);
         assert!(e.status.contains("inside the mask border"), "{}", e.status);
         let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
-        assert_eq!(groups.len(), 2, "the loop is a face group of its own");
+        assert_eq!(groups.len(), 3, "the loop and the masked area are face groups of their own");
+        assert!(e.status.contains("masked area"), "{}", e.status);
         e.undo();
         assert_eq!(e.scene.active().mesh.triangle_count(), before, "one undo step");
+        assert!(e.scene.active().mesh.groups().iter().all(|&g| g == 0), "the new groups undo with the loop");
         e.edge_loop_both_sides = true;
         e.edge_loop_masked();
         let both = e.scene.active().mesh.triangle_count();
         assert_eq!(both - before, 2 * (one - before), "a loop on each side");
+    }
+
+    /// Mask vertices above `y` fully and the rest not at all.
+    fn mask_above(e: &mut Editor, y: f32) {
+        let mask: Vec<f32> = e.scene.active().mesh.positions.iter().map(|p| if p.y > y { 1.0 } else { 0.0 }).collect();
+        e.scene.active_mut().mesh.mask = mask;
+    }
+
+    /// Face groups of the triangles that existed before the loop, in that
+    /// mesh's order, and of the strip the loop appended after them.
+    fn groups_after_loop(e: &Editor, before: usize) -> (Vec<u32>, Vec<u32>) {
+        let mesh = &e.scene.active().mesh;
+        let mut original = vec![None; before];
+        let mut strip = Vec::new();
+        for (i, &src) in mesh.source_triangles().iter().enumerate() {
+            let g = mesh.groups()[i];
+            let src = src as usize;
+            if src < before {
+                assert!(original[src].is_none(), "triangle {src} duplicated");
+                original[src] = Some(g);
+            } else {
+                strip.push(g);
+            }
+        }
+        (original.into_iter().map(|g| g.expect("an original triangle was dropped")).collect(), strip)
+    }
+
+    #[test]
+    fn edge_loop_gives_the_masked_area_its_own_group() {
+        let mut e = editor();
+        assert!(e.edge_loop_group_masked, "on by default");
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let inside = |t: &[u32; 3]| t.iter().all(|&v| positions[v as usize].y > 0.3);
+        let hide_in = triangles
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| inside(t))
+            .max_by(|(_, a), (_, b)| {
+                let y = |t: &[u32; 3]| t.iter().map(|&v| positions[v as usize].y).sum::<f32>();
+                y(a).partial_cmp(&y(b)).unwrap()
+            })
+            .unwrap()
+            .0;
+        let hide_out = triangles.iter().position(|t| t.iter().all(|&v| positions[v as usize].y < -0.5)).unwrap();
+        let mut hidden = vec![false; n];
+        hidden[hide_in] = true;
+        hidden[hide_out] = true;
+        let groups: Vec<u32> = triangles.iter().map(|t| if inside(t) { 4 } else { 1 }).collect();
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_both_sides = false;
+        e.edge_loop_masked();
+        assert_eq!(e.history.undo_labels().count(), 1, "the group is part of the loop's undo step");
+        assert_eq!(e.history.undo_labels().last(), Some("Edge loop at mask border"));
+        let masked: Vec<bool> = triangles.iter().enumerate().map(|(t, tri)| inside(tri) && t != hide_in).collect();
+        let (original, strip) = groups_after_loop(&e, n);
+        let inner_group = original[masked.iter().position(|&c| c).unwrap()];
+        assert!(masked.iter().zip(&original).filter(|(c, _)| **c).all(|(_, g)| *g == inner_group));
+        assert_ne!(inner_group, 4, "the masked area gets a new group, not the one it had");
+        assert!(groups.iter().all(|&g| g != inner_group));
+        assert!(!strip.is_empty());
+        assert!(strip.iter().all(|&g| g == strip[0] && g != inner_group));
+        for (t, &g) in original.iter().enumerate() {
+            if masked[t] {
+                assert_eq!(g, inner_group);
+            } else {
+                assert_eq!(g, groups[t], "outside and hidden faces stay");
+            }
+        }
+        assert_eq!(original[hide_in], 4, "a hidden face inside the mask is excluded");
+        assert_eq!(original[hide_out], 1);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn edge_loop_group_masked_off_keeps_the_inner_groups() {
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        e.edge_loop_group_masked = false;
+        e.edge_loop_both_sides = false;
+        e.edge_loop_masked();
+        let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
+        assert_eq!(groups.len(), 2, "only the loop is a new group");
+        assert!(e.status.contains("the loop in a new face group"), "{}", e.status);
+        assert!(!e.status.contains("masked area"), "{}", e.status);
+
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let groups: Vec<u32> =
+            triangles.iter().map(|t| if t.iter().all(|&v| positions[v as usize].y > 0.3) { 4 } else { 1 }).collect();
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_group_masked = false;
+        e.edge_loop_masked();
+        let (original, strip) = groups_after_loop(&e, n);
+        assert_eq!(original, groups, "the masked area keeps the group it had");
+        assert!(!strip.is_empty());
+        assert!(strip.iter().all(|&g| g == strip[0]));
+        assert!(!groups.contains(&strip[0]));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn edge_loop_both_sides_keeps_the_outside_groups() {
+        let mut e = editor();
+        mask_above(&mut e, 0.3);
+        let positions = e.scene.active().mesh.positions.clone();
+        let triangles = e.scene.active().mesh.triangles.clone();
+        let n = triangles.len();
+        let inside = |t: &[u32; 3]| t.iter().all(|&v| positions[v as usize].y > 0.3);
+        let hide_in = triangles.iter().position(&inside).unwrap();
+        let hide_out = triangles.iter().position(|t| t.iter().all(|&v| positions[v as usize].y < -0.5)).unwrap();
+        let mut hidden = vec![false; n];
+        hidden[hide_in] = true;
+        hidden[hide_out] = true;
+        let groups: Vec<u32> = triangles
+            .iter()
+            .map(|t| {
+                if inside(t) {
+                    4
+                } else {
+                    let x: f32 = t.iter().map(|&v| positions[v as usize].x).sum();
+                    if x >= 0.0 { 1 } else { 2 }
+                }
+            })
+            .collect();
+        assert!(groups.contains(&1) && groups.contains(&2));
+        e.scene.active_mut().mesh.set_hidden(hidden);
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        e.edge_loop_both_sides = true;
+        e.edge_loop_group_masked = true;
+        e.edge_loop_masked();
+        assert_eq!(e.history.undo_labels().count(), 1, "both sides and the new group are one step");
+        assert!(e.status.contains("on both sides"), "{}", e.status);
+        let masked: Vec<bool> = triangles.iter().enumerate().map(|(t, tri)| inside(tri) && t != hide_in).collect();
+        let (original, strip) = groups_after_loop(&e, n);
+        let inner_group = original[masked.iter().position(|&c| c).unwrap()];
+        assert_ne!(inner_group, 1);
+        assert_ne!(inner_group, 2);
+        assert_ne!(inner_group, 4);
+        for (t, &g) in original.iter().enumerate() {
+            if masked[t] {
+                assert_eq!(g, inner_group, "the inside is one new group");
+            } else {
+                assert_eq!(g, groups[t], "the outside keeps its groups, hidden faces included");
+            }
+        }
+        assert!(strip.iter().all(|&g| g == strip[0] && g != inner_group && g != 1 && g != 2));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.scene.active().mesh.triangle_count(), n);
+        assert_eq!(e.history.undo_labels().count(), 0);
     }
 
     /// Groups of the active piece's triangles, and how many have `g`.
@@ -13721,5 +14670,122 @@ mod tests {
         drag(&mut e, end, end + (end - layout.center));
         assert!(e.history.can_undo());
         assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
+    }
+
+    #[test]
+    fn brushes_sort_alphabetically() {
+        let mut e = editor();
+        e.sort_brushes_alphabetically();
+        let names: Vec<String> = e.brush_order.iter().map(|k| k.label().to_lowercase()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "{names:?}");
+        assert_eq!(e.brush_order.len(), BrushKind::ALL.len());
+    }
+
+    #[test]
+    fn brush_size_works_in_an_empty_scene_with_the_size_on_the_model() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        e.set_radius_on_model(true);
+        e.sync_model_radius();
+        let range = e.world_radius_range();
+        assert!(*range.end() > 0.1, "a usable size range: {range:?}");
+        assert!(e.brush_radius_world <= *range.end() && e.brush_radius_pt > 2.0);
+        let before = e.brush_radius_world;
+        e.adjust_radius(1.25);
+        assert!(e.brush_radius_world > before, "] grows the brush");
+        e.adjust_radius(0.8);
+        e.adjust_radius(0.8);
+        assert!(e.brush_radius_world < before, "[ shrinks it");
+    }
+
+    #[test]
+    fn floor_grid_shows_in_an_empty_scene() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
+    }
+
+    #[test]
+    fn new_empty_scene_has_no_pieces_and_stays_safe() {
+        let mut e = editor();
+        e.show_welcome = true;
+        e.path = Some(std::path::PathBuf::from("/tmp/old.oxb"));
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        e.request(Pending::New("empty"));
+        assert!(matches!(e.pending, Some(Pending::New("empty"))), "unsaved work asks first");
+        assert_eq!(e.scene.pieces.len(), 2, "the document stays until the user confirms");
+        e.perform(Pending::New("empty"));
+        assert!(e.pending.is_none());
+        assert!(e.scene.pieces.is_empty());
+        assert!(e.scene.try_active().is_none());
+        assert!(e.path.is_none());
+        assert!(!e.show_welcome, "the Home window closes");
+        assert!(!e.history.can_undo());
+        assert_eq!(e.camera, Camera::default());
+
+        // Framing and a brush dab leave the scene alone.
+        e.camera.yaw = 0.4;
+        e.camera.distance = 8.0;
+        let cam = e.camera;
+        e.frame_active();
+        e.frame();
+        e.perform_command(CommandId::Frame);
+        assert_eq!(e.camera, cam);
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.brush_kind = BrushKind::Draw;
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(460.0, 330.0));
+        e.pointer_up();
+        assert!(e.scene.pieces.is_empty());
+        assert!(!e.history.can_undo());
+        assert!(!matches!(e.drag, Drag::Stroke { .. }));
+
+        e.duplicate_active(false);
+        e.start_poly_edit();
+        e.start_retopo();
+        e.toggle_gizmo(GizmoMode::Combined);
+        e.remesh_active();
+        e.add_level();
+        e.invert_mask();
+        e.subdivide(true);
+        e.decimate_active();
+        e.merge_visible();
+        e.export(std::path::Path::new("/tmp/oxy-empty-export-should-not-exist.obj"));
+        assert!(e.poly_edit.is_none());
+        assert!(e.retopo.is_none());
+        assert!(e.gizmo.is_none());
+        assert!(e.scene.pieces.is_empty());
+        assert!(e.status.contains("No piece") || e.status.contains("Nothing to export"), "{}", e.status);
+
+        e.add_primitive("sphere");
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.active_index(), 0);
+        assert!(e.scene.active().name.starts_with("Sphere"));
+        e.undo();
+        assert!(e.scene.pieces.is_empty(), "undo of the only piece returns to the empty scene");
+        assert!(e.scene.try_active().is_none());
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert!(e.scene.active().name.starts_with("Sphere"), "{}", e.scene.active().name);
+
+        e.perform(Pending::New("empty"));
+        let dir = std::env::temp_dir().join(format!("oxy-empty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("empty.oxb");
+        assert!(e.save(&path), "{}", e.status);
+        let mut f = editor();
+        f.show_welcome = true;
+        f.open(&path);
+        assert!(!f.show_welcome);
+        assert_eq!(f.scene.pieces.len(), 0, "{}", f.status);
+        assert_eq!(f.path.as_deref(), Some(path.as_path()));
+        let obj = dir.join("tri.obj");
+        std::fs::write(&obj, "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        f.import(&obj);
+        assert_eq!(f.scene.pieces.len(), 1, "{}", f.status);
+        assert_eq!(f.scene.active_index(), 0);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

@@ -272,6 +272,9 @@ fn load(path: &Path) -> Result<Vec<Piece>, String> {
     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     if ext == format::EXTENSION {
         let scene = format::load(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        if scene.pieces.is_empty() {
+            return Ok(Vec::new());
+        }
         let pieces: Vec<Piece> = scene.pieces.into_iter().filter(|p| p.visible).map(PieceData::into_piece).collect();
         if pieces.is_empty() {
             return Err(format!("{}: no visible pieces", path.display()));

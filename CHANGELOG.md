@@ -4,6 +4,40 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.18] - 2026-11-18
+
+### Fixed
+
+- Starting from an empty scene no longer pins the brush size to its minimum with the size on the model: the size range now follows the camera distance until there is something to measure, so the slider and `[` `]` work (#328).
+- The **Floor grid** toggle now works in an empty scene too; the grid is drawn at the origin, sized to the view.
+
+### Added
+- **Blur and sharpen the mask with a click** (as in ZBrush). Ctrl+click on the model blurs the whole mask and Ctrl+Alt+click sharpens it; dragging still paints or unmasks. With nothing masked, a click still paints a dab.
+- **Sort brushes A–Z** in the Arrange menu lists the brush selector alphabetically (#304).
+- **Hide masked** (Visibility menu and the command palette) hides the masked faces (#329).
+- Pressing Alt just before letting go of a mask box or lasso masks everything *outside* it instead (#329).
+
+## [4.0.0-beta.17] - 2026-11-18
+
+### Added
+- **Import several files at once** ([#311](https://github.com/crisprintsstuff/OxyBrush/issues/311)). The Import dialog takes more than one file (Shift-click or Ctrl/Cmd-click), and dropping several files on the window does the same. Each object in each file becomes its own piece, and the whole batch is one undo step. Files are imported in name order, because the system file dialog doesn't promise the order they were clicked. A file that can't be read is skipped and named in the status bar; the rest still import, including into an empty scene. When the batch is fitted to the scene, every file uses the same scale factor (from the batch's overall size, or the factor already chosen for this project), so a small part stays in proportion to a large one; one Undo restores the original sizes and a second removes the batch. A large import runs in the background, with the same progress line as a remesh.
+- **Empty scene** (File > New, and the welcome window). Starts a project with no pieces, so you can build it with Insert Primitive, + Add or Import. Saving it and opening it again keeps it empty. A tool that needs a piece says so; framing or a brush stroke on an empty scene does nothing to it.
+- **Group the masked area** (Edge loop at mask border, on by default, [#296](https://github.com/crisprintsstuff/OxyBrush/issues/296)): the triangles inside the mask get a face group of their own, along with the loop, so that area can be isolated afterwards. With Both sides on, the outside keeps its groups. Hidden faces stay out of the new group. It is the same undo step as the loop. Turn the option off to leave the masked area's groups as they were.
+- **Choose the export file type** (File > Export type). The selected type is proposed in the export dialog; a typed extension still takes precedence. This makes glTF, OBJ, STL and PLY selectable on macOS, where the save panel has no file-type list.
+
+### Changed
+- **Brush defaults:** Front faces only is off by default, and Grab, Snake Hook, Topological Move, Kelvin movement brushes and Curve Move start at strength 0.5.
+- **Resize behavior:** window resizing coalesces intermediate surface updates and keeps the UI layout synchronized with the current size.
+
+### Fixed
+- **Crease symmetry:** Crease and Sharp Crease no longer leave a ridge along the mirror plane.
+- **Kelvin Grab:** ordinary pulls retain their elastic effect while long pulls remain smooth.
+- **Poly Edit picks:** clicking empty space clears the picked faces, edges or points; dragging there still orbits without clearing the pick.
+- **Group by islands:** hidden faces no longer join visible islands or have their face groups overwritten.
+
+### Planning
+- RFC 0026 for the Parts Bin is accepted, and RFC 0027 for tabbed projects is a draft; neither feature is in the app yet.
+
 ## [4.0.0-beta.16] - 2026-11-16
 
 ### Added
@@ -890,7 +924,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v3.0.0-beta...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.17...HEAD
+[4.0.0-beta.17]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.16...v4.0.0-beta.17
 [3.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...v3.0.0-beta
 [2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
 [2.5.6-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.5-beta...v2.5.6-beta
