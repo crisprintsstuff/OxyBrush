@@ -19,7 +19,9 @@ use oxy_mesh::multires::Multires;
 use oxy_mesh::retopo::Cage;
 use std::collections::VecDeque;
 
-struct ChunkSnapshot {
+mod compress;
+
+pub(crate) struct ChunkSnapshot {
     chunk: u32,
     positions: Vec<Vec3>,
     mask: Vec<f32>,
@@ -32,6 +34,11 @@ enum Change {
         piece: u64,
         snaps: Vec<ChunkSnapshot>,
     },
+    CompressedChunks {
+        piece: u64,
+        uncompressed_bytes: usize,
+        data: Vec<u8>,
+    },
     Topology {
         piece: u64,
         mesh: Box<Mesh>,
@@ -41,6 +48,11 @@ enum Change {
         piece: u64,
         groups: Vec<u32>,
         hidden: Vec<bool>,
+    },
+    CompressedFaces {
+        piece: u64,
+        uncompressed_bytes: usize,
+        data: Vec<u8>,
     },
     /// `Some`: the piece is currently absent and is re-inserted on swap.
     /// `None`: the piece at `index` is removed on swap.
@@ -110,14 +122,66 @@ impl From<Step> for Change {
 }
 
 impl Change {
+    fn compress(&mut self) {
+        match self {
+            Change::Chunks { piece, snaps } => {
+                let p = *piece;
+                let raw = compress::encode_snapshots(snaps);
+                let uncompressed_bytes = raw.len();
+                let data = compress::compress_bytes(&raw);
+                *self = Change::CompressedChunks { piece: p, uncompressed_bytes, data };
+            }
+            Change::Faces { piece, groups, hidden } => {
+                let p = *piece;
+                let raw = compress::encode_faces(groups, hidden);
+                let uncompressed_bytes = raw.len();
+                let data = compress::compress_bytes(&raw);
+                *self = Change::CompressedFaces { piece: p, uncompressed_bytes, data };
+            }
+            Change::Compound(changes) => {
+                for c in changes {
+                    c.compress();
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn ensure_uncompressed(&mut self) {
+        match self {
+            Change::CompressedChunks { piece, uncompressed_bytes, data } => {
+                let p = *piece;
+                let raw = compress::decompress_bytes(data, *uncompressed_bytes)
+                    .expect("corrupt compressed chunks in history");
+                let snaps = compress::decode_snapshots(&raw).expect("corrupt chunk snapshots");
+                *self = Change::Chunks { piece: p, snaps };
+            }
+            Change::CompressedFaces { piece, uncompressed_bytes, data } => {
+                let p = *piece;
+                let raw =
+                    compress::decompress_bytes(data, *uncompressed_bytes).expect("corrupt compressed faces in history");
+                let (groups, hidden) = compress::decode_faces(&raw).expect("corrupt face attributes");
+                *self = Change::Faces { piece: p, groups, hidden };
+            }
+            Change::Compound(changes) => {
+                for c in changes {
+                    c.ensure_uncompressed();
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// The one piece this change edits in place, found by id, when it edits
     /// exactly one and doesn't add or remove pieces. Such a change can be
     /// undone out of order: it doesn't depend on any other piece.
     fn single_piece(&self) -> Option<u64> {
         match self {
             Change::Chunks { piece, .. }
+            | Change::CompressedChunks { piece, .. }
             | Change::Topology { piece, .. }
             | Change::Faces { piece, .. }
+            | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
@@ -135,8 +199,10 @@ impl Change {
     fn touches(&self, id: u64) -> bool {
         match self {
             Change::Chunks { piece, .. }
+            | Change::CompressedChunks { piece, .. }
             | Change::Topology { piece, .. }
             | Change::Faces { piece, .. }
+            | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
@@ -152,10 +218,12 @@ impl Change {
             Change::Chunks { snaps, .. } => {
                 snaps.iter().map(|s| s.positions.len() * 16 + s.color.len() * 12 + 32).sum()
             }
+            Change::CompressedChunks { data, .. } => data.len() + 32,
             Change::Topology { mesh, multires, .. } => {
                 mesh_bytes(mesh) + multires.as_ref().map_or(0, |m| m.approx_bytes())
             }
             Change::Faces { groups, .. } => groups.len() * 5,
+            Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
             Change::Visible { .. } | Change::Reorder { .. } => 16,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
@@ -168,6 +236,7 @@ impl Change {
 
     /// Exchange stored state with the scene. Returns the affected piece id, if any.
     fn swap(&mut self, scene: &mut Scene) -> Option<u64> {
+        self.ensure_uncompressed();
         match self {
             Change::Chunks { piece, snaps } => {
                 let mesh = &mut scene.get_mut(*piece)?.mesh;
@@ -259,6 +328,9 @@ impl Change {
                 }
                 changes.reverse();
                 last
+            }
+            Change::CompressedChunks { .. } | Change::CompressedFaces { .. } => {
+                unreachable!("ensure_uncompressed called")
             }
         }
     }
@@ -497,12 +569,30 @@ impl History {
         self.redo.clear();
         let id = self.next_id;
         self.next_id += 1;
+        if let Some(prev) = self.undo.back_mut() {
+            prev.change.compress();
+        }
         self.undo.push_back(Entry { id, label, change });
         self.revision += 1;
         self.enforce_budget();
     }
 
+    pub fn compress_inactive(&mut self) {
+        let n = self.undo.len();
+        if n > 1 {
+            for entry in self.undo.range_mut(0..n - 1) {
+                entry.change.compress();
+            }
+        }
+        for entry in self.redo.iter_mut() {
+            entry.change.compress();
+        }
+    }
+
     fn enforce_budget(&mut self) {
+        if self.used_bytes() > self.budget_bytes {
+            self.compress_inactive();
+        }
         while self.undo.len() > 1 && self.used_bytes() > self.budget_bytes {
             self.undo.pop_front();
         }
@@ -559,6 +649,9 @@ impl History {
         e.change.swap(scene);
         let label = e.label.clone();
         self.last_moved = Some((e.id, true));
+        if let Some(prev) = self.redo.last_mut() {
+            prev.change.compress();
+        }
         self.redo.push(e);
         self.revision += 1;
         Some(label)
@@ -578,6 +671,9 @@ impl History {
         e.change.swap(scene);
         let label = e.label.clone();
         self.last_moved = Some((e.id, true));
+        if let Some(prev) = self.redo.last_mut() {
+            prev.change.compress();
+        }
         self.redo.push(e);
         self.revision += 1;
         Ok(Some(label))
@@ -594,6 +690,9 @@ impl History {
         e.change.swap(scene);
         let label = e.label.clone();
         self.last_moved = Some((e.id, false));
+        if let Some(prev) = self.undo.back_mut() {
+            prev.change.compress();
+        }
         self.undo.push_back(e);
         self.revision += 1;
         self.enforce_budget();
@@ -611,6 +710,9 @@ impl History {
         e.change.swap(scene);
         let label = e.label.clone();
         self.last_moved = Some((e.id, false));
+        if let Some(prev) = self.undo.back_mut() {
+            prev.change.compress();
+        }
         self.undo.push_back(e);
         self.revision += 1;
         Some(label)
@@ -1050,5 +1152,65 @@ mod tests {
         assert_eq!(s.pieces[1].name, "Sphere");
         assert_eq!(s.pieces[2].name, "b");
         assert_eq!(s.active_index(), 2);
+    }
+
+    #[test]
+    fn compressed_history_roundtrip_and_memory_reduction() {
+        let mut s = scene();
+        let mut h = History::default();
+        let id = s.active().id;
+        let orig_pos = s.active().mesh.positions[0];
+
+        // Perform 5 stroke steps that touch chunks
+        for i in 0..5 {
+            h.begin(format!("stroke {i}"), id, &s.active().mesh);
+            h.touch(&s.active().mesh, 0);
+            s.active_mut().mesh.positions[0] += glam::Vec3::new(1.0, 0.0, 0.0);
+            h.commit();
+        }
+
+        // Verify that older entries (indices 0..4) are compressed
+        let undo_entries: Vec<_> = h.undo.iter().collect();
+        assert_eq!(undo_entries.len(), 5);
+        for entry in &undo_entries[..4] {
+            assert!(matches!(entry.change, Change::CompressedChunks { .. }));
+        }
+        // The newest entry (index 4) should remain uncompressed
+        assert!(matches!(undo_entries[4].change, Change::Chunks { .. }));
+
+        // Now undo all 5 steps and verify each one decompresses and restores positions properly
+        for _ in 0..5 {
+            h.undo(&mut s);
+        }
+        assert_eq!(s.active().mesh.positions[0], orig_pos);
+
+        // Redo all 5 steps
+        for _ in 0..5 {
+            h.redo(&mut s);
+        }
+        assert_eq!(s.active().mesh.positions[0], orig_pos + glam::Vec3::new(5.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn compressed_faces_roundtrip() {
+        let mut s = scene();
+        let mut h = History::default();
+        let id = s.active().id;
+
+        // Record a face edit
+        let groups = vec![1; s.active().mesh.triangle_count()];
+        let hidden = vec![false; s.active().mesh.triangle_count()];
+        h.record_faces("Face edit", id, groups.clone(), hidden.clone());
+
+        // Push another step so the face edit becomes inactive and gets compressed
+        h.begin("Stroke", id, &s.active().mesh);
+        h.touch(&s.active().mesh, 0);
+        h.commit();
+
+        assert!(matches!(h.undo[0].change, Change::CompressedFaces { .. }));
+
+        // Undo stroke, then undo face edit
+        h.undo(&mut s);
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Face edit"));
     }
 }

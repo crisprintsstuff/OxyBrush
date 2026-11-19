@@ -192,11 +192,11 @@ impl Polys {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 struct Level {
     triangles: Vec<[u32; 3]>,
     positions: Vec<Vec3>,
-    /// Empty for level 0.
+    /// Empty for level 0 or when all displacements are zero.
     details: Vec<Vec3>,
     /// None for level 0.
     refinement: Option<Refinement>,
@@ -207,6 +207,23 @@ struct Level {
     /// points left where they are), which keeps the shape as it was.
     /// Always true for level 0.
     smooth: bool,
+}
+
+impl PartialEq for Level {
+    fn eq(&self, other: &Self) -> bool {
+        let details_eq = match (self.details.is_empty(), other.details.is_empty()) {
+            (true, true) => true,
+            (false, false) => self.details == other.details,
+            (true, false) => other.details.iter().all(|d| *d == Vec3::ZERO),
+            (false, true) => self.details.iter().all(|d| *d == Vec3::ZERO),
+        };
+        details_eq
+            && self.triangles == other.triangles
+            && self.positions == other.positions
+            && self.refinement == other.refinement
+            && self.polys == other.polys
+            && self.smooth == other.smooth
+    }
 }
 
 /// Per-level copies of mask, face groups and visibility, in level order.
@@ -422,12 +439,21 @@ impl Multires {
             }
             let new_smooth = self.smooth_from(j);
             let lvl = &mut self.levels[j];
-            lvl.details = lvl.positions.iter().zip(&new_smooth).map(|(p, s)| *p - *s).collect();
+            let all_zero = lvl.positions.iter().zip(&new_smooth).all(|(p, s)| *p == *s);
+            if all_zero {
+                lvl.details.clear();
+            } else {
+                lvl.details = lvl.positions.iter().zip(&new_smooth).map(|(p, s)| *p - *s).collect();
+            }
         }
         for j in k + 1..self.levels.len() {
             let smooth = self.smooth_from(j);
             let lvl = &mut self.levels[j];
-            lvl.positions = smooth.iter().zip(&lvl.details).map(|(s, d)| *s + *d).collect();
+            if lvl.details.is_empty() {
+                lvl.positions = smooth;
+            } else {
+                lvl.positions = smooth.iter().zip(&lvl.details).map(|(s, d)| *s + *d).collect();
+            }
         }
     }
 
@@ -453,7 +479,12 @@ impl Multires {
         if k > 0 {
             let smooth = self.smooth_from(k);
             let lvl = &mut self.levels[k];
-            lvl.details = lvl.positions.iter().zip(&smooth).map(|(p, s)| *p - *s).collect();
+            let all_zero = lvl.positions.iter().zip(&smooth).all(|(p, s)| *p == *s);
+            if all_zero {
+                lvl.details.clear();
+            } else {
+                lvl.details = lvl.positions.iter().zip(&smooth).map(|(p, s)| *p - *s).collect();
+            }
         }
     }
 
@@ -494,7 +525,12 @@ impl Multires {
             self.levels[k].smooth = flag;
             let base = self.smooth_from(k);
             let lvl = &mut self.levels[k];
-            lvl.details = lvl.positions.iter().zip(&base).map(|(p, s)| *p - *s).collect();
+            let all_zero = lvl.positions.iter().zip(&base).all(|(p, s)| *p == *s);
+            if all_zero {
+                lvl.details.clear();
+            } else {
+                lvl.details = lvl.positions.iter().zip(&base).map(|(p, s)| *p - *s).collect();
+            }
         }
         true
     }
@@ -550,7 +586,7 @@ impl Multires {
             Refinement::Cc(r) if smooth => cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
             Refinement::Cc(r) => linear_cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
         };
-        level.details = vec![Vec3::ZERO; level.positions.len()];
+        level.details = Vec::new();
         level
     }
 
@@ -782,7 +818,8 @@ impl Multires {
         self.levels
             .iter()
             .map(|l| {
-                l.positions.len() * 24
+                l.positions.len() * 12
+                    + l.details.len() * 12
                     + l.triangles.len() * 12
                     + l.positions.len() * 16
                     + l.polys.as_ref().map_or(0, Polys::bytes)
@@ -825,7 +862,8 @@ impl Multires {
                 return None;
             }
             let smooth = loop_positions(&prev.positions, &refinement);
-            let details = pos.iter().zip(&smooth).map(|(p, s)| *p - *s).collect();
+            let all_zero = pos.iter().zip(&smooth).all(|(p, s)| *p == *s);
+            let details = if all_zero { Vec::new() } else { pos.iter().zip(&smooth).map(|(p, s)| *p - *s).collect() };
             levels.push(Level {
                 triangles,
                 positions: pos,
@@ -920,7 +958,12 @@ impl Multires {
             if pos.len() != level.positions.len() {
                 return None;
             }
-            level.details = pos.iter().zip(&level.positions).map(|(p, s)| *p - *s).collect();
+            let all_zero = pos.iter().zip(&level.positions).all(|(p, s)| *p == *s);
+            if all_zero {
+                level.details.clear();
+            } else {
+                level.details = pos.iter().zip(&level.positions).map(|(p, s)| *p - *s).collect();
+            }
             level.positions = pos;
             m.levels.push(level);
         }
