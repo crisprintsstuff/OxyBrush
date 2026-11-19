@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.19" date="2026-11-19" type="development">
+      <description>
+        <p>Sculpt dense meshes up to 200M+ triangles with partitioned GPU
+        rendering, bounded draw calls, and compressed undo history. Multires
+        details and hidden pieces use less memory. Reorder pieces by
+        drag-and-drop, join picked pieces, isolate a piece with Alt-click,
+        align Poly Edit gizmo axes, invert brush alphas, and pick export file
+        types.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.18" date="2026-11-18" type="development">
       <description>
         <p>Blur or sharpen the mask with Ctrl+click, hide the masked faces,
