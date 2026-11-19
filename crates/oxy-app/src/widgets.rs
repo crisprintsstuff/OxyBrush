@@ -1027,7 +1027,7 @@ pub fn thumb_sized(
 }
 
 /// Whether the Studio theme's drawing style is on (set by `apply_theme`):
-/// quiet uppercase section headings with a divider, and selected items as a
+/// quiet section headings with a divider, and selected items as a
 /// dark fill with an accent outline rather than an accent-tinted fill.
 /// The brush icons' clay color as packed sRGB, or `u32::MAX` for the
 /// original terracotta (Theme window > Colors > Brush icons).
@@ -1151,12 +1151,12 @@ pub fn section<R>(
     add: impl FnOnce(&mut Ui) -> R,
 ) -> Option<R> {
     let header = if studio_style() {
-        // A thin divider, then the title small, uppercase and spaced out.
+        // A thin divider, then the title small and quiet, in the same case as the Graphite style.
         let r = ui.available_rect_before_wrap();
         let y = r.top() + 1.0;
         ui.painter().hline(r.x_range(), y, ui.visuals().widgets.noninteractive.bg_stroke);
         ui.add_space(4.0);
-        egui::RichText::new(title.to_uppercase()).size(11.5).strong().extra_letter_spacing(0.8).weak()
+        egui::RichText::new(title).size(12.5).strong().weak()
     } else {
         egui::RichText::new(title).strong().size(14.0)
     };
