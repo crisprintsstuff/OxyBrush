@@ -2604,6 +2604,7 @@ name = "oxy-history"
 version = "4.0.0-beta.18"
 dependencies = [
  "glam",
+ "lz4_flex",
  "oxy-doc",
  "oxy-mesh",
 ]

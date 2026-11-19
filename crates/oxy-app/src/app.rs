@@ -659,7 +659,7 @@ impl App {
         ed.update_primitive();
         ed.update_poly_smooth();
         ed.check_link_topology();
-        let ids: Vec<u64> = ed.scene.pieces.iter().map(|p| p.id).collect();
+        let ids: Vec<u64> = ed.scene.pieces.iter().filter(|p| p.visible).map(|p| p.id).collect();
         let previewing = ed.insert_preview.is_some()
             || ed.extract_preview.is_some()
             || ed.curve.is_some()
@@ -729,10 +729,13 @@ impl App {
         let poly_wire = ed.poly_wire_piece();
         let all_wires = ed.view.wireframe && ed.view.wireframe_opacity > 0.001;
         for p in ed.scene.pieces.iter_mut() {
+            if !p.visible {
+                continue;
+            }
             let piece_wire = (all_wires || Some(p.id) == poly_wire)
                 && p.mesh.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
-            if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
+            if Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
                 items.push(oxy_render::DrawItem {
                     id: p.id,
