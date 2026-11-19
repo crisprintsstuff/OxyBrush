@@ -133,6 +133,8 @@ pub enum StrokeSetting {
     Spacing(f32),
     /// An alpha from the editor's list, or none.
     Alpha(Option<usize>),
+    /// Invert the alpha (0 becomes 1 and 1 becomes 0 inside the alpha).
+    AlphaInvert(bool),
 }
 
 /// Brushes a re-sculpt can run. The others aren't dab strokes.
@@ -2104,6 +2106,7 @@ fn alpha_same(a: &Option<AlphaStamp>, b: &Option<AlphaStamp>) -> bool {
             Arc::ptr_eq(&a.alpha, &b.alpha)
                 && a.rotation == b.rotation
                 && a.follow_stroke == b.follow_stroke
+                && a.invert == b.invert
                 && a.up == b.up
         }
         _ => false,
@@ -2122,12 +2125,17 @@ fn apply_setting(recipe: &mut StrokeRecipe, setting: StrokeSetting, alphas: &[Ar
         StrokeSetting::Alpha(None) => recipe.alpha = None,
         StrokeSetting::Alpha(Some(index)) => {
             if let Some(alpha) = alphas.get(index).cloned() {
-                let (rotation, follow, up) = recipe
+                let (rotation, follow, invert, up) = recipe
                     .alpha
                     .as_ref()
-                    .map(|stamp| (stamp.rotation, stamp.follow_stroke, stamp.up))
-                    .unwrap_or((0.0, true, Vec3::Y));
-                recipe.alpha = Some(AlphaStamp { alpha, rotation, follow_stroke: follow, up });
+                    .map(|stamp| (stamp.rotation, stamp.follow_stroke, stamp.invert, stamp.up))
+                    .unwrap_or((0.0, true, false, Vec3::Y));
+                recipe.alpha = Some(AlphaStamp { alpha, rotation, follow_stroke: follow, invert, up });
+            }
+        }
+        StrokeSetting::AlphaInvert(invert) => {
+            if let Some(stamp) = &mut recipe.alpha {
+                stamp.invert = invert;
             }
         }
     }
@@ -3040,6 +3048,24 @@ mod tests {
         assert_eq!(edited.alpha.as_ref().unwrap().alpha.name, "Bumps");
         let err = max_err(&positions(&e), &resculpted(&surface, &old, &later, &edited));
         assert!(err < 1e-4, "alpha edit, worst {err}");
+    }
+
+    #[test]
+    fn editing_alpha_invert_resculpts() {
+        let mut e = editor();
+        e.alpha = Some(e.alphas.iter().position(|a| a.name == "Scales").expect("scales"));
+        stroke(&mut e, 300.0);
+        stroke(&mut e, 340.0);
+        let id = e.living.strokes[0].id;
+        let surface = e.scene.active().mesh.clone();
+        let old = e.living.strokes[0].clone();
+        let later = e.living.strokes[1].clone();
+        e.living_open_edit(id).unwrap();
+        e.living_edit_setting(StrokeSetting::AlphaInvert(true), false);
+        let edited = e.living.strokes[0].recipe.clone().unwrap();
+        assert!(edited.alpha.as_ref().unwrap().invert);
+        let err = max_err(&positions(&e), &resculpted(&surface, &old, &later, &edited));
+        assert!(err < 1e-4, "alpha invert edit, worst {err}");
     }
 
     #[test]

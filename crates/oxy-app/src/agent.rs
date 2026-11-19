@@ -636,6 +636,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
         alpha: Arc::clone(alpha),
         rotation: ed.alpha_rotation_deg.to_radians(),
         follow_stroke: ed.alpha_follow_stroke,
+        invert: ed.alpha_invert,
         up: ed.camera.up(),
     });
     let params = StrokeParams {
