@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- Section headings in the Studio theme (the settings panel) are shown as written, "Like This", instead of in all capitals.
+
 ## [4.0.0-beta.18] - 2026-11-18
 
 ### Fixed
