@@ -486,15 +486,27 @@ fn deform_row(ui: &mut Ui, ed: &mut Editor, kind: Deformer) {
 /// Remembers the press across frames, in case the release comes a frame
 /// later.
 fn flick(ui: &Ui, rect: Rect, id: egui::Id) -> Option<f32> {
+    let visible = ui.clip_rect().intersect(rect);
     let key = id.with("flick_press");
+    if !visible.is_positive() {
+        ui.data_mut(|d| d.remove::<egui::Pos2>(key));
+        return None;
+    }
+    let dragged_other = ui.ctx().dragged_id().is_some_and(|d| d != id);
     let mut press: Option<egui::Pos2> = ui.data(|d| d.get_temp(key));
     let mut out = None;
     ui.input(|i| {
         for e in &i.events {
             if let egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, .. } = e {
                 if *pressed {
-                    press = rect.contains(*pos).then_some(*pos);
-                } else if let Some(p) = press.take() {
+                    if visible.contains(*pos) && !dragged_other {
+                        press = Some(*pos);
+                    } else {
+                        press = None;
+                    }
+                } else if let Some(p) = press.take()
+                    && !dragged_other
+                {
                     let dx = pos.x - p.x;
                     if dx.abs() > 6.0 {
                         out = Some((dx / (rect.width() * 0.5)).clamp(-1.0, 1.0));
@@ -706,5 +718,128 @@ mod tests {
         e.deform.axes[index(Deformer::Bend)] = [false; 3];
         assert!(!e.deform_begin(Deformer::Bend));
         assert!(e.status.contains("pick at least one axis"));
+    }
+
+    #[test]
+    fn flick_ignores_press_outside_clip_rect() {
+        let ctx = egui::Context::default();
+        let bar_id = egui::Id::unique("test_deform_bar");
+        let bar_rect = egui::Rect::from_min_max(egui::pos2(10.0, 100.0), egui::pos2(300.0, 128.0));
+        let clip_rect = egui::Rect::from_min_max(egui::pos2(0.0, 200.0), egui::pos2(400.0, 600.0));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Frame 1: Press on the title bar area (y = 114, inside bar_rect but outside clip_rect)
+        let raw1 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(50.0, 114.0), true)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw1, |ui| {
+            ui.set_clip_rect(clip_rect);
+            let flicked = flick(ui, bar_rect, bar_id);
+            assert!(flicked.is_none(), "press outside clip_rect must not trigger flick");
+        });
+        out.textures_delta.clear();
+
+        // Frame 2: Release after dragging 80px horizontally in the title bar
+        let raw2 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(130.0, 114.0), false)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw2, |ui| {
+            ui.set_clip_rect(clip_rect);
+            let flicked = flick(ui, bar_rect, bar_id);
+            assert!(flicked.is_none(), "release from an unclipped press must not trigger deformation");
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn flick_ignores_release_when_another_widget_is_dragged() {
+        let ctx = egui::Context::default();
+        let bar_id = egui::Id::unique("test_deform_bar_2");
+        let other_id = egui::Id::unique("window_title_bar");
+        let bar_rect = egui::Rect::from_min_max(egui::pos2(10.0, 210.0), egui::pos2(300.0, 238.0));
+        let clip_rect = egui::Rect::from_min_max(egui::pos2(0.0, 200.0), egui::pos2(400.0, 600.0));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Frame 1: Press inside the bar
+        let raw1 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(50.0, 220.0), true)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw1, |ui| {
+            ui.set_clip_rect(clip_rect);
+            let _ = flick(ui, bar_rect, bar_id);
+        });
+        out.textures_delta.clear();
+
+        // Frame 2: Release while another widget is being dragged (e.g. title bar)
+        let raw2 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(120.0, 220.0), false)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw2, |ui| {
+            ui.ctx().set_dragged_id(other_id);
+            ui.set_clip_rect(clip_rect);
+            let flicked = flick(ui, bar_rect, bar_id);
+            assert!(flicked.is_none(), "release while dragging another widget must not trigger flick");
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn flick_registers_valid_flick_within_clip_rect() {
+        let ctx = egui::Context::default();
+        let bar_id = egui::Id::unique("test_deform_bar_3");
+        let bar_rect = egui::Rect::from_min_max(egui::pos2(10.0, 210.0), egui::pos2(300.0, 238.0));
+        let clip_rect = egui::Rect::from_min_max(egui::pos2(0.0, 200.0), egui::pos2(400.0, 600.0));
+        let button = |pos, pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+
+        // Frame 1: Press inside visible bar
+        let raw1 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(50.0, 220.0), true)],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(raw1, |ui| {
+            ui.set_clip_rect(clip_rect);
+            let flicked = flick(ui, bar_rect, bar_id);
+            assert!(flicked.is_none());
+        });
+        out.textures_delta.clear();
+
+        // Frame 2: Release 50px to the right
+        let raw2 = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+            events: vec![button(egui::pos2(100.0, 220.0), false)],
+            ..Default::default()
+        };
+        let mut result = None;
+        let mut out = ctx.run_ui(raw2, |ui| {
+            ui.set_clip_rect(clip_rect);
+            result = flick(ui, bar_rect, bar_id);
+        });
+        out.textures_delta.clear();
+        assert!(result.is_some(), "valid flick must be detected");
+        assert!(result.unwrap() > 0.0);
     }
 }
