@@ -741,6 +741,15 @@ pub enum Drag {
         hit: oxy_mesh::RayHit,
         ray_dir: Vec3,
     },
+    /// Click with the mask key on the model blurs the whole mask (with the
+    /// invert key too: sharpens it, as in ZBrush); dragging beyond the
+    /// threshold paints the mask (or unmasks) instead.
+    MaskBlurOrPaint {
+        start: Vec2,
+        hit: oxy_mesh::RayHit,
+        ray_dir: Vec3,
+        sharpen: bool,
+    },
     /// Click with Alt on mesh while Gizmo is active snaps pivot;
     /// dragging beyond threshold falls through to carve brush stroke.
     GizmoSnapOrCarve {
@@ -1860,6 +1869,7 @@ impl Editor {
                 | Drag::Select { .. }
                 | Drag::PendingStroke
                 | Drag::GizmoSnapOrMask { .. }
+                | Drag::MaskBlurOrPaint { .. }
                 | Drag::GizmoSnapOrCarve { .. }
         )
     }
@@ -2145,6 +2155,12 @@ impl Editor {
     }
 
     /// Brush for number key `n` (1–9, then 0 for the tenth), in shelf order.
+    /// Reorder the brush list by name (the number keys follow the new order).
+    pub fn sort_brushes_alphabetically(&mut self) {
+        self.brush_order.sort_by_key(|k| k.label().to_lowercase());
+        self.status = "Brushes sorted A–Z".into();
+    }
+
     pub fn brush_for_number_key(&self, n: u32) -> Option<BrushKind> {
         let i = if n == 0 { 9 } else { n as usize - 1 };
         self.brush_order.get(i).copied()
@@ -2522,6 +2538,17 @@ impl Editor {
             self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
             return;
         }
+        // Mask key on the model, with something masked: a click blurs the
+        // mask (invert key too: sharpens it), a drag paints it. With nothing
+        // masked a click still paints a dab, as it always did.
+        if m.ctrl
+            && let Some(hit) = active_hit
+            && !self.job_blocks_active()
+            && self.scene.active().mesh.mask.iter().any(|&v| v > 0.0)
+        {
+            self.drag = Drag::MaskBlurOrPaint { start: p, hit, ray_dir: d, sharpen: m.alt };
+            return;
+        }
         // Mask key on empty space. The box gesture blurs on a click; the clear
         // gesture inverts on a click and clears on a drag.
         if m.ctrl && active_hit.is_none() {
@@ -2872,7 +2899,11 @@ impl Editor {
 
     /// A range for the Size slider in world units, from the scene's size.
     pub fn world_radius_range(&self) -> std::ops::RangeInclusive<f32> {
-        let s = self.scene.bounds().extent().length().max(1e-3);
+        let bounds = self.scene.bounds();
+        // With nothing visible (an empty scene) the size comes from the view,
+        // or the range collapses to a sliver and the brush is stuck at it.
+        let size = if bounds.is_empty() { self.camera.distance } else { bounds.extent().length() };
+        let s = size.max(1e-3);
         (s * 0.0005)..=(s * 0.5)
     }
 
@@ -3411,7 +3442,7 @@ impl Editor {
                 true
             }
             Drag::Stroke { .. } => self.stroke_to(pos),
-            Drag::GizmoSnapOrMask { start, hit, ray_dir } => {
+            Drag::GizmoSnapOrMask { start, hit, ray_dir } | Drag::MaskBlurOrPaint { start, hit, ray_dir, .. } => {
                 if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
@@ -3645,6 +3676,13 @@ impl Editor {
             Drag::GizmoSnapOrMask { hit, .. } => {
                 self.snap_gizmo_to_surface(hit.point, hit.normal);
             }
+            Drag::MaskBlurOrPaint { sharpen, .. } => {
+                if sharpen {
+                    self.edit_mesh_mask("Sharpen mask", Mesh::sharpen_mask);
+                } else {
+                    self.edit_mesh_mask("Blur mask", |m| m.blur_mask(1));
+                }
+            }
             Drag::GizmoSnapOrCarve { hit, .. } => {
                 self.custom_gizmo_pivot = Some(hit.point);
                 self.kept_pivot_of = None;
@@ -3659,7 +3697,10 @@ impl Editor {
             Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
             Drag::CurveHandle { .. } => {}
             Drag::Select { action, points, lasso, click_group } => {
-                self.finish_select(action, points, lasso, click_group)
+                // Alt pressed after a mask box (not held from the start,
+                // which means unmask) masks everything but the box.
+                let outside = action == SelectAction::Mask && self.modifiers.alt;
+                self.finish_select(action, points, lasso, click_group, outside)
             }
             Drag::MaskGesture { start } => {
                 let moved = self.pointer.is_some_and(|p| p.distance(start) >= 4.0 * self.pixels_per_point.max(0.1));
@@ -3931,7 +3972,14 @@ impl Editor {
         }
     }
 
-    fn finish_select(&mut self, action: SelectAction, points: Vec<Vec2>, lasso: bool, click_group: Option<u32>) {
+    fn finish_select(
+        &mut self,
+        action: SelectAction,
+        points: Vec<Vec2>,
+        lasso: bool,
+        click_group: Option<u32>,
+        outside: bool,
+    ) {
         let is_click = points.len() < 2 || points.iter().all(|p| p.distance(points[0]) < 4.0);
         if is_click {
             match (action, click_group) {
@@ -3964,7 +4012,7 @@ impl Editor {
                 // mirrored box.
                 let center = self.symmetry_center();
                 let transforms = self.symmetry.transforms();
-                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center)));
+                let inside = move |p: Vec3| transforms.iter().any(|t| inside(center + *t * (p - center))) != outside;
                 // A mask box drawn around none of the model clears the mask.
                 let mesh = &self.scene.active().mesh;
                 let any =
@@ -3976,7 +4024,13 @@ impl Editor {
                     return;
                 }
                 let value = if action == SelectAction::Mask { 1.0 } else { 0.0 };
-                let label = if action == SelectAction::Mask { "Mask selection" } else { "Unmask selection" };
+                let label = if outside {
+                    "Mask outside selection"
+                } else if action == SelectAction::Mask {
+                    "Mask selection"
+                } else {
+                    "Unmask selection"
+                };
                 self.edit_mesh_mask(label, |mesh| {
                     for v in 0..mesh.vertex_count() {
                         if !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]) {
@@ -5932,6 +5986,12 @@ impl Editor {
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
         let b = self.scene.bounds();
+        if b.is_empty() {
+            // An empty scene still gets a floor (when it's switched on),
+            // sized to the view and sitting at the origin.
+            let h = self.camera.distance.max(1e-3) * 0.25;
+            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+        }
         oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
@@ -10728,6 +10788,39 @@ mod tests {
     }
 
     #[test]
+    fn alt_after_a_mask_box_masks_everything_outside_it() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        let (from, to) = (Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        drag(&mut e, from, to);
+        let inside = masked(&e);
+        // Same box, with Alt pressed only before letting go.
+        e.undo();
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(to);
+        e.modifiers.alt = true;
+        e.pointer_up();
+        let total = e.scene.active().mesh.vertex_count();
+        assert_eq!(masked(&e), total - inside, "the complement of the box is masked");
+        assert!(e.history.undo_labels().any(|l| l == "Mask outside selection"));
+    }
+
+    #[test]
+    fn hide_masked_hides_only_the_masked_faces() {
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers.ctrl = true;
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        e.edit_faces("Hide masked", oxy_mesh::Mesh::hide_masked);
+        let mesh = &e.scene.active().mesh;
+        let hidden = mesh.hidden().iter().filter(|&&h| h).count();
+        assert!(hidden > 0 && hidden < mesh.triangle_count());
+        assert_eq!(mesh.hidden().iter().zip(mesh.masked_faces()).filter(|(h, m)| **h != *m).count(), 0);
+    }
+
+    #[test]
     fn lasso_hides_and_ctrl_click_inverts_and_empty_box_clears() {
         let mut e = editor();
         e.selection_lasso = true;
@@ -12933,6 +13026,42 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_click_on_the_model_blurs_the_mask_and_ctrl_alt_click_sharpens_it() {
+        let mut e = editor();
+        e.scene
+            .active_mut()
+            .mesh
+            .mask
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, m)| *m = if i % 2 == 0 { 1.0 } else { 0.0 });
+        let at = Vec2::new(400.0, 300.0);
+        let click = |e: &mut Editor, alt: bool| {
+            e.pointer = Some(at);
+            e.modifiers.ctrl = true;
+            e.modifiers.alt = alt;
+            e.pointer_down(PointerButton::Primary);
+            e.pointer_up();
+            e.modifiers.ctrl = false;
+            e.modifiers.alt = false;
+        };
+        let soft = |e: &Editor| e.scene.active().mesh.mask.iter().filter(|&&m| m > 0.01 && m < 0.99).count();
+        assert_eq!(soft(&e), 0);
+        click(&mut e, false);
+        assert!(soft(&e) > 0, "blur softens the edges: {}", e.status);
+        let blurred = soft(&e);
+        click(&mut e, true);
+        assert!(soft(&e) < blurred, "sharpen firms them up again");
+        e.undo();
+        assert_eq!(soft(&e), blurred);
+
+        // Nothing masked: a click paints a dab instead.
+        let mut e = editor();
+        click(&mut e, false);
+        assert!(e.scene.active().mesh.mask.iter().any(|&m| m > 0.0));
+    }
+
+    #[test]
     fn gizmo_ctrl_click_mesh_snaps_pivot_and_aligns_normal() {
         let mut e = editor();
         e.toggle_gizmo(GizmoMode::Move);
@@ -14538,6 +14667,39 @@ mod tests {
         drag(&mut e, end, end + (end - layout.center));
         assert!(e.history.can_undo());
         assert!(e.living.strokes.is_empty(), "a gizmo move is not a living stroke");
+    }
+
+    #[test]
+    fn brushes_sort_alphabetically() {
+        let mut e = editor();
+        e.sort_brushes_alphabetically();
+        let names: Vec<String> = e.brush_order.iter().map(|k| k.label().to_lowercase()).collect();
+        assert!(names.windows(2).all(|w| w[0] <= w[1]), "{names:?}");
+        assert_eq!(e.brush_order.len(), BrushKind::ALL.len());
+    }
+
+    #[test]
+    fn brush_size_works_in_an_empty_scene_with_the_size_on_the_model() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        e.set_radius_on_model(true);
+        e.sync_model_radius();
+        let range = e.world_radius_range();
+        assert!(*range.end() > 0.1, "a usable size range: {range:?}");
+        assert!(e.brush_radius_world <= *range.end() && e.brush_radius_pt > 2.0);
+        let before = e.brush_radius_world;
+        e.adjust_radius(1.25);
+        assert!(e.brush_radius_world > before, "] grows the brush");
+        e.adjust_radius(0.8);
+        e.adjust_radius(0.8);
+        assert!(e.brush_radius_world < before, "[ shrinks it");
+    }
+
+    #[test]
+    fn floor_grid_shows_in_an_empty_scene() {
+        let mut e = editor();
+        e.perform(Pending::New("empty"));
+        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
     }
 
     #[test]

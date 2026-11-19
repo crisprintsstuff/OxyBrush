@@ -53,6 +53,14 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.18" date="2026-11-18" type="development">
+      <description>
+        <p>Blur or sharpen the mask with Ctrl+click, hide the masked faces,
+        mask everything outside a box or lasso by pressing Alt before letting
+        go, and sort the brush list A–Z. In an empty scene the brush size
+        slider and the floor grid now work.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.17" date="2026-11-18" type="development">
       <description>
         <p>Start from an empty scene, import several files together, extrude

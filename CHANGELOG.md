@@ -7,6 +7,19 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 - **Poly Edit gizmo axes and pivot** ([#324](https://github.com/crisprintsstuff/OxyBrush/issues/324)). The gizmo bar's **Pivot & axes** menu aligns the axes to the world, the view, or the average normal of what is picked. Alt+click a point, edge or face to snap the pivot to it; Alt+drag a handle to move or turn the gizmo without moving geometry. **Reset pivot** puts it back.
 
+## [4.0.0-beta.18] - 2026-11-18
+
+### Fixed
+
+- Starting from an empty scene no longer pins the brush size to its minimum with the size on the model: the size range now follows the camera distance until there is something to measure, so the slider and `[` `]` work (#328).
+- The **Floor grid** toggle now works in an empty scene too; the grid is drawn at the origin, sized to the view.
+
+### Added
+- **Blur and sharpen the mask with a click** (as in ZBrush). Ctrl+click on the model blurs the whole mask and Ctrl+Alt+click sharpens it; dragging still paints or unmasks. With nothing masked, a click still paints a dab.
+- **Sort brushes A–Z** in the Arrange menu lists the brush selector alphabetically (#304).
+- **Hide masked** (Visibility menu and the command palette) hides the masked faces (#329).
+- Pressing Alt just before letting go of a mask box or lasso masks everything *outside* it instead (#329).
+
 ## [4.0.0-beta.17] - 2026-11-18
 
 ### Added
