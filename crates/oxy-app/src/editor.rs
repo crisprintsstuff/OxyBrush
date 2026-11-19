@@ -7166,13 +7166,9 @@ impl Editor {
 
     /// Snap gizmo pivot to `point` and align primary (Z) axis to surface `normal`.
     pub fn snap_gizmo_to_surface(&mut self, point: Vec3, normal: Vec3) {
-        let z = normal.normalize_or(Vec3::Z);
-        let ref_axis = if z.y.abs() < 0.99 { Vec3::Y } else { Vec3::X };
-        let x = ref_axis.cross(z).normalize();
-        let y = z.cross(x).normalize();
         self.custom_gizmo_pivot = Some(point);
         self.kept_pivot_of = None;
-        self.custom_gizmo_rotation = Some(Mat3::from_cols(x, y, z));
+        self.custom_gizmo_rotation = Some(crate::gizmo_ops::basis_from_normal(normal));
         self.gizmo_pivot = None;
         self.status = "Gizmo aligned to surface normal".into();
     }
@@ -7302,7 +7298,7 @@ impl Editor {
         let base_pivot = self.gizmo_base_pivot()?;
         // While dragging, the gizmo follows the transformed pivot.
         let (pivot, rot) = match &self.drag {
-            Drag::PolyGizmo(g) => (g.pivot + g.current.translate, g.rotation),
+            Drag::PolyGizmo(g) => g.shown(),
             Drag::MultiGizmo(g) => (g.pivot + g.current.translate, Mat3::IDENTITY),
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
@@ -7313,6 +7309,7 @@ impl Editor {
             }
             // Several pieces turn about the world axes.
             _ if self.poly_edit.is_none() && self.gizmo_pieces().len() > 1 => (base_pivot, Mat3::IDENTITY),
+            _ if self.poly_edit.is_some() => (base_pivot, self.poly_gizmo_rotation()),
             _ => (base_pivot, self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY)),
         };
         let size = self.canvas_size();
