@@ -57,6 +57,20 @@ impl Editor {
                 out.push(i);
             }
         }
+        let mut descendants = Vec::new();
+        for &i in &out {
+            let id = self.scene.pieces[i].id;
+            for desc_id in self.scene.descendants_of(id) {
+                if let Some(desc_idx) = self.scene.index_of(desc_id)
+                    && self.scene.pieces[desc_idx].visible
+                    && !out.contains(&desc_idx)
+                    && !descendants.contains(&desc_idx)
+                {
+                    descendants.push(desc_idx);
+                }
+            }
+        }
+        out.extend(descendants);
         out
     }
 
@@ -301,5 +315,45 @@ impl Editor {
         } else {
             format!("Isolated {name} (Alt-click eye icon again to show all)")
         };
+    }
+
+    /// Set piece `child_id`'s parent to `parent_id` (or None to unparent),
+    /// recording an undo step. Returns false if rejected (e.g. cycle).
+    pub fn set_piece_parent(&mut self, child_id: u64, parent_id: Option<u64>) -> bool {
+        let Some(p) = self.scene.get(child_id) else { return false };
+        if p.parent == parent_id {
+            return false;
+        }
+        if let Some(target) = parent_id
+            && !self.scene.can_parent(child_id, target)
+        {
+            return false;
+        }
+        let previous = p.parent;
+        let child_name = p.name.clone();
+        let target_name = parent_id.and_then(|id| self.scene.get(id)).map(|p| p.name.clone());
+        self.scene.set_parent(child_id, parent_id);
+        self.history.record_compound(
+            match &target_name {
+                Some(name) => format!("Parent {child_name} to {name}"),
+                None => format!("Unparent {child_name}"),
+            },
+            vec![Step::Parent { piece: child_id, previous }],
+        );
+        self.status = match &target_name {
+            Some(name) => format!("Parented {child_name} under {name}"),
+            None => format!("Unparented {child_name}"),
+        };
+        true
+    }
+
+    /// Detach the active piece from its parent piece, so it no longer moves with it.
+    pub fn unparent_active(&mut self) {
+        let Some(id) = self.scene.try_active().map(|p| p.id) else { return };
+        if self.scene.parent_of(id).is_some() {
+            self.set_piece_parent(id, None);
+        } else {
+            self.status = "Active piece has no parent".into();
+        }
     }
 }

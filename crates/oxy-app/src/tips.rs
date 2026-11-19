@@ -99,6 +99,7 @@ commands! {
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
+    Unparent => "Unparent piece", "", "Detach the active piece from its parent piece, so it no longer moves with it.";
     Solo => "Solo piece / show all", "Alt+S", "Show only the active piece, or show every piece again.";
     Merge => "Merge and remesh visible pieces", "", "Fuse all visible pieces into the active one with a voxel remesh: one closed surface with new, even triangles. Use Join to keep the pieces as they are.";
     Join => "Join visible pieces", "", "Combine the active piece and the other visible pieces into one piece, exactly as they are: no remesh. Each piece keeps its own face groups, so you can still hide or select it.";
@@ -722,7 +723,10 @@ pub mod plain {
     pub const PIECE_HIDE: &str =
         "Hide this piece. Hidden pieces are not sculpted or exported. Alt-click isolates this piece.";
     pub const PIECE_SHOW: &str = "Show this piece again. Alt-click isolates this piece.";
-    pub const PIECE_DRAG: &str = "Drag up or down to reorder pieces in the scene.";
+    pub const PIECE_DRAG: &str =
+        "Drag onto another piece to parent it, drag above/below to reorder, or drop below the list to unparent.";
+    pub const PIECE_FOLD: &str = "Collapse children in the tree.";
+    pub const PIECE_UNFOLD: &str = "Expand children in the tree.";
     pub const PIECE_RENAME: &str = "The active piece. Edit the name here.";
     pub const GIZMO_PIECES: &str = "The active piece and the pieces you Ctrl/Cmd+clicked in the Pieces list move, turn and scale together about their middle, as one undo step. Masked parts of each stay put.";
     pub const GIZMO_ONE_PIECE: &str = "Drop the other picked pieces: the gizmo moves just the active piece again.";
@@ -991,6 +995,8 @@ pub mod plain {
         PIECE_HIDE,
         PIECE_SHOW,
         PIECE_DRAG,
+        PIECE_FOLD,
+        PIECE_UNFOLD,
         PIECE_RENAME,
         PIECE_ACTIVATE,
         GIZMO_PIECES,

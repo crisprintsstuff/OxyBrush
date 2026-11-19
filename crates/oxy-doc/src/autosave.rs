@@ -156,6 +156,7 @@ mod tests {
                 strokes: None,
                 material: None,
                 instancers: Vec::new(),
+                parent: None,
             }],
             active: 0,
             alphas: Vec::new(),

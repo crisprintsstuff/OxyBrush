@@ -58,6 +58,9 @@ pub struct Piece {
     /// Surface instances on this piece (RFC 0022): copies of other pieces
     /// placed on its surface, written as the `INST` section.
     pub instancers: Vec<Instancer>,
+    /// The piece this piece is parented to, if any. Transforming the parent
+    /// transforms this piece and all other descendants with it.
+    pub parent: Option<u64>,
 }
 
 /// Copies of one piece (the source) on the surface of the piece that owns
@@ -226,6 +229,7 @@ impl Piece {
             strokes: None,
             material: None,
             instancers: Vec::new(),
+            parent: None,
         }
     }
 
@@ -271,6 +275,7 @@ impl Piece {
                     strokes: None,
                     material: self.material.clone(),
                     instancers: Vec::new(),
+                    parent: None,
                 }
             }
             None => PieceData {
@@ -286,6 +291,7 @@ impl Piece {
                 strokes: None,
                 material: self.material.clone(),
                 instancers: Vec::new(),
+                parent: None,
             },
         }
     }
@@ -318,6 +324,8 @@ pub struct PieceData {
     /// The `INST` section: surface instances. Filled in by
     /// [`Scene::to_data`], which knows the pieces' places in the list.
     pub instancers: Vec<SavedInstancer>,
+    /// The `PARN` section: parent piece index. Filled in by [`Scene::to_data`].
+    pub parent: Option<u32>,
 }
 
 impl PieceData {
@@ -369,6 +377,7 @@ impl PieceData {
             strokes,
             material: self.material,
             instancers: Vec::new(),
+            parent: None,
         }
     }
 }
@@ -534,9 +543,78 @@ impl Scene {
         (2..).map(|n| format!("{base} {n}")).find(|n| !self.pieces.iter().any(|p| &p.name == n)).expect("infinite")
     }
 
+    /// The piece's parent id, if any.
+    pub fn parent_of(&self, id: u64) -> Option<u64> {
+        self.get(id)?.parent
+    }
+
+    /// All pieces whose immediate parent is `id`, in scene piece order.
+    pub fn children_of(&self, id: u64) -> Vec<u64> {
+        self.pieces.iter().filter(|p| p.parent == Some(id)).map(|p| p.id).collect()
+    }
+
+    /// The chain of parents above `id`, immediate parent first.
+    pub fn ancestors_of(&self, id: u64) -> Vec<u64> {
+        let mut ancestors = Vec::new();
+        let mut cur = id;
+        while let Some(parent) = self.parent_of(cur) {
+            if ancestors.contains(&parent) || parent == id {
+                break;
+            }
+            ancestors.push(parent);
+            cur = parent;
+        }
+        ancestors
+    }
+
+    /// All pieces descended from `id` (children, grandchildren, etc.), in depth-first order.
+    pub fn descendants_of(&self, id: u64) -> Vec<u64> {
+        let mut descendants = Vec::new();
+        let mut stack = self.children_of(id);
+        stack.reverse();
+        while let Some(child) = stack.pop() {
+            if !descendants.contains(&child) && child != id {
+                descendants.push(child);
+                let mut grandchildren = self.children_of(child);
+                grandchildren.reverse();
+                stack.extend(grandchildren);
+            }
+        }
+        descendants
+    }
+
+    /// Whether piece `child` can be parented under piece `target_parent`
+    /// without creating a cycle or self-parenting.
+    pub fn can_parent(&self, child: u64, target_parent: u64) -> bool {
+        if child == target_parent {
+            return false;
+        }
+        if self.get(child).is_none() || self.get(target_parent).is_none() {
+            return false;
+        }
+        !self.descendants_of(child).contains(&target_parent)
+    }
+
+    /// Set piece `child`'s parent to `parent`. Returns false if the assignment
+    /// is rejected (e.g. cycle or non-existent piece).
+    pub fn set_parent(&mut self, child: u64, parent: Option<u64>) -> bool {
+        if let Some(target) = parent
+            && !self.can_parent(child, target)
+        {
+            return false;
+        }
+        if let Some(p) = self.get_mut(child) {
+            p.parent = parent;
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn to_data(&self) -> SceneData {
         let mut pieces: Vec<PieceData> = self.pieces.iter().map(Piece::to_data).collect();
         for (data, p) in pieces.iter_mut().zip(&self.pieces) {
+            data.parent = p.parent.and_then(|pid| self.index_of(pid)).map(|idx| idx as u32);
             data.instancers = p
                 .instancers
                 .iter()
@@ -554,12 +632,23 @@ impl Scene {
         if data.pieces.is_empty() {
             return Some(Self::empty());
         }
-        let saved: Vec<Vec<SavedInstancer>> =
+        let saved_instancers: Vec<Vec<SavedInstancer>> =
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
+        let saved_parents: Vec<Option<u32>> = data.pieces.iter_mut().map(|p| p.parent.take()).collect();
         let mut pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
-        // Sources are found by their place in the list; ids are new.
+        // Sources and parents are found by their place in the list; ids are new.
         let ids: Vec<u64> = pieces.iter().map(|p| p.id).collect();
-        for (i, (p, list)) in pieces.iter_mut().zip(saved).enumerate() {
+        for (i, (p, &parent_idx)) in pieces.iter_mut().zip(&saved_parents).enumerate() {
+            if let Some(parent_idx) = parent_idx {
+                let parent_idx = parent_idx as usize;
+                if parent_idx < ids.len() && parent_idx != i {
+                    p.parent = Some(ids[parent_idx]);
+                } else {
+                    log::warn!("ignoring invalid parent index {parent_idx} on piece {:?}", p.name);
+                }
+            }
+        }
+        for (i, (p, list)) in pieces.iter_mut().zip(saved_instancers).enumerate() {
             p.instancers = list
                 .into_iter()
                 .filter_map(|s| {
@@ -570,6 +659,23 @@ impl Scene {
                     ok.then(|| Instancer { source: ids[s.source as usize], settings: s.settings })
                 })
                 .collect();
+        }
+        // Break any cycles that might exist from corrupt files:
+        let temp_scene = Scene { pieces, active: 0 };
+        let mut safe_parents = Vec::new();
+        for p in &temp_scene.pieces {
+            let mut ok_parent = p.parent;
+            if let Some(pid) = p.parent
+                && temp_scene.ancestors_of(pid).contains(&p.id)
+            {
+                log::warn!("breaking cyclic parenting on piece {:?}", p.name);
+                ok_parent = None;
+            }
+            safe_parents.push(ok_parent);
+        }
+        let mut pieces = temp_scene.pieces;
+        for (p, parent) in pieces.iter_mut().zip(safe_parents) {
+            p.parent = parent;
         }
         let active = data.active.min(pieces.len() - 1);
         Some(Self { pieces, active })
@@ -609,5 +715,54 @@ mod tests {
         let back = Scene::from_data(s.to_data()).unwrap();
         assert!(back.pieces.is_empty());
         assert!(back.try_active().is_none());
+    }
+
+    #[test]
+    fn piece_hierarchy_and_cycle_prevention() {
+        let mut s = Scene::new(Piece::new("Root", primitives::icosphere(1, 1.0)));
+        s.pieces.push(Piece::new("Child 1", primitives::icosphere(1, 1.0)));
+        s.pieces.push(Piece::new("Grandchild", primitives::icosphere(1, 1.0)));
+        s.pieces.push(Piece::new("Child 2", primitives::icosphere(1, 1.0)));
+        let root = s.pieces[0].id;
+        let c1 = s.pieces[1].id;
+        let gc = s.pieces[2].id;
+        let c2 = s.pieces[3].id;
+
+        // Valid parenting
+        assert!(s.set_parent(c1, Some(root)));
+        assert!(s.set_parent(gc, Some(c1)));
+        assert!(s.set_parent(c2, Some(root)));
+
+        assert_eq!(s.parent_of(c1), Some(root));
+        assert_eq!(s.children_of(root), vec![c1, c2]);
+        assert_eq!(s.ancestors_of(gc), vec![c1, root]);
+        assert_eq!(s.descendants_of(root), vec![c1, gc, c2]);
+
+        // Cycle prevention
+        assert!(!s.can_parent(root, root)); // self-parenting
+        assert!(!s.can_parent(root, c1)); // parenting under child
+        assert!(!s.can_parent(root, gc)); // parenting under grandchild
+        assert!(!s.set_parent(root, Some(gc)));
+
+        // Roundtrip to/from data preserves parent hierarchy
+        let data = s.to_data();
+        assert_eq!(data.pieces[1].parent, Some(0)); // c1's parent is index 0
+        assert_eq!(data.pieces[2].parent, Some(1)); // gc's parent is index 1
+        assert_eq!(data.pieces[3].parent, Some(0)); // c2's parent is index 0
+
+        let restored = Scene::from_data(data).unwrap();
+        let r_root = restored.pieces[0].id;
+        let r_c1 = restored.pieces[1].id;
+        let r_gc = restored.pieces[2].id;
+        let r_c2 = restored.pieces[3].id;
+        assert_eq!(restored.parent_of(r_c1), Some(r_root));
+        assert_eq!(restored.parent_of(r_gc), Some(r_c1));
+        assert_eq!(restored.parent_of(r_c2), Some(r_root));
+        assert_eq!(restored.descendants_of(r_root), vec![r_c1, r_gc, r_c2]);
+
+        // Unparenting
+        assert!(s.set_parent(c1, None));
+        assert_eq!(s.parent_of(c1), None);
+        assert_eq!(s.children_of(root), vec![c2]);
     }
 }

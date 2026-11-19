@@ -81,6 +81,11 @@ enum Change {
         from: usize,
         to: usize,
     },
+    /// The piece's parent was set or cleared.
+    Parent {
+        piece: u64,
+        parent: Option<u64>,
+    },
     /// Several changes applied as one; order alternates on each swap.
     Compound(Vec<Change>),
 }
@@ -101,6 +106,8 @@ pub enum Step {
     Instancers { piece: u64, previous: Vec<oxy_doc::Instancer> },
     /// The piece was shown or hidden; this is whether it was visible.
     Visible { piece: u64, previous: bool },
+    /// The piece's parent was changed; this is its previous parent id.
+    Parent { piece: u64, previous: Option<u64> },
 }
 
 impl From<Step> for Change {
@@ -117,6 +124,7 @@ impl From<Step> for Change {
             Step::Instancers { piece, previous } => Change::Instancers { piece, list: previous },
             Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
             Step::Reordered { from, to } => Change::Reorder { from: to, to: from },
+            Step::Parent { piece, previous } => Change::Parent { piece, parent: previous },
         }
     }
 }
@@ -184,6 +192,7 @@ impl Change {
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
+            | Change::Parent { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
             Change::Piece { .. } | Change::Reorder { .. } => None,
             Change::Compound(c) => {
@@ -205,6 +214,7 @@ impl Change {
             | Change::CompressedFaces { piece, .. }
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
+            | Change::Parent { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
             Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
             Change::Reorder { .. } => true,
@@ -225,7 +235,7 @@ impl Change {
             Change::Faces { groups, .. } => groups.len() * 5,
             Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
-            Change::Visible { .. } | Change::Reorder { .. } => 16,
+            Change::Visible { .. } | Change::Reorder { .. } | Change::Parent { .. } => 16,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Cage { mesh, cage, .. } => {
                 mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
@@ -278,6 +288,11 @@ impl Change {
             Change::Visible { piece, visible } => {
                 let p = scene.get_mut(*piece)?;
                 std::mem::swap(&mut p.visible, visible);
+                Some(*piece)
+            }
+            Change::Parent { piece, parent } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.parent, parent);
                 Some(*piece)
             }
             Change::Piece { index, piece } => match piece.take() {
@@ -1212,5 +1227,24 @@ mod tests {
         // Undo stroke, then undo face edit
         h.undo(&mut s);
         assert_eq!(h.undo(&mut s).as_deref(), Some("Face edit"));
+    }
+
+    #[test]
+    fn parenting_undo_redo() {
+        let mut s = scene();
+        let p2 = Piece::new("Child", oxy_mesh::primitives::icosphere(1, 1.0));
+        let child_id = p2.id;
+        let parent_id = s.active().id;
+        s.pieces.push(p2);
+
+        let mut h = History::default();
+        s.set_parent(child_id, Some(parent_id));
+        h.record_compound("Parent piece", vec![Step::Parent { piece: child_id, previous: None }]);
+
+        assert_eq!(s.parent_of(child_id), Some(parent_id));
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Parent piece"));
+        assert_eq!(s.parent_of(child_id), None);
+        assert_eq!(h.redo(&mut s).as_deref(), Some("Parent piece"));
+        assert_eq!(s.parent_of(child_id), Some(parent_id));
     }
 }

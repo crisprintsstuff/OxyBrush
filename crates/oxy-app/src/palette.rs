@@ -135,6 +135,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
         cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
+        cmd(ed, Cmd::Unparent, "pieces unparent detach parent", Editor::unparent_active),
         cmd(ed, Cmd::Solo, "pieces isolate", Editor::solo_active),
         cmd(ed, Cmd::Join, "pieces combine merge attach together one", Editor::join_visible),
         cmd(ed, Cmd::JoinPicked, "pieces combine merge attach together picked selected", Editor::join_picked),
