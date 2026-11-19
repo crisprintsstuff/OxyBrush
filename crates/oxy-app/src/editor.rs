@@ -1002,6 +1002,8 @@ pub struct Editor {
     pub pressure_min: f32,
     /// A pen (or other pressure source) has reported pressure this session.
     pub pen_seen: bool,
+    /// A stamp drag moved since the last frame; `flush_stamp` redraws it once.
+    stamp_queued: bool,
     /// Pen pressure that already counts as full (0.3..1).
     pub pressure_full: f32,
     /// Two-point shape of the pressure curve: the inner control points of
@@ -1494,6 +1496,7 @@ impl Default for Editor {
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pen_seen: false,
+            stamp_queued: false,
             pressure_full: 1.0,
             pressure_shape: LINEAR_PRESSURE_SHAPE,
             noise_scale: 3.0,
@@ -3374,9 +3377,8 @@ impl Editor {
                 }
                 true
             }
-            Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start } => {
-                let (kind, invert, start) = (*kind, *invert, *start);
-                self.apply_stamp(kind, invert, start, pos, false);
+            Drag::Deferred { mode: StrokeMode::Stamp, .. } => {
+                self.stamp_queued = true;
                 true
             }
             Drag::Deferred { .. } => true,
@@ -3622,7 +3624,23 @@ impl Editor {
     pub fn flush_drag(&mut self) -> bool {
         let a = self.flush_stroke();
         let b = self.flush_gizmo();
-        a || b
+        let c = self.flush_stamp();
+        a || b || c
+    }
+
+    /// Stamp stroke mode: show the stamp for the latest pointer position,
+    /// once per frame however many move events arrived.
+    fn flush_stamp(&mut self) -> bool {
+        if !std::mem::take(&mut self.stamp_queued) {
+            return false;
+        }
+        if let Drag::Deferred { mode: StrokeMode::Stamp, kind, invert, start } = self.drag
+            && let Some(pos) = self.pointer
+        {
+            self.apply_stamp(kind, invert, start, pos, false);
+            return true;
+        }
+        false
     }
 
     pub fn pointer_up(&mut self) {
@@ -10884,6 +10902,7 @@ mod tests {
             e.pointer = Some(Vec2::new(360.0, 300.0));
             e.pointer_down(PointerButton::Primary);
             e.pointer_moved(Vec2::new(440.0, 300.0));
+            e.flush_drag();
             if mode == StrokeMode::Line {
                 assert_eq!(before, e.scene.active().mesh.positions, "{mode:?}: nothing until release");
             } else {
@@ -14460,8 +14479,13 @@ mod tests {
         e.pointer = Some(Vec2::new(400.0, 300.0));
         e.pointer_down(PointerButton::Primary);
         e.pointer_moved(Vec2::new(420.0, 300.0));
+        e.flush_drag();
         let small = height(&e);
+        // Several moves within a frame stamp once, at the latest position.
+        e.pointer_moved(Vec2::new(430.0, 300.0));
         e.pointer_moved(Vec2::new(440.0, 300.0));
+        assert_eq!(height(&e), small, "nothing is stamped until the frame");
+        e.flush_drag();
         let full = height(&e);
         assert!(small > 0.0 && full > small, "the stamp grows with the drag, live: {small} -> {full}");
         e.pointer_up();
@@ -14475,6 +14499,7 @@ mod tests {
         e.pointer = Some(Vec2::new(400.0, 300.0));
         e.pointer_down(PointerButton::Primary);
         e.pointer_moved(Vec2::new(440.0, 300.0));
+        e.flush_drag();
         assert_ne!(e.scene.active().mesh.positions, before);
         e.cancel_drag();
         assert_eq!(e.scene.active().mesh.positions, before);
