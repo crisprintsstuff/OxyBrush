@@ -1325,6 +1325,8 @@ pub struct Editor {
     /// Pieces picked with Ctrl/Cmd+click in the Pieces list, by id, that
     /// the transform gizmo moves along with the active piece.
     pub piece_pick: Vec<u64>,
+    /// Pieces whose children are collapsed in the tree view outliner.
+    pub folded_pieces: std::collections::HashSet<u64>,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -1660,6 +1662,7 @@ impl Default for Editor {
             custom_gizmo_pivot: None,
             custom_gizmo_rotation: None,
             piece_pick: Vec::new(),
+            folded_pieces: std::collections::HashSet::new(),
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
@@ -5186,7 +5189,7 @@ impl Editor {
         let symmetry_center = src.symmetry_center.map(|c| if mirror_x { c * Vec3::new(-1.0, 1.0, 1.0) } else { c });
         let name = self.scene.unique_name(&base);
         self.add_piece(
-            Piece { symmetry_center, ..Piece::new(name.clone(), Mesh::from_data(data)) },
+            Piece { parent: src.parent, symmetry_center, ..Piece::new(name.clone(), Mesh::from_data(data)) },
             if mirror_x { "Mirror duplicate" } else { "Duplicate" },
         );
         self.status = format!("Created {name}");
@@ -6037,11 +6040,19 @@ impl Editor {
         self.pointer_up();
         let index = self.scene.active_index();
         let piece = self.scene.pieces.remove(index);
+        let piece_id = piece.id;
+        self.folded_pieces.remove(&piece_id);
         self.status = format!("Deleted {}", piece.name);
         self.scene.set_active(index.saturating_sub(1));
         // The pieces it copied (surface instances) become ordinary, shown pieces.
         let sources: Vec<u64> = piece.instancers.iter().map(|i| i.source).collect();
         let mut steps = vec![Step::Removed { index, piece: Box::new(piece) }];
+        for p in &mut self.scene.pieces {
+            if p.parent == Some(piece_id) {
+                steps.push(Step::Parent { piece: p.id, previous: p.parent });
+                p.parent = None;
+            }
+        }
         for id in sources {
             if let Some(p) = self.scene.get_mut(id) {
                 steps.push(Step::Visible { piece: id, previous: p.visible });
@@ -6960,6 +6971,7 @@ impl Editor {
         let levels = joined.iter().any(|&i| self.scene.pieces[i].multires.is_some());
         let first = &self.scene.pieces[active];
         let piece = Piece {
+            parent: first.parent,
             symmetry_center: first.symmetry_center,
             ..Piece::new(first.name.clone(), Mesh::from_data(MeshData::join(&parts)))
         };
@@ -7401,7 +7413,7 @@ impl Editor {
             return self.poly_gizmo_pivot();
         }
         // Several pieces picked: the middle of them all.
-        if self.gizmo_pieces().len() > 1 {
+        if !self.piece_pick.is_empty() && self.gizmo_pieces().len() > 1 {
             return self.multi_gizmo_pivot();
         }
         let id = self.scene.try_active()?.id;
@@ -10401,6 +10413,141 @@ mod tests {
         // Isolate piece 2 again: all pieces visible
         e.isolate_piece(2);
         assert!(e.scene.pieces.iter().all(|p| p.visible));
+    }
+
+    #[test]
+    fn parenting_and_unparenting_with_undo_redo() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        let parent_id = e.scene.pieces[0].id;
+        let child_id = e.scene.pieces[1].id;
+
+        // Parent child to parent
+        assert!(e.set_piece_parent(child_id, Some(parent_id)));
+        assert_eq!(e.scene.parent_of(child_id), Some(parent_id));
+        assert_eq!(e.scene.children_of(parent_id), vec![child_id]);
+
+        // Undo parenting
+        e.undo();
+        assert_eq!(e.scene.parent_of(child_id), None);
+        assert!(e.scene.children_of(parent_id).is_empty());
+
+        // Redo parenting
+        e.redo();
+        assert_eq!(e.scene.parent_of(child_id), Some(parent_id));
+        assert_eq!(e.scene.children_of(parent_id), vec![child_id]);
+
+        // Unparent active piece
+        e.scene.set_active(1);
+        e.unparent_active();
+        assert_eq!(e.scene.parent_of(child_id), None);
+
+        // Undo unparent
+        e.undo();
+        assert_eq!(e.scene.parent_of(child_id), Some(parent_id));
+    }
+
+    #[test]
+    fn parent_cycle_prevention_in_editor() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        let a = e.scene.pieces[0].id;
+        let b = e.scene.pieces[1].id;
+        let c = e.scene.pieces[2].id;
+
+        assert!(e.set_piece_parent(b, Some(a)));
+        assert!(e.set_piece_parent(c, Some(b)));
+
+        // Cannot parent to self
+        assert!(!e.set_piece_parent(a, Some(a)));
+        // Cannot parent to child or grandchild (cycle)
+        assert!(!e.set_piece_parent(a, Some(b)));
+        assert!(!e.set_piece_parent(a, Some(c)));
+        assert_eq!(e.scene.parent_of(a), None);
+    }
+
+    #[test]
+    fn parent_transform_propagates_to_descendants_and_child_leaves_parent_intact() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.scene.set_active(0);
+        let parent_id = e.scene.pieces[0].id;
+        let child_id = e.scene.pieces[1].id;
+        assert!(e.set_piece_parent(child_id, Some(parent_id)));
+
+        // With parent active, gizmo_pieces includes parent and its child
+        assert_eq!(e.gizmo_pieces(), vec![0, 1]);
+        e.toggle_gizmo(GizmoMode::Move);
+
+        // Gizmo pivot stays at parent's pivot (piece_pick is empty)
+        let parent_pivot = e.gizmo_base_pivot().unwrap();
+        assert!(parent_pivot.distance(e.scene.pieces[0].mesh.bounds().center()) < 1e-4);
+
+        let before: Vec<Vec<Vec3>> = e.scene.pieces.iter().map(|p| p.mesh.positions.clone()).collect();
+        let layout = e.gizmo_layout().unwrap();
+        let end = layout.axes[0].expect("X axis handle");
+        e.pointer = Some(end);
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::MultiGizmo(_)));
+        e.pointer_moved(end + Vec2::new(40.0, 0.0));
+        e.pointer_up();
+
+        // Both parent and child moved along X
+        for (k, p) in e.scene.pieces.iter().enumerate() {
+            let d = p.mesh.positions[0] - before[k][0];
+            assert!(d.x > 0.01 && d.y.abs() < 1e-4 && d.z.abs() < 1e-4, "piece {k} moved along X: {d}");
+        }
+
+        // Single undo step restores both
+        e.undo();
+        for (k, p) in e.scene.pieces.iter().enumerate() {
+            assert_eq!(p.mesh.positions, before[k], "piece {k} restored");
+        }
+
+        // Now activate the child piece
+        e.scene.set_active(1);
+        assert_eq!(e.gizmo_pieces(), vec![1]); // Child has no descendants, parent is not moved
+
+        let child_layout = e.gizmo_layout().unwrap();
+        let child_end = child_layout.axes[0].expect("X axis handle");
+        e.pointer = Some(child_end);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(child_end + Vec2::new(40.0, 0.0));
+        e.pointer_up();
+
+        // Child moved, but parent stayed put!
+        let parent_delta = e.scene.pieces[0].mesh.positions[0] - before[0][0];
+        let child_delta = e.scene.pieces[1].mesh.positions[0] - before[1][0];
+        assert!(parent_delta.length() < 1e-4, "parent did not move when transforming child: {parent_delta}");
+        assert!(child_delta.x > 0.01, "child moved when transforming child");
+    }
+
+    #[test]
+    fn delete_parent_unparents_children_and_undo_restores() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        let p0 = e.scene.pieces[0].id;
+        let p1 = e.scene.pieces[1].id;
+        let p2 = e.scene.pieces[2].id;
+
+        assert!(e.set_piece_parent(p1, Some(p0)));
+        assert!(e.set_piece_parent(p2, Some(p0)));
+
+        // Delete active piece (p0)
+        e.scene.set_active(0);
+        e.delete_active();
+        assert_eq!(e.scene.pieces.len(), 2);
+        // Children become unparented
+        assert_eq!(e.scene.pieces[0].parent, None);
+        assert_eq!(e.scene.pieces[1].parent, None);
+
+        // Undo restores parent and re-parents children
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert_eq!(e.scene.parent_of(p1), Some(p0));
+        assert_eq!(e.scene.parent_of(p2), Some(p0));
     }
 
     #[test]

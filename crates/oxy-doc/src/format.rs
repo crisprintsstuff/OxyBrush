@@ -45,6 +45,10 @@
 //!   units, 1 times the face size) `size:f32 offset:f32 spin:f32
 //!   vary_size:f32 vary_spin:f32 seed:u32`. Older readers skip it: the host
 //!   and the (hidden) source open as ordinary pieces, without the copies.
+//! - `PARN` (optional, since 4.0.0-beta.20): parent piece index of the
+//!   **preceding** `PIEC`: `parent:u32`, the parent piece's place among the
+//!   file's pieces (from 0; not this piece). Transforming the parent transforms
+//!   this piece with it. Older readers skip it and keep pieces independent.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -282,6 +286,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if !p.instancers.is_empty() {
             sections.push((*b"INST", encode_instancers(&p.instancers)));
+        }
+        if let Some(parent) = p.parent {
+            sections.push((*b"PARN", parent.to_le_bytes().to_vec()));
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
             sections.push((*b"STRK", encode_strokes(st)));
@@ -671,6 +678,11 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Ok(list) => piece.instancers = list,
                     Err(e) => log::warn!("ignoring damaged surface instances on piece {:?}: {e}", piece.name),
                 }
+            }
+            b"PARN" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PARN before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                piece.parent = Some(r.u32()?);
             }
             b"STRK" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STRK before any piece".into()))?;
@@ -1409,6 +1421,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         strokes: None,
         material: None,
         instancers: Vec::new(),
+        parent: None,
     })
 }
 
@@ -1656,6 +1669,7 @@ mod tests {
                     strokes: None,
                     material: None,
                     instancers: Vec::new(),
+                    parent: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -1670,6 +1684,7 @@ mod tests {
                     strokes: None,
                     material: None,
                     instancers: Vec::new(),
+                    parent: None,
                 },
             ],
             active: 1,
@@ -1842,6 +1857,7 @@ mod tests {
             }),
             material: None,
             instancers: Vec::new(),
+            parent: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
@@ -2484,6 +2500,7 @@ mod tests {
                 strokes: None,
                 material: None,
                 instancers: Vec::new(),
+                parent: None,
             }],
             active: 0,
             alphas: Vec::new(),
@@ -2622,5 +2639,23 @@ mod tests {
         // empty scenes were allowed.
         let with = sample();
         assert_eq!(decode(&encode(&with)).unwrap().pieces.len(), with.pieces.len());
+    }
+
+    #[test]
+    fn parent_piece_index_round_trips_in_oxb() {
+        let mut scene = sample();
+        scene.pieces[1].parent = Some(0); // piece 1 is child of piece 0
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PARN").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[0].parent, None);
+        assert_eq!(back.pieces[1].parent, Some(0));
+
+        // Unknown section skip keeps older readers happy:
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"PARN").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        let decoded = decode(&skipped).unwrap();
+        assert_eq!(decoded.pieces[1].parent, None);
     }
 }
