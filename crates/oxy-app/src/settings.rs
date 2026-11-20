@@ -605,10 +605,14 @@ pub enum ThemePreset {
     /// edges, bar sliders with a fill and a thin handle, small corners, and
     /// the accent kept for what is selected or active.
     Studio,
+    /// Tactile sculptor's studio: dark charcoal slate panels, concentric clay
+    /// sliders, card-based brush tiles, and sculpted silver-clay icons.
+    Sculptor,
 }
 
 impl ThemePreset {
-    pub const ALL: [ThemePreset; 9] = [
+    pub const ALL: [ThemePreset; 10] = [
+        ThemePreset::Sculptor,
         ThemePreset::Studio,
         ThemePreset::Graphite,
         ThemePreset::Matte,
@@ -622,6 +626,7 @@ impl ThemePreset {
 
     pub fn label(self) -> &'static str {
         match self {
+            ThemePreset::Sculptor => "Sculptor (Clay & Charcoal)",
             ThemePreset::Graphite => "Graphite (Neutral Dark)",
             ThemePreset::Matte => "Matte (Workstation Dark)",
             ThemePreset::Charcoal => "Charcoal (OLED Deep)",
@@ -636,6 +641,7 @@ impl ThemePreset {
 
     pub fn key(self) -> &'static str {
         match self {
+            ThemePreset::Sculptor => "sculptor",
             ThemePreset::Graphite => "graphite",
             ThemePreset::Matte => "matte",
             ThemePreset::Charcoal => "charcoal",
@@ -742,6 +748,8 @@ pub enum BrushIconColor {
     /// The original terracotta clay.
     #[default]
     Clay,
+    /// Shaded silver-slate monochrome clay (from the Sculptor theme).
+    Silver,
     /// The accent color, so the icons match the theme.
     Accent,
     /// A color of the user's choosing (`brush_icon_custom`).
@@ -749,11 +757,13 @@ pub enum BrushIconColor {
 }
 
 impl BrushIconColor {
-    pub const ALL: [BrushIconColor; 3] = [BrushIconColor::Clay, BrushIconColor::Accent, BrushIconColor::Custom];
+    pub const ALL: [BrushIconColor; 4] =
+        [BrushIconColor::Clay, BrushIconColor::Silver, BrushIconColor::Accent, BrushIconColor::Custom];
 
     pub fn label(self) -> &'static str {
         match self {
             BrushIconColor::Clay => "Clay",
+            BrushIconColor::Silver => "Silver clay",
             BrushIconColor::Accent => "Match accent",
             BrushIconColor::Custom => "Custom",
         }
@@ -762,6 +772,7 @@ impl BrushIconColor {
     pub fn key(self) -> &'static str {
         match self {
             BrushIconColor::Clay => "clay",
+            BrushIconColor::Silver => "silver",
             BrushIconColor::Accent => "accent",
             BrushIconColor::Custom => "custom",
         }
@@ -771,6 +782,9 @@ impl BrushIconColor {
         Self::ALL.into_iter().find(|c| c.key() == k)
     }
 }
+
+/// Shaded silver-slate monochrome clay (Sculptor theme).
+pub const SILVER_CLAY_RGB: [u8; 3] = [170, 175, 185];
 
 /// The custom brush icon color a fresh install starts from: the clay's own
 /// terracotta, so switching to Custom starts where the icons already are.

@@ -244,6 +244,21 @@ pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
                 stroke: Color32::from_gray(42),
                 window_stroke: Color32::from_gray(50),
             },
+            // Sculptor: dark charcoal slate panels, concentric clay sliders,
+            // card-based brush tiles, and sculpted silver-clay icons.
+            ThemePreset::Sculptor => Palette {
+                bg: Color32::from_rgb(18, 19, 23),
+                panel: Color32::from_rgb(26, 28, 33),
+                window: Color32::from_rgb(32, 34, 40),
+                faint: Color32::from_rgb(36, 38, 45),
+                text: Color32::from_rgb(215, 218, 226),
+                inactive_weak: Color32::from_rgb(38, 40, 48),
+                inactive_fill: Color32::from_rgb(32, 33, 37),
+                hovered_weak: Color32::from_rgb(46, 49, 58),
+                hovered_fill: Color32::from_rgb(52, 56, 66),
+                stroke: Color32::from_rgb(60, 63, 72),
+                window_stroke: Color32::from_rgb(60, 63, 72),
+            },
             ThemePreset::StudioLight => Palette {
                 bg: Color32::from_gray(245),
                 panel: Color32::from_gray(236),
@@ -420,6 +435,7 @@ pub fn apply_theme(
     install_fonts(ctx);
     ctx.set_visuals(v);
     crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
+    crate::widgets::set_sculptor_style(theme == ThemePreset::Sculptor && !is_high_contrast);
     ctx.all_styles_mut(|s| {
         s.interaction.show_tooltips_only_when_still = false;
         s.interaction.tooltip_delay = 0.2;
@@ -428,7 +444,7 @@ pub fn apply_theme(
         s.spacing.button_padding = m.button_padding;
         s.spacing.interact_size.y = m.interact_height;
         s.spacing.slider_width = m.slider_width;
-        if theme == ThemePreset::Studio && !is_high_contrast {
+        if (theme == ThemePreset::Studio || theme == ThemePreset::Sculptor) && !is_high_contrast {
             // A bar as tall as a value box, rather than a thin line.
             s.spacing.slider_rail_height = (m.interact_height - 6.0).max(12.0);
         }
@@ -1573,7 +1589,7 @@ struct Look {
     background: (oxy_render::BackgroundStyle, [f64; 3], [f64; 3]),
 }
 
-const LOOKS: [Look; 3] = [
+const LOOKS: [Look; 4] = [
     Look {
         name: "Classic",
         note: "Neutral graphite, the clay accent and rounded corners: OxyBrush's default look.",
@@ -1582,6 +1598,14 @@ const LOOKS: [Look; 3] = [
         corners: CornerStyle::Rounded,
         // The default viewport background (`ViewSettings::default`).
         background: (oxy_render::BackgroundStyle::Gradient, [0.011, 0.011, 0.011], [0.064, 0.064, 0.064]),
+    },
+    Look {
+        name: "Sculptor",
+        note: "Dark charcoal slate panels, concentric clay sliders, card brush tiles and silver-clay icons.",
+        theme: ThemePreset::Sculptor,
+        accent: AccentPreset::Terracotta,
+        corners: CornerStyle::Rounded,
+        background: (oxy_render::BackgroundStyle::Gradient, [0.012, 0.013, 0.015], [0.040, 0.042, 0.046]),
     },
     Look {
         name: "Workstation",
@@ -1927,9 +1951,12 @@ fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
 /// matching `apply_theme`.
 fn normal_rail_height(ed: &Editor) -> f32 {
     let m = metrics(ed.layout);
-    let studio = ed.theme == ThemePreset::Studio && !ed.high_contrast;
-    let mut h =
-        if studio { (m.interact_height - 6.0).max(12.0) } else { egui::style::Spacing::default().slider_rail_height };
+    let bar_style = (ed.theme == ThemePreset::Studio || ed.theme == ThemePreset::Sculptor) && !ed.high_contrast;
+    let mut h = if bar_style {
+        (m.interact_height - 6.0).max(12.0)
+    } else {
+        egui::style::Spacing::default().slider_rail_height
+    };
     if ed.layout == UiLayout::Touch {
         h = h.max(10.0);
     }
