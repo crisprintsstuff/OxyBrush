@@ -916,13 +916,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
         if ed.show_inspector {
-            inspector_panel.resizable(true).min_size(180.0).default_size(m.inspector_width).show(ui, |ui| {
-                // Fill the panel's width whatever is open: a scroll area that
-                // shrinks to its content made the panel grow and shrink as
-                // sections opened and closed (#80). Dragging its edge still
-                // resizes it.
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
-            });
+            let max_w = (ui.ctx().input(|i| i.viewport_rect()).width() * 0.45).clamp(m.inspector_width, 500.0);
+            inspector_panel.resizable(true).min_size(180.0).max_size(max_w).default_size(m.inspector_width).show(
+                ui,
+                |ui| {
+                    // Fill the panel's width whatever is open: a scroll area that
+                    // shrinks to its content made the panel grow and shrink as
+                    // sections opened and closed (#80). Dragging its edge still
+                    // resizes it.
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
+                },
+            );
         }
         view_strip(ui, ed);
     }
@@ -4810,8 +4814,8 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
 struct PieceDrag(usize);
 
 enum PieceDropAction {
-    Reorder { from: usize, to: usize },
-    Parent { from: usize, target: usize },
+    Parent { child_id: u64, parent_id: u64 },
+    Insert { piece_id: u64, new_parent: Option<u64>, target_id: u64, is_after: bool },
 }
 
 struct TreeRow {
@@ -4925,49 +4929,58 @@ fn build_tree_rows(scene: &oxy_doc::Scene, folded: &std::collections::HashSet<u6
     rows
 }
 
-/// Drag-and-drop parenting or reordering on piece row `i`.
-fn handle_piece_drop(ui: &Ui, r: &egui::Response, i: usize, scene: &oxy_doc::Scene) -> Option<PieceDropAction> {
+/// Drag-and-drop parenting or reordering on piece row with target index `target_idx`.
+fn handle_piece_drop(
+    ui: &Ui,
+    r: &egui::Response,
+    target_idx: usize,
+    scene: &oxy_doc::Scene,
+) -> Option<PieceDropAction> {
+    if !r.contains_pointer() {
+        return None;
+    }
     let pointer = ui.ctx().pointer_interact_pos()?;
-    let from = r.dnd_hover_payload::<PieceDrag>().or_else(|| r.dnd_release_payload::<PieceDrag>())?.0;
-    if from == i || from >= scene.pieces.len() || i >= scene.pieces.len() {
+    let payload = r.dnd_hover_payload::<PieceDrag>()?;
+    let from = payload.0;
+    if from == target_idx || from >= scene.pieces.len() || target_idx >= scene.pieces.len() {
         return None;
     }
     let child_id = scene.pieces[from].id;
-    let target_id = scene.pieces[i].id;
-    let can_parent = scene.can_parent(child_id, target_id);
+    let target_id = scene.pieces[target_idx].id;
 
+    // A piece cannot be dropped onto itself or any of its descendants
+    if scene.descendants_of(child_id).contains(&target_id) {
+        return None;
+    }
+
+    let can_parent = scene.can_parent(child_id, target_id);
     let h = r.rect.height();
     let y_rel = pointer.y - r.rect.top();
     let is_parent_zone = can_parent && y_rel >= h * 0.25 && y_rel <= h * 0.75;
     let is_after = y_rel > h * 0.5;
 
     // Visual feedback while hovering
-    if r.dnd_hover_payload::<PieceDrag>().is_some() {
-        let p = ui.painter();
-        let stroke_color = ui.visuals().selection.stroke.color;
-        if is_parent_zone {
-            let stroke = EStroke::new(2.0, stroke_color);
-            p.rect_stroke(r.rect.expand(1.0), widgets::rounding(4.0), stroke, egui::StrokeKind::Inside);
-        } else {
-            let stroke = EStroke::new(2.5, stroke_color);
-            let y = if is_after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
-            p.hline(r.rect.x_range(), y, stroke);
-        }
+    let p = ui.painter();
+    let stroke_color = ui.visuals().selection.stroke.color;
+    if is_parent_zone {
+        let stroke = EStroke::new(2.0, stroke_color);
+        p.rect_stroke(r.rect.expand(1.0), widgets::rounding(4.0), stroke, egui::StrokeKind::Inside);
+    } else {
+        let stroke = EStroke::new(2.5, stroke_color);
+        let y = if is_after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
+        p.hline(r.rect.x_range(), y, stroke);
     }
 
     // Drop released
-    if r.dnd_release_payload::<PieceDrag>().is_some() {
+    if ui.input(|i| i.pointer.any_released()) {
+        let _ = r.dnd_release_payload::<PieceDrag>();
         if is_parent_zone {
-            return Some(PieceDropAction::Parent { from, target: i });
+            return Some(PieceDropAction::Parent { child_id, parent_id: target_id });
         }
-        let mut to = if is_after { i + 1 } else { i };
-        if from < to {
-            to -= 1;
-        }
-        if from != to {
-            return Some(PieceDropAction::Reorder { from, to });
-        }
+        let target_parent = scene.pieces[target_idx].parent;
+        return Some(PieceDropAction::Insert { piece_id: child_id, new_parent: target_parent, target_id, is_after });
     }
+
     None
 }
 
@@ -4985,6 +4998,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let mut action_hide_others = None;
     let mut action_show_all = false;
     let mut action_unparent = None;
+    let mut action_parent_to = None;
     let mut action_toggle_fold = None;
     let mut action_duplicate = None;
     let mut action_delete = None;
@@ -4996,17 +5010,21 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
     // Outliner header: Search filter, expand/collapse all, and show/hide all
     ui.horizontal(|ui| {
-        let search_w = (ui.available_width() - 84.0).max(60.0);
+        let spacing = ui.spacing().item_spacing.x;
+        let btn_w = 22.0;
+        let num_buttons = if ed.piece_filter.is_empty() { 3.0 } else { 4.0 };
+        let buttons_total_w = num_buttons * btn_w + num_buttons * spacing;
+        let search_w = (ui.available_width() - buttons_total_w - 6.0).clamp(40.0, 140.0);
         let resp = ui
             .add(egui::TextEdit::singleline(&mut ed.piece_filter).hint_text("Filter pieces…").desired_width(search_w));
         tips::hover(resp, "Filter pieces by name");
         if !ed.piece_filter.is_empty() && tips::hover(ui.small_button("✕"), "Clear filter").clicked() {
             ed.piece_filter.clear();
         }
-        if tips::hover(ui.add(egui::Button::selectable(false, "▾▾").frame(false)), "Expand all").clicked() {
+        if widgets::small_icon_button(ui, Icon::ExpandAll, "Expand all").clicked() {
             ed.folded_pieces.clear();
         }
-        if tips::hover(ui.add(egui::Button::selectable(false, "▸▸").frame(false)), "Collapse all").clicked() {
+        if widgets::small_icon_button(ui, Icon::CollapseAll, "Collapse all").clicked() {
             ed.folded_pieces.clear();
             for p in &ed.scene.pieces {
                 if !ed.scene.children_of(p.id).is_empty() {
@@ -5017,7 +5035,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         let all_vis = !ed.scene.pieces.is_empty() && ed.scene.pieces.iter().all(|p| p.visible);
         let vis_icon = if all_vis { Icon::Eye } else { Icon::EyeOff };
         let vis_tip = if all_vis { "Hide all pieces" } else { "Show all pieces" };
-        if widgets::icon_button(ui, vis_icon, false, true, vis_tip).clicked() {
+        if widgets::small_icon_button(ui, vis_icon, vis_tip).clicked() {
             let target_vis = !all_vis;
             for p in &mut ed.scene.pieces {
                 p.visible = target_vis;
@@ -5106,14 +5124,12 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
                     // Fold chevron
                     if row.has_children {
-                        let chev = if row.is_folded { "▸" } else { "▾" };
                         let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
-                        let btn = ui.add(egui::Button::selectable(false, chev).frame(false));
-                        if tips::hover(btn, tip).clicked() {
+                        if widgets::fold_chevron(ui, !row.is_folded, tip).clicked() {
                             toggle_fold = Some(piece_id);
                         }
                     } else {
-                        ui.allocate_space(egui::vec2(12.0, 12.0));
+                        ui.allocate_space(egui::vec2(14.0, 18.0));
                     }
 
                     // Visibility toggle
@@ -5250,7 +5266,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         // Right-click context menu
         let has_children = row.has_children;
         let is_folded = row.is_folded;
-        frame_resp.context_menu(|ui| {
+        frame_resp.container_context_menu(|ui| {
             ui.set_min_width(150.0);
             if ui.button("Rename").clicked() {
                 action_rename = Some((piece_id, piece_name.clone()));
@@ -5282,6 +5298,21 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             if is_parented && ui.button("Unparent").clicked() {
                 action_unparent = Some(piece_id);
                 ui.close();
+            }
+            let can_have_parent =
+                ed.scene.pieces.iter().any(|other| other.id != piece_id && ed.scene.can_parent(piece_id, other.id));
+            if can_have_parent {
+                ui.menu_button("Parent to…", |ui| {
+                    for other in &ed.scene.pieces {
+                        if other.id != piece_id && ed.scene.can_parent(piece_id, other.id) {
+                            let is_current = is_parented && ed.scene.parent_of(piece_id) == Some(other.id);
+                            if ui.selectable_label(is_current, &other.name).clicked() {
+                                action_parent_to = Some((piece_id, other.id));
+                                ui.close();
+                            }
+                        }
+                    }
+                });
             }
             if has_children {
                 let fold_text = if is_folded { "Unfold children" } else { "Fold children" };
@@ -5316,20 +5347,22 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     // Drop zone at bottom to unparent and place at end
     if !ed.scene.pieces.is_empty() {
         let (bottom_rect, bottom_resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
-        if bottom_resp.dnd_hover_payload::<PieceDrag>().is_some() {
+            ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+        if bottom_resp.contains_pointer() && bottom_resp.dnd_hover_payload::<PieceDrag>().is_some() {
             let p = ui.painter();
             let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
             p.hline(bottom_rect.x_range(), bottom_rect.center().y, stroke);
         }
-        if let Some(from) = bottom_resp.dnd_release_payload::<PieceDrag>() {
+        if bottom_resp.contains_pointer()
+            && ui.input(|i| i.pointer.any_released())
+            && let Some(from) = bottom_resp.dnd_release_payload::<PieceDrag>()
+        {
             let from = from.0;
             if from < ed.scene.pieces.len() {
                 let id = ed.scene.pieces[from].id;
-                ed.set_piece_parent(id, None);
-                let last = ed.scene.pieces.len() - 1;
-                if from != last {
-                    ed.reorder_piece(from, last);
+                if let Some(last_piece) = ed.scene.pieces.last() {
+                    let target_id = last_piece.id;
+                    ed.place_piece_relative(id, None, target_id, true);
                 }
             }
         }
@@ -5337,11 +5370,11 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
     if let Some(act) = drop_action {
         match act {
-            PieceDropAction::Reorder { from, to } => ed.reorder_piece(from, to),
-            PieceDropAction::Parent { from, target } => {
-                let child_id = ed.scene.pieces[from].id;
-                let target_id = ed.scene.pieces[target].id;
-                ed.set_piece_parent(child_id, Some(target_id));
+            PieceDropAction::Parent { child_id, parent_id } => {
+                ed.place_piece_as_child(child_id, parent_id);
+            }
+            PieceDropAction::Insert { piece_id, new_parent, target_id, is_after } => {
+                ed.place_piece_relative(piece_id, new_parent, target_id, is_after);
             }
         }
     }
@@ -5371,6 +5404,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if let Some(id) = action_unparent {
         ed.set_piece_parent(id, None);
+    }
+    if let Some((child_id, parent_id)) = action_parent_to {
+        ed.place_piece_as_child(child_id, parent_id);
     }
     if let Some(id) = action_toggle_fold.or(toggle_fold) {
         if ed.folded_pieces.contains(&id) {

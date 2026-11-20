@@ -10591,6 +10591,87 @@ mod tests {
     }
 
     #[test]
+    fn place_piece_as_child_moves_child_to_another_parent_and_undoes() {
+        let mut e = editor();
+        e.duplicate_active(false); // piece 1
+        e.duplicate_active(false); // piece 2
+        let p0 = e.scene.pieces[0].id; // Parent A
+        let p1 = e.scene.pieces[1].id; // Child
+        let p2 = e.scene.pieces[2].id; // Parent B
+
+        assert!(e.set_piece_parent(p1, Some(p0)));
+        assert_eq!(e.scene.parent_of(p1), Some(p0));
+
+        // Move child p1 to parent B (p2)
+        e.place_piece_as_child(p1, p2);
+        assert_eq!(e.scene.parent_of(p1), Some(p2));
+
+        // Undo restores parent p0
+        e.undo();
+        assert_eq!(e.scene.parent_of(p1), Some(p0));
+
+        // Redo moves it back to parent p2
+        e.redo();
+        assert_eq!(e.scene.parent_of(p1), Some(p2));
+    }
+
+    #[test]
+    fn place_piece_relative_unparents_child_when_dropped_next_to_root() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        let p0 = e.scene.pieces[0].id;
+        let p1 = e.scene.pieces[1].id;
+        let p2 = e.scene.pieces[2].id;
+
+        assert!(e.set_piece_parent(p1, Some(p0)));
+        assert_eq!(e.scene.parent_of(p1), Some(p0));
+
+        // Move child p1 relative to root p2 with new_parent = None (unparent)
+        e.place_piece_relative(p1, None, p2, true);
+        assert_eq!(e.scene.parent_of(p1), None);
+        // p1 should be after p2
+        let idx1 = e.scene.index_of(p1).unwrap();
+        let idx2 = e.scene.index_of(p2).unwrap();
+        assert!(idx1 > idx2);
+
+        // Undo restores parent p0
+        e.undo();
+        assert_eq!(e.scene.parent_of(p1), Some(p0));
+
+        // Redo unparents again
+        e.redo();
+        assert_eq!(e.scene.parent_of(p1), None);
+    }
+
+    #[test]
+    fn place_piece_relative_moves_child_between_parents() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        let parent_a = e.scene.pieces[0].id;
+        let child_a = e.scene.pieces[1].id;
+        let parent_b = e.scene.pieces[2].id;
+        let child_b = e.scene.pieces[3].id;
+
+        assert!(e.set_piece_parent(child_a, Some(parent_a)));
+        assert!(e.set_piece_parent(child_b, Some(parent_b)));
+
+        // Move child_a relative to child_b under parent_b
+        e.place_piece_relative(child_a, Some(parent_b), child_b, true);
+        assert_eq!(e.scene.parent_of(child_a), Some(parent_b));
+
+        // Undo restores child_a to parent_a
+        e.undo();
+        assert_eq!(e.scene.parent_of(child_a), Some(parent_a));
+
+        // Redo moves child_a to parent_b
+        e.redo();
+        assert_eq!(e.scene.parent_of(child_a), Some(parent_b));
+    }
+
+    #[test]
     fn parametric_primitives_are_low_poly_unless_remeshed() {
         let mut e = editor();
         // The Add menu opens a window with a low-poly preview; nothing is added yet.

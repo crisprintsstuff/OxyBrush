@@ -302,6 +302,10 @@ pub enum Icon {
     ModeAuto,
     /// Drag handle grip (two vertical columns of dots).
     Grip,
+    ChevronDown,
+    ChevronRight,
+    ExpandAll,
+    CollapseAll,
 }
 
 /// Paint an icon into `rect` with color `c`.
@@ -412,6 +416,42 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 vec![ctr + vec2(-l, -d * l * 0.5), ctr + vec2(0.0, d * l * 0.5), ctr + vec2(l, -d * l * 0.5)],
                 s,
             ));
+        }
+        Icon::ChevronDown => {
+            let l = r * 0.55;
+            p.add(Shape::line(vec![ctr + vec2(-l, -l * 0.4), ctr + vec2(0.0, l * 0.5), ctr + vec2(l, -l * 0.4)], s));
+        }
+        Icon::ChevronRight => {
+            let l = r * 0.55;
+            p.add(Shape::line(vec![ctr + vec2(-l * 0.4, -l), ctr + vec2(l * 0.5, 0.0), ctr + vec2(-l * 0.4, l)], s));
+        }
+        Icon::ExpandAll => {
+            let l = r * 0.48;
+            let dy = r * 0.32;
+            for y_off in [-dy, dy] {
+                p.add(Shape::line(
+                    vec![
+                        ctr + vec2(-l, y_off - l * 0.35),
+                        ctr + vec2(0.0, y_off + l * 0.45),
+                        ctr + vec2(l, y_off - l * 0.35),
+                    ],
+                    s,
+                ));
+            }
+        }
+        Icon::CollapseAll => {
+            let l = r * 0.48;
+            let dx = r * 0.32;
+            for x_off in [-dx, dx] {
+                p.add(Shape::line(
+                    vec![
+                        ctr + vec2(x_off - l * 0.35, -l),
+                        ctr + vec2(x_off + l * 0.45, 0.0),
+                        ctr + vec2(x_off - l * 0.35, l),
+                    ],
+                    s,
+                ));
+            }
         }
         Icon::Help => {
             p.circle_stroke(ctr, r * 0.75, s);
@@ -673,6 +713,35 @@ pub fn icon_button(ui: &mut Ui, icon: Icon, selected: bool, enabled: bool, toolt
             v.text_color()
         };
         paint_icon(ui.painter(), rect.shrink(5.0), icon, fg);
+    }
+    crate::tips::hover(response, tooltip)
+}
+
+/// Compact square icon button (e.g. for section headers).
+pub fn small_icon_button(ui: &mut Ui, icon: Icon, tooltip: &str) -> Response {
+    let size = Vec2::splat(22.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let bg = if response.hovered() { v.widgets.hovered.weak_bg_fill } else { Color32::TRANSPARENT };
+        ui.painter().rect(rect, 4.0, bg, Stroke::NONE, egui::StrokeKind::Inside);
+        let fg = if response.hovered() { v.text_color() } else { v.weak_text_color().linear_multiply(0.75) };
+        paint_icon(ui.painter(), rect.shrink(3.0), icon, fg);
+    }
+    crate::tips::hover(response, tooltip)
+}
+
+/// Small vector fold/unfold chevron for tree rows.
+pub fn fold_chevron(ui: &mut Ui, open: bool, tooltip: &str) -> Response {
+    let size = vec2(14.0, 18.0);
+    let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
+    if ui.is_rect_visible(rect) {
+        let v = ui.visuals();
+        let fg = if response.hovered() { v.text_color() } else { v.weak_text_color().linear_multiply(0.65) };
+        let icon = if open { Icon::ChevronDown } else { Icon::ChevronRight };
+        paint_icon(ui.painter(), rect.shrink(2.0), icon, fg);
     }
     crate::tips::hover(response, tooltip)
 }
