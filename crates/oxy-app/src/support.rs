@@ -143,28 +143,72 @@ pub fn encode(s: &str) -> String {
 }
 
 /// Load a PNG as a brush alpha (luminance; transparent pixels count as black).
+/// Supports both 8-bit and 16-bit PNGs (preserving 16-bit depth).
 pub fn load_alpha_png(path: &std::path::Path) -> Result<oxy_sculpt::Alpha, String> {
     let file = File::open(path).map_err(|e| e.to_string())?;
-    let mut decoder = png::Decoder::new_with_limits(io::BufReader::new(file), png::Limits { bytes: 256 << 20 });
-    decoder.set_transformations(png::Transformations::normalize_to_color8());
+    let mut decoder = png::Decoder::new_with_limits(io::BufReader::new(file), png::Limits { bytes: 512 << 20 });
+    decoder.set_transformations(png::Transformations::EXPAND);
     let mut reader = decoder.read_info().map_err(|e| e.to_string())?;
     let mut buf = vec![0; reader.output_buffer_size().ok_or("image too large")?];
     let info = reader.next_frame(&mut buf).map_err(|e| e.to_string())?;
     let (w, h) = (info.width, info.height);
     let px = &buf[..info.buffer_size()];
-    let luma: Vec<u8> = match info.color_type {
-        png::ColorType::Grayscale => px.to_vec(),
-        png::ColorType::GrayscaleAlpha => {
-            px.as_chunks::<2>().0.iter().map(|p| ((p[0] as u16 * p[1] as u16) / 255) as u8).collect()
-        }
-        png::ColorType::Rgb => px.as_chunks::<3>().0.iter().map(|p| luminance(p)).collect(),
-        png::ColorType::Rgba => {
-            px.as_chunks::<4>().0.iter().map(|p| ((luminance(p) as u16 * p[3] as u16) / 255) as u8).collect()
-        }
-        other => return Err(format!("unsupported PNG color type {other:?}")),
-    };
     let name = path.file_stem().map_or("Alpha".into(), |s| s.to_string_lossy().into_owned());
-    oxy_sculpt::Alpha::from_luma(name, w, h, &luma).ok_or_else(|| "empty image".to_string())
+
+    if info.bit_depth == png::BitDepth::Sixteen {
+        let luma: Vec<u16> = match info.color_type {
+            png::ColorType::Grayscale => px.as_chunks::<2>().0.iter().map(|p| u16::from_be_bytes(*p)).collect(),
+            png::ColorType::GrayscaleAlpha => px
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| {
+                    let g = u16::from_be_bytes([p[0], p[1]]) as u32;
+                    let a = u16::from_be_bytes([p[2], p[3]]) as u32;
+                    ((g * a) / 65535) as u16
+                })
+                .collect(),
+            png::ColorType::Rgb => px
+                .as_chunks::<6>()
+                .0
+                .iter()
+                .map(|p| {
+                    let r = u16::from_be_bytes([p[0], p[1]]);
+                    let g = u16::from_be_bytes([p[2], p[3]]);
+                    let b = u16::from_be_bytes([p[4], p[5]]);
+                    luminance16(r, g, b)
+                })
+                .collect(),
+            png::ColorType::Rgba => px
+                .as_chunks::<8>()
+                .0
+                .iter()
+                .map(|p| {
+                    let r = u16::from_be_bytes([p[0], p[1]]);
+                    let g = u16::from_be_bytes([p[2], p[3]]);
+                    let b = u16::from_be_bytes([p[4], p[5]]);
+                    let a = u16::from_be_bytes([p[6], p[7]]) as u32;
+                    let l = luminance16(r, g, b) as u32;
+                    ((l * a) / 65535) as u16
+                })
+                .collect(),
+            other => return Err(format!("unsupported PNG color type {other:?}")),
+        };
+        oxy_sculpt::Alpha::from_luma16(name, w, h, &luma).ok_or_else(|| "empty image".to_string())
+    } else {
+        let luma: Vec<u8> = match info.color_type {
+            png::ColorType::Grayscale => px.to_vec(),
+            png::ColorType::GrayscaleAlpha => {
+                px.as_chunks::<2>().0.iter().map(|p| ((p[0] as u16 * p[1] as u16) / 255) as u8).collect()
+            }
+            png::ColorType::Rgb => px.as_chunks::<3>().0.iter().map(|p| luminance(p)).collect(),
+            png::ColorType::Rgba => {
+                px.as_chunks::<4>().0.iter().map(|p| ((luminance(p) as u16 * p[3] as u16) / 255) as u8).collect()
+            }
+            other => return Err(format!("unsupported PNG color type {other:?}")),
+        };
+        oxy_sculpt::Alpha::from_luma(name, w, h, &luma).ok_or_else(|| "empty image".to_string())
+    }
 }
 
 /// Write `alpha` as a 16-bit grayscale PNG (white = 1), for editing in a 2D
@@ -195,6 +239,10 @@ pub fn write_alpha_png(alpha: &oxy_sculpt::Alpha, path: &std::path::Path) -> Res
 
 fn luminance(p: &[u8]) -> u8 {
     (0.2126 * p[0] as f32 + 0.7152 * p[1] as f32 + 0.0722 * p[2] as f32).round() as u8
+}
+
+fn luminance16(r: u16, g: u16, b: u16) -> u16 {
+    (0.2126 * r as f32 + 0.7152 * g as f32 + 0.0722 * b as f32).round() as u16
 }
 
 /// macOS: the system tool that registers an app's document types.
