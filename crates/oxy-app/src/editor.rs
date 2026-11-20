@@ -1333,6 +1333,8 @@ pub struct Editor {
     pub renaming_piece: Option<u64>,
     /// Text buffer for inline rename.
     pub rename_text: String,
+    /// Maximum visible height of the scrollable Pieces outliner box in the inspector.
+    pub pieces_box_height: f32,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -1680,6 +1682,7 @@ impl Default for Editor {
             piece_filter: String::new(),
             renaming_piece: None,
             rename_text: String::new(),
+            pieces_box_height: 240.0,
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
@@ -2054,6 +2057,7 @@ impl Editor {
             settings_panel: self.show_inspector,
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
+            pieces_box_height: self.pieces_box_height,
         }
     }
 
@@ -2343,6 +2347,7 @@ impl Editor {
         self.show_inspector = s.settings_panel;
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
+        self.pieces_box_height = s.pieces_box_height;
         if !s.remember_brushes {
             return;
         }
@@ -12858,6 +12863,7 @@ mod tests {
             settings_panel: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
+            pieces_box_height: 320.0,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();

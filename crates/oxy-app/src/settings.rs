@@ -488,6 +488,8 @@ pub struct Settings {
     pub alpha_capture_size: u32,
     /// When dragging empty space in a panel scrolls it (RFC 0015).
     pub panel_drag_scroll: PanelDragScroll,
+    /// Maximum visible height of the scrollable Pieces outliner box in the inspector.
+    pub pieces_box_height: f32,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -1012,6 +1014,7 @@ impl Default for Settings {
             settings_panel: true,
             alpha_capture_size: 1024,
             panel_drag_scroll: PanelDragScroll::Pen,
+            pieces_box_height: 240.0,
         }
     }
 }
@@ -1179,6 +1182,7 @@ impl Settings {
             + &format!("settings_panel = {}\n", self.settings_panel)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
+            + &format!("pieces_box_height = {}\n", self.pieces_box_height)
             + &format!(
                 "ui_tint = {}\nui_tint_intensity = {}\nui_brightness = {}\n",
                 self.ui_tint_color.map_or("none".to_string(), |[r, g, b]| format!("{r}, {g}, {b}")),
@@ -1486,6 +1490,13 @@ impl Settings {
                 "panel_drag_scroll" => {
                     s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
                 }
+                "pieces_box_height" => {
+                    s.pieces_box_height = v
+                        .parse::<f32>()
+                        .ok()
+                        .filter(|h| h.is_finite())
+                        .map_or(s.pieces_box_height, |h| h.clamp(100.0, 800.0))
+                }
                 "alpha_capture_size" => {
                     s.alpha_capture_size = v
                         .parse()
@@ -1781,6 +1792,7 @@ mod tests {
             settings_panel: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
+            pieces_box_height: 280.0,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate recent entries are dropped and the list is capped.
