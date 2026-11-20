@@ -778,7 +778,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
         if ed.show_inspector {
-            inspector_panel.resizable(true).default_size(m.inspector_width).show(ui, |ui| {
+            inspector_panel.resizable(true).min_size(180.0).default_size(m.inspector_width).show(ui, |ui| {
                 // Fill the panel's width whatever is open: a scroll area that
                 // shrinks to its content made the panel grow and shrink as
                 // sections opened and closed (#80). Dragging its edge still
@@ -4533,7 +4533,7 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
 /// Capture from view with its size, and Export alpha… for the selected one.
 fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         let busy = ed.job.is_some();
         if ui.add_enabled_ui(!busy, |ui| tips::button(ui, "Capture from view", Cmd::CaptureAlpha)).inner.clicked() {
             ed.capture_alpha();
@@ -4548,11 +4548,14 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
             })
             .response;
         tips::hover(r, plain::CAPTURE_SIZE);
+        if ui
+            .add_enabled_ui(ed.alpha.is_some(), |ui| tips::button(ui, "Export alpha…", Cmd::ExportAlpha))
+            .inner
+            .clicked()
+        {
+            ed.request_export_alpha = true;
+        }
     });
-    if ui.add_enabled_ui(ed.alpha.is_some(), |ui| tips::button(ui, "Export alpha…", Cmd::ExportAlpha)).inner.clicked()
-    {
-        ed.request_export_alpha = true;
-    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -4729,12 +4732,15 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         }
                     }
                     if i == active {
+                        let text_w = (ui.available_width() - 80.0).clamp(50.0, 120.0);
                         tips::hover(
-                            ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(120.0)),
+                            ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(text_w)),
                             plain::PIECE_RENAME,
                         );
                     } else {
-                        let btn = ui.add(egui::Button::selectable(false, &p.name).sense(egui::Sense::click_and_drag()));
+                        let btn = ui.add(
+                            egui::Button::selectable(false, &p.name).sense(egui::Sense::click_and_drag()).truncate(),
+                        );
                         let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
                         if btn.dragged() {
                             btn.dnd_set_drag_payload(PieceDrag(i));
@@ -5044,7 +5050,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         tips::hover(ui.add(crate::widgets::Bar(size_slider(ed).suffix(suffix))), Cmd::Radius.tip());
         ui.end_row();
         ui.label("Size");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             let mut on_model = ed.radius_on_model;
             tips::hover(ui.selectable_value(&mut on_model, false, "On screen"), plain::SIZE_ON_SCREEN);
             tips::hover(ui.selectable_value(&mut on_model, true, "On the model"), plain::SIZE_ON_MODEL);
@@ -5057,7 +5063,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         if ed.brush_kind != BrushKind::PaintGroups {
             let shift_smooth = ed.brush_roles().shift;
             let k = if shift_smooth { BrushKind::Smooth } else { ed.brush_kind };
-            let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
+            let strength_label = if shift_smooth { "Shift smooth" } else { "Strength" };
             ui.label(strength_label);
             tips::hover(
                 ui.add(crate::widgets::Bar(egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2))),
@@ -5250,7 +5256,7 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spray, 0.0..=1.0))), plain::SPRAY);
         ui.end_row();
         ui.label("Pressure curve");
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             tips::hover(
                 ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))),
                 plain::PRESSURE_CURVE,
@@ -5266,7 +5272,7 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
 
 fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
     let current = ed.alpha.and_then(|i| ed.alphas.get(i)).map_or("None".to_string(), |a| a.name.clone());
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         tips::hover(
             egui::ComboBox::from_id_salt("alpha")
                 .selected_text(current)
@@ -5283,8 +5289,8 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
         if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
             ed.request_load_alpha = true;
         }
-        capture_controls(ui, ed);
     });
+    capture_controls(ui, ed);
     match ed.alpha.and_then(|i| ed.alphas.get(i)).cloned() {
         Some(a) => {
             ui.horizontal(|ui| {
@@ -5313,13 +5319,13 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Mirror");
         widgets::chip(ui, &mut ed.symmetry.x, "X", &Cmd::SymX.tip_in(&ed.keymap));
         widgets::chip(ui, &mut ed.symmetry.y, "Y", &Cmd::SymY.tip_in(&ed.keymap));
         widgets::chip(ui, &mut ed.symmetry.z, "Z", &Cmd::SymZ.tip_in(&ed.keymap));
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Radial");
         tips::hover(ui.add(egui::DragValue::new(&mut ed.symmetry.radial).range(0..=64).speed(0.1)), plain::RADIAL);
         tips::hover(
@@ -5337,7 +5343,7 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
             plain::RADIAL_AXIS,
         );
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Centre");
         if tips::hover(ui.small_button("Recentre"), plain::SYM_RECENTER).clicked() {
             ed.recenter_symmetry(false);
@@ -5376,7 +5382,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     ui.add_space(4.0);
     ui.label(RichText::new("Subdivision levels").small().weak());
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         match ed.multires_level() {
             Some((a, c)) => {
                 tips::hover(ui.label(format!("Level {} of {c}", a + 1)), plain::LEVELS);
@@ -5451,7 +5457,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
     });
     if ed.remesh_shell {
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("Wall");
             for side in oxy_topo::ShellSide::ALL {
                 tips::hover(
@@ -5478,7 +5484,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             );
         }
     }
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Engine");
         egui::ComboBox::from_id_salt("remesh_engine")
             .selected_text(match ed.remesh_engine {
@@ -5498,7 +5504,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.subdivide(ed.subdivision_smooth);
         }
     });
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Keep");
         tips::hover(
             ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))),
@@ -5513,7 +5519,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 fn groups_section(ui: &mut Ui, ed: &mut Editor) {
     tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Show face group colors", Cmd::GroupColors);
     tips::check_km(ui, &ed.keymap, &mut ed.view.show_mask, "Show mask", Cmd::ShowMask);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Selection");
         tips::hover(ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle"), plain::SELECTION_RECT);
         tips::hover(ui.selectable_value(&mut ed.selection_lasso, true, "Lasso"), Cmd::Lasso.tip());
@@ -5537,7 +5543,7 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if tips::button(ui, "Extract mask…", Cmd::ExtractMask).clicked() {
             ed.begin_extract();
         }
