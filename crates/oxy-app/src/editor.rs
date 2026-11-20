@@ -2084,7 +2084,14 @@ impl Editor {
     /// The color brush icons are drawn in, or `None` for the original clay.
     pub fn brush_icon_rgb(&self) -> Option<[u8; 3]> {
         match self.brush_icon_color {
-            crate::settings::BrushIconColor::Clay => None,
+            crate::settings::BrushIconColor::Clay => {
+                if self.theme == crate::settings::ThemePreset::Sculptor {
+                    Some(crate::settings::SILVER_CLAY_RGB)
+                } else {
+                    None
+                }
+            }
+            crate::settings::BrushIconColor::Silver => Some(crate::settings::SILVER_CLAY_RGB),
             crate::settings::BrushIconColor::Accent => Some(self.accent.rgb(self.custom_accent)),
             crate::settings::BrushIconColor::Custom => Some(self.brush_icon_custom),
         }

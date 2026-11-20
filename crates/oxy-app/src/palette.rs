@@ -343,6 +343,17 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Guide, "help manual documentation", |e| e.guide.open = true),
         cmd(ed, Cmd::Welcome, "help start", |e| e.show_welcome = true),
         Entry {
+            label: "Theme: Sculptor".into(),
+            detail: String::new(),
+            keywords: "theme style dark sculptor clay charcoal tactile cards sliders appearance",
+            tooltip: "Tactile studio with dark charcoal panels, concentric clay sliders and card brush tiles".into(),
+            act: Act::Run(|e| {
+                e.theme = crate::settings::ThemePreset::Sculptor;
+                e.high_contrast = false;
+                e.status = "Theme: Sculptor".into();
+            }),
+        },
+        Entry {
             label: "Theme: Studio".into(),
             detail: String::new(),
             keywords: "theme style dark studio flat neutral appearance",

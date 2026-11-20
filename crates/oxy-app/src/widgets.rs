@@ -753,6 +753,9 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, k
     let (rect, response) = ui.allocate_exact_size(Vec2::splat(size), Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, k.label()));
     if ui.is_rect_visible(rect) {
+        if sculptor_style() && selected {
+            ui.painter().rect_filled(rect.shrink(1.0), 8.0, Color32::from_rgb(40, 42, 48));
+        }
         let tex = brush_texture(ui.ctx(), k);
         ui.painter().image(
             tex.id(),
@@ -762,13 +765,14 @@ pub fn brush_icon_button(ui: &mut Ui, k: BrushKind, selected: bool, size: f32, k
         );
         let accent = ui.visuals().selection.stroke.color;
         let stroke = if selected {
-            Stroke::new(1.5, accent)
+            if sculptor_style() { Stroke::new(1.0, Color32::from_rgb(72, 76, 85)) } else { Stroke::new(1.5, accent) }
         } else if response.hovered() {
             Stroke::new(1.0, Color32::from_gray(150))
         } else {
             Stroke::NONE
         };
-        ui.painter().rect_stroke(rect.shrink(1.0), 6.0, stroke, egui::StrokeKind::Inside);
+        let corner = if sculptor_style() { 8.0 } else { 6.0 };
+        ui.painter().rect_stroke(rect.shrink(1.0), corner, stroke, egui::StrokeKind::Inside);
     }
     crate::tips::hover(response, crate::tips::brush_tip(k, key))
 }
@@ -1023,39 +1027,88 @@ pub fn thumb_sized(
     response.widget_info(|| egui::WidgetInfo::selected(Role::Button, true, selected, label));
     if ui.is_rect_visible(rect) {
         let v = ui.visuals();
-        let img = Rect::from_min_size(rect.min, Vec2::splat(size));
         let accent = ui.visuals().selection.stroke.color;
-        let stroke = if selected {
-            Stroke::new(1.5, accent)
-        } else if response.hovered() {
-            Stroke::new(1.0, Color32::from_gray(140))
-        } else {
-            Stroke::NONE
-        };
-        ui.painter().rect(img, 5.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
-        if let Some(t) = tex {
-            ui.painter().image(
-                t.id(),
-                img.shrink(3.0),
-                Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
-                Color32::WHITE,
+        if sculptor_style() {
+            let card_rect = rect.shrink2(vec2(1.0, 1.0));
+            let (bg, stroke) = if selected {
+                (Color32::from_rgb(40, 42, 48), Stroke::new(1.0, Color32::from_rgb(72, 76, 85)))
+            } else if response.hovered() {
+                (Color32::from_rgb(34, 36, 42), Stroke::new(1.0, Color32::from_rgb(58, 62, 70)))
+            } else {
+                (Color32::TRANSPARENT, Stroke::NONE)
+            };
+            ui.painter().rect(card_rect, 8.0, bg, stroke, egui::StrokeKind::Inside);
+            let img = Rect::from_center_size(
+                pos2(card_rect.center().x, card_rect.top() + (size - 2.0) * 0.5 + 2.0),
+                Vec2::splat(size - 6.0),
+            );
+            if let Some(t) = tex {
+                ui.painter().image(t.id(), img, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            } else {
+                ui.painter().text(
+                    img.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "None",
+                    egui::FontId::proportional(11.0),
+                    v.weak_text_color(),
+                );
+            }
+            let text_color = if selected {
+                Color32::from_rgb(230, 232, 238)
+            } else if response.hovered() {
+                Color32::from_rgb(210, 214, 222)
+            } else {
+                Color32::from_rgb(175, 178, 186)
+            };
+            let galley = egui::WidgetText::from(egui::RichText::new(label).size(10.5)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                size - 4.0,
+                egui::TextStyle::Small,
+            );
+            ui.painter().galley(
+                pos2(card_rect.center().x - galley.size().x / 2.0, card_rect.bottom() - 15.0),
+                galley,
+                text_color,
             );
         } else {
-            ui.painter().text(
-                img.center(),
-                egui::Align2::CENTER_CENTER,
-                "None",
-                egui::FontId::proportional(11.0),
-                v.weak_text_color(),
+            let img = Rect::from_min_size(rect.min, Vec2::splat(size));
+            let stroke = if selected {
+                Stroke::new(1.5, accent)
+            } else if response.hovered() {
+                Stroke::new(1.0, Color32::from_gray(140))
+            } else {
+                Stroke::NONE
+            };
+            ui.painter().rect(img, 5.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
+            if let Some(t) = tex {
+                ui.painter().image(
+                    t.id(),
+                    img.shrink(3.0),
+                    Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)),
+                    Color32::WHITE,
+                );
+            } else {
+                ui.painter().text(
+                    img.center(),
+                    egui::Align2::CENTER_CENTER,
+                    "None",
+                    egui::FontId::proportional(11.0),
+                    v.weak_text_color(),
+                );
+            }
+            let galley = egui::WidgetText::from(egui::RichText::new(label).size(10.0)).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Truncate),
+                size,
+                egui::TextStyle::Small,
+            );
+            ui.painter().galley(
+                pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 1.0),
+                galley,
+                v.text_color(),
             );
         }
-        let galley = egui::WidgetText::from(egui::RichText::new(label).size(10.0)).into_galley(
-            ui,
-            Some(egui::TextWrapMode::Truncate),
-            size,
-            egui::TextStyle::Small,
-        );
-        ui.painter().galley(pos2(img.center().x - galley.size().x / 2.0, img.bottom() + 1.0), galley, v.text_color());
     }
     crate::tips::hover(response, tooltip)
 }
@@ -1095,6 +1148,7 @@ fn srgb_to_linear(rgb: [u8; 3]) -> [f32; 3] {
 }
 
 static STUDIO_STYLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SCULPTOR_STYLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn set_studio_style(on: bool) {
     STUDIO_STYLE.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -1102,6 +1156,14 @@ pub fn set_studio_style(on: bool) {
 
 pub fn studio_style() -> bool {
     STUDIO_STYLE.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn set_sculptor_style(on: bool) {
+    SCULPTOR_STYLE.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn sculptor_style() -> bool {
+    SCULPTOR_STYLE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// How much of the usual corner radius the Studio theme keeps: a little
@@ -1115,26 +1177,26 @@ pub fn rounding(r: f32) -> f32 {
 }
 
 /// A slider that, in the Studio theme, draws its handle as a solid bar with
-/// no outline. Elsewhere it is egui's slider unchanged.
-///
-/// egui paints an idle handle in the rail's own colour and makes it visible
-/// with an outline, so the outline can't simply be switched off. Instead the
-/// handle is found among the shapes the slider just painted (the last
-/// outlined rectangle taller than it is wide) and repainted: filled with the
-/// outline's colour while idle, or keeping its accent fill while hovered or
-/// dragged, and with no outline either way.
+/// no outline, and in the Sculptor theme draws a pill track with a concentric
+/// circle knob. Elsewhere it is egui's slider unchanged.
 pub struct Bar<'a>(pub egui::Slider<'a>);
 
 impl egui::Widget for Bar<'_> {
     fn ui(self, ui: &mut Ui) -> Response {
-        if !studio_style() {
+        if !studio_style() && !sculptor_style() {
             return ui.add(self.0);
         }
         let layer = ui.layer_id();
         let start = ui.ctx().graphics(|g| g.get(layer).map_or(0, |l| l.next_idx().0));
-        let response = ui.add(self.0);
+        let slider = if sculptor_style() { self.0.trailing_fill(true) } else { self.0 };
+        let response = ui.add(slider);
         let rail = ui.visuals().widgets.inactive.bg_fill;
-        ui.ctx().graphics_mut(|g| solid_handle(g.entry(layer), start, rail));
+        if studio_style() {
+            ui.ctx().graphics_mut(|g| solid_handle(g.entry(layer), start, rail));
+        } else if sculptor_style() {
+            let accent = ui.visuals().selection.stroke.color;
+            ui.ctx().graphics_mut(|g| concentric_handle(g.entry(layer), start, rail, accent));
+        }
         response
     }
 }
@@ -1164,12 +1226,81 @@ fn solid_handle(list: &mut egui::layers::PaintList, start: usize, rail: Color32)
     }
 }
 
+/// Repaints the slider as a pill-shaped track with a concentric circle handle (Sculptor theme).
+fn concentric_handle(list: &mut egui::layers::PaintList, start: usize, rail_fill: Color32, accent: Color32) {
+    let entries = list.all_entries();
+    let mut rail_idx = None;
+    let mut handle_idx = None;
+
+    for (i, c) in entries.enumerate().skip(start) {
+        match &c.shape {
+            Shape::Rect(r) if r.stroke.width > 0.0 && r.rect.height() > r.rect.width() => {
+                handle_idx = Some(i);
+            }
+            Shape::Rect(r) if r.rect.width() > r.rect.height() && rail_idx.is_none() => {
+                rail_idx = Some(i);
+            }
+            _ => {}
+        }
+    }
+
+    let Some(h_idx) = handle_idx else { return };
+
+    // Update rail if found: pill shape, dark recessed fill, and subtle 1px border.
+    if let Some(r_idx) = rail_idx {
+        list.mutate_shape(egui::layers::ShapeIdx(r_idx), |c| {
+            if let Shape::Rect(r) = &mut c.shape {
+                r.fill = rail_fill;
+                r.stroke = Stroke::new(1.0, Color32::from_rgb(60, 63, 72));
+                r.corner_radius = egui::CornerRadius::same((r.rect.height() * 0.5).round().min(255.0) as u8);
+            }
+        });
+    }
+
+    // Update trailing fill rect between rail and handle
+    if let Some(r_idx) = rail_idx {
+        for i in (r_idx + 1)..h_idx {
+            list.mutate_shape(egui::layers::ShapeIdx(i), |c| {
+                if let Shape::Rect(r) = &mut c.shape {
+                    if r.rect.height() > r.rect.width() {
+                        return;
+                    }
+                    r.fill = accent;
+                    let rad = (r.rect.height() * 0.5).round().min(255.0) as u8;
+                    r.corner_radius = egui::CornerRadius { nw: rad, sw: rad, ne: 0, se: 0 };
+                    r.stroke = Stroke::NONE;
+                }
+            });
+        }
+    }
+
+    // Replace handle with concentric target knob: outer accent ring, dark gap, solid accent dot.
+    list.mutate_shape(egui::layers::ShapeIdx(h_idx), |c| {
+        if let Shape::Rect(r) = &mut c.shape {
+            let pos = r.rect.center();
+            let h = r.rect.height();
+            let out_r = (h * 0.58).clamp(8.0, 14.0);
+            let mid_r = out_r * 0.72;
+            let inner_r = out_r * 0.44;
+
+            let knob_shapes = vec![
+                Shape::circle_filled(pos, out_r, accent),
+                Shape::circle_filled(pos, mid_r, Color32::from_rgb(44, 45, 50)),
+                Shape::circle_filled(pos, inner_r, accent),
+            ];
+            c.shape = Shape::Vec(knob_shapes);
+        }
+    });
+}
+
 /// Fill and outline for a selected row or tile, with `tint` the strength of
 /// the accent fill in the other themes.
 pub fn selected_look(v: &egui::Visuals, tint: f32) -> (Color32, Stroke) {
     let accent = v.selection.stroke.color;
     if studio_style() {
         (v.widgets.inactive.weak_bg_fill, Stroke::new(1.0, accent))
+    } else if sculptor_style() {
+        (Color32::from_rgb(40, 42, 48), Stroke::new(1.0, Color32::from_rgb(72, 76, 85)))
     } else {
         (accent.linear_multiply(tint), Stroke::new(1.0, accent))
     }
@@ -1244,6 +1375,39 @@ mod tests {
         solid_handle(&mut list, 0, rail);
         assert_eq!(rect_at(&list, 0).fill, accent);
         assert_eq!(rect_at(&list, 0).stroke, Stroke::NONE);
+    }
+
+    #[test]
+    fn the_sculptor_slider_handle_is_concentric() {
+        let rail = Color32::from_gray(32);
+        let outline = Stroke::new(1.0, Color32::from_gray(190));
+        let accent = Color32::from_rgb(216, 129, 93);
+        let clip = Rect::EVERYTHING;
+        let mut list = egui::layers::PaintList::default();
+        let start = list.next_idx().0;
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(10.0, 0.0), vec2(120.0, 16.0)), rail, Stroke::NONE));
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(10.0, 0.0), vec2(50.0, 16.0)), rail, Stroke::NONE));
+        list.add(clip, rect_shape(Rect::from_min_size(pos2(60.0, -2.0), vec2(6.0, 20.0)), rail, outline));
+        concentric_handle(&mut list, start, rail, accent);
+
+        // Rail has pill rounding and stroke
+        let r = rect_at(&list, 0);
+        assert_eq!(r.fill, rail);
+        assert_eq!(r.stroke.width, 1.0);
+        assert_eq!(r.corner_radius.nw, 8);
+
+        // Trailing fill has accent
+        let fill = rect_at(&list, 1);
+        assert_eq!(fill.fill, accent);
+
+        // Handle is replaced with concentric circle shapes
+        let handle_shape = &list.all_entries().nth(2).unwrap().shape;
+        match handle_shape {
+            Shape::Vec(shapes) => {
+                assert_eq!(shapes.len(), 3);
+            }
+            s => panic!("expected Shape::Vec for concentric knob: {s:?}"),
+        }
     }
 
     #[test]
