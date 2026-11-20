@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.20](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Autodesk FBX import, Sculptor dark slate theme with concentric clay sliders and sculpted icons, upgraded scene outliner with folders and search, and dynamic UI tint and intensity controls. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+> **Beta:** [v4.0.0-beta.20.2](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Autodesk FBX import, Sculptor dark slate theme with concentric clay sliders and sculpted icons, upgraded scene outliner with folders and search, and dynamic UI tint and intensity controls. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
 
 **Highlights**
 
