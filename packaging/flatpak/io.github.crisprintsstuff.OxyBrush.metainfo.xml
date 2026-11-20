@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.20.2" date="2026-11-20" type="development">
+      <description>
+        <p>Fix inspector panel runaway width expansion in Standard and Touch
+        friendly layout presets by enforcing panel max_size bounds. Replace
+        missing font characters for Expand All, Collapse All, and fold chevrons
+        with crisp vector icons. Fix piece row context menus and add a direct
+        Parent to menu. Enhance drag-and-drop parenting, unparenting, and sibling
+        reordering across scene hierarchies.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.20" date="2026-11-20" type="development">
       <description>
         <p>Import Autodesk FBX files spanning modern 7.x binary, ASCII,

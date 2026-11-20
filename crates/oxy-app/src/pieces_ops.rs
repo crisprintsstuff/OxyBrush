@@ -267,6 +267,7 @@ impl Editor {
 
     /// Move the piece at index `from` to index `to`, updating the active index
     /// and recording the move in undo history (#297).
+    #[allow(dead_code)]
     pub fn reorder_piece(&mut self, from: usize, to: usize) {
         if from >= self.scene.pieces.len() || to >= self.scene.pieces.len() || from == to {
             return;
@@ -354,6 +355,127 @@ impl Editor {
             self.set_piece_parent(id, None);
         } else {
             self.status = "Active piece has no parent".into();
+        }
+    }
+
+    /// Reorder piece `piece_id` relative to `target_id` and update its parent to `new_parent`.
+    pub fn place_piece_relative(&mut self, piece_id: u64, new_parent: Option<u64>, target_id: u64, is_after: bool) {
+        if piece_id == target_id {
+            return;
+        }
+        let Some(p) = self.scene.get(piece_id) else { return };
+        let prev_parent = p.parent;
+        let child_name = p.name.clone();
+
+        // Check parenting validity if changing parent
+        if prev_parent != new_parent
+            && let Some(target) = new_parent
+            && !self.scene.can_parent(piece_id, target)
+        {
+            return;
+        }
+
+        let Some(from_idx) = self.scene.index_of(piece_id) else { return };
+        let Some(target_idx) = self.scene.index_of(target_id) else { return };
+
+        let dest_idx = if is_after {
+            let descendants = self.scene.descendants_of(target_id);
+            let last_sub_idx = self
+                .scene
+                .pieces
+                .iter()
+                .enumerate()
+                .filter(|(idx, p)| *idx != from_idx && (p.id == target_id || descendants.contains(&p.id)))
+                .map(|(idx, _)| idx)
+                .max()
+                .unwrap_or(target_idx);
+            last_sub_idx + 1
+        } else {
+            target_idx
+        };
+
+        let insert_idx = if from_idx < dest_idx { dest_idx.saturating_sub(1) } else { dest_idx };
+        let insert_idx = insert_idx.min(self.scene.pieces.len().saturating_sub(1));
+
+        let mut steps = Vec::new();
+
+        if prev_parent != new_parent {
+            self.scene.set_parent(piece_id, new_parent);
+            if let Some(pid) = new_parent {
+                self.folded_pieces.remove(&pid);
+            }
+            steps.push(Step::Parent { piece: piece_id, previous: prev_parent });
+        }
+
+        if from_idx != insert_idx {
+            let active_id = self.scene.try_active().map(|p| p.id);
+            let piece = self.scene.pieces.remove(from_idx);
+            self.scene.pieces.insert(insert_idx, piece);
+            if let Some(i) = active_id.and_then(|id| self.scene.index_of(id)) {
+                self.scene.set_active(i);
+            }
+            steps.push(Step::Reordered { from: from_idx, to: insert_idx });
+        }
+
+        if !steps.is_empty() {
+            let label = if prev_parent != new_parent {
+                if new_parent.is_none() { format!("Unparent {child_name}") } else { format!("Move {child_name}") }
+            } else {
+                format!("Reorder {child_name}")
+            };
+            self.history.record_compound(label, steps);
+            self.status = format!("Moved {child_name}");
+        }
+    }
+
+    /// Parent piece `child_id` to `parent_id`, placing it after `parent_id` and its children.
+    pub fn place_piece_as_child(&mut self, child_id: u64, parent_id: u64) {
+        if child_id == parent_id || !self.scene.can_parent(child_id, parent_id) {
+            return;
+        }
+        let Some(p) = self.scene.get(child_id) else { return };
+        let prev_parent = p.parent;
+        let child_name = p.name.clone();
+        let target_name = self.scene.get(parent_id).map(|p| p.name.clone()).unwrap_or_default();
+
+        let Some(from_idx) = self.scene.index_of(child_id) else { return };
+        let Some(target_idx) = self.scene.index_of(parent_id) else { return };
+
+        let descendants = self.scene.descendants_of(parent_id);
+        let last_sub_idx = self
+            .scene
+            .pieces
+            .iter()
+            .enumerate()
+            .filter(|(idx, p)| *idx != from_idx && (p.id == parent_id || descendants.contains(&p.id)))
+            .map(|(idx, _)| idx)
+            .max()
+            .unwrap_or(target_idx);
+
+        let dest_idx = last_sub_idx + 1;
+        let insert_idx = if from_idx < dest_idx { dest_idx.saturating_sub(1) } else { dest_idx };
+        let insert_idx = insert_idx.min(self.scene.pieces.len().saturating_sub(1));
+
+        let mut steps = Vec::new();
+        if prev_parent != Some(parent_id) {
+            self.scene.set_parent(child_id, Some(parent_id));
+            self.folded_pieces.remove(&parent_id);
+            steps.push(Step::Parent { piece: child_id, previous: prev_parent });
+        }
+
+        if from_idx != insert_idx {
+            let active_id = self.scene.try_active().map(|p| p.id);
+            let piece = self.scene.pieces.remove(from_idx);
+            self.scene.pieces.insert(insert_idx, piece);
+            if let Some(i) = active_id.and_then(|id| self.scene.index_of(id)) {
+                self.scene.set_active(i);
+            }
+            steps.push(Step::Reordered { from: from_idx, to: insert_idx });
+        }
+
+        if !steps.is_empty() {
+            self.history.record_compound(format!("Parent {child_name} under {target_name}"), steps);
+            self.status = format!("Parented {child_name} under {target_name}");
         }
     }
 }

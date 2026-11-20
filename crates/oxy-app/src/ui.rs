@@ -916,13 +916,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             PanelSide::Left => egui::Panel::left(format!("inspector_{key}")),
         };
         if ed.show_inspector {
-            inspector_panel.resizable(true).min_size(180.0).default_size(m.inspector_width).show(ui, |ui| {
-                // Fill the panel's width whatever is open: a scroll area that
-                // shrinks to its content made the panel grow and shrink as
-                // sections opened and closed (#80). Dragging its edge still
-                // resizes it.
-                egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
-            });
+            let max_w = (ui.ctx().input(|i| i.viewport_rect()).width() * 0.45).clamp(m.inspector_width, 500.0);
+            inspector_panel.resizable(true).min_size(180.0).max_size(max_w).default_size(m.inspector_width).show(
+                ui,
+                |ui| {
+                    // Fill the panel's width whatever is open: a scroll area that
+                    // shrinks to its content made the panel grow and shrink as
+                    // sections opened and closed (#80). Dragging its edge still
+                    // resizes it.
+                    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
+                },
+            );
         }
         view_strip(ui, ed);
     }
@@ -4810,8 +4814,8 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
 struct PieceDrag(usize);
 
 enum PieceDropAction {
-    Reorder { from: usize, to: usize },
-    Parent { from: usize, target: usize },
+    Parent { child_id: u64, parent_id: u64 },
+    Insert { piece_id: u64, new_parent: Option<u64>, target_id: u64, is_after: bool },
 }
 
 struct TreeRow {
@@ -4925,49 +4929,58 @@ fn build_tree_rows(scene: &oxy_doc::Scene, folded: &std::collections::HashSet<u6
     rows
 }
 
-/// Drag-and-drop parenting or reordering on piece row `i`.
-fn handle_piece_drop(ui: &Ui, r: &egui::Response, i: usize, scene: &oxy_doc::Scene) -> Option<PieceDropAction> {
+/// Drag-and-drop parenting or reordering on piece row with target index `target_idx`.
+fn handle_piece_drop(
+    ui: &Ui,
+    r: &egui::Response,
+    target_idx: usize,
+    scene: &oxy_doc::Scene,
+) -> Option<PieceDropAction> {
+    if !r.contains_pointer() {
+        return None;
+    }
     let pointer = ui.ctx().pointer_interact_pos()?;
-    let from = r.dnd_hover_payload::<PieceDrag>().or_else(|| r.dnd_release_payload::<PieceDrag>())?.0;
-    if from == i || from >= scene.pieces.len() || i >= scene.pieces.len() {
+    let payload = r.dnd_hover_payload::<PieceDrag>()?;
+    let from = payload.0;
+    if from == target_idx || from >= scene.pieces.len() || target_idx >= scene.pieces.len() {
         return None;
     }
     let child_id = scene.pieces[from].id;
-    let target_id = scene.pieces[i].id;
-    let can_parent = scene.can_parent(child_id, target_id);
+    let target_id = scene.pieces[target_idx].id;
 
+    // A piece cannot be dropped onto itself or any of its descendants
+    if scene.descendants_of(child_id).contains(&target_id) {
+        return None;
+    }
+
+    let can_parent = scene.can_parent(child_id, target_id);
     let h = r.rect.height();
     let y_rel = pointer.y - r.rect.top();
     let is_parent_zone = can_parent && y_rel >= h * 0.25 && y_rel <= h * 0.75;
     let is_after = y_rel > h * 0.5;
 
     // Visual feedback while hovering
-    if r.dnd_hover_payload::<PieceDrag>().is_some() {
-        let p = ui.painter();
-        let stroke_color = ui.visuals().selection.stroke.color;
-        if is_parent_zone {
-            let stroke = EStroke::new(2.0, stroke_color);
-            p.rect_stroke(r.rect.expand(1.0), widgets::rounding(4.0), stroke, egui::StrokeKind::Inside);
-        } else {
-            let stroke = EStroke::new(2.5, stroke_color);
-            let y = if is_after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
-            p.hline(r.rect.x_range(), y, stroke);
-        }
+    let p = ui.painter();
+    let stroke_color = ui.visuals().selection.stroke.color;
+    if is_parent_zone {
+        let stroke = EStroke::new(2.0, stroke_color);
+        p.rect_stroke(r.rect.expand(1.0), widgets::rounding(4.0), stroke, egui::StrokeKind::Inside);
+    } else {
+        let stroke = EStroke::new(2.5, stroke_color);
+        let y = if is_after { r.rect.bottom() + 1.0 } else { r.rect.top() - 1.0 };
+        p.hline(r.rect.x_range(), y, stroke);
     }
 
     // Drop released
-    if r.dnd_release_payload::<PieceDrag>().is_some() {
+    if ui.input(|i| i.pointer.any_released()) {
+        let _ = r.dnd_release_payload::<PieceDrag>();
         if is_parent_zone {
-            return Some(PieceDropAction::Parent { from, target: i });
+            return Some(PieceDropAction::Parent { child_id, parent_id: target_id });
         }
-        let mut to = if is_after { i + 1 } else { i };
-        if from < to {
-            to -= 1;
-        }
-        if from != to {
-            return Some(PieceDropAction::Reorder { from, to });
-        }
+        let target_parent = scene.pieces[target_idx].parent;
+        return Some(PieceDropAction::Insert { piece_id: child_id, new_parent: target_parent, target_id, is_after });
     }
+
     None
 }
 
@@ -4985,6 +4998,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let mut action_hide_others = None;
     let mut action_show_all = false;
     let mut action_unparent = None;
+    let mut action_parent_to = None;
     let mut action_toggle_fold = None;
     let mut action_duplicate = None;
     let mut action_delete = None;
@@ -4996,17 +5010,21 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
     // Outliner header: Search filter, expand/collapse all, and show/hide all
     ui.horizontal(|ui| {
-        let search_w = (ui.available_width() - 84.0).max(60.0);
+        let spacing = ui.spacing().item_spacing.x;
+        let btn_w = 22.0;
+        let num_buttons = if ed.piece_filter.is_empty() { 3.0 } else { 4.0 };
+        let buttons_total_w = num_buttons * btn_w + num_buttons * spacing;
+        let search_w = (ui.available_width() - buttons_total_w - 6.0).clamp(40.0, 140.0);
         let resp = ui
             .add(egui::TextEdit::singleline(&mut ed.piece_filter).hint_text("Filter pieces…").desired_width(search_w));
         tips::hover(resp, "Filter pieces by name");
         if !ed.piece_filter.is_empty() && tips::hover(ui.small_button("✕"), "Clear filter").clicked() {
             ed.piece_filter.clear();
         }
-        if tips::hover(ui.add(egui::Button::selectable(false, "▾▾").frame(false)), "Expand all").clicked() {
+        if widgets::small_icon_button(ui, Icon::ExpandAll, "Expand all").clicked() {
             ed.folded_pieces.clear();
         }
-        if tips::hover(ui.add(egui::Button::selectable(false, "▸▸").frame(false)), "Collapse all").clicked() {
+        if widgets::small_icon_button(ui, Icon::CollapseAll, "Collapse all").clicked() {
             ed.folded_pieces.clear();
             for p in &ed.scene.pieces {
                 if !ed.scene.children_of(p.id).is_empty() {
@@ -5017,7 +5035,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         let all_vis = !ed.scene.pieces.is_empty() && ed.scene.pieces.iter().all(|p| p.visible);
         let vis_icon = if all_vis { Icon::Eye } else { Icon::EyeOff };
         let vis_tip = if all_vis { "Hide all pieces" } else { "Show all pieces" };
-        if widgets::icon_button(ui, vis_icon, false, true, vis_tip).clicked() {
+        if widgets::small_icon_button(ui, vis_icon, vis_tip).clicked() {
             let target_vis = !all_vis;
             for p in &mut ed.scene.pieces {
                 p.visible = target_vis;
@@ -5036,312 +5054,399 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.label(RichText::new(count_text).weak().small());
     ui.add_space(2.0);
 
-    for row in &tree_rows {
-        let i = row.index;
-        let is_active = i == active;
-        let (fill, stroke) = if is_active {
-            widgets::selected_look(ui.visuals(), 0.18)
-        } else if picked[i] {
-            // Picked with Ctrl/Cmd+click: moves with the active piece.
-            let accent = ui.visuals().selection.stroke.color;
-            (accent.linear_multiply(0.06), EStroke::new(1.0, accent.linear_multiply(0.45)))
-        } else {
-            (Color32::TRANSPARENT, EStroke::NONE)
-        };
-        let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
-        let mut row_dragged = false;
-        let p = &mut ed.scene.pieces[i];
-        let piece_id = p.id;
-        let piece_name = p.name.clone();
-        let is_parented = p.parent.is_some();
-        let piece_triangles = p.mesh.triangle_count();
-        let is_visible = p.visible;
+    // Frame container for the scrollable pieces outliner
+    let outliner_frame = egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color.linear_multiply(0.35))
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(widgets::rounding(4.0))
+        .inner_margin(egui::Margin::symmetric(2, 2));
 
-        let frame_resp = egui::Frame::new()
-            .fill(fill)
-            .stroke(stroke)
-            .corner_radius(widgets::rounding(6.0))
-            .inner_margin(egui::Margin::symmetric(2, 1))
-            .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    // Vector hierarchy guide lines for indented rows
-                    if row.depth > 0 {
-                        let indent_step = 16.0;
-                        let indent_w = row.depth as f32 * indent_step;
-                        let (indent_rect, _) = ui.allocate_exact_size(egui::vec2(indent_w, 20.0), egui::Sense::hover());
-                        let painter = ui.painter();
-                        let line_color = ui.visuals().text_color().linear_multiply(0.22);
-                        let line_stroke = EStroke::new(1.0, line_color);
+    outliner_frame.show(ui, |ui| {
+        egui::ScrollArea::vertical().max_height(ed.pieces_box_height).auto_shrink([false, true]).show(ui, |ui| {
+            for row in &tree_rows {
+                let i = row.index;
+                let is_active = i == active;
+                let (fill, stroke) = if is_active {
+                    widgets::selected_look(ui.visuals(), 0.18)
+                } else if picked[i] {
+                    // Picked with Ctrl/Cmd+click: moves with the active piece.
+                    let accent = ui.visuals().selection.stroke.color;
+                    (accent.linear_multiply(0.06), EStroke::new(1.0, accent.linear_multiply(0.45)))
+                } else {
+                    (Color32::TRANSPARENT, EStroke::NONE)
+                };
+                let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
+                let mut row_dragged = false;
+                let p = &mut ed.scene.pieces[i];
+                let piece_id = p.id;
+                let piece_name = p.name.clone();
+                let is_parented = p.parent.is_some();
+                let piece_triangles = p.mesh.triangle_count();
+                let is_visible = p.visible;
 
-                        for d in 0..row.depth {
-                            let x = (indent_rect.left() + d as f32 * indent_step + indent_step * 0.5).round();
-                            let top_y = indent_rect.top() - 1.0;
-                            let bot_y = indent_rect.bottom() + 1.0;
-                            let mid_y = indent_rect.center().y.round();
+                let frame_resp = egui::Frame::new()
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(widgets::rounding(6.0))
+                    .inner_margin(egui::Margin::symmetric(2, 1))
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            // Vector hierarchy guide lines for indented rows
+                            if row.depth > 0 {
+                                let indent_step = 16.0;
+                                let indent_w = row.depth as f32 * indent_step;
+                                let (indent_rect, _) =
+                                    ui.allocate_exact_size(egui::vec2(indent_w, 20.0), egui::Sense::hover());
+                                let painter = ui.painter();
+                                let line_color = ui.visuals().text_color().linear_multiply(0.22);
+                                let line_stroke = EStroke::new(1.0, line_color);
 
-                            if d < row.depth - 1 {
-                                if row.ancestor_continues.get(d).copied().unwrap_or(false) {
-                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, bot_y)], line_stroke);
+                                for d in 0..row.depth {
+                                    let x = (indent_rect.left() + d as f32 * indent_step + indent_step * 0.5).round();
+                                    let top_y = indent_rect.top() - 1.0;
+                                    let bot_y = indent_rect.bottom() + 1.0;
+                                    let mid_y = indent_rect.center().y.round();
+
+                                    if d < row.depth - 1 {
+                                        if row.ancestor_continues.get(d).copied().unwrap_or(false) {
+                                            painter.line_segment(
+                                                [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
+                                                line_stroke,
+                                            );
+                                        }
+                                    } else {
+                                        if row.is_last_child {
+                                            painter.line_segment(
+                                                [egui::pos2(x, top_y), egui::pos2(x, mid_y)],
+                                                line_stroke,
+                                            );
+                                        } else {
+                                            painter.line_segment(
+                                                [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
+                                                line_stroke,
+                                            );
+                                        }
+                                        painter.line_segment(
+                                            [egui::pos2(x, mid_y), egui::pos2(indent_rect.right(), mid_y)],
+                                            line_stroke,
+                                        );
+                                    }
+                                }
+                            }
+
+                            // Drag grip
+                            let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
+                            if grip.dragged() {
+                                grip.dnd_set_drag_payload(PieceDrag(i));
+                                row_dragged = true;
+                            }
+
+                            // Fold chevron
+                            if row.has_children {
+                                let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
+                                if widgets::fold_chevron(ui, !row.is_folded, tip).clicked() {
+                                    toggle_fold = Some(piece_id);
                                 }
                             } else {
-                                if row.is_last_child {
-                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, mid_y)], line_stroke);
+                                ui.allocate_space(egui::vec2(14.0, 18.0));
+                            }
+
+                            // Visibility toggle
+                            let (icon, tip) = if is_visible {
+                                (Icon::Eye, plain::PIECE_HIDE)
+                            } else {
+                                (Icon::EyeOff, plain::PIECE_SHOW)
+                            };
+                            if widgets::icon_button(ui, icon, false, true, tip).clicked() {
+                                if alt {
+                                    isolate = Some(i);
                                 } else {
-                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, bot_y)], line_stroke);
+                                    p.visible = !p.visible;
                                 }
-                                painter.line_segment(
-                                    [egui::pos2(x, mid_y), egui::pos2(indent_rect.right(), mid_y)],
-                                    line_stroke,
+                            }
+
+                            // Piece type icon
+                            let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
+                                (Icon::Wireframe, "Tube piece")
+                            } else if p.cage.is_some() {
+                                (Icon::Wireframe, "Retopology cage")
+                            } else {
+                                (Icon::Cube, "Mesh piece")
+                            };
+                            let (icon_rect, icon_resp) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                            let icon_color = if is_visible {
+                                ui.visuals().text_color().linear_multiply(0.65)
+                            } else {
+                                ui.visuals().text_color().linear_multiply(0.25)
+                            };
+                            widgets::paint_icon(ui.painter(), icon_rect, piece_icon, icon_color);
+                            tips::hover(icon_resp, icon_tip);
+
+                            // Name label / inline rename
+                            let is_renaming = ed.renaming_piece == Some(piece_id);
+                            if is_renaming {
+                                let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
+                                let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
+                                let text_resp = tips::hover(
+                                    ui.add(
+                                        egui::TextEdit::singleline(&mut ed.rename_text)
+                                            .id(edit_id)
+                                            .desired_width(text_w),
+                                    ),
+                                    plain::PIECE_RENAME,
+                                );
+                                if !ui.memory(|m| m.has_focus(edit_id)) && ed.rename_text == p.name {
+                                    text_resp.request_focus();
+                                }
+                                if text_resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                                    let trimmed = ed.rename_text.trim();
+                                    if !trimmed.is_empty() {
+                                        p.name = trimmed.to_string();
+                                    }
+                                    ed.renaming_piece = None;
+                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                                    ed.renaming_piece = None;
+                                }
+                            } else {
+                                let text_color = if is_active {
+                                    ui.visuals().selection.stroke.color
+                                } else if !is_visible {
+                                    ui.visuals().text_color().linear_multiply(0.4)
+                                } else {
+                                    ui.visuals().text_color()
+                                };
+                                let btn = ui.add(
+                                    egui::Button::selectable(is_active, RichText::new(&p.name).color(text_color))
+                                        .frame(false)
+                                        .sense(egui::Sense::click_and_drag())
+                                        .truncate(),
+                                );
+                                let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
+                                if btn.dragged() {
+                                    btn.dnd_set_drag_payload(PieceDrag(i));
+                                    row_dragged = true;
+                                } else if btn.double_clicked() {
+                                    action_rename = Some((piece_id, p.name.clone()));
+                                } else if btn.clicked() {
+                                    if command {
+                                        pick = Some(i);
+                                    } else {
+                                        select = Some(i);
+                                    }
+                                }
+                            }
+
+                            // Multires level badge
+                            if let Some(mr) = p.multires.as_ref().filter(|m| m.level_count() > 1) {
+                                let text = format!("L{}", mr.active() + 1);
+                                let tip = format!("Multires level {} of {}", mr.active() + 1, mr.level_count());
+                                let badge = ui.label(
+                                    RichText::new(text).small().strong().color(ui.visuals().selection.stroke.color),
+                                );
+                                tips::hover(badge, &tip);
+                            }
+
+                            // Active mask dot indicator
+                            if p.mesh.mask.iter().any(|&w| w > 0.01) {
+                                let dot = ui.label(RichText::new("●").small().color(Color32::from_rgb(230, 160, 50)));
+                                tips::hover(dot, "Has active mask");
+                            }
+
+                            // Copied instancer badge
+                            if sources.contains(&piece_id) {
+                                tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
+                            }
+
+                            // Picked badge
+                            if picked[i] {
+                                tips::hover(
+                                    ui.label(
+                                        RichText::new("picked")
+                                            .weak()
+                                            .small()
+                                            .color(ui.visuals().selection.stroke.color),
+                                    ),
+                                    plain::GIZMO_PIECES,
                                 );
                             }
-                        }
+
+                            // Right-aligned triangle count and child counter
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                let tri_lbl =
+                                    ui.label(RichText::new(fmt_count(piece_triangles)).monospace().weak().small());
+                                let vert_count = fmt_count(p.mesh.vertex_count());
+                                let tri_count = fmt_count(piece_triangles);
+                                tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
+
+                                if row.is_folded && row.child_count > 0 {
+                                    ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
+                                }
+                            });
+                        });
+                    })
+                    .response;
+
+                // Active row leading accent stripe
+                if is_active {
+                    let accent_color = ui.visuals().selection.stroke.color;
+                    let stripe_rect = egui::Rect::from_min_max(
+                        egui::pos2(frame_resp.rect.left(), frame_resp.rect.top() + 1.0),
+                        egui::pos2(frame_resp.rect.left() + 3.0, frame_resp.rect.bottom() - 1.0),
+                    );
+                    ui.painter().rect_filled(stripe_rect, widgets::rounding(1.5), accent_color);
+                }
+
+                // Right-click context menu
+                let has_children = row.has_children;
+                let is_folded = row.is_folded;
+                frame_resp.container_context_menu(|ui| {
+                    ui.set_min_width(150.0);
+                    if ui.button("Rename").clicked() {
+                        action_rename = Some((piece_id, piece_name.clone()));
+                        ui.close();
                     }
-
-                    // Drag grip
-                    let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
-                    if grip.dragged() {
-                        grip.dnd_set_drag_payload(PieceDrag(i));
-                        row_dragged = true;
+                    if ui.button("Focus (F)").clicked() {
+                        action_focus = Some(i);
+                        ui.close();
                     }
-
-                    // Fold chevron
-                    if row.has_children {
-                        let chev = if row.is_folded { "▸" } else { "▾" };
-                        let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
-                        let btn = ui.add(egui::Button::selectable(false, chev).frame(false));
-                        if tips::hover(btn, tip).clicked() {
-                            toggle_fold = Some(piece_id);
-                        }
-                    } else {
-                        ui.allocate_space(egui::vec2(12.0, 12.0));
+                    ui.separator();
+                    let vis_label = if is_visible { "Hide" } else { "Show" };
+                    if ui.button(vis_label).clicked() {
+                        action_toggle_vis = Some(i);
+                        ui.close();
                     }
-
-                    // Visibility toggle
-                    let (icon, tip) =
-                        if is_visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
-                    if widgets::icon_button(ui, icon, false, true, tip).clicked() {
-                        if alt {
-                            isolate = Some(i);
-                        } else {
-                            p.visible = !p.visible;
-                        }
+                    if ui.button("Solo (Isolate)").clicked() {
+                        action_isolate = Some(i);
+                        ui.close();
                     }
-
-                    // Piece type icon
-                    let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
-                        (Icon::Wireframe, "Tube piece")
-                    } else if p.cage.is_some() {
-                        (Icon::Wireframe, "Retopology cage")
-                    } else {
-                        (Icon::Cube, "Mesh piece")
-                    };
-                    let (icon_rect, icon_resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                    let icon_color = if is_visible {
-                        ui.visuals().text_color().linear_multiply(0.65)
-                    } else {
-                        ui.visuals().text_color().linear_multiply(0.25)
-                    };
-                    widgets::paint_icon(ui.painter(), icon_rect, piece_icon, icon_color);
-                    tips::hover(icon_resp, icon_tip);
-
-                    // Name label / inline rename
-                    let is_renaming = ed.renaming_piece == Some(piece_id);
-                    if is_renaming {
-                        let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
-                        let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
-                        let text_resp = tips::hover(
-                            ui.add(egui::TextEdit::singleline(&mut ed.rename_text).id(edit_id).desired_width(text_w)),
-                            plain::PIECE_RENAME,
-                        );
-                        if !ui.memory(|m| m.has_focus(edit_id)) && ed.rename_text == p.name {
-                            text_resp.request_focus();
-                        }
-                        if text_resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                            let trimmed = ed.rename_text.trim();
-                            if !trimmed.is_empty() {
-                                p.name = trimmed.to_string();
+                    if ui.button("Hide other pieces").clicked() {
+                        action_hide_others = Some(i);
+                        ui.close();
+                    }
+                    if ui.button("Show all pieces").clicked() {
+                        action_show_all = true;
+                        ui.close();
+                    }
+                    ui.separator();
+                    if is_parented && ui.button("Unparent").clicked() {
+                        action_unparent = Some(piece_id);
+                        ui.close();
+                    }
+                    let can_have_parent = ed
+                        .scene
+                        .pieces
+                        .iter()
+                        .any(|other| other.id != piece_id && ed.scene.can_parent(piece_id, other.id));
+                    if can_have_parent {
+                        ui.menu_button("Parent to…", |ui| {
+                            for other in &ed.scene.pieces {
+                                if other.id != piece_id && ed.scene.can_parent(piece_id, other.id) {
+                                    let is_current = is_parented && ed.scene.parent_of(piece_id) == Some(other.id);
+                                    if ui.selectable_label(is_current, &other.name).clicked() {
+                                        action_parent_to = Some((piece_id, other.id));
+                                        ui.close();
+                                    }
+                                }
                             }
-                            ed.renaming_piece = None;
-                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                            ed.renaming_piece = None;
-                        }
-                    } else {
-                        let text_color = if is_active {
-                            ui.visuals().selection.stroke.color
-                        } else if !is_visible {
-                            ui.visuals().text_color().linear_multiply(0.4)
-                        } else {
-                            ui.visuals().text_color()
-                        };
-                        let btn = ui.add(
-                            egui::Button::selectable(is_active, RichText::new(&p.name).color(text_color))
-                                .frame(false)
-                                .sense(egui::Sense::click_and_drag())
-                                .truncate(),
-                        );
-                        let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
-                        if btn.dragged() {
-                            btn.dnd_set_drag_payload(PieceDrag(i));
-                            row_dragged = true;
-                        } else if btn.double_clicked() {
-                            action_rename = Some((piece_id, p.name.clone()));
-                        } else if btn.clicked() {
-                            if command {
-                                pick = Some(i);
-                            } else {
-                                select = Some(i);
-                            }
+                        });
+                    }
+                    if has_children {
+                        let fold_text = if is_folded { "Unfold children" } else { "Fold children" };
+                        if ui.button(fold_text).clicked() {
+                            action_toggle_fold = Some(piece_id);
+                            ui.close();
                         }
                     }
-
-                    // Multires level badge
-                    if let Some(mr) = p.multires.as_ref().filter(|m| m.level_count() > 1) {
-                        let text = format!("L{}", mr.active() + 1);
-                        let tip = format!("Multires level {} of {}", mr.active() + 1, mr.level_count());
-                        let badge =
-                            ui.label(RichText::new(text).small().strong().color(ui.visuals().selection.stroke.color));
-                        tips::hover(badge, &tip);
+                    ui.separator();
+                    if ui.button("Duplicate").clicked() {
+                        action_duplicate = Some(i);
+                        ui.close();
                     }
-
-                    // Active mask dot indicator
-                    if p.mesh.mask.iter().any(|&w| w > 0.01) {
-                        let dot = ui.label(RichText::new("●").small().color(Color32::from_rgb(230, 160, 50)));
-                        tips::hover(dot, "Has active mask");
+                    if total_pieces > 1 && ui.button("Delete").clicked() {
+                        action_delete = Some(i);
+                        ui.close();
                     }
-
-                    // Copied instancer badge
-                    if sources.contains(&piece_id) {
-                        tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
-                    }
-
-                    // Picked badge
-                    if picked[i] {
-                        tips::hover(
-                            ui.label(RichText::new("picked").weak().small().color(ui.visuals().selection.stroke.color)),
-                            plain::GIZMO_PIECES,
-                        );
-                    }
-
-                    // Right-aligned triangle count and child counter
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let tri_lbl = ui.label(RichText::new(fmt_count(piece_triangles)).monospace().weak().small());
-                        let vert_count = fmt_count(p.mesh.vertex_count());
-                        let tri_count = fmt_count(piece_triangles);
-                        tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
-
-                        if row.is_folded && row.child_count > 0 {
-                            ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
-                        }
-                    });
                 });
-            })
-            .response;
 
-        // Active row leading accent stripe
-        if is_active {
-            let accent_color = ui.visuals().selection.stroke.color;
-            let stripe_rect = egui::Rect::from_min_max(
-                egui::pos2(frame_resp.rect.left(), frame_resp.rect.top() + 1.0),
-                egui::pos2(frame_resp.rect.left() + 3.0, frame_resp.rect.bottom() - 1.0),
-            );
-            ui.painter().rect_filled(stripe_rect, widgets::rounding(1.5), accent_color);
-        }
-
-        // Right-click context menu
-        let has_children = row.has_children;
-        let is_folded = row.is_folded;
-        frame_resp.context_menu(|ui| {
-            ui.set_min_width(150.0);
-            if ui.button("Rename").clicked() {
-                action_rename = Some((piece_id, piece_name.clone()));
-                ui.close();
-            }
-            if ui.button("Focus (F)").clicked() {
-                action_focus = Some(i);
-                ui.close();
-            }
-            ui.separator();
-            let vis_label = if is_visible { "Hide" } else { "Show" };
-            if ui.button(vis_label).clicked() {
-                action_toggle_vis = Some(i);
-                ui.close();
-            }
-            if ui.button("Solo (Isolate)").clicked() {
-                action_isolate = Some(i);
-                ui.close();
-            }
-            if ui.button("Hide other pieces").clicked() {
-                action_hide_others = Some(i);
-                ui.close();
-            }
-            if ui.button("Show all pieces").clicked() {
-                action_show_all = true;
-                ui.close();
-            }
-            ui.separator();
-            if is_parented && ui.button("Unparent").clicked() {
-                action_unparent = Some(piece_id);
-                ui.close();
-            }
-            if has_children {
-                let fold_text = if is_folded { "Unfold children" } else { "Fold children" };
-                if ui.button(fold_text).clicked() {
-                    action_toggle_fold = Some(piece_id);
-                    ui.close();
+                if row_dragged {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                }
+                if let Some(act) = handle_piece_drop(ui, &frame_resp, i, &ed.scene) {
+                    drop_action = Some(act);
                 }
             }
-            ui.separator();
-            if ui.button("Duplicate").clicked() {
-                action_duplicate = Some(i);
-                ui.close();
+
+            if tree_rows.is_empty() && total_pieces > 0 {
+                ui.label(RichText::new("No matching pieces found.").weak().small());
             }
-            if total_pieces > 1 && ui.button("Delete").clicked() {
-                action_delete = Some(i);
-                ui.close();
+
+            // Drop zone at bottom to unparent and place at end
+            if !ed.scene.pieces.is_empty() {
+                let (bottom_rect, bottom_resp) =
+                    ui.allocate_exact_size(egui::vec2(ui.available_width(), 16.0), egui::Sense::hover());
+                if bottom_resp.contains_pointer() && bottom_resp.dnd_hover_payload::<PieceDrag>().is_some() {
+                    let p = ui.painter();
+                    let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
+                    p.hline(bottom_rect.x_range(), bottom_rect.center().y, stroke);
+                }
+                if bottom_resp.contains_pointer()
+                    && ui.input(|i| i.pointer.any_released())
+                    && let Some(from) = bottom_resp.dnd_release_payload::<PieceDrag>()
+                {
+                    let from = from.0;
+                    if from < ed.scene.pieces.len() {
+                        let id = ed.scene.pieces[from].id;
+                        if let Some(last_piece) = ed.scene.pieces.last() {
+                            let target_id = last_piece.id;
+                            ed.place_piece_relative(id, None, target_id, true);
+                        }
+                    }
+                }
             }
         });
+    });
 
-        if row_dragged {
-            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-        }
-        if let Some(act) = handle_piece_drop(ui, &frame_resp, i, &ed.scene) {
-            drop_action = Some(act);
-        }
+    // Draggable separator line at bottom to adjust visible height of the pieces box
+    let sep_height = 8.0;
+    let (sep_rect, sep_resp) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), sep_height), egui::Sense::click_and_drag());
+    let is_sep_active = sep_resp.hovered() || sep_resp.dragged();
+    if is_sep_active {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
     }
+    if sep_resp.dragged() {
+        ed.pieces_box_height = (ed.pieces_box_height + sep_resp.drag_delta().y).clamp(100.0, 700.0);
+    }
+    if sep_resp.double_clicked() {
+        ed.pieces_box_height = 240.0;
+    }
+    tips::hover(sep_resp, "Drag to resize pieces list · Double-click to reset");
 
-    if tree_rows.is_empty() && total_pieces > 0 {
-        ui.label(RichText::new("No matching pieces found.").weak().small());
-    }
+    let p = ui.painter();
+    let line_y = sep_rect.center().y.round();
+    let line_color = if is_sep_active {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().widgets.noninteractive.bg_stroke.color
+    };
+    p.hline(sep_rect.x_range(), line_y, EStroke::new(1.0, line_color));
 
-    // Drop zone at bottom to unparent and place at end
-    if !ed.scene.pieces.is_empty() {
-        let (bottom_rect, bottom_resp) =
-            ui.allocate_exact_size(egui::vec2(ui.available_width(), 10.0), egui::Sense::hover());
-        if bottom_resp.dnd_hover_payload::<PieceDrag>().is_some() {
-            let p = ui.painter();
-            let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
-            p.hline(bottom_rect.x_range(), bottom_rect.center().y, stroke);
-        }
-        if let Some(from) = bottom_resp.dnd_release_payload::<PieceDrag>() {
-            let from = from.0;
-            if from < ed.scene.pieces.len() {
-                let id = ed.scene.pieces[from].id;
-                ed.set_piece_parent(id, None);
-                let last = ed.scene.pieces.len() - 1;
-                if from != last {
-                    ed.reorder_piece(from, last);
-                }
-            }
-        }
-    }
+    let grip_rect = egui::Rect::from_center_size(sep_rect.center(), egui::vec2(26.0, 3.5));
+    let grip_color = if is_sep_active {
+        ui.visuals().selection.stroke.color
+    } else {
+        ui.visuals().text_color().linear_multiply(0.25)
+    };
+    p.rect_filled(grip_rect, widgets::rounding(1.5), grip_color);
 
     if let Some(act) = drop_action {
         match act {
-            PieceDropAction::Reorder { from, to } => ed.reorder_piece(from, to),
-            PieceDropAction::Parent { from, target } => {
-                let child_id = ed.scene.pieces[from].id;
-                let target_id = ed.scene.pieces[target].id;
-                ed.set_piece_parent(child_id, Some(target_id));
+            PieceDropAction::Parent { child_id, parent_id } => {
+                ed.place_piece_as_child(child_id, parent_id);
+            }
+            PieceDropAction::Insert { piece_id, new_parent, target_id, is_after } => {
+                ed.place_piece_relative(piece_id, new_parent, target_id, is_after);
             }
         }
     }
@@ -5371,6 +5476,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if let Some(id) = action_unparent {
         ed.set_piece_parent(id, None);
+    }
+    if let Some((child_id, parent_id)) = action_parent_to {
+        ed.place_piece_as_child(child_id, parent_id);
     }
     if let Some(id) = action_toggle_fold.or(toggle_fold) {
         if ed.folded_pieces.contains(&id) {
