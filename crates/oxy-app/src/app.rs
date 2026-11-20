@@ -1032,13 +1032,14 @@ impl App {
                     .add_filter(
                         "OxyBrush project or mesh",
                         &[
-                            "oxb", "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "OXB", "OBJ", "GLB", "GLTF",
-                            "STL", "PLY", "ZTL", "ZPR",
+                            "oxb", "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "fbx", "OXB", "OBJ", "GLB",
+                            "GLTF", "STL", "PLY", "ZTL", "ZPR", "FBX",
                         ],
                     )
                     .add_filter("OxyBrush project (*.oxb)", &["oxb", "OXB"])
                     .add_filter("glTF (*.glb, *.gltf)", &["glb", "gltf", "GLB", "GLTF"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
+                    .add_filter("Autodesk FBX (*.fbx)", &["fbx", "FBX"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
                     .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])
                     .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);
@@ -1055,12 +1056,13 @@ impl App {
                     .add_filter(
                         "Meshes",
                         &[
-                            "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "OBJ", "GLB", "GLTF", "STL", "PLY",
-                            "ZTL", "ZPR",
+                            "obj", "glb", "gltf", "stl", "ply", "ztl", "zpr", "fbx", "OBJ", "GLB", "GLTF", "STL",
+                            "PLY", "ZTL", "ZPR", "FBX",
                         ],
                     )
                     .add_filter("glTF (*.glb, *.gltf)", &["glb", "gltf", "GLB", "GLTF"])
                     .add_filter("Wavefront OBJ (*.obj)", &["obj", "OBJ"])
+                    .add_filter("Autodesk FBX (*.fbx)", &["fbx", "FBX"])
                     .add_filter("STL mesh (*.stl)", &["stl", "STL"])
                     .add_filter("PLY mesh, with vertex color (*.ply)", &["ply", "PLY"])
                     .add_filter("ZBrush tool or project (*.ztl, *.zpr)", &["ztl", "zpr", "ZTL", "ZPR"]);

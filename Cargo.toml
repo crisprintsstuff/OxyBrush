@@ -43,6 +43,8 @@ crc32fast = "1.5"
 dirs = "7"
 miniz_oxide = "0.9"
 serde_json = "1"
+fbx-reader = "0.1"
+fbx-rs = "0.1"
 # In-process plugins (docs/rfcs/0011-wasm-plugins.md): a pure-Rust WebAssembly
 # interpreter. `wat` lets plugins and tests be written as WebAssembly text.
 # `portable-dispatch`: the loop-based interpreter, which cannot overflow the

@@ -2,7 +2,8 @@
 //!
 //! Supported: OBJ import/export, binary/ASCII STL import, binary STL export,
 //! PLY import/export, glTF 2.0 import (`.glb`, `.gltf`; see
-//! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`). Several
+//! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`), and
+//! Autodesk FBX import (`.fbx`, binary and ASCII; see [`fbx_import`]). Several
 //! pieces at once go through [`export_pieces`].
 //! Imported geometry is triangulated and welded so it can be sculpted as one
 //! continuous surface.
@@ -14,6 +15,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 pub mod bridge;
+mod fbx_import;
 mod gltf;
 mod gltf_import;
 mod meshopt;
@@ -68,6 +70,11 @@ pub fn import(path: &Path) -> Result<Mesh> {
             let parts: Vec<MeshData> = pieces.iter().map(|(_, m)| m.to_data()).collect();
             Ok(Mesh::from_data(MeshData::join(&parts)))
         }
+        "fbx" => {
+            let pieces = fbx_import::import_pieces(&std::fs::read(path)?, "Imported")?;
+            let parts: Vec<MeshData> = pieces.iter().map(|(_, m)| m.to_data()).collect();
+            Ok(Mesh::from_data(MeshData::join(&parts)))
+        }
         other => Err(Error::Unsupported(other.to_string())),
     }
 }
@@ -83,6 +90,7 @@ pub fn import_pieces(path: &Path) -> Result<Vec<(String, Mesh)>> {
         "ply" => Ok(vec![(stem, import_ply(&std::fs::read(path)?)?)]),
         "ztl" | "zpr" => oxy_ztl::import_pieces(&std::fs::read(path)?).map_err(Error::Format),
         "glb" | "gltf" => gltf_import::import_pieces(path, &stem),
+        "fbx" => fbx_import::import_pieces(&std::fs::read(path)?, &stem),
         other => Err(Error::Unsupported(other.to_string())),
     }
 }
@@ -296,6 +304,16 @@ pub fn import_ply(bytes: &[u8]) -> Result<Mesh> {
 /// `uvs` (one per triangle, or empty) stay on the corners, so welding the
 /// points a UV seam split keeps each face's UVs.
 fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>, uvs: Vec<[Vec2; 3]>) -> Result<Mesh> {
+    finish_with(positions, tris, colors, uvs, Vec::new())
+}
+
+pub(crate) fn finish_with(
+    positions: Vec<Vec3>,
+    tris: Vec<[u32; 3]>,
+    colors: Vec<Option<Vec3>>,
+    uvs: Vec<[Vec2; 3]>,
+    groups: Vec<u32>,
+) -> Result<Mesh> {
     if tris.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
@@ -332,7 +350,8 @@ fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>, 
         Vec::new()
     };
     let uv = if uvs.len() == tris.len() { uvs } else { Vec::new() };
-    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, uv, ..Default::default() }))
+    let groups = if groups.len() == tris.len() { groups } else { Vec::new() };
+    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, uv, groups, ..Default::default() }))
 }
 
 fn is_ascii_stl(bytes: &[u8]) -> bool {
@@ -777,6 +796,74 @@ mod tests {
         if zpr_path.exists() {
             let pieces = import_pieces(&zpr_path).expect("failed to import DefaultProject.ZPR pieces");
             assert!(!pieces.is_empty());
+        }
+    }
+
+    #[test]
+    fn fbx_synthetic_quad_mesh() {
+        let fbx = b"; FBX 7.4.0 project file\n\
+FBXHeaderExtension:  {\n\
+    FBXHeaderVersion: 1003\n\
+    FBXVersion: 7400\n\
+}\n\
+Objects:  {\n\
+    Model: 100, \"Model::TestQuad\", \"Mesh\" {\n\
+    }\n\
+    Geometry: 200, \"Geometry::\", \"Mesh\" {\n\
+        Vertices: *12 {\n\
+            a: 0,0,0, 1,0,0, 1,1,0, 0,1,0\n\
+        }\n\
+        PolygonVertexIndex: *4 {\n\
+            a: 0,1,2,-4\n\
+        }\n\
+    }\n\
+}\n\
+Connections:  {\n\
+    C: \"OO\",200,100\n\
+}\n";
+        let pieces = fbx_import::import_pieces(fbx, "Test").expect("parse synthetic FBX");
+        assert_eq!(pieces.len(), 1);
+        let (ref name, ref mesh) = pieces[0];
+        assert_eq!(name, "TestQuad");
+        assert_eq!(mesh.triangle_count(), 2);
+        assert_eq!(mesh.vertex_count(), 4);
+    }
+
+    #[test]
+    fn fbx_import_if_present() {
+        let dir = Path::new("/home/cris/oxylabs/FbxFiles");
+        if !dir.exists() {
+            return;
+        }
+
+        let p1 = dir.join("Dragon 2.5_fbx.fbx");
+        if p1.exists() {
+            let m = import(&p1).expect("import Dragon 2.5");
+            assert_eq!(m.triangle_count(), 37986);
+            assert_eq!(m.vertex_count(), 19381);
+            let pieces = import_pieces(&p1).expect("import pieces Dragon 2.5");
+            assert_eq!(pieces.len(), 1);
+            assert_eq!(pieces[0].0, "Cube");
+        }
+
+        let p2 = dir.join("Dragon_Baked_Actions_fbx_7.4_binary.fbx");
+        if p2.exists() {
+            let m = import(&p2).expect("import Dragon 7.4 binary");
+            assert_eq!(m.triangle_count(), 37986);
+            assert_eq!(m.vertex_count(), 19381);
+            let pieces = import_pieces(&p2).expect("import pieces Dragon 7.4 binary");
+            assert_eq!(pieces.len(), 1);
+            assert_eq!(pieces[0].0, "Dragon_Mesh");
+        }
+
+        let p3 = dir.join("Dragon_Baked_Actions_fbx_6.1_ASCII.fbx");
+        if p3.exists() {
+            let m = import(&p3).expect("import Dragon 6.1 ASCII");
+            assert_eq!(m.triangle_count(), 37986);
+            assert_eq!(m.vertex_count(), 19381);
+            let pieces = import_pieces(&p3).expect("import pieces Dragon 6.1 ASCII");
+            assert_eq!(pieces.len(), 1);
+            assert_eq!(pieces[0].0, "Dragon_Mesh");
         }
     }
 }

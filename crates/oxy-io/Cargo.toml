@@ -13,6 +13,8 @@ oxy-ztl.workspace = true
 glam.workspace = true
 tobj.workspace = true
 serde_json.workspace = true
+fbx-reader.workspace = true
+fbx-rs.workspace = true
 
 [lints]
 workspace = true

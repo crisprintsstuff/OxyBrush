@@ -124,7 +124,7 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 - 📝 Gaussian splats: open scans as a reference, convert them to a mesh, sculpt them through a bound mesh, and send them to Blender and back ([RFC 0021](rfcs/0021-gaussian-splats.md), proposed)
 - 📝 Parts Bin: save strokes as a detail and drag them from a strip onto a model, as a stroke group that stays editable ([RFC 0026](rfcs/0026-parts-bin.md), draft)
 - 🚧 UVs carried through import, subdivision levels and export ([RFC 0020](rfcs/0020-uvs.md): import from OBJ and glTF, saving and export done; subdivision levels and Poly Edit next); UV unwrap; normal/displacement map baking
-- ~~glTF export~~ ✅ (glTF/GLB and PLY export, LOD chain, split pieces, `oxybrush-cli`); FBX/USD export; send-to-Blender bridge
+- ~~glTF export~~ ✅ (glTF/GLB and PLY export, LOD chain, split pieces, `oxybrush-cli`); FBX import ✅ (7.x binary/ASCII & 5.8/6.x ASCII/binary); FBX/USD export; send-to-Blender bridge
 - WASM & Python plugin APIs and automation scripting
 - Interactive path tracer viewport renderer & turntable rendering
 - Multi-light studio setups, environment lighting & atmospheric depth fog
