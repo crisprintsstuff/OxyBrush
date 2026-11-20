@@ -2959,7 +2959,8 @@ fn custom_matcap_texture(ctx: &egui::Context, m: &crate::matcaps::CustomMatcap) 
 /// Alpha preview texture (cached per alpha name and size).
 fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHandle {
     widgets::cached_texture(ctx, ("alpha", a.name.clone(), a.size), || {
-        egui::ColorImage::from_gray([a.size as usize, a.size as usize], &a.to_luma8())
+        let (n, px) = a.to_preview_luma8(128);
+        egui::ColorImage::from_gray([n as usize, n as usize], &px)
     })
 }
 
@@ -4338,13 +4339,13 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
 fn alpha_thumbnail(ui: &mut Ui, alpha: &oxy_sculpt::Alpha, invert: bool) {
     let id = egui::Id::unique(("alpha_tex", alpha.name.as_str(), alpha.size, invert));
     let tex = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(id)).unwrap_or_else(|| {
-        let mut pixels = alpha.to_luma8();
+        let (n, mut pixels) = alpha.to_preview_luma8(128);
         if invert {
             for p in &mut pixels {
                 *p = 255 - *p;
             }
         }
-        let img = egui::ColorImage::from_gray([alpha.size as usize, alpha.size as usize], &pixels);
+        let img = egui::ColorImage::from_gray([n as usize, n as usize], &pixels);
         let t = ui.ctx().load_texture(
             format!("alpha {} (invert: {invert})", alpha.name),
             img,

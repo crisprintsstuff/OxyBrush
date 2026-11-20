@@ -11,6 +11,9 @@
 
 use glam::Vec2;
 
+/// Maximum width or height of an alpha texture (4096).
+pub const MAX_ALPHA_SIZE: u32 = 4096;
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Alpha {
     pub name: String,
@@ -109,20 +112,22 @@ impl Alpha {
     }
 
     /// Build from 8-bit luminance (e.g. a grayscale PNG). Non-square images
-    /// are resampled into a square.
+    /// are fitted into a square preserving aspect ratio (padded with 0).
     pub fn from_luma(name: impl Into<String>, width: u32, height: u32, luma: &[u8]) -> Option<Alpha> {
         if width == 0 || height == 0 || luma.len() < (width * height) as usize {
             return None;
         }
-        let size = width.max(height).clamp(16, 1024);
-        let mut data = Vec::with_capacity((size * size) as usize);
-        for j in 0..size {
-            for i in 0..size {
-                let sx = ((i as f32 + 0.5) / size as f32 * width as f32) as u32;
-                let sy = ((j as f32 + 0.5) / size as f32 * height as f32) as u32;
-                data.push(luma[(sy.min(height - 1) * width + sx.min(width - 1)) as usize] as f32 / 255.0);
-            }
+        let (size, data) = resample_to_square(width, height, luma, |b| b as f32 / 255.0);
+        Some(Alpha { name: name.into(), size, data })
+    }
+
+    /// Build from 16-bit luminance (e.g. a 16-bit grayscale PNG). Non-square
+    /// images are fitted into a square preserving aspect ratio (padded with 0).
+    pub fn from_luma16(name: impl Into<String>, width: u32, height: u32, luma: &[u16]) -> Option<Alpha> {
+        if width == 0 || height == 0 || luma.len() < (width * height) as usize {
+            return None;
         }
+        let (size, data) = resample_to_square(width, height, luma, |w| w as f32 / 65535.0);
         Some(Alpha { name: name.into(), size, data })
     }
 
@@ -147,6 +152,106 @@ impl Alpha {
     pub fn to_luma8(&self) -> Vec<u8> {
         self.data.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect()
     }
+
+    /// Downsampled 8-bit preview pixels (at most `max_dim × max_dim`, row-major square).
+    pub fn to_preview_luma8(&self, max_dim: u32) -> (u32, Vec<u8>) {
+        if self.size <= max_dim {
+            return (self.size, self.to_luma8());
+        }
+        let preview_size = max_dim;
+        let mut out = Vec::with_capacity((preview_size * preview_size) as usize);
+        for j in 0..preview_size {
+            for i in 0..preview_size {
+                let uv_x = (i as f32 + 0.5) / preview_size as f32 * 2.0 - 1.0;
+                let uv_y = 1.0 - (j as f32 + 0.5) / preview_size as f32 * 2.0;
+                let val = self.sample(Vec2::new(uv_x, uv_y));
+                out.push((val.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            }
+        }
+        (preview_size, out)
+    }
+}
+
+/// Resamples a 2D image into a square alpha, fitting the image to preserve
+/// aspect ratio and zero-padding any remainder. Uses area-box filtering for
+/// downsampling so fine lines are antialiased without breaking or aliasing.
+fn resample_to_square<T: Copy>(width: u32, height: u32, pixels: &[T], to_f32: impl Fn(T) -> f32) -> (u32, Vec<f32>) {
+    let max_dim = width.max(height);
+    let size = max_dim.clamp(16, MAX_ALPHA_SIZE);
+    let scale = size as f64 / max_dim as f64;
+    let fit_w = ((width as f64 * scale).round() as u32).clamp(1, size);
+    let fit_h = ((height as f64 * scale).round() as u32).clamp(1, size);
+    let pad_x = (size - fit_w) / 2;
+    let pad_y = (size - fit_h) / 2;
+
+    let mut data = vec![0.0f32; (size * size) as usize];
+    let downsampling = width > fit_w || height > fit_h;
+
+    for j in 0..fit_h {
+        let dst_y = pad_y + j;
+        let y_start = j as f64 * height as f64 / fit_h as f64;
+        let y_end = (j + 1) as f64 * height as f64 / fit_h as f64;
+
+        for i in 0..fit_w {
+            let dst_x = pad_x + i;
+            let x_start = i as f64 * width as f64 / fit_w as f64;
+            let x_end = (i + 1) as f64 * width as f64 / fit_w as f64;
+
+            let val = if downsampling {
+                let sx0 = x_start.floor() as usize;
+                let sx1 = (x_end.ceil() as usize).min(width as usize);
+                let sy0 = y_start.floor() as usize;
+                let sy1 = (y_end.ceil() as usize).min(height as usize);
+
+                let mut sum = 0.0;
+                let mut weight = 0.0;
+                for sy in sy0..sy1 {
+                    let y_lo = (sy as f64).max(y_start);
+                    let y_hi = ((sy + 1) as f64).min(y_end);
+                    let h_overlap = (y_hi - y_lo).max(0.0);
+                    if h_overlap <= 0.0 {
+                        continue;
+                    }
+                    let row_offset = sy * width as usize;
+                    for sx in sx0..sx1 {
+                        let x_lo = (sx as f64).max(x_start);
+                        let x_hi = ((sx + 1) as f64).min(x_end);
+                        let w_overlap = (x_hi - x_lo).max(0.0);
+                        let area = (w_overlap * h_overlap) as f32;
+                        if area > 0.0 {
+                            sum += to_f32(pixels[row_offset + sx]) * area;
+                            weight += area;
+                        }
+                    }
+                }
+                if weight > 0.0 {
+                    sum / weight
+                } else {
+                    let cx = (x_start as usize).min(width as usize - 1);
+                    let cy = (y_start as usize).min(height as usize - 1);
+                    to_f32(pixels[cy * width as usize + cx])
+                }
+            } else {
+                let sx = ((i as f32 + 0.5) / fit_w as f32 * width as f32 - 0.5).clamp(0.0, (width - 1) as f32);
+                let sy = ((j as f32 + 0.5) / fit_h as f32 * height as f32 - 0.5).clamp(0.0, (height - 1) as f32);
+                let x0 = sx.floor() as usize;
+                let y0 = sy.floor() as usize;
+                let x1 = (x0 + 1).min(width as usize - 1);
+                let y1 = (y0 + 1).min(height as usize - 1);
+                let fx = sx - x0 as f32;
+                let fy = sy - y0 as f32;
+                let v00 = to_f32(pixels[y0 * width as usize + x0]);
+                let v10 = to_f32(pixels[y0 * width as usize + x1]);
+                let v01 = to_f32(pixels[y1 * width as usize + x0]);
+                let v11 = to_f32(pixels[y1 * width as usize + x1]);
+                (v00 * (1.0 - fx) + v10 * fx) * (1.0 - fy) + (v01 * (1.0 - fx) + v11 * fx) * fy
+            };
+
+            data[(dst_y * size + dst_x) as usize] = val.clamp(0.0, 1.0);
+        }
+    }
+
+    (size, data)
 }
 
 fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
@@ -249,6 +354,38 @@ mod tests {
         assert!(g.sample(Vec2::new(-0.9, 0.0)) < 0.2);
         assert!(g.sample(Vec2::new(0.9, 0.0)) > 0.8);
         assert!(Alpha::from_luma("bad", 4, 4, &[0; 3]).is_none());
+    }
+
+    #[test]
+    fn non_square_aspect_ratio_and_padding() {
+        // A 20x40 image (tall)
+        let luma = vec![255u8; 20 * 40];
+        let a = Alpha::from_luma("tall", 20, 40, &luma).unwrap();
+        assert_eq!(a.size, 40);
+        // Left and right sides should be padded with 0 (since width was 20 and height 40)
+        assert_eq!(a.sample(Vec2::new(-0.9, 0.0)), 0.0);
+        assert_eq!(a.sample(Vec2::new(0.9, 0.0)), 0.0);
+        // Center should be 1.0
+        assert_eq!(a.sample(Vec2::ZERO), 1.0);
+    }
+
+    #[test]
+    fn high_res_clamp_and_16bit() {
+        let luma16 = vec![65535u16; 32 * 32];
+        let a = Alpha::from_luma16("16bit", 32, 32, &luma16).unwrap();
+        assert_eq!(a.size, 32);
+        assert_eq!(a.sample(Vec2::ZERO), 1.0);
+
+        // Clamping respects MAX_ALPHA_SIZE (4096)
+        assert_eq!(MAX_ALPHA_SIZE, 4096);
+    }
+
+    #[test]
+    fn preview_downsampling() {
+        let a = BuiltinAlpha::Noise.generate(512);
+        let (ps, prev) = a.to_preview_luma8(64);
+        assert_eq!(ps, 64);
+        assert_eq!(prev.len(), 64 * 64);
     }
 
     #[test]
