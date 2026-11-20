@@ -4,11 +4,23 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.19.2] - 2026-11-20
+
 ### Added
 
+- **4K alpha resolution & 16-bit depth preservation** ([#359](https://github.com/crisprintsstuff/OxyBrush/issues/359)):
+  - Raised alpha import clamp from 1024 to 4096 (`MAX_ALPHA_SIZE = 4096`), allowing high-resolution detail stamping on dense meshes.
+  - Native 16-bit grayscale depth (`u16`) preserved on import for 16-bit PNG files without bit-depth loss or banding.
+  - Aspect ratio preservation: non-square alpha images are centered and padded with black borders rather than stretched.
+  - Area-box filtering ensures 1px ink lines and high-frequency details are antialiased without dropping when downsampled.
+  - Inspector previews downsampled to ≤128x128 for UI textures, saving 16 MB GPU VRAM per 4K alpha.
 - **Preserve volume option in voxel remesh** ([#354](https://github.com/crisprintsstuff/OxyBrush/issues/354)). When enabled, remeshing projects vertices back to the level-set zero crossing and applies volume-calibrated normal adjustment to compensate for voxelization chord loss and smoothing shrinkage. Successive remeshes retain their silhouette, mass, and volume without shrinking or squashing. Also available in the CLI via `--preserve-volume`.
+
 ### Fixed
 
+- **Inspector panel narrow resizing and control wrapping** ([#360](https://github.com/crisprintsstuff/OxyBrush/issues/360)):
+  - Converted rigid single-line widget rows (Alpha selector, Brush size, Symmetry, Topology, Groups) to wrapping layouts (`ui.horizontal_wrapped`) so buttons stack gracefully.
+  - Added `.min_size(180.0)` and flexible piece renaming/truncation so the inspector panel can be dragged much narrower without egui snapping back.
 - **Deform window title bar dragging** ([#351](https://github.com/crisprintsstuff/OxyBrush/issues/351)): Prevented scrolled-away deformer sliders from triggering deformations when dragging the window by its title bar. Hit-testing for quick flicks is now strictly bounded to the scroll viewport's visible clip rectangle and ignores drags of other widgets or windows.
 
 ## [4.0.0-beta.19] - 2026-11-19
