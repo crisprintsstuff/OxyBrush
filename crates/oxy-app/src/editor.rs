@@ -536,7 +536,7 @@ pub enum SettingsTab {
     General,
     /// Pen pressure curve and tablet options.
     Pen,
-    /// Brush shelf options and a way into the Theme window.
+    /// Appearance settings: theme, colors, layout presets, UI scaling, and shelf options.
     Interface,
     Plugins,
     Keymap,
@@ -602,7 +602,7 @@ impl SettingsTab {
         match self {
             SettingsTab::General => "General",
             SettingsTab::Pen => "Pen & tablet",
-            SettingsTab::Interface => "Interface",
+            SettingsTab::Interface => "Appearance",
             SettingsTab::Plugins => "Plugins",
             SettingsTab::Keymap => "Keymap",
             SettingsTab::Agent => "AI agent",
@@ -611,26 +611,26 @@ impl SettingsTab {
     }
 }
 
-/// The tabs of the Theme window (RFC 0014).
+/// The tabs of the Appearance section in Preferences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ThemeTab {
     /// The theme gallery and the looks (preset combinations).
     #[default]
     Themes,
-    /// Accent color and viewport background.
+    /// Accent color, UI tint/brightness, buttons, brush icons, and viewport background.
     Colors,
-    /// Interface scale and corner rounding.
-    SizeShape,
+    /// Interface scale, layout presets, panel arrangement, brush shelf, corners, and slider thickness.
+    LayoutScale,
 }
 
 impl ThemeTab {
-    pub const ALL: [ThemeTab; 3] = [ThemeTab::Themes, ThemeTab::Colors, ThemeTab::SizeShape];
+    pub const ALL: [ThemeTab; 3] = [ThemeTab::Themes, ThemeTab::Colors, ThemeTab::LayoutScale];
 
     pub fn label(self) -> &'static str {
         match self {
             ThemeTab::Themes => "Themes",
             ThemeTab::Colors => "Colors",
-            ThemeTab::SizeShape => "Size & shape",
+            ThemeTab::LayoutScale => "Layout & Scale",
         }
     }
 }
@@ -1115,7 +1115,7 @@ pub struct Editor {
     /// Color pickers for the viewport backdrop. A menu closes on click, so
     /// the pickers live in this window (opened from View and Settings).
     /// Theme and accent color window (with clickable swatches and color pickers).
-    /// The Theme window is open, on `theme_tab`.
+    /// The Preferences window is open on the Appearance tab (`theme_tab`).
     pub show_theme: bool,
     /// The Deform window (RFC 0016), its settings, the deformer being
     /// dragged and the last one applied (for Repeat).
@@ -2125,9 +2125,11 @@ impl Editor {
         }
     }
 
-    /// Open the Theme window on `tab`.
+    /// Open Preferences on the Appearance tab with `tab` selected.
     pub fn open_theme(&mut self, tab: ThemeTab) {
+        self.show_settings = true;
         self.show_theme = true;
+        self.settings_tab = SettingsTab::Interface;
         self.theme_tab = tab;
     }
 
@@ -2179,6 +2181,7 @@ impl Editor {
     pub fn open_settings(&mut self, tab: SettingsTab) {
         self.show_settings = true;
         self.settings_tab = tab;
+        self.show_theme = tab == SettingsTab::Interface;
     }
 
     /// Turn viewport shading off, or back on at the strengths it had.
