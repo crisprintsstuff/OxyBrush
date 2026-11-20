@@ -1243,6 +1243,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "caf1079563223d5d59d83c85886a56e586cfd5c1a26292e971a0fa266531ac5a"
 
 [[package]]
+name = "fbx-reader"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21f6f78813b0ceb0defcd1f07d57ee9b440b5fdbb94121d7631ba1f9e53837d2"
+dependencies = [
+ "miniz_oxide 0.9.1",
+]
+
+[[package]]
+name = "fbx-rs"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "340efa3034cf321cb905bcfb29a72915865b9a0f6b4476536c94e05269fe9694"
+dependencies = [
+ "miniz_oxide 0.8.9",
+]
+
+[[package]]
 name = "fdeflate"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2613,6 +2631,8 @@ dependencies = [
 name = "oxy-io"
 version = "4.0.0-beta.19.2"
 dependencies = [
+ "fbx-reader",
+ "fbx-rs",
  "glam",
  "oxy-mesh",
  "oxy-ztl",
