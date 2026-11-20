@@ -4599,47 +4599,106 @@ struct TreeRow {
     has_children: bool,
     is_folded: bool,
     child_count: usize,
+    ancestor_continues: Vec<bool>,
+    is_last_child: bool,
 }
 
-fn build_tree_rows(scene: &oxy_doc::Scene, folded: &std::collections::HashSet<u64>) -> Vec<TreeRow> {
+fn build_tree_rows(scene: &oxy_doc::Scene, folded: &std::collections::HashSet<u64>, filter: &str) -> Vec<TreeRow> {
     let mut rows = Vec::new();
     let mut visited = std::collections::HashSet::new();
 
-    fn visit(
-        id: u64,
-        depth: usize,
-        scene: &oxy_doc::Scene,
-        folded: &std::collections::HashSet<u64>,
-        visited: &mut std::collections::HashSet<u64>,
-        rows: &mut Vec<TreeRow>,
-    ) {
-        if !visited.insert(id) {
+    let filter_clean = filter.trim().to_lowercase();
+    let is_filtering = !filter_clean.is_empty();
+
+    let matching_ids: std::collections::HashSet<u64> = if is_filtering {
+        let mut set = std::collections::HashSet::new();
+        for p in &scene.pieces {
+            if p.name.to_lowercase().contains(&filter_clean) {
+                set.insert(p.id);
+                for anc in scene.ancestors_of(p.id) {
+                    set.insert(anc);
+                }
+            }
+        }
+        set
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    struct TreeVisitCtx<'a> {
+        scene: &'a oxy_doc::Scene,
+        folded: &'a std::collections::HashSet<u64>,
+        visited: &'a mut std::collections::HashSet<u64>,
+        rows: &'a mut Vec<TreeRow>,
+        is_filtering: bool,
+        matching_ids: &'a std::collections::HashSet<u64>,
+    }
+
+    fn visit(id: u64, depth: usize, ancestor_continues: Vec<bool>, is_last_child: bool, ctx: &mut TreeVisitCtx<'_>) {
+        if ctx.is_filtering && !ctx.matching_ids.contains(&id) {
             return;
         }
-        let Some(index) = scene.index_of(id) else { return };
-        let children = scene.children_of(id);
+        if !ctx.visited.insert(id) {
+            return;
+        }
+        let Some(index) = ctx.scene.index_of(id) else { return };
+        let all_children = ctx.scene.children_of(id);
+        let children: Vec<u64> = if ctx.is_filtering {
+            all_children.into_iter().filter(|cid| ctx.matching_ids.contains(cid)).collect()
+        } else {
+            all_children
+        };
         let has_children = !children.is_empty();
-        let is_folded = folded.contains(&id);
-        rows.push(TreeRow { index, depth, has_children, is_folded, child_count: children.len() });
+        let is_folded = if ctx.is_filtering { false } else { ctx.folded.contains(&id) };
+        ctx.rows.push(TreeRow {
+            index,
+            depth,
+            has_children,
+            is_folded,
+            child_count: children.len(),
+            ancestor_continues: ancestor_continues.clone(),
+            is_last_child,
+        });
         if !is_folded {
-            for child_id in children {
-                visit(child_id, depth + 1, scene, folded, visited, rows);
+            let n = children.len();
+            for (idx, child_id) in children.into_iter().enumerate() {
+                let child_is_last = idx + 1 == n;
+                let mut child_ancestors = ancestor_continues.clone();
+                child_ancestors.push(!child_is_last);
+                visit(child_id, depth + 1, child_ancestors, child_is_last, ctx);
             }
         }
     }
 
+    let mut ctx = TreeVisitCtx {
+        scene,
+        folded,
+        visited: &mut visited,
+        rows: &mut rows,
+        is_filtering,
+        matching_ids: &matching_ids,
+    };
+
     // First visit root pieces in scene order
-    for p in &scene.pieces {
-        let is_root = p.parent.is_none() || p.parent.is_some_and(|pid| scene.index_of(pid).is_none());
-        if is_root && !visited.contains(&p.id) {
-            visit(p.id, 0, scene, folded, &mut visited, &mut rows);
+    let roots: Vec<u64> = scene
+        .pieces
+        .iter()
+        .filter(|p| p.parent.is_none() || p.parent.is_some_and(|pid| scene.index_of(pid).is_none()))
+        .map(|p| p.id)
+        .collect();
+    let root_count = roots.len();
+    for (idx, root_id) in roots.into_iter().enumerate() {
+        if !ctx.visited.contains(&root_id) {
+            let is_last = idx + 1 == root_count;
+            visit(root_id, 0, Vec::new(), is_last, &mut ctx);
         }
     }
     // Any remaining pieces not visited and not hidden under a folded ancestor
     for p in &scene.pieces {
-        let hidden_by_fold = scene.ancestors_of(p.id).iter().any(|anc| folded.contains(anc));
-        if !visited.contains(&p.id) && !hidden_by_fold {
-            visit(p.id, 0, scene, folded, &mut visited, &mut rows);
+        let hidden_by_fold =
+            if is_filtering { false } else { scene.ancestors_of(p.id).iter().any(|anc| folded.contains(anc)) };
+        if !ctx.visited.contains(&p.id) && !hidden_by_fold {
+            visit(p.id, 0, Vec::new(), true, &mut ctx);
         }
     }
     rows
@@ -4698,31 +4757,85 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let mut isolate = None;
     let mut drop_action = None;
     let mut toggle_fold = None;
+    let mut action_rename = None;
+    let mut action_focus = None;
+    let mut action_toggle_vis = None;
+    let mut action_isolate = None;
+    let mut action_hide_others = None;
+    let mut action_show_all = false;
+    let mut action_unparent = None;
+    let mut action_toggle_fold = None;
+    let mut action_duplicate = None;
+    let mut action_delete = None;
     let command = ui.input(|i| i.modifiers.command);
     let alt = ui.input(|i| i.modifiers.alt);
+    let total_pieces = ed.scene.pieces.len();
     let sources: Vec<u64> = ed.scene.pieces.iter().flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
-    let picked: Vec<bool> = (0..ed.scene.pieces.len()).map(|i| ed.piece_picked(i)).collect();
-    let tree_rows = build_tree_rows(&ed.scene, &ed.folded_pieces);
+    let picked: Vec<bool> = (0..total_pieces).map(|i| ed.piece_picked(i)).collect();
 
-    for row in tree_rows {
+    // Outliner header: Search filter, expand/collapse all, and show/hide all
+    ui.horizontal(|ui| {
+        let search_w = (ui.available_width() - 84.0).max(60.0);
+        let resp = ui
+            .add(egui::TextEdit::singleline(&mut ed.piece_filter).hint_text("Filter pieces…").desired_width(search_w));
+        tips::hover(resp, "Filter pieces by name");
+        if !ed.piece_filter.is_empty() && tips::hover(ui.small_button("✕"), "Clear filter").clicked() {
+            ed.piece_filter.clear();
+        }
+        if tips::hover(ui.add(egui::Button::selectable(false, "▾▾").frame(false)), "Expand all").clicked() {
+            ed.folded_pieces.clear();
+        }
+        if tips::hover(ui.add(egui::Button::selectable(false, "▸▸").frame(false)), "Collapse all").clicked() {
+            ed.folded_pieces.clear();
+            for p in &ed.scene.pieces {
+                if !ed.scene.children_of(p.id).is_empty() {
+                    ed.folded_pieces.insert(p.id);
+                }
+            }
+        }
+        let all_vis = !ed.scene.pieces.is_empty() && ed.scene.pieces.iter().all(|p| p.visible);
+        let vis_icon = if all_vis { Icon::Eye } else { Icon::EyeOff };
+        let vis_tip = if all_vis { "Hide all pieces" } else { "Show all pieces" };
+        if widgets::icon_button(ui, vis_icon, false, true, vis_tip).clicked() {
+            let target_vis = !all_vis;
+            for p in &mut ed.scene.pieces {
+                p.visible = target_vis;
+            }
+        }
+    });
+
+    let tree_rows = build_tree_rows(&ed.scene, &ed.folded_pieces, &ed.piece_filter);
+    let total_triangles: usize = ed.scene.pieces.iter().map(|p| p.mesh.triangle_count()).sum();
+    let filter_active = !ed.piece_filter.trim().is_empty();
+    let count_text = if filter_active {
+        format!("{}/{} pieces · {} tris", tree_rows.len(), total_pieces, fmt_count(total_triangles))
+    } else {
+        format!("{} pieces · {} tris", total_pieces, fmt_count(total_triangles))
+    };
+    ui.label(RichText::new(count_text).weak().small());
+    ui.add_space(2.0);
+
+    for row in &tree_rows {
         let i = row.index;
-        let (fill, stroke) = if i == active {
+        let is_active = i == active;
+        let (fill, stroke) = if is_active {
             widgets::selected_look(ui.visuals(), 0.18)
         } else if picked[i] {
             // Picked with Ctrl/Cmd+click: moves with the active piece.
-            // A faint outline, quieter than the active piece's look.
             let accent = ui.visuals().selection.stroke.color;
             (accent.linear_multiply(0.06), EStroke::new(1.0, accent.linear_multiply(0.45)))
         } else {
             (Color32::TRANSPARENT, EStroke::NONE)
         };
-        // Without the outline in the other themes, as before.
         let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
         let mut row_dragged = false;
         let p = &mut ed.scene.pieces[i];
         let piece_id = p.id;
+        let piece_name = p.name.clone();
+        let is_parented = p.parent.is_some();
         let piece_triangles = p.mesh.triangle_count();
         let is_visible = p.visible;
+
         let frame_resp = egui::Frame::new()
             .fill(fill)
             .stroke(stroke)
@@ -4730,15 +4843,47 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             .inner_margin(egui::Margin::symmetric(2, 1))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    // Vector hierarchy guide lines for indented rows
                     if row.depth > 0 {
-                        ui.add_space((row.depth - 1) as f32 * 14.0);
-                        ui.label(RichText::new("└").weak().small());
+                        let indent_step = 16.0;
+                        let indent_w = row.depth as f32 * indent_step;
+                        let (indent_rect, _) = ui.allocate_exact_size(egui::vec2(indent_w, 20.0), egui::Sense::hover());
+                        let painter = ui.painter();
+                        let line_color = ui.visuals().text_color().linear_multiply(0.22);
+                        let line_stroke = EStroke::new(1.0, line_color);
+
+                        for d in 0..row.depth {
+                            let x = (indent_rect.left() + d as f32 * indent_step + indent_step * 0.5).round();
+                            let top_y = indent_rect.top() - 1.0;
+                            let bot_y = indent_rect.bottom() + 1.0;
+                            let mid_y = indent_rect.center().y.round();
+
+                            if d < row.depth - 1 {
+                                if row.ancestor_continues.get(d).copied().unwrap_or(false) {
+                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, bot_y)], line_stroke);
+                                }
+                            } else {
+                                if row.is_last_child {
+                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, mid_y)], line_stroke);
+                                } else {
+                                    painter.line_segment([egui::pos2(x, top_y), egui::pos2(x, bot_y)], line_stroke);
+                                }
+                                painter.line_segment(
+                                    [egui::pos2(x, mid_y), egui::pos2(indent_rect.right(), mid_y)],
+                                    line_stroke,
+                                );
+                            }
+                        }
                     }
+
+                    // Drag grip
                     let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
                     if grip.dragged() {
                         grip.dnd_set_drag_payload(PieceDrag(i));
                         row_dragged = true;
                     }
+
+                    // Fold chevron
                     if row.has_children {
                         let chev = if row.is_folded { "▸" } else { "▾" };
                         let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
@@ -4749,6 +4894,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                     } else {
                         ui.allocate_space(egui::vec2(12.0, 12.0));
                     }
+
+                    // Visibility toggle
                     let (icon, tip) =
                         if is_visible { (Icon::Eye, plain::PIECE_HIDE) } else { (Icon::EyeOff, plain::PIECE_SHOW) };
                     if widgets::icon_button(ui, icon, false, true, tip).clicked() {
@@ -4758,20 +4905,65 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             p.visible = !p.visible;
                         }
                     }
-                    if i == active {
-                        let text_w = (ui.available_width() - 80.0).clamp(50.0, 120.0);
-                        tips::hover(
-                            ui.add(egui::TextEdit::singleline(&mut p.name).desired_width(text_w)),
+
+                    // Piece type icon
+                    let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
+                        (Icon::Wireframe, "Tube piece")
+                    } else if p.cage.is_some() {
+                        (Icon::Wireframe, "Retopology cage")
+                    } else {
+                        (Icon::Cube, "Mesh piece")
+                    };
+                    let (icon_rect, icon_resp) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    let icon_color = if is_visible {
+                        ui.visuals().text_color().linear_multiply(0.65)
+                    } else {
+                        ui.visuals().text_color().linear_multiply(0.25)
+                    };
+                    widgets::paint_icon(ui.painter(), icon_rect, piece_icon, icon_color);
+                    tips::hover(icon_resp, icon_tip);
+
+                    // Name label / inline rename
+                    let is_renaming = ed.renaming_piece == Some(piece_id);
+                    if is_renaming {
+                        let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
+                        let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
+                        let text_resp = tips::hover(
+                            ui.add(egui::TextEdit::singleline(&mut ed.rename_text).id(edit_id).desired_width(text_w)),
                             plain::PIECE_RENAME,
                         );
+                        if !ui.memory(|m| m.has_focus(edit_id)) && ed.rename_text == p.name {
+                            text_resp.request_focus();
+                        }
+                        if text_resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                            let trimmed = ed.rename_text.trim();
+                            if !trimmed.is_empty() {
+                                p.name = trimmed.to_string();
+                            }
+                            ed.renaming_piece = None;
+                        } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                            ed.renaming_piece = None;
+                        }
                     } else {
+                        let text_color = if is_active {
+                            ui.visuals().selection.stroke.color
+                        } else if !is_visible {
+                            ui.visuals().text_color().linear_multiply(0.4)
+                        } else {
+                            ui.visuals().text_color()
+                        };
                         let btn = ui.add(
-                            egui::Button::selectable(false, &p.name).sense(egui::Sense::click_and_drag()).truncate(),
+                            egui::Button::selectable(is_active, RichText::new(&p.name).color(text_color))
+                                .frame(false)
+                                .sense(egui::Sense::click_and_drag())
+                                .truncate(),
                         );
                         let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
                         if btn.dragged() {
                             btn.dnd_set_drag_payload(PieceDrag(i));
                             row_dragged = true;
+                        } else if btn.double_clicked() {
+                            action_rename = Some((piece_id, p.name.clone()));
                         } else if btn.clicked() {
                             if command {
                                 pick = Some(i);
@@ -4780,25 +4972,124 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             }
                         }
                     }
-                    if row.is_folded && row.child_count > 0 {
-                        ui.label(RichText::new(format!("({})", row.child_count)).weak().small());
+
+                    // Multires level badge
+                    if let Some(mr) = p.multires.as_ref().filter(|m| m.level_count() > 1) {
+                        let text = format!("L{}", mr.active() + 1);
+                        let tip = format!("Multires level {} of {}", mr.active() + 1, mr.level_count());
+                        let badge =
+                            ui.label(RichText::new(text).small().strong().color(ui.visuals().selection.stroke.color));
+                        tips::hover(badge, &tip);
                     }
-                    ui.label(RichText::new(fmt_count(piece_triangles)).weak().small());
+
+                    // Active mask dot indicator
+                    if p.mesh.mask.iter().any(|&w| w > 0.01) {
+                        let dot = ui.label(RichText::new("●").small().color(Color32::from_rgb(230, 160, 50)));
+                        tips::hover(dot, "Has active mask");
+                    }
+
+                    // Copied instancer badge
                     if sources.contains(&piece_id) {
                         tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
                     }
+
+                    // Picked badge
                     if picked[i] {
-                        tips::hover(ui.label(RichText::new("picked").weak().small()), plain::GIZMO_PIECES);
+                        tips::hover(
+                            ui.label(RichText::new("picked").weak().small().color(ui.visuals().selection.stroke.color)),
+                            plain::GIZMO_PIECES,
+                        );
                     }
+
+                    // Right-aligned triangle count and child counter
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let tri_lbl = ui.label(RichText::new(fmt_count(piece_triangles)).monospace().weak().small());
+                        let vert_count = fmt_count(p.mesh.vertex_count());
+                        let tri_count = fmt_count(piece_triangles);
+                        tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
+
+                        if row.is_folded && row.child_count > 0 {
+                            ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
+                        }
+                    });
                 });
             })
             .response;
+
+        // Active row leading accent stripe
+        if is_active {
+            let accent_color = ui.visuals().selection.stroke.color;
+            let stripe_rect = egui::Rect::from_min_max(
+                egui::pos2(frame_resp.rect.left(), frame_resp.rect.top() + 1.0),
+                egui::pos2(frame_resp.rect.left() + 3.0, frame_resp.rect.bottom() - 1.0),
+            );
+            ui.painter().rect_filled(stripe_rect, widgets::rounding(1.5), accent_color);
+        }
+
+        // Right-click context menu
+        let has_children = row.has_children;
+        let is_folded = row.is_folded;
+        frame_resp.context_menu(|ui| {
+            ui.set_min_width(150.0);
+            if ui.button("Rename").clicked() {
+                action_rename = Some((piece_id, piece_name.clone()));
+                ui.close();
+            }
+            if ui.button("Focus (F)").clicked() {
+                action_focus = Some(i);
+                ui.close();
+            }
+            ui.separator();
+            let vis_label = if is_visible { "Hide" } else { "Show" };
+            if ui.button(vis_label).clicked() {
+                action_toggle_vis = Some(i);
+                ui.close();
+            }
+            if ui.button("Solo (Isolate)").clicked() {
+                action_isolate = Some(i);
+                ui.close();
+            }
+            if ui.button("Hide other pieces").clicked() {
+                action_hide_others = Some(i);
+                ui.close();
+            }
+            if ui.button("Show all pieces").clicked() {
+                action_show_all = true;
+                ui.close();
+            }
+            ui.separator();
+            if is_parented && ui.button("Unparent").clicked() {
+                action_unparent = Some(piece_id);
+                ui.close();
+            }
+            if has_children {
+                let fold_text = if is_folded { "Unfold children" } else { "Fold children" };
+                if ui.button(fold_text).clicked() {
+                    action_toggle_fold = Some(piece_id);
+                    ui.close();
+                }
+            }
+            ui.separator();
+            if ui.button("Duplicate").clicked() {
+                action_duplicate = Some(i);
+                ui.close();
+            }
+            if total_pieces > 1 && ui.button("Delete").clicked() {
+                action_delete = Some(i);
+                ui.close();
+            }
+        });
+
         if row_dragged {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         }
         if let Some(act) = handle_piece_drop(ui, &frame_resp, i, &ed.scene) {
             drop_action = Some(act);
         }
+    }
+
+    if tree_rows.is_empty() && total_pieces > 0 {
+        ui.label(RichText::new("No matching pieces found.").weak().small());
     }
 
     // Drop zone at bottom to unparent and place at end
@@ -4833,15 +5124,47 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     }
-    if let Some(id) = toggle_fold {
+    if let Some((id, name)) = action_rename {
+        ed.renaming_piece = Some(id);
+        ed.rename_text = name;
+    }
+    if let Some(i) = action_focus {
+        ed.scene.set_active(i);
+        ed.frame_active();
+    }
+    if let Some(p) = action_toggle_vis.and_then(|i| ed.scene.pieces.get_mut(i)) {
+        p.visible = !p.visible;
+    }
+    if let Some(i) = action_isolate.or(isolate) {
+        ed.isolate_piece(i);
+    }
+    if let Some(i) = action_hide_others {
+        for (idx, p) in ed.scene.pieces.iter_mut().enumerate() {
+            p.visible = idx == i;
+        }
+    }
+    if action_show_all {
+        for p in &mut ed.scene.pieces {
+            p.visible = true;
+        }
+    }
+    if let Some(id) = action_unparent {
+        ed.set_piece_parent(id, None);
+    }
+    if let Some(id) = action_toggle_fold.or(toggle_fold) {
         if ed.folded_pieces.contains(&id) {
             ed.folded_pieces.remove(&id);
         } else {
             ed.folded_pieces.insert(id);
         }
     }
-    if let Some(i) = isolate {
-        ed.isolate_piece(i);
+    if let Some(i) = action_duplicate {
+        ed.scene.set_active(i);
+        ed.duplicate_active(false);
+    }
+    if let Some(i) = action_delete {
+        ed.scene.set_active(i);
+        ed.delete_active();
     }
     if let Some(i) = pick {
         ed.toggle_piece_pick(i);
@@ -7625,7 +7948,7 @@ mod tests {
         assert!(s.set_parent(gc_id, Some(child_id)));
 
         let mut folded = std::collections::HashSet::new();
-        let rows = build_tree_rows(&s, &folded);
+        let rows = build_tree_rows(&s, &folded, "");
         assert_eq!(rows.len(), 4);
         assert_eq!(rows[0].index, 0); // Root
         assert_eq!(rows[0].depth, 0);
@@ -7634,10 +7957,14 @@ mod tests {
         assert_eq!(rows[1].index, 1); // Child under Root
         assert_eq!(rows[1].depth, 1);
         assert!(rows[1].has_children);
+        assert!(rows[1].is_last_child);
+        assert_eq!(rows[1].ancestor_continues, vec![false]);
 
         assert_eq!(rows[2].index, 2); // Grandchild under Child
         assert_eq!(rows[2].depth, 2);
         assert!(!rows[2].has_children);
+        assert!(rows[2].is_last_child);
+        assert_eq!(rows[2].ancestor_continues, vec![false, false]);
 
         assert_eq!(rows[3].index, 3); // Sibling (Root level)
         assert_eq!(rows[3].depth, 0);
@@ -7645,10 +7972,17 @@ mod tests {
 
         // Fold Root: child and grandchild should be collapsed
         folded.insert(root_id);
-        let collapsed = build_tree_rows(&s, &folded);
+        let collapsed = build_tree_rows(&s, &folded, "");
         assert_eq!(collapsed.len(), 2);
         assert_eq!(collapsed[0].index, 0);
         assert!(collapsed[0].is_folded);
         assert_eq!(collapsed[1].index, 3); // Sibling
+
+        // Filter: search for "Grand" should reveal Root, Child, Grandchild even when Root is folded
+        let filtered = build_tree_rows(&s, &folded, "Grand");
+        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered[0].index, 0); // Root (ancestor preserved)
+        assert_eq!(filtered[1].index, 1); // Child (ancestor preserved)
+        assert_eq!(filtered[2].index, 2); // Grandchild (matches)
     }
 }

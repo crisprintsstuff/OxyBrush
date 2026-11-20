@@ -1327,6 +1327,12 @@ pub struct Editor {
     pub piece_pick: Vec<u64>,
     /// Pieces whose children are collapsed in the tree view outliner.
     pub folded_pieces: std::collections::HashSet<u64>,
+    /// Search filter string for the Pieces outliner.
+    pub piece_filter: String,
+    /// Piece currently undergoing inline rename in the outliner.
+    pub renaming_piece: Option<u64>,
+    /// Text buffer for inline rename.
+    pub rename_text: String,
     /// Command palette / brush picker, while open.
     pub palette: Option<crate::palette::Palette>,
     /// Built-in guide window.
@@ -1663,6 +1669,9 @@ impl Default for Editor {
             custom_gizmo_rotation: None,
             piece_pick: Vec::new(),
             folded_pieces: std::collections::HashSet::new(),
+            piece_filter: String::new(),
+            renaming_piece: None,
+            rename_text: String::new(),
             palette: None,
             guide: Default::default(),
             recent_files: Vec::new(),
