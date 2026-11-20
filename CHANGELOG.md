@@ -8,20 +8,25 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
-- **4K alpha resolution & 16-bit depth preservation** ([#359](https://github.com/crisprintsstuff/OxyBrush/issues/359)):
+- **Hierarchical scene tree outliner for pieces with transform propagation** ([#332](https://github.com/crisprintsstuff/OxyBrush/issues/332), [#358](https://github.com/crisprintsstuff/OxyBrush/pull/358)):
+  - Tree-view outliner in the Pieces panel with depth indentation, branch connector lines, and fold/unfold chevrons (`▾`/`▸`) with collapsed child counts.
+  - Drag-and-drop parenting: drop into the middle zone of a piece to parent under it, or drop below the list / click **Unparent** to unparent.
+  - Transform propagation: transforming a parent piece with the gizmo (`T`) moves all descendants together around the parent's pivot (like a joint or limb), while transforming child pieces leaves the parent intact.
+  - Saved in `.oxb` project files via the skippable `PARN` chunk with full undo/redo history support.
+- **4K alpha resolution & 16-bit depth preservation** ([#359](https://github.com/crisprintsstuff/OxyBrush/issues/359), [#361](https://github.com/crisprintsstuff/OxyBrush/pull/361)):
   - Raised alpha import clamp from 1024 to 4096 (`MAX_ALPHA_SIZE = 4096`), allowing high-resolution detail stamping on dense meshes.
   - Native 16-bit grayscale depth (`u16`) preserved on import for 16-bit PNG files without bit-depth loss or banding.
   - Aspect ratio preservation: non-square alpha images are centered and padded with black borders rather than stretched.
   - Area-box filtering ensures 1px ink lines and high-frequency details are antialiased without dropping when downsampled.
   - Inspector previews downsampled to ≤128x128 for UI textures, saving 16 MB GPU VRAM per 4K alpha.
-- **Preserve volume option in voxel remesh** ([#354](https://github.com/crisprintsstuff/OxyBrush/issues/354)). When enabled, remeshing projects vertices back to the level-set zero crossing and applies volume-calibrated normal adjustment to compensate for voxelization chord loss and smoothing shrinkage. Successive remeshes retain their silhouette, mass, and volume without shrinking or squashing. Also available in the CLI via `--preserve-volume`.
+- **Preserve volume option in voxel remesh** ([#354](https://github.com/crisprintsstuff/OxyBrush/issues/354), [#357](https://github.com/crisprintsstuff/OxyBrush/pull/357)). When enabled, remeshing projects vertices back to the level-set zero crossing and applies volume-calibrated normal adjustment to compensate for voxelization chord loss and smoothing shrinkage. Successive remeshes retain their silhouette, mass, and volume without shrinking or squashing. Also available in the CLI via `--preserve-volume`.
 
 ### Fixed
 
-- **Inspector panel narrow resizing and control wrapping** ([#360](https://github.com/crisprintsstuff/OxyBrush/issues/360)):
+- **Inspector panel narrow resizing and control wrapping** ([#360](https://github.com/crisprintsstuff/OxyBrush/issues/360), [#362](https://github.com/crisprintsstuff/OxyBrush/pull/362)):
   - Converted rigid single-line widget rows (Alpha selector, Brush size, Symmetry, Topology, Groups) to wrapping layouts (`ui.horizontal_wrapped`) so buttons stack gracefully.
   - Added `.min_size(180.0)` and flexible piece renaming/truncation so the inspector panel can be dragged much narrower without egui snapping back.
-- **Deform window title bar dragging** ([#351](https://github.com/crisprintsstuff/OxyBrush/issues/351)): Prevented scrolled-away deformer sliders from triggering deformations when dragging the window by its title bar. Hit-testing for quick flicks is now strictly bounded to the scroll viewport's visible clip rectangle and ignores drags of other widgets or windows.
+- **Deform window title bar dragging** ([#351](https://github.com/crisprintsstuff/OxyBrush/issues/351), [#355](https://github.com/crisprintsstuff/OxyBrush/pull/355)): Prevented scrolled-away deformer sliders from triggering deformations when dragging the window by its title bar. Hit-testing for quick flicks is now strictly bounded to the scroll viewport's visible clip rectangle and ignores drags of other widgets or windows.
 
 ## [4.0.0-beta.19] - 2026-11-19
 

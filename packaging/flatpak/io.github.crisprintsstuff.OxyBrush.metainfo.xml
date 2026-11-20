@@ -55,11 +55,12 @@
   <releases>
     <release version="4.0.0-beta.19.2" date="2026-11-20" type="development">
       <description>
-        <p>Import 4K alphas with native 16-bit depth and aspect-ratio
-        preservation. Resize the inspector panel narrower with wrapping
-        controls. Preserve mesh volume across voxel remeshes with level-set
-        zero crossing projection. Fix Deform window title bar dragging and
-        update project branding.</p>
+        <p>Hierarchical tree-view scene outliner for pieces with folding,
+        drag-and-drop parenting, and transform propagation. Import 4K alphas
+        with native 16-bit depth and aspect-ratio preservation. Resize the
+        inspector panel narrower with wrapping controls. Preserve mesh volume
+        across voxel remeshes with level-set zero crossing projection. Fix
+        Deform window title bar dragging and update project branding.</p>
       </description>
     </release>
     <release version="4.0.0-beta.19" date="2026-11-19" type="development">
