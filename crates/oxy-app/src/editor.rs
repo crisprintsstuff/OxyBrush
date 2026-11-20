@@ -1398,6 +1398,14 @@ pub struct Editor {
     pub slider_size: crate::settings::SliderSize,
     /// Fill of buttons and other controls; `None` keeps the theme's.
     pub button_color: Option<[u8; 3]>,
+    /// Tint color for UI panels and chrome; `None` keeps the base theme neutral.
+    pub ui_tint_color: Option<[u8; 3]>,
+    /// Strength of the UI tint color in `0.0..=1.0`.
+    pub ui_tint_intensity: f32,
+    /// UI brightness / intensity offset in `-1.0..=1.0`.
+    pub ui_brightness: f32,
+    /// Current hue angle in degrees (0..=360) for the UI color slider.
+    pub ui_tint_hue: f32,
     /// What color the brush icons' clay is, and the custom one.
     pub brush_icon_color: crate::settings::BrushIconColor,
     pub brush_icon_custom: [u8; 3],
@@ -1698,6 +1706,10 @@ impl Default for Editor {
             corner_style: crate::settings::CornerStyle::Rounded,
             slider_size: crate::settings::SliderSize::Normal,
             button_color: None,
+            ui_tint_color: None,
+            ui_tint_intensity: 0.0,
+            ui_brightness: 0.0,
+            ui_tint_hue: 210.0,
             brush_icon_color: crate::settings::BrushIconColor::Clay,
             brush_icon_custom: crate::settings::DEFAULT_BRUSH_ICON_RGB,
             max_triangles: crate::settings::default_max_triangles(),
@@ -1987,6 +1999,9 @@ impl Editor {
             corner_style: self.corner_style,
             slider_size: self.slider_size,
             button_color: self.button_color,
+            ui_tint_color: self.ui_tint_color,
+            ui_tint_intensity: self.ui_tint_intensity,
+            ui_brightness: self.ui_brightness,
             brush_icon_color: self.brush_icon_color,
             brush_icon_custom: self.brush_icon_custom,
             max_triangles: self.max_triangles,
@@ -2113,6 +2128,9 @@ impl Editor {
         self.corner_style = crate::settings::CornerStyle::default();
         self.slider_size = crate::settings::SliderSize::default();
         self.button_color = None;
+        self.ui_tint_color = None;
+        self.ui_tint_intensity = 0.0;
+        self.ui_brightness = 0.0;
         self.brush_icon_color = crate::settings::BrushIconColor::Clay;
         if self.ui_scale != 1.0 {
             self.ui_scale_from = Some(self.ui_scale);
@@ -2275,6 +2293,12 @@ impl Editor {
         self.corner_style = s.corner_style;
         self.slider_size = s.slider_size;
         self.button_color = s.button_color;
+        self.ui_tint_color = s.ui_tint_color;
+        self.ui_tint_intensity = s.ui_tint_intensity;
+        self.ui_brightness = s.ui_brightness;
+        if let Some(rgb) = s.ui_tint_color {
+            self.ui_tint_hue = crate::ui::rgb_to_hue(rgb);
+        }
         self.brush_icon_color = s.brush_icon_color;
         self.brush_icon_custom = s.brush_icon_custom;
         self.max_triangles = s.max_triangles;
@@ -12719,6 +12743,9 @@ mod tests {
             corner_style: crate::settings::CornerStyle::Soft,
             slider_size: crate::settings::SliderSize::Thick,
             button_color: Some([1, 2, 3]),
+            ui_tint_color: Some([30, 60, 90]),
+            ui_tint_intensity: 0.4,
+            ui_brightness: -0.1,
             brush_icon_color: crate::settings::BrushIconColor::Accent,
             brush_icon_custom: [4, 5, 6],
             max_triangles: 48_000_000,

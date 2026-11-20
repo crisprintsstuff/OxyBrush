@@ -413,6 +413,12 @@ pub struct Settings {
     pub slider_size: SliderSize,
     /// Fill of buttons and other controls; `None` keeps the theme's.
     pub button_color: Option<[u8; 3]>,
+    /// Tint color for UI panels and chrome; `None` keeps the base theme neutral.
+    pub ui_tint_color: Option<[u8; 3]>,
+    /// Strength of the UI tint color in `0.0..=1.0` (0 = neutral base theme).
+    pub ui_tint_intensity: f32,
+    /// UI brightness / intensity offset in `-1.0..=1.0` (0 = base theme default).
+    pub ui_brightness: f32,
     pub brush_icon_color: BrushIconColor,
     pub brush_icon_custom: [u8; 3],
     /// Maximum triangles allowed during subdivision (0 = unlimited).
@@ -972,6 +978,9 @@ impl Default for Settings {
             corner_style: CornerStyle::Rounded,
             slider_size: SliderSize::Normal,
             button_color: None,
+            ui_tint_color: None,
+            ui_tint_intensity: 0.0,
+            ui_brightness: 0.0,
             brush_icon_color: BrushIconColor::Clay,
             brush_icon_custom: DEFAULT_BRUSH_ICON_RGB,
             max_triangles: default_max_triangles(),
@@ -1170,6 +1179,12 @@ impl Settings {
             + &format!("settings_panel = {}\n", self.settings_panel)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
+            + &format!(
+                "ui_tint = {}\nui_tint_intensity = {}\nui_brightness = {}\n",
+                self.ui_tint_color.map_or("none".to_string(), |[r, g, b]| format!("{r}, {g}, {b}")),
+                self.ui_tint_intensity,
+                self.ui_brightness,
+            )
             + &self.brush.as_ref().map_or(String::new(), |b| format!("brush = {}\n", b.to_code()))
             + &if self.brush_gravity.is_empty() {
                 String::new()
@@ -1373,6 +1388,23 @@ impl Settings {
                     }
                 }
                 "button_color" => s.button_color = parse_u8_rgb(v),
+                "ui_tint" => {
+                    s.ui_tint_color = if v == "none" || v.is_empty() { None } else { parse_u8_rgb(v) };
+                }
+                "ui_tint_intensity" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=1.0).contains(&x)
+                    {
+                        s.ui_tint_intensity = x;
+                    }
+                }
+                "ui_brightness" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (-1.0..=1.0).contains(&x)
+                    {
+                        s.ui_brightness = x;
+                    }
+                }
                 "brush_icon_color" => {
                     if let Some(c) = BrushIconColor::from_key(v) {
                         s.brush_icon_color = c;
@@ -1707,6 +1739,9 @@ mod tests {
             corner_style: CornerStyle::Soft,
             slider_size: SliderSize::Thick,
             button_color: Some([1, 2, 3]),
+            ui_tint_color: Some([30, 60, 90]),
+            ui_tint_intensity: 0.4,
+            ui_brightness: -0.1,
             brush_icon_color: BrushIconColor::Accent,
             brush_icon_custom: [4, 5, 6],
             max_triangles: 48_000_000,

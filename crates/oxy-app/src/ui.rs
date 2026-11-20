@@ -128,6 +128,122 @@ pub struct Palette {
     pub window_stroke: Color32,
 }
 
+/// Convert a hue in degrees `0.0..=360.0` to full-saturation, full-value RGB `[u8; 3]`.
+pub fn hue_to_rgb(hue_deg: f32) -> [u8; 3] {
+    let h = (hue_deg % 360.0 + 360.0) % 360.0;
+    let c = 1.0;
+    let x = c * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (c, x, 0.0),
+        1 => (x, c, 0.0),
+        2 => (0.0, c, x),
+        3 => (0.0, x, c),
+        4 => (x, 0.0, c),
+        _ => (c, 0.0, x),
+    };
+    [(r * 255.0).round() as u8, (g * 255.0).round() as u8, (b * 255.0).round() as u8]
+}
+
+/// Convert an RGB color `[u8; 3]` to its dominant hue in degrees `0.0..=360.0`.
+pub fn rgb_to_hue(rgb: [u8; 3]) -> f32 {
+    let r = rgb[0] as f32 / 255.0;
+    let g = rgb[1] as f32 / 255.0;
+    let b = rgb[2] as f32 / 255.0;
+    let max = r.max(g).max(b);
+    let min = r.min(g).min(b);
+    let delta = max - min;
+    if delta < 1e-4 {
+        return 0.0;
+    }
+    let h = if (max - r).abs() < 1e-4 {
+        ((g - b) / delta) % 6.0
+    } else if (max - g).abs() < 1e-4 {
+        (b - r) / delta + 2.0
+    } else {
+        (r - g) / delta + 4.0
+    };
+    (h * 60.0 + 360.0) % 360.0
+}
+
+impl Palette {
+    /// Adjust the palette's chrome colors with an optional tint color, tint intensity (0..=1),
+    /// and overall brightness offset (-1..=1).
+    pub fn adjusted(mut self, tint: Option<[u8; 3]>, tint_amount: f32, brightness: f32) -> Self {
+        let tint_amount = tint_amount.clamp(0.0, 1.0);
+        let brightness = brightness.clamp(-1.0, 1.0);
+        if tint.is_none() && tint_amount < 1e-4 && brightness.abs() < 1e-4 {
+            return self;
+        }
+
+        let adjust_color = |c: Color32, is_text: bool| -> Color32 {
+            let mut r = c.r() as f32;
+            let mut g = c.g() as f32;
+            let mut b = c.b() as f32;
+
+            if brightness.abs() > 1e-4 {
+                if is_text {
+                    if brightness > 0.0 {
+                        r = (r - brightness * 30.0).max(10.0);
+                        g = (g - brightness * 30.0).max(10.0);
+                        b = (b - brightness * 30.0).max(10.0);
+                    } else {
+                        r = (r - brightness * 20.0).min(255.0);
+                        g = (g - brightness * 20.0).min(255.0);
+                        b = (b - brightness * 20.0).min(255.0);
+                    }
+                } else if brightness > 0.0 {
+                    r += (255.0 - r) * (brightness * 0.45);
+                    g += (255.0 - g) * (brightness * 0.45);
+                    b += (255.0 - b) * (brightness * 0.45);
+                } else {
+                    let factor = 1.0 + brightness * 0.75;
+                    r *= factor;
+                    g *= factor;
+                    b *= factor;
+                }
+            }
+
+            if let Some(t) = tint
+                && tint_amount > 1e-4
+            {
+                let max_t = (t[0].max(t[1]).max(t[2]) as f32).max(1.0);
+                let t_unit = [t[0] as f32 / max_t, t[1] as f32 / max_t, t[2] as f32 / max_t];
+                let lum = 0.299 * r + 0.587 * g + 0.114 * b;
+                let factor = if is_text { tint_amount * 0.2 } else { tint_amount * 0.65 };
+
+                let t_r = lum * t_unit[0];
+                let t_g = lum * t_unit[1];
+                let t_b = lum * t_unit[2];
+
+                r = r * (1.0 - factor) + t_r * factor;
+                g = g * (1.0 - factor) + t_g * factor;
+                b = b * (1.0 - factor) + t_b * factor;
+            }
+
+            Color32::from_rgba_premultiplied(
+                r.clamp(0.0, 255.0).round() as u8,
+                g.clamp(0.0, 255.0).round() as u8,
+                b.clamp(0.0, 255.0).round() as u8,
+                c.a(),
+            )
+        };
+
+        self.bg = adjust_color(self.bg, false);
+        self.panel = adjust_color(self.panel, false);
+        self.window = adjust_color(self.window, false);
+        self.faint = adjust_color(self.faint, false);
+        self.inactive_weak = adjust_color(self.inactive_weak, false);
+        self.inactive_fill = adjust_color(self.inactive_fill, false);
+        self.hovered_weak = adjust_color(self.hovered_weak, false);
+        self.hovered_fill = adjust_color(self.hovered_fill, false);
+        self.stroke = adjust_color(self.stroke, false);
+        self.window_stroke = adjust_color(self.window_stroke, false);
+        self.text = adjust_color(self.text, true);
+
+        self
+    }
+}
+
 /// The chrome colours of `theme` (high contrast overrides it).
 pub fn theme_palette(theme: ThemePreset, is_high_contrast: bool) -> Palette {
     if is_high_contrast {
@@ -317,6 +433,9 @@ pub fn apply_theme(
     high_contrast: bool,
     ui_scale: f32,
     layout: UiLayout,
+    ui_tint_color: Option<[u8; 3]>,
+    ui_tint_intensity: f32,
+    ui_brightness: f32,
 ) {
     let m = metrics(layout);
     let is_high_contrast = high_contrast || theme == ThemePreset::HighContrast;
@@ -329,7 +448,10 @@ pub fn apply_theme(
         egui::Visuals::dark()
     };
 
-    let p = theme_palette(theme, is_high_contrast);
+    let mut p = theme_palette(theme, is_high_contrast);
+    if !is_high_contrast {
+        p = p.adjusted(ui_tint_color, ui_tint_intensity, ui_brightness);
+    }
 
     v.panel_fill = p.panel;
     v.window_fill = p.window;
@@ -1700,7 +1822,10 @@ fn theme_window(ctx: &egui::Context, ed: &mut Editor) {
 /// button, and an accent dot, with its name under it.
 fn theme_card(ui: &mut Ui, ed: &Editor, theme: ThemePreset, selected: bool) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(egui::vec2(116.0, 92.0), egui::Sense::click());
-    let p = theme_palette(theme, theme == ThemePreset::HighContrast);
+    let mut p = theme_palette(theme, theme == ThemePreset::HighContrast);
+    if !ed.high_contrast && theme != ThemePreset::HighContrast {
+        p = p.adjusted(ed.ui_tint_color, ed.ui_tint_intensity, ed.ui_brightness);
+    }
     let accent = {
         let [r, g, b] = ed.accent.rgb(ed.custom_accent);
         Color32::from_rgb(r, g, b)
@@ -1801,6 +1926,102 @@ fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
             }
         });
     }
+    ui.add_space(8.0);
+    ui.label(RichText::new("UI color & intensity").strong());
+    ui.label(RichText::new("Color tint and brightness intensity for panels, windows and chrome.").weak().small());
+
+    // Hue slider
+    ui.horizontal(|ui| {
+        ui.label("Color hue:");
+        let mut hue = ed.ui_tint_hue;
+        let slider = egui::Slider::new(&mut hue, 0.0..=360.0).suffix("°").show_value(true);
+        if ui.add(slider).changed() {
+            ed.ui_tint_hue = hue;
+            let rgb = hue_to_rgb(hue);
+            ed.ui_tint_color = Some(rgb);
+            if ed.ui_tint_intensity < 0.1 {
+                ed.ui_tint_intensity = 0.45;
+            }
+        }
+        let swatch_rgb = ed.ui_tint_color.unwrap_or_else(|| hue_to_rgb(ed.ui_tint_hue));
+        let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+        ui.painter().rect_filled(
+            rect,
+            widgets::rounding(3.0),
+            Color32::from_rgb(swatch_rgb[0], swatch_rgb[1], swatch_rgb[2]),
+        );
+    });
+
+    // Color intensity slider
+    ui.horizontal(|ui| {
+        ui.label("Color intensity:");
+        let mut intensity_pct = (ed.ui_tint_intensity * 100.0).round();
+        let slider = egui::Slider::new(&mut intensity_pct, 0.0..=100.0).suffix("%").show_value(true);
+        if ui.add(slider).changed() {
+            ed.ui_tint_intensity = (intensity_pct / 100.0).clamp(0.0, 1.0);
+            if ed.ui_tint_color.is_none() && ed.ui_tint_intensity > 0.0 {
+                ed.ui_tint_color = Some(hue_to_rgb(ed.ui_tint_hue));
+            }
+        }
+    });
+
+    // UI brightness intensity slider
+    ui.horizontal(|ui| {
+        ui.label("UI brightness:");
+        let mut brightness_pct = (ed.ui_brightness * 100.0).round();
+        let slider = egui::Slider::new(&mut brightness_pct, -50.0..=50.0).suffix("%").show_value(true);
+        if ui.add(slider).changed() {
+            ed.ui_brightness = (brightness_pct / 100.0).clamp(-0.5, 0.5);
+        }
+    });
+
+    // Quick swatches and custom color picker + Reset button
+    ui.horizontal(|ui| {
+        for (name, maybe_rgb) in [
+            ("Neutral", None),
+            ("Slate", Some([80, 120, 180])),
+            ("Ocean", Some([30, 130, 220])),
+            ("Forest", Some([40, 160, 100])),
+            ("Amber", Some([230, 140, 30])),
+            ("Crimson", Some([220, 60, 60])),
+            ("Purple", Some([160, 80, 220])),
+        ] {
+            let is_selected = match (ed.ui_tint_color, maybe_rgb) {
+                (None, None) => ed.ui_tint_intensity < 0.05,
+                (Some(c), Some(t)) => ed.ui_tint_intensity >= 0.05 && c == t,
+                _ => false,
+            };
+            if ui.selectable_label(is_selected, name).clicked() {
+                if let Some(rgb) = maybe_rgb {
+                    ed.ui_tint_color = Some(rgb);
+                    ed.ui_tint_hue = rgb_to_hue(rgb);
+                    if ed.ui_tint_intensity < 0.1 {
+                        ed.ui_tint_intensity = 0.45;
+                    }
+                } else {
+                    ed.ui_tint_color = None;
+                    ed.ui_tint_intensity = 0.0;
+                }
+            }
+        }
+
+        let mut custom_rgb = ed.ui_tint_color.unwrap_or_else(|| hue_to_rgb(ed.ui_tint_hue)).map(|c| c as f32 / 255.0);
+        if ui.color_edit_button_rgb(&mut custom_rgb).changed() {
+            let rgb = custom_rgb.map(|c| (c * 255.0).round() as u8);
+            ed.ui_tint_color = Some(rgb);
+            ed.ui_tint_hue = rgb_to_hue(rgb);
+            if ed.ui_tint_intensity < 0.1 {
+                ed.ui_tint_intensity = 0.45;
+            }
+        }
+
+        let has_custom = ed.ui_tint_intensity > 0.0 || ed.ui_brightness.abs() > 0.01;
+        if ui.add_enabled(has_custom, egui::Button::new("Reset")).clicked() {
+            ed.ui_tint_color = None;
+            ed.ui_tint_intensity = 0.0;
+            ed.ui_brightness = 0.0;
+        }
+    });
     ui.add_space(8.0);
     ui.label(RichText::new("Buttons").strong());
     ui.horizontal(|ui| {
@@ -6698,6 +6919,9 @@ mod tests {
             high_contrast,
             ui_scale,
             layout,
+            None,
+            0.0,
+            0.0,
         );
     }
 
@@ -7240,6 +7464,9 @@ mod tests {
             false,
             1.0,
             UiLayout::Standard,
+            None,
+            0.0,
+            0.0,
         );
         let v = ctx.global_style().visuals.clone();
         // Navy: blue clearly above red and green.
@@ -7275,6 +7502,9 @@ mod tests {
                 false,
                 1.0,
                 layout,
+                None,
+                0.0,
+                0.0,
             );
             let mut rects = None;
             for _ in 0..3 {
@@ -7308,6 +7538,9 @@ mod tests {
                 false,
                 1.0,
                 UiLayout::Standard,
+                None,
+                0.0,
+                0.0,
             );
             ctx.global_style().visuals.clone()
         };
@@ -7342,6 +7575,9 @@ mod tests {
                 false,
                 1.0,
                 UiLayout::Standard,
+                None,
+                0.0,
+                0.0,
             );
             let w = ctx.global_style().visuals.widgets.clone();
             (w.inactive.weak_bg_fill, w.hovered.weak_bg_fill)
@@ -7377,6 +7613,9 @@ mod tests {
                         false,
                         1.0,
                         layout,
+                        None,
+                        0.0,
+                        0.0,
                     );
                     let s = ctx.global_style();
                     (s.spacing.slider_rail_height, s.spacing.interact_size.y, s.spacing.slider_width)
@@ -7412,6 +7651,9 @@ mod tests {
                         false,
                         1.0,
                         UiLayout::Standard,
+                        None,
+                        0.0,
+                        0.0,
                     );
                     let v = ctx.global_style().visuals.clone();
                     let expected_accent = Color32::from_rgb(
@@ -7650,5 +7892,63 @@ mod tests {
         assert_eq!(collapsed[0].index, 0);
         assert!(collapsed[0].is_folded);
         assert_eq!(collapsed[1].index, 3); // Sibling
+    }
+
+    #[test]
+    fn test_ui_hue_and_palette_adjustment() {
+        // 1. Hue to RGB and back
+        let red = hue_to_rgb(0.0);
+        assert_eq!(red, [255, 0, 0]);
+        assert!((rgb_to_hue(red) - 0.0).abs() < 1.0);
+
+        let green = hue_to_rgb(120.0);
+        assert_eq!(green, [0, 255, 0]);
+        assert!((rgb_to_hue(green) - 120.0).abs() < 1.0);
+
+        let blue = hue_to_rgb(240.0);
+        assert_eq!(blue, [0, 0, 255]);
+        assert!((rgb_to_hue(blue) - 240.0).abs() < 1.0);
+
+        // 2. Palette adjustment with tint and brightness
+        let base = theme_palette(ThemePreset::Graphite, false);
+        // Neutral with 0 tint and 0 brightness matches base
+        let neutral = base.adjusted(None, 0.0, 0.0);
+        assert_eq!(neutral.panel, base.panel);
+        assert_eq!(neutral.bg, base.bg);
+
+        // Blue tint shifts panels towards blue
+        let tinted = base.adjusted(Some([0, 100, 255]), 0.5, 0.0);
+        assert!(tinted.panel.b() > tinted.panel.r());
+        assert!(tinted.bg.b() > tinted.bg.r());
+
+        // Negative brightness darkens panels
+        let darkened = base.adjusted(None, 0.0, -0.4);
+        assert!(darkened.panel.r() < base.panel.r());
+        assert!(darkened.bg.r() < base.bg.r());
+
+        // Positive brightness lightens panels
+        let lightened = base.adjusted(None, 0.0, 0.4);
+        assert!(lightened.panel.r() > base.panel.r());
+        assert!(lightened.bg.r() > base.bg.r());
+
+        // 3. Applying custom tint in apply_theme sets visual panel fill
+        let ctx = egui::Context::default();
+        apply_theme(
+            &ctx,
+            ThemePreset::Graphite,
+            AccentPreset::Terracotta,
+            [0; 3],
+            CornerStyle::Rounded,
+            SliderSize::Normal,
+            None,
+            false,
+            1.0,
+            UiLayout::Standard,
+            Some([0, 120, 240]),
+            0.6,
+            -0.1,
+        );
+        let v = ctx.global_style().visuals.clone();
+        assert!(v.panel_fill.b() > v.panel_fill.r());
     }
 }

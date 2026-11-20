@@ -52,6 +52,9 @@ type AppliedThemeKey = (
     bool,
     f32,
     crate::settings::UiLayout,
+    Option<[u8; 3]>,
+    u32,
+    u32,
 );
 
 pub struct App {
@@ -570,6 +573,9 @@ impl App {
             self.editor.high_contrast,
             self.editor.ui_scale,
             self.editor.layout,
+            self.editor.ui_tint_color,
+            self.editor.ui_tint_intensity.to_bits(),
+            self.editor.ui_brightness.to_bits(),
         );
         if self.applied_theme != Some(theme_key) {
             ui::apply_theme(
@@ -583,6 +589,9 @@ impl App {
                 theme_key.6,
                 theme_key.7,
                 theme_key.8,
+                theme_key.9,
+                f32::from_bits(theme_key.10),
+                f32::from_bits(theme_key.11),
             );
             self.applied_theme = Some(theme_key);
         }
