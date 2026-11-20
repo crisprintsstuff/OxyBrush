@@ -245,6 +245,25 @@ fn edit_section(ui: &mut egui::Ui, ed: &mut Editor) {
     let Some(mut recipe) = ed.living_edit_recipe().cloned() else { return };
     ui.label(RichText::new(format!("Edit {}", recipe.settings.kind.label())).strong());
     ui.label(RichText::new("Later strokes stay as they are. Esc cancels.").weak().small());
+    let is_editing_path = ed.curve.as_ref().is_some_and(|c| c.living_stroke == Some(id));
+    ui.horizontal(|ui| {
+        let btn_text = if is_editing_path { "Done editing path" } else { "Edit path" };
+        if ui
+            .selectable_label(is_editing_path, btn_text)
+            .on_hover_text("Show this stroke's path as a curve with points on the model. Drag points to reshape it, click to add one, Alt+click to remove one. Esc cancels.")
+            .clicked()
+        {
+            if is_editing_path {
+                ed.accept_living_curve(id);
+            } else {
+                let _ = ed.living_open_path_edit(id);
+            }
+        }
+        if is_editing_path {
+            ui.label(RichText::new("Drag curve handles on model").weak().small());
+        }
+    });
+    ui.add_space(2.0);
     egui::Grid::new(format!("stroke_edit_{id}")).num_columns(2).spacing([8.0, 4.0]).show(ui, |ui| {
         ui.label("Brush");
         egui::ComboBox::from_id_salt("stroke_edit_brush").selected_text(recipe.settings.kind.label()).show_ui(
