@@ -955,7 +955,6 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         action = Some(UiAction::InstallAddon);
     }
     dialogs(ui, ed, &mut action);
-    theme_window(ui.ctx(), ed);
     crate::deform_ui::deform_window(ui.ctx(), ed);
     crate::living_ui::window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
@@ -1039,7 +1038,7 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
                             crate::editor::SettingsTab::General => plain::SETTINGS,
                             crate::editor::SettingsTab::Pen => plain::PEN_SETTINGS,
                             crate::editor::SettingsTab::Interface => {
-                                "Brush shelf options; the look is in the Theme window"
+                                "Theme, colors, layout presets, UI scaling and shelf options"
                             }
                             crate::editor::SettingsTab::Plugins => plain::PLUGINS,
                             crate::editor::SettingsTab::Keymap => plain::KEYMAP_SETTINGS,
@@ -1076,6 +1075,7 @@ fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
             });
         });
     ed.show_settings = open;
+    ed.show_theme = open && ed.settings_tab == crate::editor::SettingsTab::Interface;
 }
 
 fn print_tools_dialog(ctx: &egui::Context, ed: &mut Editor) {
@@ -1320,21 +1320,9 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
 
 fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.heading("General");
-    ui.label(RichText::new("Interface layout, arrangement, and default sculpting behavior.").weak().small());
+    ui.label(RichText::new("Startup, tools, and default sculpting behavior.").weak().small());
     ui.add_space(6.0);
 
-    ui.label(RichText::new("Layout preset").strong());
-    for l in UiLayout::ALL {
-        tips::hover(ui.radio_value(&mut ed.layout, l, l.label()), l.description());
-    }
-    ui.add_space(4.0);
-
-    ui.separator();
-    tips::hover(ui.label(RichText::new("Panel arrangement").strong()), plain::ARRANGE);
-    arrange_menu(ui, ed_layout_snapshot(ed));
-    ui.add_space(4.0);
-
-    ui.separator();
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
     tips::check_plain(
@@ -1509,27 +1497,37 @@ pub(crate) fn scale_slider(ui: &mut Ui, scale: &mut f32) -> egui::Response {
 }
 
 fn settings_interface_tab(ui: &mut Ui, ed: &mut Editor) {
-    ui.heading("Interface");
+    ui.heading("Appearance");
+    ui.label(
+        RichText::new("Theme, accent and tint colors, layout presets, scaling and interface shape.").weak().small(),
+    );
+    ui.add_space(6.0);
+
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Theme, colors, interface scale and corners are in the Theme window.").weak().small());
-        if tips::button(ui, "Theme…", Cmd::ThemeWindow).clicked() {
-            ed.open_theme(crate::editor::ThemeTab::Themes);
+        for tab in crate::editor::ThemeTab::ALL {
+            ui.selectable_value(&mut ed.theme_tab, tab, tab.label());
         }
     });
-    ui.add_space(6.0);
-    ui.label(RichText::new("Brush shelf").strong());
-    tips::check_plain(
-        ui,
-        &mut ed.show_brush_names,
-        "Show brush names in the brush shelf",
-        "Off shows the brushes as icons only, so more fit in the shelf; hover one to see its name. Works with every theme and layout.",
-    );
-    tips::check_plain(
-        ui,
-        &mut ed.narrow_shelf,
-        "Narrow brush shelf (one column)",
-        "A side shelf as one narrow column, leaving more room for the model: the current brush, alpha and material stacked on top, then one brush per row with its name underneath (or icons only, with names off). Not used when the shelf is at the bottom.",
-    );
+    ui.separator();
+    match ed.theme_tab {
+        crate::editor::ThemeTab::Themes => theme_tab_themes(ui, ed),
+        crate::editor::ThemeTab::Colors => theme_tab_colors(ui, ed),
+        crate::editor::ThemeTab::LayoutScale => theme_tab_layout_scale(ui, ed),
+    }
+    ui.add_space(8.0);
+    ui.separator();
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Changes apply at once and are remembered.").weak().small());
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("Reset appearance")
+                .on_hover_text("Back to the default look: Graphite, the terracotta accent, rounded corners, 100% scale and the default viewport background")
+                .clicked()
+            {
+                ed.reset_theme();
+            }
+        });
+    });
 }
 
 fn settings_plugins_tab(ui: &mut Ui, ed: &mut Editor) {
@@ -1772,50 +1770,6 @@ fn short_label(label: &'static str) -> &'static str {
 /// The note in brackets of a theme's label, if any.
 fn theme_note(t: ThemePreset) -> &'static str {
     t.label().split_once(" (").map_or("", |(_, n)| n.trim_end_matches(')'))
-}
-
-/// The Theme window (RFC 0014): everything about how OxyBrush looks, in
-/// one place. Themes: the theme gallery and looks. Colors: accent and
-/// viewport background. Size & shape: interface scale and corner rounding.
-/// Changes apply at once and are remembered.
-fn theme_window(ctx: &egui::Context, ed: &mut Editor) {
-    if !ed.show_theme {
-        return;
-    }
-    let mut open = true;
-    egui::Window::new("Theme")
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_pos(egui::pos2(300.0, 140.0))
-        .show(ctx, |ui| {
-            ui.set_width(520.0);
-            ui.horizontal(|ui| {
-                for tab in crate::editor::ThemeTab::ALL {
-                    ui.selectable_value(&mut ed.theme_tab, tab, tab.label());
-                }
-            });
-            ui.separator();
-            match ed.theme_tab {
-                crate::editor::ThemeTab::Themes => theme_tab_themes(ui, ed),
-                crate::editor::ThemeTab::Colors => theme_tab_colors(ui, ed),
-                crate::editor::ThemeTab::SizeShape => theme_tab_size_shape(ui, ed),
-            }
-            ui.separator();
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("Changes apply at once and are remembered.").weak().small());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .button("Reset everything")
-                        .on_hover_text("Back to the default look: Graphite, the terracotta accent, rounded corners, 100% scale and the default viewport background")
-                        .clicked()
-                    {
-                        ed.reset_theme();
-                    }
-                });
-            });
-        });
-    ed.show_theme &= open;
 }
 
 /// One theme as a small picture of its panels, a window with text and a
@@ -2088,7 +2042,7 @@ fn contrast_ratio(rgb: [u8; 3], text: Color32) -> f32 {
     (a.max(b) + 0.05) / (a.min(b) + 0.05)
 }
 
-fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
+fn theme_tab_layout_scale(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new("Interface scale").strong());
     ui.horizontal(|ui| {
         let before = ed.ui_scale;
@@ -2101,6 +2055,32 @@ fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.add_space(8.0);
+
+    ui.label(RichText::new("Layout preset").strong());
+    for l in UiLayout::ALL {
+        tips::hover(ui.radio_value(&mut ed.layout, l, l.label()), l.description());
+    }
+    ui.add_space(8.0);
+
+    tips::hover(ui.label(RichText::new("Panel arrangement").strong()), plain::ARRANGE);
+    arrange_menu(ui, ed_layout_snapshot(ed));
+    ui.add_space(8.0);
+
+    ui.label(RichText::new("Brush shelf").strong());
+    tips::check_plain(
+        ui,
+        &mut ed.show_brush_names,
+        "Show brush names in the brush shelf",
+        "Off shows the brushes as icons only, so more fit in the shelf; hover one to see its name. Works with every theme and layout.",
+    );
+    tips::check_plain(
+        ui,
+        &mut ed.narrow_shelf,
+        "Narrow brush shelf (one column)",
+        "A side shelf as one narrow column, leaving more room for the model: the current brush, alpha and material stacked on top, then one brush per row with its name underneath (or icons only, with names off). Not used when the shelf is at the bottom.",
+    );
+    ui.add_space(8.0);
+
     ui.label(RichText::new("Corners").strong());
     ui.horizontal(|ui| {
         for c in CornerStyle::ALL {
@@ -2133,6 +2113,7 @@ fn theme_tab_size_shape(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.add_space(8.0);
+
     ui.label(RichText::new("Slider thickness").strong());
     ui.horizontal(|ui| {
         for size in SliderSize::ALL {
@@ -7399,7 +7380,7 @@ mod tests {
                 ed.open_theme(tab);
                 ed.accent = AccentPreset::Custom;
                 run_frames(&mut ed, 2);
-                assert!(ed.show_theme, "{layout:?} {tab:?} stays open");
+                assert!(ed.show_settings && ed.show_theme, "{layout:?} {tab:?} stays open");
             }
         }
     }

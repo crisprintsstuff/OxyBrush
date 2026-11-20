@@ -225,11 +225,11 @@ commands! {
     Focal85 => "Focal length 85 mm", "", "Set the perspective lens to 85 mm (portrait lens).";
     Focal135 => "Focal length 135 mm", "", "Set the perspective lens to 135 mm (telephoto lens).";
     ResetFocal => "Reset focal length", "", "Restore the default perspective lens (about 38 mm, 35°).";
-    BackgroundWindow => "Viewport background…", "", "Open the Theme window on its Colors tab, where the viewport background is set.";
+    BackgroundWindow => "Viewport background…", "", "Open Preferences on the Appearance tab, where the viewport background is set.";
     BackgroundGradient => "Viewport background: gradient", "", "Use a soft radial gradient for the viewport background.";
     BackgroundFlat => "Viewport background: flat", "", "Use a solid color for the viewport background.";
     ResetBackground => "Reset viewport background", "", "Restore the default gradient and viewport background colors.";
-    ThemeWindow => "Theme…", "", "Open the Theme window: the theme, looks, accent color, viewport background, interface scale and corners, in one place.";
+    ThemeWindow => "Theme…", "", "Open Preferences on the Appearance tab: themes, looks, accent and UI colors, viewport background, scaling and layout.";
     WireframeWindow => "Wireframe settings…", "", "Open the wireframe color and opacity window.";
     AlignCursor => "Align cursor to surface on / off", "", "Draw the brush ring flat against the surface under the pointer.";
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
