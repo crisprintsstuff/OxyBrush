@@ -1727,12 +1727,14 @@ impl Editor {
 
     /// Keep the edits made so far and close the panel section.
     pub fn living_close_edit(&mut self) {
+        self.curve = None;
         self.living_edit_finish();
         self.living.editing = None;
     }
 
     /// Esc: drop the edit in progress and undo every change this Edit made.
     pub fn living_cancel_edit(&mut self) {
+        self.curve = None;
         let Some(edit) = self.living.editing.take() else {
             if let Some(wait) = &mut self.living.resculpt_wait {
                 wait.cancelled = true;
@@ -1753,6 +1755,56 @@ impl Editor {
         self.status = "Stroke edit cancelled".into();
     }
 
+    /// Open path editing for stroke `id` as an interactive curve on the model.
+    pub fn living_open_path_edit(&mut self, id: u64) -> Result<(), String> {
+        if !self.living.enabled {
+            return Err("Living strokes is off".into());
+        }
+        if self.living_edit_id() != Some(id) {
+            self.living_open_edit(id)?;
+        }
+        let Some(recipe) = self.living_edit_recipe().cloned() else {
+            return Err("Stroke has no recipe to edit path".into());
+        };
+        let raw = crate::editor::stroke_path_points(&recipe);
+        if raw.is_empty() {
+            return Err("Stroke path has no recorded points".into());
+        }
+        let tol = (recipe.settings.radius * 0.25).clamp(1e-4, 5.0);
+        let points = crate::editor::simplify_points_3d(&raw, tol, 16);
+        if points.len() < 2 {
+            return Err("Stroke path is too short to edit as a curve".into());
+        }
+        self.begin_living_curve_points(id, recipe.settings.kind, recipe.invert, points);
+        Ok(())
+    }
+
+    /// Finish path editing for stroke `id`.
+    pub fn accept_living_curve(&mut self, id: u64) {
+        if self.curve.as_ref().is_some_and(|c| c.living_stroke == Some(id)) {
+            self.curve = None;
+            self.living_edit_finish();
+            self.status = "Path edit applied".into();
+        }
+    }
+
+    pub(crate) fn living_resculpt_path(
+        &mut self,
+        id: u64,
+        samples: &[(oxy_sculpt::StrokeSample, f32, f32)],
+        dragging: bool,
+    ) {
+        let Some(mut draft) = self.living_edit_recipe().cloned() else { return };
+        let mut events = Vec::with_capacity(samples.len() * 2);
+        let spacing = draft.settings.spacing;
+        for &(s, size, strength) in samples {
+            events.push(oxy_sculpt::RecipeEvent::Modulation { size, strength });
+            events.push(oxy_sculpt::RecipeEvent::Sample { sample: s, spacing, strength: 1.0, max_dabs: 0 });
+        }
+        draft.events = events;
+        self.living_apply_edit(id, draft, dragging);
+    }
+
     /// Change one setting. `preview` is a slider drag: the surface updates
     /// at a reduced rate, and the full stroke is applied when the drag ends
     /// (`preview` false).
@@ -1767,6 +1819,10 @@ impl Editor {
         let Some(id) = self.living.editing.as_ref().map(|edit| edit.id) else { return };
         let Some(mut draft) = self.living.editing.as_ref().and_then(|edit| edit.draft.clone()) else { return };
         apply_setting(&mut draft, setting, &self.alphas);
+        self.living_apply_edit(id, draft, preview);
+    }
+
+    pub(crate) fn living_apply_edit(&mut self, id: u64, mut draft: StrokeRecipe, preview: bool) {
         if self.living.editing.as_ref().is_some_and(|edit| edit.drag.is_none())
             && let Some(from) = self.edit_body(id)
         {
@@ -2096,7 +2152,7 @@ fn surface_of(stroke: &LivingStroke) -> SurfaceChange {
 }
 
 fn recipe_same(a: &StrokeRecipe, b: &StrokeRecipe) -> bool {
-    a.settings == b.settings && a.invert == b.invert && alpha_same(&a.alpha, &b.alpha)
+    a.settings == b.settings && a.invert == b.invert && alpha_same(&a.alpha, &b.alpha) && a.events == b.events
 }
 
 fn alpha_same(a: &Option<AlphaStamp>, b: &Option<AlphaStamp>) -> bool {
@@ -3234,5 +3290,92 @@ mod tests {
                 .any(|(was, now)| was.x.signum() == sign && (*was - now).length() > 1e-3)
         };
         assert!(moved(1.0) && moved(-1.0), "the edit moves both sides");
+    }
+
+    #[test]
+    fn test_simplify_points_3d_and_path_extraction() {
+        use crate::editor::{simplify_points_3d, stroke_path_points};
+        use glam::Vec3;
+
+        // Two points get an automatic midpoint for bending
+        let two = vec![(Vec3::new(0.0, 0.0, 0.0), Vec3::Y), (Vec3::new(2.0, 0.0, 0.0), Vec3::Y)];
+        let res = simplify_points_3d(&two, 0.1, 16);
+        assert_eq!(res.len(), 3);
+        assert!((res[1].0 - Vec3::new(1.0, 0.0, 0.0)).length() < 1e-5);
+
+        // Collinear points are simplified down
+        let mut line = Vec::new();
+        for i in 0..20 {
+            line.push((Vec3::new(i as f32 * 0.1, 0.0, 0.0), Vec3::Y));
+        }
+        let simp = simplify_points_3d(&line, 0.05, 16);
+        assert_eq!(simp.len(), 3); // start, mid, end
+
+        // Curved arc keeps curvature points
+        let mut arc = Vec::new();
+        for i in 0..20 {
+            let a = i as f32 * 0.1;
+            arc.push((Vec3::new(a.cos(), a.sin(), 0.0), Vec3::Z));
+        }
+        let simp_arc = simplify_points_3d(&arc, 0.02, 16);
+        assert!(simp_arc.len() >= 4, "arc retains curvature points: {}", simp_arc.len());
+
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let recipe = e.living.strokes[0].recipe.as_ref().unwrap();
+        let extracted = stroke_path_points(recipe);
+        assert!(!extracted.is_empty(), "extracted points from stroke recipe");
+    }
+
+    #[test]
+    fn living_stroke_path_edit_opens_and_resculpts() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        let pos_before = positions(&e);
+
+        // Open path edit
+        e.living_open_path_edit(id).expect("open path edit");
+        assert!(e.curve.is_some());
+        assert_eq!(e.curve.as_ref().unwrap().living_stroke, Some(id));
+        let num_pts = e.curve.as_ref().unwrap().points.len();
+        assert!(num_pts >= 2);
+
+        // Move the first point to another spot on the surface
+        let (o, d) = e.camera.ray(glam::Vec2::new(350.0, 320.0), e.canvas_size());
+        let hit = e.scene.active().mesh.raycast(o, d).expect("hit");
+        e.curve.as_mut().unwrap().points[0] = (hit.point, hit.normal);
+        e.update_curve();
+
+        // Release handle / finish path drag
+        let samples = e.curve.as_ref().unwrap().samples.clone();
+        e.living_resculpt_path(id, &samples, false);
+
+        let pos_after = positions(&e);
+        assert_ne!(pos_before, pos_after, "surface changed after reshaping stroke path");
+
+        // Accept the curve
+        e.accept_living_curve(id);
+        assert!(e.curve.is_none());
+
+        // Undoing restores the previous surface
+        assert!(e.history.can_undo());
+        e.undo();
+        assert_eq!(positions(&e), pos_before, "undo restores surface before path edit");
+    }
+
+    #[test]
+    fn living_stroke_path_edit_cancels() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        let pos_before = positions(&e);
+
+        e.living_open_path_edit(id).expect("open path edit");
+        assert!(e.curve.is_some());
+
+        e.cancel_curve();
+        assert!(e.curve.is_none());
+        assert_eq!(positions(&e), pos_before);
     }
 }

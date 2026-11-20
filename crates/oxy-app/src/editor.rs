@@ -217,10 +217,12 @@ pub struct CurveEdit {
     /// What the preview was built from.
     built: Option<CurveKey>,
     /// Samples with their (size, strength) modulation.
-    samples: Vec<(StrokeSample, f32, f32)>,
+    pub samples: Vec<(StrokeSample, f32, f32)>,
     /// Curve Move: the mesh tied to the rest curve, and what it was tied
     /// with.
     binding: Option<(MoveBindKey, oxy_sculpt::wire::Binding, Vec<oxy_sculpt::wire::WireCurve>)>,
+    /// Living strokes: stroke id if this curve is editing the path of an existing stroke.
+    pub living_stroke: Option<u64>,
 }
 
 /// What a Curve Move binding depends on.
@@ -265,11 +267,11 @@ pub struct DynStroke {
 /// What the user edits on an open curve, and what curve undo restores.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CurveShape {
-    points: Vec<(Vec3, Vec3)>,
-    rest: Vec<(Vec3, Vec3)>,
-    weights: Vec<(f32, f32)>,
-    closed: bool,
-    fades: (f32, f32),
+    pub points: Vec<(Vec3, Vec3)>,
+    pub rest: Vec<(Vec3, Vec3)>,
+    pub weights: Vec<(f32, f32)>,
+    pub closed: bool,
+    pub fades: (f32, f32),
 }
 
 impl CurveEdit {
@@ -420,6 +422,77 @@ pub(crate) fn simplify_path(path: &[Vec2], tol: f32, max: usize) -> Vec<Vec2> {
         pts = (0..max).map(|i| pts[i * last / (max - 1)]).collect();
     }
     pts
+}
+
+/// Ramer-Douglas-Peucker simplification for 3D trajectory points (position and surface normal).
+pub(crate) fn simplify_points_3d(points: &[(Vec3, Vec3)], tol: f32, max: usize) -> Vec<(Vec3, Vec3)> {
+    if points.len() <= 2 {
+        let mut pts = points.to_vec();
+        if pts.len() == 2 {
+            let mid_p = pts[0].0.lerp(pts[1].0, 0.5);
+            let mid_n = pts[0].1.lerp(pts[1].1, 0.5).normalize_or_zero();
+            pts.insert(1, (mid_p, mid_n));
+        }
+        return pts;
+    }
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    *keep.last_mut().unwrap() = true;
+    let mut stack = vec![(0usize, points.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        let (pa, pb) = (points[a].0, points[b].0);
+        let ab = pb - pa;
+        let ab_len_sq = ab.length_squared();
+        let mut best = (0.0f32, 0usize);
+        for (i, p) in points.iter().enumerate().take(b).skip(a + 1) {
+            let ap = p.0 - pa;
+            let d = if ab_len_sq < 1e-8 { ap.length() } else { ap.cross(ab).length() / ab_len_sq.sqrt() };
+            if d > best.0 {
+                best = (d, i);
+            }
+        }
+        if best.0 > tol {
+            keep[best.1] = true;
+            if best.1 > a + 1 {
+                stack.push((a, best.1));
+            }
+            if b > best.1 + 1 {
+                stack.push((best.1, b));
+            }
+        }
+    }
+    let mut pts: Vec<(Vec3, Vec3)> = points.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| *p).collect();
+    if pts.len() > max && max >= 2 {
+        let last = pts.len() - 1;
+        pts = (0..max).map(|i| pts[i * last / (max - 1)]).collect();
+    }
+    if pts.len() == 2 {
+        let mid_p = pts[0].0.lerp(pts[1].0, 0.5);
+        let mid_n = pts[0].1.lerp(pts[1].1, 0.5).normalize_or_zero();
+        pts.insert(1, (mid_p, mid_n));
+    }
+    pts
+}
+
+/// Extract surface sample positions and normals from a stroke's recipe.
+pub(crate) fn stroke_path_points(recipe: &oxy_sculpt::StrokeRecipe) -> Vec<(Vec3, Vec3)> {
+    let mut raw = Vec::new();
+    for e in &recipe.events {
+        match e {
+            oxy_sculpt::RecipeEvent::Sample { sample, .. } => {
+                if raw.last().is_none_or(|(p, _): &(Vec3, Vec3)| p.distance(sample.position) > 1e-5) {
+                    raw.push((sample.position, sample.normal));
+                }
+            }
+            oxy_sculpt::RecipeEvent::Stamp { sample, .. } => {
+                if raw.last().is_none_or(|(p, _): &(Vec3, Vec3)| p.distance(sample.position) > 1e-5) {
+                    raw.push((sample.position, sample.normal));
+                }
+            }
+            oxy_sculpt::RecipeEvent::Modulation { .. } => {}
+        }
+    }
+    raw
 }
 
 /// Fade factor at `t` (0..1 along the curve).
@@ -3764,7 +3837,14 @@ impl Editor {
                 }
             }
             Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
-            Drag::CurveHandle { .. } => {}
+            Drag::CurveHandle { .. } => {
+                if let Some(c) = &self.curve
+                    && let Some(id) = c.living_stroke
+                {
+                    let samples = c.samples.clone();
+                    self.living_resculpt_path(id, &samples, false);
+                }
+            }
             Drag::Select { action, points, lasso, click_group } => {
                 // Alt pressed after a mask box (not held from the start,
                 // which means unmask) masks everything but the box.
@@ -4497,6 +4577,7 @@ impl Editor {
             built: None,
             samples: Vec::new(),
             binding: None,
+            living_stroke: None,
         });
         self.status = "The Curve Move curve that was open is back: drag its points, or Enter to apply it".into();
     }
@@ -5390,12 +5471,60 @@ impl Editor {
             built: None,
             samples: Vec::new(),
             binding: None,
+            living_stroke: None,
         });
         self.status = if moving {
             "Drag the points to move the model with the curve, click it to add one, Alt+click to remove one; Enter applies it".into()
         } else {
             "Drag the points to adjust the curve, click it to add one, Alt+click to remove one; Enter applies it".into()
         };
+    }
+
+    pub(crate) fn begin_living_curve_points(
+        &mut self,
+        id: u64,
+        kind: BrushKind,
+        invert: bool,
+        points: Vec<(Vec3, Vec3)>,
+    ) {
+        let piece = self.scene.active();
+        let mut preview = piece.mesh.clone();
+        preview.mark_all_dirty();
+        let shape = CurveShape {
+            points: points.clone(),
+            rest: Vec::new(),
+            weights: vec![(1.0, 1.0); points.len()],
+            closed: false,
+            fades: (0.0, 0.0),
+        };
+        self.curve = Some(CurveEdit {
+            piece: piece.id,
+            kind,
+            invert,
+            fade_in: 0.0,
+            fade_out: 0.0,
+            world_per_pt: self.world_radius(points[0].0, 1.0),
+            pressure: 1.0,
+            revision: self.history.revision(),
+            topology: piece.mesh.topology_version(),
+            weights: vec![(1.0, 1.0); points.len()],
+            closed: false,
+            selected: Some(0),
+            ui_dragging: false,
+            undo: Vec::new(),
+            redo: Vec::new(),
+            settled: shape,
+            points,
+            rest: Vec::new(),
+            preview,
+            touched: Vec::new(),
+            built: None,
+            samples: Vec::new(),
+            binding: None,
+            living_stroke: Some(id),
+        });
+        self.status =
+            "Drag points to reshape the stroke, click curve to add one, Alt+click to remove. Esc cancels.".into();
     }
 
     /// A primary press while a curve is open: grab a control point, add
@@ -5419,6 +5548,7 @@ impl Editor {
             if self.active_modifiers().alt {
                 let c = self.curve.as_mut().expect("open");
                 if c.points.len() > min {
+                    let living_id = c.living_stroke;
                     c.points.remove(i);
                     if i < c.rest.len() {
                         c.rest.remove(i);
@@ -5429,6 +5559,13 @@ impl Editor {
                         Some(s) if s > i => Some(s - 1),
                         s => s,
                     };
+                    if let Some(id) = living_id {
+                        self.update_curve();
+                        if let Some(c) = &self.curve {
+                            let samples = c.samples.clone();
+                            self.living_resculpt_path(id, &samples, false);
+                        }
+                    }
                 } else {
                     self.status = if c.closed {
                         "A closed curve needs at least three points".into()
@@ -5567,7 +5704,7 @@ impl Editor {
         };
         if self.scene.try_active().map(|p| p.id) != Some(c.piece)
             || piece.mesh.topology_version() != c.topology
-            || self.history.revision() != c.revision
+            || (c.living_stroke.is_none() && self.history.revision() != c.revision)
         {
             self.curve = None;
             self.status = "Curve stroke discarded: the model changed".into();
@@ -5582,6 +5719,32 @@ impl Editor {
         if shape != c.settled && !dragging && !c.ui_dragging {
             c.undo.push(std::mem::replace(&mut c.settled, shape.clone()));
             c.redo.clear();
+        }
+        if let Some(id) = c.living_stroke {
+            let key = CurveKey { shape, settings };
+            if c.built.as_ref() == Some(&key) {
+                return;
+            }
+            let real = &piece.mesh;
+            let probe = radius.max(c.world_per_pt * 4.0) * 2.0;
+            let closed = c.closed && c.points.len() >= 3;
+            let samples: Vec<(StrokeSample, f32, f32)> = curve_points(&c.points, closed, (radius * 0.05).max(1e-5))
+                .into_iter()
+                .filter_map(|(q, n, t, u)| {
+                    let hit = real.raycast(q + n * probe, -n).or_else(|| real.raycast(q - n * probe, n))?;
+                    let fade = if closed { 1.0 } else { curve_fade(t, c.fade_in, c.fade_out) };
+                    let (size, strength) = c.weight_at(u);
+                    let sample =
+                        StrokeSample { position: hit.point, normal: facing(hit.normal, -n), pressure: c.pressure };
+                    Some((sample, size, strength * fade))
+                })
+                .collect();
+            c.samples = samples;
+            c.built = Some(key);
+
+            let samples = c.samples.clone();
+            self.living_resculpt_path(id, &samples, dragging);
+            return;
         }
         if c.kind == BrushKind::CurveMove {
             self.update_curve_move();
@@ -5721,6 +5884,12 @@ impl Editor {
 
     /// Apply the curve stroke to the piece, as one undo step.
     pub fn accept_curve(&mut self) {
+        if let Some(c) = &self.curve
+            && let Some(living_id) = c.living_stroke
+        {
+            self.accept_living_curve(living_id);
+            return;
+        }
         self.update_curve();
         if self.curve.as_ref().is_some_and(|c| c.kind == BrushKind::CurveMove) {
             self.accept_curve_move();
@@ -5821,7 +5990,11 @@ impl Editor {
 
     /// Discard the curve stroke; the piece is unchanged.
     pub fn cancel_curve(&mut self) {
-        if self.curve.take().is_some() {
+        if let Some(c) = self.curve.take() {
+            if c.living_stroke.is_some() {
+                self.living_cancel_edit();
+                return;
+            }
             self.status = "Curve stroke cancelled".into();
         }
     }
@@ -5921,7 +6094,7 @@ impl Editor {
             || self.primitive_edit.is_some()
             || self.insert_preview.is_some()
             || self.extract_preview.is_some()
-            || self.curve.is_some();
+            || self.curve.as_ref().is_some_and(|c| c.living_stroke.is_none());
         if !others {
             if self.poly_smooth_piece().is_some() {
                 return self.poly_smooth_mesh_mut();
@@ -5937,8 +6110,8 @@ impl Editor {
         match (&mut self.insert_preview, &mut self.extract_preview, &mut self.curve) {
             (Some(m), _, _) => Some(m),
             (None, Some(p), _) => Some(&mut p.mesh),
-            (None, None, Some(c)) => Some(&mut c.preview),
-            (None, None, None) => None,
+            (None, None, Some(c)) if c.living_stroke.is_none() => Some(&mut c.preview),
+            _ => None,
         }
     }
 
@@ -5948,7 +6121,9 @@ impl Editor {
         if self.tube.is_some() || self.primitive_edit.is_some() {
             return None;
         }
-        if let Some(c) = &self.curve {
+        if let Some(c) = &self.curve
+            && c.living_stroke.is_none()
+        {
             return Some(c.piece);
         }
         if self.insert_preview.is_some() || self.extract_preview.is_some() {
