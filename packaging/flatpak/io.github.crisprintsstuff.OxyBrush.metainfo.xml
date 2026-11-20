@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.20" date="2026-11-20" type="development">
+      <description>
+        <p>Import Autodesk FBX files spanning modern 7.x binary, ASCII,
+        and legacy 5.8/6.x formats. Experience the Sculptor theme with dark
+        charcoal slate panels, pill tracks with concentric clay sliders, and
+        sculpted silver-clay icons. Organize scenes with the upgraded outliner
+        featuring folders, interactive parenting, and real-time search.
+        Customize UI color hue, tint intensity, and brightness.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.19.2" date="2026-11-20" type="development">
       <description>
         <p>Hierarchical tree-view scene outliner for pieces with folding,

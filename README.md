@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.19.2](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Hierarchical scene outliner with transform parenting, import 4K 16-bit alphas, sculpt dense meshes up to 200M+ triangles with partitioned GPU rendering, resize the inspector panel narrower, and preserve voxel remesh volume. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+> **Beta:** [v4.0.0-beta.20](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Autodesk FBX import, Sculptor dark slate theme with concentric clay sliders and sculpted icons, upgraded scene outliner with folders and search, and dynamic UI tint and intensity controls. Expect rough edges and keep copies of anything important. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
 
 **Highlights**
 
@@ -84,7 +84,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 - **Arrange the panels** (Preferences > General, or right-click the brush shelf or the size/strength bar): put the brush shelf left, bottom or right; the settings panel left or right; and size, strength and Raise/Carve floating at the top or bottom of the viewport, or in the toolbar. **Drag brushes** in the shelf to reorder them; the number keys follow your order. **Right-click a brush > Set hotkey** gives it a key of its own.
 - **Fit more in the shelf:** turn off **Show brush names** (Preferences > Interface) for an icon grid, or use **Narrow brush shelf** for a single column.
-- **Change the look** in **View > Theme…**: themes, accent and button colors, brush icon colors, the viewport background, interface scale, corners and slider thickness.
+- **Change the look** in **View > Theme…**: themes (including Sculptor and Midnight), accent and button colors, brush icon colors, UI tint hue and intensity, chrome brightness, the viewport background, interface scale, corners and slider thickness.
 
 ![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
 
