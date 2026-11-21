@@ -26,18 +26,24 @@ pub struct Recoverable {
 
 /// Find autosaves from other (crashed) sessions, newest first.
 pub fn find_recoverable(dir: &Path) -> Vec<Recoverable> {
-    let own = own_file_name();
+    let pid = std::process::id();
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out: Vec<Recoverable> = entries
         .filter_map(Result::ok)
         .filter(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
-            n.starts_with("autosave-") && n.ends_with(".oxb") && n != own
+            n.starts_with("autosave-") && n.ends_with(".oxb") && !is_own_autosave(&n, pid)
         })
         .filter_map(|e| Some(Recoverable { modified: e.metadata().ok()?.modified().ok()?, path: e.path() }))
         .collect();
     out.sort_by_key(|r| std::cmp::Reverse(r.modified));
     out
+}
+
+fn is_own_autosave(name: &str, pid: u32) -> bool {
+    let prefix = format!("autosave-{pid}-");
+    let legacy = format!("autosave-{pid}.oxb");
+    name == legacy || (name.starts_with(&prefix) && name.ends_with(".oxb"))
 }
 
 fn own_file_name() -> String {
@@ -72,10 +78,44 @@ impl Autosaver {
         self.dir.as_ref().map(|d| d.join(own_file_name()))
     }
 
+    /// Autosave file path for a specific document id (`autosave-<pid>-<doc_id>.oxb`).
+    pub fn path_for(&self, doc_id: u64) -> Option<PathBuf> {
+        self.dir.as_ref().map(|d| d.join(format!("autosave-{}-{}.oxb", std::process::id(), doc_id)))
+    }
+
     /// Whether a save is due now (the caller then provides a snapshot).
     pub fn due(&mut self, dirty: bool) -> bool {
         self.poll();
         self.enabled && dirty && self.in_flight.is_none() && self.dir.is_some() && self.last.elapsed() >= self.interval
+    }
+
+    /// Start writing `snapshot` in the background for a specific document id.
+    pub fn start_for(&mut self, doc_id: u64, snapshot: SceneData) {
+        if !self.enabled {
+            return;
+        }
+        let Some(path) = self.path_for(doc_id) else { return };
+        self.last = Instant::now();
+        let (tx, rx) = mpsc::channel();
+        std::thread::Builder::new()
+            .name("autosave".into())
+            .spawn(move || {
+                let r = path
+                    .parent()
+                    .map_or(Ok(()), std::fs::create_dir_all)
+                    .map_err(|e| e.to_string())
+                    .and_then(|()| crate::format::save(&snapshot, &path).map_err(|e| e.to_string()));
+                let _ = tx.send(r);
+            })
+            .map(|_| self.in_flight = Some(rx))
+            .unwrap_or_else(|e| self.last_error = Some(e.to_string()));
+    }
+
+    /// Delete the autosave file for a specific document id (e.g. on clean tab close).
+    pub fn remove_file_for(&self, doc_id: u64) {
+        if let Some(p) = self.path_for(doc_id) {
+            let _ = std::fs::remove_file(p);
+        }
     }
 
     /// Start writing `snapshot` in the background.
@@ -119,10 +159,21 @@ impl Autosaver {
         }
     }
 
-    /// Call on clean exit: waits for a pending save, then removes our autosave.
+    /// Call on clean exit: waits for a pending save, then removes all autosaves for this pid.
     pub fn finish(&mut self) {
         if let Some(rx) = self.in_flight.take() {
             let _ = rx.recv_timeout(Duration::from_secs(10));
+        }
+        if let Some(dir) = &self.dir {
+            let pid = std::process::id();
+            if let Ok(entries) = std::fs::read_dir(dir) {
+                for entry in entries.filter_map(Result::ok) {
+                    let n = entry.file_name().to_string_lossy().into_owned();
+                    if is_own_autosave(&n, pid) {
+                        let _ = std::fs::remove_file(entry.path());
+                    }
+                }
+            }
         }
         if let Some(p) = self.path() {
             let _ = std::fs::remove_file(p);
@@ -179,6 +230,59 @@ mod tests {
         // Disabled autosave is never due even if dirty.
         a.enabled = false;
         assert!(!a.due(true));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn multi_document_autosaves_and_per_tab_cleanup() {
+        let dir = std::env::temp_dir().join(format!("oxb-autosave-multi-{}", std::process::id()));
+        let mut a = Autosaver::new(Some(dir.clone()), Duration::ZERO);
+        let scene = SceneData {
+            pieces: vec![PieceData {
+                name: "p".into(),
+                visible: true,
+                mesh: primitives::cube(1, 1.0).to_data(),
+                multires: None,
+                vertex_map: None,
+                symmetry_center: None,
+                cage: None,
+                tubes: Vec::new(),
+                curve: None,
+                strokes: None,
+                material: None,
+                instancers: Vec::new(),
+                parent: None,
+            }],
+            active: 0,
+            alphas: Vec::new(),
+        };
+
+        let p1 = a.path_for(1).unwrap();
+        let p2 = a.path_for(2).unwrap();
+        assert_eq!(p1, dir.join(format!("autosave-{}-1.oxb", std::process::id())));
+        assert_eq!(p2, dir.join(format!("autosave-{}-2.oxb", std::process::id())));
+
+        a.start_for(1, scene.clone());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while a.last_success.is_none() && Instant::now() < deadline {
+            a.due(true);
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(p1.exists());
+
+        // Verify own multi-tab files are ignored by find_recoverable
+        assert!(find_recoverable(&dir).is_empty());
+
+        // Simulate a crashed session's multi-tab file
+        let other_crash = dir.join("autosave-88888888-1.oxb");
+        std::fs::copy(&p1, &other_crash).unwrap();
+        assert_eq!(find_recoverable(&dir).len(), 1);
+
+        // Remove single doc file on clean tab close
+        a.remove_file_for(1);
+        assert!(!p1.exists());
+        assert_eq!(find_recoverable(&dir).len(), 1);
+
         std::fs::remove_dir_all(dir).ok();
     }
 }
