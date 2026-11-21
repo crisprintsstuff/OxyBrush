@@ -1,6 +1,6 @@
 # RFC 0026: Recipe Box
 
-Status: Partial — phases 1–3 implemented: phases 1–2 and the `PART` section in #379; phase 3 (Move on surface, linked Edit…/Edit path/Move across mirrored pairs, Unlink, Save back to Recipe Box / Save as new recipe, `PART` version 2) after the rename to the Recipe Box. Remaining: phase 4 (rename, reorder, variations popup) and phase 5 (geodesic walk from RFC 0025 phase 6).
+Status: Partial — phases 1–3 implemented: phases 1–2 and the `PART` section in #379; phase 3 (Move on surface, linked Edit…/Edit path/Move across mirrored pairs, Unlink, Save back to Recipe Box / Save as new recipe, `PART` version 2) after the rename to the Recipe Box. Phase 4 library housekeeping is implemented. Remaining: phase 5 (geodesic walk from RFC 0025 phase 6).
 
 ## Naming
 
@@ -639,11 +639,13 @@ write, sanitises the name, and queues a thumbnail if there is no
 sidecar PNG. **Export…** copies that `.oxydetail` out. It does not
 overwrite the source project, and it does not upload anything.
 
-**Rename** changes the display name and the file name together (the
-detail, the PNG and the `library.txt` keys). **Delete** asks "Delete
+**Rename** changes the display name in `library.txt` and keeps the detail
+file, thumbnail, and content hash stable so placed recipes still find
+the original entry when saved back. **Delete** asks "Delete
 *name* from the Recipe Box? Parts already placed on a model stay there."
 and removes the detail and the PNG. **Reorder** is a drag inside the
-open slot's variation row; `order` in `library.txt` is rewritten.
+open slot's variation row, or **Move earlier** and **Move later** in the
+slot popup. Both write `order` in `library.txt`.
 **Category** is a short label on the part (Eyes, Ears, Arms). Empty
 means no category. Parts that share a category are the variations
 shown when any of them is opened. The strip itself is one slot per

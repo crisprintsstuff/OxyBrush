@@ -6,6 +6,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Organize the Recipe Box.** Click a slot to rename the recipe, change its category, or move it earlier or later. Click a category variation to place it or drag it to reorder. Deleting a recipe leaves copies already placed on models editable.
+- **More ways to place surface instances.** **Masked surface** places live copies on visible faces that meet the mask threshold. **Even scatter** spaces seeded copies across the visible surface in a background job. Both modes save with the project.
+
 - **UVs survive subdivision.** Catmull–Clark and Loop levels preserve UV islands when you subdivide, switch levels, save and reopen, or export OBJ or glTF/GLB.
 
 ### Fixed

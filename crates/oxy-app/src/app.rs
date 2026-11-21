@@ -783,6 +783,7 @@ impl App {
         // Surface instances: the source's mesh, drawn once per copy. The
         // transforms are uploaded only when they change.
         let draws = ed.instance_draws();
+        let scatter_pending = ed.instance_scatter_pending();
         for d in &draws {
             if self.instance_uploaded.get(&d.key) != Some(&d.generation) {
                 g.viewport.set_instances(&g.device, &g.queue, d.key, &d.transforms);
@@ -935,7 +936,13 @@ impl App {
             g.egui_renderer.free_texture(id);
         }
 
-        let repaint_delay = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.repaint_delay);
+        let repaint_delay = out
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .map(|v| v.repaint_delay)
+            .into_iter()
+            .chain(scatter_pending.then_some(Duration::from_millis(30)))
+            .min();
         if repaint_delay == Some(Duration::ZERO) || self.auto.screenshot.is_some() {
             g.window.request_redraw();
             self.egui_repaint_at = None;
@@ -1841,6 +1848,9 @@ impl ApplicationHandler for App {
                         ElementState::Pressed if !over_egui && self.editor.pointer_in_canvas() => {
                             self.editor.pointer_down(b)
                         }
+                        ElementState::Released
+                            if self.editor.part_placement.as_ref().is_some_and(|p| p.moving.is_none())
+                                && (b != PointerButton::Primary || self.egui_ctx.is_pointer_over_egui()) => {}
                         ElementState::Released => self.editor.pointer_up(),
                         _ => {}
                     }

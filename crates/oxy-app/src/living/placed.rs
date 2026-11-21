@@ -788,8 +788,13 @@ impl Editor {
             .parts_library
             .entries
             .iter()
-            .find(|e| source.content != [0; 32] && e.hash == source.content)
-            .or_else(|| self.parts_library.entries.iter().find(|e| e.name == source.name))
+            .find(|entry| {
+                if source.content == [0; 32] {
+                    entry.name == source.name || entry.detail.name == source.name
+                } else {
+                    entry.hash == source.content
+                }
+            })
             .ok_or_else(|| {
                 format!("{} isn't in the Recipe Box any more. Use Save as new recipe instead.", source.name)
             })?;
@@ -933,6 +938,25 @@ mod tests {
 
     fn close(a: &[Vec3], b: &[Vec3]) -> bool {
         a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (*x - *y).length() < 1e-5)
+    }
+
+    #[test]
+    fn click_to_place_a_recipe_requires_a_surface_and_does_not_sculpt_a_stroke() {
+        let mut e = editor();
+        let before = e.scene.active().mesh.positions.clone();
+        e.begin_part_placement(l_detail()).unwrap();
+        e.pointer = Some(glam::Vec2::new(0.0, 0.0));
+        e.pointer_up();
+        assert!(!e.part_placement.as_ref().unwrap().choice_open);
+        e.pointer = Some(glam::Vec2::new(400.0, 300.0));
+        let hit = e.surface_hit_at(e.pointer.unwrap()).unwrap();
+        e.pointer_down(crate::editor::PointerButton::Primary);
+        assert!(!e.is_stroking());
+        e.pointer_up();
+        let placement = e.part_placement.as_ref().unwrap();
+        assert!(placement.choice_open);
+        assert_eq!(placement.anchor, hit.point);
+        assert_eq!(e.scene.active().mesh.positions, before);
     }
 
     #[test]
@@ -1175,8 +1199,11 @@ mod tests {
         e.living_close_edit();
         assert_eq!(std::fs::read(&path).unwrap(), on_disk, "an edit never writes the box");
         // Save back: the source side's recipes, in the source's own hand.
+        let file = e.parts_library.entries[0].file_name.clone();
+        e.parts_library.edit_part(&dir, &file, "Renamed Ell", "Shapes").unwrap();
+        e.parts_library = crate::parts::PartsLibrary::load_all(&dir);
         let check = e.part_save_back_check(mirror.id).unwrap();
-        assert!(check.question.starts_with("Replace Ell"), "{}", check.question);
+        assert!(check.question.starts_with("Replace Renamed Ell"), "{}", check.question);
         e.part_save_back(mirror.id).unwrap();
         let saved = PartDetail::from_bytes(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(saved.recipes.len(), 2);
@@ -1194,9 +1221,10 @@ mod tests {
         let other = e.part_save_as_new(source.id, "Ell", "Shapes").unwrap();
         assert_ne!(other, path);
         assert_eq!(e.parts_library.entries.len(), 2);
-        // With the source side's strokes all deleted, save back refuses.
-        e.living.selected = source.stroke_ids.iter().copied().collect();
-        e.living_delete_selected();
+        // Deleting the library file leaves the placed strokes editable.
+        e.parts_library.delete_part(&dir, &file).unwrap();
+        assert!(e.living.part(source.id).is_some());
+        assert!(e.living.strokes.iter().any(|stroke| stroke.id == source.stroke_ids[0] && stroke.recipe.is_some()));
         assert!(e.part_save_back_check(mirror.id).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
