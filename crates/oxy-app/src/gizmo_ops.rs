@@ -270,10 +270,11 @@ impl Editor {
             self.history.record_topology(label, id, prev, prev_multires);
         } else {
             let mirror = self.gizmo_mirror();
-            let piece = self.scene.active_mut();
-            self.history.begin(label, piece.id, &piece.mesh);
+            let doc = &mut self.documents[self.active_document];
+            let piece = doc.scene.active_mut();
+            doc.history.begin(label, piece.id, &piece.mesh);
             for c in 0..piece.mesh.chunks.len() as u32 {
-                self.history.touch(&piece.mesh, c);
+                doc.history.touch(&piece.mesh, c);
             }
             let original = piece.mesh.positions.clone();
             let moved = pose::apply(&mut piece.mesh, &original, &weights, pivot, &t, &mirror);
@@ -331,6 +332,7 @@ impl Editor {
             self.gizmo_session = None;
         }
         let basis = self.gizmo_basis();
+        let rev = self.history.revision();
         let s = self.gizmo_session.get_or_insert(GizmoSession {
             piece,
             pivot,
@@ -345,7 +347,7 @@ impl Editor {
         s.linear = t.linear * s.linear;
         s.shift = t.linear * s.shift + shift;
         s.steps += 1;
-        s.revision = self.history.revision();
+        s.revision = rev;
     }
 
     /// One-click operators (Mirror, ground, origin) are applied at once, and
@@ -455,11 +457,12 @@ impl Editor {
                 revision: 0,
             });
         }
+        let rev = self.history.revision();
         if let Some(s) = self.gizmo_session.as_mut() {
             s.linear = want_linear;
             s.shift = want_shift;
             s.steps += 1;
-            s.revision = self.history.revision();
+            s.revision = rev;
         }
         true
     }

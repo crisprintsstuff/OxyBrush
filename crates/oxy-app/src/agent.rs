@@ -511,7 +511,8 @@ fn select_piece(ed: &mut Editor, id: Option<u64>, index: Option<usize>, name: Op
     match find_piece(ed, id, index, name) {
         Ok(i) => {
             ed.scene.set_active(i);
-            let piece = ed.scene.active();
+            let doc = &ed.documents[ed.active_document];
+            let piece = doc.scene.active();
             ed.status = format!("Active piece: {}", piece.name);
             ToolResult::ok(format!("Active piece: {} (id {})", piece.name, piece.id))
         }
@@ -551,7 +552,7 @@ fn import_action(ed: &mut Editor, path: &std::path::Path) -> Apply {
     let before = ed.history.revision();
     ed.import(path);
     if ed.job.is_some() {
-        if let Some(job) = ed.job.as_mut() {
+        if let Some(job) = ed.documents[ed.active_document].job.as_mut() {
             job.undo_prefix.clone_from(&ed.agent_label);
         }
         Apply::PendingJob
@@ -667,18 +668,19 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
     let paint = kind == oxy_sculpt::BrushKind::Paint || ed.scene.active().mesh.is_painted();
     let piece_id = ed.scene.active().id;
     let label = format!("{}{}", ed.agent_label, kind.label());
-    let piece = ed.scene.active_mut();
-    ed.history.begin_with(&label, piece_id, &piece.mesh, paint);
-    let history = &mut ed.history;
+    let doc = &mut ed.documents[ed.active_document];
+    let piece = doc.scene.active_mut();
+    doc.history.begin_with(&label, piece_id, &piece.mesh, paint);
+    let history = &mut doc.history;
     let dabs = apply_samples(&mut piece.mesh, &params, &mut |mesh, chunk| history.touch(mesh, chunk));
     if dabs == 0 {
-        ed.history.cancel();
+        doc.history.cancel();
         return ToolResult::error(
             "the stroke did not move the surface (it may be fully masked, or the brush is too small)",
         );
     }
-    ed.history.commit();
-    let name = ed.scene.active().name.clone();
+    doc.history.commit();
+    let name = doc.scene.active().name.clone();
     let text = format!("{label}: {dabs} dabs on {name}");
     ed.status = text.clone();
     ToolResult::ok(text)
@@ -757,7 +759,8 @@ mod tests {
         ed.scene = Scene::new(Piece::new("Sphere", primitives::icosphere(3, 1.0)));
         ed.canvas = [0.0, 0.0, 800.0, 600.0];
         ed.pixels_per_point = 1.0;
-        ed.camera.frame(ed.scene.bounds());
+        let bounds = ed.scene.bounds();
+        ed.camera.frame(bounds);
         ed
     }
 

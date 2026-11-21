@@ -108,13 +108,14 @@ impl Editor {
             return false;
         };
         self.pointer_up();
-        let piece = self.scene.active();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active();
         let label = format!("Deform: {}", kind.label());
-        self.history.begin(&label, piece.id, &piece.mesh);
+        doc.history.begin(&label, piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
-        self.deform_drag = Some(DeformDrag {
+        doc.deform_drag = Some(DeformDrag {
             piece: piece.id,
             kind,
             axes,
@@ -133,7 +134,8 @@ impl Editor {
     /// and only the newest amount is ever worked out.
     pub fn deform_update(&mut self, amount: f32) {
         let background = self.deform_background_above;
-        let Some(drag) = self.deform_drag.as_mut() else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(drag) = doc.deform_drag.as_mut() else { return };
         drag.amount = amount.clamp(-1.0, 1.0);
         self.status = format!("{} {:+.0}", drag.kind.label(), drag.amount * 100.0);
         if drag.prep.original().len() > background {
@@ -147,10 +149,11 @@ impl Editor {
 
     /// Put `positions` (worked out for `amount`) on the dragged piece.
     fn deform_show(&mut self, positions: Vec<Vec3>, amount: f32) {
-        let Some(drag) = self.deform_drag.as_mut() else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(drag) = doc.deform_drag.as_mut() else { return };
         drag.shown = amount;
-        if let Some(i) = self.scene.index_of(drag.piece) {
-            self.scene.pieces[i].mesh.replace_positions(positions);
+        if let Some(i) = doc.scene.index_of(drag.piece) {
+            doc.scene.pieces[i].mesh.replace_positions(positions);
         }
     }
 
@@ -313,14 +316,15 @@ impl Editor {
             return;
         }
         let weights = self.deform_weights(self.deform.use_mask);
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
         let Some(positions) = fit_to_standard_size(&piece.mesh.positions, &weights) else {
             self.status = "Nothing to fit: everything is masked or hidden".into();
             return;
         };
-        self.history.begin("Fit to standard size", piece.id, &piece.mesh);
+        doc.history.begin("Fit to standard size", piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
         let moved: Vec<u32> = (0..weights.len() as u32).filter(|&v| weights[v as usize] > 0.0).collect();
         piece.mesh.positions = positions;

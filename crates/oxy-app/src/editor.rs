@@ -1,11 +1,13 @@
 //! Editor state and pointer/keyboard interaction, independent of the GPU and
 //! window so it can be unit-tested.
 
+pub use crate::document::Document;
+
 use crate::keymap::{self, CommandEffect, CommandId, NavAction, NavButton};
 use crate::pose::{self, GizmoMode, Handle};
 use glam::{Mat3, Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
-use oxy_history::{History, Step};
+use oxy_history::Step;
 use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
 use oxy_sculpt::{
@@ -1034,41 +1036,14 @@ pub(crate) type MeshKey = (u64, u64, u64, u64);
 pub const KEY_ZOOM_STEPS: f32 = 2.0;
 
 pub struct Editor {
-    pub scene: Scene,
-    pub history: History,
-    pub camera: Camera,
-    pub brush_kind: BrushKind,
-    /// Brush radius in logical points (screen space). With
-    /// `radius_on_model` on it's worked out each frame from
-    /// `brush_radius_world` at the depth under the pointer (see
-    /// [`Editor::sync_model_radius`]), so everything that uses it follows.
-    pub brush_radius_pt: f32,
-    /// Brush size is a size on the model (world units) rather than on
-    /// screen: zooming in makes the circle bigger on screen, like the model.
-    pub radius_on_model: bool,
-    /// The brush radius on the model (world units), with `radius_on_model`.
-    pub brush_radius_world: f32,
-    /// `brush_radius_pt` as last worked out from `brush_radius_world`: if it
-    /// differs, a key or slider changed it and the world size follows.
-    radius_pt_derived: f32,
-    /// Where the size on the model was last measured (the surface under the
-    /// pointer), for when the pointer is off the model.
-    radius_depth: Option<Vec3>,
-    pub strengths: [f32; BrushKind::ALL.len()],
-    /// Each brush's Gravity, 0..=1 (0: off).
-    pub gravities: [f32; BrushKind::ALL.len()],
-    pub falloff: Falloff,
-    /// Moves the falloff's middle, -1..=1 (negative firmer, positive softer).
-    pub focal_shift: f32,
-    pub spacing: f32,
-    pub pressure_strength: bool,
-    pub pressure_radius: bool,
-    pub front_faces_only: bool,
-    pub auto_smooth: f32,
-    pub stroke_mode: StrokeMode,
-    /// Stabilizer ("lazy mouse") distance in logical points; 0 = off.
-    pub stabilizer_pt: f32,
-    pub spray: f32,
+    /// Open document sessions (tabs). Guaranteed non-empty.
+    pub documents: Vec<Document>,
+    /// Index into `documents` for the active tab.
+    pub active_document: usize,
+    /// Counter for generating unique session document IDs.
+    #[allow(dead_code)]
+    pub next_doc_id: u64,
+
     /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
     pub pressure_gamma: f32,
     /// Strength of the lightest touch (output floor, 0..0.5).
@@ -1082,51 +1057,13 @@ pub struct Editor {
     /// Two-point shape of the pressure curve: the inner control points of
     /// a cubic from (0, 0) to (1, 1), as [x1, y1, x2, y2] (straight by default).
     pub pressure_shape: [f32; 4],
-    pub noise_scale: f32,
-    /// Crease brush pinch intensity factor (how tightly walls are pulled together).
-    pub crease_pinch: f32,
-    /// Shape used when BrushKind::InsertPrimitive is active.
-    pub insert_shape: oxy_sculpt::InsertShape,
-    /// Built-in alphas followed by user-loaded ones.
-    pub alphas: Vec<Arc<Alpha>>,
-    /// Index into `alphas`; None = no alpha.
-    pub alpha: Option<usize>,
-    pub alpha_rotation_deg: f32,
-    pub alpha_follow_stroke: bool,
-    pub alpha_invert: bool,
     /// Box/lasso selections use a lasso instead of a rectangle.
     pub selection_lasso: bool,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
     pub request_load_alpha: bool,
     /// Ask the app for a file to export the selected alpha to.
     pub request_export_alpha: bool,
-    /// An alpha was captured or loaded since the project was last saved:
-    /// alphas are saved with it, but aren't in the undo history.
-    alphas_unsaved: bool,
-    /// How many alphas have been captured from the view this session (for names).
-    captures: u32,
-    /// Side of a captured alpha, in pixels (`CAPTURE_SIZES`).
-    pub capture_alpha_size: u32,
-    pub symmetry: Symmetry,
-    /// The mirror settings last drawn, to notice a plane being turned on.
-    symmetry_seen: Symmetry,
-    /// When the mirror planes were last shown briefly (a plane turned on,
-    /// or the centre moved).
-    symmetry_flash: Option<Instant>,
     pub view: ViewSettings,
-    pub matcap: MatcapPreset,
-    pub remesh_resolution: u32,
-    /// Surface area of the active piece, cached by (piece, history revision).
-    remesh_area: Option<((u64, u64), f32)>,
-    pub remesh_adaptivity: f32,
-    /// Preserve volume and silhouette when voxel remeshing (prevents model shrinkage).
-    pub remesh_preserve_volume: bool,
-    /// Remesh into a wall around the surface instead of filling it.
-    pub remesh_shell: bool,
-    /// The wall's thickness (scene units) and side.
-    pub remesh_shell_thickness: f32,
-    pub remesh_shell_side: oxy_topo::ShellSide,
-    pub remesh_engine: oxy_topo::RemeshEngine,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
     /// Ctrl+Z (Undo and Redo) works on the active piece only, instead of
@@ -1149,17 +1086,6 @@ pub struct Editor {
     pub orbit_pivot: Option<Vec3>,
     /// This press's orbit has already picked its pivot (Cursor mode).
     orbit_picked: bool,
-    /// How new subdivision levels (and Subdivide) are made: quads
-    /// (Catmull–Clark, the default) or triangles (Loop). A piece that has
-    /// levels keeps its own.
-    pub subdivision_scheme: oxy_mesh::multires::Scheme,
-    /// New subdivision levels (and Subdivide) are smoothed; off: split in
-    /// place, keeping the shape (linear subdivision).
-    pub subdivision_smooth: bool,
-    /// The piece whose pivot was kept in place (with following off): the
-    /// kept pivot is `custom_gizmo_pivot`; None when that is a pivot you
-    /// placed yourself (or there is none).
-    pub(crate) kept_pivot_of: Option<u64>,
     /// In-app plugins' remembered panel settings (see `Settings`).
     pub plugin_params: std::collections::BTreeMap<String, Vec<f32>>,
     /// The main window's size, position and state, kept up to date by the
@@ -1185,20 +1111,14 @@ pub struct Editor {
     pub show_inspector: bool,
     pub show_shortcuts: bool,
     pub show_about: bool,
-    /// Color pickers for the viewport backdrop. A menu closes on click, so
-    /// the pickers live in this window (opened from View and Settings).
-    /// Theme and accent color window (with clickable swatches and color pickers).
-    /// The Preferences window is open on the Appearance tab (`theme_tab`).
     pub show_theme: bool,
     /// The Deform window (RFC 0016), its settings, the deformer being
     /// dragged and the last one applied (for Repeat).
     pub show_deform: bool,
     pub deform: crate::deform_ui::DeformSettings,
-    pub deform_drag: Option<crate::deform_ui::DeformDrag>,
     /// Pieces with more points than this are previewed in the background
     /// while a deformer is dragged (lowered in tests).
     pub deform_background_above: usize,
-    pub deform_last: Option<crate::deform_ui::LastDeform>,
     pub theme_tab: ThemeTab,
     /// Wireframe settings window (opacity, color picker, presets).
     pub show_wireframe: bool,
@@ -1209,8 +1129,6 @@ pub struct Editor {
     pub settings_tab: SettingsTab,
     /// Welcome window with starter shapes and the basics (shown at startup).
     pub show_welcome: bool,
-    /// Carve instead of raise by default (the invert key still flips it while held).
-    pub carve: bool,
     /// Interface layout (Standard / Compact / Touch).
     pub layout: crate::settings::UiLayout,
     /// Show the welcome window at every start (remembered setting).
@@ -1218,7 +1136,6 @@ pub struct Editor {
     /// On-screen Smooth / Mask / Invert toggles (touch layout); combined
     /// with the keyboard modifiers.
     pub touch_modifiers: Modifiers,
-    /// Level changes above this many triangles run in the background.
     pub(crate) level_job_triangles: usize,
     /// Opt-in update checks (off unless the user turns them on).
     pub updater: crate::updates::Updater,
@@ -1236,8 +1153,6 @@ pub struct Editor {
     pub parts_dir: Option<std::path::PathBuf>,
     /// Show the Parts Bin strip along the bottom of the viewport.
     pub show_parts_bin: bool,
-    /// Active part placement / drag onto mesh.
-    pub part_placement: Option<crate::parts::PartPlacement>,
     /// Set by the UI: export this part to a file.
     #[allow(dead_code)]
     pub request_export_part: Option<oxy_sculpt::PartDetail>,
@@ -1273,24 +1188,11 @@ pub struct Editor {
     pub pressure: f32,
     pub drag: Drag,
     pub status: String,
-    /// Project file (`.oxb`) the document was opened from / saved to.
-    pub path: Option<PathBuf>,
-    /// The document came from OxyCharacter (see [`Link`]).
-    pub link: Option<Link>,
-    /// A document linked to another app through a link manifest (RFC 0010).
-    pub bridge: Option<crate::bridge::Bridge>,
     /// A short message shown over the viewport for a few seconds.
     pub toast: Option<Toast>,
-    /// For each piece: the topology version last seen and whether it had
-    /// UVs then, to say when an operation dropped them (RFC 0020).
-    uv_watch: std::collections::HashMap<u64, (u64, bool)>,
-    /// History revision at the last save (or load).
-    pub saved_revision: u64,
     pub autosaver: autosave::Autosaver,
-    autosaved_revision: u64,
     pub recoverable: Vec<autosave::Recoverable>,
     pub pending: Option<Pending>,
-    pub job: Option<Job>,
     pub frame_ms: f32,
     pub quit_now: bool,
     /// Grab captures everything under the brush circle, through the whole
@@ -1307,22 +1209,11 @@ pub struct Editor {
     /// Let a drag on empty space start a stroke when it reaches the model
     /// (orbit with the middle mouse button instead).
     pub stroke_from_empty: bool,
-    /// Dynamic detail: sculpting brushes add triangles where they need
-    /// them and remove ones that have become too small.
-    pub dyntopo: bool,
-    /// How fine dynamic detail makes the mesh, 0..=1 (coarse to fine),
-    /// relative to the brush size.
-    pub dyntopo_detail: f32,
     /// Holding the pointer still during a freehand stroke turns it into an
     /// editable curve.
     pub hold_to_curve: bool,
     /// Ask before turning a held stroke into a curve.
     pub hold_to_curve_ask: bool,
-    /// A held stroke waiting for Yes / No (with `hold_to_curve_ask`); the
-    /// stroke stays applied, unrecorded, until answered.
-    pub hold_offer: Option<HoldWatch>,
-    /// The last freehand stroke, for Edit > Last stroke.
-    pub last_stroke: Option<LastStroke>,
     /// Draw the brush cursor in the tangent plane of the surface under it.
     /// Off (the default): the ring lies flat on the screen.
     pub surface_cursor: bool,
@@ -1330,98 +1221,25 @@ pub struct Editor {
     pub floor_grid: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
-    /// The primitive being dragged out with the Insert Primitive brush,
-    /// drawn solid so you can see it grow before it is inserted.
-    pub insert_preview: Option<oxy_mesh::Mesh>,
-    /// A parametric primitive being set up (Pieces > + Add), shown in the preview slot.
-    pub primitive_edit: Option<crate::primitive_ui::PrimitiveEdit>,
-    /// The tube being shaped (RFC 0009), shown in the preview slot.
-    pub tube: Option<crate::tube::TubeEdit>,
-    /// The tube tool is waiting for a path to be drawn.
-    pub tube_armed: bool,
-    /// Twist, Spin and Braid for the next tube drawn: the last ones used.
-    pub tube_shape: oxy_mesh::primitives::TubeShape,
-    /// The cross-section the next tube starts with (the last one accepted).
-    pub tube_profile: Option<oxy_mesh::primitives::TubeProfile>,
-    /// The piece the tube being drawn will be added into (Tube brush).
-    pub tube_into: Option<u64>,
-    /// The retopology tool, while its window is open (RFC 0012).
-    pub retopo: Option<crate::retopo::Retopo>,
-    /// Living strokes (RFC 0017): recorded strokes and the Strokes panel.
-    pub living: crate::living::Living,
-    /// The Poly Edit tool, while its window is open (RFC 0018).
-    pub poly_edit: Option<crate::polyedit::PolyEdit>,
-    /// The last (surface, retopology piece) pair, to continue it.
-    pub retopo_last: Option<(u64, u64)>,
     /// Tab is held (retopology: Tab+drag extends a border edge).
     pub tab_held: bool,
-    /// Mask extract in progress: the shell is shown and can be adjusted, and
-    /// becomes a piece only when accepted.
-    pub extract_preview: Option<ExtractPreview>,
-    /// A curve stroke being adjusted (stroke mode Curve).
-    pub curve: Option<CurveEdit>,
-    /// Fade in / out for new curve strokes (fraction of the length).
-    pub curve_fade_in: f32,
-    pub curve_fade_out: f32,
-    /// Curve Move: put the curve through the middle of the part under it
-    /// (an arm's core) instead of on its surface.
-    pub curve_move_centred: bool,
     /// Previous cursor normal, eased toward the latest sample.
     cursor_smooth: Option<CursorSmooth>,
-    /// Unsnapped yaw/pitch while Shift-orbiting in 45° steps.
-    pub(crate) snap_orbit: Option<(f32, f32)>,
     /// User matcaps (from the library folder), and which one is in use
     /// instead of the built-in `matcap`.
     pub custom_matcaps: Vec<crate::matcaps::CustomMatcap>,
-    pub custom_matcap: Option<usize>,
     /// Live matcap preview while hovering a material tile or menu item; None when not hovering.
     pub preview_matcap: Option<(MatcapPreset, Option<usize>)>,
-    /// The material pickers set the active piece's own material instead of
-    /// the scene's.
-    pub material_for_piece: bool,
     /// A material being hovered in a picker for the active piece (its key,
     /// see [`Editor::material_key_preset`]); reset every frame.
     pub preview_piece_material: Option<String>,
-    /// A piece's material changed since the last save (it has no undo step,
-    /// like a piece's name).
-    pieces_unsaved: bool,
     /// Library folder for custom matcaps; None in automated runs.
     pub matcap_dir: Option<PathBuf>,
     /// Set by the UI to ask the platform layer for a matcap file dialog.
     pub request_load_matcap: bool,
-    /// Paint brush and fill color (sRGB, 0..=1).
-    pub paint_color: Vec3,
-    /// Transform gizmo mode; None hides the gizmo.
-    pub gizmo: Option<GizmoMode>,
-    /// Cached gizmo pivot, keyed by (piece id, history revision, vertex count).
-    pub(crate) gizmo_pivot: Option<((u64, u64, usize), Option<Vec3>)>,
-    /// Bounds of what the gizmo moves, keyed by (piece, topology, faces,
-    /// edits), for the bar's absolute Size and Centre.
-    pub(crate) gizmo_bounds_cache: Option<(MeshKey, Option<oxy_mesh::Aabb>)>,
     /// Snap gizmo drags to steps (also while Shift is held).
     pub gizmo_snap: bool,
     pub gizmo_snap_steps: pose::Snap,
-    /// Values typed into the gizmo bar's Numeric section.
-    pub gizmo_numeric: crate::gizmo_ops::Numeric,
-    /// Gizmo changes not applied yet (the bar's live totals; Cancel).
-    pub gizmo_session: Option<crate::gizmo_ops::GizmoSession>,
-    /// User-customized gizmo pivot point (repositioned via Alt-drag or Ctrl-click snap).
-    pub custom_gizmo_pivot: Option<Vec3>,
-    /// User-customized gizmo rotation / orientation basis.
-    pub custom_gizmo_rotation: Option<Mat3>,
-    /// Pieces picked with Ctrl/Cmd+click in the Pieces list, by id, that
-    /// the transform gizmo moves along with the active piece.
-    pub piece_pick: Vec<u64>,
-    /// Anchor piece id for Shift-click range selection in the Pieces outliner.
-    pub piece_select_anchor: Option<u64>,
-    /// Pieces whose children are collapsed in the tree view outliner.
-    pub folded_pieces: std::collections::HashSet<u64>,
-    /// Search filter string for the Pieces outliner.
-    pub piece_filter: String,
-    /// Piece currently undergoing inline rename in the outliner.
-    pub renaming_piece: Option<u64>,
-    /// Text buffer for inline rename.
-    pub rename_text: String,
     /// Maximum visible height of the scrollable Pieces outliner box in the inspector.
     pub pieces_box_height: f32,
     /// Command palette / brush picker, while open.
@@ -1435,7 +1253,7 @@ pub struct Editor {
     pub focal_mm: f32,
     /// Focal-length window, opened from the view strip, View menu or palette.
     pub show_focal_length: bool,
-    /// Opt-in local agent (MCP). Off unless the user turns it on.
+    /// Opt-in local agent (MCP). Off unless the user turns them on.
     pub agent_enabled: bool,
     /// `http://127.0.0.1:<port>/mcp` while the listener is up.
     pub agent_endpoint: String,
@@ -1516,9 +1334,6 @@ pub struct Editor {
     pub show_print_dialog: bool,
     /// Mesh topology diagnostics dialog visibility.
     pub show_diagnostics: bool,
-    /// The piece the Pieces panel's Boolean row combines with (the last one
-    /// picked, while it exists).
-    pub boolean_with: Option<u64>,
     /// Edge loop at mask border: a loop on both sides, how far from the
     /// border (share of the neighbouring faces), and whether the masked
     /// area gets a face group of its own. Kept for the session, like the
@@ -1526,26 +1341,12 @@ pub struct Editor {
     pub edge_loop_both_sides: bool,
     pub edge_loop_width: f32,
     pub edge_loop_group_masked: bool,
-    /// The piece the Instances section copies onto the active piece.
-    pub instance_pick: Option<u64>,
-    /// Edit source (surface instances): the source shown alone.
-    pub editing_source: Option<crate::instances::SourceEdit>,
-    /// A surface instance settings edit in progress: the host and its
-    /// instancers before it, recorded as one undo step when it ends.
-    pub(crate) instancer_before: Option<(u64, Vec<oxy_doc::Instancer>)>,
-    /// Copies worked out for each instancer, by renderer key.
-    pub(crate) instance_cache: std::collections::HashMap<u64, crate::instances::InstanceCache>,
     /// The diagnostics window's last report, for (piece, topology version):
     /// checking a large mesh on every frame was slow, and the report only
     /// changes with the triangles.
     diagnostics_cache: Option<((u64, u64), oxy_mesh::topo::ManifoldReport)>,
     /// Unit scale: millimeters per world unit.
     pub print_scale_mm_per_unit: f32,
-    /// The power-of-ten scale given to the first import that was far out of
-    /// scale with the scene (see `import_unit_scale`), reused for every
-    /// later import into the same document so parts from one source still
-    /// fit together. Cleared when another document is opened or started.
-    pub import_scale: Option<f32>,
     /// The thinnest wall the 3D print check accepts, in millimeters.
     pub print_wall_thickness_mm: f32,
     /// The wall Hollow leaves, in millimeters. Separate from the check's
@@ -1572,70 +1373,58 @@ pub struct Editor {
     pub wall_thickness_report: Option<oxy_topo::WallThicknessReport>,
 }
 
+impl std::ops::Deref for Editor {
+    type Target = Document;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.documents[self.active_document]
+    }
+}
+
+impl std::ops::DerefMut for Editor {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.documents[self.active_document]
+    }
+}
+
+impl Editor {
+    /// Active document tab.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn active_doc(&self) -> &Document {
+        &self.documents[self.active_document]
+    }
+
+    /// Mutable active document tab.
+    #[inline]
+    #[allow(dead_code)]
+    pub fn active_doc_mut(&mut self) -> &mut Document {
+        &mut self.documents[self.active_document]
+    }
+}
+
 impl Default for Editor {
     fn default() -> Self {
         let scene = Scene::new(Piece::new("Sphere", primitives::icosphere(6, 1.0)));
         let mut camera = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
         camera.frame(scene.bounds());
-        let mut strengths = [0.0; BrushKind::ALL.len()];
-        for (i, k) in BrushKind::ALL.iter().enumerate() {
-            strengths[i] = k.default_strength();
-        }
+        let doc = Document::new(1, scene, camera);
         Self {
-            scene,
-            history: History::default(),
-            camera,
-            brush_kind: BrushKind::Draw,
-            brush_radius_pt: 50.0,
-            radius_on_model: false,
-            brush_radius_world: 0.0,
-            radius_pt_derived: 0.0,
-            radius_depth: None,
-            strengths,
-            gravities: [0.0; BrushKind::ALL.len()],
-            falloff: Falloff::Smooth,
-            focal_shift: 0.0,
-            spacing: 0.15,
-            pressure_strength: true,
-            pressure_radius: false,
-            front_faces_only: false,
-            auto_smooth: 0.0,
-            stroke_mode: StrokeMode::Freehand,
-            stabilizer_pt: 0.0,
-            spray: 0.0,
+            documents: vec![doc],
+            active_document: 0,
+            next_doc_id: 2,
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pen_seen: false,
             stamp_queued: false,
             pressure_full: 1.0,
             pressure_shape: LINEAR_PRESSURE_SHAPE,
-            noise_scale: 3.0,
-            crease_pinch: 0.3,
-            insert_shape: oxy_sculpt::InsertShape::Sphere,
-            alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
-            alpha: None,
-            alpha_rotation_deg: 0.0,
-            alpha_follow_stroke: false,
-            alpha_invert: false,
             selection_lasso: false,
             request_load_alpha: false,
             request_export_alpha: false,
-            alphas_unsaved: false,
-            captures: 0,
-            capture_alpha_size: 1024,
-            symmetry: Symmetry { x: true, ..Default::default() },
-            symmetry_seen: Symmetry { x: true, ..Default::default() },
-            symmetry_flash: None,
             view: ViewSettings::default(),
-            matcap: MatcapPreset::Terracotta,
-            remesh_resolution: 128,
-            remesh_area: None,
-            remesh_adaptivity: 0.0,
-            remesh_preserve_volume: false,
-            remesh_shell: false,
-            remesh_shell_thickness: 0.05,
-            remesh_shell_side: oxy_topo::ShellSide::default(),
-            remesh_engine: oxy_topo::RemeshEngine::Vdb,
             remember_brushes: false,
             undo_per_piece: false,
             gizmo_done_reverts: false,
@@ -1644,9 +1433,6 @@ impl Default for Editor {
             units: crate::settings::Units::Metric,
             orbit_pivot: None,
             orbit_picked: false,
-            subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
-            subdivision_smooth: true,
-            kept_pivot_of: None,
             plugin_params: Default::default(),
             window_geometry: None,
             show_brush_names: true,
@@ -1663,16 +1449,13 @@ impl Default for Editor {
             show_theme: false,
             show_deform: false,
             deform: Default::default(),
-            deform_drag: None,
             deform_background_above: crate::deform_ui::BACKGROUND_ABOVE,
-            deform_last: None,
             theme_tab: ThemeTab::Themes,
             show_wireframe: false,
             show_lights: false,
             show_settings: false,
             settings_tab: SettingsTab::default(),
             show_welcome: true,
-            carve: false,
             layout: crate::settings::UiLayout::Standard,
             welcome_at_startup: false,
             touch_modifiers: Modifiers::default(),
@@ -1685,7 +1468,6 @@ impl Default for Editor {
             parts_library: crate::parts::PartsLibrary::default(),
             parts_dir: None,
             show_parts_bin: true,
-            part_placement: None,
             request_export_part: None,
             request_import_part: false,
             shelf: Default::default(),
@@ -1708,17 +1490,10 @@ impl Default for Editor {
             pressure: 1.0,
             drag: Drag::None,
             status: "Welcome to OxyBrush. Drag on the model to sculpt, drag on empty space to orbit. Press F1 for shortcuts.".into(),
-            path: None,
-            link: None,
-            bridge: None,
             toast: None,
-            uv_watch: Default::default(),
-            saved_revision: 0,
             autosaver: autosave::Autosaver::new(None, Duration::from_secs(120)),
-            autosaved_revision: 0,
             recoverable: Vec::new(),
             pending: None,
-            job: None,
             frame_ms: 0.0,
             grab_through: false,
             quick_menu: None,
@@ -1726,58 +1501,20 @@ impl Default for Editor {
             pointer_slider: None,
             rmb_press: None,
             stroke_from_empty: false,
-            dyntopo: false,
-            dyntopo_detail: 0.5,
             hold_to_curve: true,
             hold_to_curve_ask: false,
-            hold_offer: None,
-            last_stroke: None,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
-            insert_preview: None,
-            primitive_edit: None,
-            tube: None,
-            tube_armed: false,
-            tube_shape: Default::default(),
-            tube_profile: None,
-            tube_into: None,
-            retopo: None,
-            poly_edit: None,
-            living: crate::living::Living::new(),
-            retopo_last: None,
             tab_held: false,
-            extract_preview: None,
-            curve: None,
-            curve_fade_in: 0.15,
-            curve_fade_out: 0.15,
-            curve_move_centred: true,
             cursor_smooth: None,
-            snap_orbit: None,
             custom_matcaps: Vec::new(),
-            custom_matcap: None,
             preview_matcap: None,
-            material_for_piece: false,
             preview_piece_material: None,
-            pieces_unsaved: false,
             matcap_dir: None,
             request_load_matcap: false,
-            paint_color: Vec3::new(0.75, 0.22, 0.18),
-            gizmo: None,
-            gizmo_bounds_cache: None,
-            gizmo_pivot: None,
             gizmo_snap: false,
             gizmo_snap_steps: pose::Snap::DEFAULT,
-            gizmo_numeric: crate::gizmo_ops::Numeric::default(),
-            gizmo_session: None,
-            custom_gizmo_pivot: None,
-            custom_gizmo_rotation: None,
-            piece_pick: Vec::new(),
-            piece_select_anchor: None,
-            folded_pieces: std::collections::HashSet::new(),
-            piece_filter: String::new(),
-            renaming_piece: None,
-            rename_text: String::new(),
             pieces_box_height: 240.0,
             palette: None,
             guide: Default::default(),
@@ -1825,17 +1562,11 @@ impl Default for Editor {
             extract_smooth: 2,
             show_print_dialog: false,
             show_diagnostics: false,
-            boolean_with: None,
             edge_loop_both_sides: true,
             edge_loop_width: 0.25,
             edge_loop_group_masked: true,
-            instance_pick: None,
-            editing_source: None,
-            instancer_before: None,
-            instance_cache: Default::default(),
             diagnostics_cache: None,
             print_scale_mm_per_unit: 10.0,
-            import_scale: None,
             print_wall_thickness_mm: 2.0,
             print_hollow_thickness_mm: 2.0,
             print_drain_hole_radius_mm: 2.5,
@@ -2844,16 +2575,17 @@ impl Editor {
         if kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
         if !changed {
-            self.history.begin_with(
+            doc.history.begin_with(
                 kind.label(),
                 piece.id,
                 &piece.mesh,
                 kind == BrushKind::Paint || piece.mesh.is_painted(),
             );
         }
-        let history = &mut self.history;
+        let history = &mut doc.history;
         if let Drag::Stroke { stroke, .. } = &mut self.drag {
             stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
         }
@@ -2916,7 +2648,8 @@ impl Editor {
         if !force && d.last.elapsed() < d.cost.mul_f32(1.5) {
             return;
         }
-        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == d.piece) else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == d.piece) else { return };
         let t0 = Instant::now();
         let spheres: Vec<(Vec3, f32)> = d
             .spheres
@@ -2928,7 +2661,7 @@ impl Editor {
             if !d.changed {
                 // From here on the stroke is one topology step (the mesh
                 // before it is in `before`), not chunk snapshots.
-                self.history.cancel();
+                doc.history.cancel();
                 d.changed = true;
             }
             let old = piece.mesh.vertex_count();
@@ -3164,10 +2897,11 @@ impl Editor {
         if !self.need_piece() {
             return;
         }
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
         let c = if world { Vec3::ZERO } else { piece.mesh.bounds().center() };
         piece.symmetry_center = Some(c);
-        self.symmetry_flash = Some(Instant::now());
+        doc.symmetry_flash = Some(Instant::now());
         self.status = if world {
             "Symmetry centre: world origin".into()
         } else {
@@ -3442,11 +3176,12 @@ impl Editor {
             }
         };
         let snapping = self.snap_modifier_held();
-        let snap = &mut self.snap_orbit;
+        let doc = &mut self.documents[self.active_document];
+        let snap = &mut doc.snap_orbit;
         match pivot {
             // Around the pivot, which stays put on screen.
-            Some(p) => self.camera.orbit_about(p, |c| turn(c, snap, snapping)),
-            None => turn(&mut self.camera, snap, snapping),
+            Some(p) => doc.camera.orbit_about(p, |c| turn(c, snap, snapping)),
+            None => turn(&mut doc.camera, snap, snapping),
         }
     }
 
@@ -3503,7 +3238,8 @@ impl Editor {
                 // Drag up zooms in (the same direction as the view strip),
                 // unless the keymap says drag down, as in ZBrush.
                 let sign = if self.keymap.zoom_drag_down_in { 1.0 } else { -1.0 };
-                self.camera.zoom(sign * delta.y / self.pixels_per_point.max(0.1) * 0.05);
+                let ppp = self.pixels_per_point.max(0.1);
+                self.camera.zoom(sign * delta.y / ppp * 0.05);
                 true
             }
             Drag::MaskGesture { .. } => true,
@@ -3527,7 +3263,7 @@ impl Editor {
             }
             Drag::InsertPrimitive { start_pixel, anchor, normal, scale, shape } => {
                 let d = pos.distance(*start_pixel);
-                let world_per_pixel = self.camera.world_per_pixel(*anchor, size.y);
+                let world_per_pixel = self.documents[self.active_document].camera.world_per_pixel(*anchor, size.y);
                 *scale = d * world_per_pixel;
                 let (anchor, normal, scale, shape) = (*anchor, *normal, *scale, *shape);
                 self.insert_preview = (scale > 1e-4).then(|| self.primitive_geometry(anchor, normal, scale, shape));
@@ -3561,9 +3297,11 @@ impl Editor {
             }
             Drag::CurveHandle { index } => {
                 let index = *index;
-                let (o, d) = self.camera.ray(self.canvas_local(pos), size);
-                let forward = self.camera.forward();
-                if let Some(c) = &mut self.curve
+                let local = self.canvas_local(pos);
+                let doc = &mut self.documents[self.active_document];
+                let (o, d) = doc.camera.ray(local, size);
+                let forward = doc.camera.forward();
+                if let Some(c) = &mut doc.curve
                     && c.kind == BrushKind::CurveMove
                     && let Some(p) = c.points.get_mut(index)
                 {
@@ -3576,8 +3314,8 @@ impl Editor {
                             p.0 = o + d * t;
                         }
                     }
-                } else if let Some(c) = &mut self.curve
-                    && let Some(hit) = self.scene.active().mesh.raycast(o, d)
+                } else if let Some(c) = &mut doc.curve
+                    && let Some(hit) = doc.scene.active().mesh.raycast(o, d)
                     && let Some(p) = c.points.get_mut(index)
                 {
                     *p = (hit.point, facing(hit.normal, d));
@@ -3611,18 +3349,22 @@ impl Editor {
             }
             Drag::Stroke { .. } => self.stroke_to(pos),
             Drag::GizmoSnapOrMask { start, hit, ray_dir } | Drag::MaskBlurOrPaint { start, hit, ray_dir, .. } => {
-                if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
+                let ppp = self.pixels_per_point.max(0.1);
+                if pos.distance(*start) >= 4.0 * ppp {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
-                    let (o, ray_d) = self.camera.ray(self.canvas_local(pos), size);
-                    if let Some(sample_hit) = self.scene.active().mesh.raycast(o, ray_d) {
+                    let pressure = self.pressure();
+                    let local = self.canvas_local(pos);
+                    let doc = &mut self.documents[self.active_document];
+                    let (o, ray_d) = doc.camera.ray(local, size);
+                    if let Some(sample_hit) = doc.scene.active().mesh.raycast(o, ray_d) {
                         let sample = StrokeSample {
                             position: sample_hit.point,
                             normal: facing(sample_hit.normal, ray_d),
-                            pressure: self.pressure(),
+                            pressure,
                         };
-                        let piece = self.scene.active_mut();
-                        let history = &mut self.history;
+                        let piece = doc.scene.active_mut();
+                        let history = &mut doc.history;
                         if let Drag::Stroke { stroke, .. } = &mut self.drag {
                             stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
                         }
@@ -3631,18 +3373,22 @@ impl Editor {
                 true
             }
             Drag::GizmoSnapOrCarve { start, hit, ray_dir } => {
-                if pos.distance(*start) >= 4.0 * self.pixels_per_point.max(0.1) {
+                let ppp = self.pixels_per_point.max(0.1);
+                if pos.distance(*start) >= 4.0 * ppp {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
-                    let (o, ray_d) = self.camera.ray(self.canvas_local(pos), size);
-                    if let Some(sample_hit) = self.scene.active().mesh.raycast(o, ray_d) {
+                    let pressure = self.pressure();
+                    let local = self.canvas_local(pos);
+                    let doc = &mut self.documents[self.active_document];
+                    let (o, ray_d) = doc.camera.ray(local, size);
+                    if let Some(sample_hit) = doc.scene.active().mesh.raycast(o, ray_d) {
                         let sample = StrokeSample {
                             position: sample_hit.point,
                             normal: facing(sample_hit.normal, ray_d),
-                            pressure: self.pressure(),
+                            pressure,
                         };
-                        let piece = self.scene.active_mut();
-                        let history = &mut self.history;
+                        let piece = doc.scene.active_mut();
+                        let history = &mut doc.history;
                         if let Drag::Stroke { stroke, .. } = &mut self.drag {
                             stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
                         }
@@ -3657,6 +3403,8 @@ impl Editor {
     pub fn stroke_to(&mut self, pos: Vec2) -> bool {
         let size = self.canvas_size();
         let pressure_now = self.pressure();
+        let stabilizer_pt = self.stabilizer_pt;
+        let ppp = self.pixels_per_point;
         let (stroke, grab_plane, lazy) = match &mut self.drag {
             Drag::Stroke { stroke, grab_plane, lazy, .. } => (stroke, grab_plane, lazy),
             _ => return false,
@@ -3664,7 +3412,7 @@ impl Editor {
         // Stabilizer: the brush trails the pointer on a string of fixed length.
         let pos = match lazy {
             Some(b) => {
-                let r = self.stabilizer_pt * self.pixels_per_point;
+                let r = stabilizer_pt * ppp;
                 let dist = b.distance(pos);
                 if dist <= r {
                     return true;
@@ -3675,8 +3423,9 @@ impl Editor {
             None => pos,
         };
         let local = pos - Vec2::new(self.canvas[0], self.canvas[1]);
-        let (o, d) = self.camera.ray(local, size);
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let (o, d) = doc.camera.ray(local, size);
+        let piece = doc.scene.active_mut();
         // Grab and Snake Hook follow the cursor off the surface, on a
         // view-facing plane at the stroke's starting depth.
         let sample = if stroke.settings().kind.is_grab_like() || stroke.settings().kind == BrushKind::SnakeHook {
@@ -3697,8 +3446,9 @@ impl Editor {
         };
         // Detail first, then the dab, so the dab shapes the new triangles.
         self.dyntopo_step(Some(sample.position), false);
-        let piece = self.scene.active_mut();
-        let history = &mut self.history;
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        let history = &mut doc.history;
         if let Drag::Stroke { stroke, .. } = &mut self.drag {
             stroke.add_sample(&mut piece.mesh, sample, &mut |m, c| history.touch(m, c));
         }
@@ -3736,15 +3486,16 @@ impl Editor {
                 let t = pose::drag_transform(&input);
                 g.current = t;
                 if g.reposition_pivot {
-                    self.custom_gizmo_pivot = Some(g.pivot + t.translate);
-                    self.kept_pivot_of = None;
+                    let doc = &mut self.documents[self.active_document];
+                    doc.custom_gizmo_pivot = Some(g.pivot + t.translate);
+                    doc.kept_pivot_of = None;
                     if mode == GizmoMode::Rotate {
-                        self.custom_gizmo_rotation = Some(t.linear * g.rotation);
+                        doc.custom_gizmo_rotation = Some(t.linear * g.rotation);
                     }
                     return true;
                 }
                 let mirror = g.mirror;
-                let mesh = &mut self.scene.active_mut().mesh;
+                let mesh = &mut self.documents[self.active_document].scene.active_mut().mesh;
                 pose::apply_interactive(mesh, &g.original, &g.original_normals, &g.weights, g.pivot, &t, &mirror);
                 for &c in &g.affected_chunks {
                     let orig = g.original_chunk_aabbs[c as usize];
@@ -3973,7 +3724,8 @@ impl Editor {
             Drag::CurveCut { .. } => self.status = "Cut cancelled".into(),
             Drag::Deferred { .. } => {
                 // A stamp shown while dragging goes back.
-                self.history.revert_pending(&mut self.scene);
+                let doc = &mut self.documents[self.active_document];
+                doc.history.revert_pending(&mut doc.scene);
                 self.status = "Cancelled".into();
             }
             _ => self.status = "Cancelled".into(),
@@ -4029,10 +3781,11 @@ impl Editor {
         );
         match kind {
             BrushKind::PlaneClip => {
-                let piece = self.scene.active_mut();
-                self.history.begin(kind.label(), piece.id, &piece.mesh);
+                let doc = &mut self.documents[self.active_document];
+                let piece = doc.scene.active_mut();
+                doc.history.begin(kind.label(), piece.id, &piece.mesh);
                 for c in 0..piece.mesh.chunks.len() as u32 {
-                    self.history.touch(&piece.mesh, c);
+                    doc.history.touch(&piece.mesh, c);
                 }
                 let mut moved = Vec::new();
                 for &(p, n) in &planes {
@@ -4042,10 +3795,10 @@ impl Editor {
                 moved.dedup();
                 if !moved.is_empty() {
                     piece.mesh.update_after_move(&moved);
-                    self.history.commit();
+                    doc.history.commit();
                     self.status = format!("Clipped {} vertices", moved.len());
                 } else {
-                    self.history.cancel();
+                    doc.history.cancel();
                     self.status = "No vertices clipped".into();
                 }
             }
@@ -4083,7 +3836,8 @@ impl Editor {
     /// direction turns the alpha; a click (a drag under 4 px) stamps at
     /// the brush size.
     fn apply_stamp(&mut self, kind: BrushKind, invert: bool, start: Vec2, end: Vec2, commit: bool) {
-        self.history.revert_pending(&mut self.scene);
+        let doc = &mut self.documents[self.active_document];
+        doc.history.revert_pending(&mut doc.scene);
         let click = end.distance(start) < 4.0 * self.pixels_per_point.max(0.1);
         if click && !commit {
             return;
@@ -4103,14 +3857,15 @@ impl Editor {
         if kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
-        let piece = self.scene.active_mut();
-        self.history.begin_with(
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        doc.history.begin_with(
             kind.label(),
             piece.id,
             &piece.mesh,
             kind == BrushKind::Paint || piece.mesh.is_painted(),
         );
-        let history = &mut self.history;
+        let history = &mut doc.history;
         stroke.stamp(&mut piece.mesh, sample, STAMP_REPEATS, &mut |m, c| history.touch(m, c));
         if commit {
             let recipe = stroke.take_recipe();
@@ -4142,14 +3897,15 @@ impl Editor {
         if kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
-        let piece = self.scene.active_mut();
-        self.history.begin_with(
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        doc.history.begin_with(
             kind.label(),
             piece.id,
             &piece.mesh,
             kind == BrushKind::Paint || piece.mesh.is_painted(),
         );
-        let history = &mut self.history;
+        let history = &mut doc.history;
         for s in samples {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
         }
@@ -4274,7 +4030,8 @@ impl Editor {
 
     pub fn scroll(&mut self, steps: f32) {
         if self.keymap.wheel_zoom {
-            self.camera.zoom(if self.keymap.invert_wheel_zoom { -steps } else { steps });
+            let invert = self.keymap.invert_wheel_zoom;
+            self.camera.zoom(if invert { -steps } else { steps });
         }
     }
 
@@ -4310,7 +4067,8 @@ impl Editor {
         }
         let id = self.scene.active().id;
         let name = self.scene.active().name.clone();
-        let result = self.history.undo_piece(&mut self.scene, id);
+        let doc = &mut self.documents[self.active_document];
+        let result = doc.history.undo_piece(&mut doc.scene, id);
         if matches!(result, Ok(Some(_))) {
             self.living_after_undo_redo();
         }
@@ -4337,7 +4095,8 @@ impl Editor {
         }
         let id = self.scene.active().id;
         let name = self.scene.active().name.clone();
-        let result = self.history.redo_piece(&mut self.scene, id);
+        let doc = &mut self.documents[self.active_document];
+        let result = doc.history.redo_piece(&mut doc.scene, id);
         if matches!(result, Ok(Some(_))) {
             self.living_after_undo_redo();
         }
@@ -4395,7 +4154,8 @@ impl Editor {
             self.status = "Wait for the running operation to finish before undoing".into();
             return;
         }
-        let result = self.history.undo(&mut self.scene);
+        let doc = &mut self.documents[self.active_document];
+        let result = doc.history.undo(&mut doc.scene);
         if result.is_some() {
             self.living_after_undo_redo();
         }
@@ -4419,7 +4179,8 @@ impl Editor {
             self.status = "Wait for the running operation to finish before redoing".into();
             return;
         }
-        let result = self.history.redo(&mut self.scene);
+        let doc = &mut self.documents[self.active_document];
+        let result = doc.history.redo(&mut doc.scene);
         if result.is_some() {
             self.living_after_undo_redo();
         }
@@ -4525,13 +4286,14 @@ impl Editor {
         self.link = None;
         self.bridge = None;
         self.import_scale = None;
-        if self.scene.bounds().is_empty() {
+        let bounds = self.scene.bounds();
+        if bounds.is_empty() {
             // Nothing to frame: the view goes back to the default, looking
             // at the origin, instead of staying on the previous model.
             self.camera = Camera::default();
             self.orbit_pivot = None;
         } else {
-            self.camera.frame(self.scene.bounds());
+            self.camera.frame(bounds);
         }
         self.reopen_saved_curve();
         self.living_adopt_loaded();
@@ -4906,7 +4668,8 @@ impl Editor {
             self.import_scale = Some(factor);
             self.scale_pieces(first, factor);
         }
-        self.camera.frame(self.scene.bounds());
+        let bounds = self.scene.bounds();
+        self.camera.frame(bounds);
         self.status = import_status(file_count, only_path.as_deref(), tris, piece_count, &failed, factor);
         (self.history.revision().wrapping_sub(before)) as usize
     }
@@ -5167,17 +4930,18 @@ impl Editor {
     /// mesh. Subdivision levels keep level 0, so they don't count. Called
     /// every frame.
     pub fn check_link_topology(&mut self) {
-        let Some(link) = &mut self.link else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(link) = &mut doc.link else { return };
         if link.hint_shown {
             return;
         }
-        let changed = match self.scene.pieces.iter().find(|p| Some(p.id) == link.body) {
+        let changed = match doc.scene.pieces.iter().find(|p| Some(p.id) == link.body) {
             Some(body) => {
                 let counts = (body.mesh.vertex_count(), body.mesh.triangle_count());
                 body.multires.is_none() && counts != (link.body_vertices, link.body_triangles)
             }
             // Split into parts (they keep the body's name), not deleted.
-            None => link.body.is_some() && self.scene.pieces.iter().any(|p| p.name.starts_with(LINK_BODY_NAME)),
+            None => link.body.is_some() && doc.scene.pieces.iter().any(|p| p.name.starts_with(LINK_BODY_NAME)),
         };
         if changed {
             link.hint_shown = true;
@@ -5244,15 +5008,16 @@ impl Editor {
     pub fn watch_uvs(&mut self) {
         let mut dropped: Option<String> = None;
         let mut seen = std::collections::HashSet::new();
-        for p in &self.scene.pieces {
+        let doc = &mut self.documents[self.active_document];
+        for p in &doc.scene.pieces {
             seen.insert(p.id);
             let now = (p.mesh.topology_version(), p.mesh.has_uvs());
-            match self.uv_watch.insert(p.id, now) {
+            match doc.uv_watch.insert(p.id, now) {
                 Some((version, true)) if version != now.0 && !now.1 => dropped = Some(p.name.clone()),
                 _ => {}
             }
         }
-        self.uv_watch.retain(|id, _| seen.contains(id));
+        doc.uv_watch.retain(|id, _| seen.contains(id));
         if let Some(name) = dropped {
             self.toast = Some(Toast {
                 text: format!(
@@ -5714,7 +5479,8 @@ impl Editor {
             self.status = "Edit this stroke as a curve? Enter: yes, Esc: no".into();
             return true;
         }
-        self.history.revert_pending(&mut self.scene);
+        let doc = &mut self.documents[self.active_document];
+        doc.history.revert_pending(&mut doc.scene);
         self.begin_curve(h.kind, h.invert, &h.path);
         if let Some(c) = &self.curve {
             self.drag = Drag::CurveHandle { index: c.points.len() - 1 };
@@ -5729,9 +5495,10 @@ impl Editor {
     /// stroke back and opens it as a curve; no keeps it as drawn (one undo
     /// step, as usual).
     pub fn answer_hold_offer(&mut self, yes: bool) {
-        let Some(h) = self.hold_offer.take() else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(h) = doc.hold_offer.take() else { return };
         if yes {
-            self.history.revert_pending(&mut self.scene);
+            doc.history.revert_pending(&mut doc.scene);
             self.begin_curve(h.kind, h.invert, &h.path);
         } else {
             let kind = h.kind;
@@ -5743,29 +5510,38 @@ impl Editor {
     /// Rebuild the curve preview if anything it depends on changed, or
     /// drop it if the piece changed underneath. Called every frame.
     pub fn update_curve(&mut self) {
-        let Some(c) = &self.curve else { return };
-        let Some(piece) = self.scene.pieces.iter().find(|p| p.id == c.piece) else {
-            self.curve = None;
-            return;
-        };
-        if self.scene.try_active().map(|p| p.id) != Some(c.piece)
-            || piece.mesh.topology_version() != c.topology
-            || (c.living_stroke.is_none() && self.history.revision() != c.revision)
         {
-            self.curve = None;
-            self.status = "Curve stroke discarded: the model changed".into();
-            return;
+            let doc = &mut self.documents[self.active_document];
+            let Some(c) = &doc.curve else { return };
+            let Some(piece) = doc.scene.pieces.iter().find(|p| p.id == c.piece) else {
+                doc.curve = None;
+                return;
+            };
+            if doc.scene.try_active().map(|p| p.id) != Some(c.piece)
+                || piece.mesh.topology_version() != c.topology
+                || (c.living_stroke.is_none() && doc.history.revision() != c.revision)
+            {
+                doc.curve = None;
+                self.status = "Curve stroke discarded: the model changed".into();
+                return;
+            }
         }
-        let radius = self.brush_radius_pt * c.world_per_pt;
-        let settings = *self.new_stroke(c.kind, c.invert, radius, 0.0).settings();
+        let (c_piece, c_kind, c_invert, c_world_per_pt) = {
+            let c = self.documents[self.active_document].curve.as_ref().unwrap();
+            (c.piece, c.kind, c.invert, c.world_per_pt)
+        };
+        let radius = self.brush_radius_pt * c_world_per_pt;
+        let settings = *self.new_stroke(c_kind, c_invert, radius, 0.0).settings();
         let dragging = matches!(self.drag, Drag::CurveHandle { .. });
-        let c = self.curve.as_mut().expect("checked");
+        let doc = &mut self.documents[self.active_document];
+        let c = doc.curve.as_mut().expect("checked");
         // A finished edit (not mid-drag) becomes a curve undo step.
         let shape = c.shape();
         if shape != c.settled && !dragging && !c.ui_dragging {
             c.undo.push(std::mem::replace(&mut c.settled, shape.clone()));
             c.redo.clear();
         }
+        let piece = doc.scene.pieces.iter().find(|p| p.id == c_piece).expect("checked");
         if let Some(id) = c.living_stroke {
             let key = CurveKey { shape, settings };
             if c.built.as_ref() == Some(&key) {
@@ -5792,7 +5568,7 @@ impl Editor {
             self.living_resculpt_path(id, &samples, dragging);
             return;
         }
-        if c.kind == BrushKind::CurveMove {
+        if c_kind == BrushKind::CurveMove {
             self.update_curve_move();
             return;
         }
@@ -5833,7 +5609,8 @@ impl Editor {
         let kind = c.kind;
         let invert = c.invert;
         let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
-        let c = self.curve.as_mut().expect("checked");
+        let doc = &mut self.documents[self.active_document];
+        let c = doc.curve.as_mut().expect("checked");
         let mut touched = vec![false; c.preview.chunks.len()];
         for &(s, size, strength) in &c.samples {
             stroke.set_modulation(size, strength);
@@ -5852,8 +5629,9 @@ impl Editor {
         let falloff = self.falloff;
         let strength = self.strength(BrushKind::CurveMove);
         let radius = self.brush_radius_pt * self.curve_world_per_pt();
-        let Some(c) = self.curve.as_mut() else { return };
-        let Some(piece) = self.scene.pieces.iter().find(|p| p.id == c.piece) else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(c) = doc.curve.as_mut() else { return };
+        let Some(piece) = doc.scene.pieces.iter().find(|p| p.id == c.piece) else { return };
         let real = &piece.mesh;
         let closed = c.closed && c.points.len() >= 3;
         let per = move_samples_per_segment(&c.rest, radius);
@@ -5947,10 +5725,11 @@ impl Editor {
         if c.kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
-        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
         let paint = c.kind == BrushKind::Paint || piece.mesh.is_painted();
-        self.history.begin_with(c.kind.label(), piece.id, &piece.mesh, paint);
-        let history = &mut self.history;
+        doc.history.begin_with(c.kind.label(), piece.id, &piece.mesh, paint);
+        let history = &mut doc.history;
         for &(s, size, strength) in &c.samples {
             stroke.set_modulation(size, strength);
             stroke.add_sample(&mut piece.mesh, s, &mut |m, chunk| history.touch(m, chunk));
@@ -5969,10 +5748,11 @@ impl Editor {
             self.status = "Curve Move: nothing moved".into();
             return;
         }
-        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
-        self.history.begin_with(BrushKind::CurveMove.label(), piece.id, &piece.mesh, false);
+        let doc = &mut self.documents[self.active_document];
+        let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == c.piece) else { return };
+        doc.history.begin_with(BrushKind::CurveMove.label(), piece.id, &piece.mesh, false);
         for &chunk in &binding.chunks {
-            self.history.touch(&piece.mesh, chunk);
+            doc.history.touch(&piece.mesh, chunk);
         }
         for &v in &binding.vertices {
             piece.mesh.positions[v as usize] = c.preview.positions[v as usize];
@@ -6136,24 +5916,27 @@ impl Editor {
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
+        let active = self.active_document;
+        let doc = &self.documents[active];
         let others = self.tube.is_some()
-            || self.primitive_edit.is_some()
-            || self.insert_preview.is_some()
-            || self.extract_preview.is_some()
-            || self.curve.as_ref().is_some_and(|c| c.living_stroke.is_none());
+            || doc.primitive_edit.is_some()
+            || doc.insert_preview.is_some()
+            || doc.extract_preview.is_some()
+            || doc.curve.as_ref().is_some_and(|c| c.living_stroke.is_none());
         if !others {
             if self.poly_smooth_piece().is_some() {
                 return self.poly_smooth_mesh_mut();
             }
             return self.plugin_preview_mut().map(|(_, m)| m);
         }
-        if let Some(t) = &mut self.tube {
-            return Some(&mut t.preview);
+        if self.tube.is_some() {
+            return self.tube.as_mut().map(|t| &mut t.preview);
         }
-        if let Some(p) = &mut self.primitive_edit {
+        let doc = &mut self.documents[active];
+        if let Some(p) = &mut doc.primitive_edit {
             return Some(&mut p.preview);
         }
-        match (&mut self.insert_preview, &mut self.extract_preview, &mut self.curve) {
+        match (&mut doc.insert_preview, &mut doc.extract_preview, &mut doc.curve) {
             (Some(m), _, _) => Some(m),
             (None, Some(p), _) => Some(&mut p.mesh),
             (None, None, Some(c)) if c.living_stroke.is_none() => Some(&mut c.preview),
@@ -7398,14 +7181,14 @@ impl Editor {
 
     /// An editor with one sphere in an 800×600 view, for tests elsewhere in the crate.
     #[cfg(test)]
+    #[allow(clippy::field_reassign_with_default)]
     pub(crate) fn for_tests() -> Editor {
-        let mut e = Editor {
-            scene: Scene::new(Piece::new("Sphere", oxy_mesh::primitives::icosphere(4, 1.0))),
-            ..Default::default()
-        };
+        let mut e = Editor::default();
+        e.scene = Scene::new(Piece::new("Sphere", oxy_mesh::primitives::icosphere(4, 1.0)));
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.camera = Camera::default();
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         e
     }
 
@@ -7736,14 +7519,15 @@ impl Editor {
         // What this handle does: for the combined gizmo, its own operation.
         let (mode, handle) = pose::operation(self.gizmo.unwrap_or(GizmoMode::Move), handle);
         let world_per_px = self.camera.world_per_pixel(layout.pivot, self.canvas_size().y);
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
 
         // If Alt is held, we are repositioning the gizmo pivot without modifying mesh vertices.
         let reposition_pivot = is_alt;
         if !reposition_pivot {
-            self.history.begin(mode.label(), piece.id, &piece.mesh);
+            doc.history.begin(mode.label(), piece.id, &piece.mesh);
             for c in 0..piece.mesh.chunks.len() as u32 {
-                self.history.touch(&piece.mesh, c);
+                doc.history.touch(&piece.mesh, c);
             }
         }
 
@@ -7765,7 +7549,8 @@ impl Editor {
             }
             _ => None,
         };
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
         let mut affected_chunk_flags = vec![false; piece.mesh.chunks.len()];
         let mut has_soft_weights = false;
         for (v, &w) in weights.iter().enumerate() {
@@ -7779,7 +7564,7 @@ impl Editor {
         let affected_chunks: Vec<u32> =
             affected_chunk_flags.iter().enumerate().filter_map(|(c, &aff)| aff.then_some(c as u32)).collect();
         let original_chunk_aabbs: Vec<oxy_mesh::Aabb> = piece.mesh.chunks.iter().map(|c| c.aabb).collect();
-        let current_rot = self.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY);
+        let current_rot = doc.custom_gizmo_rotation.unwrap_or(Mat3::IDENTITY);
         let original = piece.mesh.positions.clone();
         let original_normals = piece.mesh.normals.clone();
         // Moving the pivot itself (Alt) doesn't mirror anything.
@@ -7835,10 +7620,11 @@ impl Editor {
             return;
         }
         self.pointer_up();
-        let piece = self.scene.active_mut();
-        self.history.begin_with(label, piece.id, &piece.mesh, true);
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        doc.history.begin_with(label, piece.id, &piece.mesh, true);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
         f(&mut piece.mesh);
         piece.mesh.mark_all_dirty();
@@ -7904,17 +7690,18 @@ impl Editor {
             return 0;
         }
         self.pointer_up();
-        let piece = self.scene.active_mut();
-        self.history.begin("Clean mesh", piece.id, &piece.mesh);
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        doc.history.begin("Clean mesh", piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
         let removed = piece.mesh.clean_degenerate_triangles();
         if removed > 0 {
-            self.history.commit();
+            doc.history.commit();
             self.status = format!("Removed {removed} degenerate triangles");
         } else {
-            self.history.cancel();
+            doc.history.cancel();
             self.status = "Mesh is already clean (0 degenerate triangles)".into();
         }
         removed
@@ -7928,14 +7715,15 @@ impl Editor {
         if !matches!(self.drag, Drag::Select { .. }) {
             self.pointer_up();
         }
-        let piece = self.scene.active_mut();
-        self.history.begin(label, piece.id, &piece.mesh);
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
+        doc.history.begin(label, piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
         f(&mut piece.mesh);
         piece.mesh.mark_all_dirty();
-        self.history.commit();
+        doc.history.commit();
         self.status = label.into();
     }
 
@@ -7967,21 +7755,22 @@ impl Editor {
             return;
         }
         self.pointer_up();
-        let piece = self.scene.active_mut();
+        let doc = &mut self.documents[self.active_document];
+        let piece = doc.scene.active_mut();
         let before = piece.mesh.mask.clone();
-        self.history.begin(label, piece.id, &piece.mesh);
+        doc.history.begin(label, piece.id, &piece.mesh);
         for c in 0..piece.mesh.chunks.len() as u32 {
-            self.history.touch(&piece.mesh, c);
+            doc.history.touch(&piece.mesh, c);
         }
         let n = f(&mut piece.mesh);
         if n == 0 {
             piece.mesh.mask = before;
-            self.history.cancel();
+            doc.history.cancel();
             self.status = nothing.into();
             return;
         }
         piece.mesh.mark_all_dirty();
-        self.history.commit();
+        doc.history.commit();
         self.status = format!("{label}: {n} points masked");
     }
 
@@ -8036,7 +7825,8 @@ impl Editor {
 
     pub fn frame(&mut self) {
         self.orbit_pivot = None;
-        self.camera.frame(self.scene.bounds());
+        let bounds = self.scene.bounds();
+        self.camera.frame(bounds);
     }
 
     /// Centre and frame the active piece (F), or every visible piece when
@@ -8047,9 +7837,12 @@ impl Editor {
             // Nothing to fit: leave the camera where it is.
             return;
         };
-        if piece.visible && piece.mesh.triangle_count() > 0 {
-            self.camera.frame(piece.mesh.bounds());
-            self.status = format!("Framed {}", piece.name);
+        let visible = piece.visible && piece.mesh.triangle_count() > 0;
+        let bounds = piece.mesh.bounds();
+        let name = piece.name.clone();
+        if visible {
+            self.camera.frame(bounds);
+            self.status = format!("Framed {name}");
         } else {
             self.frame();
             self.status = "Framed all visible pieces".into();
@@ -8664,6 +8457,7 @@ fn base_mesh(bytes: &[u8]) -> Mesh {
 }
 
 #[cfg(test)]
+#[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
 
@@ -8676,11 +8470,12 @@ mod tests {
     }
 
     fn editor() -> Editor {
-        let mut e =
-            Editor { scene: Scene::new(Piece::new("Sphere", primitives::icosphere(4, 1.0))), ..Default::default() };
+        let mut e = Editor::default();
+        e.scene = Scene::new(Piece::new("Sphere", primitives::icosphere(4, 1.0)));
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.camera = Camera::default();
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         e
     }
 
@@ -9646,13 +9441,15 @@ mod tests {
 
     /// Move vertex 0 of piece `i` by `d` as one undo step.
     fn nudge_piece(e: &mut Editor, i: usize, label: &str, d: Vec3) {
-        let id = e.scene.pieces[i].id;
-        e.history.begin(label, id, &e.scene.pieces[i].mesh);
-        e.history.touch(&e.scene.pieces[i].mesh, 0);
-        let mesh = &mut e.scene.pieces[i].mesh;
+        let doc = &mut e.documents[e.active_document];
+        let id = doc.scene.pieces[i].id;
+        let mesh = &doc.scene.pieces[i].mesh;
+        doc.history.begin(label, id, mesh);
+        doc.history.touch(mesh, 0);
+        let mesh = &mut doc.scene.pieces[i].mesh;
         mesh.positions[0] += d;
         mesh.update_after_move(&[0]);
-        e.history.commit();
+        doc.history.commit();
     }
 
     #[test]
@@ -13871,7 +13668,9 @@ mod tests {
 
     #[test]
     fn presets_capture_apply_and_survive_codes() {
-        let mut e = Editor { brush_kind: BrushKind::Crease, brush_radius_pt: 21.0, ..Default::default() };
+        let mut e = Editor::default();
+        e.brush_kind = BrushKind::Crease;
+        e.brush_radius_pt = 21.0;
         *e.strength_mut(BrushKind::Crease) = 0.66;
         e.falloff = oxy_sculpt::Falloff::Sharp;
         e.stroke_mode = StrokeMode::Line;
@@ -14217,7 +14016,8 @@ mod tests {
         let s = e.settings();
         assert_eq!(s.custom_matcap, "Chalk");
         // Next start: the library loads first, then settings pick the same one.
-        let mut f = Editor { custom_matcaps: e.custom_matcaps.clone(), ..Default::default() };
+        let mut f = Editor::default();
+        f.custom_matcaps = e.custom_matcaps.clone();
         f.apply_settings(&s);
         assert_eq!(f.custom_matcap, Some(1));
         // Removing an earlier matcap keeps the selection on the same one.
@@ -14240,7 +14040,8 @@ mod tests {
         let n = a.positions.len() as u32;
         data.positions.extend(a.positions.iter().map(|p| *p + Vec3::X * 4.0));
         data.triangles.extend(a.triangles.iter().map(|t| t.map(|v| v + n)));
-        let mut e = Editor { scene: Scene::new(Piece::new("Pair", Mesh::from_data(data))), ..Default::default() };
+        let mut e = Editor::default();
+        e.scene = Scene::new(Piece::new("Pair", Mesh::from_data(data)));
         let total = e.scene.triangle_count();
         e.split_active(false);
         assert_eq!(e.scene.pieces.len(), 1, "one face group: nothing to split");
@@ -15242,7 +15043,8 @@ mod tests {
         data.triangles.extend(one.triangles.iter().map(|t| t.map(|v| v + n)));
         e.scene = Scene::new(Piece::new("Pair", Mesh::from_data(data)));
         e.symmetry.x = true;
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         e.custom_gizmo_pivot = Some(Vec3::new(0.6, 0.0, 0.0));
         e.toggle_gizmo(GizmoMode::Move);
         let before = e.scene.active().mesh.positions.clone();

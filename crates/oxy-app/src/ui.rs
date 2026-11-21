@@ -777,7 +777,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         ed.camera.snap(0.0, -1.55);
                     }
                     ui.separator();
-                    tips::check_km(ui, &ed.keymap, &mut ed.camera.orthographic, "Orthographic", Cmd::Ortho);
+                    tips::check_km(ui, &ed.keymap, &mut ed.documents[ed.active_document].camera.orthographic, "Orthographic", Cmd::Ortho);
                     tips::menu(ui, "Focal length", plain::FOCAL_LENGTH_MENU, |ui| {
                         ui.set_min_width(280.0);
                         focal_length_controls(ui, ed);
@@ -2341,9 +2341,12 @@ fn toolbar(ui: &mut Ui, ed: &mut Editor) {
             }
 
             ui.label(RichText::new("Mirror").weak());
-            widgets::chip(ui, &mut ed.symmetry.x, "X", &Cmd::SymX.tip_in(&ed.keymap));
-            widgets::chip(ui, &mut ed.symmetry.y, "Y", &Cmd::SymY.tip_in(&ed.keymap));
-            widgets::chip(ui, &mut ed.symmetry.z, "Z", &Cmd::SymZ.tip_in(&ed.keymap));
+            let tip_x = Cmd::SymX.tip_in(&ed.keymap);
+            let tip_y = Cmd::SymY.tip_in(&ed.keymap);
+            let tip_z = Cmd::SymZ.tip_in(&ed.keymap);
+            widgets::chip(ui, &mut ed.symmetry.x, "X", &tip_x);
+            widgets::chip(ui, &mut ed.symmetry.y, "Y", &tip_y);
+            widgets::chip(ui, &mut ed.symmetry.z, "Z", &tip_z);
             ui.separator();
 
             let levels = ed.multires_level();
@@ -3334,7 +3337,8 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             let r = widgets::drag_button(ui, Icon::Pan, plain::PAN);
             if r.dragged() {
                 let d = r.drag_delta() * ppp;
-                ed.camera.pan(Vec2::new(d.x, d.y), ed.canvas[3]);
+                let h = ed.canvas[3];
+                ed.camera.pan(Vec2::new(d.x, d.y), h);
             }
             let r = widgets::drag_button(ui, Icon::Zoom, plain::ZOOM);
             if r.dragged() {
@@ -5016,11 +5020,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
         if widgets::small_icon_button(ui, Icon::CollapseAll, "Collapse all").clicked() {
             ed.folded_pieces.clear();
-            for p in &ed.scene.pieces {
-                if !ed.scene.children_of(p.id).is_empty() {
-                    ed.folded_pieces.insert(p.id);
-                }
-            }
+            let to_fold: Vec<u64> =
+                ed.scene.pieces.iter().filter(|p| !ed.scene.children_of(p.id).is_empty()).map(|p| p.id).collect();
+            ed.folded_pieces.extend(to_fold);
         }
         let all_vis = !ed.scene.pieces.is_empty() && ed.scene.pieces.iter().all(|p| p.visible);
         let vis_icon = if all_vis { Icon::Eye } else { Icon::EyeOff };
@@ -5069,7 +5071,10 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 };
                 let stroke = if widgets::studio_style() || is_selected { stroke } else { EStroke::NONE };
                 let mut row_dragged = false;
-                let p = &mut ed.scene.pieces[i];
+                let mut toggle_vis = false;
+                let mut commit_rename = None;
+                let doc = &mut ed.documents[ed.active_document];
+                let p = &doc.scene.pieces[i];
                 let piece_id = p.id;
                 let piece_name = p.name.clone();
                 let piece_triangles = p.mesh.triangle_count();
@@ -5152,7 +5157,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                                 if alt {
                                     isolate = Some(i);
                                 } else {
-                                    p.visible = !p.visible;
+                                    toggle_vis = true;
                                 }
                             }
 
@@ -5175,29 +5180,29 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             tips::hover(icon_resp, icon_tip);
 
                             // Name label / inline rename
-                            let is_renaming = ed.renaming_piece == Some(piece_id);
+                            let is_renaming = doc.renaming_piece == Some(piece_id);
                             if is_renaming {
                                 let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
                                 let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
                                 let text_resp = tips::hover(
                                     ui.add(
-                                        egui::TextEdit::singleline(&mut ed.rename_text)
+                                        egui::TextEdit::singleline(&mut doc.rename_text)
                                             .id(edit_id)
                                             .desired_width(text_w),
                                     ),
                                     plain::PIECE_RENAME,
                                 );
-                                if !ui.memory(|m| m.has_focus(edit_id)) && ed.rename_text == p.name {
+                                if !ui.memory(|m| m.has_focus(edit_id)) && doc.rename_text == piece_name {
                                     text_resp.request_focus();
                                 }
-                                if text_resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                    let trimmed = ed.rename_text.trim();
+                                if text_resp.lost_focus() || ui.input(|i_in| i_in.key_pressed(egui::Key::Enter)) {
+                                    let trimmed = doc.rename_text.trim();
                                     if !trimmed.is_empty() {
-                                        p.name = trimmed.to_string();
+                                        commit_rename = Some(trimmed.to_string());
                                     }
-                                    ed.renaming_piece = None;
-                                } else if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                    ed.renaming_piece = None;
+                                    doc.renaming_piece = None;
+                                } else if ui.input(|i_in| i_in.key_pressed(egui::Key::Escape)) {
+                                    doc.renaming_piece = None;
                                 }
                             } else {
                                 let text_color = if is_active {
@@ -5283,6 +5288,13 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         });
                     })
                     .response;
+
+                if toggle_vis {
+                    ed.scene.pieces[i].visible = !ed.scene.pieces[i].visible;
+                }
+                if let Some(new_name) = commit_rename {
+                    ed.scene.pieces[i].name = new_name;
+                }
 
                 if frame_resp.interact(egui::Sense::click()).clicked()
                     && pick.is_none()
@@ -5992,10 +6004,11 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
             egui::ComboBox::from_id_salt("alpha")
                 .selected_text(current)
                 .show_ui(ui, |ui| {
-                    tips::hover(ui.selectable_value(&mut ed.alpha, None, "None"), tips::alpha_tip("None"));
-                    for (i, a) in ed.alphas.iter().enumerate() {
+                    let doc = &mut ed.documents[ed.active_document];
+                    tips::hover(ui.selectable_value(&mut doc.alpha, None, "None"), tips::alpha_tip("None"));
+                    for (i, a) in doc.alphas.iter().enumerate() {
                         let tip = tips::alpha_tip(&a.name);
-                        tips::hover(ui.selectable_value(&mut ed.alpha, Some(i), a.name.as_str()), tip);
+                        tips::hover(ui.selectable_value(&mut doc.alpha, Some(i), a.name.as_str()), tip);
                     }
                 })
                 .response,
@@ -6036,9 +6049,12 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
 fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
     ui.horizontal_wrapped(|ui| {
         ui.label("Mirror");
-        widgets::chip(ui, &mut ed.symmetry.x, "X", &Cmd::SymX.tip_in(&ed.keymap));
-        widgets::chip(ui, &mut ed.symmetry.y, "Y", &Cmd::SymY.tip_in(&ed.keymap));
-        widgets::chip(ui, &mut ed.symmetry.z, "Z", &Cmd::SymZ.tip_in(&ed.keymap));
+        let tip_x = Cmd::SymX.tip_in(&ed.keymap);
+        let tip_y = Cmd::SymY.tip_in(&ed.keymap);
+        let tip_z = Cmd::SymZ.tip_in(&ed.keymap);
+        widgets::chip(ui, &mut ed.symmetry.x, "X", &tip_x);
+        widgets::chip(ui, &mut ed.symmetry.y, "Y", &tip_y);
+        widgets::chip(ui, &mut ed.symmetry.z, "Z", &tip_z);
     });
     ui.horizontal_wrapped(|ui| {
         ui.label("Radial");
@@ -6071,8 +6087,9 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
 
 fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.label(RichText::new("Dynamic detail").small().weak());
+    let tip = Cmd::DynDetail.tip_in(&ed.keymap);
     ui.horizontal(|ui| {
-        tips::check_plain(ui, &mut ed.dyntopo, "Add detail as you sculpt", &Cmd::DynDetail.tip_in(&ed.keymap));
+        tips::check_plain(ui, &mut ed.dyntopo, "Add detail as you sculpt", &tip);
     });
     if ed.dyntopo {
         let levels = ed.scene.try_active().is_some_and(|p| p.multires.as_ref().is_some_and(|m| m.is_bound_to(&p.mesh)));
@@ -7025,7 +7042,8 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
         .show(ctx, |ui| {
             ui.label(RichText::new(if moving { plain::MOVE_HELP } else { plain::CURVE_HELP }).weak().small());
             ui.add_space(4.0);
-            let Some(c) = ed.curve.as_mut() else { return };
+            let doc = &mut ed.documents[ed.active_document];
+            let Some(c) = doc.curve.as_mut() else { return };
             let mut dragging = false;
             egui::Grid::new("curve_grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                 let pct = |v: f64, _: std::ops::RangeInclusive<usize>| format!("{:.0}%", v * 100.0);
@@ -7073,8 +7091,8 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label(RichText::new(if moving { plain::MOVE_SELECT } else { plain::CURVE_SELECT }).weak().small());
             }
             if !moving {
-                ed.curve_fade_in = c.fade_in;
-                ed.curve_fade_out = c.fade_out;
+                doc.curve_fade_in = c.fade_in;
+                doc.curve_fade_out = c.fade_out;
             }
             ui.label(RichText::new(if moving { plain::MOVE_SIZE } else { plain::CURVE_SIZE }).weak().small());
             ui.add_space(4.0);

@@ -50,7 +50,7 @@ impl Editor {
         let transforms = self.symmetry.transforms();
         let front = self.front_faces_only;
         let Drag::GroupPaint { piece, group, last, changed, .. } = &mut self.drag else { return };
-        let Some(target) = self.scene.get_mut(*piece) else { return };
+        let Some(target) = self.documents[self.active_document].scene.get_mut(*piece) else { return };
         for t in transforms {
             let q = center + t * (p - center);
             let facing = front.then(|| t * d);
