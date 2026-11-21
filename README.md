@@ -41,7 +41,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 - **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
 - **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
 - **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.
-- **Open files:** projects in `.oxb`; import glTF/GLB, OBJ, STL, PLY, FBX and ZBrush `.ztl`/`.zpr` (OBJ, PLY and glTF/GLB with their vertex colors, shown in the viewport over the material; View > Shading > **Show vertex color** hides them); export glTF/GLB (optionally compressed, quantized or meshopt, down to about a quarter of the size: File > glTF compression), OBJ, STL and PLY.
+- **Open files:** projects in `.oxb`; import glTF/GLB, OBJ, STL, PLY, FBX and ZBrush `.ztl`/`.zpr` (OBJ, PLY and glTF/GLB with their vertex colors, shown in the viewport over the material; View > Shading > **Show vertex color** hides them); export glTF/GLB (optionally compressed, quantized or meshopt, down to about a quarter of the size: File > glTF compression), OBJ, STL and PLY. UVs from OBJ and glTF/GLB are kept through subdivision levels and exported with the active level.
 
 ## Download and install
 

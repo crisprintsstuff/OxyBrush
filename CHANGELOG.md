@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **UVs survive subdivision.** Catmull–Clark and Loop levels preserve UV islands when you subdivide, switch levels, save and reopen, or export OBJ or glTF/GLB.
+
+### Fixed
+
+- **Blender bridge returns work on meshes with shape keys.** Position-only edits move the Basis and keep each key's offset. Sending a new piece back again updates the object that the bridge previously created.
+
 ## [4.0.0-beta.21.4] - 2026-11-21
 
 ### Added

@@ -18,7 +18,7 @@ from bpy.types import AddonPreferences, Operator, Panel
 MANIFEST = "bridge.oxylink.json"
 POLL_SECONDS = 1.0
 
-# Open links: folder -> {"objects": {sent name: Blender object name}, "seen": mtime}
+# Open links: folder -> original object names, returned piece paths and last seen mtime.
 _links = {}
 
 
@@ -108,11 +108,29 @@ class OXYBRUSH_OT_send(Operator):
         except OSError as e:
             self.report({"ERROR"}, "Could not start OxyBrush: %s" % e)
             return {"CANCELLED"}
-        _links[folder] = {"objects": names, "seen": 0.0}
+        _links[folder] = {"objects": names, "new_objects": {}, "seen": 0.0}
         if not bpy.app.timers.is_registered(_poll):
             bpy.app.timers.register(_poll, first_interval=POLL_SECONDS, persistent=True)
         self.report({"INFO"}, "Sent %d object(s) to OxyBrush" % len(objects))
         return {"FINISHED"}
+
+
+def _move_vertices(mesh, verts):
+    flat = [coord for vertex in verts for coord in vertex]
+    if mesh.shape_keys:
+        basis = mesh.shape_keys.reference_key
+        before = [0.0] * len(flat)
+        basis.data.foreach_get("co", before)
+        delta = [new - old for new, old in zip(flat, before)]
+        for key in mesh.shape_keys.key_blocks:
+            if key == basis:
+                key.data.foreach_set("co", flat)
+            else:
+                key.data.foreach_get("co", before)
+                key.data.foreach_set("co", [coord + offset for coord, offset in zip(before, delta)])
+        mesh.shape_keys.update_tag()
+    mesh.vertices.foreach_set("co", flat)
+    mesh.update()
 
 
 def _apply(folder, link):
@@ -125,21 +143,22 @@ def _apply(folder, link):
         if not path.startswith(os.path.normpath(folder) + os.sep) or not os.path.isfile(path):
             continue
         verts, faces = _read_obj(path)
-        target = bpy.data.objects.get(link["objects"].get(item.get("name"), ""))
-        if item.get("new") or target is None:
+        name = item.get("name")
+        is_new = item.get("new")
+        objects = link["new_objects"] if is_new else link["objects"]
+        key = rel if is_new else name
+        target = bpy.data.objects.get(objects.get(key, ""))
+        if target is None:
             mesh = bpy.data.meshes.new(item.get("name") or "OxyBrush")
             mesh.from_pydata(verts, [], faces)
             mesh.update()
             ob = bpy.data.objects.new(mesh.name, mesh)
             bpy.context.scene.collection.objects.link(ob)
-            link["objects"][item.get("name")] = ob.name
+            objects[key] = ob.name
             continue
         mesh = target.data
         if item.get("same_topology") and len(verts) == len(mesh.vertices):
-            # Same vertices: move them, keeping UVs, materials, groups and shape keys.
-            flat = [c for v in verts for c in v]
-            mesh.vertices.foreach_set("co", flat)
-            mesh.update()
+            _move_vertices(mesh, verts)
         else:
             new = bpy.data.meshes.new(mesh.name)
             new.from_pydata(verts, [], faces)

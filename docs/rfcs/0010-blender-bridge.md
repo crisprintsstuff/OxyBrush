@@ -1,6 +1,6 @@
 # RFC 0010: Blender bridge
 
-- **Status:** OBJ bridge and Blender add-on implemented; tab-aware since RFC 0027. The release workflow packages the extension ZIP. Interactive round-trip testing, extension-directory publication, and optional glTF exchange are pending.
+- **Status:** OBJ bridge and Blender add-on implemented; tab-aware since RFC 0027. The release workflow packages the extension ZIP. The interactive OBJ round trip was verified on Linux. Extension-directory publication and optional glTF exchange are pending.
 - **Requested by:** testers, who want to send a model from Blender to OxyBrush,
   sculpt it, and get it back without exporting and importing by hand.
 
