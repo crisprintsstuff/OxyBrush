@@ -236,9 +236,10 @@ impl Editor {
     /// Each copy's transform for instancer `index` of piece `host`, worked
     /// out again only when the host, the source or the settings changed.
     pub fn instance_transforms(&mut self, host: u64, index: usize) -> Option<Arc<Vec<Mat4>>> {
-        let hp = self.scene.get(host)?;
+        let doc = &mut self.documents[self.active_document];
+        let hp = doc.scene.get(host)?;
         let ins = hp.instancers.get(index)?;
-        let sp = self.scene.get(ins.source)?;
+        let sp = doc.scene.get(ins.source)?;
         let inputs = Inputs {
             host_topology: hp.mesh.topology_version(),
             host_faces: hp.mesh.face_version(),
@@ -248,7 +249,7 @@ impl Editor {
             source_edits: sp.mesh.edit_version(),
             settings: ins.settings,
         };
-        let cache = self.instance_cache.entry(draw_key(host, index)).or_default();
+        let cache = doc.instance_cache.entry(draw_key(host, index)).or_default();
         if cache.inputs.as_ref() == Some(&inputs) {
             return Some(cache.transforms.clone());
         }
@@ -282,8 +283,9 @@ impl Editor {
             out.push(InstanceDraw { key, host, source, transforms, generation });
         }
         // Forget copies of pieces that are gone.
-        let scene = &self.scene;
-        self.instance_cache.retain(|k, _| scene.get(k >> 16).is_some());
+        let doc = &mut self.documents[self.active_document];
+        let scene = &doc.scene;
+        doc.instance_cache.retain(|k, _| scene.get(k >> 16).is_some());
         out
     }
 

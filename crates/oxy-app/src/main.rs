@@ -7,6 +7,7 @@ mod agent;
 mod app;
 mod bridge;
 mod deform_ui;
+mod document;
 mod editor;
 mod gizmo_ops;
 mod group_paint;

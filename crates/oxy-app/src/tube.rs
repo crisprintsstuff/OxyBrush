@@ -446,7 +446,8 @@ impl Editor {
         }
         let m = self.active_modifiers();
         if let Some(i) = self.tube_point_at(p) {
-            let tube = self.tube.as_mut().unwrap();
+            let doc = &mut self.documents[self.active_document];
+            let tube = doc.tube.as_mut().unwrap();
             if m.alt {
                 tube.remove_point(i);
                 return true;

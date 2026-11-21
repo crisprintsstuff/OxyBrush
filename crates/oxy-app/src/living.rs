@@ -537,15 +537,16 @@ impl Editor {
     /// After a stroke of `brush` was committed as the newest undo entry:
     /// record it, when Living strokes is on.
     pub(crate) fn living_record(&mut self, brush: BrushKind, recipe: Option<StrokeRecipe>) {
-        if !self.living.enabled || brush == BrushKind::Mask {
+        let doc = &mut self.documents[self.active_document];
+        if !doc.living.enabled || brush == BrushKind::Mask {
             return;
         }
-        let piece = self.scene.active();
-        let Some(entry) = self.history.newest_id() else { return };
-        if self.living.strokes.iter().any(|s| s.entry == entry) {
+        let piece = doc.scene.active();
+        let Some(entry) = doc.history.newest_id() else { return };
+        if doc.living.strokes.iter().any(|s| s.entry == entry) {
             return; // nothing new was committed
         }
-        let Some(chunks) = self.history.newest_chunks_before(piece.id) else { return };
+        let Some(chunks) = doc.history.newest_chunks_before(piece.id) else { return };
         let mesh = &piece.mesh;
         let painted = mesh.is_painted();
         let mut moved: Vec<(u32, Vec3, Vec3)> = Vec::new();
@@ -572,10 +573,10 @@ impl Editor {
         }
         moved.sort_unstable_by_key(|m| m.0);
         let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
-        let id = self.living.next_id;
-        self.living.next_id += 1;
+        let id = doc.living.next_id;
+        doc.living.next_id += 1;
         let (piece_id, topology, points) = (piece.id, mesh.topology_version(), mesh.vertex_count());
-        self.living.strokes.push(LivingStroke {
+        doc.living.strokes.push(LivingStroke {
             id,
             piece: piece_id,
             brush,
@@ -619,20 +620,21 @@ impl Editor {
             }
             _ => return,
         };
-        let Some(grp) = self.living.group(gid).cloned() else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(grp) = doc.living.group(gid).cloned() else { return };
         if !grp.visible {
-            self.living.note = Some(format!(
+            doc.living.note = Some(format!(
                 "{} is hidden, so the stroke wasn't put in it: show the layer to sculpt into it",
                 grp.name
             ));
             return;
         }
-        let Some(i) = self.scene.index_of(piece_id) else { return };
-        let Some(s) = self.living.strokes.last_mut() else { return };
+        let Some(i) = doc.scene.index_of(piece_id) else { return };
+        let Some(s) = doc.living.strokes.last_mut() else { return };
         s.group = Some(gid);
         let t = s.strength * grp.strength;
         if (t - s.applied).abs() > 1e-6 {
-            let mesh = &mut self.scene.pieces[i].mesh;
+            let mesh = &mut doc.scene.pieces[i].mesh;
             add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
             s.applied = t;
             mesh.update_after_move(&s.vertices);
@@ -729,9 +731,10 @@ impl Editor {
             return;
         }
         let mut baked: Vec<String> = Vec::new();
-        let scene = &self.scene;
-        let history = &self.history;
-        self.living.strokes.retain(|s| {
+        let doc = &mut self.documents[self.active_document];
+        let scene = &doc.scene;
+        let history = &doc.history;
+        doc.living.strokes.retain(|s| {
             let Some(p) = scene.index_of(s.piece).map(|i| &scene.pieces[i]) else { return false };
             if p.mesh.topology_version() != s.topology || p.mesh.vertex_count() != s.points {
                 if s.listed() && !baked.contains(&p.name) {
@@ -742,9 +745,9 @@ impl Editor {
             // An undone stroke stays only while it can be redone.
             !s.undone || history.can_redo_id(s.entry)
         });
-        self.living.edits.retain(|e| self.history.can_undo_id(e.entry) || self.history.can_redo_id(e.entry));
-        let strokes = &self.living.strokes;
-        self.living.groups.retain(|g| strokes.iter().any(|s| s.group == Some(g.id)));
+        doc.living.edits.retain(|e| history.can_undo_id(e.entry) || history.can_redo_id(e.entry));
+        let strokes = &doc.living.strokes;
+        doc.living.groups.retain(|g| strokes.iter().any(|s| s.group == Some(g.id)));
         if let Some(Target::Group(g)) = self.living.target
             && self.living.group(g).is_none()
         {
@@ -812,11 +815,12 @@ impl Editor {
         if targets.is_empty() {
             return;
         }
-        let mesh = &mut self.scene.pieces[i].mesh;
+        let doc = &mut self.documents[self.active_document];
+        let mesh = &mut doc.scene.pieces[i].mesh;
         let mut moved: Vec<u32> = Vec::new();
         let mut colors = false;
         for (k, t) in targets {
-            let s = &mut self.living.strokes[k];
+            let s = &mut doc.living.strokes[k];
             add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
             s.applied = t;
             moved.extend_from_slice(&s.vertices);
@@ -875,14 +879,15 @@ impl Editor {
         if changed.is_empty() && groups_before == groups_after {
             return false;
         }
+        let doc = &mut self.documents[self.active_document];
         // Snapshot the chunks whose points will move (at least one, so a
         // change that moves nothing, like a rename, is still an undo step).
-        let mesh = &self.scene.pieces[index].mesh;
+        let mesh = &doc.scene.pieces[index].mesh;
         let mut chunks: BTreeSet<u32> = BTreeSet::new();
         let mut painted = false;
         let mut any_chunk = None;
         for (id, b, a) in &changed {
-            let Some(s) = self.living.strokes.iter().find(|s| s.id == *id) else { continue };
+            let Some(s) = doc.living.strokes.iter().find(|s| s.id == *id) else { continue };
             painted |= !s.colors.is_empty();
             if any_chunk.is_none() {
                 any_chunk = s.vertices.first().and_then(|&v| mesh.vertex_chunk_of(v).copied());
@@ -894,16 +899,16 @@ impl Editor {
         if chunks.is_empty() {
             chunks.insert(any_chunk.unwrap_or(0));
         }
-        self.history.begin_with(label, pid, mesh, painted);
+        doc.history.begin_with(label, pid, mesh, painted);
         for &c in &chunks {
-            self.history.touch(mesh, c);
+            doc.history.touch(mesh, c);
         }
-        let mesh = &mut self.scene.pieces[index].mesh;
+        let mesh = &mut doc.scene.pieces[index].mesh;
         let mut moved: Vec<u32> = Vec::new();
         let mut colors = false;
         let mut data_log: Vec<(u64, Data, Data)> = Vec::new();
         for &(id, b, a) in &changed {
-            let Some(s) = self.living.strokes.iter_mut().find(|s| s.id == id) else { continue };
+            let Some(s) = doc.living.strokes.iter_mut().find(|s| s.id == id) else { continue };
             if let Some(k) = data.iter().position(|d| d.0 == id) {
                 let (_, nd, nc) = data.swap_remove(k);
                 // Take the old change off at its share, put the new one on.
@@ -1209,7 +1214,8 @@ impl Editor {
             return;
         }
         let center = self.symmetry_center();
-        let mesh = &self.scene.active().mesh;
+        let doc = &mut self.documents[self.active_document];
+        let mesh = &doc.scene.active().mesh;
         let mut made = Vec::new();
         let (mut unmatched, mut total) = (0, 0);
         for s in &picked {
@@ -1217,7 +1223,7 @@ impl Editor {
             unmatched += missed;
             total += s.vertices.len();
             if !vertices.is_empty() {
-                made.push(self.living.new_like(s, vertices, deltas, colors));
+                made.push(doc.living.new_like(s, vertices, deltas, colors));
             }
         }
         if made.is_empty() {
@@ -1461,23 +1467,24 @@ impl Editor {
     /// After a project was opened: start a fresh list, and take the strokes
     /// saved with its pieces.
     pub(crate) fn living_adopt_loaded(&mut self) {
-        self.living.clear();
-        self.living.note = None;
+        let doc = &mut self.documents[self.active_document];
+        doc.living.clear();
+        doc.living.note = None;
         let mut found = 0;
         let mut taken = 0;
-        let alphas = &self.alphas;
-        for p in &mut self.scene.pieces {
+        let alphas = doc.alphas.clone();
+        for p in &mut doc.scene.pieces {
             let Some(saved) = p.strokes.take().map(|b| *b) else { continue };
             found += saved.strokes.len();
-            if !self.living.enabled || saved.vertices as usize != p.mesh.vertex_count() {
+            if !doc.living.enabled || saved.vertices as usize != p.mesh.vertex_count() {
                 continue;
             }
             let mut group_ids: HashMap<u32, u32> = HashMap::new();
             for g in saved.groups {
-                let id = self.living.next_group;
-                self.living.next_group += 1;
+                let id = doc.living.next_group;
+                doc.living.next_group += 1;
                 group_ids.insert(g.id, id);
-                self.living.groups.push(StrokeGroup {
+                doc.living.groups.push(StrokeGroup {
                     id,
                     piece: p.id,
                     name: g.name,
@@ -1490,9 +1497,9 @@ impl Editor {
                     continue;
                 };
                 let group = s.group.and_then(|g| group_ids.get(&g).copied());
-                let id = self.living.next_id;
-                self.living.next_id += 1;
-                let factor = group.and_then(|g| self.living.group(g)).map_or(1.0, StrokeGroup::factor);
+                let id = doc.living.next_id;
+                doc.living.next_id += 1;
+                let factor = group.and_then(|g| doc.living.group(g)).map_or(1.0, StrokeGroup::factor);
                 // The recipe, when it reads and its alpha is still among
                 // the alphas (they're saved with the project).
                 // Version 2 matches the stored pixels and ignores the name.
@@ -1512,7 +1519,7 @@ impl Editor {
                         }
                     }
                 };
-                self.living.strokes.push(LivingStroke {
+                doc.living.strokes.push(LivingStroke {
                     id,
                     piece: p.id,
                     brush,
@@ -1535,7 +1542,7 @@ impl Editor {
             }
             for pp in saved.parts {
                 let group = group_ids.get(&pp.group).copied().unwrap_or(pp.group);
-                self.living.placed_parts.push(PlacedPart {
+                doc.living.placed_parts.push(PlacedPart {
                     id: pp.id,
                     piece: p.id,
                     name: pp.name,
@@ -1979,20 +1986,21 @@ impl Editor {
             self.status = "Stroke edit cancelled".into();
             return;
         }
+        let doc = &mut self.documents[self.active_document];
         let Some(index) =
-            self.scene.index_of(self.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0))
+            doc.scene.index_of(doc.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0))
         else {
             return;
         };
-        let mesh = &self.scene.pieces[index].mesh;
+        let mesh = &doc.scene.pieces[index].mesh;
         if mesh.vertex_count() != new_mesh.vertex_count() {
             self.status = "The piece changed while the stroke was being edited".into();
             return;
         }
         let painted = mesh.is_painted() || wait.recipe.settings.kind == BrushKind::Paint;
-        let pid = self.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0);
-        self.history.begin_with("Edit stroke", pid, mesh, painted);
-        let mesh = &mut self.scene.pieces[index].mesh;
+        let pid = doc.living.strokes.iter().find(|s| s.id == id).map(|s| s.piece).unwrap_or(0);
+        doc.history.begin_with("Edit stroke", pid, mesh, painted);
+        let mesh = &mut doc.scene.pieces[index].mesh;
         let mut chunks = Vec::new();
         for (i, chunk) in mesh.chunks.iter().enumerate() {
             let range = chunk.vertices.start as usize..chunk.vertices.end as usize;
@@ -2008,7 +2016,7 @@ impl Editor {
             chunks.push(0);
         }
         for &chunk in &chunks {
-            self.history.touch(mesh, chunk);
+            doc.history.touch(mesh, chunk);
         }
         for &chunk in &chunks {
             let range = mesh.chunks[chunk as usize].vertices.clone();
@@ -2089,21 +2097,23 @@ impl Editor {
         let painted =
             had_color || recipe.settings.kind == BrushKind::Paint || self.scene.pieces[index].mesh.is_painted();
         if record {
-            let mesh = &self.scene.pieces[index].mesh;
-            self.history.begin_with("Edit stroke", pid, mesh, painted);
-            let mesh = &self.scene.pieces[index].mesh;
+            let doc = &mut self.documents[self.active_document];
+            let mesh = &doc.scene.pieces[index].mesh;
+            doc.history.begin_with("Edit stroke", pid, mesh, painted);
+            let mesh = &doc.scene.pieces[index].mesh;
             if let Some(&chunk) = own.vertices.first().and_then(|&v| mesh.vertex_chunk_of(v)) {
-                self.history.touch(mesh, chunk);
+                doc.history.touch(mesh, chunk);
             } else if !mesh.chunks.is_empty() {
-                self.history.touch(mesh, 0);
+                doc.history.touch(mesh, 0);
             }
         }
+        let doc = &mut self.documents[self.active_document];
         let change = if record {
-            let history = &mut self.history;
-            let mesh = &mut self.scene.pieces[index].mesh;
+            let history = &mut doc.history;
+            let mesh = &mut doc.scene.pieces[index].mesh;
             resculpt(mesh, &own, &later, applied, recipe, &mut |mesh, chunk| history.touch(mesh, chunk))
         } else {
-            let mesh = &mut self.scene.pieces[index].mesh;
+            let mesh = &mut doc.scene.pieces[index].mesh;
             resculpt(mesh, &own, &later, applied, recipe, &mut |_, _| {})
         };
         if record {
@@ -2478,13 +2488,14 @@ impl Editor {
 
     /// Update placement location as pointer hovers over `hit_point` with surface normal `hit_normal`.
     pub fn update_part_placement(&mut self, hit_point: Vec3, hit_normal: Vec3, piece_id: u64) {
-        let Some(placement) = &mut self.part_placement else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(placement) = &mut doc.part_placement else { return };
         placement.piece = piece_id;
         placement.anchor = hit_point;
         placement.normal = hit_normal;
 
         // Check if on symmetry plane
-        let piece = self.scene.pieces.iter().find(|p| p.id == piece_id);
+        let piece = doc.scene.pieces.iter().find(|p| p.id == piece_id);
         let center = piece.and_then(|p| p.symmetry_center).unwrap_or(Vec3::ZERO);
         let axis_vec = match placement.mirror_axis {
             2 => Vec3::Y,
@@ -2501,19 +2512,20 @@ impl Editor {
 
     /// Commit the active placement with `choice`.
     pub fn commit_part_placement(&mut self, choice: PlaceChoice) -> Result<(), String> {
-        let Some(placement) = self.part_placement.take() else {
+        let doc = &mut self.documents[self.active_document];
+        let Some(placement) = doc.part_placement.take() else {
             return Err("No active part placement".into());
         };
-        if !self.living.enabled {
+        if !doc.living.enabled {
             self.status = "Living strokes is off. Turn it on in Preferences > General to save or place a part.".into();
             return Err(self.status.clone());
         }
-        if self.dyntopo {
+        if doc.dyntopo {
             self.status =
                 "Dynamic detail is on, which changes the triangles, so this part can't be placed. Turn it off.".into();
             return Err(self.status.clone());
         }
-        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == placement.piece) else {
+        let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == placement.piece) else {
             return Err("Piece not found".into());
         };
 
@@ -2547,9 +2559,9 @@ impl Editor {
         }
 
         // New stroke group for this placed part
-        let group_id = self.living.next_group;
-        self.living.next_group += 1;
-        self.living.groups.push(StrokeGroup {
+        let group_id = doc.living.next_group;
+        doc.living.next_group += 1;
+        doc.living.groups.push(StrokeGroup {
             id: group_id,
             piece: piece.id,
             name: placement.detail.name.clone(),
@@ -2557,7 +2569,7 @@ impl Editor {
             visible: true,
         });
 
-        self.history.begin(format!("Place {}", placement.detail.name), piece.id, &piece.mesh);
+        doc.history.begin(format!("Place {}", placement.detail.name), piece.id, &piece.mesh);
 
         let mut touched = vec![false; piece.mesh.chunks.len()];
         let mut source_stroke_ids = Vec::new();
@@ -2568,7 +2580,7 @@ impl Editor {
             let before_colors = piece.mesh.color.clone();
             let painted = piece.mesh.is_painted();
             let mut stroke_touched = vec![false; piece.mesh.chunks.len()];
-            let history = &mut self.history;
+            let history = &mut doc.history;
             let mesh = &mut piece.mesh;
             r.replay(mesh, &mut |m, chunk| {
                 history.touch(m, chunk);
@@ -2598,16 +2610,17 @@ impl Editor {
             moved.sort_unstable_by_key(|m| m.0);
             let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
 
-            let stroke_id = self.living.next_id;
-            self.living.next_id += 1;
+            let stroke_id = doc.living.next_id;
+            doc.living.next_id += 1;
             source_stroke_ids.push(stroke_id);
 
-            self.living.strokes.push(LivingStroke {
+            let rev = doc.history.revision();
+            doc.living.strokes.push(LivingStroke {
                 id: stroke_id,
                 piece: piece.id,
                 brush: r.settings.kind,
                 made: SystemTime::now(),
-                entry: self.history.revision(),
+                entry: rev,
                 topology: piece.mesh.topology_version(),
                 points: piece.mesh.vertex_count(),
                 vertices: moved.iter().map(|m| m.0).collect(),
@@ -2657,7 +2670,7 @@ impl Editor {
                 let before_colors = piece.mesh.color.clone();
                 let painted = piece.mesh.is_painted();
                 let mut stroke_touched = vec![false; piece.mesh.chunks.len()];
-                let history = &mut self.history;
+                let history = &mut doc.history;
                 let mesh = &mut piece.mesh;
                 r.replay(mesh, &mut |m, chunk| {
                     history.touch(m, chunk);
@@ -2687,16 +2700,17 @@ impl Editor {
                 moved.sort_unstable_by_key(|m| m.0);
                 let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
 
-                let stroke_id = self.living.next_id;
-                self.living.next_id += 1;
+                let stroke_id = doc.living.next_id;
+                doc.living.next_id += 1;
                 mirror_stroke_ids.push(stroke_id);
 
-                self.living.strokes.push(LivingStroke {
+                let rev = doc.history.revision();
+                doc.living.strokes.push(LivingStroke {
                     id: stroke_id,
                     piece: piece.id,
                     brush: r.settings.kind,
                     made: SystemTime::now(),
-                    entry: self.history.revision(),
+                    entry: rev,
                     topology: piece.mesh.topology_version(),
                     points: piece.mesh.vertex_count(),
                     vertices: moved.iter().map(|m| m.0).collect(),
@@ -2712,14 +2726,14 @@ impl Editor {
                 });
             }
 
-            partner_id = self.living.next_part_id + 1;
+            partner_id = doc.living.next_part_id + 1;
         }
 
-        let part_id = self.living.next_part_id;
-        self.living.next_part_id += if is_mirrored { 2 } else { 1 };
+        let part_id = doc.living.next_part_id;
+        doc.living.next_part_id += if is_mirrored { 2 } else { 1 };
 
         let flags = if is_mirrored { 1 | 2 } else { 2 };
-        self.living.placed_parts.push(PlacedPart {
+        doc.living.placed_parts.push(PlacedPart {
             id: part_id,
             piece: piece.id,
             name: placement.detail.name.clone(),
@@ -2737,7 +2751,7 @@ impl Editor {
         });
 
         if is_mirrored {
-            self.living.placed_parts.push(PlacedPart {
+            doc.living.placed_parts.push(PlacedPart {
                 id: partner_id,
                 piece: piece.id,
                 name: placement.detail.name.clone(),

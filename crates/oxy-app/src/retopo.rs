@@ -265,46 +265,51 @@ impl Editor {
     }
 
     fn retopo_cage_mut(&mut self) -> Option<&mut Cage> {
-        let r = self.retopo.as_mut()?;
-        match r.cage_piece.and_then(|id| self.scene.pieces.iter().position(|p| p.id == id)) {
-            Some(i) => self.scene.pieces[i].cage.as_mut(),
-            None => Some(&mut r.draft),
+        let doc = &mut self.documents[self.active_document];
+        let cage_piece = doc.retopo.as_ref()?.cage_piece;
+        match cage_piece.and_then(|id| doc.scene.pieces.iter().position(|p| p.id == id)) {
+            Some(i) => doc.scene.pieces[i].cage.as_mut(),
+            None => doc.retopo.as_mut().map(|r| &mut r.draft),
         }
     }
 
     /// Bring the cage up to date with its piece (a brush or an undo may
     /// have moved the mesh, or removed the piece).
     pub fn retopo_sync(&mut self) {
-        let Some(r) = self.retopo.as_mut() else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(r) = doc.retopo.as_mut() else { return };
         // Redo brought back the piece an undo removed: pick it up again.
         if r.cage_piece.is_none()
             && r.draft.is_empty()
-            && let Some((s, c)) = self.retopo_last
+            && let Some((s, c)) = doc.retopo_last
             && s == r.surface
-            && self.scene.pieces.iter().any(|p| p.id == c && p.cage.as_ref().is_some_and(|k| k.is_linked_to(&p.mesh)))
+            && doc.scene.pieces.iter().any(|p| p.id == c && p.cage.as_ref().is_some_and(|k| k.is_linked_to(&p.mesh)))
         {
             r.cage_piece = Some(c);
             r.view_key = None;
         }
         let Some(id) = r.cage_piece else { return };
-        match self.scene.pieces.iter_mut().find(|p| p.id == id) {
+        match doc.scene.pieces.iter_mut().find(|p| p.id == id) {
             Some(p) => {
                 let synced = match p.cage.as_mut() {
                     Some(c) => c.sync_from(&p.mesh),
                     None => false,
                 };
                 if !synced {
-                    // Undo brought back a mesh without a cage, or the
-                    // topology changed (remesh, subdivide): start a new one.
-                    r.cage_piece = None;
-                    r.view_key = None;
+                    let doc = &mut self.documents[self.active_document];
+                    if let Some(r) = doc.retopo.as_mut() {
+                        r.cage_piece = None;
+                        r.view_key = None;
+                    }
                     self.status = "The retopology piece was changed by another tool; starting a new one".into();
                 }
             }
             None => {
-                // Undo removed the piece (its first face): back to the draft.
-                r.cage_piece = None;
-                r.view_key = None;
+                let doc = &mut self.documents[self.active_document];
+                if let Some(r) = doc.retopo.as_mut() {
+                    r.cage_piece = None;
+                    r.view_key = None;
+                }
             }
         }
         if self.surface_piece().is_none() {
@@ -524,8 +529,9 @@ impl Editor {
     /// before the change. Rebuilds the piece's mesh when faces changed.
     fn commit_cage(&mut self, label: &str, before: Snapshot, mut cage: Cage) {
         self.bump_generation();
-        let Some(r) = self.retopo.as_mut() else { return };
-        let piece_index = r.cage_piece.and_then(|id| self.scene.index_of(id));
+        let doc = &mut self.documents[self.active_document];
+        let cage_piece = doc.retopo.as_ref().and_then(|r| r.cage_piece);
+        let piece_index = cage_piece.and_then(|id| doc.scene.index_of(id));
         match piece_index {
             Some(i) => {
                 let id = self.scene.pieces[i].id;
@@ -559,7 +565,10 @@ impl Editor {
             }
             None => {
                 if cage.faces.is_empty() {
-                    r.draft = cage;
+                    let doc = &mut self.documents[self.active_document];
+                    if let Some(r) = doc.retopo.as_mut() {
+                        r.draft = cage;
+                    }
                     return;
                 }
                 let Some(mesh) = cage.build_mesh() else { return };
@@ -1630,7 +1639,8 @@ mod tests {
         want.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
         assert_eq!(base, want);
         // Stepping down to level 1 shows the drawn quads.
-        e.scene.set_active(e.scene.index_of(id).unwrap());
+        let idx = e.scene.index_of(id).unwrap();
+        e.scene.set_active(idx);
         e.step_level(-2);
         let p = &e.scene.pieces[e.scene.index_of(id).unwrap()];
         let mut shown = p.mesh.positions.clone();

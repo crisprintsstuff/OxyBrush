@@ -255,8 +255,8 @@ impl Editor {
         });
         g.current = t;
         for part in &g.parts {
-            let Some(i) = self.scene.index_of(part.id) else { continue };
-            let mesh = &mut self.scene.pieces[i].mesh;
+            let Some(i) = self.documents[self.active_document].scene.index_of(part.id) else { continue };
+            let mesh = &mut self.documents[self.active_document].scene.pieces[i].mesh;
             let (pos0, nrm0) = (&part.before.positions, &part.before.normals);
             pose::apply_interactive(mesh, pos0, nrm0, &part.weights, g.pivot, &t, &pose::GizmoMirror::NONE);
             for &c in &part.affected {

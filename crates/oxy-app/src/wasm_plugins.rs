@@ -440,7 +440,7 @@ impl Editor {
             // Overtaken: a newer run follows (update_plugin_previews).
             return;
         }
-        let Some(i) = self.scene.index_of(pv.piece) else {
+        let Some(i) = self.documents[self.active_document].scene.index_of(pv.piece) else {
             p.preview = None;
             return;
         };
@@ -449,7 +449,7 @@ impl Editor {
         let edits: Vec<(usize, PieceEdits)> = gather(&mut result.clone());
         let mine = edits.iter().find(|(k, _)| Some(*k) == index).map(|(_, e)| e);
         pv.mesh = match mine {
-            Some(e) => match edited_mesh(&self.scene.pieces[i].mesh, e) {
+            Some(e) => match edited_mesh(&self.documents[self.active_document].scene.pieces[i].mesh, e) {
                 Some(m) => Some(m),
                 None => {
                     self.status = format!("{label}: its result doesn't fit the piece");
@@ -491,7 +491,8 @@ impl Editor {
                 applied += 1;
                 continue;
             }
-            let mesh = &mut self.scene.pieces[i].mesh;
+            let doc = &mut self.documents[self.active_document];
+            let mesh = &mut doc.scene.pieces[i].mesh;
             let (n, nt) = (mesh.vertex_count(), mesh.triangle_count());
             if e.positions.as_ref().is_some_and(|v| v.len() != n)
                 || e.mask.as_ref().is_some_and(|v| v.len() != n)
@@ -504,10 +505,10 @@ impl Editor {
             }
             let (vertex, faces) = (e.has_vertex_edits(), e.has_face_edits());
             if vertex {
-                self.history.begin_with(label, id, mesh, e.color.is_some() || mesh.is_painted());
+                doc.history.begin_with(label, id, mesh, e.color.is_some() || mesh.is_painted());
                 let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
                 for &c in &chunks {
-                    self.history.touch(mesh, c);
+                    doc.history.touch(mesh, c);
                 }
                 if let Some(p) = e.positions {
                     mesh.positions = p;
@@ -551,7 +552,9 @@ impl Editor {
                 self.scene.pieces.push(oxy_doc::Piece::new(name, mesh));
                 steps.push(oxy_history::Step::Inserted { index });
             }
-            self.scene.set_active(self.scene.pieces.len() - 1);
+            let doc = &mut self.documents[self.active_document];
+            let active = doc.scene.pieces.len() - 1;
+            doc.scene.set_active(active);
             self.history.record_compound(format!("{label} (new pieces)"), steps);
             applied += added;
         }

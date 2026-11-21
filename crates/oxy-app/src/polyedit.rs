@@ -548,7 +548,8 @@ impl Editor {
             }
             return;
         };
-        let p = &mut self.scene.pieces[i];
+        let doc = &mut self.documents[self.active_document];
+        let p = &mut doc.scene.pieces[i];
         let ok = match p.cage.as_mut() {
             Some(c) => c.sync_from(&p.mesh),
             None => false,
@@ -557,7 +558,7 @@ impl Editor {
         // them, so Reach: Face group follows what's shown.
         let faces = p.mesh.face_version();
         if ok
-            && let Some(pe) = self.poly_edit.as_mut()
+            && let Some(pe) = doc.poly_edit.as_mut()
             && pe.groups_seen != faces
         {
             pe.groups_seen = faces;
@@ -2246,7 +2247,8 @@ mod tests {
         e.show_welcome = false;
         e.canvas = [0.0, 0.0, 800.0, 600.0];
         e.camera = oxy_render::Camera::default();
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         e.symmetry.x = false;
         e
     }
@@ -2474,7 +2476,8 @@ mod tests {
         // A border edge of an open plane, with Shift: new faces come out of it.
         let mut e = editor();
         e.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(1, 1.0)));
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         start(&mut e);
         let c = cage(&e);
         let faces = c.faces.len();
@@ -2514,7 +2517,8 @@ mod tests {
         e.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(10, 2.0)));
         e.camera.yaw = 0.5;
         e.camera.pitch = 0.6;
-        e.camera.frame(e.scene.bounds());
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
         start(&mut e);
         e.poly_edit.as_mut().unwrap().mode = ElementMode::Points;
         let c = cage(&e).clone();
@@ -2577,7 +2581,8 @@ mod tests {
         e2.scene = Scene::new(Piece::new("Plane", oxy_mesh::primitives::plane(10, 2.0)));
         e2.camera.yaw = 0.5;
         e2.camera.pitch = 0.6;
-        e2.camera.frame(e2.scene.bounds());
+        let bounds = e2.scene.bounds();
+        e2.camera.frame(bounds);
         start(&mut e2);
         let c2 = cage(&e2).clone();
         let off = (0..c2.positions.len() as u32)
