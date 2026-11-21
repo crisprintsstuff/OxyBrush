@@ -924,6 +924,8 @@ pub enum Pending {
     New(&'static str),
     /// Close the project: back to the start screen over a fresh sphere.
     Close,
+    /// Close a tab by index.
+    CloseTab(usize),
     OpenProject(PathBuf),
     /// Open a link manifest from another app (RFC 0010).
     OpenLink(PathBuf),
@@ -936,6 +938,7 @@ pub enum Pending {
 pub struct Job {
     pub label: String,
     pub started: Instant,
+    pub doc_id: u64,
     /// Piece receiving the result. An import that only adds pieces leaves
     /// this unused, including when the scene is empty.
     target: u64,
@@ -3128,6 +3131,7 @@ impl Editor {
 
     /// The alphas saved with the project: every one after the built-ins
     /// (captured from view or loaded from an image), at 16 bits.
+    #[allow(dead_code)]
     fn saved_alphas(&self) -> Vec<oxy_doc::AlphaData> {
         self.alphas[BuiltinAlpha::ALL.len().min(self.alphas.len())..]
             .iter()
@@ -4220,7 +4224,11 @@ impl Editor {
 
     /// Ask before discarding unsaved changes; otherwise run immediately.
     pub fn request(&mut self, action: Pending) {
-        if self.is_modified() {
+        let is_dirty = match &action {
+            Pending::CloseTab(idx) => self.documents.get(*idx).is_some_and(|d| d.is_dirty()),
+            _ => self.is_modified(),
+        };
+        if is_dirty {
             self.pending = Some(action);
         } else {
             self.perform(action);
@@ -4234,33 +4242,13 @@ impl Editor {
             Pending::Quit => self.quit_now = true,
             Pending::New(which) => {
                 self.show_welcome = false;
-                if which == "empty" {
-                    self.gizmo = None;
-                    self.poly_edit = None;
-                    self.retopo = None;
-                    self.cancel_tube();
-                    self.curve = None;
-                    self.extract_preview = None;
-                    self.primitive_edit = None;
-                    self.insert_preview = None;
-                    self.show_deform = false;
-                    self.status = "New document (empty scene)".into();
-                    self.replace_document(Scene::empty(), None);
-                } else {
-                    let (name, mesh) = Self::primitive(which);
-                    self.status = format!("New document ({})", name.to_lowercase());
-                    self.replace_document(Scene::new(Piece::new(name, mesh)), None);
-                }
+                self.new_tab(which);
             }
             Pending::Close => {
-                let closed = self.path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
-                let (name, mesh) = Self::primitive("sphere");
-                self.replace_document(Scene::new(Piece::new(name, mesh)), None);
-                self.show_welcome = true;
-                self.status = match closed {
-                    Some(name) => format!("Closed {name}"),
-                    None => "Closed the project".into(),
-                };
+                self.perform_close_tab(self.active_document);
+            }
+            Pending::CloseTab(idx) => {
+                self.perform_close_tab(idx);
             }
             Pending::OpenProject(path) => {
                 self.open_project_now(&path);
@@ -4299,33 +4287,235 @@ impl Editor {
         self.living_adopt_loaded();
     }
 
-    /// The document as saved: the scene, plus the Curve Move curve that is
-    /// open, if any, on its piece (the `CURV` section), so it isn't lost.
-    pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
-        let mut data = self.scene.to_data();
-        data.alphas = self.saved_alphas();
-        for (d, p) in data.pieces.iter_mut().zip(&self.scene.pieces) {
-            d.strokes = self.living_saved(p);
+    /// Whether tab `index` is an untouched starter document (no path, no
+    /// edits, no background jobs, and no unaccepted tool previews).
+    pub fn is_empty_tab(&self, index: usize) -> bool {
+        let Some(doc) = self.documents.get(index) else { return false };
+        doc.path.is_none()
+            && !doc.is_dirty()
+            && doc.history.revision() == 0
+            && doc.job.is_none()
+            && doc.tube.is_none()
+            && doc.poly_edit.is_none()
+            && doc.retopo.is_none()
+            && doc.curve.is_none()
+            && doc.primitive_edit.is_none()
+            && doc.extract_preview.is_none()
+            && doc.insert_preview.is_none()
+            && doc.deform_drag.is_none()
+            && doc.hold_offer.is_none()
+    }
+
+    /// Create or open a new document tab. If the active tab is an untouched
+    /// starter, it is reused.
+    pub fn new_tab(&mut self, which: &str) -> usize {
+        self.show_welcome = false;
+        if self.is_empty_tab(self.active_document) {
+            if which == "empty" {
+                self.gizmo = None;
+                self.poly_edit = None;
+                self.retopo = None;
+                self.cancel_tube();
+                self.curve = None;
+                self.extract_preview = None;
+                self.primitive_edit = None;
+                self.insert_preview = None;
+                self.show_deform = false;
+                self.status = "New document (empty scene)".into();
+                self.replace_document(Scene::empty(), None);
+            } else {
+                let (name, mesh) = Self::primitive(which);
+                self.status = format!("New document ({})", name.to_lowercase());
+                self.replace_document(Scene::new(Piece::new(name, mesh)), None);
+            }
+            return self.active_document;
         }
-        if let Some(c) = self.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
-            && let Some(i) = self.scene.index_of(c.piece)
+
+        self.pointer_up();
+        self.release_pointer();
+        let doc_id = self.next_doc_id;
+        self.next_doc_id += 1;
+        let (scene, status) = if which == "empty" {
+            (Scene::empty(), "New document (empty scene)".into())
+        } else {
+            let (name, mesh) = Self::primitive(which);
+            let s = format!("New document ({})", name.to_lowercase());
+            (Scene::new(Piece::new(name, mesh)), s)
+        };
+        let bounds = scene.bounds();
+        let camera = if bounds.is_empty() {
+            Camera::default()
+        } else {
+            let mut c = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
+            c.frame(bounds);
+            c
+        };
+        let doc = Document::new(doc_id, scene, camera);
+        self.documents.push(doc);
+        self.active_document = self.documents.len() - 1;
+        self.status = status;
+        self.active_document
+    }
+
+    /// Switch the active document to `new_index`. Commits any active stroke
+    /// cleanly before switching.
+    pub fn switch_tab(&mut self, new_index: usize) {
+        if new_index >= self.documents.len() || new_index == self.active_document {
+            return;
+        }
+        self.pointer_up();
+        self.release_pointer();
+        self.quick_menu = None;
+        self.pointer_slider = None;
+        self.active_document = new_index;
+    }
+
+    /// Request closing tab `index`. If modified, asks for confirmation first.
+    pub fn request_close_tab(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        if self.documents[index].is_dirty() {
+            self.switch_tab(index);
+        }
+        self.request(Pending::CloseTab(index));
+    }
+
+    /// Close tab `index` unconditionally. Removes its autosave file.
+    /// Closing the last tab resets to a fresh Untitled document and displays
+    /// the Welcome screen.
+    pub fn perform_close_tab(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        // Cancel background job on this tab if any
+        self.documents[index].job = None;
+
+        let doc_id = self.documents[index].id;
+        self.autosaver.remove_file_for(doc_id);
+
+        let closed =
+            self.documents[index].path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
+
+        if self.documents.len() == 1 {
+            let next_id = self.next_doc_id;
+            self.next_doc_id += 1;
+            let (name, mesh) = Self::primitive("sphere");
+            let scene = Scene::new(Piece::new(name, mesh));
+            let mut camera = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
+            camera.frame(scene.bounds());
+            self.documents[0] = Document::new(next_id, scene, camera);
+            self.active_document = 0;
+            self.show_welcome = true;
+            self.status = match closed {
+                Some(name) => format!("Closed {name}"),
+                None => "Closed the project".into(),
+            };
+            return;
+        }
+
+        if self.active_document == index {
+            self.pointer_up();
+            self.release_pointer();
+        }
+
+        self.documents.remove(index);
+        if self.active_document >= self.documents.len() {
+            self.active_document = self.documents.len() - 1;
+        } else if self.active_document > index {
+            self.active_document -= 1;
+        }
+        self.status = match closed {
+            Some(name) => format!("Closed {name}"),
+            None => "Closed tab".into(),
+        };
+    }
+
+    /// Open project from `path`. If already open in another tab, focuses it.
+    /// If the active tab is an untouched starter, reuses it; otherwise opens a new tab.
+    pub fn open_project(&mut self, path: &Path) -> bool {
+        self.show_welcome = false;
+        let canon = path.canonicalize().ok();
+        let is_same_as_active =
+            self.path.as_ref().is_some_and(|p| p == path || (canon.is_some() && p.canonicalize().ok() == canon));
+
+        if is_same_as_active && self.is_modified() {
+            self.request(Pending::OpenProject(path.to_path_buf()));
+            return false;
+        }
+
+        if is_same_as_active {
+            return true;
+        }
+
+        if let Some(existing_idx) = self.documents.iter().position(|d| {
+            d.path.as_ref().is_some_and(|p| p == path || (canon.is_some() && p.canonicalize().ok() == canon))
+        }) {
+            let prev_was_empty = self.is_empty_tab(self.active_document);
+            let prev_idx = self.active_document;
+            self.switch_tab(existing_idx);
+            if prev_was_empty && prev_idx != existing_idx && self.documents.len() > 1 {
+                self.perform_close_tab(prev_idx);
+            }
+            self.status = format!("Switched to {}", path.file_name().and_then(|n| n.to_str()).unwrap_or("project"));
+            return true;
+        }
+
+        if self.is_empty_tab(self.active_document) {
+            self.open_project_now(path)
+        } else {
+            let new_idx = self.new_tab("empty");
+            let ok = self.open_project_now(path);
+            if !ok {
+                self.perform_close_tab(new_idx);
+            }
+            ok
+        }
+    }
+
+    pub(crate) fn doc_saved_alphas(doc: &Document) -> Vec<oxy_doc::AlphaData> {
+        doc.alphas[BuiltinAlpha::ALL.len().min(doc.alphas.len())..]
+            .iter()
+            .map(|a| oxy_doc::AlphaData {
+                name: a.name.clone(),
+                size: a.size,
+                data: a.data.iter().copied().map(Alpha::quantize_u16).collect(),
+            })
+            .collect()
+    }
+
+    pub(crate) fn doc_scene_data(&self, idx: usize) -> oxy_doc::SceneData {
+        let doc = &self.documents[idx];
+        let mut data = doc.scene.to_data();
+        data.alphas = Self::doc_saved_alphas(doc);
+        for (d, p) in data.pieces.iter_mut().zip(&doc.scene.pieces) {
+            d.strokes = doc.living.saved(p);
+        }
+        if let Some(c) = doc.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
+            && let Some(i) = doc.scene.index_of(c.piece)
         {
-            let mesh = &self.scene.pieces[i].mesh;
+            let mesh = &doc.scene.pieces[i].mesh;
             data.pieces[i].curve = Some(Box::new(oxy_doc::SavedCurve {
                 points: c.points.clone(),
                 rest: c.rest.clone(),
                 weights: c.weights.clone(),
                 closed: c.closed,
-                radius_pt: self.brush_radius_pt,
+                radius_pt: doc.brush_radius_pt,
                 world_per_pt: c.world_per_pt,
-                strength: self.strength(BrushKind::CurveMove),
-                falloff: Falloff::ALL.iter().position(|&f| f == self.falloff).unwrap_or(0) as u8,
+                strength: doc.strengths[kind_index(BrushKind::CurveMove)],
+                falloff: Falloff::ALL.iter().position(|&f| f == doc.falloff).unwrap_or(0) as u8,
                 pressure: c.pressure,
                 vertices: mesh.vertex_count() as u32,
                 triangles: mesh.triangle_count() as u32,
             }));
         }
         data
+    }
+
+    /// The document as saved: the scene, plus the Curve Move curve that is
+    /// open, if any, on its piece (the `CURV` section), so it isn't lost.
+    pub(crate) fn scene_data(&self) -> oxy_doc::SceneData {
+        self.doc_scene_data(self.active_document)
     }
 
     /// Reopen a Curve Move curve saved with the project (see `scene_data`),
@@ -4469,7 +4659,7 @@ impl Editor {
         } else if crate::bridge::is_manifest(path) {
             self.request(Pending::OpenLink(path.to_path_buf()));
         } else if is_project {
-            self.request(Pending::OpenProject(path.to_path_buf()));
+            self.open_project(path);
         } else {
             self.import(path);
         }
@@ -4572,6 +4762,10 @@ impl Editor {
 
     /// Read `paths` off the UI thread and add the pieces when the read ends.
     fn start_import_job(&mut self, paths: Vec<PathBuf>) {
+        if self.documents.iter().any(|d| d.job.is_some()) {
+            self.status = "Another operation is still running".into();
+            return;
+        }
         self.release_pointer();
         let n = paths.len();
         let label = if n == 1 {
@@ -4591,10 +4785,12 @@ impl Editor {
             })
             .expect("spawn worker thread");
         let target = self.scene.pieces.get(self.scene.active_index()).map(|p| p.id).unwrap_or(0);
+        let doc_id = self.documents[self.active_document].id;
         self.status = format!("{label}…");
         self.job = Some(Job {
             label,
             started: Instant::now(),
+            doc_id,
             target,
             consumed: Vec::new(),
             holds_levels: false,
@@ -5031,22 +5227,46 @@ impl Editor {
 
     /// Start a background autosave if one is due. Call once per frame.
     pub fn tick_autosave(&mut self) {
-        let changed = self.history.revision() != self.autosaved_revision && self.is_modified();
-        // A level job holds a piece's levels: autosave after it finishes.
-        let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
-        if !self.is_stroking() && !levels_out && self.autosaver.due(changed) {
-            self.autosaved_revision = self.history.revision();
-            self.autosaver.start(self.scene_data());
+        let active_id = self.documents[self.active_document].id;
+        let stroking = self.is_stroking();
+        let any_due = self.documents.iter().any(|d| d.history.revision() != d.autosaved_revision && d.is_dirty());
+        if !self.autosaver.due(any_due) {
+            return;
+        }
+        for i in 0..self.documents.len() {
+            let doc = &self.documents[i];
+            let changed = doc.history.revision() != doc.autosaved_revision && doc.is_dirty();
+            let levels_out = doc.job.as_ref().is_some_and(|j| j.holds_levels);
+            let busy_stroking = doc.id == active_id && stroking;
+            if changed && !levels_out && !busy_stroking {
+                let doc_id = doc.id;
+                let data = self.doc_scene_data(i);
+                self.documents[i].autosaved_revision = self.documents[i].history.revision();
+                self.autosaver.start_for(doc_id, data);
+                break;
+            }
         }
     }
 
     /// Force an immediate autosave if changes have been made (e.g. window blur or suspend).
     pub fn force_autosave(&mut self) {
-        let changed = self.history.revision() != self.autosaved_revision && self.is_modified();
-        let levels_out = self.job.as_ref().is_some_and(|j| j.holds_levels);
-        if !self.is_stroking() && !levels_out && changed && self.autosaver.enabled {
-            self.autosaved_revision = self.history.revision();
-            self.autosaver.start(self.scene_data());
+        if !self.autosaver.enabled {
+            return;
+        }
+        let active_id = self.documents[self.active_document].id;
+        let stroking = self.is_stroking();
+        for i in 0..self.documents.len() {
+            let doc = &self.documents[i];
+            let changed = doc.history.revision() != doc.autosaved_revision && doc.is_dirty();
+            let levels_out = doc.job.as_ref().is_some_and(|j| j.holds_levels);
+            let busy_stroking = doc.id == active_id && stroking;
+            if changed && !levels_out && !busy_stroking {
+                let doc_id = doc.id;
+                let data = self.doc_scene_data(i);
+                self.documents[i].autosaved_revision = self.documents[i].history.revision();
+                self.autosaver.start_for(doc_id, data);
+                break;
+            }
         }
     }
 
@@ -5057,13 +5277,16 @@ impl Editor {
             Scene::from_data(d)
         }) {
             Ok(Some(scene)) => {
+                let _ = std::fs::remove_file(&r.path);
+                if !self.is_empty_tab(self.active_document) {
+                    self.new_tab("empty");
+                }
                 // Same order as opening: alphas first, so recipes can find them.
                 self.adopt_alphas(alphas);
                 self.replace_document(scene, None);
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
-                let _ = std::fs::remove_file(&r.path);
             }
             _ => self.status = format!("Could not recover {}", r.path.display()),
         }
@@ -6502,7 +6725,7 @@ impl Editor {
         consumed: Vec<u64>,
         work: impl FnOnce() -> Result<JobResult, String> + Send + 'static,
     ) {
-        if self.job.is_some() {
+        if self.documents.iter().any(|d| d.job.is_some()) {
             self.status = "Another operation is still running".into();
             return;
         }
@@ -6511,6 +6734,7 @@ impl Editor {
         // A job that adds a piece (a cylinder, a remeshed primitive) has no
         // target yet when the scene is empty. 0 is not a piece id.
         let target = self.scene.try_active().map(|p| p.id).unwrap_or(0);
+        let doc_id = self.documents[self.active_document].id;
         std::thread::Builder::new()
             .name("oxy-topo".into())
             .spawn(move || {
@@ -6521,6 +6745,7 @@ impl Editor {
         self.job = Some(Job {
             label,
             started: Instant::now(),
+            doc_id,
             target,
             consumed,
             holds_levels: false,
@@ -7042,103 +7267,181 @@ impl Editor {
 
     /// Apply a finished background job. Call once per frame.
     pub fn poll_job(&mut self) -> bool {
-        let Some(job) = &self.job else { return false };
-        let result = match job.rx.try_recv() {
-            Ok(r) => r,
-            Err(mpsc::TryRecvError::Empty) => return false,
-            Err(mpsc::TryRecvError::Disconnected) => Err("worker stopped unexpectedly".into()),
-        };
-        let job = self.job.take().expect("checked");
+        let mut finished = None;
+        for (i, doc) in self.documents.iter_mut().enumerate() {
+            if let Some(job) = &mut doc.job {
+                match job.rx.try_recv() {
+                    Ok(result) => {
+                        finished = Some((i, result));
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        finished = Some((i, Err("worker stopped unexpectedly".to_string())));
+                        break;
+                    }
+                    Err(mpsc::TryRecvError::Empty) => {}
+                }
+            }
+        }
+        let Some((idx, result)) = finished else { return false };
+        let job = self.documents[idx].job.take().expect("checked");
         let secs = job.started.elapsed().as_secs_f32();
+        let target_doc_id = job.doc_id;
+        let Some(actual_idx) = self.documents.iter().position(|d| d.id == target_doc_id) else {
+            // Tab was closed while job ran: safely discarded
+            return true;
+        };
+        let status = self.apply_job_result(actual_idx, job, result, secs);
+        if actual_idx == self.active_document {
+            self.status = status;
+        } else {
+            let title = self.documents[actual_idx].title();
+            self.status = format!("[{title}] {status}");
+        }
+        true
+    }
+
+    fn apply_job_result(&mut self, doc_idx: usize, job: Job, result: Result<JobResult, String>, secs: f32) -> String {
+        let is_active = doc_idx == self.active_document;
         match result {
             Ok(JobResult::Levels { mesh, multires, previous }) => {
-                let Some(index) = self.scene.index_of(job.target) else {
-                    self.status = format!("{}: the piece was deleted meanwhile", job.label);
-                    return true;
+                let doc = &mut self.documents[doc_idx];
+                let Some(index) = doc.scene.index_of(job.target) else {
+                    return format!("{}: the piece was deleted meanwhile", job.label);
                 };
-                let piece = &mut self.scene.pieces[index];
+                let piece = &mut doc.scene.pieces[index];
                 let level = multires.as_ref().map(|m| (m.active(), m.level_count()));
                 let tris = mesh.triangle_count();
                 let prev_mesh = std::mem::replace(&mut piece.mesh, mesh);
                 piece.multires = multires;
-                self.history.record_topology(&job.label, job.target, prev_mesh, previous);
-                self.status = match level {
+                doc.history.record_topology(&job.label, job.target, prev_mesh, previous);
+                match level {
                     Some((a, c)) => format!("{}: level {} of {c}, {tris} triangles in {secs:.1} s", job.label, a + 1),
                     None => format!("{}: {tris} triangles in {secs:.1} s", job.label),
-                };
+                }
             }
-            Ok(JobResult::Plugin(done)) => self.finish_plugin_job(*done, secs),
+            Ok(JobResult::Plugin(done)) => {
+                if is_active {
+                    self.finish_plugin_job(*done, secs);
+                    self.status.clone()
+                } else {
+                    let prev_active = self.active_document;
+                    self.active_document = doc_idx;
+                    self.finish_plugin_job(*done, secs);
+                    let st = self.status.clone();
+                    self.active_document = prev_active;
+                    st
+                }
+            }
             Ok(JobResult::Alpha(alpha)) => {
                 let name = alpha.name.clone();
                 let n = alpha.size;
-                self.add_alpha(alpha);
-                self.status = format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s");
+                let doc = &mut self.documents[doc_idx];
+                doc.alphas.push(Arc::new(alpha));
+                doc.alpha = Some(doc.alphas.len() - 1);
+                doc.alphas_unsaved = true;
+                format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s")
             }
-            Ok(JobResult::Resculpt { id, mesh, change }) => self.finish_resculpt_job(id, mesh, change),
+            Ok(JobResult::Resculpt { id, mesh, change }) => {
+                if is_active {
+                    self.finish_resculpt_job(id, mesh, change);
+                    self.status.clone()
+                } else {
+                    let prev_active = self.active_document;
+                    self.active_document = doc_idx;
+                    self.finish_resculpt_job(id, mesh, change);
+                    let st = self.status.clone();
+                    self.active_document = prev_active;
+                    st
+                }
+            }
             Ok(JobResult::MadeReal(name, mesh, copies)) => {
-                let name = self.scene.unique_name(&name);
+                let doc = &mut self.documents[doc_idx];
+                let name = doc.scene.unique_name(&name);
                 let tris = mesh.triangle_count();
-                self.add_piece(Piece::new(name.clone(), mesh), "Make surface instances real");
-                self.status = format!(
-                    "Made {copies} copies real as {name} ({tris} triangles); the copies and their source are kept"
-                );
+                let mut p = Piece::new(name.clone(), mesh);
+                ensure_symmetry_center(&mut p);
+                let at = doc.scene.pieces.len();
+                doc.scene.pieces.push(p);
+                doc.scene.set_active(at);
+                doc.history.record("Make surface instances real", Step::Inserted { index: at });
+                format!("Made {copies} copies real as {name} ({tris} triangles); the copies and their source are kept")
             }
             Ok(JobResult::Primitive(name, mesh)) => {
-                let name = self.scene.unique_name(&name);
+                let doc = &mut self.documents[doc_idx];
+                let name = doc.scene.unique_name(&name);
                 let tris = mesh.triangle_count();
-                self.add_piece(Piece::new(name.clone(), mesh), &format!("Add {name}"));
-                self.status = format!("Added {name} ({tris} triangles)");
+                let mut p = Piece::new(name.clone(), mesh);
+                ensure_symmetry_center(&mut p);
+                let at = doc.scene.pieces.len();
+                doc.scene.pieces.push(p);
+                doc.scene.set_active(at);
+                doc.history.record(format!("Add {name}"), Step::Inserted { index: at });
+                format!("Added {name} ({tris} triangles)")
             }
             Ok(JobResult::NewPieces(new)) => {
-                let Some(index) = self.scene.index_of(job.target) else {
-                    self.status = format!("{}: the piece was deleted meanwhile", job.label);
-                    return true;
+                let doc = &mut self.documents[doc_idx];
+                let Some(index) = doc.scene.index_of(job.target) else {
+                    return format!("{}: the piece was deleted meanwhile", job.label);
                 };
                 let mut steps = Vec::new();
                 let count = new.len();
-                let symmetry_center = self.scene.pieces[index].symmetry_center;
+                let symmetry_center = doc.scene.pieces[index].symmetry_center;
                 for (k, (name, mesh)) in new.into_iter().enumerate() {
                     let at = index + 1 + k;
-                    let name = self.scene.unique_name(&name);
-                    self.scene.pieces.insert(at, Piece { symmetry_center, ..Piece::new(name, mesh) });
+                    let name = doc.scene.unique_name(&name);
+                    doc.scene.pieces.insert(at, Piece { symmetry_center, ..Piece::new(name, mesh) });
                     steps.push(Step::Inserted { index: at });
                 }
-                self.scene.set_active(index);
-                self.history.record_compound(job.label.clone(), steps);
-                self.status = format!("{}: {count} pieces added in {secs:.1} s", job.label);
+                doc.scene.set_active(index);
+                doc.history.record_compound(job.label.clone(), steps);
+                format!("{}: {count} pieces added in {secs:.1} s", job.label)
             }
             Ok(JobResult::Mesh(mesh)) => {
-                let Some(target_index) = self.scene.index_of(job.target) else {
-                    self.status = format!("{}: the piece was deleted meanwhile", job.label);
-                    return true;
+                let doc = &mut self.documents[doc_idx];
+                let Some(target_index) = doc.scene.index_of(job.target) else {
+                    return format!("{}: the piece was deleted meanwhile", job.label);
                 };
                 let tris = mesh.triangle_count();
                 let mut steps = Vec::new();
                 for id in &job.consumed {
-                    if let Some(i) = self.scene.index_of(*id) {
-                        let piece = self.scene.pieces.remove(i);
+                    if let Some(i) = doc.scene.index_of(*id) {
+                        let piece = doc.scene.pieces.remove(i);
                         steps.push(Step::Removed { index: i, piece: Box::new(piece) });
                     }
                 }
-                let target_index = self.scene.index_of(job.target).unwrap_or(target_index);
-                let target_piece = &mut self.scene.pieces[target_index];
+                let target_index = doc.scene.index_of(job.target).unwrap_or(target_index);
+                let target_piece = &mut doc.scene.pieces[target_index];
                 let prev = std::mem::replace(&mut target_piece.mesh, mesh);
                 let prev_levels = target_piece.multires.take();
                 steps.push(Step::Topology { piece: job.target, previous: prev, previous_multires: prev_levels });
-                self.scene.set_active(target_index);
-                self.history.record_compound(job.label.clone(), steps);
-                self.status = format!("{}: {tris} triangles in {secs:.1} s", job.label);
+                doc.scene.set_active(target_index);
+                doc.history.record_compound(job.label.clone(), steps);
+                format!("{}: {tris} triangles in {secs:.1} s", job.label)
             }
             Ok(JobResult::Imported(read)) => {
-                let prefix = job.undo_prefix.clone();
-                let n = self.finish_import(read);
-                if !prefix.is_empty() && n > 0 {
-                    self.history.prefix_recent_undo(&prefix, n);
+                if is_active {
+                    let prefix = job.undo_prefix.clone();
+                    let n = self.finish_import(read);
+                    if !prefix.is_empty() && n > 0 {
+                        self.history.prefix_recent_undo(&prefix, n);
+                    }
+                    self.status.clone()
+                } else {
+                    let prev_active = self.active_document;
+                    self.active_document = doc_idx;
+                    let prefix = job.undo_prefix.clone();
+                    let n = self.finish_import(read);
+                    if !prefix.is_empty() && n > 0 {
+                        self.history.prefix_recent_undo(&prefix, n);
+                    }
+                    let st = self.status.clone();
+                    self.active_document = prev_active;
+                    st
                 }
             }
-            Err(e) => self.status = format!("{} failed: {e}", job.label),
+            Err(e) => format!("{} failed: {e}", job.label),
         }
-        true
     }
 
     // ---- faces and masks ----
@@ -15332,5 +15635,174 @@ mod tests {
         assert_eq!(f.scene.pieces.len(), 1, "{}", f.status);
         assert_eq!(f.scene.active_index(), 0);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn multi_document_tab_lifecycle_and_switching() {
+        let mut e = editor();
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+        assert!(e.is_empty_tab(0));
+
+        // Tab 0 is modified
+        e.add_primitive("cube");
+        assert!(!e.is_empty_tab(0));
+        assert_eq!(e.scene.pieces.len(), 2);
+        let tab0_rev = e.history.revision();
+
+        // New tab 1
+        let tab1 = e.new_tab("plane");
+        assert_eq!(tab1, 1);
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+        assert_eq!(e.scene.pieces[0].name, "Plane");
+        assert_eq!(e.history.revision(), 0);
+
+        // Modifying tab 1 does not affect tab 0
+        e.add_primitive("torus");
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.documents[0].scene.pieces.len(), 2);
+        assert_eq!(e.documents[0].history.revision(), tab0_rev);
+
+        // Switch back to tab 0
+        e.switch_tab(0);
+        assert_eq!(e.active_document, 0);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.pieces[1].name, "Cube");
+        assert_eq!(e.history.revision(), tab0_rev);
+
+        // Switch to tab 1 commits active stroke cleanly
+        center(&mut e);
+        e.pointer_down(PointerButton::Primary);
+        assert!(e.is_stroking());
+        e.switch_tab(1);
+        assert_eq!(e.active_document, 1);
+        assert!(!e.is_stroking());
+    }
+
+    #[test]
+    fn open_reuses_empty_tab_or_focuses_already_open() {
+        let dir = std::env::temp_dir().join(format!("oxy-tab-open-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path_a = dir.join("doc_a.oxb");
+        let path_b = dir.join("doc_b.oxb");
+
+        let mut e = editor();
+        e.add_primitive("cube");
+        assert!(e.save(&path_a));
+
+        e.perform(Pending::New("empty"));
+        e.add_primitive("plane");
+        assert!(e.save(&path_b));
+
+        // Fresh editor: tab 0 is empty starter
+        let mut app = editor();
+        assert!(app.is_empty_tab(0));
+        app.open(&path_a);
+        // Reuses empty tab 0
+        assert_eq!(app.documents.len(), 1);
+        assert_eq!(app.active_document, 0);
+        assert_eq!(app.path.as_deref(), Some(path_a.as_path()));
+
+        // Tab 0 has path and is not empty. Opening doc_b opens a new tab!
+        app.open(&path_b);
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.active_document, 1);
+        assert_eq!(app.path.as_deref(), Some(path_b.as_path()));
+
+        // Opening path_a again switches to tab 0 instead of duplicating
+        app.open(&path_a);
+        assert_eq!(app.documents.len(), 2);
+        assert_eq!(app.active_document, 0);
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn closing_tabs_and_last_tab_resets_welcome() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        e.new_tab("plane");
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+
+        // Close clean tab 1
+        e.perform_close_tab(1);
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+
+        // Closing last tab with unsaved work asks first, then perform resets to starter and shows welcome
+        e.show_welcome = false;
+        assert!(e.is_modified());
+        e.request_close_tab(0);
+        assert!(matches!(e.pending, Some(Pending::CloseTab(0))));
+        e.perform(Pending::CloseTab(0));
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+        assert!(e.show_welcome);
+        assert_eq!(e.path, None);
+    }
+
+    #[test]
+    fn background_job_tags_doc_id_and_applies_to_origin_tab() {
+        let mut e = editor();
+        let tab0_id = e.documents[0].id;
+        let p_mesh = oxy_mesh::primitives::icosphere(2, 0.5);
+
+        // Start job on Tab 0
+        e.start_job("Background primitive".into(), Vec::new(), move || {
+            Ok(JobResult::Primitive("JobPiece".into(), p_mesh))
+        });
+        assert!(e.documents[0].job.is_some());
+        assert_eq!(e.documents[0].job.as_ref().unwrap().doc_id, tab0_id);
+
+        // Switch to Tab 1
+        e.new_tab("plane");
+        assert_eq!(e.active_document, 1);
+        assert_eq!(e.scene.pieces.len(), 1);
+
+        // Wait for background worker to complete, then poll while Tab 1 is active: result must apply to Tab 0!
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut polled = false;
+        while !polled && std::time::Instant::now() < deadline {
+            polled = e.poll_job();
+            if !polled {
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+        assert!(polled);
+        assert!(e.documents[0].job.is_none());
+        assert_eq!(e.documents[0].scene.pieces.len(), 2);
+        assert_eq!(e.documents[0].scene.pieces[1].name, "JobPiece");
+
+        // Active tab (Tab 1) must be completely untouched
+        assert_eq!(e.active_document, 1);
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.pieces[0].name, "Plane");
+    }
+
+    #[test]
+    fn background_job_on_closed_tab_is_safely_discarded() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        e.new_tab("plane");
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+
+        // Start job on Tab 1
+        e.start_job("Discarded job".into(), Vec::new(), move || {
+            Ok(JobResult::Primitive("Ghost".into(), oxy_mesh::primitives::cube(1, 1.0)))
+        });
+        assert!(e.documents[1].job.is_some());
+
+        // Close Tab 1 while job is running
+        e.perform_close_tab(1);
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+
+        // Polling job does not panic or touch remaining tab
+        assert!(!e.poll_job());
+        assert_eq!(e.scene.pieces.len(), 2);
     }
 }

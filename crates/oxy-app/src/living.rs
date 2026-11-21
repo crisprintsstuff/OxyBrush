@@ -511,6 +511,74 @@ impl Living {
     pub fn parts_of(&self, piece: u64) -> Vec<PlacedPart> {
         self.placed_parts.iter().filter(|p| p.piece == piece).cloned().collect()
     }
+
+    /// The strokes of `piece` to save with it (the `STRK` section), with
+    /// point numbers in the order the piece's mesh is saved in.
+    pub(crate) fn saved(&self, piece: &Piece) -> Option<SavedStrokes> {
+        if !self.enabled || !self.save {
+            return None;
+        }
+        let mesh = &piece.mesh;
+        let order: Option<Vec<u32>> = piece.multires.as_ref().map(|mr| mr.level_indices(mesh));
+        let mut strokes = Vec::new();
+        for s in self.strokes.iter().filter(|s| s.piece == piece.id && s.listed()) {
+            if s.topology != mesh.topology_version() || s.points != mesh.vertex_count() {
+                continue;
+            }
+            let mut rows: Vec<(u32, Vec3, Vec3)> = (0..s.vertices.len())
+                .map(|j| {
+                    let v = s.vertices[j];
+                    let v = order.as_ref().map_or(v, |o| o[v as usize]);
+                    (v, s.deltas[j], s.colors.get(j).copied().unwrap_or(Vec3::ZERO))
+                })
+                .collect();
+            rows.sort_unstable_by_key(|r| r.0);
+            strokes.push(SavedStroke {
+                brush: crate::settings::brush_key(s.brush).to_string(),
+                made: s.made.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
+                strength: s.strength,
+                group: s.group,
+                vertices: rows.iter().map(|r| r.0).collect(),
+                deltas: rows.iter().map(|r| r.1).collect(),
+                colors: if s.colors.is_empty() { Vec::new() } else { rows.iter().map(|r| r.2).collect() },
+                recipe: match (&s.recipe, s.no_recipe) {
+                    (Some(recipe), _) => recipe.to_bytes(),
+                    (None, Some(why)) => why.to_marker().unwrap_or_default(),
+                    (None, None) => Vec::new(),
+                },
+            });
+        }
+        if strokes.is_empty() {
+            return None;
+        }
+        let used: BTreeSet<u32> = strokes.iter().filter_map(|s| s.group).collect();
+        let groups = self
+            .groups
+            .iter()
+            .filter(|g| used.contains(&g.id))
+            .map(|g| SavedStrokeGroup { id: g.id, name: g.name.clone(), strength: g.strength, visible: g.visible })
+            .collect();
+        let parts = self
+            .parts_of(piece.id)
+            .into_iter()
+            .map(|p| oxy_doc::SavedPlacedPart {
+                id: p.id,
+                name: p.name,
+                group: p.group,
+                stroke_ids: p.stroke_ids,
+                anchor: p.anchor,
+                normal: p.normal,
+                tangent: p.tangent,
+                scale: p.scale,
+                detail_size: p.detail_size,
+                content: p.content,
+                flags: p.flags,
+                mirror_axis: p.mirror_axis,
+                partner: p.partner,
+            })
+            .collect();
+        Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes, parts })
+    }
 }
 
 impl Editor {
@@ -1356,72 +1424,9 @@ impl Editor {
 
     /// The strokes of `piece` to save with it (the `STRK` section), with
     /// point numbers in the order the piece's mesh is saved in.
+    #[allow(dead_code)]
     pub(crate) fn living_saved(&self, piece: &Piece) -> Option<SavedStrokes> {
-        if !self.living.enabled || !self.living.save {
-            return None;
-        }
-        let mesh = &piece.mesh;
-        let order: Option<Vec<u32>> = piece.multires.as_ref().map(|mr| mr.level_indices(mesh));
-        let mut strokes = Vec::new();
-        for s in self.living.strokes.iter().filter(|s| s.piece == piece.id && s.listed()) {
-            if s.topology != mesh.topology_version() || s.points != mesh.vertex_count() {
-                continue;
-            }
-            let mut rows: Vec<(u32, Vec3, Vec3)> = (0..s.vertices.len())
-                .map(|j| {
-                    let v = s.vertices[j];
-                    let v = order.as_ref().map_or(v, |o| o[v as usize]);
-                    (v, s.deltas[j], s.colors.get(j).copied().unwrap_or(Vec3::ZERO))
-                })
-                .collect();
-            rows.sort_unstable_by_key(|r| r.0);
-            strokes.push(SavedStroke {
-                brush: crate::settings::brush_key(s.brush).to_string(),
-                made: s.made.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
-                strength: s.strength,
-                group: s.group,
-                vertices: rows.iter().map(|r| r.0).collect(),
-                deltas: rows.iter().map(|r| r.1).collect(),
-                colors: if s.colors.is_empty() { Vec::new() } else { rows.iter().map(|r| r.2).collect() },
-                recipe: match (&s.recipe, s.no_recipe) {
-                    (Some(recipe), _) => recipe.to_bytes(),
-                    (None, Some(why)) => why.to_marker().unwrap_or_default(),
-                    (None, None) => Vec::new(),
-                },
-            });
-        }
-        if strokes.is_empty() {
-            return None;
-        }
-        let used: BTreeSet<u32> = strokes.iter().filter_map(|s| s.group).collect();
-        let groups = self
-            .living
-            .groups
-            .iter()
-            .filter(|g| used.contains(&g.id))
-            .map(|g| SavedStrokeGroup { id: g.id, name: g.name.clone(), strength: g.strength, visible: g.visible })
-            .collect();
-        let parts = self
-            .living
-            .parts_of(piece.id)
-            .into_iter()
-            .map(|p| oxy_doc::SavedPlacedPart {
-                id: p.id,
-                name: p.name,
-                group: p.group,
-                stroke_ids: p.stroke_ids,
-                anchor: p.anchor,
-                normal: p.normal,
-                tangent: p.tangent,
-                scale: p.scale,
-                detail_size: p.detail_size,
-                content: p.content,
-                flags: p.flags,
-                mirror_axis: p.mirror_axis,
-                partner: p.partner,
-            })
-            .collect();
-        Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes, parts })
+        self.living.saved(piece)
     }
 
     /// For a glTF export: piece `piece`'s surface without its stroke

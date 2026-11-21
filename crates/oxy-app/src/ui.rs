@@ -853,6 +853,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     });
 
     apply_arrangement(ui.ctx(), ed);
+    tab_bar(ui, ed, &mut action);
     toolbar(ui, ed);
     status_bar(ui, ed);
 
@@ -2315,6 +2316,136 @@ fn edit_linear_color(ui: &mut Ui, color: &mut [f64; 3]) -> egui::Response {
         *color = bytes.map(srgb_byte_to_linear);
     }
     response
+}
+
+/// Tab bar showing open project documents across the top of the viewport.
+fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
+    let frame = egui::Frame::new().fill(ui.visuals().window_fill).inner_margin(egui::Margin {
+        left: 8,
+        right: 8,
+        top: 2,
+        bottom: 0,
+    });
+
+    egui::Panel::top("tab_bar").frame(frame).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+
+            let doc_count = ed.documents.len();
+            let mut switch_to = None;
+            let mut close_tab = None;
+
+            // Collect file names for disambiguation
+            let titles: Vec<String> = (0..doc_count)
+                .map(|i| {
+                    let doc = &ed.documents[i];
+                    let base = doc.title();
+                    let is_dup = ed.documents.iter().enumerate().any(|(j, d)| j != i && d.title() == base);
+                    if let (true, Some(p)) = (is_dup, &doc.path) {
+                        let parent = p
+                            .parent()
+                            .and_then(|p| p.file_name())
+                            .map(|n| n.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        if !parent.is_empty() {
+                            return format!("{parent}/{base}");
+                        }
+                    }
+                    base
+                })
+                .collect();
+
+            egui::ScrollArea::horizontal().show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, title_text) in titles.iter().enumerate().take(doc_count) {
+                        let doc = &ed.documents[i];
+                        let is_active = i == ed.active_document;
+                        let is_dirty = doc.is_dirty();
+                        let has_job = doc.job.is_some();
+                        let job_label = doc.job.as_ref().map(|j| j.label.clone());
+
+                        let dot = if is_dirty { "• " } else { "" };
+                        let job_mark = if has_job { " ⏳" } else { "" };
+                        let label_display = format!("{dot}{title_text}{job_mark}");
+
+                        let tooltip = match &doc.path {
+                            Some(p) => {
+                                let mut s = p.display().to_string();
+                                if let Some(jl) = &job_label {
+                                    s.push_str(&format!("\n{jl}…"));
+                                }
+                                s
+                            }
+                            None => {
+                                let mut s = "Untitled project".to_string();
+                                if let Some(jl) = &job_label {
+                                    s.push_str(&format!("\n{jl}…"));
+                                }
+                                s
+                            }
+                        };
+
+                        let bg = if is_active {
+                            ui.visuals().widgets.active.bg_fill
+                        } else {
+                            ui.visuals().widgets.inactive.bg_fill
+                        };
+
+                        let response = egui::Frame::new()
+                            .fill(bg)
+                            .corner_radius(egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 })
+                            .inner_margin(egui::Margin { left: 8, right: 4, top: 4, bottom: 4 })
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                                    let text_color = if is_active {
+                                        ui.visuals().strong_text_color()
+                                    } else {
+                                        ui.visuals().text_color()
+                                    };
+                                    let mut rt = RichText::new(label_display).color(text_color);
+                                    if is_active {
+                                        rt = rt.strong();
+                                    }
+                                    let tab_label = egui::Label::new(rt);
+                                    ui.add(tab_label);
+
+                                    // Close button
+                                    if ui.small_button("×").on_hover_text("Close tab").clicked() {
+                                        close_tab = Some(i);
+                                    }
+                                });
+                            });
+
+                        let tab_rect = response.response.rect;
+                        let tab_interact =
+                            ui.interact(tab_rect, egui::Id::unique(("tab_click", i)), egui::Sense::click());
+                        let tab_interact = tab_interact.on_hover_text(tooltip);
+
+                        if tab_interact.clicked() {
+                            switch_to = Some(i);
+                        }
+                        if tab_interact.middle_clicked() {
+                            close_tab = Some(i);
+                        }
+                    }
+
+                    // "+" New Tab button
+                    let add_btn = ui.button("+").on_hover_text("New tab (sphere)");
+                    if add_btn.clicked() {
+                        ed.new_tab("sphere");
+                    }
+                });
+            });
+
+            if let Some(idx) = switch_to {
+                ed.switch_tab(idx);
+            }
+            if let Some(idx) = close_tab {
+                ed.request_close_tab(idx);
+            }
+        });
+    });
 }
 
 /// Quick-access bar under the menus: undo, brush size, symmetry, levels, view.
@@ -6482,12 +6613,16 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         });
     } else if let Some(pending) = ed.pending.clone() {
         let what = match &pending {
-            Pending::Quit => "quitting",
-            Pending::New(_) => "starting a new document",
-            Pending::Close => "closing the project",
-            Pending::OpenProject(_) => "opening another project",
-            Pending::OpenLink(_) => "opening the objects sent from another app",
-            Pending::Revert => "reverting",
+            Pending::Quit => "quitting".to_string(),
+            Pending::New(_) => "starting a new document".to_string(),
+            Pending::Close => "closing the project".to_string(),
+            Pending::CloseTab(idx) => {
+                let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "tab".into());
+                format!("closing {name}")
+            }
+            Pending::OpenProject(_) => "opening another project".to_string(),
+            Pending::OpenLink(_) => "opening the objects sent from another app".to_string(),
+            Pending::Revert => "reverting".to_string(),
         };
         egui::Modal::new(egui::Id::unique("unsaved")).show(&ctx, |ui| {
             ui.heading("Unsaved changes");
@@ -7688,8 +7823,8 @@ mod tests {
         // Lay out once with the pointer away from everything.
         click_at(&mut ed, &ctx, egui::pos2(700.0, 450.0));
         assert!(!egui::Popup::is_any_open(&ctx));
-        // The brush tile is the first tile at the top of the left panel.
-        click_at(&mut ed, &ctx, egui::pos2(37.0, 105.0));
+        // The brush tile is the first tile at the top of the left panel (under menu, tab bar and toolbar).
+        click_at(&mut ed, &ctx, egui::pos2(37.0, 131.0));
         assert!(egui::Popup::is_any_open(&ctx), "clicking the brush tile opens the picker");
     }
 
@@ -7752,9 +7887,9 @@ mod tests {
         // Find the rows from the layout: Draw is the first row, Pinch the seventh.
         let row = |ed: &Editor, k: BrushKind| ed.brush_order.iter().position(|b| *b == k).unwrap();
         assert_eq!(row(&ed, BrushKind::Draw), 0);
-        // Rows are 36 pt tall plus 2 pt spacing; the first starts below the previews.
-        let first = 192.0;
-        let y = |i: usize| first + 38.0 * i as f32;
+        // Rows are 46 pt tall plus 2 pt spacing; the first starts below the previews.
+        let first = 234.0;
+        let y = |i: usize| first + 48.0 * i as f32;
         // Drag Draw down onto the upper half of the fourth row (Smooth).
         drag(&mut ed, &ctx, egui::pos2(100.0, y(0)), egui::pos2(100.0, y(3) - 8.0));
         assert_eq!(row(&ed, BrushKind::Draw), 2, "order: {:?}", ed.brush_order);
