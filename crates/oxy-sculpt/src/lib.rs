@@ -1267,8 +1267,9 @@ impl Stroke {
             // tensor), and the contributions are summed. Where the mirrored
             // brushes overlap near the plane they reinforce each other, so
             // the shape rises in one piece instead of leaving a valley or a
-            // ridge. The sum is then softly capped at one drag
-            // ([`additive_weight`]) so nothing runs ahead of the cursor.
+            // ridge. The part of the sum that counts the same brush twice is
+            // divided out ([`overlap_divisor`]), so the point under the
+            // cursor follows it exactly and the overlap stays round.
             // Opposite components (the two sides' drags across the plane)
             // cancel smoothly, keeping the seam on the plane.
             struct Acc {
@@ -1279,6 +1280,14 @@ impl Stroke {
                 sum_w: f32,
                 max_w: f32,
             }
+            let centers: Vec<Vec3> = captured.iter().map(|c| c.1).collect();
+            let overlap = copies_overlap(
+                &self.settings,
+                dab.radius,
+                &centers,
+                alpha.is_some(),
+                through.then_some(self.view.normalize_or_zero()),
+            );
             let mut acc: HashMap<u32, Acc> = HashMap::new();
             for ((m, center, hits), n) in captured.iter().zip(&normals) {
                 for &(index, w, orig) in hits {
@@ -1308,7 +1317,7 @@ impl Stroke {
                 .into_iter()
                 .map(|(index, e)| {
                     // One copy: scale 1, so the move is exactly that copy's.
-                    let scale = if e.sum_w > 1e-8 { additive_weight(e.sum_w, e.max_w) / e.sum_w } else { 0.0 };
+                    let scale = if e.sum_w > 1e-8 { 1.0 / overlap_divisor(e.sum_w, e.max_w, overlap) } else { 0.0 };
                     BlendedGrab {
                         index,
                         orig: e.orig,
@@ -1411,44 +1420,80 @@ fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: 
     }
 }
 
-/// Width of the soft knee where [`additive_weight`] saturates at one drag.
-const ADDITIVE_KNEE: f32 = 0.5;
-
-/// How strongly a vertex follows a grab-like drag when several symmetry
-/// copies reach it, from the sum `sum_w` of their falloff weights and the
-/// strongest one `max_w`.
-///
-/// WHY: the copies add up, as in other sculpting apps, so where the
-/// mirrored brushes overlap near the plane their falloffs reinforce each
-/// other and the shape rises in one piece. It used to take the strongest
-/// copy (a smooth maximum), so a vertex on the plane only got one copy's
-/// weak edge weight while the brush centres beside it got a full drag: two
-/// bumps with a valley (or a ridge when pushing in) along the plane.
-///
-/// The sum saturates at one drag through a C1 quadratic knee, so a vertex
-/// never runs ahead of the cursor (two copies on top of each other move it
-/// once, not twice) and the overlap has no crease where it saturates.
-///
-/// INVARIANT: with one copy (`sum_w == max_w`) this is exactly `max_w`, so
-/// strokes away from the plane are unchanged. The knee is never wider than
-/// the other copies' share `sum_w - max_w`, so it is continuous where a
-/// mirror copy's reach begins (no step at the edge of the mirrored brush),
-/// and the result is never below `max_w`.
-fn additive_weight(sum_w: f32, max_w: f32) -> f32 {
-    let k = ADDITIVE_KNEE.min(sum_w - max_w);
-    if k <= 0.0 {
-        return max_w;
-    }
-    let lo = 1.0 - k;
-    let w = if sum_w <= lo {
-        sum_w
-    } else if sum_w >= 1.0 + k {
-        1.0
+/// A brush's falloff at squared distance `d2` from its centre, without the
+/// alpha image, the mask or front-face fading: the shape `vertex_weight`
+/// gives a plain brush. `alpha` widens the footprint as an alpha does.
+#[inline]
+fn falloff_profile(settings: &BrushSettings, radius: f32, d2: f32, alpha: bool) -> f32 {
+    if settings.kind.is_kelvin() {
+        // Kelvin Grab squared, not cubed: with the Kelvinlet's own fall-off
+        // on top, the cube gave too narrow a peak (see `kelvin_tensor`).
+        let t = 1.0 - (d2 / (radius * radius)).min(1.0);
+        if settings.kind == BrushKind::KelvinGrab { t * t } else { t * t * t }
+    } else if alpha {
+        // With an alpha the image defines the footprint; falloff still softens it.
+        settings.falloff.eval_shifted((d2.sqrt() / (radius * std::f32::consts::SQRT_2)).min(1.0), settings.focal_shift)
     } else {
-        let t = sum_w - lo;
-        sum_w - t * t / (4.0 * k)
-    };
-    w.max(max_w)
+        settings.falloff.eval_shifted(d2.sqrt() / radius, settings.focal_shift)
+    }
+}
+
+/// How much the symmetry copies of one dab overlap: the other copies'
+/// falloff weights at the first copy's centre, summed (0 when they don't
+/// reach each other; 1 for two copies on top of each other). The copies are
+/// images of one another, so every copy sees the same sum. `view`, for a
+/// grab-through capture, measures distances across the view only.
+fn copies_overlap(settings: &BrushSettings, radius: f32, centers: &[Vec3], alpha: bool, view: Option<Vec3>) -> f32 {
+    let Some(&c0) = centers.first() else { return 0.0 };
+    centers[1..]
+        .iter()
+        .map(|&c| {
+            let mut off = c - c0;
+            if let Some(v) = view {
+                off -= v * off.dot(v);
+            }
+            falloff_profile(settings, radius, off.length_squared(), alpha).max(0.0)
+        })
+        .sum()
+}
+
+/// What the summed contributions of a grab-like brush's symmetry copies are
+/// divided by at a vertex, from the sum `sum_w` of the copies' falloff
+/// weights there, the strongest `max_w`, and how much the copies overlap
+/// each other (`overlap`, [`copies_overlap`]).
+///
+/// WHY: each copy moves a vertex by its own drag times its weight, and the
+/// copies add up, so where mirrored brushes overlap near the plane the shape
+/// rises in one piece (taking only the strongest copy left a valley there).
+/// Added up as they are, two copies on top of each other would move a point
+/// twice; 4.0.0-beta.21 capped the sum at one drag, which flattened every
+/// overlap into a mesa ("the points are capped, so it isn't round").
+/// Instead, the part of the sum that is the copies counting the same brush
+/// twice is divided out: with `r` the mirror copies' share at this vertex
+/// relative to their share under the cursor, the sum is divided by
+/// `1 + overlap * r`. So:
+///
+/// - the vertex under the cursor follows the drag exactly (`r` = 1 there);
+/// - copies on top of each other (brush on the plane) are exactly one brush;
+/// - where only one copy reaches, the move is exactly that copy's (`r` = 0),
+///   so strokes away from the plane are unchanged;
+/// - copies that don't reach each other (`overlap` 0) simply add up;
+/// - in between the shape stays round: no cap, no crease. Between two copies
+///   a little off the plane the seam can rise a little past the drag (up to
+///   about 17% at 0.3–0.4 radii from the plane), as two overlapping pulls do.
+///
+/// `r` eases in (`1 - (1 - g)²`), so the divisor has no kink where the
+/// mirror copy's share reaches its share under the cursor.
+///
+/// RETURNS: the divisor, at least 1.
+fn overlap_divisor(sum_w: f32, max_w: f32, overlap: f32) -> f32 {
+    if overlap <= 1e-6 || max_w <= 1e-8 {
+        return 1.0;
+    }
+    let others = (sum_w - max_w).max(0.0);
+    let g = (others / (max_w * overlap)).min(1.0);
+    let r = 1.0 - (1.0 - g) * (1.0 - g);
+    1.0 + overlap * r
 }
 
 /// Grab-through capture: every visible vertex whose distance from the
@@ -1522,10 +1567,7 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         1.0
     };
     let f = if settings.kind.is_kelvin() {
-        // Kelvin Grab squared, not cubed: with the Kelvinlet's own fall-off
-        // on top, the cube gave too narrow a peak (see `kelvin_tensor`).
-        let t = 1.0 - (d2 / (dab.radius * dab.radius)).min(1.0);
-        if settings.kind == BrushKind::KelvinGrab { t * t } else { t * t * t }
+        falloff_profile(settings, dab.radius, d2, alpha.is_some())
     } else if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
         // Square footprint aligned with the stroke: soft only across it.
         let side = dab.normal.cross(dab.direction);
@@ -1536,13 +1578,8 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         } else {
             settings.falloff.eval_shifted(across, settings.focal_shift).max(0.0) * (1.0 - along.powi(8))
         }
-    } else if alpha.is_some() {
-        // With an alpha the image defines the footprint; falloff still softens it.
-        settings
-            .falloff
-            .eval_shifted((d2.sqrt() / (dab.radius * std::f32::consts::SQRT_2)).min(1.0), settings.focal_shift)
     } else {
-        settings.falloff.eval_shifted(d2.sqrt() / dab.radius, settings.focal_shift)
+        falloff_profile(settings, dab.radius, d2, alpha.is_some())
     };
     let f = match alpha {
         Some(a) => f * a.sample(Vec2::new(offset.dot(dab.tangent), offset.dot(dab.bitangent)) / dab.radius),
@@ -1740,10 +1777,10 @@ fn target_positions(
 }
 
 /// Snake Hook with more than one symmetry copy. Each copy's drag is read
-/// from the pre-dab surface and blended like Grab: the copies' weights add
-/// up where they overlap ([`additive_weight`]), capped at one drag, so the
-/// seam rises with the brush instead of lagging into a valley, but never
-/// runs ahead of it.
+/// from the pre-dab surface and blended like Grab: the copies add up where
+/// they overlap, less the part that counts the same brush twice
+/// ([`overlap_divisor`]), so the seam rises with the brush in one round
+/// piece instead of lagging into a valley or flattening into a mesa.
 #[allow(clippy::too_many_arguments)]
 fn blend_snake_hook(
     mesh: &mut Mesh,
@@ -1757,6 +1794,8 @@ fn blend_snake_hook(
 ) {
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
     let mut chunks = Vec::new();
+    let centers: Vec<Vec3> = copies.iter().map(|&m| base.transformed(m, origin).center).collect();
+    let overlap = copies_overlap(settings, base.radius, &centers, alpha.is_some(), None);
     for &m in copies {
         let dab = base.transformed(m, origin);
         let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
@@ -1784,7 +1823,7 @@ fn blend_snake_hook(
     }
     let moved: Vec<u32> = acc.keys().copied().collect();
     for (v, (weighted, sum_w, max_w)) in &acc {
-        mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, additive_weight(*sum_w, *max_w));
+        mesh.positions[*v as usize] += *weighted / overlap_divisor(*sum_w, *max_w, overlap);
     }
     mesh.update_after_move(&moved);
 }
@@ -2906,28 +2945,86 @@ mod tests {
     }
 
     #[test]
-    fn additive_weight_adds_copies_but_never_passes_one_drag() {
-        for i in 0..=100 {
-            let a = i as f32 / 100.0;
-            // Only one copy: its own weight, exactly.
-            assert_eq!(additive_weight(a, a), a);
-            // A second copy that barely reaches changes (almost) nothing.
-            assert!((additive_weight(a + 1e-4, a) - a).abs() < 1e-3, "step at a = {a}");
-            // Continuous and growing as the second copy grows, never below
-            // the stronger copy and never past one drag.
-            let mut last = additive_weight(a, a);
-            for j in 1..=i {
-                let b = j as f32 / 100.0;
-                let w = additive_weight(a + b, a);
-                assert!(w >= a - 1e-6 && w <= 1.0 + 1e-6, "a = {a}, b = {b}: {w}");
-                assert!(w >= last - 1e-6 && w - last < 0.02, "jump at a = {a}, b = {b}");
-                last = w;
+    fn the_overlap_divisor_counts_one_brush_once() {
+        // One copy, or copies that don't reach each other: unchanged.
+        for a in [0.0, 0.3, 1.0] {
+            assert_eq!(overlap_divisor(a, a, 0.7), 1.0);
+            assert_eq!(overlap_divisor(a + 0.2, a.max(0.2), 0.0), 1.0);
+        }
+        // Under the cursor (full weight, the mirror copy at its overlap): the
+        // sum 1 + overlap comes back to exactly one drag.
+        for o in [0.05, 0.3, 0.65, 1.0] {
+            let d = overlap_divisor(1.0 + o, 1.0, o);
+            assert!(((1.0 + o) / d - 1.0).abs() < 1e-6, "overlap {o}: {d}");
+        }
+        // Two copies on top of each other: one brush, at every weight.
+        for w in [0.1, 0.5, 1.0] {
+            assert!((2.0 * w / overlap_divisor(2.0 * w, w, 1.0) - w).abs() < 1e-6);
+        }
+        // Continuous as the mirror copy's share grows from nothing, with no
+        // step where it starts to reach, and never below one.
+        let mut last = overlap_divisor(0.6, 0.6, 0.4);
+        for k in 1..=200 {
+            let b = k as f32 / 200.0 * 0.6;
+            let d = overlap_divisor(0.6 + b, 0.6, 0.4);
+            assert!(d >= 1.0 && (d - last).abs() < 0.01, "jump at {b}: {last} -> {d}");
+            last = d;
+        }
+    }
+
+    /// The plane stroke of `plane_stroke`, with the brush centre `x` from
+    /// the X mirror plane.
+    fn pull_at(kind: BrushKind, sym: Symmetry, x: f32) -> (Mesh, Mesh) {
+        let mut mesh = primitives::plane(60, 2.0);
+        let before = mesh.clone();
+        let settings = BrushSettings { kind, radius: 0.5, strength: 1.0, spacing: 0.2, ..Default::default() };
+        let mut s = Stroke::new(settings, sym, false).with_view(-Vec3::Y);
+        let start = Vec3::new(x, 0.0, 0.0);
+        s.add_sample(&mut mesh, StrokeSample { position: start, normal: Vec3::Y, pressure: 1.0 }, &mut |_, _| {});
+        s.add_sample(
+            &mut mesh,
+            StrokeSample { position: start + Vec3::Y * 0.3, normal: Vec3::Y, pressure: 1.0 },
+            &mut |_, _| {},
+        );
+        (before, mesh)
+    }
+
+    #[test]
+    fn grabbing_on_the_mirror_plane_is_one_round_brush_not_a_mesa() {
+        // The report on 4.0.0-beta.21: "the points are capped, so it isn't
+        // round". Pulling on the plane, both copies are the same brush; the
+        // cap made a flat top there. Now it is exactly the brush itself.
+        let xsym = Symmetry { x: true, ..Default::default() };
+        for kind in [BrushKind::Grab, BrushKind::TopoMove, BrushKind::KelvinGrab] {
+            let (before, sym) = pull_at(kind, xsym, 0.0);
+            let (_, solo) = pull_at(kind, Symmetry::default(), 0.0);
+            for (i, p) in before.positions.iter().enumerate() {
+                let (a, b) = (sym.positions[i].y - p.y, solo.positions[i].y - p.y);
+                assert!((a - b).abs() < 1e-4, "{kind:?} at {p}: {a} with symmetry, {b} without");
             }
         }
-        // Two weak copies reinforce each other (the old smooth maximum kept 0.4).
-        assert!(additive_weight(0.8, 0.4) > 0.75);
-        // Two full copies on top of each other: one drag, not two.
-        assert_eq!(additive_weight(2.0, 1.0), 1.0);
+        // A little off the plane the top stays round: no wider at its peak
+        // than the brush alone, and the point under the cursor follows it.
+        for kind in [BrushKind::Grab, BrushKind::TopoMove] {
+            for x in [1.0 / 30.0, 2.0 / 30.0] {
+                let (before, sym) = pull_at(kind, xsym, x);
+                let rise: Vec<(Vec3, f32)> =
+                    before.positions.iter().zip(&sym.positions).map(|(p, q)| (*p, q.y - p.y)).collect();
+                let peak = rise.iter().map(|r| r.1).fold(0.0f32, f32::max);
+                let top = rise.iter().filter(|r| r.1 >= peak - 0.005 * 0.3).count();
+                let (b0, solo) = pull_at(kind, Symmetry::default(), 0.0);
+                let solo_top =
+                    b0.positions.iter().zip(&solo.positions).filter(|(p, q)| q.y - p.y >= 0.3 * 0.995).count();
+                assert!(
+                    top <= solo_top + 4,
+                    "{kind:?} at {x}: a flat top of {top} points (the brush alone: {solo_top})"
+                );
+                let under = vertex_at(&before, Vec3::new(x, 0.0, 0.0));
+                let follow = sym.positions[under].y - before.positions[under].y;
+                assert!((follow - 0.3).abs() < 0.02 * 0.3 + 1e-4, "{kind:?} at {x}: under the cursor {follow}");
+                assert!(peak <= 0.3 * 1.2, "{kind:?} at {x}: ran far ahead of the drag ({peak})");
+            }
+        }
     }
 
     /// Rise of the seam vertex and of the brush centre for a pull along the
@@ -2952,7 +3049,9 @@ mod tests {
             // from the centre (part of its feel), so it keeps a little less.
             let min_ratio = if kind == BrushKind::KelvinGrab { 0.85 } else { 0.95 };
             assert!(seam >= min_ratio * centre, "{kind:?} valley on the plane: seam {seam} vs centre {centre}");
-            assert!(seam <= centre + 1e-3, "{kind:?} seam ran ahead of the brush: {seam} vs {centre}");
+            // Two overlapping pulls rise a little more between them than at
+            // either brush, never far past the drag.
+            assert!(seam <= centre * 1.2, "{kind:?} seam ran far ahead of the brush: {seam} vs {centre}");
             // Without symmetry the same spot gets just the falloff: the
             // overlap is what lifts it.
             let (solo_seam, _) = seam_and_centre_rise(kind, Symmetry::default());
@@ -3038,10 +3137,11 @@ mod tests {
         let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
         let w_seam = Falloff::Smooth.eval(0.2 / 0.5);
         let seam_move = after.positions[origin] - before.positions[origin];
-        // On the plane both copies agree, and their weights add up, capped
-        // at one drag: more than one copy's falloff (the old valley), never
-        // more than the full drag.
-        let expected = 0.3 * additive_weight(2.0 * w_seam, w_seam);
+        // On the plane both copies agree, and their weights add up, less the
+        // part that counts the same brush twice: more than one copy's falloff
+        // (the old valley), and not flattened at one drag (the old cap).
+        let overlap = Falloff::Smooth.eval(0.4 / 0.5);
+        let expected = 0.3 * 2.0 * w_seam / overlap_divisor(2.0 * w_seam, w_seam, overlap);
         assert!(expected > 0.3 * w_seam * 1.3);
         assert!(seam_move.distance(Vec3::new(0.0, 0.0, expected)) < 1e-4, "{seam_move} vs {expected}");
         // The brush centre is inside the mirror sphere too. Parallel to the
@@ -3213,14 +3313,15 @@ mod tests {
         let (before, alt) = front_overlap(BrushKind::SnakeHook, sym, true, false, delta);
         assert!(max_edge_stretch(&before, &alt) < 3.0);
         assert!(max_image_gap(&alt, |p| Vec3::new(-p.x, p.y, p.z)) < 1e-3);
-        // Parallel to the plane, the seam follows the stroke once. Adding both
-        // copies would carry it about twice as far as the brush centre.
+        // Parallel to the plane, the seam follows the stroke about once:
+        // two overlapping copies carry it a little further than the brush
+        // centre (here 1.17 times), as overlapping pulls do, not twice.
         let (before, after) = plane_stroke(BrushKind::SnakeHook, sym, false, Vec3::new(0.0, 0.0, 0.2));
         let origin = vertex_at(&before, Vec3::ZERO);
         let centre = vertex_at(&before, Vec3::new(0.2, 0.0, 0.0));
         let seam = (after.positions[origin] - before.positions[origin]).length();
         let at_centre = (after.positions[centre] - before.positions[centre]).length();
-        assert!(seam < at_centre + 1e-3, "seam ran ahead of the brush ({seam} > {at_centre})");
+        assert!(seam < at_centre * 1.2, "seam ran far ahead of the brush ({seam} > {at_centre})");
         assert!(after.positions[origin].x.abs() < 1e-3);
     }
 

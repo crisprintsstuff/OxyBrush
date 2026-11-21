@@ -10,6 +10,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Grab, Topological Move, Kelvin Grab and Snake Hook pull round shapes with symmetry on.** Since 4.0.0-beta.21 a pull on or near the mirror plane came out with a flat top, as if capped ("the points are capped, so it isn't round"), and on the plane the brush's edges moved twice as far. Now a pull on the plane is exactly the brush itself, the point under the cursor follows it exactly, the brush is unchanged where the mirror copy doesn't reach, and near the plane the two sides rise as one round shape, a little higher between them than at either brush, as two overlapping pulls do.
 - **Left clicks in the Pieces list work again.** Clicking a piece's eye selected the piece instead of hiding it, and double-click to rename and Alt+click to isolate did nothing: the whole row's click area sat on top of its own buttons. The row now takes only the clicks that miss them, so it still selects the piece, and right-click still opens its menu.
 
 ## [4.0.0-beta.19.2] - 2026-11-20
