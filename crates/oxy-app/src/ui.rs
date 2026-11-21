@@ -844,6 +844,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::check_km(ui, &ed.keymap, &mut inspector, "Show settings panel", Cmd::SettingsPanel).changed() {
                     ed.toggle_settings_panel();
                 }
+                ui.checkbox(&mut ed.show_parts_bin, "Parts Bin")
+                    .on_hover_text("Show the Parts Bin strip along the bottom of the viewport.");
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -987,7 +989,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         if ed.quick_bar != QuickBar::Toolbar && ed.layout != UiLayout::Workstation {
             floating_quick_bar(ui.ctx(), ed, canvas);
         }
+        crate::parts_ui::show_parts_bin_strip(ui, ed);
     }
+    crate::parts_ui::show_placement_choice_dialog(ui.ctx(), ed);
     quick_menu(ui.ctx(), ed);
     brush_key_prompt(ui.ctx(), ed, canvas);
     pointer_slider(ui.ctx(), ed);

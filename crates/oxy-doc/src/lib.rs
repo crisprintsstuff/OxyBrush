@@ -393,6 +393,26 @@ pub struct SavedStrokes {
     pub groups: Vec<SavedStrokeGroup>,
     /// Oldest first.
     pub strokes: Vec<SavedStroke>,
+    /// Placed parts from the Parts Bin (RFC 0026).
+    pub parts: Vec<SavedPlacedPart>,
+}
+
+/// A placed part on this piece (RFC 0026: Parts Bin).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedPlacedPart {
+    pub id: u64,
+    pub name: String,
+    pub group: u32,
+    pub stroke_ids: Vec<u64>,
+    pub anchor: Vec3,
+    pub normal: Vec3,
+    pub tangent: Vec3,
+    pub scale: f32,
+    pub detail_size: f32,
+    pub content: [u8; 32],
+    pub flags: u8,
+    pub mirror_axis: u8,
+    pub partner: u64,
 }
 
 /// A named group of strokes, used like a sculpt layer.

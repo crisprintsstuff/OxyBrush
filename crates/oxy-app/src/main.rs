@@ -19,6 +19,8 @@ mod living;
 mod living_ui;
 mod matcaps;
 mod palette;
+mod parts;
+mod parts_ui;
 mod pieces_ops;
 mod plugins;
 mod polyedit;

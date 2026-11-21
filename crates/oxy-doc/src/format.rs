@@ -290,10 +290,15 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if let Some(parent) = p.parent {
             sections.push((*b"PARN", parent.to_le_bytes().to_vec()));
         }
-        if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty()) {
-            sections.push((*b"STRK", encode_strokes(st)));
-            if st.strokes.iter().any(|s| !s.recipe.is_empty()) {
-                sections.push((*b"STRI", encode_stroke_recipes(st)));
+        if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty() || !st.parts.is_empty()) {
+            if !st.strokes.is_empty() {
+                sections.push((*b"STRK", encode_strokes(st)));
+                if st.strokes.iter().any(|s| !s.recipe.is_empty()) {
+                    sections.push((*b"STRI", encode_stroke_recipes(st)));
+                }
+            }
+            if !st.parts.is_empty() {
+                sections.push((*b"PART", encode_placed_parts(&st.parts)));
             }
         }
         if !p.mesh.uv.is_empty() && p.mesh.uv.len() == p.mesh.triangles.len() {
@@ -705,6 +710,18 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     (Err(e), _) => log::warn!("ignoring damaged stroke recipes on piece {:?}: {e}", piece.name),
                 }
             }
+            b"PART" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PART before any piece".into()))?;
+                match (decode_placed_parts(&raw), &mut piece.strokes) {
+                    (Ok(parts), Some(st)) => {
+                        st.parts = parts;
+                    }
+                    (Ok(parts), None) => {
+                        piece.strokes = Some(crate::SavedStrokes { parts, ..Default::default() });
+                    }
+                    (Err(e), _) => log::warn!("ignoring damaged placed parts on piece {:?}: {e}", piece.name),
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -791,6 +808,82 @@ fn decode_stroke_recipes(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
+fn encode_placed_parts(parts: &[crate::SavedPlacedPart]) -> Vec<u8> {
+    let mut b = Vec::new();
+    b.push(1u8); // version 1
+    b.extend_from_slice(&(parts.len() as u32).to_le_bytes());
+    for p in parts {
+        b.extend_from_slice(&p.id.to_le_bytes());
+        let name_bytes = p.name.as_bytes();
+        b.extend_from_slice(&(name_bytes.len() as u32).to_le_bytes());
+        b.extend_from_slice(name_bytes);
+        b.extend_from_slice(&p.group.to_le_bytes());
+        b.extend_from_slice(&(p.stroke_ids.len() as u32).to_le_bytes());
+        for &sid in &p.stroke_ids {
+            b.extend_from_slice(&sid.to_le_bytes());
+        }
+        for v in [p.anchor, p.normal, p.tangent] {
+            for x in v.to_array() {
+                b.extend_from_slice(&x.to_le_bytes());
+            }
+        }
+        b.extend_from_slice(&p.scale.to_le_bytes());
+        b.extend_from_slice(&p.detail_size.to_le_bytes());
+        b.extend_from_slice(&p.content);
+        b.push(p.flags);
+        b.push(p.mirror_axis);
+        b.extend_from_slice(&p.partner.to_le_bytes());
+    }
+    b
+}
+
+fn decode_placed_parts(raw: &[u8]) -> Result<Vec<crate::SavedPlacedPart>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let version = r.u8()?;
+    if version != 1 {
+        return Ok(Vec::new());
+    }
+    let count = r.u32()? as usize;
+    let mut parts = Vec::with_capacity(count);
+    for _ in 0..count {
+        let id = r.u64()?;
+        let name_len = r.u32()? as usize;
+        let name = String::from_utf8(r.take(name_len)?.to_vec())
+            .map_err(|_| Error::Corrupt("part name is not UTF-8".into()))?;
+        let group = r.u32()?;
+        let n = r.u32()? as usize;
+        let mut stroke_ids = Vec::with_capacity(n);
+        for _ in 0..n {
+            stroke_ids.push(r.u64()?);
+        }
+        let anchor = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let normal = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let tangent = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let scale = r.f32()?;
+        let detail_size = r.f32()?;
+        let content: [u8; 32] = r.take(32)?.try_into().map_err(|_| Error::Corrupt("part content hash short".into()))?;
+        let flags = r.u8()?;
+        let mirror_axis = r.u8()?;
+        let partner = r.u64()?;
+        parts.push(crate::SavedPlacedPart {
+            id,
+            name,
+            group,
+            stroke_ids,
+            anchor,
+            normal,
+            tangent,
+            scale,
+            detail_size,
+            content,
+            flags,
+            mirror_axis,
+            partner,
+        });
+    }
+    Ok(parts)
+}
+
 fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes> {
     let mut r = Reader { data: raw, pos: 0 };
     let vertices = r.u32()?;
@@ -855,7 +948,7 @@ fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes
             recipe: Vec::new(),
         });
     }
-    Ok(crate::SavedStrokes { vertices, groups, strokes })
+    Ok(crate::SavedStrokes { vertices, groups, strokes, parts: Vec::new() })
 }
 
 fn encode_curve(c: &crate::SavedCurve) -> Vec<u8> {
@@ -1854,6 +1947,7 @@ mod tests {
                 vertices: n as u32,
                 groups: vec![group.clone()],
                 strokes: vec![stroke, painted],
+                parts: Vec::new(),
             }),
             material: None,
             instancers: Vec::new(),
@@ -2657,5 +2751,45 @@ mod tests {
         skipped[at..at + 4].copy_from_slice(b"NOPE");
         let decoded = decode(&skipped).unwrap();
         assert_eq!(decoded.pieces[1].parent, None);
+    }
+
+    #[test]
+    fn placed_part_round_trips_in_oxb() {
+        let mut scene = sample();
+        let part = crate::SavedPlacedPart {
+            id: 42,
+            name: "DragonHorn".into(),
+            group: 1,
+            stroke_ids: vec![101, 102],
+            anchor: Vec3::new(1.0, 2.0, 3.0),
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            scale: 1.5,
+            detail_size: 0.25,
+            content: [7u8; 32],
+            flags: 3,
+            mirror_axis: 1,
+            partner: 43,
+        };
+        let strokes = crate::SavedStrokes {
+            vertices: scene.pieces[0].mesh.positions.len() as u32,
+            parts: vec![part.clone()],
+            ..Default::default()
+        };
+        scene.pieces[0].strokes = Some(strokes);
+
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"PART").count(), 1);
+        let back = decode(&bytes).unwrap();
+        let loaded = &back.pieces[0].strokes.as_ref().unwrap().parts;
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0], part);
+
+        // An older reader (where PART is renamed/unknown) skips PART gracefully
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"PART").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        let decoded = decode(&skipped).unwrap();
+        assert!(decoded.pieces[0].strokes.as_ref().is_none_or(|st| st.parts.is_empty()));
     }
 }
