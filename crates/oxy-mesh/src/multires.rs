@@ -1138,8 +1138,9 @@ fn child_sharpness(r: &CcRefinement, a: u32, b: u32) -> f32 {
 
 /// The polygons of `mesh` for Catmull–Clark levels: triangles joined
 /// across the edges that aren't polygon edges, which are the edges missing
-/// from `cage` (when given) or else the mesh's quad diagonals. A group of
-/// triangles whose outline isn't one simple loop stays as triangles.
+/// from `cage` (when given) or else the mesh's quad diagonals and n-gon
+/// edges. A group of triangles whose outline isn't one simple loop stays
+/// as triangles.
 ///
 /// RETURNS: the polygons (in mesh point and triangle numbering) and the
 /// creases of `cage` that lie on polygon edges.
@@ -1157,9 +1158,10 @@ fn base_polygons(mesh: &Mesh, cage: Option<&Cage>) -> (Polys, Vec<([u32; 2], f32
         set
     });
     let diagonals = mesh.quad_diagonals_ref();
+    let ngon_edges = mesh.ngon_edges();
     let inner = |k: &[u32; 2]| match &cage_edges {
         Some(set) => !set.contains(k),
-        None => diagonals.contains(k),
+        None => diagonals.contains(k) || ngon_edges.contains(k),
     };
     // Triangles on each inner edge, then join pairs.
     let mut on_edge: HashMap<[u32; 2], Vec<u32>> = HashMap::new();
