@@ -202,6 +202,9 @@ impl MeshData {
     }
 }
 
+/// A set of edges as point pairs `[low, high]`.
+pub type EdgeSet = std::collections::HashSet<[u32; 2]>;
+
 #[derive(Debug, Clone)]
 pub struct Mesh {
     pub positions: Vec<Vec3>,
@@ -1540,6 +1543,15 @@ impl Mesh {
             Some(e) => e,
             None => EMPTY.get_or_init(Default::default),
         }
+    }
+
+    /// The quad diagonals and n-gon edges, when the mesh was told which
+    /// polygons it was built from ([`Self::set_ngon_edges`] was called, as
+    /// importing polygons and building from a cage do) rather than
+    /// guessing its quads from the shape. Points are `[low, high]`.
+    pub fn known_polygons(&self) -> Option<(&EdgeSet, &EdgeSet)> {
+        let ngon = self.ngon_edges.get()?;
+        Some((self.quad_diagonals_ref(), ngon))
     }
 
     /// Whether a wireframe should leave out edge `[low, high]`: a quad's

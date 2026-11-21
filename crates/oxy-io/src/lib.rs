@@ -5,8 +5,9 @@
 //! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`), and
 //! Autodesk FBX import (`.fbx`, binary and ASCII; see [`fbx_import`]). Several
 //! pieces at once go through [`export_pieces`].
-//! Imported geometry is triangulated and welded so it can be sculpted as one
-//! continuous surface.
+//! Imported geometry is split into triangles (remembering which triangles
+//! make each polygon, see [`keep_polygons`]) and welded so it can be
+//! sculpted as one continuous surface.
 
 use glam::Vec3;
 use oxy_mesh::{Mesh, MeshData, Vec2, primitives::weld_with_map};
@@ -112,7 +113,8 @@ fn load_obj_geometry(path: &Path) -> Result<Vec<tobj::Model>> {
     };
     let lines: Vec<&str> = text.lines().filter(|l| !is_material(l)).collect();
     let geometry = with_comment_colors(&lines);
-    let opts = tobj::LoadOptions { triangulate: true, single_index: false, ..Default::default() };
+    // Polygons as written (split by `model_triangles`), so the quads are known.
+    let opts = tobj::LoadOptions { triangulate: false, single_index: false, ignore_points: true, ignore_lines: true };
     let (models, _) = tobj::load_obj_buf(&mut geometry.as_bytes(), &opts, |_| Err(tobj::LoadError::OpenFileFailed))
         .map_err(Error::Obj)?;
     Ok(models)
@@ -187,13 +189,67 @@ fn model_colors(m: &tobj::Model) -> Option<Vec<Vec3>> {
     )
 }
 
-/// An OBJ object being gathered: name, points, triangles, per-point colors.
-type Part = (String, Vec<Vec3>, Vec<[u32; 3]>, Vec<Option<Vec3>>, Vec<[Vec2; 3]>);
+/// A model's triangles as corner numbers (positions in `mesh.indices`, so
+/// texture indices can be read alongside), each with the number of the
+/// polygon it came from, counted from `first_face`. Polygons are split by
+/// [`split_polygon`].
+fn model_triangles(m: &tobj::Model, first_face: u32) -> (Vec<[usize; 3]>, Vec<u32>) {
+    let idx = &m.mesh.indices;
+    let positions: &[[f32; 3]] = m.mesh.positions.as_chunks::<3>().0;
+    let points: Vec<Vec3> = positions.iter().map(|&p| Vec3::from(p)).collect();
+    let mut corners = Vec::with_capacity(idx.len());
+    let mut faces = Vec::with_capacity(idx.len());
+    let arities: Vec<usize> = if m.mesh.face_arities.is_empty() {
+        vec![3; idx.len() / 3]
+    } else {
+        m.mesh.face_arities.iter().map(|&n| n as usize).collect()
+    };
+    let mut start = 0;
+    for (f, n) in arities.into_iter().enumerate() {
+        let Some(poly) = idx.get(start..start + n) else { break };
+        split_polygon(&points, poly, |t| {
+            corners.push(t.map(|k| start + k));
+            faces.push(first_face + f as u32);
+        });
+        start += n;
+    }
+    (corners, faces)
+}
+
+/// An OBJ object being gathered: points, triangles, the polygon of each
+/// triangle, per-point colors and per-corner UVs.
+#[derive(Default)]
+struct Gathered {
+    positions: Vec<Vec3>,
+    tris: Vec<[u32; 3]>,
+    faces: Vec<u32>,
+    colors: Vec<Option<Vec3>>,
+    uvs: Vec<[Vec2; 3]>,
+}
+
+impl Gathered {
+    /// Add a model's points and polygons (split into triangles).
+    fn add(&mut self, m: &tobj::Model) {
+        let base = self.positions.len() as u32;
+        let first_face = self.faces.last().map_or(0, |&f| f + 1);
+        let (corners, faces) = model_triangles(m, first_face);
+        let before = self.tris.len();
+        self.positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
+        self.tris.extend(corners.iter().map(|c| c.map(|k| m.mesh.indices[k] + base)));
+        self.faces.extend(faces);
+        push_colors(&mut self.colors, m);
+        push_uvs(&mut self.uvs, before, &corners, m);
+    }
+
+    fn finish(self) -> Result<Mesh> {
+        finish_with(self.positions, self.tris, self.colors, self.uvs, Vec::new(), self.faces)
+    }
+}
 
 fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
     let models = load_obj_geometry(path)?;
-    // (name, positions, triangles, colors) in file order, merged by name.
-    let mut parts: Vec<Part> = Vec::new();
+    // Objects in file order, merged by name.
+    let mut parts: Vec<(String, Gathered)> = Vec::new();
     for m in models {
         if m.mesh.indices.len() < 3 {
             continue;
@@ -203,32 +259,24 @@ fn import_obj_pieces(path: &Path, stem: &str) -> Result<Vec<(String, Mesh)>> {
         let i = match parts.iter().position(|p| p.0 == name) {
             Some(i) => i,
             None => {
-                parts.push((name, Vec::new(), Vec::new(), Vec::new(), Vec::new()));
+                parts.push((name, Gathered::default()));
                 parts.len() - 1
             }
         };
-        let (_, positions, tris, colors, uvs) = &mut parts[i];
-        let base = positions.len() as u32;
-        let before = tris.len();
-        positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
-        tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
-        push_colors(colors, &m);
-        push_uvs(uvs, before, tris.len(), &m);
+        parts[i].1.add(&m);
     }
     if parts.is_empty() {
         return Err(Error::Format("no triangles".into()));
     }
-    parts
-        .into_iter()
-        .map(|(name, positions, tris, colors, uvs)| Ok((name, finish(positions, tris, colors, uvs)?)))
-        .collect()
+    parts.into_iter().map(|(name, g)| Ok((name, g.finish()?))).collect()
 }
 
 /// Append a model's UVs per triangle corner (`vt`, by each corner's own
-/// texture index), filling with zeros the triangles of earlier models
-/// that had none when this one has some, so the list stays aligned with
-/// the triangles. `before..after` are this model's triangles.
-fn push_uvs(uvs: &mut Vec<[Vec2; 3]>, before: usize, after: usize, m: &tobj::Model) {
+/// texture index; `corners` are positions in the model's index list),
+/// filling with zeros the triangles of earlier models that had none when
+/// this one has some, so the list stays aligned with the triangles.
+/// `before` is the number of triangles before this model's.
+fn push_uvs(uvs: &mut Vec<[Vec2; 3]>, before: usize, corners: &[[usize; 3]], m: &tobj::Model) {
     let tc = &m.mesh.texcoords;
     let ti = &m.mesh.texcoord_indices;
     let has = !tc.is_empty() && ti.len() == m.mesh.indices.len();
@@ -238,9 +286,9 @@ fn push_uvs(uvs: &mut Vec<[Vec2; 3]>, before: usize, after: usize, m: &tobj::Mod
     uvs.resize(before, [Vec2::ZERO; 3]);
     if has {
         let uv = |k: u32| tc.get(2 * k as usize..2 * k as usize + 2).map_or(Vec2::ZERO, |c| Vec2::new(c[0], c[1]));
-        uvs.extend(ti.as_chunks::<3>().0.iter().map(|t| t.map(uv)));
+        uvs.extend(corners.iter().map(|c| c.map(|k| uv(ti[k]))));
     }
-    uvs.resize(after, [Vec2::ZERO; 3]);
+    uvs.resize(before + corners.len(), [Vec2::ZERO; 3]);
 }
 
 /// Append a model's per-vertex colors (None for each vertex without).
@@ -265,20 +313,11 @@ fn extension(path: &Path) -> String {
 }
 
 pub fn import_obj(path: &Path) -> Result<Mesh> {
-    let models = load_obj_geometry(path)?;
-    let mut positions = Vec::new();
-    let mut tris = Vec::new();
-    let mut colors = Vec::new();
-    let mut uvs = Vec::new();
-    for m in models {
-        let base = positions.len() as u32;
-        let before = tris.len();
-        positions.extend(m.mesh.positions.as_chunks::<3>().0.iter().map(|&p| Vec3::from(p)));
-        tris.extend(m.mesh.indices.as_chunks::<3>().0.iter().map(|t| t.map(|i| i + base)));
-        push_colors(&mut colors, &m);
-        push_uvs(&mut uvs, before, tris.len(), &m);
+    let mut all = Gathered::default();
+    for m in load_obj_geometry(path)? {
+        all.add(&m);
     }
-    finish(positions, tris, colors, uvs)
+    all.finish()
 }
 
 pub fn import_stl(bytes: &[u8]) -> Result<Mesh> {
@@ -304,15 +343,19 @@ pub fn import_ply(bytes: &[u8]) -> Result<Mesh> {
 /// `uvs` (one per triangle, or empty) stay on the corners, so welding the
 /// points a UV seam split keeps each face's UVs.
 fn finish(positions: Vec<Vec3>, tris: Vec<[u32; 3]>, colors: Vec<Option<Vec3>>, uvs: Vec<[Vec2; 3]>) -> Result<Mesh> {
-    finish_with(positions, tris, colors, uvs, Vec::new())
+    finish_with(positions, tris, colors, uvs, Vec::new(), Vec::new())
 }
 
+/// [`finish`] with face groups (one per triangle, or empty) and, for files
+/// made of polygons, the polygon each triangle came from (`faces`, or
+/// empty): see [`keep_polygons`].
 pub(crate) fn finish_with(
     positions: Vec<Vec3>,
     tris: Vec<[u32; 3]>,
     colors: Vec<Option<Vec3>>,
     uvs: Vec<[Vec2; 3]>,
     groups: Vec<u32>,
+    faces: Vec<u32>,
 ) -> Result<Mesh> {
     if tris.is_empty() {
         return Err(Error::Format("no triangles".into()));
@@ -351,7 +394,78 @@ pub(crate) fn finish_with(
     };
     let uv = if uvs.len() == tris.len() { uvs } else { Vec::new() };
     let groups = if groups.len() == tris.len() { groups } else { Vec::new() };
-    Ok(Mesh::from_data(MeshData { positions, triangles: tris, color, uv, groups, ..Default::default() }))
+    let mesh = Mesh::from_data(MeshData { positions, triangles: tris, color, uv, groups, ..Default::default() });
+    keep_polygons(&mesh, &faces);
+    Ok(mesh)
+}
+
+/// Tell `mesh` which of its edges lie inside the file's polygons, so its
+/// quads stay quads (for the wireframe, quad subdivision and export) and
+/// its n-gons stay n-gons, whatever their shape. Without this the quads are
+/// guessed from the triangles, and a quad folded along its diagonal (not
+/// flat) is taken for two triangles.
+///
+/// PRECONDITION: `faces[t]` is the polygon that triangle `t` of the
+/// `MeshData` the mesh was built from came from, and each polygon's
+/// triangles are next to each other (the mesh may reorder triangles; its
+/// `source_triangles` say how).
+/// No effect when `faces` doesn't match, or when every polygon was a
+/// triangle: a file of triangles keeps the guessed quads, as before.
+pub fn keep_polygons(mesh: &Mesh, faces: &[u32]) {
+    if faces.is_empty() || faces.windows(2).all(|w| w[0] != w[1]) {
+        return;
+    }
+    let mut mesh_tri = vec![u32::MAX; faces.len()];
+    for (t, &s) in mesh.source_triangles().iter().enumerate() {
+        match mesh_tri.get_mut(s as usize) {
+            Some(slot) => *slot = t as u32,
+            None => return,
+        }
+    }
+    // The edge triangles `x` and `y` share, if they share one.
+    let shared = |x: u32, y: u32| -> Option<[u32; 2]> {
+        let (x, y) = (mesh.triangles.get(x as usize)?, mesh.triangles.get(y as usize)?);
+        let mut it = x.iter().copied().filter(|v| y.contains(v));
+        let (a, b) = (it.next()?, it.next()?);
+        (it.next().is_none() && a != b).then(|| [a.min(b), a.max(b)])
+    };
+    let (mut diagonals, mut ngon) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+    let mut start = 0;
+    for run in faces.chunk_by(|a, b| a == b) {
+        let ts = &mesh_tri[start..start + run.len()];
+        start += run.len();
+        match ts {
+            [_] => {}
+            [x, y] => diagonals.extend(shared(*x, *y)),
+            _ => {
+                for (i, &x) in ts.iter().enumerate() {
+                    ngon.extend(ts[i + 1..].iter().filter_map(|&y| shared(x, y)));
+                }
+            }
+        }
+    }
+    mesh.set_quad_diagonals(diagonals);
+    mesh.set_ngon_edges(ngon);
+}
+
+/// Split one polygon (point numbers `poly`) into triangles, given to
+/// `out` as positions in `poly`. A quad is split along the diagonal across
+/// which its two halves agree best (the one inside a quad that isn't
+/// convex); a larger polygon is fanned from its first corner. Points and
+/// lines give none.
+pub(crate) fn split_polygon(positions: &[Vec3], poly: &[u32], mut out: impl FnMut([usize; 3])) {
+    match poly.len() {
+        0..=2 => {}
+        4 => {
+            let p = |i: usize| positions.get(poly[i] as usize).copied().unwrap_or(Vec3::ZERO);
+            let normal = |a: usize, b: usize, c: usize| (p(b) - p(a)).cross(p(c) - p(a)).normalize_or_zero();
+            let agree_02 = normal(0, 1, 2).dot(normal(0, 2, 3));
+            let agree_13 = normal(0, 1, 3).dot(normal(1, 2, 3));
+            let halves = if agree_13 > agree_02 + 1e-4 { [[0, 1, 3], [1, 2, 3]] } else { [[0, 1, 2], [0, 2, 3]] };
+            halves.into_iter().for_each(out);
+        }
+        n => (1..n - 1).for_each(|k| out([0, k, k + 1])),
+    }
 }
 
 fn is_ascii_stl(bytes: &[u8]) -> bool {
@@ -589,6 +703,93 @@ pub fn write_stl(mesh: &Mesh, w: &mut impl Write) -> io::Result<()> {
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+
+    /// A grid of `n`×`n` quads with every other point raised by `lift`, so
+    /// each quad is folded along its diagonal (not flat), as OBJ text.
+    fn folded_grid_obj(n: usize, lift: f32) -> String {
+        let mut text = String::new();
+        for j in 0..=n {
+            for i in 0..=n {
+                let z = if (i + j) % 2 == 0 { lift } else { 0.0 };
+                text.push_str(&format!("v {i} {j} {z}\n"));
+            }
+        }
+        for j in 0..n {
+            for i in 0..n {
+                let a = j * (n + 1) + i + 1;
+                text.push_str(&format!("f {a} {} {} {}\n", a + 1, a + n + 2, a + n + 1));
+            }
+        }
+        text
+    }
+
+    fn temp_obj(name: &str, text: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("oxy-io-polys-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = dir.join(name);
+        std::fs::write(&p, text).unwrap();
+        p
+    }
+
+    #[test]
+    fn folded_quads_in_an_obj_stay_quads() {
+        // Folded about 77° across the diagonal: the shape alone doesn't say
+        // these are quads (the old import made 72 triangles of them).
+        let p = temp_obj("folded.obj", &folded_grid_obj(6, 0.8));
+        let mesh = import(&p).unwrap();
+        assert_eq!(mesh.quad_and_triangle_counts(), (36, 0));
+        assert!(mesh.known_polygons().is_some());
+        // Quad subdivision then makes 4 quads of each, not 3 of each half.
+        assert_eq!(oxy_mesh::multires::Multires::first_quad_level_triangles(&mesh, None), 36 * 4 * 2);
+        let pieces = import_pieces(&p).unwrap();
+        assert_eq!(pieces[0].1.quad_count(), 36);
+    }
+
+    #[test]
+    fn obj_polygons_keep_their_uvs_and_ngons() {
+        // A pentagon and a quad with texture coordinates, then a triangle.
+        let text = "v 0 0 0\nv 2 0 0\nv 3 1 0\nv 1 2 0\nv -1 1 0\nv 2 -2 0\nv 0 -2 0\nv 5 5 0\n\
+                    vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvt 0.5 0.5\n\
+                    f 1/1 2/2 3/3 4/4 5/5\nf 1/1 7/4 6/3 2/2\nf 2 8 3\n";
+        let mesh = import(&temp_obj("ngon.obj", text)).unwrap();
+        assert_eq!(mesh.triangle_count(), 3 + 2 + 1);
+        let (diagonals, ngon) = mesh.known_polygons().unwrap();
+        assert_eq!((diagonals.len(), ngon.len()), (1, 2), "one quad diagonal, two edges inside the pentagon");
+        assert_eq!(mesh.quad_and_triangle_counts(), (1, 4));
+        // Quad subdivision sees a pentagon, a quad and a triangle.
+        assert_eq!(oxy_mesh::multires::Multires::first_quad_level_triangles(&mesh, None), 2 * (5 + 4 + 3));
+        // Each corner kept its own texture coordinate.
+        let p0 = mesh.positions.iter().position(|p| *p == Vec3::ZERO).unwrap() as u32;
+        for (t, tri) in mesh.triangles.iter().enumerate() {
+            if let Some(k) = tri.iter().position(|&v| v == p0) {
+                assert_eq!(mesh.uvs()[t][k], Vec2::ZERO);
+            }
+        }
+    }
+
+    #[test]
+    fn a_quad_that_is_not_convex_splits_inside_itself() {
+        // An arrowhead: corner 3 points in, so the 1–3 diagonal lies outside.
+        let p = [Vec3::ZERO, Vec3::new(2.0, 0.0, 0.0), Vec3::new(0.0, 2.0, 0.0), Vec3::new(0.5, 0.5, 0.0)];
+        let poly = [0, 1, 3, 2];
+        let mut tris = Vec::new();
+        split_polygon(&p, &poly, |t| tris.push(t));
+        let up = |t: [usize; 3]| {
+            let [a, b, c] = t.map(|k| p[poly[k] as usize]);
+            (b - a).cross(c - a).z
+        };
+        assert!(tris.iter().all(|&t| up(t) > 0.0), "both halves face the same way: {tris:?}");
+        split_polygon(&p, &[0, 1], |_| panic!("a line gives no triangles"));
+    }
+
+    #[test]
+    fn an_obj_of_triangles_still_guesses_its_quads() {
+        // Two triangles making a flat square: guessed as one quad, as before.
+        let text = "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nf 1 2 3\nf 1 3 4\n";
+        let mesh = import(&temp_obj("tris.obj", text)).unwrap();
+        assert!(mesh.known_polygons().is_none());
+        assert_eq!(mesh.quad_count(), 1);
+    }
 
     #[test]
     fn obj_objects_become_separate_pieces() {

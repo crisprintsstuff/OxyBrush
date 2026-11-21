@@ -84,7 +84,7 @@ impl Editor {
         let mut pieces = Vec::new();
         let mut map = Vec::new();
         for (i, o) in manifest.objects.iter().enumerate() {
-            let (positions, tris) = match bridge::read_obj_exact(&o.obj) {
+            let (positions, tris, faces) = match bridge::read_obj_exact_polygons(&o.obj) {
                 Ok(x) => x,
                 Err(e) => {
                     self.status = format!("Could not read {} from {}: {e}", o.name, manifest.app);
@@ -94,6 +94,7 @@ impl Editor {
             let sent = positions.len();
             let world: Vec<Vec3> = positions.iter().map(|&p| o.matrix.transform_point3(p)).collect();
             let mesh = Mesh::new(world, tris);
+            oxy_io::keep_polygons(&mesh, &faces);
             let origin =
                 Some(VertexOrigin { topology_version: mesh.topology_version(), map: mesh.source_vertices().to_vec() });
             let piece = Piece { origin, ..Piece::new(o.name.clone(), mesh) };

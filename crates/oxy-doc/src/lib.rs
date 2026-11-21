@@ -276,6 +276,7 @@ impl Piece {
                     material: self.material.clone(),
                     instancers: Vec::new(),
                     parent: None,
+                    polygons: None,
                 }
             }
             None => PieceData {
@@ -292,6 +293,7 @@ impl Piece {
                 material: self.material.clone(),
                 instancers: Vec::new(),
                 parent: None,
+                polygons: SavedPolygons::of(&self.mesh),
             },
         }
     }
@@ -326,11 +328,71 @@ pub struct PieceData {
     pub instancers: Vec<SavedInstancer>,
     /// The `PARN` section: parent piece index. Filled in by [`Scene::to_data`].
     pub parent: Option<u32>,
+    /// The `POLY` section: which edges of `mesh` lie inside the polygons it
+    /// was imported or built from, so its quads stay quads after it's
+    /// opened again. None when the quads are guessed from the shape.
+    pub polygons: Option<SavedPolygons>,
+}
+
+/// Edges inside a piece's polygons, as point pairs `[low, high]` in its
+/// saved mesh's numbering (the `POLY` section).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct SavedPolygons {
+    /// The diagonal splitting each quad into two triangles.
+    pub diagonals: Vec<[u32; 2]>,
+    /// Edges inside polygons of five or more corners.
+    pub ngon_edges: Vec<[u32; 2]>,
+}
+
+impl SavedPolygons {
+    /// The polygons `mesh` knows, if any, in its own numbering, sorted so
+    /// the bytes don't change from one save to the next.
+    pub fn of(mesh: &Mesh) -> Option<Self> {
+        let (diagonals, ngon) = mesh.known_polygons()?;
+        let sorted = |set: &std::collections::HashSet<[u32; 2]>| {
+            let mut v: Vec<[u32; 2]> = set.iter().copied().collect();
+            v.sort_unstable();
+            v
+        };
+        Some(Self { diagonals: sorted(diagonals), ngon_edges: sorted(ngon) })
+    }
+
+    /// Give them to `mesh`, which was built from the saved mesh data and
+    /// renumbered its points (`source_vertices`). Ignored, with a warning,
+    /// if an edge names a point the mesh doesn't have.
+    pub fn apply(&self, mesh: &Mesh) {
+        let src = mesh.source_vertices();
+        let mut at = vec![u32::MAX; src.len()];
+        for (v, &s) in src.iter().enumerate() {
+            if let Some(slot) = at.get_mut(s as usize) {
+                *slot = v as u32;
+            }
+        }
+        let renumber = |edges: &[[u32; 2]]| -> Option<std::collections::HashSet<[u32; 2]>> {
+            edges
+                .iter()
+                .map(|&[a, b]| {
+                    let (a, b) = (*at.get(a as usize)?, *at.get(b as usize)?);
+                    (a != u32::MAX && b != u32::MAX).then(|| [a.min(b), a.max(b)])
+                })
+                .collect()
+        };
+        match (renumber(&self.diagonals), renumber(&self.ngon_edges)) {
+            (Some(d), Some(n)) => {
+                mesh.set_quad_diagonals(d);
+                mesh.set_ngon_edges(n);
+            }
+            _ => log::warn!("ignoring saved polygons that don't match the mesh"),
+        }
+    }
 }
 
 impl PieceData {
     pub fn into_piece(self) -> Piece {
         let mesh = Mesh::from_data(self.mesh);
+        if let Some(p) = self.polygons.as_ref().filter(|_| self.multires.is_none()) {
+            p.apply(&mesh);
+        }
         let multires = self.multires.map(|mut mr| {
             mr.bind(&mesh);
             mr

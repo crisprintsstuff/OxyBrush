@@ -113,13 +113,26 @@ impl LinkManifest {
     }
 }
 
+/// Points, triangles and the face of each triangle, as read by
+/// [`read_obj_exact_polygons`].
+pub type ExactObj = (Vec<Vec3>, Vec<[u32; 3]>, Vec<u32>);
+
 /// Read an OBJ exactly as written: one vertex per `v` line, in file order
-/// (nothing welded or dropped), faces fan-triangulated. Texture and normal
-/// indices are ignored. RETURNS: (positions, triangles).
+/// (nothing welded or dropped), faces split into triangles. Texture and
+/// normal indices are ignored. RETURNS: (positions, triangles).
 pub fn read_obj_exact(path: &Path) -> Result<(Vec<Vec3>, Vec<[u32; 3]>)> {
+    read_obj_exact_polygons(path).map(|(p, t, _)| (p, t))
+}
+
+/// [`read_obj_exact`], also returning the face (counted from 0) each
+/// triangle came from, for [`crate::keep_polygons`], so the quads stay
+/// quads. Quads are split as [`crate::split_polygon`] does.
+/// RETURNS: (positions, triangles, faces).
+pub fn read_obj_exact_polygons(path: &Path) -> Result<ExactObj> {
     let text = std::fs::read_to_string(path)?;
     let mut positions = Vec::new();
     let mut tris = Vec::new();
+    let mut faces: Vec<u32> = Vec::new();
     for (n, line) in text.lines().enumerate() {
         let mut it = line.split_whitespace();
         match it.next() {
@@ -141,9 +154,11 @@ pub fn read_obj_exact(path: &Path) -> Result<(Vec<Vec3>, Vec<[u32; 3]>)> {
                     })
                     .collect::<std::result::Result<_, ()>>()
                     .map_err(|()| Error::Format(format!("line {}: face index out of range", n + 1)))?;
-                for k in 1..idx.len().saturating_sub(1) {
-                    tris.push([idx[0], idx[k], idx[k + 1]]);
-                }
+                let face = faces.last().map_or(0, |&f| f + 1);
+                crate::split_polygon(&positions, &idx, |t| {
+                    tris.push(t.map(|k| idx[k]));
+                    faces.push(face);
+                });
             }
             _ => {}
         }
@@ -151,7 +166,7 @@ pub fn read_obj_exact(path: &Path) -> Result<(Vec<Vec3>, Vec<[u32; 3]>)> {
     if tris.is_empty() {
         return Err(Error::Format("no faces".into()));
     }
-    Ok((positions, tris))
+    Ok((positions, tris, faces))
 }
 
 /// Write an OBJ with `positions` in the given order and `triangles`
@@ -262,6 +277,15 @@ mod tests {
         let out = dir.join("out/q.obj");
         write_obj_ordered(&out, &p, &t, "Q").unwrap();
         assert_eq!(read_obj_exact(&out).unwrap(), (p, t));
+        // The quad's two triangles come from one face, so it stays a quad
+        // even when it isn't flat.
+        let (_, _, faces) = read_obj_exact_polygons(&src).unwrap();
+        assert_eq!(faces, [0, 0, 1]);
+        std::fs::write(&src, "v 0 0 0\nv 1 0 0\nv 1 1 1\nv 0 1 0\nf 1 2 3 4\n").unwrap();
+        let (p, t, faces) = read_obj_exact_polygons(&src).unwrap();
+        let mesh = oxy_mesh::Mesh::new(p, t);
+        crate::keep_polygons(&mesh, &faces);
+        assert_eq!(mesh.quad_and_triangle_counts(), (1, 0));
         std::fs::write(&src, "v 0 0 0\nf 1 2 3\n").unwrap();
         assert!(read_obj_exact(&src).is_err(), "out-of-range face");
         let _ = std::fs::remove_dir_all(&dir);
