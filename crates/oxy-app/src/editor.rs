@@ -2384,8 +2384,8 @@ impl Editor {
         self.orbit_picked = false;
         // The size on the model, measured where this press lands.
         self.sync_model_radius();
-        // Moving a placed recipe: the click is the move's, not a stroke.
-        if button == PointerButton::Primary && self.part_placement.as_ref().is_some_and(|p| p.moving.is_some()) {
+        // A pending recipe takes the viewport click before the brush or gizmo.
+        if self.part_placement.is_some() {
             return;
         }
         if button != PointerButton::Primary {
@@ -3641,8 +3641,17 @@ impl Editor {
             }
             return;
         }
-        if let Some(placement) = &mut self.part_placement {
-            placement.choice_open = true;
+        if let Some(placement) = &self.part_placement {
+            if !placement.choice_open
+                && self.pointer_in_canvas()
+                && let Some(hit) = self.pointer.and_then(|p| self.surface_hit_at(p))
+            {
+                let piece_id = self.scene.active().id;
+                self.update_part_placement(hit.point, hit.normal, piece_id);
+                if let Some(placement) = &mut self.part_placement {
+                    placement.choice_open = true;
+                }
+            }
             return;
         }
         if self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
@@ -15432,6 +15441,48 @@ mod tests {
             oxy_mesh::instances::polygons(mesh).iter().filter(|(_, t)| mesh.groups()[t[0] as usize] == 4).count();
         assert!(in_group > 0);
         assert_eq!(e.instance_count(host, 0), in_group);
+    }
+
+    #[test]
+    fn surface_instances_follow_mask_edits_and_scatter_settings() {
+        use oxy_mesh::instances::Place;
+        let (mut e, host, _) = instanced_editor();
+        let mut settings = e.scene.active().instancers[0].settings;
+        let all = e.instance_count(host, 0);
+        settings.place = Place::Mask(0.5);
+        e.set_instancer_settings(0, settings);
+        e.commit_instancer_edit();
+        assert_eq!(e.instance_count(host, 0), 0);
+        let mesh = &mut e.scene.active_mut().mesh;
+        mesh.mask.fill(0.6);
+        mesh.mark_all_dirty();
+        assert_eq!(e.instance_count(host, 0), all);
+        settings.place = Place::Mask(0.7);
+        e.set_instancer_settings(0, settings);
+        e.commit_instancer_edit();
+        assert_eq!(e.instance_count(host, 0), 0);
+        e.undo();
+        assert_eq!(e.instance_count(host, 0), all);
+
+        settings.place = Place::Scatter(0.35);
+        e.set_instancer_settings(0, settings);
+        assert!(e.instance_transforms(host, 0).is_none(), "scatter starts off-thread");
+        settings.seed = 91;
+        e.set_instancer_settings(0, settings);
+        e.commit_instancer_edit();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        let transforms = loop {
+            if let Some(found) = e.instance_transforms(host, 0) {
+                break found;
+            }
+            assert!(std::time::Instant::now() < deadline, "scatter job did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        };
+        let piece = e.scene.active();
+        let source = e.scene.get(piece.instancers[0].source).unwrap();
+        let anchors = oxy_mesh::instances::anchors(&piece.mesh, &settings);
+        assert!(!anchors.is_empty());
+        assert_eq!(&*transforms, &oxy_mesh::instances::transforms(&piece.mesh, &source.mesh, &anchors, &settings));
     }
 
     #[test]

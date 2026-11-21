@@ -110,15 +110,16 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
     };
     let mut s: Settings = ins.settings;
     let copies = ed.instance_count(ed.scene.active().id, index);
+    let calculating = matches!(s.place, Place::Scatter(_)) && ed.instance_scatter_pending();
     let triangles = ed.instance_triangles(index);
     ui.horizontal(|ui| {
         ui.strong(format!("Copies of {source}"));
         ui.label(
-            RichText::new(format!(
-                "{} copies, {} triangles",
-                crate::ui::fmt_count(copies),
-                crate::ui::fmt_count(triangles)
-            ))
+            RichText::new(if calculating {
+                "Calculating scatter…".to_owned()
+            } else {
+                format!("{} copies, {} triangles", crate::ui::fmt_count(copies), crate::ui::fmt_count(triangles))
+            })
             .weak()
             .small(),
         );
@@ -130,6 +131,8 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
                 Place::Faces => "Every face",
                 Place::Points => "Every point",
                 Place::Group(_) => "One face group",
+                Place::Mask(_) => "Masked surface",
+                Place::Scatter(_) => "Even scatter",
             };
             egui::ComboBox::from_id_salt(("instance_place", index)).selected_text(label).show_ui(ui, |ui| {
                 ui.selectable_value(&mut s.place, Place::Faces, "Every face");
@@ -140,6 +143,17 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
                 };
                 if ui.selectable_label(matches!(s.place, Place::Group(_)), "One face group").clicked() {
                     s.place = Place::Group(g);
+                }
+                if ui.selectable_label(matches!(s.place, Place::Mask(_)), "Masked surface").clicked()
+                    && !matches!(s.place, Place::Mask(_))
+                {
+                    s.place = Place::Mask(0.5);
+                }
+                if ui.selectable_label(matches!(s.place, Place::Scatter(_)), "Even scatter").clicked()
+                    && !matches!(s.place, Place::Scatter(_))
+                {
+                    let extent = ed.scene.active().mesh.bounds().extent().max_element();
+                    s.place = Place::Scatter((extent / 12.0).max(0.001));
                 }
             });
             if let Place::Group(g) = &mut s.place {
@@ -154,6 +168,23 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
             }
         });
         ui.end_row();
+
+        match &mut s.place {
+            Place::Mask(threshold) => {
+                ui.label("Mask threshold");
+                ui.add(egui::Slider::new(threshold, 0.01..=1.0)).on_hover_text("Copy onto visible faces whose average mask meets this value.");
+            }
+            Place::Scatter(spacing) => {
+                ui.label("Spacing");
+                let speed = *spacing * 0.05;
+                ui.add(egui::DragValue::new(spacing).speed(speed).range(0.0001..=1.0e20))
+                    .on_hover_text("Minimum distance between copies in scene units when scattered. The copies follow later sculpt edits.");
+            }
+            _ => {}
+        }
+        if s.place.extended() {
+            ui.end_row();
+        }
 
         tips::hover(ui.label("Facing"), plain::INSTANCE_ORIENT);
         ui.horizontal(|ui| {

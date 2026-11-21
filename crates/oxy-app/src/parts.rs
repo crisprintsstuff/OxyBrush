@@ -2,7 +2,7 @@
 //!
 //! Stores `.oxydetail` files and their thumbnail PNGs in the user's data folder
 //! (`…/oxybrush/parts` or `%LOCALAPPDATA%\OxyBrush\parts`).
-//! `library.txt` tracks order, categories, and content hashes.
+//! `library.txt` tracks order, display names, categories, and content hashes.
 
 use glam::Vec3;
 use oxy_sculpt::PartDetail;
@@ -67,13 +67,6 @@ fn hex_encode(bytes: &[u8]) -> String {
     s
 }
 
-fn hex_decode(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
-    }
-    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
-}
-
 /// Compute SHA-256 of byte slice.
 pub fn content_hash(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
@@ -96,7 +89,7 @@ pub struct PartEntry {
 #[derive(Clone, Debug, Default)]
 pub struct PartsLibrary {
     pub entries: Vec<PartEntry>,
-    pub selected_category: String, // "All" or category name
+    pub selected_category: String, // Empty shows all recipes
 }
 
 impl PartsLibrary {
@@ -111,7 +104,7 @@ impl PartsLibrary {
 
     /// Entries filtered by the active category filter ("All" shows everything).
     pub fn filtered_entries(&self) -> Vec<&PartEntry> {
-        if self.selected_category.is_empty() || self.selected_category == "All" {
+        if self.selected_category.is_empty() {
             self.entries.iter().collect()
         } else {
             self.entries.iter().filter(|e| e.category == self.selected_category).collect()
@@ -126,7 +119,7 @@ impl PartsLibrary {
 
         let mut order: Vec<String> = Vec::new();
         let mut categories: HashMap<String, String> = HashMap::new();
-        let mut hashes: HashMap<String, [u8; 32]> = HashMap::new();
+        let mut names = HashMap::new();
 
         for line in lib_text.lines() {
             let line = line.trim();
@@ -140,13 +133,8 @@ impl PartsLibrary {
                     order = v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect();
                 } else if let Some(fname) = k.strip_prefix("category.") {
                     categories.insert(fname.trim().to_string(), v.to_string());
-                } else if let Some(fname) = k.strip_prefix("hash.")
-                    && let Some(bytes) = hex_decode(v)
-                    && bytes.len() == 32
-                {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&bytes);
-                    hashes.insert(fname.trim().to_string(), arr);
+                } else if let Some(fname) = k.strip_prefix("name.") {
+                    names.insert(fname.trim().to_string(), v.to_string());
                 }
             }
         }
@@ -176,7 +164,7 @@ impl PartsLibrary {
                 let thumb = dir.join(format!("{}.png", fname.strip_suffix(&format!(".{EXTENSION}")).unwrap_or(fname)));
                 let thumb_path = if thumb.exists() { Some(thumb) } else { None };
                 entries.push(PartEntry {
-                    name: detail.name.clone(),
+                    name: names.remove(fname).unwrap_or_else(|| detail.name.clone()),
                     category,
                     file_name: fname.clone(),
                     hash,
@@ -195,7 +183,7 @@ impl PartsLibrary {
             let thumb = dir.join(format!("{}.png", fname.strip_suffix(&format!(".{EXTENSION}")).unwrap_or(&fname)));
             let thumb_path = if thumb.exists() { Some(thumb) } else { None };
             entries.push(PartEntry {
-                name: detail.name.clone(),
+                name: names.remove(&fname).unwrap_or_else(|| detail.name.clone()),
                 category,
                 file_name: fname,
                 hash,
@@ -204,28 +192,29 @@ impl PartsLibrary {
             });
         }
 
-        PartsLibrary { entries, selected_category: "All".into() }
+        PartsLibrary { entries, selected_category: String::new() }
     }
 
     /// Save `library.txt` atomically.
     pub fn save_index(&self, dir: &Path) -> std::io::Result<()> {
         let _ = std::fs::create_dir_all(dir);
         let lib_path = dir.join(LIBRARY_FILE);
-        let tmp_path = dir.join("library.txt.tmp");
 
         let mut out = String::from("# OxyBrush parts library.\nversion = 1\n");
         let order_str = self.entries.iter().map(|e| e.file_name.as_str()).collect::<Vec<_>>().join(", ");
         out.push_str(&format!("order = {order_str}\n"));
 
         for e in &self.entries {
+            if e.name != e.detail.name {
+                out.push_str(&format!("name.{} = {}\n", e.file_name, e.name));
+            }
             if !e.category.is_empty() {
                 out.push_str(&format!("category.{} = {}\n", e.file_name, e.category));
             }
             out.push_str(&format!("hash.{} = {}\n", e.file_name, hex_encode(&e.hash)));
         }
 
-        std::fs::write(&tmp_path, out)?;
-        std::fs::rename(&tmp_path, lib_path)
+        oxy_io::write_atomic(&lib_path, out.as_bytes())
     }
 
     /// Add or update a part in the library.
@@ -245,7 +234,7 @@ impl PartsLibrary {
         self.entries.retain(|e| e.file_name != fname);
         self.entries.push(PartEntry {
             name: detail.name.clone(),
-            category: category.trim().to_string(),
+            category: category.trim().replace(['\r', '\n'], " "),
             file_name: fname,
             hash,
             detail,
@@ -259,11 +248,21 @@ impl PartsLibrary {
     /// A name no entry uses yet: `name`, or `name 2`, `name 3`… (Save as
     /// new recipe must not replace another recipe with the same name).
     pub fn free_name(&self, name: &str) -> String {
-        let taken = |n: &str| self.entries.iter().any(|e| e.file_name == file_name(n));
+        let taken = |n: &str| {
+            let file = file_name(n);
+            self.entries.iter().any(|e| e.file_name.eq_ignore_ascii_case(&file) || e.name.eq_ignore_ascii_case(n))
+        };
         if !taken(name) {
             return name.to_string();
         }
-        (2..).map(|k| format!("{name} {k}")).find(|n| !taken(n)).expect("a free name")
+        (2..)
+            .map(|k| {
+                let suffix = format!(" {k}");
+                let prefix: String = name.chars().take(80 - suffix.len()).collect();
+                format!("{prefix}{suffix}")
+            })
+            .find(|n| !taken(n))
+            .expect("a free name")
     }
 
     /// Replace the detail in entry `file_name` with `detail`, keeping the
@@ -275,7 +274,8 @@ impl PartsLibrary {
         let Some(at) = self.entries.iter().position(|e| e.file_name == file_name) else {
             return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such recipe in the Recipe Box"));
         };
-        detail.name = self.entries[at].name.clone();
+        // Display names in the index do not change the backing recipe identity.
+        detail.name = self.entries[at].detail.name.clone();
         let file_path = dir.join(file_name);
         let tmp_path = file_path.with_extension(format!("{EXTENSION}.tmp"));
         let bytes = detail.to_bytes();
@@ -289,17 +289,87 @@ impl PartsLibrary {
         Ok(hash)
     }
 
-    /// Delete a part from the library by file name.
-    #[allow(dead_code)]
-    pub fn delete_part(&mut self, dir: &Path, file_name: &str) -> std::io::Result<()> {
-        let file_path = dir.join(file_name);
-        let _ = std::fs::remove_file(file_path);
-        let thumb_path =
-            dir.join(format!("{}.png", file_name.strip_suffix(&format!(".{EXTENSION}")).unwrap_or(file_name)));
-        let _ = std::fs::remove_file(thumb_path);
+    /// Change the library label and category without replacing the detail file.
+    pub fn edit_part(&mut self, dir: &Path, file_name: &str, name: &str, category: &str) -> std::io::Result<()> {
+        let at = self.entry_index(file_name)?;
+        let (name, category) = (name.trim(), category.trim());
+        if name.is_empty() || [name, category].iter().any(|s| s.contains(['\r', '\n'])) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Enter a name and a single-line category",
+            ));
+        }
+        if self.entries.iter().enumerate().any(|(i, e)| i != at && e.name.eq_ignore_ascii_case(name)) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                "That recipe name is already in the box",
+            ));
+        }
+        let old_name = std::mem::replace(&mut self.entries[at].name, name.into());
+        let old_category = std::mem::replace(&mut self.entries[at].category, category.into());
+        if let Err(error) = self.save_index(dir) {
+            self.entries[at].name = old_name;
+            self.entries[at].category = old_category;
+            return Err(error);
+        }
+        self.reset_empty_filter();
+        Ok(())
+    }
 
-        self.entries.retain(|e| e.file_name != file_name);
-        self.save_index(dir)
+    /// Move a recipe to a library position and persist the new order.
+    pub fn reorder_part(&mut self, dir: &Path, from: usize, to: usize) -> std::io::Result<()> {
+        if from == to || from >= self.entries.len() || to >= self.entries.len() {
+            return Ok(());
+        }
+        let entry = self.entries.remove(from);
+        self.entries.insert(to, entry);
+        if let Err(error) = self.save_index(dir) {
+            let entry = self.entries.remove(to);
+            self.entries.insert(from, entry);
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Delete the library file. Placed recipes are stored in their projects.
+    pub fn delete_part(&mut self, dir: &Path, file_name: &str) -> std::io::Result<()> {
+        let at = self.entry_index(file_name)?;
+        let file = dir.join(&self.entries[at].file_name);
+        let pending = file.with_extension(format!("deleting-{}", std::process::id()));
+        let moved = match std::fs::rename(&file, &pending) {
+            Ok(()) => true,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+            Err(error) => return Err(error),
+        };
+        let entry = self.entries.remove(at);
+        if let Err(error) = self.save_index(dir) {
+            self.entries.insert(at, entry);
+            if moved {
+                std::fs::rename(pending, file)?;
+            }
+            return Err(error);
+        }
+        if moved {
+            let _ = std::fs::remove_file(pending);
+        }
+        if let Some(path) = entry.thumbnail_path {
+            let _ = std::fs::remove_file(path);
+        }
+        self.reset_empty_filter();
+        Ok(())
+    }
+
+    fn entry_index(&self, file_name: &str) -> std::io::Result<usize> {
+        self.entries
+            .iter()
+            .position(|e| e.file_name == file_name)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "No such recipe in the Recipe Box"))
+    }
+
+    fn reset_empty_filter(&mut self) {
+        if self.filtered_entries().is_empty() {
+            self.selected_category.clear();
+        }
     }
 }
 
@@ -339,12 +409,24 @@ mod tests {
         lib.save_part(&dir, detail, "Creatures").expect("saves part");
         assert_eq!(lib.entries.len(), 1);
 
-        // Reload
-        let reloaded = PartsLibrary::load_all(&dir);
-        assert_eq!(reloaded.entries.len(), 1);
-        assert_eq!(reloaded.entries[0].name, "Horn");
-        assert_eq!(reloaded.entries[0].category, "Creatures");
+        let file = lib.entries[0].file_name.clone();
+        let hash = lib.entries[0].hash;
+        let bytes = std::fs::read(dir.join(&file)).unwrap();
+        let mut second = lib.entries[0].detail.clone();
+        second.name = "Antler".into();
+        lib.save_part(&dir, second, "Creatures").unwrap();
+        assert!(lib.edit_part(&dir, &file, "Antler", "Creatures").is_err());
+        lib.edit_part(&dir, &file, "Curved horn", "Creatures").unwrap();
+        lib.reorder_part(&dir, 1, 0).unwrap();
+        assert_eq!(std::fs::read(dir.join(&file)).unwrap(), bytes);
+        let mut reloaded = PartsLibrary::load_all(&dir);
+        assert_eq!(reloaded.entries.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Antler", "Curved horn"]);
+        assert_eq!(reloaded.entries[1].file_name, file);
+        assert_eq!(reloaded.entries[1].hash, hash);
         assert_eq!(reloaded.categories(), vec!["Creatures"]);
+        reloaded.delete_part(&dir, &file).unwrap();
+        assert!(!dir.join(file).exists());
+        assert_eq!(PartsLibrary::load_all(&dir).entries.len(), 1);
 
         let _ = std::fs::remove_dir_all(&dir);
     }

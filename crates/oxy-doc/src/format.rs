@@ -45,6 +45,10 @@
 //!   units, 1 times the face size) `size:f32 offset:f32 spin:f32
 //!   vary_size:f32 vary_spin:f32 seed:u32`. Older readers skip it: the host
 //!   and the (hidden) source open as ordinary pieces, without the copies.
+//! - `INS2` (optional): the full surface-instance list when it uses mask or
+//!   scatter placement. Layout as `INST`, with place 3 (mask threshold) or
+//!   4 (scatter spacing), reusing `group` as f32 bits. Replaces `INST` on
+//!   read; earlier readers still get legacy modes through `INST`.
 //! - `PARN` (optional, since 4.0.0-beta.20): parent piece index of the
 //!   **preceding** `PIEC`: `parent:u32`, the parent piece's place among the
 //!   file's pieces (from 0; not this piece). Transforming the parent transforms
@@ -299,7 +303,13 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if let Some(m) = &p.material {
             sections.push((*b"MATL", m.as_bytes().to_vec()));
         }
-        if !p.instancers.is_empty() {
+        if p.instancers.iter().any(|ins| ins.settings.place.extended()) {
+            let legacy: Vec<_> = p.instancers.iter().filter(|ins| !ins.settings.place.extended()).cloned().collect();
+            if !legacy.is_empty() {
+                sections.push((*b"INST", encode_instancers(&legacy)));
+            }
+            sections.push((*b"INS2", encode_instancers(&p.instancers)));
+        } else if !p.instancers.is_empty() {
             sections.push((*b"INST", encode_instancers(&p.instancers)));
         }
         if let Some(parent) = p.parent {
@@ -696,9 +706,9 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     _ => log::warn!("ignoring a damaged material on piece {:?}", piece.name),
                 }
             }
-            b"INST" => {
+            b"INST" | b"INS2" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("INST before any piece".into()))?;
-                match decode_instancers(&raw) {
+                match decode_instancers(&raw, &tag == b"INS2") {
                     Ok(list) => piece.instancers = list,
                     Err(e) => log::warn!("ignoring damaged surface instances on piece {:?}: {e}", piece.name),
                 }
@@ -1304,6 +1314,8 @@ fn encode_instancers(list: &[crate::SavedInstancer]) -> Vec<u8> {
             Place::Faces => (0u8, 0u32),
             Place::Points => (1, 0),
             Place::Group(g) => (2, g),
+            Place::Mask(threshold) => (3, threshold.to_bits()),
+            Place::Scatter(spacing) => (4, spacing.to_bits()),
         };
         b.push(place);
         b.extend_from_slice(&group.to_le_bytes());
@@ -1328,7 +1340,7 @@ fn encode_instancers(list: &[crate::SavedInstancer]) -> Vec<u8> {
     b
 }
 
-fn decode_instancers(raw: &[u8]) -> Result<Vec<crate::SavedInstancer>> {
+fn decode_instancers(raw: &[u8], extended: bool) -> Result<Vec<crate::SavedInstancer>> {
     use oxy_mesh::instances::{Orient, Place, Settings, SizeMode};
     let mut r = Reader { data: raw, pos: 0 };
     let count = r.u32()? as usize;
@@ -1340,7 +1352,13 @@ fn decode_instancers(raw: &[u8]) -> Result<Vec<crate::SavedInstancer>> {
                 (0, _) => Place::Faces,
                 (1, _) => Place::Points,
                 (2, g) => Place::Group(g),
-                _ => return Err(Error::Corrupt("unknown instance placement".into())),
+                (3, bits) if extended && (0.01..=1.0).contains(&f32::from_bits(bits)) => {
+                    Place::Mask(f32::from_bits(bits))
+                }
+                (4, bits) if extended && f32::from_bits(bits).is_finite() && f32::from_bits(bits) > 0.0 => {
+                    Place::Scatter(f32::from_bits(bits))
+                }
+                _ => return Err(Error::Corrupt("unknown or invalid instance placement".into())),
             };
             let orient = match r.u8()? {
                 0 => Orient::World,
@@ -2808,6 +2826,27 @@ mod tests {
         let back = Scene::from_data(decode(&old).unwrap()).unwrap();
         assert_eq!(back.pieces.len(), 2);
         assert!(back.pieces[0].instancers.is_empty());
+    }
+
+    #[test]
+    fn extended_instance_placements_preserve_legacy_modes() {
+        use oxy_mesh::instances::{Place, Settings};
+        let mut s = sample();
+        let places = [Place::Mask(0.65), Place::Group(3), Place::Scatter(0.125)];
+        s.pieces[0].instancers = places
+            .into_iter()
+            .map(|place| crate::SavedInstancer {
+                source: 1,
+                settings: Settings { place, seed: 42, ..Settings::default() },
+            })
+            .collect();
+        let mut bytes = encode(&s);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[0].instancers, s.pieces[0].instancers);
+        let tag = bytes.windows(4).position(|w| w == b"INS2").unwrap();
+        bytes[tag..tag + 4].copy_from_slice(b"ZZZZ");
+        let legacy = decode(&bytes).unwrap();
+        assert_eq!(legacy.pieces[0].instancers, s.pieces[0].instancers[1..2]);
     }
 
     #[test]
