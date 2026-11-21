@@ -19,6 +19,10 @@ mod lights_ui;
 mod living;
 mod living_ui;
 mod matcaps;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod menu_model;
+#[cfg(target_os = "macos")]
+mod native_menu;
 mod palette;
 mod parts;
 mod parts_ui;
@@ -221,6 +225,12 @@ fn main() {
     }
 
     let mut builder = winit::event_loop::EventLoop::builder();
+    // OxyBrush puts its own menus in the macOS menu bar (RFC 0028).
+    #[cfg(target_os = "macos")]
+    {
+        use winit::platform::macos::EventLoopBuilderExtMacOS;
+        builder.with_default_menu(false);
+    }
 
     #[cfg(target_os = "linux")]
     {
