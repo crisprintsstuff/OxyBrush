@@ -5316,212 +5316,233 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 let piece_triangles = p.mesh.triangle_count();
                 let is_visible = p.visible;
 
-                let frame_resp = egui::Frame::new()
-                    .fill(fill)
-                    .stroke(stroke)
-                    .corner_radius(widgets::rounding(6.0))
-                    .inner_margin(egui::Margin::symmetric(2, 1))
-                    .show(ui, |ui| {
-                        ui.horizontal(|ui| {
-                            // Vector hierarchy guide lines for indented rows
-                            if row.depth > 0 {
-                                let indent_step = 16.0;
-                                let indent_w = row.depth as f32 * indent_step;
-                                let (indent_rect, _) =
-                                    ui.allocate_exact_size(egui::vec2(indent_w, 20.0), egui::Sense::hover());
-                                let painter = ui.painter();
-                                let line_color = ui.visuals().text_color().linear_multiply(0.22);
-                                let line_stroke = EStroke::new(1.0, line_color);
+                // The row's own click (select, and the right-click menu) is
+                // registered *under* the widgets in it, so the eye button,
+                // the name (double-click to rename) and Alt+click get their
+                // clicks. Sensing the frame after drawing it put the row on
+                // top of them, and it swallowed every left click.
+                let frame_resp = ui
+                    .scope_builder(egui::UiBuilder::new().sense(egui::Sense::click()), |ui| {
+                        egui::Frame::new()
+                            .fill(fill)
+                            .stroke(stroke)
+                            .corner_radius(widgets::rounding(6.0))
+                            .inner_margin(egui::Margin::symmetric(2, 1))
+                            .show(ui, |ui| {
+                                ui.horizontal(|ui| {
+                                    // Vector hierarchy guide lines for indented rows
+                                    if row.depth > 0 {
+                                        let indent_step = 16.0;
+                                        let indent_w = row.depth as f32 * indent_step;
+                                        let (indent_rect, _) =
+                                            ui.allocate_exact_size(egui::vec2(indent_w, 20.0), egui::Sense::hover());
+                                        let painter = ui.painter();
+                                        let line_color = ui.visuals().text_color().linear_multiply(0.22);
+                                        let line_stroke = EStroke::new(1.0, line_color);
 
-                                for d in 0..row.depth {
-                                    let x = (indent_rect.left() + d as f32 * indent_step + indent_step * 0.5).round();
-                                    let top_y = indent_rect.top() - 1.0;
-                                    let bot_y = indent_rect.bottom() + 1.0;
-                                    let mid_y = indent_rect.center().y.round();
+                                        for d in 0..row.depth {
+                                            let x = (indent_rect.left() + d as f32 * indent_step + indent_step * 0.5)
+                                                .round();
+                                            let top_y = indent_rect.top() - 1.0;
+                                            let bot_y = indent_rect.bottom() + 1.0;
+                                            let mid_y = indent_rect.center().y.round();
 
-                                    if d < row.depth - 1 {
-                                        if row.ancestor_continues.get(d).copied().unwrap_or(false) {
-                                            painter.line_segment(
-                                                [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
-                                                line_stroke,
-                                            );
+                                            if d < row.depth - 1 {
+                                                if row.ancestor_continues.get(d).copied().unwrap_or(false) {
+                                                    painter.line_segment(
+                                                        [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
+                                                        line_stroke,
+                                                    );
+                                                }
+                                            } else {
+                                                if row.is_last_child {
+                                                    painter.line_segment(
+                                                        [egui::pos2(x, top_y), egui::pos2(x, mid_y)],
+                                                        line_stroke,
+                                                    );
+                                                } else {
+                                                    painter.line_segment(
+                                                        [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
+                                                        line_stroke,
+                                                    );
+                                                }
+                                                painter.line_segment(
+                                                    [egui::pos2(x, mid_y), egui::pos2(indent_rect.right(), mid_y)],
+                                                    line_stroke,
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    // Drag grip
+                                    let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
+                                    if grip.dragged() {
+                                        grip.dnd_set_drag_payload(PieceDrag(i));
+                                        row_dragged = true;
+                                    }
+
+                                    // Fold chevron
+                                    if row.has_children {
+                                        let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
+                                        if widgets::fold_chevron(ui, !row.is_folded, tip).clicked() {
+                                            toggle_fold = Some(piece_id);
                                         }
                                     } else {
-                                        if row.is_last_child {
-                                            painter.line_segment(
-                                                [egui::pos2(x, top_y), egui::pos2(x, mid_y)],
-                                                line_stroke,
-                                            );
+                                        ui.allocate_space(egui::vec2(14.0, 18.0));
+                                    }
+
+                                    // Visibility toggle
+                                    let (icon, tip) = if is_visible {
+                                        (Icon::Eye, plain::PIECE_HIDE)
+                                    } else {
+                                        (Icon::EyeOff, plain::PIECE_SHOW)
+                                    };
+                                    if widgets::icon_button(ui, icon, false, true, tip).clicked() {
+                                        if alt {
+                                            isolate = Some(i);
                                         } else {
-                                            painter.line_segment(
-                                                [egui::pos2(x, top_y), egui::pos2(x, bot_y)],
-                                                line_stroke,
-                                            );
+                                            toggle_vis = true;
                                         }
-                                        painter.line_segment(
-                                            [egui::pos2(x, mid_y), egui::pos2(indent_rect.right(), mid_y)],
-                                            line_stroke,
+                                    }
+
+                                    // Piece type icon
+                                    let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
+                                        (Icon::Wireframe, "Tube piece")
+                                    } else if p.cage.is_some() {
+                                        (Icon::Wireframe, "Retopology cage")
+                                    } else {
+                                        (Icon::Cube, "Mesh piece")
+                                    };
+                                    let (icon_rect, icon_resp) =
+                                        ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                    let icon_color = if is_visible {
+                                        ui.visuals().text_color().linear_multiply(0.65)
+                                    } else {
+                                        ui.visuals().text_color().linear_multiply(0.25)
+                                    };
+                                    widgets::paint_icon(ui.painter(), icon_rect, piece_icon, icon_color);
+                                    tips::hover(icon_resp, icon_tip);
+
+                                    // Name label / inline rename
+                                    let is_renaming = doc.renaming_piece == Some(piece_id);
+                                    if is_renaming {
+                                        let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
+                                        let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
+                                        let text_resp = tips::hover(
+                                            ui.add(
+                                                egui::TextEdit::singleline(&mut doc.rename_text)
+                                                    .id(edit_id)
+                                                    .desired_width(text_w),
+                                            ),
+                                            plain::PIECE_RENAME,
+                                        );
+                                        if !ui.memory(|m| m.has_focus(edit_id)) && doc.rename_text == piece_name {
+                                            text_resp.request_focus();
+                                        }
+                                        if text_resp.lost_focus() || ui.input(|i_in| i_in.key_pressed(egui::Key::Enter))
+                                        {
+                                            let trimmed = doc.rename_text.trim();
+                                            if !trimmed.is_empty() {
+                                                commit_rename = Some(trimmed.to_string());
+                                            }
+                                            doc.renaming_piece = None;
+                                        } else if ui.input(|i_in| i_in.key_pressed(egui::Key::Escape)) {
+                                            doc.renaming_piece = None;
+                                        }
+                                    } else {
+                                        let text_color = if is_active {
+                                            ui.visuals().selection.stroke.color
+                                        } else if is_picked {
+                                            ui.visuals().selection.stroke.color.linear_multiply(0.9)
+                                        } else if !is_visible {
+                                            ui.visuals().text_color().linear_multiply(0.4)
+                                        } else {
+                                            ui.visuals().text_color()
+                                        };
+                                        let btn_w = (ui.available_width() - 65.0).max(60.0);
+                                        let btn = ui.add_sized(
+                                            egui::vec2(btn_w, 18.0),
+                                            egui::Button::selectable(
+                                                is_selected,
+                                                RichText::new(&p.name).color(text_color),
+                                            )
+                                            .frame(false)
+                                            .sense(egui::Sense::click_and_drag())
+                                            .truncate(),
+                                        );
+                                        let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
+                                        if btn.dragged() && !shift && !command {
+                                            btn.dnd_set_drag_payload(PieceDrag(i));
+                                            row_dragged = true;
+                                        } else if btn.double_clicked() {
+                                            action_rename = Some((piece_id, p.name.clone()));
+                                        } else if btn.clicked() {
+                                            if shift {
+                                                range_select = Some((i, command));
+                                            } else if command {
+                                                pick = Some(i);
+                                            } else {
+                                                select = Some(i);
+                                            }
+                                        }
+                                    }
+
+                                    // Multires level badge
+                                    if let Some(mr) = p.multires.as_ref().filter(|m| m.level_count() > 1) {
+                                        let text = format!("L{}", mr.active() + 1);
+                                        let tip = format!("Multires level {} of {}", mr.active() + 1, mr.level_count());
+                                        let badge = ui.label(
+                                            RichText::new(text)
+                                                .small()
+                                                .strong()
+                                                .color(ui.visuals().selection.stroke.color),
+                                        );
+                                        tips::hover(badge, &tip);
+                                    }
+
+                                    // Active mask dot indicator
+                                    if p.mesh.mask.iter().any(|&w| w > 0.01) {
+                                        let dot =
+                                            ui.label(RichText::new("●").small().color(Color32::from_rgb(230, 160, 50)));
+                                        tips::hover(dot, "Has active mask");
+                                    }
+
+                                    // Copied instancer badge
+                                    if sources.contains(&piece_id) {
+                                        tips::hover(
+                                            ui.label(RichText::new("copied").weak().small()),
+                                            plain::PIECE_COPIED,
                                         );
                                     }
-                                }
-                            }
 
-                            // Drag grip
-                            let grip = widgets::drag_handle(ui, plain::PIECE_DRAG);
-                            if grip.dragged() {
-                                grip.dnd_set_drag_payload(PieceDrag(i));
-                                row_dragged = true;
-                            }
-
-                            // Fold chevron
-                            if row.has_children {
-                                let tip = if row.is_folded { plain::PIECE_UNFOLD } else { plain::PIECE_FOLD };
-                                if widgets::fold_chevron(ui, !row.is_folded, tip).clicked() {
-                                    toggle_fold = Some(piece_id);
-                                }
-                            } else {
-                                ui.allocate_space(egui::vec2(14.0, 18.0));
-                            }
-
-                            // Visibility toggle
-                            let (icon, tip) = if is_visible {
-                                (Icon::Eye, plain::PIECE_HIDE)
-                            } else {
-                                (Icon::EyeOff, plain::PIECE_SHOW)
-                            };
-                            if widgets::icon_button(ui, icon, false, true, tip).clicked() {
-                                if alt {
-                                    isolate = Some(i);
-                                } else {
-                                    toggle_vis = true;
-                                }
-                            }
-
-                            // Piece type icon
-                            let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
-                                (Icon::Wireframe, "Tube piece")
-                            } else if p.cage.is_some() {
-                                (Icon::Wireframe, "Retopology cage")
-                            } else {
-                                (Icon::Cube, "Mesh piece")
-                            };
-                            let (icon_rect, icon_resp) =
-                                ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                            let icon_color = if is_visible {
-                                ui.visuals().text_color().linear_multiply(0.65)
-                            } else {
-                                ui.visuals().text_color().linear_multiply(0.25)
-                            };
-                            widgets::paint_icon(ui.painter(), icon_rect, piece_icon, icon_color);
-                            tips::hover(icon_resp, icon_tip);
-
-                            // Name label / inline rename
-                            let is_renaming = doc.renaming_piece == Some(piece_id);
-                            if is_renaming {
-                                let edit_id = ui.make_persistent_id(("piece_rename", piece_id));
-                                let text_w = (ui.available_width() - 80.0).clamp(60.0, 160.0);
-                                let text_resp = tips::hover(
-                                    ui.add(
-                                        egui::TextEdit::singleline(&mut doc.rename_text)
-                                            .id(edit_id)
-                                            .desired_width(text_w),
-                                    ),
-                                    plain::PIECE_RENAME,
-                                );
-                                if !ui.memory(|m| m.has_focus(edit_id)) && doc.rename_text == piece_name {
-                                    text_resp.request_focus();
-                                }
-                                if text_resp.lost_focus() || ui.input(|i_in| i_in.key_pressed(egui::Key::Enter)) {
-                                    let trimmed = doc.rename_text.trim();
-                                    if !trimmed.is_empty() {
-                                        commit_rename = Some(trimmed.to_string());
+                                    // Picked badge
+                                    if is_picked {
+                                        tips::hover(
+                                            ui.label(
+                                                RichText::new("picked")
+                                                    .weak()
+                                                    .small()
+                                                    .color(ui.visuals().selection.stroke.color),
+                                            ),
+                                            plain::GIZMO_PIECES,
+                                        );
                                     }
-                                    doc.renaming_piece = None;
-                                } else if ui.input(|i_in| i_in.key_pressed(egui::Key::Escape)) {
-                                    doc.renaming_piece = None;
-                                }
-                            } else {
-                                let text_color = if is_active {
-                                    ui.visuals().selection.stroke.color
-                                } else if is_picked {
-                                    ui.visuals().selection.stroke.color.linear_multiply(0.9)
-                                } else if !is_visible {
-                                    ui.visuals().text_color().linear_multiply(0.4)
-                                } else {
-                                    ui.visuals().text_color()
-                                };
-                                let btn_w = (ui.available_width() - 65.0).max(60.0);
-                                let btn = ui.add_sized(
-                                    egui::vec2(btn_w, 18.0),
-                                    egui::Button::selectable(is_selected, RichText::new(&p.name).color(text_color))
-                                        .frame(false)
-                                        .sense(egui::Sense::click_and_drag())
-                                        .truncate(),
-                                );
-                                let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
-                                if btn.dragged() && !shift && !command {
-                                    btn.dnd_set_drag_payload(PieceDrag(i));
-                                    row_dragged = true;
-                                } else if btn.double_clicked() {
-                                    action_rename = Some((piece_id, p.name.clone()));
-                                } else if btn.clicked() {
-                                    if shift {
-                                        range_select = Some((i, command));
-                                    } else if command {
-                                        pick = Some(i);
-                                    } else {
-                                        select = Some(i);
-                                    }
-                                }
-                            }
 
-                            // Multires level badge
-                            if let Some(mr) = p.multires.as_ref().filter(|m| m.level_count() > 1) {
-                                let text = format!("L{}", mr.active() + 1);
-                                let tip = format!("Multires level {} of {}", mr.active() + 1, mr.level_count());
-                                let badge = ui.label(
-                                    RichText::new(text).small().strong().color(ui.visuals().selection.stroke.color),
-                                );
-                                tips::hover(badge, &tip);
-                            }
+                                    // Right-aligned triangle count and child counter
+                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                        let tri_lbl = ui.label(
+                                            RichText::new(fmt_count(piece_triangles)).monospace().weak().small(),
+                                        );
+                                        let vert_count = fmt_count(p.mesh.vertex_count());
+                                        let tri_count = fmt_count(piece_triangles);
+                                        tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
 
-                            // Active mask dot indicator
-                            if p.mesh.mask.iter().any(|&w| w > 0.01) {
-                                let dot = ui.label(RichText::new("●").small().color(Color32::from_rgb(230, 160, 50)));
-                                tips::hover(dot, "Has active mask");
-                            }
-
-                            // Copied instancer badge
-                            if sources.contains(&piece_id) {
-                                tips::hover(ui.label(RichText::new("copied").weak().small()), plain::PIECE_COPIED);
-                            }
-
-                            // Picked badge
-                            if is_picked {
-                                tips::hover(
-                                    ui.label(
-                                        RichText::new("picked")
-                                            .weak()
-                                            .small()
-                                            .color(ui.visuals().selection.stroke.color),
-                                    ),
-                                    plain::GIZMO_PIECES,
-                                );
-                            }
-
-                            // Right-aligned triangle count and child counter
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                let tri_lbl =
-                                    ui.label(RichText::new(fmt_count(piece_triangles)).monospace().weak().small());
-                                let vert_count = fmt_count(p.mesh.vertex_count());
-                                let tri_count = fmt_count(piece_triangles);
-                                tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
-
-                                if row.is_folded && row.child_count > 0 {
-                                    ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
-                                }
+                                        if row.is_folded && row.child_count > 0 {
+                                            ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
+                                        }
+                                    });
+                                });
                             });
-                        });
                     })
                     .response;
 
@@ -5532,11 +5553,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                     ed.scene.pieces[i].name = new_name;
                 }
 
-                if frame_resp.interact(egui::Sense::click()).clicked()
-                    && pick.is_none()
-                    && select.is_none()
-                    && range_select.is_none()
-                {
+                if frame_resp.clicked() && pick.is_none() && select.is_none() && range_select.is_none() {
                     if shift {
                         range_select = Some((i, command));
                     } else if command {
@@ -8038,6 +8055,117 @@ mod tests {
             });
             out.textures_delta.clear();
         }
+    }
+
+    /// Lay the UI out with accessibility on and return the screen rects of
+    /// the widgets whose accessible label is `label`, in drawing order.
+    fn widgets_labelled(ed: &mut Editor, ctx: &egui::Context, label: &str) -> Vec<egui::Rect> {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        ctx.enable_accesskit();
+        // Panels size themselves over the first frames: measure once the
+        // layout has settled.
+        let mut out = egui::FullOutput::default();
+        for _ in 0..6 {
+            out = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+        }
+        let update = out.platform_output.accesskit_update.expect("accessibility tree");
+        update
+            .nodes
+            .iter()
+            .filter(|(_, n)| n.label() == Some(label))
+            .filter_map(|(_, n)| n.bounds())
+            .map(|b| {
+                egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))
+            })
+            .collect()
+    }
+
+    /// Press and release at `at` with `modifiers`, `clicks` times in quick
+    /// succession (2 for a double-click).
+    fn click_with(ed: &mut Editor, ctx: &egui::Context, at: egui::Pos2, modifiers: egui::Modifiers, clicks: u32) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers };
+        // Press and release in the same frame, as a real mouse click
+        // usually arrives from the window (a test that spread them over two
+        // frames didn't see the row taking the eye's clicks).
+        let mut frames = vec![vec![egui::Event::PointerMoved(at)]];
+        for _ in 0..clicks {
+            frames.push(vec![button(true), button(false)]);
+        }
+        frames.push(vec![]);
+        let start = ctx.input(|i| i.time) + 1.0;
+        for (k, events) in frames.into_iter().enumerate() {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(start + k as f64 * 0.05),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn piece_rows_take_left_clicks_on_their_own_buttons() {
+        // The whole row senses clicks too (select, right-click menu). It
+        // used to be registered on top of the row's widgets and swallowed
+        // their left clicks: the eye did nothing, nor did double-click to
+        // rename or Alt+click to isolate.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.duplicate_active(false);
+        ed.scene.set_active(0);
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let eyes = widgets_labelled(&mut ed, &ctx, plain::PIECE_HIDE);
+        assert!(eyes.len() >= 2, "an eye button per piece: {eyes:?}");
+        let n = ed.scene.pieces.len();
+
+        // Click the eye of a piece that isn't the active one: it hides and
+        // shows, and the active piece stays as it was (the row used to take
+        // the click and select the piece instead).
+        click_with(&mut ed, &ctx, eyes[1].center(), egui::Modifiers::NONE, 1);
+        assert!(!ed.scene.pieces[1].visible, "the eye hides the piece");
+        assert!(ed.scene.pieces[0].visible);
+        assert_eq!(ed.scene.active_index(), 0, "the eye doesn't select the piece");
+        click_with(&mut ed, &ctx, eyes[1].center(), egui::Modifiers::NONE, 1);
+        assert!(ed.scene.pieces[1].visible, "and shows it again");
+        // The active piece's eye works too.
+        click_with(&mut ed, &ctx, eyes[0].center(), egui::Modifiers::NONE, 1);
+        assert!(!ed.scene.pieces[0].visible);
+        click_with(&mut ed, &ctx, eyes[0].center(), egui::Modifiers::NONE, 1);
+        assert!(ed.scene.pieces[0].visible);
+
+        // Alt+click the second piece's eye: only it stays shown. (Alt also
+        // reaches the app through its own key state, as from the window.)
+        ed.modifiers.alt = true;
+        click_with(&mut ed, &ctx, eyes[1].center(), egui::Modifiers::ALT, 1);
+        ed.modifiers.alt = false;
+        let shown: Vec<bool> = ed.scene.pieces.iter().map(|p| p.visible).collect();
+        assert_eq!(shown.iter().filter(|&&v| v).count(), 1, "Alt+click isolates: {shown:?}");
+        assert!(shown[1]);
+        for p in &mut ed.scene.pieces {
+            p.visible = true;
+        }
+
+        // Click the second piece's name: it becomes the active piece.
+        let name = ed.scene.pieces[1].name.clone();
+        let names = widgets_labelled(&mut ed, &ctx, &name);
+        let at = names.first().expect("the name button").center();
+        click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 1);
+        assert_eq!(ed.scene.active_index(), 1, "clicking the name selects the piece");
+        // Double-click it: rename starts.
+        click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 2);
+        let id = ed.scene.pieces[1].id;
+        assert_eq!(ed.documents[ed.active_document].renaming_piece, Some(id), "double-click renames");
+        assert_eq!(ed.scene.pieces.len(), n);
     }
 
     #[test]
