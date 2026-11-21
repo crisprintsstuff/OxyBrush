@@ -1060,6 +1060,9 @@ pub struct Editor {
     pub window_maximized: bool,
     /// What the title bar asked the window to do this frame, for the app.
     pub window_request: Option<crate::title_bar::WindowRequest>,
+    /// The menus are in the macOS menu bar, so the window has no menu row
+    /// (RFC 0028). Set by the app when it installs them.
+    pub native_menu_bar: bool,
     /// The material a new tab starts with (Preferences > General).
     pub new_tab_material: crate::settings::NewTabMaterial,
     /// For a chosen new-tab material: the built-in one, and a custom matcap
@@ -1183,6 +1186,10 @@ pub struct Editor {
     pub parts_dir: Option<std::path::PathBuf>,
     /// Show the pull-out Recipe Box drawer beside the brush shelf.
     pub show_parts_bin: bool,
+    /// The Shading window: ambient occlusion, cavity, hard edges and the
+    /// inactive pieces look, for the macOS menu bar, which can't hold
+    /// sliders (RFC 0028).
+    pub show_shading: bool,
     /// Whether the Recipe Box drawer is currently slid open.
     pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
@@ -1456,6 +1463,7 @@ impl Default for Editor {
             own_title_bar: false,
             window_maximized: false,
             window_request: None,
+            native_menu_bar: false,
             new_tab_material: crate::settings::NewTabMaterial::Current,
             new_tab_matcap: MatcapPreset::Terracotta,
             new_tab_custom_matcap: String::new(),
@@ -1515,6 +1523,7 @@ impl Default for Editor {
             parts_library: crate::parts::PartsLibrary::default(),
             parts_dir: None,
             show_parts_bin: true,
+            show_shading: false,
             parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,

@@ -237,7 +237,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `Ctrl+,` | Preferences window (General, Pen & tablet, Interface, Plugins, Keymap, AI agent, Updates) |
 | `F1` / `F2` | Full shortcut list / built-in guide |
 
-These are the OxyBrush preset. **Preferences > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit or Right-drag orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt.
+These are the OxyBrush preset. **Preferences > Keymap** can change any of them, including the numpad view keys, and can switch the mouse to the MMB orbit or Right-drag orbit preset. On macOS, **Cmd** works wherever Ctrl is listed and **Option** is Alt. On macOS the menus are in the menu bar at the top of the screen, and **Settings…** and **Quit** are under **OxyBrush**.
 
 ## Roadmap
 
