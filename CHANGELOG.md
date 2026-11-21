@@ -4,7 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.21.3] - 2026-11-21
+
 ### Added
+
+- **Blender bridge extension ZIP.** Install the OBJ bridge from the release downloads. The extension manifest now passes Blender validation ([#396](https://github.com/crisprintsstuff/OxyBrush/pull/396)).
 
 - **New tabs keep your material.** A new tab now starts with the material (matcap) of the tab you were in, instead of the default one. **Preferences > General > New tabs start with** can also choose the default material, or a material you pick there (built in or one you loaded).
 - **Placed recipes can be moved, kept in step and saved back** ([RFC 0026](docs/rfcs/0026-parts-bin.md), phase 3). In a placed recipe's group menu in the Strokes window:
@@ -1007,7 +1011,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.17...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.3...HEAD
+[4.0.0-beta.21.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.3
 [4.0.0-beta.17]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.16...v4.0.0-beta.17
 [3.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...v3.0.0-beta
 [2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
