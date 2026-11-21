@@ -393,11 +393,11 @@ pub struct SavedStrokes {
     pub groups: Vec<SavedStrokeGroup>,
     /// Oldest first.
     pub strokes: Vec<SavedStroke>,
-    /// Placed parts from the Parts Bin (RFC 0026).
+    /// Placed parts from the Recipe Box (RFC 0026).
     pub parts: Vec<SavedPlacedPart>,
 }
 
-/// A placed part on this piece (RFC 0026: Parts Bin).
+/// A placed part on this piece (RFC 0026: Recipe Box).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SavedPlacedPart {
     pub id: u64,

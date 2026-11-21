@@ -1158,13 +1158,13 @@ pub struct Editor {
     pub request_export_preset: Option<oxy_sculpt::BrushPreset>,
     /// Set by the UI: import a preset file.
     pub request_import_preset: bool,
-    /// The user's Parts Bin library (RFC 0026).
+    /// The user's Recipe Box library (RFC 0026).
     pub parts_library: crate::parts::PartsLibrary,
     /// Where parts are saved; None in automated runs and tests.
     pub parts_dir: Option<std::path::PathBuf>,
-    /// Show the pull-out Parts Bin drawer beside the brush shelf.
+    /// Show the pull-out Recipe Box drawer beside the brush shelf.
     pub show_parts_bin: bool,
-    /// Whether the Parts Bin drawer is currently slid open.
+    /// Whether the Recipe Box drawer is currently slid open.
     pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
     #[allow(dead_code)]

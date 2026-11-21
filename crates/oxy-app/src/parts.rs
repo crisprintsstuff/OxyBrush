@@ -1,4 +1,4 @@
-//! Parts Bin library manager (RFC 0026: Parts Bin).
+//! Recipe Box library manager (RFC 0026: Recipe Box).
 //!
 //! Stores `.oxydetail` files and their thumbnail PNGs in the user's data folder
 //! (`…/oxybrush/parts` or `%LOCALAPPDATA%\OxyBrush\parts`).
@@ -75,7 +75,7 @@ pub fn content_hash(data: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
-/// An entry in the user's Parts Bin.
+/// An entry in the user's Recipe Box.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PartEntry {
     pub name: String,

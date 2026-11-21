@@ -1,6 +1,6 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: Partial — phases 1–5 implemented (recipes, Edit settings, Edit path in #377, and Parts Bin details / `.oxydetail` library in #379). Remaining: phase 6 (geodesic surface-walk mapping and optional Replay later strokes).
+Status: Partial — phases 1–5 implemented (recipes, Edit settings, Edit path in #377, and Recipe Box details / `.oxydetail` library in #379). Remaining: phase 6 (geodesic surface-walk mapping and optional Replay later strokes).
 
 ## Summary
 
@@ -46,8 +46,8 @@ other sculpting apps don't offer.
 
 ### Details
 
-- **Save as part…** on selected strokes or a group asks for a name and
-  adds it to the shared Parts Bin library, shown as a strip with
+- **Save as recipe…** on selected strokes or a group asks for a name and
+  adds it to the shared Recipe Box library, shown as a strip with
   thumbnails. The Strokes window lists the placed strokes as a group;
   there is no separate Details list.
 - **Place:** drag a part onto the model and choose one copy or a
@@ -191,13 +191,13 @@ bundled starter details, if any, are made for OxyBrush (CC0).
 3. **Edit path:** ✅ the path as a curve (#377).
 4. **Details in a project:** ✅ Save as part, place with move, turn and
    scale, mirror (#379).
-5. **Detail files:** ✅ export, import, the Parts Bin library across projects (#379).
+5. **Detail files:** ✅ export, import, the Recipe Box library across projects (#379).
 6. **Later:** geodesic mapping for details that wrap; Replay later
    strokes.
 
 ## Decisions
 
-The maintainer chose these on 2026-11-16, with the Parts Bin amendments
+The maintainer chose these on 2026-11-16, with the Recipe Box amendments
 confirmed on 2026-11-18:
 
 - **Later strokes when one is edited** keep their stored change (the
@@ -205,7 +205,7 @@ confirmed on 2026-11-18:
   rather than always being replayed.
 - **Recipes** are recorded whenever Living strokes is on (they're small),
   without a separate option.
-- **Details live** in one shared library shown as the Parts Bin strip,
+- **Details live** in one shared library shown as the Recipe Box strip,
   with Export/Import, not a separate Strokes window list.
 - **Symmetric strokes in a detail:** a detail keeps one side only. At
   drop, the user chooses one copy or a mirrored pair; Mirror X/Y/Z
@@ -222,6 +222,6 @@ confirmed on 2026-11-18:
   recipes; a separate RFC).
 - A shared online library of details.
 
-[RFC 0026](0026-parts-bin.md) specifies the Parts Bin for phases
+[RFC 0026](0026-parts-bin.md) specifies the Recipe Box for phases
 4 and 5, including the confirmed amendments above and the remaining open
 design questions.

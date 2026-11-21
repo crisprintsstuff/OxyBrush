@@ -1,10 +1,23 @@
-# RFC 0026: Parts Bin
+# RFC 0026: Recipe Box
 
-Status: Partial — phases 1–2 and the `PART` project section implemented in #379 (`.oxydetail` format, save/place, viewport Parts Bin strip, category filter, drag-and-drop placement dialog with symmetry plane handling, delete). Remaining: phase 3 (post-drop Move on surface, linked Edit/Move across mirrored pairs, Unlink, Save back / Save as new), phase 4 (rename, reorder, variations popup), and phase 5 (geodesic walk from RFC 0025 phase 6).
+Status: Partial — phases 1–2 and the `PART` project section implemented in #379 (`.oxydetail` format, save/place, viewport Recipe Box strip, category filter, drag-and-drop placement dialog with symmetry plane handling, delete). Remaining: phase 3 (post-drop Move on surface, linked Edit/Move across mirrored pairs, Unlink, Save back / Save as new), phase 4 (rename, reorder, variations popup), and phase 5 (geodesic walk from RFC 0025 phase 6).
+
+## Naming
+
+The feature was drafted as the *Parts Bin*, and the things in it as
+*parts*. The maintainer renamed them (2026-11-21): in the interface a
+saved, reusable set of strokes is a **recipe**, and the library is the
+**Recipe Box** (**Save as recipe…**, **Save back to Recipe Box**, **Save
+as new recipe**). This RFC keeps using *part* for that thing, because
+*recipe* below already means one stroke's recorded inputs
+(`StrokeRecipe`, RFC 0025): a part, as the interface calls it a recipe,
+is a set of stroke recipes. Code names, the `.oxydetail` file, the
+`PART` project section and the library folder on disk keep their names,
+so existing projects and libraries still open.
 
 ## Summary
 
-A **Parts Bin**: a library of saved details (a set of eyes, an ear, an
+A **Recipe Box**: a library of saved details (a set of eyes, an ear, an
 arm) that you drag from a strip along the bottom of the viewport onto a
 model. On drop you choose a mirrored pair or a single copy. The part is
 sculpted again at that spot from its stroke recipes, and it stays fully
@@ -29,7 +42,7 @@ give you is a library you keep across projects and a way to drop a part
 onto the surface in the view, then keep working on it as strokes.
 
 The owner's sketch shows that library as a horizontal strip titled
-**Parts Bin**, between the brush list and the settings panel, with
+**Recipe Box**, between the brush list and the settings panel, with
 square thumbnail slots, a slot that opens to the part or its variations,
 and an arrow at the right that pages to more slots.
 
@@ -61,8 +74,8 @@ The following four amendments to RFC 0025 were confirmed by the owner on
 2026-11-18 and are recorded in Decisions below.
 
 1. **Where the library is shown.** One shared library is shown as the
-   Parts Bin strip, not a separate Details list. The Strokes window keeps
-   **Save as part…** and lists the placed strokes as a group.
+   Recipe Box strip, not a separate Details list. The Strokes window keeps
+   **Save as recipe…** and lists the placed strokes as a group.
 2. **Who chooses the mirror.** The file stores one side. The drop asks
    **Place one** or **Mirror pair**; the piece's Mirror toggles only
    supply the default axis.
@@ -77,7 +90,7 @@ The following four amendments to RFC 0025 were confirmed by the owner on
 
 ## What you see
 
-The Parts Bin sits as a **pull-out sliding drawer** anchored to the same edge as
+The Recipe Box sits as a **pull-out sliding drawer** anchored to the same edge as
 the brush shelf (`ShelfPosition::Left`, `Right`, or `Bottom`), keeping the
 viewport uncluttered until pulled open:
 
@@ -85,7 +98,7 @@ viewport uncluttered until pulled open:
   brush shelf (centered vertically for Left/Right shelves, or horizontally at
   the bottom edge above the quick bar when the shelf is docked at the bottom).
   Clicking or dragging the handle slides the drawer in and out; saving a new
-  part automatically slides the drawer open to show it. **View > Parts Bin**
+  part automatically slides the drawer open to show it. **View > Recipe Box**
   and hiding the panels hide both handle and drawer. The Touch layout uses the
   same drawer. No new shortcut, so the shortcut list is unchanged until one is
   added.
@@ -102,7 +115,7 @@ that starts on a slot or a variation is a placement. A drag that ends
 on another slot does not reorder; reorder is in the panel, so it is not
 confused with a drop.
 
-**Save as part…** is on the selection in the Strokes window. It asks
+**Save as recipe…** is on the selection in the Strokes window. It asks
 for a name and a category, writes the `.oxydetail` into the library,
 and makes the thumbnail. Strokes that cannot be a part are left out,
 with the reason, in the wording under "What cannot be a part".
@@ -115,7 +128,7 @@ could not edit would not be a part.
 The drop adds a stroke group on the piece that was hit, named after the
 part. Every stroke in the group keeps a `StrokeRecipe`, saved in `STRI`
 with any other recipe. Living strokes has to be on. With it off, the
-strip and **Save as part…** say: "Living strokes is off. Turn it on in
+strip and **Save as recipe…** say: "Living strokes is off. Turn it on in
 Preferences > General to save or place a part."
 
 ### In the Strokes window
@@ -205,17 +218,17 @@ command to link them again is not in these phases.
 An edit, a move, a fade or a delete changes the piece. The library
 file is written only when you ask:
 
-- **Save back to bin** asks "Replace *name* in the Parts Bin with this
+- **Save back to Recipe Box** asks "Replace *name* in the Recipe Box with this
   version?" and then replaces that `.oxydetail` with one side's current
   recipes, in anchor-relative form, and regenerates the thumbnail.
-- **Save as new part** asks for a name and adds a new file.
+- **Save as new recipe** asks for a name and adds a new file.
 
 A linked pair saves one side, which is all a part file stores. If the
 library file has been deleted or renamed out of reach, **Save back to
-bin** offers **Save as new part** instead. Closing the project, saving
+bin** offers **Save as new recipe** instead. Closing the project, saving
 the `.oxb`, or editing the part does not write the library.
 
-For a pair, **Save back to bin** uses the source side's current recipes,
+For a pair, **Save back to Recipe Box** uses the source side's current recipes,
 even if the last edit was made on the mirror side or the pair was
 unlinked. It keeps the original bin entry's handedness, not whichever
 side happens to be positive. If the entire source side was deleted, the
@@ -278,10 +291,10 @@ rebuilding the mesh, booleans, and the other topology changes in RFC
 
 The drop itself must not bake the strokes it just added. A drop while
 dynamic detail is on is refused, as decided below. Placed part strokes
-use a separate Parts memory pool, with a user-adjustable limit, rather
+use a separate Recipe memory pool, with a user-adjustable limit, rather
 than the ordinary living-strokes budget. If a placement would exceed
-the Parts memory limit, the drop is refused without changing the mesh.
-The status line says: "Parts memory limit reached. Raise the limit in
+the Recipe memory limit, the drop is refused without changing the mesh.
+The status line says: "Recipe memory limit reached. Raise the limit in
 Preferences or remove placed parts to free space."
 
 ## How it works
@@ -298,7 +311,7 @@ replay does not depend on how fast the machine is.
 
 The byte layout of `.oxydetail` is the one phase 5 of RFC 0025 fixes
 when it is implemented: a versioned header, the recipes, and the alpha
-images. Parts Bin adds no required field. Order, category and a
+images. Recipe Box adds no required field. Order, category and a
 content hash live in the library index, not in the detail, so a shared
 file stays a detail. An optional skippable thumbnail chunk can be
 added later; readers skip chunks they do not know, as `.oxb` readers
@@ -324,7 +337,7 @@ same app folder name the presets use (`OxyBrush` on Windows,
 | Linux | `$XDG_DATA_HOME/oxybrush/parts`, or `~/.local/share/oxybrush/parts` |
 | macOS | `~/Library/Application Support/oxybrush/parts` |
 
-Settings stay in the config directory (`settings.txt`). The Parts Bin
+Settings stay in the config directory (`settings.txt`). The Recipe Box
 uses the app's data directory, beside brush presets, as decided below.
 
 Nothing in the folder is fetched or uploaded. The updater and the
@@ -614,7 +627,7 @@ and the link flag clear. A pair is two records, each naming the other,
 both linked, with the same axis; exactly the placement made from the bin
 has the source-side flag. Unlink does not change these roles. If an
 entire side is deleted, the survivor retains its role even though its
-partner is gone. **Save back to bin** finds the library file by the SHA-256
+partner is gone. **Save back to Recipe Box** finds the library file by the SHA-256
 (`hash.` in `library.txt`). The file name is a hint; the hash wins
 after a rename. The hash identifies a local file. It is not a security
 check. `library.txt` is not copied into the `.oxb`.
@@ -628,7 +641,7 @@ overwrite the source project, and it does not upload anything.
 
 **Rename** changes the display name and the file name together (the
 detail, the PNG and the `library.txt` keys). **Delete** asks "Delete
-*name* from the Parts Bin? Parts already placed on a model stay there."
+*name* from the Recipe Box? Parts already placed on a model stay there."
 and removes the detail and the PNG. **Reorder** is a drag inside the
 open slot's variation row; `order` in `library.txt` is rewritten.
 **Category** is a short label on the part (Eyes, Ears, Arms). Empty
@@ -650,7 +663,7 @@ file with no PNG renders the part once onto a neutral sphere, in an
 offscreen pass, so the slot is not blank; if that replay misses the
 sphere, the pass uses a plane. A missing or failed image shows the
 part's name in the slot. The thumbnail is regenerated on **Save back
-to bin** and **Save as new part**, and is never required to place the
+to bin** and **Save as new recipe**, and is never required to place the
 part.
 
 The PNG is a cache. It is not a test oracle: a software renderer and a
@@ -722,7 +735,7 @@ not a second implementation beside them.
 2. **The strip.** The data-folder library, thumbnails, slots, paging,
    category filter, drag onto the mesh, the Place one / Mirror pair
    choice, the on-plane rule, and the curvature, size, mask, dynamic
-   detail, subdivision and Parts memory-limit messages. Import and
+   detail, subdivision and Recipe memory-limit messages. Import and
    export of `.oxydetail`. Tests: the library name cannot leave the folder;
    atomic replace leaves no `.tmp` behind; a drop records one undo
    step and a cancel records none; a mirrored drop has recipes on
@@ -730,9 +743,9 @@ not a second implementation beside them.
    leaves the mesh unchanged; One centered copy puts the footprint
    midpoint on the plane; Mirror, halves match meets on the plane; a
    drop while dynamic detail is on does not change the mesh and shows
-   its reason; a drop that would exceed the Parts memory limit does
+   its reason; a drop that would exceed the Recipe memory limit does
    not change the mesh, bake ordinary strokes, or use more than the
-   cap, and explains how to raise the limit or free Parts memory. The
+   cap, and explains how to raise the limit or free Recipe memory. The
    subdivision recommendation tests cover scaled brush radii, a
    suitable existing level, no suitable level and an unmeasurable
    level; neither the estimate nor the drop silently switches or adds
@@ -745,7 +758,7 @@ not a second implementation beside them.
    other side in the same undo step. Fading or deleting one stroke
    does not. Unlink lets the user disable linked edits and keeps both
    recipes.
-   **Save back to bin** and **Save
+   **Save back to Recipe Box** and **Save
    as new part** write only when asked, and an Edit… test asserts the
    library file is byte-for-byte unchanged. A later non-part stroke
    survives a move as stored. Edit path needs no extra work in this
@@ -782,9 +795,9 @@ Headless, beside the checks above:
   skipped; `.oxydetail` round-trip once its layout is fixed in the
   RFC 0025 phase 5 work.
 - `oxy-app`: the editor tests named in the phases, including refusal
-  when a part would exceed the Parts memory limit, no mesh change on
+  when a part would exceed the Recipe memory limit, no mesh change on
   refusal, and the message explaining how to raise the limit or free
-  Parts memory.
+  Recipe memory.
 - The thumbnail has no golden image. When the strip exists, a
   headless screenshot (`--screenshot`) is taken of a bin with one
   part, for a person to look at. A unit test asserts that a part
@@ -808,7 +821,7 @@ GPU dependency.
   the geodesic walk is the real fix. Shipping the warning without the
   walk is a known limit.
 - People will expect the bin to update when they edit the placed
-  part. The confirm on **Save back to bin** is there so it never
+  part. The confirm on **Save back to Recipe Box** is there so it never
   happens quietly. The risk is that the command is hard to find.
 - Resolution recommendations are estimates, not a way to recover fine
   detail on a coarse target. Switching levels also bakes living strokes;
@@ -870,7 +883,7 @@ GPU dependency.
 
 The owner decided these on 2026-11-18.
 
-- **One library.** Show it as the Parts Bin strip, not a separate
+- **One library.** Show it as the Recipe Box strip, not a separate
   Details section in the Strokes window.
 - **Mirror choice on drop.** Keep one side in the file; ask whether to
   place one or a mirrored pair. Mirror X/Y/Z supplies the default axis.
@@ -902,8 +915,8 @@ The owner decided these on 2026-11-18.
   footprint is narrower than that), the drop asks **One centered
   copy** or **Mirror, halves match**. The answer is not remembered.
   Esc or **Cancel** cancels the drop and records nothing.
-- **One Parts Bin library.** There is one library, shown as the Parts
-  Bin strip, with **Save as part…** and placed groups in the Strokes
+- **One Recipe Box library.** There is one library, shown as the Parts
+  Bin strip, with **Save as recipe…** and placed groups in the Strokes
   window; there is no separate Details section.
 - **Choose placement at the drop.** The drop asks **Place one** or
   **Mirror pair**. The piece's Mirror X/Y/Z setting selects the default
@@ -914,15 +927,15 @@ The owner decided these on 2026-11-18.
   on both linked sides. Ordinary Mirror copies remain unchanged.
 - **Default twist uses a stable world axis.** The initial twist
   direction is derived from a fixed world axis, not the camera.
-- **Both save commands are available.** **Save back to bin** replaces
-  the part only after confirmation, and **Save as new part** creates a
+- **Both save commands are available.** **Save back to Recipe Box** replaces
+  the part only after confirmation, and **Save as new recipe** creates a
   separate library entry.
 - **Keep the positive side for new parts.** When saving new parts from
   originally symmetric strokes, keep samples on the positive side of
   the mirror axis; if several axes were on, positive X is kept. Strokes
   with radial symmetry are refused. This does not change the source-side
   rule for saving a placed pair back.
-- **Store parts in the data directory.** The Parts Bin folder sits
+- **Store parts in the data directory.** The Recipe Box folder sits
   beside brush presets under the app's data directory.
 - **Same-category parts are variations.** Opening a part shows the
   other parts in its category as variations.
@@ -932,7 +945,7 @@ The owner decided these on 2026-11-18.
   linked, so edits propagate in either direction. The user can choose
   **Unlink** to disable propagation; undo restores the linked state.
 - **Parts have a separate memory limit.** Placed part strokes use a
-  dedicated Parts memory pool, separate from the ordinary
+  dedicated Recipe memory pool, separate from the ordinary
   living-strokes budget. Its limit is user-adjustable. When a new
   placement would exceed it, refuse the placement without changing
   the mesh and explain that the user can raise the limit in

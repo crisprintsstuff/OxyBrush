@@ -193,12 +193,12 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         ed.living_split_selected(axis);
                     }
                     if ui
-                        .button("Save as part…")
-                        .on_hover_text("Save the selected strokes as a reusable part in the Parts Bin (RFC 0026).")
+                        .button("Save as recipe…")
+                        .on_hover_text("Save the selected strokes as a reusable recipe in the Recipe Box.")
                         .clicked()
                     {
                         let ids: Vec<u64> = ed.living.selected.iter().copied().collect();
-                        let name = format!("Part {}", ed.parts_library.entries.len() + 1);
+                        let name = format!("Recipe {}", ed.parts_library.entries.len() + 1);
                         let _ = ed.save_part_from_strokes(&name, "Details", &ids);
                     }
                     egui::ComboBox::from_id_salt("living_side_axis")
@@ -451,8 +451,8 @@ pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
                     ui.close();
                 }
                 if ui
-                    .button("Save as part…")
-                    .on_hover_text("Save this group's strokes as a reusable part in the Parts Bin.")
+                    .button("Save as recipe…")
+                    .on_hover_text("Save this group's strokes as a reusable recipe in the Recipe Box.")
                     .clicked()
                 {
                     let ids: Vec<u64> = ed

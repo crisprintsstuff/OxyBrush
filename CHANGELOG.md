@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **The Parts Bin is now the Recipe Box**, and the strokes you save in it are **recipes**: **Save as recipe…** in the Strokes window, the Recipe Box drawer beside the brush shelf, and View > Recipe Box. The box now says what it's for, a library of reusable sculpted details to drag onto any model, instead of counting strokes. Only the names and wording changed: saved libraries and projects with placed recipes open as before.
+
 ### Fixed
 
 - **Left clicks in the Pieces list work again.** Clicking a piece's eye selected the piece instead of hiding it, and double-click to rename and Alt+click to isolate did nothing: the whole row's click area sat on top of its own buttons. The row now takes only the clicks that miss them, so it still selects the piece, and right-click still opens its menu.
