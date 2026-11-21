@@ -1,6 +1,6 @@
 # RFC 0010: Blender bridge
 
-- **Status:** OBJ bridge and Blender add-on implemented; tab-aware since RFC 0027. The release workflow packages the extension ZIP. The interactive OBJ round trip was verified on Linux. Extension-directory publication and optional glTF exchange are pending.
+- **Status:** OBJ bridge and Blender add-on implemented; tab-aware since RFC 0027. The release workflow packages the extension ZIP. The bridge converts Blender’s Z-up coordinates and hands new sends to the running OxyBrush window. The interactive OBJ round trip was verified on Linux. Extension-directory publication and optional glTF exchange are pending.
 - **Requested by:** testers, who want to send a model from Blender to OxyBrush,
   sculpt it, and get it back without exporting and importing by hand.
 
@@ -38,20 +38,22 @@ that link instead of adding a new channel:
    temporary name and renamed. It writes a manifest
    `bridge.oxylink.json` naming the app (`"app": "Blender"`), each object's
    name, OBJ path and world transform, and where OxyBrush should write
-   results. It then starts OxyBrush with that manifest
-   (`oxybrush --link <manifest>`), or, if OxyBrush is already running with
-   that link open, rewrites the OBJs and OxyBrush offers to reload them.
-2. **OxyBrush** opens the manifest like a document: one piece per object,
-   named after it, placed by its world transform so the pieces sit as they
-   did in Blender. The vertex order of each OBJ is kept (the `VMAP`
-   section added for OxyCharacter does this already). The badge reads
-   **Linked to Blender**.
-3. **Send back (OxyBrush):** each piece whose name matches an object is
-   exported, back in its object's space, to the result path the manifest
-   gives, atomically (temporary file and rename), in the original vertex
-   order when the topology is unchanged. Pieces added in OxyBrush are
-   written too and listed in a small `returned.json`, so Blender can add
-   them as new objects.
+   results. It launches `oxybrush --link <manifest>`. The launcher
+   hands off to the receiver in the same OxyBrush profile, or starts a
+   window if no receiver is running.
+2. **OxyBrush** opens one piece per object and keeps the OBJ vertex order.
+   It applies each object's Blender world transform, then rotates
+   `(x, y, z)` to `(x, z, -y)` for OxyBrush. The badge reads
+   **Linked to Blender**. A send uses an untouched active tab immediately.
+   An occupied tab offers **Open in this tab** or **Open in new tab**,
+   with a save option for unsaved changes. A manifest already open in
+   another tab focuses that tab.
+3. **Send back (OxyBrush):** coordinates rotate back to Blender's
+   world axes. Linked objects also apply the inverse of their original
+   object-to-world matrix, so Blender receives object-space positions in
+   the original vertex order when topology is unchanged. New pieces are
+   returned in Blender world space. OBJ and `returned.json` files are
+   written atomically.
 4. **Blender** watches the result folder with a timer (a second or so) and
    applies what arrived: same vertex count → update positions in place;
    otherwise replace the mesh data and report it. Each update is one
@@ -60,6 +62,11 @@ that link instead of adding a new channel:
 OxyBrush never reads anything from Blender but the manifest and the OBJs it
 names, never writes outside the result paths the manifest gives (which must
 be inside the manifest's folder), and never deletes Blender's files.
+
+The per-profile bridge inbox stores manifest paths in atomically written
+request files. The first regular window to acquire the OS file lock handles
+requests. Automated demo and screenshot runs leave the inbox alone. The
+handoff uses the local filesystem and keeps the manifest format unchanged.
 
 ### Why not MCP
 
@@ -98,8 +105,8 @@ source under GPL-compatible terms. So:
 - `--link <manifest>`: open the OBJs as pieces, with transforms and names.
 - Send back for linked OBJ pieces: per-piece export in object space, in
   the original vertex order, atomic writes, `returned.json`.
-- Reload when the linked OBJs change while open (asks first if there are
-  unsaved edits).
+- A fresh send opens a new link. Reloading edited source OBJs in an
+  existing link remains a follow-up.
 - Tests: a manifest round trip in `oxy-io`/`oxy-app` (names, transforms,
   vertex order kept, new pieces listed, writes refused outside the folder).
 

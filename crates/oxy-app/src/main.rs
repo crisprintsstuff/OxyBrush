@@ -102,6 +102,7 @@ fn detect_linux_tablet() -> Option<String> {
 
 fn main() {
     let mut files: Vec<PathBuf> = Vec::new();
+    let mut link_launch = false;
     let mut auto = app::AutoRun::default();
     #[cfg(target_os = "linux")]
     let mut backend_choice = BackendChoice::Auto;
@@ -114,7 +115,7 @@ fn main() {
             }
             "--help" | "-h" => {
                 println!(
-                    "Usage: oxybrush [PROJECT.oxb|MESH.obj|MESH.stl]... [--layout standard|compact|touch] [--backend x11|wayland] [--x11] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo] [--open-keymap [mmb|right-drag|pen]] [--link MANIFEST]\n\nPROJECT.oxb opens the project (a .oxylink.json next to it marks a document from OxyCharacter, which File > Send back to OxyCharacter returns to); a mesh file is imported\n--backend selects windowing backend on Linux (x11 or wayland)\n--x11 shortcut for --backend x11 (recommended for drawing tablets / pens under Wayland)\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)\n--open-keymap opens Settings > Keymap (add mmb for the middle-mouse preset)\n--link opens objects another app sent (an *.oxylink.json link manifest, e.g. from the Blender add-on)"
+                    "Usage: oxybrush [PROJECT.oxb|MESH.obj|MESH.stl]... [--layout standard|compact|touch] [--backend x11|wayland] [--x11] [--set KEY=VALUE]... [--screenshot OUT.png] [--demo] [--open-keymap [mmb|right-drag|pen]] [--link MANIFEST]\n\nPROJECT.oxb opens the project (a .oxylink.json next to it marks a document from OxyCharacter, which File > Send back to OxyCharacter returns to); a mesh file is imported\n--backend selects windowing backend on Linux (x11 or wayland)\n--x11 shortcut for --backend x11 (recommended for drawing tablets / pens under Wayland)\n--set changes a setting for this start, e.g. --set shelf=bottom (keys as in settings.txt)\n--open-keymap opens Settings > Keymap (add mmb for the middle-mouse preset)\n--link opens an *.oxylink.json link manifest in the running OxyBrush window, or starts one"
                 );
                 return;
             }
@@ -142,6 +143,7 @@ fn main() {
             "--demo" => auto.demo = true,
             "--link" => {
                 if let Some(p) = args.next().map(PathBuf::from) {
+                    link_launch = true;
                     files.push(p);
                 }
             }
@@ -192,7 +194,24 @@ fn main() {
         }
     }
 
+    let registration = if auto.screenshot.is_none() && !auto.demo {
+        let outgoing = (link_launch && files.len() == 1 && bridge::is_manifest(&files[0])).then(|| files[0].as_path());
+        bridge::Inbox::register(outgoing)
+    } else {
+        Ok(bridge::Registration::OtherWindow)
+    };
+    if matches!(registration, Ok(bridge::Registration::Forwarded)) {
+        return;
+    }
     let log_path = support::init_logging();
+    let bridge_inbox = match registration {
+        Ok(bridge::Registration::Receiver(inbox)) => Some(inbox),
+        Ok(_) => None,
+        Err(error) => {
+            log::warn!("bridge inbox unavailable: {error}");
+            None
+        }
+    };
     // Finder shows `.oxb` projects with OxyBrush's icon only once macOS has
     // registered the app; not in automated runs.
     #[cfg(target_os = "macos")]
@@ -262,6 +281,7 @@ fn main() {
     }
     let mut app = app::App::new(files, auto, log_path);
     app.set_event_proxy(event_loop.create_proxy());
+    app.bridge_inbox = bridge_inbox;
     if let Err(e) = event_loop.run_app(&mut app) {
         log::error!("event loop failed: {e}");
         std::process::exit(1);

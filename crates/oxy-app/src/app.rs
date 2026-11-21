@@ -93,6 +93,7 @@ pub struct App {
     /// When the preferences last changed without being saved yet.
     settings_changed_at: Option<Instant>,
     proxy: Option<EventLoopProxy<()>>,
+    pub(crate) bridge_inbox: Option<crate::bridge::Inbox>,
     /// Local MCP listener. None unless the user opted in.
     agent: Option<crate::agent::Inbox>,
     /// Screenshot tool waiting for this frame's viewport.
@@ -255,6 +256,7 @@ impl App {
             // Write the file on the first start so the welcome window isn't shown again.
             settings_changed_at: first_start.then(Instant::now),
             proxy: None,
+            bridge_inbox: None,
             agent: None,
             shot_reply: None,
             plugin_process: None,
@@ -1568,6 +1570,22 @@ impl ApplicationHandler for App {
         self.poll_agent();
         self.poll_plugin();
         self.poll_dialog();
+        let accept_bridge = self.gfx.is_some()
+            && !self.dialog_active
+            && self.editor.pending.is_none()
+            && self.editor.save_error.is_none()
+            && self.editor.recoverable.is_empty()
+            && !self.editor.quit_now
+            && !self.editor.is_stroking()
+            && self.editor.job.is_none();
+        if accept_bridge && let Some(path) = self.bridge_inbox.as_mut().and_then(|inbox| inbox.pop(Instant::now())) {
+            self.editor.receive_bridge_link(path);
+            if let Some(g) = &self.gfx {
+                g.window.set_minimized(false);
+                g.window.focus_window();
+                g.window.request_redraw();
+            }
+        }
         if self.shot_reply.is_some()
             && let Some(g) = &self.gfx
         {
@@ -1615,6 +1633,9 @@ impl ApplicationHandler for App {
             } else {
                 wait = wait.min(due - now);
             }
+        }
+        if accept_bridge && let Some(inbox) = &self.bridge_inbox {
+            wait = wait.min(inbox.wait(Instant::now()));
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + wait));
     }
