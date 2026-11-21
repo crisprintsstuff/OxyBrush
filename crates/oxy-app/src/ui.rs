@@ -6847,6 +6847,31 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 }
             });
         });
+    } else if let Some(Pending::OpenLink(path)) = ed.pending.clone() {
+        let dirty = ed.is_modified();
+        egui::Modal::new(egui::Id::unique("bridge_open_tab")).show(&ctx, |ui| {
+            ui.heading("Open incoming bridge link");
+            if dirty {
+                ui.label("The active tab has unsaved changes.");
+                if ui.button("Save and open in this tab").clicked() {
+                    *action = Some(UiAction::SaveThenContinue);
+                }
+            } else {
+                ui.label("Choose where to open the incoming model.");
+            }
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Open in new tab").clicked() {
+                    ed.pending = None;
+                    ed.open_link(&path);
+                }
+                if ui.button(if dirty { "Replace without saving" } else { "Open in this tab" }).clicked() {
+                    ed.perform(Pending::OpenLink(path.clone()));
+                }
+                if ui.button("Cancel").clicked() {
+                    ed.pending = None;
+                }
+            });
+        });
     } else if let Some(pending) = ed.pending.clone() {
         let what = match &pending {
             Pending::Quit => "quitting".to_string(),
@@ -6856,7 +6881,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "tab".into());
                 format!("closing {name}")
             }
-            Pending::OpenProject(_) => "opening another project".to_string(),
+            Pending::OpenProject(_) | Pending::OpenLink(_) => "opening another project".to_string(),
             Pending::Revert => "reverting".to_string(),
         };
         egui::Modal::new(egui::Id::unique("unsaved")).show(&ctx, |ui| {

@@ -13,6 +13,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Blender models arrive upright and open in the running window.** The bridge converts between Blender’s Z-up and OxyBrush’s Y-up coordinates in both directions. A send reuses an untouched active tab. An occupied tab offers to open the model there or in another tab.
+
+
 - **Blender bridge returns work on meshes with shape keys.** Position-only edits move the Basis and keep each key's offset. Sending a new piece back again updates the object that the bridge previously created.
 
 ## [4.0.0-beta.21.4] - 2026-11-21

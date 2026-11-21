@@ -927,6 +927,7 @@ pub enum Pending {
     /// Close a tab by index.
     CloseTab(usize),
     OpenProject(PathBuf),
+    OpenLink(PathBuf),
     /// Reload the project from its file, dropping the changes since it was
     /// saved (File > Revert). Always asked first.
     Revert,
@@ -4338,6 +4339,7 @@ impl Editor {
             Pending::OpenProject(path) => {
                 self.open_project_now(&path);
             }
+            Pending::OpenLink(path) => self.replace_tab_with_bridge_link(&path),
             Pending::Revert => self.revert_now(),
         }
     }

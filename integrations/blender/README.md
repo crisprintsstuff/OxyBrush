@@ -24,8 +24,10 @@ manifest in RFC 0010.
 2. In the add-on's preferences, set the path to the OxyBrush program
    (`oxybrush`, `oxybrush.exe`, or `OxyBrush.app/Contents/MacOS/oxybrush`).
 3. Select mesh objects and choose **Object > Send to OxyBrush** (also in the
-   3D view's sidebar, **OxyBrush** tab). OxyBrush opens them, showing
-   **Linked to Blender**.
+   3D view's sidebar, **OxyBrush** tab). A running OxyBrush window uses an
+   untouched active tab or asks where to open the link if that tab already
+   contains work. If OxyBrush is closed, it starts and opens the link.
+   The badge reads **Linked to Blender**.
 4. In OxyBrush, **File > Send back to Blender** (or click the badge), or
    **Send back to Blender and close**. Blender picks the result up within a
    second: objects with unchanged topology keep their UVs, materials, modifiers,
@@ -34,8 +36,10 @@ manifest in RFC 0010.
    repeated sends update those objects. Each update is one
    Blender undo step.
 
-Objects are sent without modifiers applied, in their own space; OxyBrush
-places them as they were in the scene.
+Objects are sent in object space with modifiers unapplied. OxyBrush
+applies their world transforms and converts Blender's Z-up coordinates to
+OxyBrush's Y-up coordinates. Send Back converts them to Blender's axes
+again, including new pieces made in OxyBrush.
 
 ## Status
 
