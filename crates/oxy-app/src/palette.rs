@@ -530,6 +530,15 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::Revert, "revert reload saved discard changes undo all file", Editor::revert),
         cmd(ed, Cmd::CloseProject, "close project document file", |e| e.request(Pending::Close)),
+        cmd(ed, Cmd::NewTab, "tab new document project open", |e| {
+            e.new_tab("sphere");
+        }),
+        cmd(ed, Cmd::CloseTab, "tab close document project", |e| e.request_close_tab(e.active_document)),
+        cmd(ed, Cmd::NextTab, "tab next switch cycle", Editor::next_tab),
+        cmd(ed, Cmd::PrevTab, "tab previous switch cycle", Editor::prev_tab),
+        cmd(ed, Cmd::ReopenClosedTab, "tab reopen restore closed project", |e| {
+            e.reopen_closed_tab();
+        }),
         cmd(ed, Cmd::Quit, "exit close", |e| e.request(Pending::Quit)),
     ]
 }

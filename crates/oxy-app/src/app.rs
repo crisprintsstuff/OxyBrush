@@ -79,7 +79,7 @@ pub struct App {
     applied_theme: Option<AppliedThemeKey>,
     applied_title: String,
     last_frame: Instant,
-    initial_file: Option<PathBuf>,
+    initial_files: Vec<PathBuf>,
     auto: AutoRun,
     frames: u32,
     /// Where preferences are remembered (None for automated runs).
@@ -140,7 +140,7 @@ struct TouchPoint {
 }
 
 impl App {
-    pub fn new(initial_file: Option<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
+    pub fn new(initial_files: Vec<PathBuf>, auto: AutoRun, log_path: Option<PathBuf>) -> Self {
         let (dialog_tx, dialog_rx) = std::sync::mpsc::channel();
         // Automated runs (CI screenshots) neither read nor write the user's settings.
         let settings_path = if auto.screenshot.is_none() { crate::settings::Settings::default_path() } else { None };
@@ -209,7 +209,7 @@ impl App {
                     first_start,
                     settings.welcome_at_startup,
                     settings_path.is_none(),
-                    initial_file.is_some() || auto.demo,
+                    !initial_files.is_empty() || auto.demo,
                 );
                 if auto.open_keymap.is_some() {
                     e.show_welcome = false;
@@ -231,7 +231,7 @@ impl App {
             applied_theme: None,
             applied_title: String::new(),
             last_frame: Instant::now(),
-            initial_file,
+            initial_files,
             auto,
             frames: 0,
             saved_settings: settings,
@@ -1605,8 +1605,9 @@ impl ApplicationHandler for App {
             event_loop.exit();
             return;
         }
-        if let Some(p) = self.initial_file.take() {
-            self.editor.open(&p);
+        if !self.initial_files.is_empty() {
+            let files = std::mem::take(&mut self.initial_files);
+            self.editor.open_dropped(&files);
         }
         self.sync_agent();
         if let Some(g) = &self.gfx {
@@ -1691,6 +1692,9 @@ impl ApplicationHandler for App {
                 let s = m.state();
                 self.editor.modifiers =
                     Modifiers { shift: s.shift_key(), ctrl: s.control_key() || s.super_key(), alt: s.alt_key() };
+                if self.editor.modifiers.ctrl {
+                    self.editor.tab_held = false;
+                }
                 redraw = true;
             }
             WindowEvent::Focused(focused) => {
@@ -1936,7 +1940,7 @@ pub(crate) fn note_held_key(ed: &mut crate::editor::Editor, key: PhysicalKey, st
     let down = state == ElementState::Pressed;
     match key {
         PhysicalKey::Code(KeyCode::Space) => ed.space_held = down,
-        PhysicalKey::Code(KeyCode::Tab) => ed.tab_held = down,
+        PhysicalKey::Code(KeyCode::Tab) => ed.tab_held = down && !ed.modifiers.ctrl,
         _ => {}
     }
 }
@@ -2232,6 +2236,13 @@ mod tests {
         assert!(ed.tab_held, "other keys leave it alone");
         note_held_key(&mut ed, tab, Released);
         assert!(!ed.tab_held);
+
+        // Ctrl+Tab does not set tab_held (isolated so retopology drag isn't activated)
+        ed.modifiers.ctrl = true;
+        note_held_key(&mut ed, tab, Pressed);
+        assert!(!ed.tab_held, "ctrl+tab does not track tab_held");
+        ed.modifiers.ctrl = false;
+
         note_held_key(&mut ed, PhysicalKey::Code(KeyCode::Space), Pressed);
         assert!(ed.space_held);
         note_held_key(&mut ed, PhysicalKey::Code(KeyCode::Space), Released);
