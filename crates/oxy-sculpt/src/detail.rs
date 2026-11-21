@@ -1,4 +1,4 @@
-//! Portable detail recipes (RFC 0025 Phase 4, RFC 0026: Parts Bin).
+//! Portable detail recipes (RFC 0025 Phase 4, RFC 0026: Recipe Box).
 //!
 //! A part/detail stores stroke recipes relative to an anchor frame (first sample
 //! of the first stroke, its surface normal, and initial tangent). Coordinates

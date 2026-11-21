@@ -1,4 +1,4 @@
-//! Pull-out Parts Bin drawer and placement dialogs (RFC 0026: Parts Bin).
+//! Pull-out Recipe Box drawer and placement dialogs (RFC 0026: Recipe Box).
 
 use crate::editor::Editor;
 use crate::parts::{PartEntry, PlaceChoice};
@@ -28,7 +28,7 @@ fn paint_chevron(p: &egui::Painter, center: Pos2, dir: ChevronDir, size: f32, co
     p.line_segment([pts[1], pts[2]], Stroke::new(1.5, color));
 }
 
-/// State for the "Save as part…" modal dialog.
+/// State for the "Save as recipe…" modal dialog.
 #[allow(dead_code)]
 #[derive(Clone, Debug, Default)]
 pub struct SavePartModal {
@@ -58,7 +58,7 @@ pub(crate) fn last_drawer_rect(ctx: &egui::Context) -> Option<Rect> {
     ctx.data(|d| d.get_temp::<Rect>(Id::unique("parts_bin_drawer_rect")))
 }
 
-/// Pull-out Parts Bin drawer anchored to the edge of the viewport matching the
+/// Pull-out Recipe Box drawer anchored to the edge of the viewport matching the
 /// brush shelf (`ShelfPosition::Left`, `Right`, or `Bottom`).
 pub fn show_parts_bin_drawer(ctx: &egui::Context, ed: &mut Editor, canvas: Rect) {
     if !ed.show_parts_bin || !ed.show_panels || canvas.width() <= 0.0 || canvas.height() <= 0.0 {
@@ -191,7 +191,7 @@ fn draw_handle(ui: &mut egui::Ui, ed: &mut Editor, shelf: ShelfPosition) -> Rect
         p.text(
             Pos2::new(rect.center().x + 6.0, rect.center().y),
             Align2::CENTER_CENTER,
-            "Parts Bin",
+            "Recipe Box",
             egui::FontId::proportional(11.0),
             text_color,
         );
@@ -200,16 +200,16 @@ fn draw_handle(ui: &mut egui::Ui, ed: &mut Editor, shelf: ShelfPosition) -> Rect
         p.text(
             Pos2::new(rect.center().x, rect.center().y + 8.0),
             Align2::CENTER_CENTER,
-            "P\nA\nR\nT\nS",
+            "R\nE\nC\nI\nP\nE\nS",
             egui::FontId::proportional(8.5),
             text_color,
         );
     }
 
     let tip = if ed.parts_bin_open {
-        "Collapse the Parts Bin drawer (click or drag back)"
+        "Collapse the Recipe Box drawer (click or drag back)"
     } else {
-        "Pull out the Parts Bin drawer (click or drag into viewport)"
+        "Pull out the Recipe Box drawer (click or drag into viewport)"
     };
     let resp = resp.on_hover_text(tip);
 
@@ -289,7 +289,9 @@ fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slo
     let categories = ed.parts_library.categories();
 
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Parts Bin").strong().small());
+        ui.label(RichText::new("Recipe Box").strong().small()).on_hover_text(
+            "Reusable sculpted details: drag one onto any model to sculpt it there, then move, edit or mirror it.",
+        );
         egui::ComboBox::from_id_salt("parts_bin_category_filter")
             .selected_text(if ed.parts_library.selected_category.is_empty() {
                 "All"
@@ -323,17 +325,22 @@ fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slo
             let collapse_dir = chevron_for_drawer(ed.shelf, true);
             let col = if btn_resp.hovered() { visuals.strong_text_color() } else { visuals.text_color() };
             paint_chevron(ui.painter(), btn_rect.center(), collapse_dir, 7.0, col);
-            if btn_resp.on_hover_text("Collapse Parts Bin drawer").clicked() {
+            if btn_resp.on_hover_text("Collapse the Recipe Box drawer").clicked() {
                 ed.parts_bin_open = false;
             }
         });
     });
 
+    // What the box is for, so it doesn't read as a list of brush strokes:
+    // a kitbash library of sculpted details.
+    ui.label(RichText::new("Reusable sculpted details: drag onto any model.").weak().small());
     ui.separator();
 
     let entries: Vec<PartEntry> = ed.parts_library.filtered_entries().into_iter().cloned().collect();
     if entries.is_empty() {
-        ui.label(RichText::new("No parts yet. In Strokes, select strokes and choose Save as part.").weak().small());
+        ui.label(
+            RichText::new("Sculpt a detail, then save it with Save as recipe… in the Strokes window.").weak().small(),
+        );
         return;
     }
 
@@ -375,10 +382,9 @@ fn draw_part_slot(ui: &mut egui::Ui, ed: &mut Editor, entry: &PartEntry, slot_si
     );
 
     let resp = resp.on_hover_text(format!(
-        "Part: {}\nCategory: {}\nStrokes: {}\nClick or drag onto model to place",
+        "Recipe: {}\nCategory: {}\nDrag onto a model to sculpt it there",
         entry.name,
         if entry.category.is_empty() { "None" } else { &entry.category },
-        entry.detail.recipes.len()
     ));
 
     if resp.drag_started() || resp.clicked() {
@@ -401,7 +407,7 @@ pub fn show_placement_choice_dialog(ctx: &egui::Context, ed: &mut Editor) {
         return;
     }
 
-    let title = if on_plane { "Mirror plane" } else { "Place part" };
+    let title = if on_plane { "Mirror plane" } else { "Place recipe" };
 
     let mut choice = None;
     let mut cancel = false;

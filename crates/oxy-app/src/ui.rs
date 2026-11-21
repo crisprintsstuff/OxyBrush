@@ -858,8 +858,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::check_km(ui, &ed.keymap, &mut inspector, "Show settings panel", Cmd::SettingsPanel).changed() {
                     ed.toggle_settings_panel();
                 }
-                ui.checkbox(&mut ed.show_parts_bin, "Parts Bin")
-                    .on_hover_text("Show the pull-out Parts Bin drawer beside the brush shelf.");
+                ui.checkbox(&mut ed.show_parts_bin, "Recipe Box")
+                    .on_hover_text("Show the pull-out Recipe Box drawer beside the brush shelf.");
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -9027,7 +9027,7 @@ mod tests {
         let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on left");
         assert!((handle.min.x - canvas.min.x).abs() < 2.0, "handle={handle:?} canvas={canvas:?}");
         click_at(&mut ed, &ctx, handle.center());
-        assert!(ed.parts_bin_open, "clicking handle pulls out Parts Bin drawer");
+        assert!(ed.parts_bin_open, "clicking handle pulls out the Recipe Box drawer");
 
         step(&mut ed, 10, 2.0);
         let drawer = crate::parts_ui::last_drawer_rect(&ctx).expect("drawer rect when open");
@@ -9036,7 +9036,7 @@ mod tests {
         assert!(open_handle.min.x > canvas.min.x + 100.0);
 
         click_at(&mut ed, &ctx, open_handle.center());
-        assert!(!ed.parts_bin_open, "clicking open handle collapses Parts Bin drawer");
+        assert!(!ed.parts_bin_open, "clicking open handle collapses the Recipe Box drawer");
 
         // 2. Shelf Right: settle closed and check right-edge alignment.
         ed.shelf = ShelfPosition::Right;

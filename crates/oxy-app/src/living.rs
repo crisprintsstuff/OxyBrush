@@ -354,12 +354,12 @@ pub struct Living {
     editing: Option<StrokeEdit>,
     /// A re-sculpt waiting on a background job.
     resculpt_wait: Option<ResculptWait>,
-    /// Placed parts on pieces (RFC 0026: Parts Bin).
+    /// Placed parts on pieces (RFC 0026: Recipe Box).
     pub placed_parts: Vec<PlacedPart>,
     pub next_part_id: u64,
 }
 
-/// A placed part on a piece (RFC 0026: Parts Bin).
+/// A placed part on a piece (RFC 0026: Recipe Box).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlacedPart {
     pub id: u64,
@@ -1932,7 +1932,7 @@ impl Editor {
             self.living_open_edit(id)?;
         }
         let Some(recipe) = self.living_edit_recipe().cloned() else {
-            return Err("Stroke has no recipe to edit path".into());
+            return Err("This stroke wasn't recorded, so its path can't be edited".into());
         };
         let raw = crate::editor::stroke_path_points(&recipe);
         if raw.is_empty() {
@@ -2528,12 +2528,14 @@ impl Editor {
     /// Start placing a detail onto the active piece's surface.
     pub fn begin_part_placement(&mut self, detail: oxy_sculpt::PartDetail) -> Result<(), String> {
         if !self.living.enabled {
-            self.status = "Living strokes is off. Turn it on in Preferences > General to save or place a part.".into();
+            self.status =
+                "Living strokes is off. Turn it on in Preferences > General to save or place a recipe.".into();
             return Err(self.status.clone());
         }
         if self.dyntopo {
             self.status =
-                "Dynamic detail is on, which changes the triangles, so this part can't be placed. Turn it off.".into();
+                "Dynamic detail is on, which changes the triangles, so this recipe can't be placed. Turn it off."
+                    .into();
             return Err(self.status.clone());
         }
         let piece_id = self.scene.active().id;
@@ -2595,15 +2597,17 @@ impl Editor {
     pub fn commit_part_placement(&mut self, choice: PlaceChoice) -> Result<(), String> {
         let doc = &mut self.documents[self.active_document];
         let Some(placement) = doc.part_placement.take() else {
-            return Err("No active part placement".into());
+            return Err("No recipe is being placed".into());
         };
         if !doc.living.enabled {
-            self.status = "Living strokes is off. Turn it on in Preferences > General to save or place a part.".into();
+            self.status =
+                "Living strokes is off. Turn it on in Preferences > General to save or place a recipe.".into();
             return Err(self.status.clone());
         }
         if doc.dyntopo {
             self.status =
-                "Dynamic detail is on, which changes the triangles, so this part can't be placed. Turn it off.".into();
+                "Dynamic detail is on, which changes the triangles, so this recipe can't be placed. Turn it off."
+                    .into();
             return Err(self.status.clone());
         }
         let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == placement.piece) else {
@@ -2635,7 +2639,7 @@ impl Editor {
 
         if sample_count > 0 && missed > sample_count / 2 {
             self.status =
-                "This part doesn't fit on the surface here. Scale it down, or drop it on a larger surface.".into();
+                "This recipe doesn't fit on the surface here. Scale it down, or drop it on a larger surface.".into();
             return Err(self.status.clone());
         }
 
@@ -2863,7 +2867,7 @@ impl Editor {
         self.part_placement = None;
     }
 
-    /// Save strokes as a reusable part in the Parts Bin.
+    /// Save strokes as a reusable part in the Recipe Box.
     pub fn save_part_from_strokes(
         &mut self,
         name: &str,
@@ -2871,7 +2875,7 @@ impl Editor {
         stroke_ids: &[u64],
     ) -> Result<PathBuf, String> {
         if !self.living.enabled {
-            return Err("Living strokes is off. Turn it on in Preferences > General to save or place a part.".into());
+            return Err("Living strokes is off. Turn it on in Preferences > General to save or place a recipe.".into());
         }
         let piece = self.scene.active();
         let strokes: Vec<&LivingStroke> = self
@@ -2882,14 +2886,14 @@ impl Editor {
             .collect();
 
         if strokes.is_empty() {
-            return Err("No strokes selected to save as a part.".into());
+            return Err("No strokes selected to save as a recipe.".into());
         }
 
         // Check if any stroke lacks a recipe due to dynamic detail or whole piece tool
         for s in &strokes {
             if s.recipe.is_none() {
                 return Err(
-                    "Dynamic detail was on when this was drawn, so it has no recipe and can't be saved as a part."
+                    "Dynamic detail was on when this was drawn, so it wasn't recorded and can't be saved as a recipe."
                         .into(),
                 );
             }
@@ -2900,11 +2904,13 @@ impl Editor {
         let detail = oxy_sculpt::PartDetail::from_recipes(name, &recipes, center, self.symmetry)?;
 
         let dir = self.parts_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("oxy_parts"));
-        let path =
-            self.parts_library.save_part(&dir, detail, category).map_err(|e| format!("Failed to save part: {e}"))?;
+        let path = self
+            .parts_library
+            .save_part(&dir, detail, category)
+            .map_err(|e| format!("Failed to save the recipe: {e}"))?;
 
         self.parts_bin_open = true;
-        self.status = format!("Saved {name} to Parts Bin");
+        self.status = format!("Saved {name} to the Recipe Box");
         Ok(path)
     }
 }

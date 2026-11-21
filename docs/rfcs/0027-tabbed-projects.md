@@ -32,7 +32,7 @@ going on in each project.
 The bar sits across the top of the viewport, under the menu bar and above
 the model. It is part of the window, so hiding the panels (Tab) or hiding
 only the settings panel (Shift+Tab) leaves it up. It does not sit in the
-bottom strip: that space is the Parts Bin when [RFC 0026](0026-parts-bin.md)
+bottom strip: that space is the Recipe Box when [RFC 0026](0026-parts-bin.md)
 lands.
 
 Each tab shows the file name, or **Untitled** when the project has never
@@ -174,7 +174,7 @@ is visible on every tab. They are not undo steps of a project.
   same lights. Per-piece materials stay in the project.
 - Wireframe, face-group colors, the floor grid, and whether panels are
   shown. Those are the window.
-- The brush preset library, custom matcaps, and the Parts Bin
+- The brush preset library, custom matcaps, and the Recipe Box
   ([RFC 0026](0026-parts-bin.md)). The bin is files on disk. Its strip is
   the same strip on every tab. A drop sculpts the **active** tab only, as
   one undo step there. Saving a part back to the bin writes the library
@@ -283,7 +283,7 @@ Nothing in the tab bar runs on the per-dab or per-frame sculpt path.
 ## Plugins, agents and bridges
 
 **Which tab.** A new action uses the active tab. That includes a menu, a
-plugin command, an agent tool, Send back, and a Parts Bin drop.
+plugin command, an agent tool, Send back, and a Recipe Box drop.
 
 **Switching away does not retarget it.** A call that has started keeps the
 tab it started on, the same way a background job does. The host snapshot
@@ -511,7 +511,7 @@ them unsaved. It does not replace the tests above.
 
 **One process per project.** This is what a second OxyBrush window is
 today. A crash takes one project with it, and the projects share nothing
-except files on disk (presets, the Parts Bin). Switching is an operating
+except files on disk (presets, the Recipe Box). Switching is an operating
 system window switch. Copying a piece is export and import. It does not
 need this refactor, and it does not give you the tab you were in the
 middle of inside the same window. The owner asked for tabs.
