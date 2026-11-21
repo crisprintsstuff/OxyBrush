@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **New tabs keep your material.** A new tab now starts with the material (matcap) of the tab you were in, instead of the default one. **Preferences > General > New tabs start with** can also choose the default material, or a material you pick there (built in or one you loaded).
 - **Placed recipes can be moved, kept in step and saved back** ([RFC 0026](docs/rfcs/0026-parts-bin.md), phase 3). In a placed recipe's group menu in the Strokes window:
   - **Move on surface**: click on the model where it should go. The Move window sets its **Twist** and **Size**, **Apply** keeps it where it is with them, and **Cancel** (or Esc) leaves it. A ring and an arrow show where it sits. It's sculpted again there in one undo step; strokes made after it stay as they were.
   - A mirrored pair is **Linked**: **Edit…**, **Edit path** and **Move on surface** on one side change the other side too, in the same undo step. Fade and delete stay per side. **Unlink** stops it, and undo links them again.
