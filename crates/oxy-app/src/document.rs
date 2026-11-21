@@ -150,6 +150,8 @@ pub struct Document {
     pub import_scale: Option<f32>,
     pub(crate) uv_watch: HashMap<u64, (u64, bool)>,
     pub job: Option<Job>,
+    /// Monotonic counter updated when the tab is created or focused (LRU eviction).
+    pub last_used: u64,
 }
 
 #[allow(dead_code)]
@@ -265,6 +267,7 @@ impl Document {
             import_scale: None,
             uv_watch: HashMap::new(),
             job: None,
+            last_used: 0,
         }
     }
 
@@ -272,7 +275,10 @@ impl Document {
     pub fn title(&self) -> String {
         match &self.path {
             Some(p) => p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "Untitled".into()),
-            None => "Untitled".into(),
+            None => match &self.bridge {
+                Some(b) => format!("{} link", b.app()),
+                None => "Untitled".into(),
+            },
         }
     }
 

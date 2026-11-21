@@ -927,8 +927,6 @@ pub enum Pending {
     /// Close a tab by index.
     CloseTab(usize),
     OpenProject(PathBuf),
-    /// Open a link manifest from another app (RFC 0010).
-    OpenLink(PathBuf),
     /// Reload the project from its file, dropping the changes since it was
     /// saved (File > Revert). Always asked first.
     Revert,
@@ -1048,6 +1046,14 @@ pub struct Editor {
     pub next_doc_id: u64,
     /// History of closed project file paths for reopening (Ctrl+Shift+T).
     pub closed_tab_history: Vec<PathBuf>,
+    /// Reopen previously open saved project tabs on startup (RFC 0027).
+    pub restore_session: bool,
+    /// Monotonic counter bumped when switching/creating tabs for LRU undo eviction.
+    pub(crate) tab_use_clock: u64,
+    /// Process-wide undo memory budget across all open tabs (4 GiB default).
+    pub(crate) shared_undo_cap_bytes: usize,
+    /// Pieces copied onto the cross-tab piece clipboard (RFC 0027).
+    pub piece_clipboard: Vec<crate::pieces_ops::CopiedPiece>,
 
     /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
     pub pressure_gamma: f32,
@@ -1276,6 +1282,8 @@ pub struct Editor {
     pub export_format: ExportFormat,
     /// The Python plugin running now, by name, for the status bar.
     pub plugin_running: Option<String>,
+    /// Document session id that the running Python plugin latched onto.
+    pub plugin_running_doc: Option<u64>,
     /// Set by the Disconnect button; the app rotates the token and clears it.
     pub agent_disconnect: bool,
     /// Discovered Python plugins.
@@ -1415,12 +1423,17 @@ impl Default for Editor {
         let scene = Scene::new(Piece::new("Sphere", primitives::icosphere(6, 1.0)));
         let mut camera = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
         camera.frame(scene.bounds());
-        let doc = Document::new(1, scene, camera);
+        let mut doc = Document::new(1, scene, camera);
+        doc.last_used = 1;
         Self {
             documents: vec![doc],
             active_document: 0,
             next_doc_id: 2,
             closed_tab_history: Vec::new(),
+            restore_session: true,
+            tab_use_clock: 1,
+            shared_undo_cap_bytes: 4usize << 30,
+            piece_clipboard: Vec::new(),
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pen_seen: false,
@@ -1535,6 +1548,7 @@ impl Default for Editor {
             gltf_compression: oxy_io::GltfCompression::None,
             export_format: ExportFormat::default(),
             plugin_running: None,
+            plugin_running_doc: None,
             agent_disconnect: false,
             plugins: crate::plugins::discover_plugins(),
             request_run_script: false,
@@ -1789,6 +1803,23 @@ impl Editor {
 
     /// Current preferences, for saving.
     pub fn settings(&self) -> crate::settings::Settings {
+        let (session_files, session_active) = if self.restore_session {
+            let mut files = Vec::new();
+            let mut active = 0;
+            for (i, d) in self.documents.iter().enumerate() {
+                if let Some(p) = &d.path
+                    && d.bridge.is_none()
+                {
+                    if i == self.active_document {
+                        active = files.len();
+                    }
+                    files.push(p.clone());
+                }
+            }
+            (files, active)
+        } else {
+            (Vec::new(), 0)
+        };
         crate::settings::Settings {
             layout: self.layout,
             ui_scale: self.ui_scale,
@@ -1891,6 +1922,9 @@ impl Editor {
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
             pieces_box_height: self.pieces_box_height,
+            restore_session: self.restore_session,
+            session_files,
+            session_active,
         }
     }
 
@@ -2184,6 +2218,7 @@ impl Editor {
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
         self.pieces_box_height = s.pieces_box_height;
+        self.restore_session = s.restore_session;
         if !s.remember_brushes {
             return;
         }
@@ -4257,7 +4292,6 @@ impl Editor {
             Pending::OpenProject(path) => {
                 self.open_project_now(&path);
             }
-            Pending::OpenLink(path) => self.open_link_now(&path),
             Pending::Revert => self.revert_now(),
         }
     }
@@ -4299,6 +4333,9 @@ impl Editor {
             && !doc.is_dirty()
             && doc.history.revision() == 0
             && doc.job.is_none()
+            && doc.bridge.is_none()
+            && doc.link.is_none()
+            && !self.wasm_plugins.iter().any(|p| p.preview.as_ref().is_some_and(|pv| pv.doc_id == doc.id))
             && doc.tube.is_none()
             && doc.poly_edit.is_none()
             && doc.retopo.is_none()
@@ -4354,7 +4391,9 @@ impl Editor {
             c.frame(bounds);
             c
         };
-        let doc = Document::new(doc_id, scene, camera);
+        self.tab_use_clock += 1;
+        let mut doc = Document::new(doc_id, scene, camera);
+        doc.last_used = self.tab_use_clock;
         self.documents.push(doc);
         self.active_document = self.documents.len() - 1;
         self.status = status;
@@ -4372,6 +4411,8 @@ impl Editor {
         self.quick_menu = None;
         self.pointer_slider = None;
         self.active_document = new_index;
+        self.tab_use_clock += 1;
+        self.documents[new_index].last_used = self.tab_use_clock;
     }
 
     /// Request closing tab `index`. If modified, asks for confirmation first.
@@ -4396,6 +4437,11 @@ impl Editor {
         self.documents[index].job = None;
 
         let doc_id = self.documents[index].id;
+        for p in &mut self.wasm_plugins {
+            if p.preview.as_ref().is_some_and(|pv| pv.doc_id == doc_id) {
+                p.preview = None;
+            }
+        }
         self.autosaver.remove_file_for(doc_id);
 
         let closed =
@@ -4412,7 +4458,10 @@ impl Editor {
             let scene = Scene::new(Piece::new(name, mesh));
             let mut camera = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
             camera.frame(scene.bounds());
-            self.documents[0] = Document::new(next_id, scene, camera);
+            self.tab_use_clock += 1;
+            let mut doc = Document::new(next_id, scene, camera);
+            doc.last_used = self.tab_use_clock;
+            self.documents[0] = doc;
             self.active_document = 0;
             self.show_welcome = true;
             self.status = match closed {
@@ -4433,10 +4482,97 @@ impl Editor {
         } else if self.active_document > index {
             self.active_document -= 1;
         }
+        self.tab_use_clock += 1;
+        self.documents[self.active_document].last_used = self.tab_use_clock;
         self.status = match closed {
             Some(name) => format!("Closed {name}"),
             None => "Closed tab".into(),
         };
+    }
+
+    /// Reopen saved project tabs from the previous session in order, skipping
+    /// any missing files and any path that already has a pending autosave
+    /// recovery (so recovery wins without opening a duplicate copy).
+    pub fn restore_session(&mut self, paths: &[PathBuf], active: usize) -> usize {
+        if !self.restore_session || paths.is_empty() {
+            return 0;
+        }
+        let saved_recent = self.recent_files.clone();
+        let recovered_sources: Vec<PathBuf> = self.recoverable.iter().filter_map(|r| r.source_path.clone()).collect();
+        let mut opened = 0;
+        let mut target_active = None;
+        let mut missing = Vec::new();
+        for (i, path) in paths.iter().enumerate() {
+            if recovered_sources.iter().any(|rp| same_path(rp, path)) {
+                continue;
+            }
+            if let Some(existing) =
+                self.documents.iter().position(|d| d.path.as_ref().is_some_and(|p| same_path(p, path)))
+            {
+                if i == active {
+                    target_active = Some(existing);
+                }
+                continue;
+            }
+            if !path.is_file() {
+                let name =
+                    path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                missing.push(name);
+                continue;
+            }
+            if self.open_project(path) {
+                opened += 1;
+                if i == active {
+                    target_active = Some(self.active_document);
+                }
+            }
+        }
+        self.recent_files = saved_recent;
+        if let Some(idx) = target_active {
+            self.switch_tab(idx);
+        }
+        if !missing.is_empty() {
+            self.status = format!("Session restore: skipped missing file(s): {}", missing.join(", "));
+        }
+        opened
+    }
+
+    /// Enforce the shared undo budget across all open tabs (4 GiB default).
+    /// Past the cap, compresses inactive tabs and drops the oldest entries from
+    /// the least-recently-used inactive tab first.
+    pub fn enforce_shared_undo_cap(&mut self) {
+        let total: usize = self.documents.iter().map(|d| d.history.used_bytes()).sum();
+        if total <= self.shared_undo_cap_bytes {
+            return;
+        }
+        let active = self.active_document;
+        for (i, d) in self.documents.iter_mut().enumerate() {
+            if i != active {
+                d.history.compress_inactive();
+            }
+        }
+        let mut total: usize = self.documents.iter().map(|d| d.history.used_bytes()).sum();
+        if total <= self.shared_undo_cap_bytes {
+            return;
+        }
+        let mut inactive: Vec<usize> = (0..self.documents.len()).filter(|&i| i != active).collect();
+        inactive.sort_by_key(|&i| self.documents[i].last_used);
+        while total > self.shared_undo_cap_bytes {
+            let mut evicted = false;
+            for &idx in &inactive {
+                let doc = &mut self.documents[idx];
+                let before = doc.history.used_bytes();
+                if before > 0 && doc.history.evict_oldest() {
+                    let after = doc.history.used_bytes();
+                    total = total.saturating_sub(before.saturating_sub(after));
+                    evicted = true;
+                    break;
+                }
+            }
+            if !evicted {
+                break;
+            }
+        }
     }
 
     /// Reopen the most recently closed tab that had a saved project file.
@@ -4715,7 +4851,7 @@ impl Editor {
         if is_addon {
             self.install_addon(path);
         } else if crate::bridge::is_manifest(path) {
-            self.request(Pending::OpenLink(path.to_path_buf()));
+            self.open_link(path);
         } else if is_project {
             self.open_project(path);
         } else {
@@ -4769,8 +4905,15 @@ impl Editor {
         self.recent_files.truncate(crate::settings::MAX_RECENT);
     }
 
-    /// Open a file from the recent list; forget it if it no longer exists.
+    /// Open a file from the recent list (focusing if already open); forget it if missing.
     pub fn open_recent(&mut self, path: &Path) {
+        self.show_welcome = false;
+        if self.path.as_ref().is_some_and(|p| same_path(p, path)) {
+            let name =
+                path.file_name().map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+            self.status = format!("Switched to {name}");
+            return;
+        }
         if path.is_file() {
             self.open(path);
         } else {
@@ -5313,9 +5456,10 @@ impl Editor {
             let busy_stroking = doc.id == active_id && stroking;
             if changed && !levels_out && !busy_stroking {
                 let doc_id = doc.id;
+                let source_path = doc.path.clone();
                 let data = self.doc_scene_data(i);
                 self.documents[i].autosaved_revision = self.documents[i].history.revision();
-                self.autosaver.start_for(doc_id, data);
+                self.autosaver.start_for(doc_id, data, source_path);
                 break;
             }
         }
@@ -5335,9 +5479,10 @@ impl Editor {
             let busy_stroking = doc.id == active_id && stroking;
             if changed && !levels_out && !busy_stroking {
                 let doc_id = doc.id;
+                let source_path = doc.path.clone();
                 let data = self.doc_scene_data(i);
                 self.documents[i].autosaved_revision = self.documents[i].history.revision();
-                self.autosaver.start_for(doc_id, data);
+                self.autosaver.start_for(doc_id, data, source_path);
                 break;
             }
         }
@@ -5350,13 +5495,24 @@ impl Editor {
             Scene::from_data(d)
         }) {
             Ok(Some(scene)) => {
-                let _ = std::fs::remove_file(&r.path);
-                if !self.is_empty_tab(self.active_document) {
+                autosave::remove_recoverable(&r.path);
+                self.show_welcome = false;
+                if let Some(orig) = &r.source_path
+                    && let Some(idx) = self
+                        .documents
+                        .iter()
+                        .position(|d| !d.is_dirty() && d.path.as_ref().is_some_and(|p| same_path(p, orig)))
+                {
+                    self.switch_tab(idx);
+                } else if !self.is_empty_tab(self.active_document) {
                     self.new_tab("empty");
                 }
                 // Same order as opening: alphas first, so recipes can find them.
                 self.adopt_alphas(alphas);
-                self.replace_document(scene, None);
+                self.replace_document(scene, r.source_path.clone());
+                if let Some(orig) = &r.source_path {
+                    self.protect_path(orig);
+                }
                 // Recovered work is unsaved until the user saves it.
                 self.saved_revision = self.history.revision().wrapping_sub(1);
                 self.status = "Recovered unsaved work. Save it to keep it.".into();
@@ -5366,9 +5522,23 @@ impl Editor {
         self.recoverable.retain(|x| x.path != r.path);
     }
 
+    /// Recover every autosaved file from crashed sessions, each in its own tab.
+    pub fn recover_all(&mut self) {
+        let list = self.recoverable.clone();
+        for r in &list {
+            self.recover(r);
+        }
+    }
+
+    /// Discard a single recoverable autosave and keep the rest.
+    pub fn discard_one_recoverable(&mut self, path: &Path) {
+        autosave::remove_recoverable(path);
+        self.recoverable.retain(|x| x.path != path);
+    }
+
     pub fn discard_recoverable(&mut self) {
         for r in self.recoverable.drain(..) {
-            let _ = std::fs::remove_file(&r.path);
+            autosave::remove_recoverable(&r.path);
         }
     }
 
@@ -8295,6 +8465,14 @@ impl Editor {
                 self.redo_piece();
                 E::None
             }
+            C::CopyPiece => {
+                self.copy_pieces();
+                E::None
+            }
+            C::PastePiece => {
+                self.paste_pieces();
+                E::None
+            }
             C::CommandPalette => {
                 self.palette = Some(crate::palette::Palette::new(crate::palette::PaletteMode::Everything));
                 E::None
@@ -9085,6 +9263,7 @@ mod tests {
         let mut result = oxy_plugin::RunResult { cancelled: true, ..Default::default() };
         result.groups.push((0, vec![9; before.len()]));
         let job = crate::wasm_plugins::PluginJob {
+            doc_id: e.documents[e.active_document].id,
             slot,
             plugin,
             label: "Plugin: Group by Height — Group in bands".into(),
@@ -13420,6 +13599,9 @@ mod tests {
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
             pieces_box_height: 320.0,
+            restore_session: false,
+            session_files: Vec::new(),
+            session_active: 0,
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
@@ -16059,6 +16241,314 @@ mod tests {
         // Other tab (Tab 1) must remain untouched
         assert_eq!(e.documents[1].scene.pieces.len(), 1);
         assert_eq!(e.documents[1].scene.pieces[0].name, "Plane");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn session_restore_opens_tabs_skips_missing_and_recovery_wins() {
+        let dir = std::env::temp_dir().join(format!("oxy-session-restore-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a_path = dir.join("a.oxb");
+        let b_path = dir.join("b.oxb");
+        let missing_path = dir.join("missing.oxb");
+        let auto_a_path = dir.join("autosave-1-1.oxb");
+        let other_recent = dir.join("other_recent.oxb");
+
+        let mut seed_a = editor();
+        seed_a.scene.pieces[0].name = "SavedA".into();
+        assert!(seed_a.save(&a_path));
+
+        let mut seed_b = editor();
+        seed_b.scene.pieces[0].name = "SavedB".into();
+        assert!(seed_b.save(&b_path));
+
+        let mut seed_auto = editor();
+        seed_auto.add_primitive("cone");
+        let cone_idx = seed_auto.scene.active_index();
+        seed_auto.scene.pieces[cone_idx].name = "RecoveredCone".into();
+        assert!(seed_auto.save(&auto_a_path));
+
+        // When recovery holds an autosave for `a_path`, session restore skips opening `a_path`
+        // (so recovery wins without opening a duplicate), skips missing files, and preserves recent_files.
+        let mut e = editor();
+        e.restore_session = true;
+        e.recent_files = vec![other_recent.clone()];
+        e.recoverable = vec![oxy_doc::autosave::Recoverable {
+            path: auto_a_path.clone(),
+            modified: std::time::SystemTime::now(),
+            source_path: Some(a_path.clone()),
+        }];
+        let opened = e.restore_session(&[a_path.clone(), missing_path, b_path.clone()], 2);
+        assert_eq!(opened, 1);
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.scene.pieces[0].name, "SavedB");
+        assert!(e.status.contains("missing"), "{}", e.status);
+        assert_eq!(e.recent_files, vec![other_recent]);
+
+        // Recovering brings back the unsaved edits for `a_path` in its own tab without touching `b_path`.
+        e.recover_all();
+        assert_eq!(e.documents.len(), 2);
+        assert!(e.documents.iter().any(|d| d.scene.pieces.iter().any(|p| p.name == "SavedB")));
+        let recovered_doc =
+            e.documents.iter().find(|d| d.scene.pieces.iter().any(|p| p.name == "RecoveredCone")).unwrap();
+        assert_eq!(recovered_doc.path.as_ref(), Some(&a_path));
+        assert!(recovered_doc.is_dirty());
+
+        // Clean launch restores both saved tabs in order and selects `active`.
+        let mut e2 = editor();
+        e2.restore_session = true;
+        let opened2 = e2.restore_session(&[a_path.clone(), b_path.clone()], 1);
+        assert_eq!(opened2, 2);
+        assert_eq!(e2.documents.len(), 2);
+        assert_eq!(e2.active_document, 1);
+        let settings = e2.settings();
+        assert_eq!(settings.session_files, vec![a_path, b_path]);
+        assert_eq!(settings.session_active, 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn recent_files_focuses_open_tab_and_drops_empty_tab() {
+        let dir = std::env::temp_dir().join(format!("oxy-recent-focus-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a_path = dir.join("a.oxb");
+        let mut seed = editor();
+        assert!(seed.save(&a_path));
+
+        let mut e = editor();
+        assert!(e.open_project(&a_path));
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        let dirty_pieces = e.scene.pieces.len();
+
+        // Opening an empty starter tab, then clicking `a.oxb` in Recent files focuses tab 0 and drops the empty tab.
+        let empty_idx = e.new_tab("empty");
+        assert!(e.is_empty_tab(empty_idx));
+        assert_eq!(e.documents.len(), 2);
+        e.open_recent(&a_path);
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+        assert_eq!(e.scene.pieces.len(), dirty_pieces);
+        assert!(e.pending.is_none());
+
+        // Clicking `a.oxb` in Recent files while already on dirty tab 0 also focuses without a discard prompt.
+        e.open_recent(&a_path);
+        assert!(e.pending.is_none());
+        assert!(e.status.contains("Switched to"), "{}", e.status);
+        assert_eq!(e.scene.pieces.len(), dirty_pieces);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn copy_and_paste_piece_across_tabs_with_living_strokes_and_undo() {
+        let mut e = editor();
+        e.living.enabled = true;
+        center(&mut e);
+        let p = e.pointer.unwrap();
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(p + Vec2::new(10.0, 0.0));
+        e.pointer_moved(p + Vec2::new(22.0, 0.0));
+        e.pointer_moved(p + Vec2::new(35.0, 0.0));
+        e.pointer_up();
+        let parent_id = e.scene.pieces[0].id;
+        assert!(!e.living.listed(parent_id).is_empty(), "expected recorded living stroke");
+
+        e.add_primitive("cube");
+        let child_id = e.scene.pieces[1].id;
+        e.place_pieces_as_children(&[child_id], parent_id);
+        e.documents[0].scene.set_active(0);
+        e.toggle_piece_pick(1);
+        let rev_before_copy = e.history.revision();
+        assert_eq!(e.copy_pieces(), 2);
+        assert_eq!(e.history.revision(), rev_before_copy, "copy must not edit history");
+
+        // Paste into Tab 1 as one undo step preserving hierarchy and living strokes.
+        e.new_tab("plane");
+        e.living.enabled = true;
+        assert_eq!(e.paste_pieces(), 2);
+        assert_eq!(e.scene.pieces.len(), 3);
+        let pasted_parent_id = e.scene.pieces[1].id;
+        assert_eq!(e.scene.pieces[2].parent, Some(pasted_parent_id));
+        assert!(!e.living.listed(pasted_parent_id).is_empty());
+        assert_eq!(e.history.undo_labels().count(), 1);
+
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert!(e.living.listed(pasted_parent_id).is_empty());
+
+        e.redo();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert_eq!(e.scene.pieces[2].parent, Some(e.scene.pieces[1].id));
+
+        // When living stroke budget is exhausted in the destination tab, meshes still paste baked.
+        e.new_tab("plane");
+        e.living.enabled = true;
+        e.living.budget_mb = 0;
+        assert_eq!(e.paste_pieces(), 2);
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.living.strokes.is_empty());
+        assert!(e.status.contains("baked"), "{}", e.status);
+    }
+
+    #[test]
+    fn shared_undo_cap_evicts_lru_inactive_tab_first() {
+        let sculpt_twice = |e: &mut Editor| {
+            for dx in [18.0_f32, -18.0_f32] {
+                center(e);
+                let p = e.pointer.unwrap();
+                e.pointer_down(PointerButton::Primary);
+                e.pointer_moved(p + Vec2::new(dx, 0.0));
+                e.pointer_up();
+            }
+        };
+
+        let mut e = editor();
+        sculpt_twice(&mut e);
+
+        e.new_tab("sphere");
+        sculpt_twice(&mut e);
+
+        e.new_tab("sphere");
+        sculpt_twice(&mut e);
+
+        // Touch Tab 1 then Tab 2 so LRU inactive order is Tab 0 (oldest) -> Tab 1 (newer), with Tab 2 active.
+        e.switch_tab(1);
+        e.switch_tab(2);
+
+        e.documents[0].history.compress_inactive();
+        e.documents[1].history.compress_inactive();
+        assert!(e.documents[0].history.used_bytes() > 0);
+        let cap = e.documents[2].history.used_bytes() + e.documents[1].history.used_bytes();
+        e.shared_undo_cap_bytes = cap;
+        e.enforce_shared_undo_cap();
+
+        assert_eq!(e.documents[0].history.undo_labels().count(), 0, "LRU inactive tab should evict first");
+        assert_eq!(e.documents[1].history.undo_labels().count(), 2, "newer inactive tab should remain");
+        assert_eq!(e.documents[2].history.undo_labels().count(), 2, "active tab should remain intact");
+    }
+
+    #[test]
+    fn wasm_plugin_preview_survives_tab_switch_and_mismatched_result_is_refused() {
+        let dir = std::env::temp_dir().join(format!("oxy-app-wasm-tab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("prev")).unwrap();
+        std::fs::write(
+            dir.join("prev/plugin.json"),
+            r#"{"name":"PreviewTest","api":3,"capabilities":["read_mesh","edit_mesh"],
+                "commands":[{"id":"go","label":"Mask preview","preview":true}],
+                "params":[{"id":"n","min":0,"max":10,"step":1,"default":1}]}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("prev/plugin.wat"),
+            r#"(module
+              (import "oxybrush" "active_piece" (func $active (result i32)))
+              (import "oxybrush" "vertex_count" (func $vc (param i32) (result i32)))
+              (import "oxybrush" "write_mask" (func $wm (param i32 i32 i32) (result i32)))
+              (memory (export "memory") 64)
+              (func (export "run") (param i32)
+                (local $p i32) (local $n i32) (local $i i32)
+                (local.set $p (call $active))
+                (local.set $n (call $vc (local.get $p)))
+                (block $d (loop $l
+                  (br_if $d (i32.ge_u (local.get $i) (local.get $n)))
+                  (f32.store (i32.add (i32.const 1024) (i32.mul (local.get $i) (i32.const 4))) (f32.const 0.75))
+                  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+                  (br $l)))
+                (drop (call $wm (local.get $p) (i32.const 1024) (local.get $n)))))"#,
+        )
+        .unwrap();
+
+        let mut e = editor();
+        e.load_wasm_plugins_from(&dir);
+        let slot = e.wasm_plugins.iter().position(|p| p.name == "PreviewTest").unwrap();
+        let tab0_id = e.documents[0].id;
+        e.start_plugin_preview(slot, 0);
+        wait_job(&mut e);
+        assert!(e.plugin_preview_mut().is_some(), "preview should show on origin tab");
+
+        // Switching to Tab 1 keeps Tab 0's preview stored without drawing it on Tab 1.
+        e.new_tab("plane");
+        e.update_plugin_previews();
+        assert!(e.wasm_plugins[slot].preview.is_some());
+        assert!(e.plugin_preview_mut().is_none());
+
+        // Delivering a result tagged for Tab 0 while Tab 1 is active refuses to modify Tab 1.
+        let tab1_mask_before = e.scene.active().mesh.mask.clone();
+        let plugin = e.wasm_plugins[slot].plugin.take().unwrap();
+        let mut wrong_res = oxy_plugin::RunResult::default();
+        wrong_res.masks.push((0, vec![0.5; tab1_mask_before.len()]));
+        let job = crate::wasm_plugins::PluginJob {
+            doc_id: tab0_id,
+            slot,
+            plugin,
+            label: "Plugin: PreviewTest — Mask preview".into(),
+            pieces: vec![e.documents[0].scene.active().id],
+            result: Ok(wrong_res),
+            preview: None,
+        };
+        e.finish_plugin_job(job, 0.1);
+        assert_eq!(e.scene.active().mesh.mask, tab1_mask_before);
+        assert!(e.status.contains("discarded"), "{}", e.status);
+        assert!(e.wasm_plugins[slot].plugin.is_some());
+        assert!(e.wasm_plugins[slot].preview.is_some(), "existing preview should stay for Tab 0");
+
+        // Returning to Tab 0 brings back its preview and allows accepting it.
+        e.switch_tab(0);
+        assert!(e.plugin_preview_mut().is_some());
+        e.accept_plugin_preview(slot);
+        assert!(e.scene.active().mesh.mask.iter().all(|&v| (v - 0.75).abs() < 1e-4));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bridge_link_opens_in_new_tab_and_close_removes_only_link_tab() {
+        let dir = std::env::temp_dir().join(format!("oxy-bridge-tab-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("out")).unwrap();
+        std::fs::write(dir.join("Suzanne.obj"), "v 0 0 0\nv 1 0 0\nv 0 1 0\nf 1 2 3\n").unwrap();
+        let manifest_path = dir.join("bridge.oxylink.json");
+        std::fs::write(
+            &manifest_path,
+            r#"{
+              "format": "oxybrush-link",
+              "version": 1,
+              "app": "Blender",
+              "objects": [
+                {
+                  "name": "Suzanne",
+                  "obj": "Suzanne.obj",
+                  "result": "out/Suzanne.obj",
+                  "matrix": [1,0,0,0, 0,1,0,0, 0,0,1,0, 0,0,0,1]
+                }
+              ],
+              "new_pieces": "out"
+            }"#,
+        )
+        .unwrap();
+
+        let mut e = editor();
+        e.add_primitive("cube");
+        assert!(e.open_link(&manifest_path));
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+        assert_eq!(e.documents[1].title(), "Blender link");
+        assert!(e.documents[1].bridge.is_some());
+        assert_eq!(e.scene.pieces[0].name, "Suzanne");
+
+        // Sending back with close closes only the link tab and leaves Tab 0 intact.
+        e.send_back_link(true);
+        assert!(dir.join("out/Suzanne.obj").is_file());
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.active_document, 0);
+        assert!(e.documents[0].bridge.is_none());
+        assert_eq!(e.scene.pieces.len(), 2);
+
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

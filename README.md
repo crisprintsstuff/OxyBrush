@@ -172,7 +172,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### Files and pipeline
 
-- **Projects:** `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Autosave** every 2 minutes (adjustable) and **crash recovery** on the next launch.
+- **Projects & tabs:** work across multiple open `.oxb` projects in **tabs** (session restore on launch can be toggled in **Preferences > General**), with **Copy piece / Paste piece** (`Ctrl+C` / `Ctrl+V`) across tabs including living strokes. `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Per-tab autosave** every 2 minutes (adjustable) and **multi-tab crash recovery** on the next launch.
 - **UVs** from OBJ and glTF files are kept per face corner through sculpting, saving and export (OBJ, glTF/GLB), so a model can go on to texturing or baking; rebuilding the triangles (remesh, dynamic detail, subdivision levels for now) drops them, with a note.
 - **Import:** glTF (`.glb`, `.gltf`; each mesh in the scene becomes a piece where the scene places it, including meshopt- and quantization-compressed files; not Draco), OBJ, STL, PLY and Autodesk FBX (`.fbx`; both 7.x binary/ASCII and legacy 5.8/6.x ASCII/binary, with transforms, UVs and material face groups preserved; each mesh becomes its own piece; broken material files don't stop an import). The Import dialog and a drop onto the window can take several files at once (Shift-click or Ctrl/Cmd-click): each file's objects become pieces, in one undo step, in name order, and a file that can't be read is skipped and named. Vertex colors come in too: OBJ colors after each vertex (`v x y z r g b`, 0–1 or 0–255) or in `#MRGB` comment blocks, and PLY `red green blue`; and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; several files imported together share that one factor so their relative sizes stay. One Undo keeps the original size.
 - **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL or binary PLY, one object per piece.
@@ -208,7 +208,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `L` | Rectangle / lasso selection |
 | Ctrl+click on the model | Blur the mask (Ctrl+Alt+click: sharpen it); dragging paints the mask as before |
 | Ctrl+M | Mask the face group under the cursor |
-| Ctrl+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
+| Ctrl+Shift+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |
 | `1`–`9`, `0` | Select the first ten brushes in the shelf (drag brushes to rearrange) |
 | `[` `]` and `-` `=` | Radius and strength (the radius is on screen, or on the model with Brush settings > Size > On the model) |
 | `S` / `U` / `I` / Shift+`O` | Slider under the pointer for size / strength / paint strength / focal shift (Single-key tools scheme: `O` for focal shift, `P` for orthographic) |
@@ -223,6 +223,8 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `T` | Transform gizmo (move, turn and scale in one) on / off |
 | `Shift`+drag a gizmo handle | Snap to steps (0.1, 15°, 10 %) |
 | Ctrl+S / Ctrl+O | Save / open project |
+| Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+1–9 | New tab / close tab / switch tabs (Ctrl+Shift+T: reopen closed tab) |
+| Ctrl+C / Ctrl+V | Copy piece / paste piece (across tabs, preserving hierarchy and living strokes) |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+Alt+Z, Ctrl+Alt+Shift+Z | Undo, redo on the active piece only |
 | Right click / hold `Q` | Quick menu at the cursor (size, strength, Raise/Carve) |

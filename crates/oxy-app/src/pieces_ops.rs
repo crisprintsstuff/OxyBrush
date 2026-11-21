@@ -10,8 +10,24 @@
 use crate::editor::{Drag, Editor};
 use crate::pose::{self, GizmoMode, Handle};
 use glam::{Vec2, Vec3};
+use oxy_doc::Piece;
 use oxy_history::Step;
 use oxy_mesh::{Aabb, Mesh};
+
+/// One piece (and its living strokes) copied onto the cross-tab clipboard.
+#[derive(Clone)]
+pub struct CopiedPiece {
+    pub name: String,
+    pub visible: bool,
+    pub mesh: Mesh,
+    pub multires: Option<oxy_mesh::multires::Multires>,
+    pub symmetry_center: Option<Vec3>,
+    pub material: Option<String>,
+    /// Index in the same clipboard batch when its parent was copied alongside it.
+    pub parent_in_batch: Option<usize>,
+    pub strokes: Vec<crate::living::LivingStroke>,
+    pub groups: Vec<crate::living::StrokeGroup>,
+}
 
 /// One piece in a multi-piece gizmo drag: how it was when the drag began.
 struct Part {
@@ -594,5 +610,118 @@ impl Editor {
     #[allow(dead_code)]
     pub fn place_piece_as_child(&mut self, child_id: u64, parent_id: u64) {
         self.place_pieces_as_children(&[child_id], parent_id);
+    }
+
+    /// Copy the active piece (plus any pieces picked with Ctrl/Cmd+click or
+    /// Shift-click) to the app clipboard without modifying undo history.
+    pub fn copy_pieces(&mut self) -> usize {
+        if self.scene.pieces.is_empty() {
+            self.status = "Nothing to copy".into();
+            return 0;
+        }
+        let picked = self.selected_piece_ids();
+        let indices: Vec<usize> =
+            self.scene.pieces.iter().enumerate().filter(|(_, p)| picked.contains(&p.id)).map(|(i, _)| i).collect();
+        let ids: Vec<u64> = indices.iter().map(|&i| self.scene.pieces[i].id).collect();
+        let batch: Vec<CopiedPiece> = indices
+            .iter()
+            .map(|&i| {
+                let piece = &self.scene.pieces[i];
+                let parent_in_batch = piece.parent.and_then(|pid| ids.iter().position(|&id| id == pid));
+                let (strokes, groups) = self.living.copy_for_piece(piece);
+                CopiedPiece {
+                    name: piece.name.clone(),
+                    visible: piece.visible,
+                    mesh: piece.mesh.clone(),
+                    multires: piece.multires.clone(),
+                    symmetry_center: piece.symmetry_center,
+                    material: piece.material.clone(),
+                    parent_in_batch,
+                    strokes,
+                    groups,
+                }
+            })
+            .collect();
+        let count = batch.len();
+        let msg = if count == 1 {
+            format!("Copied {} (Ctrl+V or Paste piece to paste)", batch[0].name)
+        } else {
+            format!("Copied {count} pieces (Ctrl+V or Paste piece to paste)")
+        };
+        self.piece_clipboard = batch;
+        self.status = msg;
+        count
+    }
+
+    /// Paste pieces from the app clipboard into the active tab as one undo
+    /// step, carrying living strokes along unless the stroke budget is full.
+    pub fn paste_pieces(&mut self) -> usize {
+        if self.piece_clipboard.is_empty() {
+            self.status = "Nothing to paste".into();
+            return 0;
+        }
+        self.pointer_up();
+        let batch = self.piece_clipboard.clone();
+        let count = batch.len();
+        let mut new_ids = Vec::with_capacity(count);
+        let mut steps = Vec::with_capacity(count);
+        let base_idx = self.scene.pieces.len();
+        let mut first_name = String::new();
+        for (k, item) in batch.iter().enumerate() {
+            let name = self.scene.unique_name(&item.name);
+            if k == 0 {
+                first_name.clone_from(&name);
+            }
+            let mesh = item.mesh.clone();
+            let multires = item.multires.clone().map(|mut mr| {
+                mr.bind(&mesh);
+                mr
+            });
+            let piece = Piece {
+                visible: item.visible,
+                multires,
+                symmetry_center: item.symmetry_center,
+                material: item.material.clone(),
+                ..Piece::new(name, mesh)
+            };
+            new_ids.push(piece.id);
+            steps.push(Step::Inserted { index: base_idx + k });
+            self.scene.pieces.push(piece);
+        }
+        for (k, item) in batch.iter().enumerate() {
+            if let Some(p_idx) = item.parent_in_batch {
+                self.scene.pieces[base_idx + k].parent = Some(new_ids[p_idx]);
+            }
+        }
+        let doc_idx = self.active_document;
+        self.documents[doc_idx].scene.set_active(base_idx);
+        self.documents[doc_idx].piece_select_anchor = Some(new_ids[0]);
+        self.documents[doc_idx].piece_pick = new_ids[1..].to_vec();
+        let label = if count == 1 { format!("Paste {first_name}") } else { format!("Paste {count} pieces") };
+        if count == 1 {
+            self.documents[doc_idx].history.record(label, steps.into_iter().next().expect("one step"));
+        } else {
+            self.documents[doc_idx].history.record_compound(label, steps);
+        }
+        let entry_id = self.documents[doc_idx].history.newest_id().unwrap_or(0);
+        let paste_res = {
+            let doc = &mut self.documents[doc_idx];
+            let items: Vec<(u64, &Mesh, &[crate::living::LivingStroke], &[crate::living::StrokeGroup])> = batch
+                .iter()
+                .enumerate()
+                .map(|(k, item)| {
+                    (new_ids[k], &doc.scene.pieces[base_idx + k].mesh, item.strokes.as_slice(), item.groups.as_slice())
+                })
+                .collect();
+            doc.living.paste_for_pieces(&items, entry_id)
+        };
+        let mut status = if count == 1 { format!("Pasted {first_name}") } else { format!("Pasted {count} pieces") };
+        if let Err(baked) = paste_res
+            && baked > 0
+        {
+            status.push_str(" (living strokes baked: stroke budget full)");
+        }
+        self.status = status;
+        count
     }
 }

@@ -451,6 +451,19 @@ impl History {
         self.enforce_budget();
     }
 
+    /// Drop the oldest history entry (oldest undo step first, then oldest
+    /// redo step) to free memory under a shared cross-document budget.
+    pub fn evict_oldest(&mut self) -> bool {
+        if self.undo.pop_front().is_some() {
+            true
+        } else if !self.redo.is_empty() {
+            self.redo.remove(0);
+            true
+        } else {
+            false
+        }
+    }
+
     /// Start recording a stroke on `piece`. Vertex color is recorded too
     /// if the mesh is painted.
     pub fn begin(&mut self, label: impl Into<String>, piece: u64, mesh: &Mesh) {
@@ -1246,5 +1259,39 @@ mod tests {
         assert_eq!(s.parent_of(child_id), None);
         assert_eq!(h.redo(&mut s).as_deref(), Some("Parent piece"));
         assert_eq!(s.parent_of(child_id), Some(parent_id));
+    }
+
+    #[test]
+    fn evict_oldest_drops_undo_before_redo_and_reduces_bytes() {
+        let mut s = scene();
+        let id = s.active().id;
+        let mut h = History::default();
+        nudge(&mut h, &mut s, id, "First", Vec3::X);
+        nudge(&mut h, &mut s, id, "Second", Vec3::Y);
+        nudge(&mut h, &mut s, id, "Third", Vec3::Z);
+        // Move "Third" onto redo stack so both undo and redo are populated.
+        assert_eq!(h.undo(&mut s).as_deref(), Some("Third"));
+        let initial_bytes = h.used_bytes();
+        assert!(initial_bytes > 0);
+
+        // Evicts oldest undo ("First") first.
+        assert!(h.evict_oldest());
+        let labels: Vec<&str> = h.undo_labels().collect();
+        assert_eq!(labels, vec!["Second"]);
+        assert_eq!(h.redo_labels().collect::<Vec<_>>(), vec!["Third"]);
+        assert!(h.used_bytes() < initial_bytes);
+
+        // Evicts remaining undo ("Second"), leaving redo intact.
+        assert!(h.evict_oldest());
+        assert!(!h.can_undo());
+        assert!(h.can_redo());
+
+        // Evicts redo ("Third").
+        assert!(h.evict_oldest());
+        assert!(!h.can_redo());
+        assert_eq!(h.used_bytes(), 0);
+
+        // Empty stack returns false.
+        assert!(!h.evict_oldest());
     }
 }

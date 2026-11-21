@@ -80,6 +80,8 @@ pub struct App {
     applied_title: String,
     last_frame: Instant,
     initial_files: Vec<PathBuf>,
+    /// Saved project tabs from the previous session, to open on `resumed`.
+    pending_session: Option<(Vec<PathBuf>, usize)>,
     auto: AutoRun,
     frames: u32,
     /// Where preferences are remembered (None for automated runs).
@@ -157,6 +159,17 @@ impl App {
         let loaded = settings_path.as_deref().and_then(crate::settings::Settings::load);
         let first_start = settings_path.is_some() && loaded.is_none();
         let settings = loaded.unwrap_or_default();
+        let pending_session = if settings.restore_session
+            && !settings.session_files.is_empty()
+            && initial_files.is_empty()
+            && auto.screenshot.is_none()
+            && !auto.demo
+            && auto.open_keymap.is_none()
+        {
+            Some((settings.session_files.clone(), settings.session_active))
+        } else {
+            None
+        };
         Self {
             gfx: None,
             egui_ctx: {
@@ -209,7 +222,7 @@ impl App {
                     first_start,
                     settings.welcome_at_startup,
                     settings_path.is_none(),
-                    !initial_files.is_empty() || auto.demo,
+                    !initial_files.is_empty() || auto.demo || pending_session.is_some(),
                 );
                 if auto.open_keymap.is_some() {
                     e.show_welcome = false;
@@ -232,6 +245,7 @@ impl App {
             applied_title: String::new(),
             last_frame: Instant::now(),
             initial_files,
+            pending_session,
             auto,
             frames: 0,
             saved_settings: settings,
@@ -336,6 +350,7 @@ impl App {
                 self.plugin_process = None;
                 self.plugin_inbox = None;
                 self.editor.plugin_running = None;
+                self.editor.plugin_running_doc = None;
                 if stdout.is_empty() {
                     self.editor.status = format!("Plugin '{name}' finished");
                 } else {
@@ -348,6 +363,7 @@ impl App {
                 self.plugin_process = None;
                 self.plugin_inbox = None;
                 self.editor.plugin_running = None;
+                self.editor.plugin_running_doc = None;
                 // For Python exceptions and tracebacks, the meaningful diagnostic
                 // (e.g. `AttributeError: ...`) is on the last non-empty line of stderr.
                 let err_msg = stderr.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("failed").trim();
@@ -359,6 +375,7 @@ impl App {
                 self.plugin_process = None;
                 self.plugin_inbox = None;
                 self.editor.plugin_running = None;
+                self.editor.plugin_running_doc = None;
             }
         }
     }
@@ -377,7 +394,8 @@ impl App {
             let _ = proxy.send_event(());
         });
         let name = crate::plugins::plugin_name(path);
-        let inbox = match crate::agent::Inbox::for_plugin(&name, Arc::clone(&wake)) {
+        let doc_id = self.editor.documents[self.editor.active_document].id;
+        let inbox = match crate::agent::Inbox::for_plugin(&name, doc_id, Arc::clone(&wake)) {
             Ok(inbox) => inbox,
             Err(e) => {
                 self.editor.status = format!("Could not start plugin '{name}': {e}");
@@ -389,6 +407,7 @@ impl App {
                 // The status bar shows "Plugin '…' running" until it ends.
                 self.editor.status.clear();
                 self.editor.plugin_running = Some(proc.name.clone());
+                self.editor.plugin_running_doc = Some(doc_id);
                 self.plugin_process = Some(proc);
                 self.plugin_inbox = Some(inbox);
             }
@@ -645,6 +664,7 @@ impl App {
         ed.deform_poll();
         ed.sync_model_radius();
         ed.living_sync();
+        ed.enforce_shared_undo_cap();
         ed.watch_uvs();
         ed.tick_gizmo_session();
         ed.tick_autosave();
@@ -1552,7 +1572,7 @@ impl ApplicationHandler for App {
         let mut wait = if self.editor.deform_busy() {
             // A deform preview is catching up: look for it often.
             Duration::from_millis(15)
-        } else if self.editor.job.is_some()
+        } else if self.editor.documents.iter().any(|d| d.job.is_some())
             || self.shot_reply.is_some()
             || self.editor.updater.busy()
             || self.plugin_process.is_some()
@@ -1606,8 +1626,11 @@ impl ApplicationHandler for App {
             return;
         }
         if !self.initial_files.is_empty() {
+            self.pending_session = None;
             let files = std::mem::take(&mut self.initial_files);
             self.editor.open_dropped(&files);
+        } else if let Some((paths, active)) = self.pending_session.take() {
+            self.editor.restore_session(&paths, active);
         }
         self.sync_agent();
         if let Some(g) = &self.gfx {

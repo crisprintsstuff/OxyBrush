@@ -29,6 +29,8 @@ pub struct WasmPlugin {
 /// A command shown before it's applied: the result of running it with the
 /// panel's current settings, drawn in place of the active piece.
 pub struct Preview {
+    /// Tab session id this preview belongs to.
+    pub doc_id: u64,
     pub command: usize,
     /// The piece previewed (the active piece when it started) and the
     /// history revision then; if either changes, the preview is dropped.
@@ -44,6 +46,8 @@ pub struct Preview {
 
 /// What a finished plugin job hands back.
 pub struct PluginJob {
+    /// Tab session id this job was launched from.
+    pub doc_id: u64,
     pub slot: usize,
     pub plugin: Box<Plugin>,
     pub label: String,
@@ -237,11 +241,19 @@ impl Editor {
             self.status = Self::NEED_PIECE.into();
             return;
         };
+        let doc_id = self.documents[self.active_document].id;
         let revision = self.history.revision();
         let Some(p) = self.wasm_plugins.get_mut(slot) else { return };
         p.show_panel = true;
-        p.preview =
-            Some(Preview { command, piece, revision, params: (Vec::new(), Vec::new()), result: None, mesh: None });
+        p.preview = Some(Preview {
+            doc_id,
+            command,
+            piece,
+            revision,
+            params: (Vec::new(), Vec::new()),
+            result: None,
+            mesh: None,
+        });
         self.update_plugin_previews();
     }
 
@@ -249,9 +261,12 @@ impl Editor {
     /// panel closed, and run again those whose settings changed. Called each
     /// frame; runs only when nothing else is running.
     pub fn update_plugin_previews(&mut self) {
+        let doc_id = self.documents[self.active_document].id;
         let Some(active) = self.scene.try_active().map(|p| p.id) else {
             for p in &mut self.wasm_plugins {
-                p.preview = None;
+                if p.preview.as_ref().is_some_and(|pv| pv.doc_id == doc_id) {
+                    p.preview = None;
+                }
             }
             return;
         };
@@ -259,7 +274,14 @@ impl Editor {
         let mut rerun = None;
         for (i, p) in self.wasm_plugins.iter_mut().enumerate() {
             let Some(pv) = &p.preview else { continue };
-            if !p.show_panel || pv.revision != revision || pv.piece != active {
+            if !p.show_panel {
+                p.preview = None;
+                continue;
+            }
+            if pv.doc_id != doc_id {
+                continue;
+            }
+            if pv.revision != revision || pv.piece != active {
                 p.preview = None;
                 continue;
             }
@@ -271,7 +293,7 @@ impl Editor {
             }
         }
         if let Some((slot, command)) = rerun
-            && self.job.is_none()
+            && !self.documents.iter().any(|d| d.job.is_some())
         {
             self.launch_plugin(slot, command, true);
         }
@@ -279,7 +301,12 @@ impl Editor {
 
     /// Apply the shown preview of plugin `slot` exactly (it isn't run again).
     pub fn accept_plugin_preview(&mut self, slot: usize) {
+        let active_doc = self.documents[self.active_document].id;
         let Some(p) = self.wasm_plugins.get_mut(slot) else { return };
+        if p.preview.as_ref().is_some_and(|pv| pv.doc_id != active_doc) {
+            self.status = "Switch back to the tab where this preview started to accept it".into();
+            return;
+        }
         let Some(pv) = p.preview.take() else { return };
         let Some((pieces, result)) = pv.result else { return };
         let label = format!(
@@ -303,10 +330,11 @@ impl Editor {
     }
 
     /// The preview mesh to draw and the piece it stands in for, if a
-    /// plugin preview is showing.
+    /// plugin preview is showing for the active tab.
     pub fn plugin_preview_mut(&mut self) -> Option<(u64, &mut Mesh)> {
+        let doc_id = self.documents[self.active_document].id;
         self.wasm_plugins.iter_mut().find_map(|p| {
-            let pv = p.preview.as_mut()?;
+            let pv = p.preview.as_mut().filter(|pv| pv.doc_id == doc_id)?;
             let piece = pv.piece;
             pv.mesh.as_mut().map(|m| (piece, m))
         })
@@ -322,12 +350,13 @@ impl Editor {
     }
 
     fn launch_plugin(&mut self, slot: usize, command: usize, preview: bool) {
-        if self.job.is_some() {
+        if self.documents.iter().any(|d| d.job.is_some()) {
             if !preview {
                 self.status = "Another operation is still running".into();
             }
             return;
         }
+        let doc_id = self.documents[self.active_document].id;
         let Some(mut plugin) = self.wasm_plugins.get_mut(slot).and_then(|p| p.plugin.take()) else { return };
         let preview_params = preview.then(|| (plugin.params.clone(), plugin.param_colors.clone()));
         if let Some(pv) = self.wasm_plugins[slot].preview.as_mut()
@@ -385,6 +414,7 @@ impl Editor {
         self.start_job(shown, consumed, move || {
             let result = plugin.run(command, snap);
             Ok(JobResult::Plugin(Box::new(PluginJob {
+                doc_id,
                 slot,
                 plugin,
                 label: job_label,
@@ -396,12 +426,22 @@ impl Editor {
     }
 
     /// Apply a finished plugin job: put the plugin back and record its
-    /// edits, or show them as the plugin's preview.
+    /// edits, or show them as the plugin's preview. Refuses to apply if
+    /// the active tab no longer matches `job.doc_id`.
     pub(crate) fn finish_plugin_job(&mut self, job: PluginJob, secs: f32) {
-        let PluginJob { slot, plugin, label, pieces, result, preview } = job;
+        let PluginJob { doc_id, slot, plugin, label, pieces, result, preview } = job;
         if let Some(p) = self.wasm_plugins.get_mut(slot) {
             p.plugin = Some(plugin);
             p.running = None;
+        }
+        if doc_id != self.documents[self.active_document].id {
+            if let Some(p) = self.wasm_plugins.get_mut(slot)
+                && preview.is_some()
+            {
+                p.preview = None;
+            }
+            self.status = format!("{label}: target tab is no longer active; result discarded");
+            return;
         }
         let result = match result {
             Ok(r) if r.cancelled => {
@@ -433,10 +473,11 @@ impl Editor {
         mut result: RunResult,
         params: (Vec<f32>, Vec<Vec3>),
     ) {
+        let doc_id = self.documents[self.active_document].id;
         let revision = self.history.revision();
         let Some(p) = self.wasm_plugins.get_mut(slot) else { return };
         let Some(pv) = p.preview.as_mut() else { return };
-        if pv.revision != revision || pv.params != params {
+        if pv.doc_id != doc_id || pv.revision != revision || pv.params != params {
             // Overtaken: a newer run follows (update_plugin_previews).
             return;
         }
@@ -970,7 +1011,8 @@ fn param_widget(ui: &mut Ui, param: &oxy_plugin::Param, value: &mut f32, color: 
 /// A floating panel per plugin whose panel is open: its params, commands,
 /// a running command's progress, and a preview's Accept and Cancel.
 pub fn panels(ctx: &egui::Context, ed: &mut Editor) {
-    let busy = ed.job.is_some();
+    let busy = ed.documents.iter().any(|d| d.job.is_some());
+    let active_doc = ed.documents[ed.active_document].id;
     let mut action = None;
     let mut changed = Vec::new();
     for i in 0..ed.wasm_plugins.len() {
@@ -979,7 +1021,9 @@ pub fn panels(ctx: &egui::Context, ed: &mut Editor) {
             continue;
         }
         let mut open = true;
-        let previewing = p.preview.as_ref().map(|pv| (pv.command, pv.result.is_some()));
+        let other_tab_preview = p.preview.as_ref().is_some_and(|pv| pv.doc_id != active_doc);
+        let previewing =
+            p.preview.as_ref().filter(|pv| pv.doc_id == active_doc).map(|pv| (pv.command, pv.result.is_some()));
         let running = p.running.clone();
         egui::Window::new(format!("Plugin: {}", p.name)).open(&mut open).resizable(false).show(ctx, |ui| {
             ui.set_max_width(360.0);
@@ -1037,7 +1081,10 @@ pub fn panels(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 }
             });
-            if let Some((_, ready)) = previewing {
+            if other_tab_preview {
+                ui.add_space(4.0);
+                ui.label(RichText::new("Preview open on another tab").weak().small());
+            } else if let Some((_, ready)) = previewing {
                 ui.add_space(4.0);
                 ui.horizontal(|ui| {
                     let accept = ui.add_enabled(ready && !busy, egui::Button::new("Accept"));

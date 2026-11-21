@@ -415,6 +415,8 @@ pub enum CommandId {
     Redo,
     UndoPiece,
     RedoPiece,
+    CopyPiece,
+    PastePiece,
     LastStrokeAsCurve,
     CommandPalette,
     BrushFinder,
@@ -655,6 +657,8 @@ const COMMANDS: &[CommandMeta] = &[
     },
     CommandMeta { id: CommandId::Guide, name: "Guide", group: "Help", defaults: &["f2"] },
     CommandMeta { id: CommandId::Preferences, name: "Preferences", group: "Edit", defaults: &["ctrl+,"] },
+    CommandMeta { id: CommandId::CopyPiece, name: "Copy piece", group: "Edit", defaults: &["ctrl+c"] },
+    CommandMeta { id: CommandId::PastePiece, name: "Paste piece", group: "Edit", defaults: &["ctrl+v"] },
     // Y: no preset uses it (they take B, E, M, O, P, Q, R, T and W).
     CommandMeta {
         id: CommandId::PolyRepeat,
@@ -1595,6 +1599,8 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::Redo => "redo",
         CommandId::UndoPiece => "undo_piece",
         CommandId::RedoPiece => "redo_piece",
+        CommandId::CopyPiece => "copy_piece",
+        CommandId::PastePiece => "paste_piece",
         CommandId::LastStrokeAsCurve => "last_stroke_as_curve",
         CommandId::CommandPalette => "command_palette",
         CommandId::BrushFinder => "brush_finder",
