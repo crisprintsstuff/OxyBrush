@@ -88,6 +88,8 @@ pub fn import_pieces(bytes: &[u8], stem: &str) -> Result<Vec<(String, Mesh)>> {
                 let mut tris = Vec::new();
                 let mut uvs = Vec::new();
                 let mut groups = Vec::new();
+                // The polygon of each triangle, so quads stay quads.
+                let mut faces = Vec::new();
                 let has_materials = !geom.materials.is_empty();
 
                 for (poly_idx, polygon) in geom.polygons.iter().enumerate() {
@@ -103,6 +105,7 @@ pub fn import_pieces(bytes: &[u8], stem: &str) -> Result<Vec<(String, Mesh)>> {
                         } else {
                             tris.push([a, b, c]);
                         }
+                        faces.push(poly_idx as u32);
 
                         if has_materials {
                             groups.push(mat_id);
@@ -129,7 +132,7 @@ pub fn import_pieces(bytes: &[u8], stem: &str) -> Result<Vec<(String, Mesh)>> {
                 }
 
                 if !tris.is_empty() {
-                    let mesh = crate::finish_with(positions, tris, Vec::new(), uvs, groups)?;
+                    let mesh = crate::finish_with(positions, tris, Vec::new(), uvs, groups, faces)?;
                     let piece_name = unique_name(node_name, &mut seen_names);
                     pieces.push((piece_name, mesh));
                 }
@@ -217,7 +220,7 @@ pub fn import_pieces(bytes: &[u8], stem: &str) -> Result<Vec<(String, Mesh)>> {
             }
 
             if !tris.is_empty() {
-                let mesh = crate::finish_with(positions, tris, Vec::new(), uvs, Vec::new())?;
+                let mesh = crate::finish_with(positions, tris, Vec::new(), uvs, Vec::new(), Vec::new())?;
                 let piece_name = unique_name(raw_name, &mut seen_names);
                 pieces.push((piece_name, mesh));
             }

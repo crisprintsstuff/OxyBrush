@@ -53,6 +53,15 @@
 //!   **preceding** `PIEC`: `parent:u32`, the parent piece's place among the
 //!   file's pieces (from 0; not this piece). Transforming the parent transforms
 //!   this piece with it. Older readers skip it and keep pieces independent.
+//! - `POLY` (optional, since 4.0.0-beta.22): the polygons of the
+//!   **preceding** `PIEC` when it was imported from (or built from) quads
+//!   and n-gons, as the edges inside them: `dcount:u32 diagonal:u32*2d
+//!   ncount:u32 ngon_edge:u32*2n`, point pairs (low first) in the `PIEC`'s
+//!   point order. A diagonal splits a quad into two triangles; an n-gon
+//!   edge lies inside a polygon of five or more corners. Not written for a
+//!   piece with subdivision levels (the `MRES` keeps its polygons) or whose
+//!   quads are guessed from its shape. Older readers skip it and guess the
+//!   quads, so quads that aren't flat open as two triangles.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -320,6 +329,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if !p.mesh.uv.is_empty() && p.mesh.uv.len() == p.mesh.triangles.len() {
             sections.push((*b"UVCO", encode_uvs(&p.mesh.uv)));
         }
+        if let Some(polys) = p.polygons.as_ref().filter(|_| p.multires.is_none()) {
+            sections.push((*b"POLY", encode_polygons(polys)));
+        }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
             b.extend_from_slice(&(p.mesh.color.len() as u32).to_le_bytes());
@@ -509,6 +521,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     piece.mesh.uv = uv;
                 } else {
                     log::warn!("ignoring UVs that don't match piece {:?}", piece.name);
+                }
+            }
+            b"POLY" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("POLY before any piece".into()))?;
+                match decode_polygons(&raw, piece.mesh.positions.len()) {
+                    Ok(p) => piece.polygons = Some(p),
+                    Err(e) => log::warn!("ignoring polygons that don't match piece {:?}: {e}", piece.name),
                 }
             }
             b"MRUV" => {
@@ -1549,7 +1568,42 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         material: None,
         instancers: Vec::new(),
         parent: None,
+        polygons: None,
     })
+}
+
+/// The `POLY` section (see the table at the top).
+fn encode_polygons(p: &crate::SavedPolygons) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(8 + (p.diagonals.len() + p.ngon_edges.len()) * 8);
+    for list in [&p.diagonals, &p.ngon_edges] {
+        bytes.extend_from_slice(&(list.len() as u32).to_le_bytes());
+        for v in list.iter().flatten() {
+            bytes.extend_from_slice(&v.to_le_bytes());
+        }
+    }
+    bytes
+}
+
+/// Read a `POLY` section for a piece of `points` points.
+/// RETURNS: an error when it's cut short or names a missing point.
+fn decode_polygons(raw: &[u8], points: usize) -> Result<crate::SavedPolygons> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let mut list = || -> Result<Vec<[u32; 2]>> {
+        let n = r.u32()? as usize;
+        r.check(n, 8)?;
+        (0..n)
+            .map(|_| {
+                let e = [r.u32()?, r.u32()?];
+                if e.iter().any(|&v| v as usize >= points) {
+                    return Err(Error::Corrupt("polygon edge point out of range".into()));
+                }
+                Ok(e)
+            })
+            .collect()
+    };
+    let diagonals = list()?;
+    let ngon_edges = list()?;
+    Ok(crate::SavedPolygons { diagonals, ngon_edges })
 }
 
 fn encode_uvs(uv: &[[oxy_mesh::Vec2; 3]]) -> Vec<u8> {
@@ -1822,6 +1876,7 @@ mod tests {
                     material: None,
                     instancers: Vec::new(),
                     parent: None,
+                    polygons: None,
                 },
                 PieceData {
                     name: "Böx ✓".into(),
@@ -1837,6 +1892,7 @@ mod tests {
                     material: None,
                     instancers: Vec::new(),
                     parent: None,
+                    polygons: None,
                 },
             ],
             active: 1,
@@ -2011,6 +2067,7 @@ mod tests {
             material: None,
             instancers: Vec::new(),
             parent: None,
+            polygons: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
         assert_eq!(bytes.windows(4).filter(|w| w == b"STRK").count(), 1);
@@ -2654,6 +2711,7 @@ mod tests {
                 material: None,
                 instancers: Vec::new(),
                 parent: None,
+                polygons: None,
             }],
             active: 0,
             alphas: Vec::new(),
@@ -2813,6 +2871,45 @@ mod tests {
         // empty scenes were allowed.
         let with = sample();
         assert_eq!(decode(&encode(&with)).unwrap().pieces.len(), with.pieces.len());
+    }
+
+    #[test]
+    fn known_polygons_round_trip_in_oxb() {
+        // Two quads, each folded too far to be guessed from its shape, in a
+        // point order `Mesh::from_data` changes.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 1.0),
+            Vec3::new(2.0, 0.0, 0.0),
+            Vec3::new(2.0, 1.0, 1.0),
+        ];
+        let triangles = vec![[0, 1, 2], [0, 2, 3], [1, 4, 5], [1, 5, 2]];
+        let mesh = oxy_mesh::Mesh::new(positions, triangles);
+        assert_eq!(mesh.quad_count(), 0, "not guessed from the shape");
+        let mesh = oxy_mesh::Mesh::from_data(mesh.to_data());
+        let at = |v: u32| mesh.source_vertices().iter().position(|&s| s == v).unwrap() as u32;
+        let key = |a: u32, b: u32| [at(a).min(at(b)), at(a).max(at(b))];
+        mesh.set_quad_diagonals([key(0, 2), key(1, 5)].into());
+        mesh.set_ngon_edges(Default::default());
+        let scene = crate::Scene::new(crate::Piece::new("Folded", mesh));
+        let bytes = encode(&scene.to_data());
+        assert_eq!(bytes.windows(4).filter(|w| w == b"POLY").count(), 1);
+        let back = crate::Scene::from_data(decode(&bytes).unwrap()).unwrap();
+        assert_eq!(back.pieces[0].mesh.quad_and_triangle_counts(), (2, 0));
+        // Older readers skip it and guess, finding no quads.
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"POLY").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        let old = crate::Scene::from_data(decode(&skipped).unwrap()).unwrap();
+        assert_eq!(old.pieces[0].mesh.quad_count(), 0);
+        // A piece whose quads are guessed writes no section.
+        let guessed =
+            crate::Scene::new(crate::Piece::new("Cube", oxy_mesh::Mesh::from_data(sample().pieces[0].mesh.clone())));
+        assert_eq!(encode(&guessed.to_data()).windows(4).filter(|w| w == b"POLY").count(), 0);
+        // Points out of range are refused, not trusted.
+        assert!(decode_polygons(&[1, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 6).is_err());
     }
 
     #[test]
