@@ -78,6 +78,10 @@ pub struct App {
     pen_press: Option<PenPress>,
     applied_theme: Option<AppliedThemeKey>,
     applied_title: String,
+    /// The window was just handed to the system to move or resize (own
+    /// title bar, RFC 0028). The system keeps the button release, so egui
+    /// is told the button went up on the next frame.
+    release_after_window_drag: bool,
     last_frame: Instant,
     initial_files: Vec<PathBuf>,
     /// Saved project tabs from the previous session, to open on `resumed`.
@@ -244,6 +248,7 @@ impl App {
             pen_press: None,
             applied_theme: None,
             applied_title: String::new(),
+            release_after_window_drag: false,
             last_frame: Instant::now(),
             initial_files,
             pending_session,
@@ -476,7 +481,12 @@ impl App {
             }
         }
         let (min_w, min_h) = crate::settings::WindowGeometry::MIN;
+        // OxyBrush's own title bar (RFC 0028) on Windows and Linux, unless
+        // the preference asks for the system's. macOS keeps its own for now.
+        let own_title_bar = cfg!(not(target_os = "macos")) && !self.editor.system_title_bar;
+        self.editor.own_title_bar = own_title_bar;
         let attrs = attrs
+            .with_decorations(!own_title_bar)
             .with_min_inner_size(winit::dpi::LogicalSize::new(min_w, min_h))
             // The title bar / window list icon. Without it, Windows shows a
             // generic icon there even though the exe has one.
@@ -487,6 +497,9 @@ impl App {
             attrs,
             window_icon(include_bytes!("../../../packaging/icons/oxybrush-256.png")),
         );
+        // Keep the drop shadow a window without the system frame would lose.
+        #[cfg(target_os = "windows")]
+        let attrs = winit::platform::windows::WindowAttributesExtWindows::with_undecorated_shadow(attrs, true);
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
@@ -632,6 +645,16 @@ impl App {
             g.surface.configure(&g.device, &g.config);
         }
         let mut raw = g.egui_state.take_egui_input(&g.window);
+        if std::mem::take(&mut self.release_after_window_drag) {
+            let (pos, modifiers) = self.egui_ctx.input(|i| (i.pointer.latest_pos().unwrap_or_default(), i.modifiers));
+            raw.events.push(egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers,
+            });
+        }
+        self.editor.window_maximized = g.window.is_maximized();
         raw.screen_rect = screen_rect;
         let mut action = None;
         let mut canvas = egui::Rect::NOTHING;
@@ -639,6 +662,28 @@ impl App {
         let mut out = self.egui_ctx.run_ui(raw, |ui| {
             (action, canvas) = ui::draw(ui, ed);
         });
+        if let Some(request) = ed.window_request.take() {
+            use crate::title_bar::WindowRequest as W;
+            match request {
+                W::Drag => {
+                    if let Err(e) = g.window.drag_window() {
+                        log::warn!("could not move the window: {e}");
+                    }
+                    self.release_after_window_drag = true;
+                }
+                W::Resize(edge) => {
+                    if let Err(e) = g.window.drag_resize_window(edge.to_winit()) {
+                        log::warn!("could not resize the window: {e}");
+                    }
+                    self.release_after_window_drag = true;
+                }
+                W::Minimize => g.window.set_minimized(true),
+                W::ToggleMaximize => g.window.set_maximized(!g.window.is_maximized()),
+                // As the system close button does: ask about unsaved tabs.
+                W::Close => ed.request(crate::editor::Pending::Quit),
+                W::Menu(pos) => g.window.show_window_menu(winit::dpi::LogicalPosition::new(pos.x, pos.y)),
+            }
+        }
         // Apply texture uploads now so skipped frames never lose them.
         let mut textures = std::mem::take(&mut out.textures_delta);
         for (id, deltas) in textures.set.drain() {
