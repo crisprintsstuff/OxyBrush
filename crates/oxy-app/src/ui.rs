@@ -4799,7 +4799,7 @@ fn capture_controls(ui: &mut Ui, ed: &mut Editor) {
 struct PieceDrag(usize);
 
 enum PieceDropAction {
-    Parent { child_id: u64, parent_id: u64 },
+    Parent { child_ids: Vec<u64>, parent_id: u64 },
     Insert { piece_id: u64, new_parent: Option<u64>, target_id: u64, is_after: bool },
 }
 
@@ -4920,6 +4920,7 @@ fn handle_piece_drop(
     r: &egui::Response,
     target_idx: usize,
     scene: &oxy_doc::Scene,
+    selected_ids: &[u64],
 ) -> Option<PieceDropAction> {
     if !r.contains_pointer() {
         return None;
@@ -4933,12 +4934,9 @@ fn handle_piece_drop(
     let child_id = scene.pieces[from].id;
     let target_id = scene.pieces[target_idx].id;
 
-    // A piece cannot be dropped onto itself or any of its descendants
-    if scene.descendants_of(child_id).contains(&target_id) {
-        return None;
-    }
+    let dragged_ids: Vec<u64> = if selected_ids.contains(&child_id) { selected_ids.to_vec() } else { vec![child_id] };
 
-    let can_parent = scene.can_parent(child_id, target_id);
+    let can_parent = dragged_ids.iter().any(|&cid| cid != target_id && scene.can_parent(cid, target_id));
     let h = r.rect.height();
     let y_rel = pointer.y - r.rect.top();
     let is_parent_zone = can_parent && y_rel >= h * 0.25 && y_rel <= h * 0.75;
@@ -4960,7 +4958,9 @@ fn handle_piece_drop(
     if ui.input(|i| i.pointer.any_released()) {
         let _ = r.dnd_release_payload::<PieceDrag>();
         if is_parent_zone {
-            return Some(PieceDropAction::Parent { child_id, parent_id: target_id });
+            let valid_children: Vec<u64> =
+                dragged_ids.into_iter().filter(|&cid| cid != target_id && scene.can_parent(cid, target_id)).collect();
+            return Some(PieceDropAction::Parent { child_ids: valid_children, parent_id: target_id });
         }
         let target_parent = scene.pieces[target_idx].parent;
         return Some(PieceDropAction::Insert { piece_id: child_id, new_parent: target_parent, target_id, is_after });
@@ -4973,6 +4973,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let active = ed.scene.active_index();
     let mut select = None;
     let mut pick = None;
+    let mut range_select = None;
     let mut isolate = None;
     let mut drop_action = None;
     let mut toggle_fold = None;
@@ -4982,13 +4983,17 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let mut action_isolate = None;
     let mut action_hide_others = None;
     let mut action_show_all = false;
-    let mut action_unparent = None;
-    let mut action_parent_to = None;
+    let mut action_unparent: Option<Vec<u64>> = None;
+    let mut action_parent_to: Option<(Vec<u64>, u64)> = None;
     let mut action_toggle_fold = None;
     let mut action_duplicate = None;
     let mut action_delete = None;
-    let command = ui.input(|i| i.modifiers.command);
-    let alt = ui.input(|i| i.modifiers.alt);
+    let command = ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
+        || ed.modifiers.ctrl
+        || ed.touch_modifiers.ctrl;
+    let alt = ui.input(|i| i.modifiers.alt) || ed.modifiers.alt || ed.touch_modifiers.alt;
+    let shift = ui.input(|i| i.modifiers.shift) || ed.modifiers.shift || ed.touch_modifiers.shift;
+    let selected_ids = ed.selected_piece_ids();
     let total_pieces = ed.scene.pieces.len();
     let sources: Vec<u64> = ed.scene.pieces.iter().flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
     let picked: Vec<bool> = (0..total_pieces).map(|i| ed.piece_picked(i)).collect();
@@ -5051,21 +5056,22 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             for row in &tree_rows {
                 let i = row.index;
                 let is_active = i == active;
+                let is_picked = picked[i];
+                let is_selected = is_active || is_picked;
                 let (fill, stroke) = if is_active {
                     widgets::selected_look(ui.visuals(), 0.18)
-                } else if picked[i] {
-                    // Picked with Ctrl/Cmd+click: moves with the active piece.
+                } else if is_picked {
+                    // Picked with Ctrl/Cmd+click or Shift-click: clearly selected.
                     let accent = ui.visuals().selection.stroke.color;
-                    (accent.linear_multiply(0.06), EStroke::new(1.0, accent.linear_multiply(0.45)))
+                    (accent.linear_multiply(0.12), EStroke::new(1.0, accent.linear_multiply(0.8)))
                 } else {
                     (Color32::TRANSPARENT, EStroke::NONE)
                 };
-                let stroke = if widgets::studio_style() || picked[i] { stroke } else { EStroke::NONE };
+                let stroke = if widgets::studio_style() || is_selected { stroke } else { EStroke::NONE };
                 let mut row_dragged = false;
                 let p = &mut ed.scene.pieces[i];
                 let piece_id = p.id;
                 let piece_name = p.name.clone();
-                let is_parented = p.parent.is_some();
                 let piece_triangles = p.mesh.triangle_count();
                 let is_visible = p.visible;
 
@@ -5196,25 +5202,31 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             } else {
                                 let text_color = if is_active {
                                     ui.visuals().selection.stroke.color
+                                } else if is_picked {
+                                    ui.visuals().selection.stroke.color.linear_multiply(0.9)
                                 } else if !is_visible {
                                     ui.visuals().text_color().linear_multiply(0.4)
                                 } else {
                                     ui.visuals().text_color()
                                 };
-                                let btn = ui.add(
-                                    egui::Button::selectable(is_active, RichText::new(&p.name).color(text_color))
+                                let btn_w = (ui.available_width() - 65.0).max(60.0);
+                                let btn = ui.add_sized(
+                                    egui::vec2(btn_w, 18.0),
+                                    egui::Button::selectable(is_selected, RichText::new(&p.name).color(text_color))
                                         .frame(false)
                                         .sense(egui::Sense::click_and_drag())
                                         .truncate(),
                                 );
                                 let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
-                                if btn.dragged() {
+                                if btn.dragged() && !shift && !command {
                                     btn.dnd_set_drag_payload(PieceDrag(i));
                                     row_dragged = true;
                                 } else if btn.double_clicked() {
                                     action_rename = Some((piece_id, p.name.clone()));
                                 } else if btn.clicked() {
-                                    if command {
+                                    if shift {
+                                        range_select = Some((i, command));
+                                    } else if command {
                                         pick = Some(i);
                                     } else {
                                         select = Some(i);
@@ -5244,7 +5256,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             }
 
                             // Picked badge
-                            if picked[i] {
+                            if is_picked {
                                 tips::hover(
                                     ui.label(
                                         RichText::new("picked")
@@ -5271,6 +5283,20 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         });
                     })
                     .response;
+
+                if frame_resp.interact(egui::Sense::click()).clicked()
+                    && pick.is_none()
+                    && select.is_none()
+                    && range_select.is_none()
+                {
+                    if shift {
+                        range_select = Some((i, command));
+                    } else if command {
+                        pick = Some(i);
+                    } else {
+                        select = Some(i);
+                    }
+                }
 
                 // Active row leading accent stripe
                 if is_active {
@@ -5314,22 +5340,39 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         ui.close();
                     }
                     ui.separator();
-                    if is_parented && ui.button("Unparent").clicked() {
-                        action_unparent = Some(piece_id);
-                        ui.close();
+                    let context_ids =
+                        if is_selected && selected_ids.len() > 1 { selected_ids.clone() } else { vec![piece_id] };
+                    let parented_count = context_ids.iter().filter(|&id| ed.scene.parent_of(*id).is_some()).count();
+                    if parented_count > 0 {
+                        let unparent_lbl = if context_ids.len() > 1 {
+                            format!("Unparent ({parented_count})")
+                        } else {
+                            "Unparent".to_string()
+                        };
+                        if ui.button(unparent_lbl).clicked() {
+                            action_unparent = Some(context_ids.clone());
+                            ui.close();
+                        }
                     }
-                    let can_have_parent = ed
-                        .scene
-                        .pieces
-                        .iter()
-                        .any(|other| other.id != piece_id && ed.scene.can_parent(piece_id, other.id));
+                    let can_have_parent = ed.scene.pieces.iter().any(|other| {
+                        !context_ids.contains(&other.id)
+                            && context_ids.iter().any(|&cid| ed.scene.can_parent(cid, other.id))
+                    });
                     if can_have_parent {
-                        ui.menu_button("Parent to…", |ui| {
+                        let menu_lbl = if context_ids.len() > 1 {
+                            format!("Parent {} pieces to…", context_ids.len())
+                        } else {
+                            "Parent to…".to_string()
+                        };
+                        ui.menu_button(menu_lbl, |ui| {
                             for other in &ed.scene.pieces {
-                                if other.id != piece_id && ed.scene.can_parent(piece_id, other.id) {
-                                    let is_current = is_parented && ed.scene.parent_of(piece_id) == Some(other.id);
+                                if !context_ids.contains(&other.id)
+                                    && context_ids.iter().any(|&cid| ed.scene.can_parent(cid, other.id))
+                                {
+                                    let is_current =
+                                        context_ids.iter().all(|&cid| ed.scene.parent_of(cid) == Some(other.id));
                                     if ui.selectable_label(is_current, &other.name).clicked() {
-                                        action_parent_to = Some((piece_id, other.id));
+                                        action_parent_to = Some((context_ids.clone(), other.id));
                                         ui.close();
                                     }
                                 }
@@ -5357,7 +5400,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 if row_dragged {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                 }
-                if let Some(act) = handle_piece_drop(ui, &frame_resp, i, &ed.scene) {
+                if let Some(act) = handle_piece_drop(ui, &frame_resp, i, &ed.scene, &selected_ids) {
                     drop_action = Some(act);
                 }
             }
@@ -5381,11 +5424,10 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 {
                     let from = from.0;
                     if from < ed.scene.pieces.len() {
-                        let id = ed.scene.pieces[from].id;
-                        if let Some(last_piece) = ed.scene.pieces.last() {
-                            let target_id = last_piece.id;
-                            ed.place_piece_relative(id, None, target_id, true);
-                        }
+                        let child_id = ed.scene.pieces[from].id;
+                        let ids_to_unparent =
+                            if selected_ids.contains(&child_id) { selected_ids.clone() } else { vec![child_id] };
+                        ed.unparent_pieces(&ids_to_unparent);
                     }
                 }
             }
@@ -5427,8 +5469,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
     if let Some(act) = drop_action {
         match act {
-            PieceDropAction::Parent { child_id, parent_id } => {
-                ed.place_piece_as_child(child_id, parent_id);
+            PieceDropAction::Parent { child_ids, parent_id } => {
+                ed.place_pieces_as_children(&child_ids, parent_id);
             }
             PieceDropAction::Insert { piece_id, new_parent, target_id, is_after } => {
                 ed.place_piece_relative(piece_id, new_parent, target_id, is_after);
@@ -5459,11 +5501,11 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             p.visible = true;
         }
     }
-    if let Some(id) = action_unparent {
-        ed.set_piece_parent(id, None);
+    if let Some(ids) = action_unparent {
+        ed.unparent_pieces(&ids);
     }
-    if let Some((child_id, parent_id)) = action_parent_to {
-        ed.place_piece_as_child(child_id, parent_id);
+    if let Some((child_ids, parent_id)) = action_parent_to {
+        ed.place_pieces_as_children(&child_ids, parent_id);
     }
     if let Some(id) = action_toggle_fold.or(toggle_fold) {
         if ed.folded_pieces.contains(&id) {
@@ -5482,14 +5524,22 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if let Some(i) = pick {
         ed.toggle_piece_pick(i);
+        if let Some(p) = ed.scene.pieces.get(i) {
+            ed.piece_select_anchor = Some(p.id);
+        }
     }
     if let Some(i) = select {
         ed.scene.set_active(i);
         ed.piece_pick.clear();
         let active_id = ed.scene.pieces[i].id;
+        ed.piece_select_anchor = Some(active_id);
         for anc in ed.scene.ancestors_of(active_id) {
             ed.folded_pieces.remove(&anc);
         }
+    }
+    if let Some((target_idx, extend)) = range_select {
+        let visible_order: Vec<usize> = tree_rows.iter().map(|r| r.index).collect();
+        ed.select_piece_range(target_idx, &visible_order, extend);
     }
     if ed.scene.pieces.is_empty() {
         ui.label(RichText::new("No pieces yet. + Add, Insert Primitive or Import starts one.").weak().small());
@@ -5530,8 +5580,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
             ed.delete_active();
         }
-        let is_parented = ed.scene.try_active().and_then(|p| p.parent).is_some();
-        if tips::button_on(ui, is_parented, "Unparent", Cmd::Unparent).clicked() {
+        let any_parented = ed.scene.try_active().and_then(|p| p.parent).is_some()
+            || ed.piece_pick.iter().any(|&id| ed.scene.parent_of(id).is_some());
+        if tips::button_on(ui, any_parented, "Unparent", Cmd::Unparent).clicked() {
             ed.unparent_active();
         }
         let has_pick = !ed.piece_pick.is_empty();
