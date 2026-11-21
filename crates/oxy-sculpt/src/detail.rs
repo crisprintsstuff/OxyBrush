@@ -375,6 +375,221 @@ impl PartDetail {
 }
 
 /// Compute a stable tangent vector perpendicular to `normal`.
+/// Where a placed part sits on a surface (RFC 0026): its anchor, the
+/// surface normal there, the tangent its local x axis follows (the twist is
+/// in it), and its scale. `mirrored` marks a frame reflected through a
+/// mirror plane: its bitangent flips, so mapping through it gives the
+/// mirror image of the part (left and right swap), not a turned copy.
+///
+/// INVARIANT: `normal` and `tangent` are unit length and perpendicular.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartFrame {
+    pub anchor: Vec3,
+    pub normal: Vec3,
+    pub tangent: Vec3,
+    pub scale: f32,
+    pub mirrored: bool,
+}
+
+impl PartFrame {
+    /// The frame a drop at `anchor` with surface `normal` and `twist`
+    /// (radians round the normal) makes: the same one
+    /// [`PartDetail::project_to_surface`] uses.
+    pub fn from_twist(anchor: Vec3, normal: Vec3, twist: f32, scale: f32) -> Self {
+        let n = normal.normalize_or_zero();
+        let n = if n.length_squared() < 0.5 { Vec3::Y } else { n };
+        let t_base = tangent_for_normal(n);
+        let b_base = n.cross(t_base).normalize();
+        let (sin_t, cos_t) = twist.sin_cos();
+        let tangent = (t_base * cos_t + b_base * sin_t).normalize();
+        PartFrame { anchor, normal: n, tangent, scale, mirrored: false }
+    }
+
+    /// The frame's y axis in the surface.
+    pub fn bitangent(&self) -> Vec3 {
+        let b = self.normal.cross(self.tangent).normalize_or_zero();
+        if self.mirrored { -b } else { b }
+    }
+
+    /// The frame with its tangent made perpendicular to its normal again
+    /// (after the normal changed, or values read from a file).
+    pub fn orthonormal(mut self) -> Self {
+        let n = self.normal.normalize_or_zero();
+        self.normal = if n.length_squared() < 0.5 { Vec3::Y } else { n };
+        let t = self.tangent - self.normal * self.tangent.dot(self.normal);
+        self.tangent = if t.length_squared() < 1e-10 { tangent_for_normal(self.normal) } else { t.normalize() };
+        self
+    }
+
+    /// A world point for local offset `local` (x tangent, y bitangent, z
+    /// normal), in units of `unit` (the detail's reference radius) times the
+    /// frame's scale.
+    pub fn to_world(&self, local: Vec3, unit: f32) -> Vec3 {
+        let o = local * unit * self.scale.max(1e-4);
+        self.anchor + self.tangent * o.x + self.bitangent() * o.y + self.normal * o.z
+    }
+
+    /// The local offset of world point `p`: the inverse of [`Self::to_world`].
+    pub fn to_local(&self, p: Vec3, unit: f32) -> Vec3 {
+        let o = (p - self.anchor) / (unit * self.scale.max(1e-4)).max(1e-9);
+        Vec3::new(o.dot(self.tangent), o.dot(self.bitangent()), o.dot(self.normal))
+    }
+
+    /// A world direction for local direction `d`.
+    pub fn dir_to_world(&self, d: Vec3) -> Vec3 {
+        self.tangent * d.x + self.bitangent() * d.y + self.normal * d.z
+    }
+
+    /// The local direction of world direction `d`.
+    pub fn dir_to_local(&self, d: Vec3) -> Vec3 {
+        Vec3::new(d.dot(self.tangent), d.dot(self.bitangent()), d.dot(self.normal))
+    }
+
+    /// This frame reflected through the plane through `center` with normal
+    /// `axis` (unit). Mapping a part through the result gives the mirror
+    /// image of mapping it through `self`.
+    pub fn reflect(&self, center: Vec3, axis: Vec3) -> Self {
+        let point = |p: Vec3| p - 2.0 * (p - center).dot(axis) * axis;
+        let dir = |d: Vec3| d - 2.0 * d.dot(axis) * axis;
+        PartFrame {
+            anchor: point(self.anchor),
+            normal: dir(self.normal),
+            tangent: dir(self.tangent),
+            scale: self.scale,
+            mirrored: !self.mirrored,
+        }
+    }
+}
+
+/// Map placed recipes from one frame to another (RFC 0026: Move on
+/// surface, and the mirror side of a linked pair). Each sample keeps its
+/// place in the part (its local offset in `from`) and is projected onto
+/// `mesh` from where `to` puts it, along `to`'s normal, as a drop does.
+/// Brush sizes scale by `to.scale / from.scale`. Samples that miss the
+/// surface are left out and counted.
+///
+/// RETURNS: the mapped recipes, in order, and how many samples missed.
+pub fn remap_recipes(
+    recipes: &[StrokeRecipe],
+    from: &PartFrame,
+    to: &PartFrame,
+    unit: f32,
+    mesh: &Mesh,
+) -> (Vec<StrokeRecipe>, usize) {
+    let ratio = to.scale.max(1e-4) / from.scale.max(1e-4);
+    let probe = (unit * to.scale * 4.0).max(0.05);
+    let n = to.normal;
+    let mut missed = 0;
+    let mut place = |p: Vec3| -> Option<(Vec3, Vec3)> {
+        let world = to.to_world(from.to_local(p, unit), unit);
+        let hit = mesh.raycast(world + n * probe, -n).or_else(|| mesh.raycast(world - n * probe, n));
+        match hit {
+            Some(h) => Some((h.point, h.normal)),
+            None => {
+                missed += 1;
+                None
+            }
+        }
+    };
+    let out = recipes
+        .iter()
+        .map(|r| {
+            let mut mapped = r.clone();
+            mapped.settings.radius *= ratio;
+            mapped.symmetry = Symmetry::default();
+            mapped.events = r
+                .events
+                .iter()
+                .filter_map(|e| match *e {
+                    RecipeEvent::Sample { mut sample, spacing, strength, max_dabs } => {
+                        let (p, nn) = place(sample.position)?;
+                        sample.position = p;
+                        sample.normal = nn;
+                        Some(RecipeEvent::Sample { sample, spacing, strength, max_dabs })
+                    }
+                    RecipeEvent::Stamp { mut sample, repeats } => {
+                        let (p, nn) = place(sample.position)?;
+                        sample.position = p;
+                        sample.normal = nn;
+                        Some(RecipeEvent::Stamp { sample, repeats })
+                    }
+                    other => Some(other),
+                })
+                .collect();
+            mapped
+        })
+        .collect();
+    (out, missed)
+}
+
+impl PartDetail {
+    /// Project this detail onto `mesh` through `frame` (RFC 0026). Like
+    /// [`Self::project_to_surface`], but the frame may be mirrored, so the
+    /// mirror side of a pair is a true mirror image.
+    ///
+    /// RETURNS: (mapped recipes, count of samples that missed the surface).
+    pub fn project_frame(&self, frame: &PartFrame, mesh: &Mesh) -> (Vec<StrokeRecipe>, usize) {
+        // The detail's own coordinates are a frame at the origin.
+        let local = PartFrame { anchor: Vec3::ZERO, normal: Vec3::Z, tangent: Vec3::X, scale: 1.0, mirrored: false };
+        let unit = self.reference_radius;
+        // Local samples are offsets / reference_radius; put them in world
+        // units of `local` (scale 1) so `remap_recipes` maps them through.
+        let world: Vec<StrokeRecipe> = self
+            .recipes
+            .iter()
+            .map(|r| {
+                let mut r = r.clone();
+                for e in &mut r.events {
+                    if let RecipeEvent::Sample { sample, .. } | RecipeEvent::Stamp { sample, .. } = e {
+                        sample.position *= unit;
+                    }
+                }
+                r
+            })
+            .collect();
+        remap_recipes(&world, &local, frame, unit, mesh)
+    }
+
+    /// A detail from recipes placed through `frame`: the inverse of
+    /// [`Self::project_frame`] (RFC 0026: Save back to Recipe Box). Sizes
+    /// go back to the detail's own scale; a mirrored frame's recipes come
+    /// back in the frame's handedness, so the saved part keeps the hand it
+    /// was placed with.
+    pub fn from_placed(
+        name: &str,
+        recipes: &[StrokeRecipe],
+        frame: &PartFrame,
+        reference_radius: f32,
+    ) -> Result<Self, String> {
+        if recipes.is_empty() {
+            return Err("There are no strokes to save".into());
+        }
+        let unit = reference_radius.max(1e-4);
+        let mut alphas: Vec<Alpha> = Vec::new();
+        let recipes = recipes
+            .iter()
+            .map(|r| {
+                let mut out = r.clone();
+                out.symmetry = Symmetry::default();
+                out.settings.radius /= frame.scale.max(1e-4);
+                if let Some(a) = &out.alpha
+                    && !alphas.iter().any(|x| x.name == a.alpha.name)
+                {
+                    alphas.push((*a.alpha).clone());
+                }
+                for e in &mut out.events {
+                    if let RecipeEvent::Sample { sample, .. } | RecipeEvent::Stamp { sample, .. } = e {
+                        sample.position = frame.to_local(sample.position, unit);
+                        sample.normal = frame.dir_to_local(sample.normal.normalize_or_zero());
+                    }
+                }
+                out
+            })
+            .collect();
+        Ok(PartDetail { name: name.to_string(), reference_radius: unit, recipes, alphas })
+    }
+}
+
 fn tangent_for_normal(normal: Vec3) -> Vec3 {
     let axis = if normal.y.abs() < 0.9 { Vec3::Y } else { Vec3::X };
     normal.cross(axis).normalize()
@@ -385,6 +600,112 @@ mod tests {
     use super::*;
     use crate::BrushSettings;
     use crate::StrokeSample;
+
+    /// An asymmetric L-shaped detail: a long leg along local x and a
+    /// short one along local +y, so a turned copy and a mirror image differ.
+    fn l_detail() -> PartDetail {
+        let event = |x: f32, y: f32| RecipeEvent::Sample {
+            sample: StrokeSample { position: Vec3::new(x, y, 0.0), normal: Vec3::Z, pressure: 1.0 },
+            spacing: 0.1,
+            strength: 1.0,
+            max_dabs: 0,
+        };
+        let mut recipe = StrokeRecipe {
+            settings: BrushSettings { radius: 0.05, ..BrushSettings::default() },
+            invert: false,
+            symmetry: Symmetry { x: true, ..Default::default() },
+            center: Vec3::ZERO,
+            view: Vec3::Z,
+            grab_through: false,
+            paint: Vec3::ONE,
+            alpha: None,
+            events: vec![event(0.0, 0.0), event(2.0, 0.0), event(4.0, 0.0), event(4.0, 1.5)],
+        };
+        recipe.settings.radius = 0.05;
+        PartDetail { name: "L".into(), reference_radius: 0.05, recipes: vec![recipe], alphas: Vec::new() }
+    }
+
+    fn points(recipes: &[StrokeRecipe]) -> Vec<Vec3> {
+        recipes
+            .iter()
+            .flat_map(|r| r.events.iter())
+            .filter_map(|e| match e {
+                RecipeEvent::Sample { sample, .. } | RecipeEvent::Stamp { sample, .. } => Some(sample.position),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_frame_maps_like_a_drop_and_its_reflection_is_a_mirror_image() {
+        let sphere = oxy_mesh::primitives::icosphere(5, 1.0);
+        let detail = l_detail();
+        let normal = Vec3::new(0.5, 0.6, 0.62).normalize();
+        let frame = PartFrame::from_twist(normal, normal, 0.4, 1.5);
+        // The same placement as the drop path.
+        let (a, missed) = detail.project_frame(&frame, &sphere);
+        let (b, _) = detail.project_to_surface(normal, normal, 0.4, 1.5, &sphere);
+        assert_eq!(missed, 0);
+        for (p, q) in points(&a).iter().zip(points(&b)) {
+            assert!(p.distance(q) < 1e-5, "{p} vs {q}");
+        }
+        assert!((a[0].settings.radius - 0.05 * 1.5).abs() < 1e-6, "brush size scales with the part");
+        assert_eq!(a[0].symmetry, Symmetry::default(), "placed recipes don't mirror again");
+        // Reflected through x = 0: every point is the mirror of the source's
+        // (the sphere is symmetric), so the L's short leg points the other way.
+        let mirror = frame.reflect(Vec3::ZERO, Vec3::X);
+        assert!(mirror.mirrored);
+        let (m, _) = detail.project_frame(&mirror, &sphere);
+        for (p, q) in points(&a).iter().zip(points(&m)) {
+            let reflected = Vec3::new(-p.x, p.y, p.z);
+            assert!(reflected.distance(q) < 2e-3, "mirror of {p} is {reflected}, got {q}");
+        }
+        // A turned copy (negated twist, the old way) is not that mirror image.
+        let turned = PartFrame::from_twist(mirror.anchor, mirror.normal, -0.4, 1.5);
+        let (t, _) = detail.project_frame(&turned, &sphere);
+        let worst = points(&t).iter().zip(points(&m)).map(|(p, q)| p.distance(q)).fold(0.0f32, f32::max);
+        assert!(worst > 0.02, "a turned copy differs from the mirror image ({worst})");
+    }
+
+    #[test]
+    fn saving_back_through_the_frame_gives_the_detail_back_in_its_own_hand() {
+        let sphere = oxy_mesh::primitives::icosphere(5, 1.0);
+        let detail = l_detail();
+        let normal = Vec3::new(-0.3, 0.8, 0.5).normalize();
+        for mirrored in [false, true] {
+            let mut frame = PartFrame::from_twist(normal, normal, 1.1, 0.8);
+            if mirrored {
+                frame = frame.reflect(Vec3::ZERO, Vec3::X);
+            }
+            let (placed, _) = detail.project_frame(&frame, &sphere);
+            let back = PartDetail::from_placed("L", &placed, &frame, detail.reference_radius).unwrap();
+            assert!((back.recipes[0].settings.radius - 0.05).abs() < 1e-6, "size back to the detail's own");
+            for (p, q) in points(&back.recipes).iter().zip(points(&detail.recipes)) {
+                // On a curved surface the projection lifts points a little
+                // off the tangent plane; across the plane they match.
+                assert!(p.truncate().distance(q.truncate()) < 0.05, "mirrored={mirrored}: {p} vs {q}");
+            }
+        }
+    }
+
+    #[test]
+    fn remapping_moves_a_placed_part_and_misses_are_counted() {
+        let sphere = oxy_mesh::primitives::icosphere(5, 1.0);
+        let detail = l_detail();
+        let from = PartFrame::from_twist(Vec3::Y, Vec3::Y, 0.0, 1.0);
+        let (placed, _) = detail.project_frame(&from, &sphere);
+        let to = PartFrame::from_twist(Vec3::Z, Vec3::Z, 0.0, 2.0);
+        let (moved, missed) = remap_recipes(&placed, &from, &to, detail.reference_radius, &sphere);
+        assert_eq!(missed, 0);
+        let pts = points(&moved);
+        assert!(pts[0].distance(Vec3::Z) < 1e-3, "the anchor sample goes to the new anchor: {}", pts[0]);
+        assert!(pts.iter().all(|p| (p.length() - 1.0).abs() < 0.02), "on the surface");
+        assert!((moved[0].settings.radius - 0.1).abs() < 1e-5, "twice the scale, twice the brush");
+        // Far off the mesh, samples miss.
+        let away = PartFrame::from_twist(Vec3::new(5.0, 0.0, 0.0), Vec3::Y, 0.0, 1.0);
+        let (_, missed) = remap_recipes(&placed, &from, &away, detail.reference_radius, &sphere);
+        assert_eq!(missed, 4);
+    }
 
     #[test]
     fn part_detail_binary_round_trip() {

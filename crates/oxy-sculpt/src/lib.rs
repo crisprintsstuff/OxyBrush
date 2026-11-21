@@ -14,7 +14,7 @@ pub mod recipe;
 pub mod wire;
 
 pub use alpha::{Alpha, BuiltinAlpha};
-pub use detail::PartDetail;
+pub use detail::{PartDetail, PartFrame};
 pub use falloff::{Falloff, shift_exponent};
 pub use preset::BrushPreset;
 pub use recipe::{RecipeEvent, StoredChange, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};

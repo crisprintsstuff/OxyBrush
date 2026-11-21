@@ -413,6 +413,11 @@ pub struct SavedPlacedPart {
     pub flags: u8,
     pub mirror_axis: u8,
     pub partner: u64,
+    /// Read from a version 1 `PART`, whose `stroke_ids` were the session's
+    /// stroke ids and mean nothing once the file is reopened: the app finds
+    /// the part's strokes by its stroke group instead. Version 2 (written
+    /// now) stores each stroke's index in [`SavedStrokes::strokes`].
+    pub legacy_ids: bool,
 }
 
 /// A named group of strokes, used like a sculpt layer.

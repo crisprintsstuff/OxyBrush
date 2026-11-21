@@ -458,3 +458,83 @@ pub fn show_placement_choice_dialog(ctx: &egui::Context, ed: &mut Editor) {
         ed.cancel_part_placement();
     }
 }
+
+/// Move on surface (RFC 0026): while a placed recipe is being moved, a
+/// marker shows where it sits and which way it faces, and a small window
+/// sets its twist and size. A click on the model moves it there; Apply keeps
+/// it where it is with the new twist and size; Cancel or Esc leaves it.
+pub fn show_move_window(ctx: &egui::Context, ed: &mut Editor) {
+    let Some((part_id, frame, name, mut twist, mut scale)) = ed.part_placement.as_ref().and_then(|p| {
+        let (id, frame) = p.moving?;
+        Some((id, frame, p.detail.name.clone(), p.twist, p.scale))
+    }) else {
+        return;
+    };
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+        ed.cancel_part_placement();
+        ed.status = format!("Move {name} cancelled");
+        return;
+    }
+    // The marker: a ring on the surface and an arrow along the recipe's x axis.
+    let ppp = ed.pixels_per_point.max(0.1);
+    let origin = glam::Vec2::new(ed.canvas[0], ed.canvas[1]);
+    let size = ed.canvas_size();
+    let project = |q: glam::Vec3| ed.camera.project(q, size).map(|s| Pos2::new(s.x + origin.x, s.y + origin.y) / ppp);
+    let radius = frame.scale * ed.living.part(part_id).map_or(0.05, |p| p.detail_size) * 3.0;
+    let ring: Vec<Pos2> = (0..=48)
+        .filter_map(|k| {
+            let a = k as f32 / 48.0 * std::f32::consts::TAU;
+            project(frame.anchor + (frame.tangent * a.cos() + frame.bitangent() * a.sin()) * radius)
+        })
+        .collect();
+    let accent = ctx.global_style().visuals.selection.stroke.color;
+    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, Id::unique("recipe_move_marker")));
+    painter.add(egui::Shape::line(ring, Stroke::new(2.0, accent)));
+    if let (Some(a), Some(b)) = (project(frame.anchor), project(frame.anchor + frame.tangent * radius * 1.4)) {
+        painter.line_segment([a, b], Stroke::new(2.0, accent));
+        painter.circle_filled(a, 3.0, accent);
+    }
+
+    let mut apply = false;
+    let mut cancel = false;
+    egui::Window::new(format!("Move {name}"))
+        .id(Id::unique("recipe_move_window"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(Align2::CENTER_TOP, [0.0, 60.0])
+        .show(ctx, |ui| {
+            ui.label(RichText::new("Click on the model where it should go.").weak().small());
+            let mut degrees = twist.to_degrees();
+            ui.horizontal(|ui| {
+                ui.label("Twist");
+                if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                    twist = degrees.to_radians();
+                }
+            });
+            let mut percent = scale / frame.scale.max(1e-4) * 100.0;
+            ui.horizontal(|ui| {
+                ui.label("Size");
+                if ui.add(egui::Slider::new(&mut percent, 10.0..=400.0).suffix("%").logarithmic(true)).changed() {
+                    scale = frame.scale * percent / 100.0;
+                }
+            });
+            ui.horizontal(|ui| {
+                apply = ui.button("Apply").on_hover_text("Keep it where it is, with this twist and size").clicked();
+                cancel = ui.button("Cancel").clicked();
+            });
+        });
+    if let Some(p) = &mut ed.part_placement {
+        p.twist = twist;
+        p.scale = scale;
+    }
+    if cancel {
+        ed.cancel_part_placement();
+        ed.status = format!("Move {name} cancelled");
+    } else if apply {
+        if let Some(p) = &mut ed.part_placement {
+            p.anchor = frame.anchor;
+            p.normal = frame.normal;
+        }
+        let _ = ed.commit_part_placement(PlaceChoice::One);
+    }
+}

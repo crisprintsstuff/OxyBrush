@@ -26,6 +26,12 @@ pub struct PartPlacement {
     pub choice_open: bool,
     pub on_plane: bool,
     pub mirror_axis: u8, // 1 = X, 2 = Y, 3 = Z
+    /// SHA-256 of the library file the recipe came from, so Save back to
+    /// Recipe Box can find it again (zero when unknown).
+    pub content: [u8; 32],
+    /// Moving a placed recipe (Move on surface) rather than dropping a new
+    /// one: its id and frame when the move started.
+    pub moving: Option<(u64, oxy_sculpt::PartFrame)>,
 }
 
 /// Placement choice on release.
@@ -248,6 +254,39 @@ impl PartsLibrary {
 
         let _ = self.save_index(dir);
         Ok(file_path)
+    }
+
+    /// A name no entry uses yet: `name`, or `name 2`, `name 3`… (Save as
+    /// new recipe must not replace another recipe with the same name).
+    pub fn free_name(&self, name: &str) -> String {
+        let taken = |n: &str| self.entries.iter().any(|e| e.file_name == file_name(n));
+        if !taken(name) {
+            return name.to_string();
+        }
+        (2..).map(|k| format!("{name} {k}")).find(|n| !taken(n)).expect("a free name")
+    }
+
+    /// Replace the detail in entry `file_name` with `detail`, keeping the
+    /// entry's name, category and file (RFC 0026: Save back to Recipe Box).
+    /// The write is atomic (temporary file, then rename).
+    ///
+    /// RETURNS: the file's new content hash.
+    pub fn replace_part(&mut self, dir: &Path, file_name: &str, mut detail: PartDetail) -> std::io::Result<[u8; 32]> {
+        let Some(at) = self.entries.iter().position(|e| e.file_name == file_name) else {
+            return Err(std::io::Error::new(std::io::ErrorKind::NotFound, "no such recipe in the Recipe Box"));
+        };
+        detail.name = self.entries[at].name.clone();
+        let file_path = dir.join(file_name);
+        let tmp_path = file_path.with_extension(format!("{EXTENSION}.tmp"));
+        let bytes = detail.to_bytes();
+        let hash = content_hash(&bytes);
+        std::fs::write(&tmp_path, &bytes)?;
+        std::fs::rename(&tmp_path, &file_path)?;
+        let e = &mut self.entries[at];
+        e.hash = hash;
+        e.detail = detail;
+        let _ = self.save_index(dir);
+        Ok(hash)
     }
 
     /// Delete a part from the library by file name.
