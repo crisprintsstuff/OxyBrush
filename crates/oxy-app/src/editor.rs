@@ -2384,6 +2384,10 @@ impl Editor {
         self.orbit_picked = false;
         // The size on the model, measured where this press lands.
         self.sync_model_radius();
+        // Moving a placed recipe: the click is the move's, not a stroke.
+        if button == PointerButton::Primary && self.part_placement.as_ref().is_some_and(|p| p.moving.is_some()) {
+            return;
+        }
         if button != PointerButton::Primary {
             // A right click (without dragging) opens the quick menu.
             self.rmb_press = (button == PointerButton::Secondary).then_some(p);
@@ -3251,10 +3255,11 @@ impl Editor {
         let prev = self.pointer.replace(pos);
         if let Some(placement) = &self.part_placement
             && !placement.choice_open
+            && placement.moving.is_none()
         {
-            let size = self.canvas_size();
-            let (o, d) = self.camera.ray(pos, size);
-            if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+            // Viewport-local, like every other pick (a raw window position
+            // put the drop off by the width of the panels).
+            if let Some(hit) = self.surface_hit_at(pos) {
                 let pid = self.scene.active().id;
                 self.update_part_placement(hit.point, hit.normal, pid);
                 return true;
@@ -3624,6 +3629,18 @@ impl Editor {
     pub fn pointer_up(&mut self) {
         self.flush_drag();
         self.commit_instancer_edit();
+        if self.part_placement.as_ref().is_some_and(|p| p.moving.is_some()) {
+            // Move on surface: a click on the model moves the recipe there.
+            if let Some(pos) = self.pointer
+                && let Some(hit) = self.surface_hit_at(pos)
+                && let Some(p) = &mut self.part_placement
+            {
+                p.anchor = hit.point;
+                p.normal = hit.normal;
+                let _ = self.commit_part_placement(crate::parts::PlaceChoice::One);
+            }
+            return;
+        }
         if let Some(placement) = &mut self.part_placement {
             placement.choice_open = true;
             return;

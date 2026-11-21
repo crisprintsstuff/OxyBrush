@@ -125,6 +125,17 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Mask strokes aren't listed.",
     },
     Topic {
+        title: "Recipe Box",
+        keywords: "recipe recipes box kitbash detail details reuse place drop move turn scale mirror pair linked unlink save back new library",
+        body: "The Recipe Box is a library of reusable sculpted details: an eye, a scar, a row of scales. Pull it out from the edge of the brush shelf (View > Recipe Box). Living strokes must be on.\n\n\
+- To make a recipe, sculpt the detail, select its strokes in the Strokes window and choose Save as recipe….\n\
+- Drag a recipe onto a model to sculpt it there: Place one, or Mirror pair for both sides. It's sculpted again on that surface, so any model works.\n\
+- A placed recipe is a group in the Strokes window, and its strokes stay editable (Edit…, Edit path). Its … menu has the rest.\n\
+- Move on surface: click on the model where it should go; the Move window sets Twist and Size, Apply keeps it in place with them, and Cancel or Esc leaves it. One undo step. Strokes you made after it stay as they were.\n\
+- A mirrored pair is Linked: Edit…, Edit path and Move on surface change both sides; fade and delete change one side. Unlink stops it, and undo links them again.\n\
+- Save back to Recipe Box replaces the recipe in the box with the version on the model (it asks first; fades aren't saved). Save as new recipe adds it under a new name. Nothing is written to the box unless you choose one of these.",
+    },
+    Topic {
         title: "Deform window",
         keywords: "deform bend twist taper skew flatten squeeze sag inflate spherize noise polish relax smooth unify",
         body: "Tools > Deform… changes the whole piece at once: bend, twist, taper, skew, flatten, squeeze, sag, inflate, spherize, noise, smooth, polish, relax and more.\n\n\

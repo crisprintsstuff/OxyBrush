@@ -254,6 +254,13 @@ fn edit_section(ui: &mut egui::Ui, ed: &mut Editor) {
     let Some(mut recipe) = ed.living_edit_recipe().cloned() else { return };
     ui.label(RichText::new(format!("Edit {}", recipe.settings.kind.label())).strong());
     ui.label(RichText::new("Later strokes stay as they are. Esc cancels.").weak().small());
+    if ed.living.part_of_stroke(id).is_some_and(|p| ed.living.linked_partner(p).is_some()) {
+        ui.label(
+            RichText::new("This change also applies to the matching stroke on the other side. Fade and delete do not.")
+                .weak()
+                .small(),
+        );
+    }
     let is_editing_path = ed.curve.as_ref().is_some_and(|c| c.living_stroke == Some(id));
     ui.horizontal(|ui| {
         let btn_text = if is_editing_path { "Done editing path" } else { "Edit path" };
@@ -416,6 +423,13 @@ pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
                     ed.living_select_group(*gid);
                 }
             }
+            let placed: Vec<crate::living::PlacedPart> =
+                ed.living.parts_in_group(*gid).into_iter().cloned().collect();
+            if placed.iter().any(|p| ed.living.linked_partner(p).is_some()) {
+                ui.label(RichText::new("Linked").weak().small()).on_hover_text(
+                    "A mirrored pair: Edit…, Edit path and Move on surface change both sides. Fade and delete change one side.",
+                );
+            }
             let mut pct = strength * 100.0;
             let r = ui
                 .add(crate::widgets::Bar(egui::Slider::new(&mut pct, 0.0..=150.0).suffix(" %").max_decimals(0)))
@@ -465,6 +479,10 @@ pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
                     let _ = ed.save_part_from_strokes(name, "Details", &ids);
                     ui.close();
                 }
+                if !placed.is_empty() {
+                    ui.separator();
+                    recipe_menu(ui, ed, &placed);
+                }
                 if ui.button("Delete its strokes").clicked() {
                     ed.living_delete_group(*gid);
                     ui.close();
@@ -473,6 +491,104 @@ pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
         });
     }
     ui.add_space(4.0);
+}
+
+/// The placed-recipe actions in a group's menu (RFC 0026, after the drop).
+fn recipe_menu(ui: &mut egui::Ui, ed: &mut Editor, placed: &[crate::living::PlacedPart]) {
+    use crate::living::FLAG_SOURCE;
+    let linked = placed.iter().any(|p| ed.living.linked_partner(p).is_some());
+    // One move for a linked pair (the other side follows); a move per side
+    // once it's unlinked.
+    let movers: Vec<&crate::living::PlacedPart> = if linked {
+        placed.iter().filter(|p| p.flags & FLAG_SOURCE != 0).take(1).chain(placed.iter().take(1)).take(1).collect()
+    } else {
+        placed.iter().collect()
+    };
+    for p in movers {
+        let label = if placed.len() > 1 && !linked {
+            if p.flags & FLAG_SOURCE != 0 { "Move on surface (placed side)" } else { "Move on surface (mirror side)" }
+        } else {
+            "Move on surface"
+        };
+        if ui
+            .button(label)
+            .on_hover_text("Move, turn or scale this recipe: click on the model where it should go. One undo step.")
+            .clicked()
+        {
+            let _ = ed.begin_part_move(p.id);
+            ui.close();
+        }
+    }
+    if linked
+        && ui
+            .button("Unlink")
+            .on_hover_text("Stop changing both sides together. Nothing on the model moves; undo links them again.")
+            .clicked()
+    {
+        let _ = ed.unlink_part(placed[0].id);
+        ui.close();
+    }
+    if ui
+        .button("Save back to Recipe Box…")
+        .on_hover_text(
+            "Replace this recipe in the Recipe Box with the version on the model (the side placed from the box).",
+        )
+        .clicked()
+    {
+        match ed.part_save_back_check(placed[0].id) {
+            Ok(check) => {
+                let id = egui::Id::unique("save_back_confirm");
+                ui.ctx().data_mut(|d| d.insert_temp(id, (placed[0].id, check.question)));
+            }
+            Err(e) => ed.status = e,
+        }
+        ui.close();
+    }
+    let name_id = egui::Id::unique(("save_new_name", placed[0].group));
+    let mut new_name: String = ui.ctx().data(|d| d.get_temp(name_id)).unwrap_or_else(|| placed[0].name.clone());
+    ui.menu_button("Save as new recipe…", |ui| {
+        ui.label("Name");
+        ui.text_edit_singleline(&mut new_name);
+        if ui.button("Save").clicked() {
+            let category = ed
+                .parts_library
+                .entries
+                .iter()
+                .find(|e| e.hash == placed[0].content)
+                .map_or_else(|| "Details".to_string(), |e| e.category.clone());
+            let _ = ed.part_save_as_new(placed[0].id, &new_name, &category).map_err(|e| ed.status = e);
+            ui.close();
+        }
+    });
+    ui.ctx().data_mut(|d| d.insert_temp(name_id, new_name));
+}
+
+/// Save back to Recipe Box asks first (it replaces the file in the box).
+pub fn save_back_confirm(ctx: &egui::Context, ed: &mut Editor) {
+    let id = egui::Id::unique("save_back_confirm");
+    let Some((part, question)) = ctx.data(|d| d.get_temp::<(u64, String)>(id)) else { return };
+    let mut answer = None;
+    egui::Window::new("Save back to Recipe Box")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .show(ctx, |ui| {
+            ui.label(&question);
+            ui.horizontal(|ui| {
+                if ui.button("Replace").clicked() {
+                    answer = Some(true);
+                }
+                if ui.button("Cancel").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                    answer = Some(false);
+                }
+            });
+        });
+    if let Some(yes) = answer {
+        ctx.data_mut(|d| d.remove::<(u64, String)>(id));
+        if yes && let Err(e) = ed.part_save_back(part) {
+            ed.status = e;
+        }
+    }
 }
 
 pub(crate) fn plural(n: usize, what: &str) -> String {
