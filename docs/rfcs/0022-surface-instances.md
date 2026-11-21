@@ -1,6 +1,6 @@
 # RFC 0022: Surface instances (plan)
 
-Status: Partial — phase 1 implemented in 4.0.0-beta.12 (rigid copies on faces, points and face groups, Edit source, Make real, `INST` section). Remaining: phases 2–4 (scatter/mask/edges, fitted copies, glTF instancing export).
+Status: Partial — phase 1 implemented in 4.0.0-beta.12 (rigid copies on faces, points and face groups, Edit source, Make real, `INST` section). Phase 2 adds masked placement and even scatter on visible faces. Remaining: scatter on a group or mask, edges, tiling, hand exclusions, fitted copies and glTF instancing export.
 
 ## Summary
 
@@ -152,6 +152,18 @@ and the (hidden) source as ordinary pieces, nothing lost.
 3. **Fitted copies** (shell mapping in the vertex shader).
 4. **glTF instancing export**, levels of detail, agent and plugin access
    (place, change, make real).
+
+### Phase 2 implementation
+
+- **Masked surface** uses one anchor per visible polygon. Copies are
+  drawn where the polygon's average corner mask meets the live threshold.
+- **Even scatter** samples visible triangles by area in a background job,
+  accepting seeded points at the requested minimum scene-space distance.
+  The sampler caps output at 20,000 copies and keeps accepted anchors as
+  the surface deforms. Changing the seed, spacing, or host topology
+  generates new anchors.
+- `INS2` carries the full list for hosts that use either new mode. Older
+  readers still load supported modes from `INST`.
 
 ## Not in this plan
 

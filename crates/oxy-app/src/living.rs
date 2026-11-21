@@ -2563,7 +2563,10 @@ impl Editor {
                     .into();
             return Err(self.status.clone());
         }
-        let piece_id = self.scene.active().id;
+        let Some(piece_id) = self.scene.try_active().map(|piece| piece.id) else {
+            self.status = Self::NEED_PIECE.into();
+            return Err(self.status.clone());
+        };
         let axis = if self.symmetry.x {
             1
         } else if self.symmetry.y {
@@ -2659,7 +2662,8 @@ impl Editor {
 
         let recipes: Vec<StrokeRecipe> = strokes.iter().map(|s| (**s.recipe.as_ref().unwrap()).clone()).collect();
         let center = piece.symmetry_center.unwrap_or(Vec3::ZERO);
-        let detail = oxy_sculpt::PartDetail::from_recipes(name, &recipes, center, self.symmetry)?;
+        let name = self.parts_library.free_name(name);
+        let detail = oxy_sculpt::PartDetail::from_recipes(&name, &recipes, center, self.symmetry)?;
 
         let dir = self.parts_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("oxy_parts"));
         let path = self

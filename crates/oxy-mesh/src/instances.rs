@@ -10,10 +10,11 @@
 //! from (same topology). Callers rebuild anchors when the topology changes.
 
 use crate::Mesh;
-use glam::{Mat3, Mat4, Vec3};
+use glam::{IVec3, Mat3, Mat4, Vec3};
+use std::collections::HashMap;
 
 /// Where copies go on the host.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub enum Place {
     /// One per polygon (quads kept where the host has them).
     #[default]
@@ -22,6 +23,16 @@ pub enum Place {
     Points,
     /// One per polygon of one face group.
     Group(u32),
+    /// One per visible polygon whose mean mask meets this threshold.
+    Mask(f32),
+    /// Seeded samples over the visible surface, this far apart in scene units.
+    Scatter(f32),
+}
+
+impl Place {
+    pub fn extended(self) -> bool {
+        matches!(self, Self::Mask(_) | Self::Scatter(_))
+    }
 }
 
 /// Which way a copy's forward axis (+Z of the source) points, around the
@@ -105,7 +116,6 @@ pub struct Anchor {
 /// otherwise triangles. Each is its points in order around it, and the
 /// triangles it covers. Hidden triangles are left out.
 pub fn polygons(host: &Mesh) -> Vec<(Vec<u32>, Vec<u32>)> {
-    use std::collections::HashMap;
     let diagonals = host.quad_diagonals_ref();
     let hidden = host.hidden();
     // Diagonal edge -> the triangles on it (two for a quad).
@@ -148,11 +158,12 @@ pub fn polygons(host: &Mesh) -> Vec<(Vec<u32>, Vec<u32>)> {
     out
 }
 
-/// Where the copies go on `host`, by `settings.place`.
+/// Candidate anchors on `host` for `settings.place`. Mask placement
+/// filters the candidates in [`transforms`], using the live mask.
 pub fn anchors(host: &Mesh, settings: &Settings) -> Vec<Anchor> {
     let mut out = Vec::new();
     match settings.place {
-        Place::Faces | Place::Group(_) => {
+        Place::Faces | Place::Group(_) | Place::Mask(_) => {
             let groups = host.groups();
             for (pts, tris) in polygons(host) {
                 if let Place::Group(g) = settings.place
@@ -198,8 +209,94 @@ pub fn anchors(host: &Mesh, settings: &Settings) -> Vec<Anchor> {
                 out.push(Anchor { points: [v; 4], weights: [1.0, 0.0, 0.0, 0.0], edge, key: out.len() as u32 });
             }
         }
+        Place::Scatter(spacing) => {
+            return scatter_anchors(
+                &host.positions,
+                &host.triangles,
+                host.hidden(),
+                spacing,
+                settings.seed,
+                settings.orient,
+            );
+        }
     }
     out
+}
+
+/// A bounded, area-weighted dart throw over visible triangles. A spatial
+/// grid rejects candidates closer than the requested scene-space spacing.
+pub fn scatter_anchors(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    hidden: &[bool],
+    spacing: f32,
+    seed: u32,
+    orient: Orient,
+) -> Vec<Anchor> {
+    if !spacing.is_finite() || spacing <= 0.0 {
+        return Vec::new();
+    }
+    const MAX_COPIES: usize = 20_000;
+    const MAX_ATTEMPTS: u32 = 200_000;
+    let mut area = 0.0_f64;
+    let mut faces = Vec::new();
+    for (&tri, &hidden) in triangles.iter().zip(hidden) {
+        if hidden {
+            continue;
+        }
+        let [a, b, c] = tri.map(|i| positions[i as usize]);
+        let face_area = (b - a).cross(c - a).length() as f64 * 0.5;
+        if face_area > 0.0 && face_area.is_finite() {
+            area += face_area;
+            faces.push((area, tri));
+        }
+    }
+    let Some(&(_, first)) = faces.first() else { return Vec::new() };
+    let origin = positions[first[0] as usize];
+    let attempts = (24.0 * area / (spacing as f64).powi(2)).ceil().clamp(64.0, MAX_ATTEMPTS as f64) as u32;
+    let min_distance = spacing * spacing;
+    let mut grid: HashMap<IVec3, Vec<Vec3>> = HashMap::new();
+    let mut anchors = Vec::new();
+    for k in 0..attempts {
+        let face = faces.partition_point(|(end, _)| *end <= area * random(seed, k, 0) as f64);
+        let tri = faces[face].1;
+        let [a, b, c] = tri.map(|i| positions[i as usize]);
+        let u = random(seed, k, 1).sqrt();
+        let v = random(seed, k, 2);
+        let weights = [1.0 - u, u * (1.0 - v), u * v, 0.0];
+        let pos = a * weights[0] + b * weights[1] + c * weights[2];
+        let grid_pos = (pos - origin) / spacing;
+        if !grid_pos.is_finite() || grid_pos.abs().max_element() >= 1.0e9 {
+            continue;
+        }
+        let cell = grid_pos.floor().as_ivec3();
+        let nearby = (-1..=1)
+            .flat_map(|x| (-1..=1).flat_map(move |y| (-1..=1).map(move |z| cell + IVec3::new(x, y, z))))
+            .filter_map(|key| grid.get(&key))
+            .flatten()
+            .any(|&other| pos.distance_squared(other) < min_distance);
+        if nearby {
+            continue;
+        }
+        grid.entry(cell).or_default().push(pos);
+        let edge = if orient == Orient::LongestEdge {
+            [(0, 1), (1, 2), (2, 0)]
+                .into_iter()
+                .map(|(i, j)| [tri[i], tri[j]])
+                .max_by(|[a, b], [c, d]| {
+                    let distance = |a: u32, b: u32| positions[a as usize].distance_squared(positions[b as usize]);
+                    distance(*a, *b).total_cmp(&distance(*c, *d))
+                })
+                .expect("a triangle has three edges")
+        } else {
+            [tri[0], tri[1]]
+        };
+        anchors.push(Anchor { points: [tri[0], tri[1], tri[2], tri[0]], weights, edge, key: k });
+        if anchors.len() == MAX_COPIES {
+            break;
+        }
+    }
+    anchors
 }
 
 /// A number in 0..1 for (`seed`, `key`, `salt`): the same every time.
@@ -234,6 +331,12 @@ pub fn transforms(host: &Mesh, source: &Mesh, anchors: &[Anchor], settings: &Set
     anchors
         .par_iter()
         .filter(|a| a.points.iter().chain(&a.edge).all(|&v| v < vc))
+        .filter(|a| match settings.place {
+            Place::Mask(threshold) => {
+                a.points.iter().zip(a.weights).map(|(&v, w)| host.mask[v as usize] * w).sum::<f32>() >= threshold
+            }
+            _ => true,
+        })
         .map(|a| {
             let mut pos = Vec3::ZERO;
             let mut n = Vec3::ZERO;
@@ -340,6 +443,30 @@ mod tests {
     fn stud() -> Mesh {
         // A small cone pointing up +Y: easy to see where it points.
         primitives::cone(8, 0.5, 1.0)
+    }
+
+    #[test]
+    fn scatter_is_seeded_spaced_and_excludes_hidden_triangles() {
+        let positions = [Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::X + Vec3::Z];
+        let tris = [[0, 1, 2], [1, 3, 2]];
+        let make = |seed| scatter_anchors(&positions, &tris, &[false, true], 0.16, seed, Orient::World);
+        let samples = make(7);
+        assert!(samples.len() >= 8);
+        assert_eq!(samples, make(7));
+        assert_ne!(samples, make(8));
+        let points: Vec<_> = samples
+            .iter()
+            .map(|a| {
+                assert_eq!(a.points[..3], tris[0]);
+                a.points.iter().zip(a.weights).map(|(&p, w)| positions[p as usize] * w).sum::<Vec3>()
+            })
+            .collect();
+        for (i, p) in points.iter().enumerate() {
+            for q in &points[..i] {
+                assert!(p.distance(*q) >= 0.16 - 1e-6);
+            }
+        }
+        assert!(scatter_anchors(&positions, &tris, &[true, true], 0.16, 7, Orient::World).is_empty());
     }
 
     #[test]
