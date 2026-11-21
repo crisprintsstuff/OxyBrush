@@ -125,7 +125,7 @@ commands! {
     SplitMasked => "Split masked", "", "Move the masked part of this piece into a new piece, and keep the unmasked part in this one. Invert the mask first to split off the unmasked part instead. Both parts come out unmasked.";
     SplitHidden => "Split hidden faces", "", "Move the hidden faces into a new piece of their own, and keep the visible faces in this one.";
     GroupVisible => "Group visible", "", "Give the visible faces their own face group.";
-    GroupFromMask => "Group from mask", "Ctrl+W", "Give the masked faces their own face group. With nothing masked, Ctrl+W groups the visible faces instead.";
+    GroupFromMask => "Group from mask", "Ctrl+Shift+W", "Give the masked faces their own face group. With nothing masked, Ctrl+Shift+W groups the visible faces instead.";
     GroupIslands => "Group by islands", "", "Give each separate surface its own face group.";
     ShowAll => "Show all faces", "Ctrl+Shift+click empty", "Show every face again.";
     HideMasked => "Hide masked", "", "Hide the masked faces, so only the unmasked part stays visible. Show all brings them back.";
@@ -235,6 +235,20 @@ commands! {
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
     Preferences => "Preferences…", "Ctrl+,", "Open preferences to customize layout, appearance, plugins, keymap and updates.";
     RunScript => "Run Python script…", "", "Execute a Python script using the OxyBrush API.";
+    NewTab => "New tab", "Ctrl+T", "Open a new project tab in this window.";
+    CloseTab => "Close tab", "Ctrl+W", "Close the active tab. You are asked before unsaved changes are discarded.";
+    NextTab => "Next tab", "Ctrl+Tab", "Switch to the next open project tab.";
+    PrevTab => "Previous tab", "Ctrl+Shift+Tab", "Switch to the previous open project tab.";
+    ReopenClosedTab => "Reopen closed tab", "Ctrl+Shift+T", "Reopen the most recently closed project tab that had a saved file.";
+    Tab1 => "Switch to tab 1", "Ctrl+1", "Switch directly to the first project tab.";
+    Tab2 => "Switch to tab 2", "Ctrl+2", "Switch directly to the second project tab.";
+    Tab3 => "Switch to tab 3", "Ctrl+3", "Switch directly to the third project tab.";
+    Tab4 => "Switch to tab 4", "Ctrl+4", "Switch directly to the fourth project tab.";
+    Tab5 => "Switch to tab 5", "Ctrl+5", "Switch directly to the fifth project tab.";
+    Tab6 => "Switch to tab 6", "Ctrl+6", "Switch directly to the sixth project tab.";
+    Tab7 => "Switch to tab 7", "Ctrl+7", "Switch directly to the seventh project tab.";
+    Tab8 => "Switch to tab 8", "Ctrl+8", "Switch directly to the eighth project tab.";
+    Tab9 => "Switch to tab 9", "Ctrl+9", "Switch directly to the ninth project tab.";
 }
 
 use crate::keymap::CommandId;
@@ -294,6 +308,20 @@ impl Cmd {
             Cmd::GroupFromMask => CommandId::GroupFromMask,
             Cmd::Guide => CommandId::Guide,
             Cmd::Preferences => CommandId::Preferences,
+            Cmd::NewTab => CommandId::NewTab,
+            Cmd::CloseTab => CommandId::CloseTab,
+            Cmd::NextTab => CommandId::NextTab,
+            Cmd::PrevTab => CommandId::PrevTab,
+            Cmd::ReopenClosedTab => CommandId::ReopenClosedTab,
+            Cmd::Tab1 => CommandId::Tab1,
+            Cmd::Tab2 => CommandId::Tab2,
+            Cmd::Tab3 => CommandId::Tab3,
+            Cmd::Tab4 => CommandId::Tab4,
+            Cmd::Tab5 => CommandId::Tab5,
+            Cmd::Tab6 => CommandId::Tab6,
+            Cmd::Tab7 => CommandId::Tab7,
+            Cmd::Tab8 => CommandId::Tab8,
+            Cmd::Tab9 => CommandId::Tab9,
             _ => return None,
         })
     }

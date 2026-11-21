@@ -1046,6 +1046,8 @@ pub struct Editor {
     /// Counter for generating unique session document IDs.
     #[allow(dead_code)]
     pub next_doc_id: u64,
+    /// History of closed project file paths for reopening (Ctrl+Shift+T).
+    pub closed_tab_history: Vec<PathBuf>,
 
     /// Pressure response: effective = pressure ^ gamma (1 = linear, <1 soft, >1 firm).
     pub pressure_gamma: f32,
@@ -1418,6 +1420,7 @@ impl Default for Editor {
             documents: vec![doc],
             active_document: 0,
             next_doc_id: 2,
+            closed_tab_history: Vec::new(),
             pressure_gamma: 1.0,
             pressure_min: 0.0,
             pen_seen: false,
@@ -4226,6 +4229,7 @@ impl Editor {
     pub fn request(&mut self, action: Pending) {
         let is_dirty = match &action {
             Pending::CloseTab(idx) => self.documents.get(*idx).is_some_and(|d| d.is_dirty()),
+            Pending::Quit => self.documents.iter().any(|d| d.is_dirty()),
             _ => self.is_modified(),
         };
         if is_dirty {
@@ -4397,6 +4401,10 @@ impl Editor {
         let closed =
             self.documents[index].path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
 
+        if let Some(path) = self.documents[index].path.clone() {
+            self.closed_tab_history.push(path);
+        }
+
         if self.documents.len() == 1 {
             let next_id = self.next_doc_id;
             self.next_doc_id += 1;
@@ -4429,6 +4437,56 @@ impl Editor {
             Some(name) => format!("Closed {name}"),
             None => "Closed tab".into(),
         };
+    }
+
+    /// Reopen the most recently closed tab that had a saved project file.
+    pub fn reopen_closed_tab(&mut self) -> bool {
+        while let Some(path) = self.closed_tab_history.pop() {
+            if path.is_file() {
+                return self.open_project(&path);
+            }
+        }
+        self.status = "No recently closed project to reopen".into();
+        false
+    }
+
+    /// Switch to the next tab, cycling to the beginning.
+    pub fn next_tab(&mut self) {
+        if self.documents.len() > 1 {
+            let next = (self.active_document + 1) % self.documents.len();
+            self.switch_tab(next);
+        }
+    }
+
+    /// Switch to the previous tab, cycling to the end.
+    pub fn prev_tab(&mut self) {
+        if self.documents.len() > 1 {
+            let prev = (self.active_document + self.documents.len() - 1) % self.documents.len();
+            self.switch_tab(prev);
+        }
+    }
+
+    /// Jump directly to tab index (0-indexed).
+    pub fn jump_to_tab(&mut self, index: usize) {
+        if index < self.documents.len() {
+            self.switch_tab(index);
+        }
+    }
+
+    /// Reorder tab from position `from` to position `to`.
+    pub fn reorder_tab(&mut self, from: usize, to: usize) {
+        if from >= self.documents.len() || to >= self.documents.len() || from == to {
+            return;
+        }
+        let doc = self.documents.remove(from);
+        self.documents.insert(to, doc);
+        if self.active_document == from {
+            self.active_document = to;
+        } else if from < self.active_document && to >= self.active_document {
+            self.active_document -= 1;
+        } else if from > self.active_document && to <= self.active_document {
+            self.active_document += 1;
+        }
     }
 
     /// Open project from `path`. If already open in another tab, focuses it.
@@ -5042,23 +5100,38 @@ impl Editor {
     }
 
     pub fn save(&mut self, path: &Path) -> bool {
-        if let Some(job) = self.job.as_ref().filter(|j| j.holds_levels) {
+        self.save_doc(self.active_document, path)
+    }
+
+    /// Save document at `doc_idx` to `path`.
+    pub fn save_doc(&mut self, doc_idx: usize, path: &Path) -> bool {
+        let Some(doc) = self.documents.get(doc_idx) else { return false };
+        if let Some(job) = doc.job.as_ref().filter(|j| j.holds_levels) {
             self.status = format!("Wait for \"{}\" to finish, then save", job.label);
             return false;
         }
         let path = if path.extension().is_none() { path.with_extension(format::EXTENSION) } else { path.to_path_buf() };
-        match format::save(&self.scene_data(), &path) {
+        let data = self.doc_scene_data(doc_idx);
+        match format::save(&data, &path) {
             Ok(()) => {
-                self.path = Some(path.clone());
-                self.saved_revision = self.history.revision();
-                self.alphas_unsaved = false;
-                self.pieces_unsaved = false;
+                let doc_id;
+                let link;
+                {
+                    let doc = &mut self.documents[doc_idx];
+                    doc.path = Some(path.clone());
+                    doc.saved_revision = doc.history.revision();
+                    doc.alphas_unsaved = false;
+                    doc.pieces_unsaved = false;
+                    doc_id = doc.id;
+                    link = doc.link.clone();
+                }
+                self.autosaver.remove_file_for(doc_id);
                 self.protect_path(&path);
                 self.remember_recent(&path);
                 self.status = format!("Saved {}", path.display());
                 // A linked document saved somewhere else takes its link
                 // file along, so OxyCharacter can still import the copy.
-                if let Some(link) = &self.link
+                if let Some(link) = link
                     && let Err(e) = link.copy_sidecar_to(&path)
                 {
                     self.status = format!("Saved {}, but could not copy its OxyCharacter link: {e}", path.display());
@@ -7447,7 +7520,7 @@ impl Editor {
     // ---- faces and masks ----
 
     /// Apply a face group / visibility edit to the active piece, undoably.
-    /// Ctrl+W: give the masked faces their own face group, or, with
+    /// Ctrl+Shift+W: give the masked faces their own face group, or, with
     /// nothing visible masked, every visible face (one undo step either way).
     pub fn group_from_mask_or_visible(&mut self) {
         if !self.need_piece() {
@@ -8471,6 +8544,62 @@ impl Editor {
             }
             C::Preferences => {
                 self.open_settings(SettingsTab::General);
+                E::None
+            }
+            C::NewTab => {
+                self.new_tab("sphere");
+                E::None
+            }
+            C::CloseTab => {
+                self.request_close_tab(self.active_document);
+                E::None
+            }
+            C::NextTab => {
+                self.next_tab();
+                E::None
+            }
+            C::PrevTab => {
+                self.prev_tab();
+                E::None
+            }
+            C::ReopenClosedTab => {
+                self.reopen_closed_tab();
+                E::None
+            }
+            C::Tab1 => {
+                self.jump_to_tab(0);
+                E::None
+            }
+            C::Tab2 => {
+                self.jump_to_tab(1);
+                E::None
+            }
+            C::Tab3 => {
+                self.jump_to_tab(2);
+                E::None
+            }
+            C::Tab4 => {
+                self.jump_to_tab(3);
+                E::None
+            }
+            C::Tab5 => {
+                self.jump_to_tab(4);
+                E::None
+            }
+            C::Tab6 => {
+                self.jump_to_tab(5);
+                E::None
+            }
+            C::Tab7 => {
+                self.jump_to_tab(6);
+                E::None
+            }
+            C::Tab8 => {
+                self.jump_to_tab(7);
+                E::None
+            }
+            C::Tab9 => {
+                self.jump_to_tab(8);
                 E::None
             }
         }
@@ -9598,12 +9727,13 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_w_groups_the_mask_or_else_what_is_visible() {
+    fn group_from_mask_or_else_what_is_visible() {
         let mut e = Editor::for_tests();
         assert_eq!(
-            e.keymap.command_for(crate::keymap::Chord::parse("ctrl+w").unwrap()),
+            e.keymap.command_for(crate::keymap::Chord::parse("ctrl+shift+w").unwrap()),
             Some(CommandId::GroupFromMask)
         );
+        assert_eq!(e.keymap.command_for(crate::keymap::Chord::parse("ctrl+w").unwrap()), Some(CommandId::CloseTab));
         // A mask on the top half: just those faces get a new group.
         {
             let m = &mut e.scene.active_mut().mesh;
@@ -15804,5 +15934,131 @@ mod tests {
         // Polling job does not panic or touch remaining tab
         assert!(!e.poll_job());
         assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn tab_shortcuts_and_reorder_and_history() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        assert_eq!(e.documents.len(), 1);
+
+        // NewTab via command
+        e.perform_command(CommandId::NewTab);
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+        e.add_primitive("plane");
+
+        // Third tab
+        e.perform_command(CommandId::NewTab);
+        assert_eq!(e.documents.len(), 3);
+        assert_eq!(e.active_document, 2);
+        e.add_primitive("sphere");
+
+        // NextTab cycles forward: 2 -> 0 -> 1 -> 2
+        e.perform_command(CommandId::NextTab);
+        assert_eq!(e.active_document, 0);
+        e.perform_command(CommandId::NextTab);
+        assert_eq!(e.active_document, 1);
+
+        // PrevTab cycles backward: 1 -> 0 -> 2
+        e.perform_command(CommandId::PrevTab);
+        assert_eq!(e.active_document, 0);
+        e.perform_command(CommandId::PrevTab);
+        assert_eq!(e.active_document, 2);
+
+        // Tab1..Tab9 direct switching
+        e.perform_command(CommandId::Tab1);
+        assert_eq!(e.active_document, 0);
+        e.perform_command(CommandId::Tab2);
+        assert_eq!(e.active_document, 1);
+        e.perform_command(CommandId::Tab3);
+        assert_eq!(e.active_document, 2);
+
+        // Reordering tabs
+        // Current order: Tab 0 (Cube), Tab 1 (Plane), Tab 2 (Sphere). Active is 2 (Sphere).
+        e.reorder_tab(2, 0);
+        // After moving index 2 to 0: Sphere is at 0, Cube at 1, Plane at 2. Active should track Sphere -> index 0.
+        assert_eq!(e.active_document, 0);
+        assert_eq!(e.documents[0].scene.pieces.len(), 2); // default + sphere
+        assert_eq!(e.documents[1].scene.pieces.len(), 2); // default + cube
+        assert_eq!(e.documents[2].scene.pieces.len(), 2); // default + plane
+
+        // Closed tab history and ReopenClosedTab
+        let dir = std::env::temp_dir().join(format!("oxy-tab-sc-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("saved_tab.oxb");
+        assert!(e.save(&path));
+        let closed_path = path.clone();
+
+        // Close active tab (Tab 0)
+        e.perform_command(CommandId::CloseTab);
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.closed_tab_history.last(), Some(&closed_path));
+
+        // ReopenClosedTab
+        e.perform_command(CommandId::ReopenClosedTab);
+        assert_eq!(e.documents.len(), 3);
+        assert_eq!(e.path.as_ref(), Some(&closed_path));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn multi_tab_quit_request_and_save_all() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        e.new_tab("plane");
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+
+        // Modify tab 0 (inactive tab)
+        e.documents[0].scene.pieces[0].name = "Modified".into();
+        assert!(e.documents[0].is_dirty());
+        assert!(!e.documents[1].is_dirty());
+
+        // While active tab is clean, requesting quit still detects dirty background tab
+        e.request(Pending::Quit);
+        assert_eq!(e.pending, Some(Pending::Quit));
+
+        // Save doc 0 to clear dirty state
+        let dir = std::env::temp_dir().join(format!("oxy-tab-quit-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let path = dir.join("tab0.oxb");
+        assert!(e.save_doc(0, &path));
+        assert!(!e.documents[0].is_dirty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revert_per_tab_keeps_other_tabs() {
+        let mut e = editor();
+        e.add_primitive("cube");
+        let dir = std::env::temp_dir().join(format!("oxy-tab-rev-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p1 = dir.join("p1.oxb");
+        assert!(e.save(&p1));
+
+        // New tab
+        e.new_tab("plane");
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+
+        // Switch back to tab 0
+        e.switch_tab(0);
+        let orig_cam = e.camera;
+        // Make an edit in tab 0
+        e.add_primitive("sphere");
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.is_modified());
+        assert!(e.can_revert());
+
+        // Revert now
+        e.revert_now();
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.camera.distance, orig_cam.distance);
+
+        // Other tab (Tab 1) must remain untouched
+        assert_eq!(e.documents[1].scene.pieces.len(), 1);
+        assert_eq!(e.documents[1].scene.pieces[0].name, "Plane");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

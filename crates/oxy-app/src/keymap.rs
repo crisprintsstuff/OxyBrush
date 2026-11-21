@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 
 /// File format this build writes. Higher versions are still read: known
 /// fields apply, and everything else is preserved in [`Keymap::extra`].
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
 /// Default bindings that changed, by the file version that still had them:
 /// a command still bound exactly to its old default moves to the new one
@@ -28,6 +28,8 @@ const OLD_DEFAULTS: &[(u32, CommandId, &[&str])] = &[
     (1, CommandId::GroupVisible, &["ctrl+w"]),
     // Version 2: Ctrl+0 frames the active piece too.
     (1, CommandId::Frame, &["f"]),
+    // Version 3: Ctrl+W became Close tab, Group from mask moved to Ctrl+Shift+W.
+    (2, CommandId::GroupFromMask, &["ctrl+w"]),
 ];
 
 /// Extension for an exported keymap, without the dot.
@@ -475,6 +477,20 @@ pub enum CommandId {
     Guide,
     Preferences,
     PolyRepeat,
+    NewTab,
+    CloseTab,
+    NextTab,
+    PrevTab,
+    ReopenClosedTab,
+    Tab1,
+    Tab2,
+    Tab3,
+    Tab4,
+    Tab5,
+    Tab6,
+    Tab7,
+    Tab8,
+    Tab9,
 }
 
 impl CommandId {
@@ -635,7 +651,7 @@ const COMMANDS: &[CommandMeta] = &[
         id: CommandId::GroupFromMask,
         name: "Group from mask (or visible)",
         group: "Mask and mesh",
-        defaults: &["ctrl+w"],
+        defaults: &["ctrl+shift+w"],
     },
     CommandMeta { id: CommandId::Guide, name: "Guide", group: "Help", defaults: &["f2"] },
     CommandMeta { id: CommandId::Preferences, name: "Preferences", group: "Edit", defaults: &["ctrl+,"] },
@@ -646,9 +662,33 @@ const COMMANDS: &[CommandMeta] = &[
         group: "Edit",
         defaults: &["y"],
     },
+    CommandMeta { id: CommandId::NewTab, name: "New tab", group: "Tabs", defaults: &["ctrl+t"] },
+    CommandMeta { id: CommandId::CloseTab, name: "Close tab", group: "Tabs", defaults: &["ctrl+w"] },
+    CommandMeta { id: CommandId::NextTab, name: "Next tab", group: "Tabs", defaults: &["ctrl+tab", "ctrl+pagedown"] },
+    CommandMeta {
+        id: CommandId::PrevTab,
+        name: "Previous tab",
+        group: "Tabs",
+        defaults: &["ctrl+shift+tab", "ctrl+pageup"],
+    },
+    CommandMeta {
+        id: CommandId::ReopenClosedTab,
+        name: "Reopen closed tab",
+        group: "Tabs",
+        defaults: &["ctrl+shift+t"],
+    },
+    CommandMeta { id: CommandId::Tab1, name: "Switch to tab 1", group: "Tabs", defaults: &["ctrl+1"] },
+    CommandMeta { id: CommandId::Tab2, name: "Switch to tab 2", group: "Tabs", defaults: &["ctrl+2"] },
+    CommandMeta { id: CommandId::Tab3, name: "Switch to tab 3", group: "Tabs", defaults: &["ctrl+3"] },
+    CommandMeta { id: CommandId::Tab4, name: "Switch to tab 4", group: "Tabs", defaults: &["ctrl+4"] },
+    CommandMeta { id: CommandId::Tab5, name: "Switch to tab 5", group: "Tabs", defaults: &["ctrl+5"] },
+    CommandMeta { id: CommandId::Tab6, name: "Switch to tab 6", group: "Tabs", defaults: &["ctrl+6"] },
+    CommandMeta { id: CommandId::Tab7, name: "Switch to tab 7", group: "Tabs", defaults: &["ctrl+7"] },
+    CommandMeta { id: CommandId::Tab8, name: "Switch to tab 8", group: "Tabs", defaults: &["ctrl+8"] },
+    CommandMeta { id: CommandId::Tab9, name: "Switch to tab 9", group: "Tabs", defaults: &["ctrl+9"] },
 ];
 
-const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Help"];
+const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Tabs", "Help"];
 
 fn command_meta(id: CommandId) -> &'static CommandMeta {
     COMMANDS.iter().find(|c| c.id == id).expect("every command has metadata")
@@ -1617,6 +1657,20 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::Guide => "guide",
         CommandId::Preferences => "preferences",
         CommandId::PolyRepeat => "poly_repeat",
+        CommandId::NewTab => "new_tab",
+        CommandId::CloseTab => "close_tab",
+        CommandId::NextTab => "next_tab",
+        CommandId::PrevTab => "prev_tab",
+        CommandId::ReopenClosedTab => "reopen_closed_tab",
+        CommandId::Tab1 => "tab_1",
+        CommandId::Tab2 => "tab_2",
+        CommandId::Tab3 => "tab_3",
+        CommandId::Tab4 => "tab_4",
+        CommandId::Tab5 => "tab_5",
+        CommandId::Tab6 => "tab_6",
+        CommandId::Tab7 => "tab_7",
+        CommandId::Tab8 => "tab_8",
+        CommandId::Tab9 => "tab_9",
     }
 }
 
@@ -2008,8 +2062,24 @@ mod tests {
         // A version-1 file saved with the old default (Ctrl+W = Group visible).
         let old = Keymap::builtin(Preset::OxyBrush)
             .to_text()
-            .replace("version = 2", "version = 1")
-            .replace("bind.group_from_mask = ctrl+w\n", "")
+            .replace(&format!("version = {VERSION}"), "version = 1")
+            .replace("bind.group_from_mask = ctrl+shift+w\n", "")
+            .replace("bind.close_tab = ctrl+w\n", "")
+            .replace("bind.new_tab = ctrl+t\n", "")
+            .replace("bind.next_tab = ctrl+tab\n", "")
+            .replace("bind.next_tab = ctrl+pagedown\n", "")
+            .replace("bind.prev_tab = ctrl+shift+tab\n", "")
+            .replace("bind.prev_tab = ctrl+pageup\n", "")
+            .replace("bind.reopen_closed_tab = ctrl+shift+t\n", "")
+            .replace("bind.tab_1 = ctrl+1\n", "")
+            .replace("bind.tab_2 = ctrl+2\n", "")
+            .replace("bind.tab_3 = ctrl+3\n", "")
+            .replace("bind.tab_4 = ctrl+4\n", "")
+            .replace("bind.tab_5 = ctrl+5\n", "")
+            .replace("bind.tab_6 = ctrl+6\n", "")
+            .replace("bind.tab_7 = ctrl+7\n", "")
+            .replace("bind.tab_8 = ctrl+8\n", "")
+            .replace("bind.tab_9 = ctrl+9\n", "")
             // Version 1 had no zoom commands and framed with F only.
             .replace("bind.frame = ctrl+0\n", "")
             .replace("bind.zoom_in = ctrl+=\n", "")
@@ -2019,7 +2089,8 @@ mod tests {
         let old = old.replace("bind.group_visible =\n", "bind.group_visible = ctrl+w\n");
         assert!(old.contains("bind.group_visible = ctrl+w"));
         let map = Keymap::from_text(&old);
-        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::GroupFromMask));
+        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::CloseTab));
+        assert_eq!(map.command_for(chord("ctrl+shift+w")), Some(CommandId::GroupFromMask));
         assert!(map.chords(CommandId::GroupVisible).is_empty());
         assert!(map.conflicts().is_empty());
         // Frame, saved as just F, gains Ctrl+0; the new zoom keys arrive too.
@@ -2027,11 +2098,23 @@ mod tests {
         assert_eq!(map.command_for(chord("f")), Some(CommandId::Frame));
         assert_eq!(map.command_for(chord("ctrl+=")), Some(CommandId::ZoomIn));
         assert_eq!(map.version, VERSION);
+
+        // A version-2 file saved with Ctrl+W = GroupFromMask moves to Ctrl+W = CloseTab, Ctrl+Shift+W = GroupFromMask.
+        let v2 = Keymap::builtin(Preset::OxyBrush)
+            .to_text()
+            .replace(&format!("version = {VERSION}"), "version = 2")
+            .replace("bind.close_tab = ctrl+w\n", "")
+            .replace("bind.group_from_mask = ctrl+shift+w\n", "bind.group_from_mask = ctrl+w\n");
+        let map_v2 = Keymap::from_text(&v2);
+        assert_eq!(map_v2.command_for(chord("ctrl+w")), Some(CommandId::CloseTab));
+        assert_eq!(map_v2.command_for(chord("ctrl+shift+w")), Some(CommandId::GroupFromMask));
+
         // Someone who moved Group visible to their own key keeps it.
-        let mine = old.replace("bind.group_visible = ctrl+w", "bind.group_visible = ctrl+shift+w");
+        let mine = old.replace("bind.group_visible = ctrl+w", "bind.group_visible = alt+w");
         let map = Keymap::from_text(&mine);
-        assert_eq!(map.command_for(chord("ctrl+shift+w")), Some(CommandId::GroupVisible));
-        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::GroupFromMask));
+        assert_eq!(map.command_for(chord("alt+w")), Some(CommandId::GroupVisible));
+        assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::CloseTab));
+
         // A command the file doesn't mention doesn't take a key the file
         // uses for something else (here Remesh moved to Ctrl+W).
         let other = old
@@ -2040,7 +2123,7 @@ mod tests {
             .replace("version = 1", "version = 2");
         let other = Keymap::from_text(&other);
         assert_eq!(other.command_for(chord("ctrl+w")), Some(CommandId::Remesh));
-        assert!(other.chords(CommandId::GroupFromMask).is_empty());
+        assert!(other.chords(CommandId::CloseTab).is_empty());
         assert!(other.conflicts().is_empty(), "{:?}", other.conflicts());
     }
 
@@ -2060,6 +2143,12 @@ mod tests {
             assert_eq!(map.command_for(chord("ctrl+shift+=")), Some(CommandId::ZoomIn));
             assert_eq!(map.command_for(chord("ctrl+-")), Some(CommandId::ZoomOut));
             assert_eq!(map.command_for(chord("ctrl+0")), Some(CommandId::Frame));
+            assert_eq!(map.command_for(chord("ctrl+t")), Some(CommandId::NewTab));
+            assert_eq!(map.command_for(chord("ctrl+w")), Some(CommandId::CloseTab));
+            assert_eq!(map.command_for(chord("ctrl+tab")), Some(CommandId::NextTab));
+            assert_eq!(map.command_for(chord("ctrl+shift+tab")), Some(CommandId::PrevTab));
+            assert_eq!(map.command_for(chord("ctrl+shift+w")), Some(CommandId::GroupFromMask));
+            assert_eq!(map.command_for(chord("ctrl+1")), Some(CommandId::Tab1));
             assert_eq!(map.command_for(chord("1")), Some(CommandId::Brush1));
             assert!(map.command_for(chord("f5")).is_none(), "an unused key stays free to bind");
             assert_eq!(map.primary(CommandId::ViewBack), "");

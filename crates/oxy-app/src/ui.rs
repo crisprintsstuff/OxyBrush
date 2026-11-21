@@ -2334,6 +2334,7 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
             let doc_count = ed.documents.len();
             let mut switch_to = None;
             let mut close_tab = None;
+            let mut moved_tab = None;
 
             // Collect file names for disambiguation
             let titles: Vec<String> = (0..doc_count)
@@ -2419,8 +2420,35 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
 
                         let tab_rect = response.response.rect;
                         let tab_interact =
-                            ui.interact(tab_rect, egui::Id::unique(("tab_click", i)), egui::Sense::click());
+                            ui.interact(tab_rect, egui::Id::unique(("tab_click", i)), egui::Sense::click_and_drag());
                         let tab_interact = tab_interact.on_hover_text(tooltip);
+
+                        if tab_interact.dragged() {
+                            tab_interact.dnd_set_drag_payload(i);
+                            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                        }
+
+                        if let Some(from) = tab_interact.dnd_hover_payload::<usize>()
+                            && *from != i
+                        {
+                            let pointer = ui.ctx().pointer_interact_pos();
+                            let after = pointer.is_some_and(|p| p.x > tab_rect.center().x);
+                            let x = if after { tab_rect.right() + 1.0 } else { tab_rect.left() - 1.0 };
+                            let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
+                            ui.painter().vline(x, tab_rect.y_range(), stroke);
+                        }
+
+                        if let Some(from) = tab_interact.dnd_release_payload::<usize>() {
+                            let pointer = ui.ctx().pointer_interact_pos();
+                            let after = pointer.is_some_and(|p| p.x > tab_rect.center().x);
+                            let mut to = if after { i + 1 } else { i };
+                            if *from < to {
+                                to -= 1;
+                            }
+                            if *from != to {
+                                moved_tab = Some((*from, to));
+                            }
+                        }
 
                         if tab_interact.clicked() {
                             switch_to = Some(i);
@@ -2430,6 +2458,25 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
                         }
                     }
 
+                    // Tab overflow menu when multiple tabs exist
+                    if doc_count > 1 {
+                        ui.menu_button("»", |ui| {
+                            for (idx, title) in titles.iter().enumerate() {
+                                let is_active = idx == ed.active_document;
+                                let is_dirty = ed.documents[idx].is_dirty();
+                                let dot = if is_dirty { "• " } else { "" };
+                                let text = format!("{dot}{title}");
+                                let label = if is_active { RichText::new(text).strong() } else { RichText::new(text) };
+                                if ui.selectable_label(is_active, label).clicked() {
+                                    switch_to = Some(idx);
+                                    ui.close();
+                                }
+                            }
+                        })
+                        .response
+                        .on_hover_text("Open tabs list");
+                    }
+
                     // "+" New Tab button
                     let add_btn = ui.button("+").on_hover_text("New tab (sphere)");
                     if add_btn.clicked() {
@@ -2437,6 +2484,10 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
                     }
                 });
             });
+
+            if let Some((from, to)) = moved_tab {
+                ed.reorder_tab(from, to);
+            }
 
             if let Some(idx) = switch_to {
                 ed.switch_tab(idx);
@@ -6605,6 +6656,59 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             ui.horizontal(|ui| {
                 if tips::hover(ui.button("Revert"), plain::REVERT_CONFIRM).clicked() {
                     ed.perform(Pending::Revert);
+                }
+                if tips::hover(ui.button("Cancel"), plain::CANCEL).clicked() {
+                    ed.pending = None;
+                }
+            });
+        });
+    } else if let Some(Pending::Quit) = &ed.pending
+        && ed.documents.iter().filter(|d| d.is_dirty()).count() > 1
+    {
+        let dirty_indices: Vec<usize> =
+            ed.documents.iter().enumerate().filter(|(_, d)| d.is_dirty()).map(|(i, _)| i).collect();
+        egui::Modal::new(egui::Id::unique("unsaved_quit_multi")).show(&ctx, |ui| {
+            ui.set_max_width(450.0);
+            ui.heading("Unsaved projects");
+            ui.label(format!(
+                "There are {} open projects with unsaved changes. Save before quitting?",
+                dirty_indices.len()
+            ));
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().max_height(200.0).show(ui, |ui| {
+                for &idx in &dirty_indices {
+                    let doc = &ed.documents[idx];
+                    let title = doc.title();
+                    let path_str =
+                        doc.path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "Untitled".into());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("• {title}")).strong());
+                        ui.label(RichText::new(path_str).weak().small());
+                    });
+                }
+            });
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if tips::hover(ui.button("Save all"), "Save all projects and quit").clicked() {
+                    let mut any_failed = false;
+                    for &idx in &dirty_indices {
+                        if let Some(p) = ed.documents[idx].path.clone() {
+                            if !ed.save_doc(idx, &p) {
+                                any_failed = true;
+                            }
+                        } else {
+                            any_failed = true;
+                        }
+                    }
+                    if !any_failed {
+                        ed.perform(Pending::Quit);
+                    } else if let Some(&first_unsaved) = dirty_indices.iter().find(|&&i| ed.documents[i].is_dirty()) {
+                        ed.switch_tab(first_unsaved);
+                        *action = Some(UiAction::SaveThenContinue);
+                    }
+                }
+                if tips::hover(ui.button("Don't save"), plain::UNSAVED_DISCARD).clicked() {
+                    ed.perform(Pending::Quit);
                 }
                 if tips::hover(ui.button("Cancel"), plain::CANCEL).clicked() {
                     ed.pending = None;
