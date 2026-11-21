@@ -1344,6 +1344,8 @@ pub struct Editor {
     pub dab_budget_ms: f32,
     /// Visual theme preset.
     pub theme: crate::settings::ThemePreset,
+    /// Colors, controls or shadows taken from other themes (Theme > Mix).
+    pub theme_mix: crate::settings::ThemeMix,
     /// Accent color preset.
     pub accent: crate::settings::AccentPreset,
     /// Custom accent RGB when `accent == AccentPreset::Custom`.
@@ -1604,6 +1606,7 @@ impl Default for Editor {
             coalesce_strokes: false,
             dab_budget_ms: 0.0,
             theme: crate::settings::ThemePreset::Graphite,
+            theme_mix: Default::default(),
             accent: crate::settings::AccentPreset::Terracotta,
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: crate::settings::CornerStyle::Rounded,
@@ -1908,6 +1911,7 @@ impl Editor {
             focal_mm: self.focal_mm,
             recent_files: self.recent_files.clone(),
             theme: self.theme,
+            theme_mix: self.theme_mix,
             accent: self.accent,
             custom_accent: self.custom_accent,
             corner_style: self.corner_style,
@@ -2022,7 +2026,7 @@ impl Editor {
     pub fn brush_icon_rgb(&self) -> Option<[u8; 3]> {
         match self.brush_icon_color {
             crate::settings::BrushIconColor::Clay => {
-                if self.theme == crate::settings::ThemePreset::Sculptor {
+                if self.theme_mix.controls(self.theme) == crate::settings::ControlStyle::SculptorClay {
                     Some(crate::settings::SILVER_CLAY_RGB)
                 } else {
                     None
@@ -2047,6 +2051,7 @@ impl Editor {
     /// scale and the default viewport background.
     pub fn reset_theme(&mut self) {
         self.theme = crate::settings::ThemePreset::default();
+        self.theme_mix = Default::default();
         self.high_contrast = false;
         self.accent = crate::settings::AccentPreset::default();
         self.corner_style = crate::settings::CornerStyle::default();
@@ -2213,6 +2218,7 @@ impl Editor {
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
         self.recent_files = s.recent_files.clone();
         self.theme = s.theme;
+        self.theme_mix = s.theme_mix;
         self.accent = s.accent;
         self.custom_accent = s.custom_accent;
         self.corner_style = s.corner_style;

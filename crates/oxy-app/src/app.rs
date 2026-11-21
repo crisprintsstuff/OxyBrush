@@ -43,7 +43,7 @@ pub struct AutoRun {
 }
 
 type AppliedThemeKey = (
-    crate::settings::ThemePreset,
+    (crate::settings::ThemePreset, crate::settings::ThemeMix),
     crate::settings::AccentPreset,
     [u8; 3],
     crate::settings::CornerStyle,
@@ -618,7 +618,7 @@ impl App {
         self.editor.frame_ms = self.editor.frame_ms * 0.9 + dt * 0.1;
 
         let theme_key = (
-            self.editor.theme,
+            (self.editor.theme, self.editor.theme_mix),
             self.editor.accent,
             self.editor.custom_accent,
             self.editor.corner_style,
@@ -634,7 +634,8 @@ impl App {
         if self.applied_theme != Some(theme_key) {
             ui::apply_theme(
                 &self.egui_ctx,
-                theme_key.0,
+                theme_key.0.0,
+                theme_key.0.1,
                 theme_key.1,
                 theme_key.2,
                 theme_key.3,

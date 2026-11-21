@@ -358,6 +358,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Tactile studio with dark charcoal panels, concentric clay sliders and card brush tiles".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Sculptor;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Sculptor".into();
             }),
@@ -370,6 +371,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to the flat neutral Studio theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Studio;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Studio".into();
             }),
@@ -382,6 +384,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to neutral dark Graphite theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Graphite;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Graphite".into();
             }),
@@ -394,6 +397,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Matte dark panels with clearly visible buttons".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Matte;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Matte".into();
             }),
@@ -406,6 +410,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Deep navy glass panels with thin blue outlines".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Midnight;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Midnight".into();
             }),
@@ -418,6 +423,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to OLED deep dark Charcoal theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Charcoal;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Charcoal".into();
             }),
@@ -430,6 +436,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to cool slate blue-gray theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::Slate;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Slate".into();
             }),
@@ -442,6 +449,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to warm sculpting studio umber theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::WarmUmber;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Warm Umber".into();
             }),
@@ -454,6 +462,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to clean bright Studio Light theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::StudioLight;
+                e.theme_mix = Default::default();
                 e.high_contrast = false;
                 e.status = "Theme: Studio Light".into();
             }),
@@ -466,6 +475,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             tooltip: "Switch to High Contrast theme".into(),
             act: Act::Run(|e| {
                 e.theme = crate::settings::ThemePreset::HighContrast;
+                e.theme_mix = Default::default();
                 e.high_contrast = true;
                 e.status = "Theme: High Contrast".into();
             }),
