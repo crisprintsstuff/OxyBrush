@@ -82,6 +82,9 @@ pub struct App {
     /// title bar, RFC 0028). The system keeps the button release, so egui
     /// is told the button went up on the next frame.
     release_after_window_drag: bool,
+    /// The macOS menu bar (RFC 0028).
+    #[cfg(target_os = "macos")]
+    native_menu: Option<crate::native_menu::NativeMenu>,
     last_frame: Instant,
     initial_files: Vec<PathBuf>,
     /// Saved project tabs from the previous session, to open on `resumed`.
@@ -249,6 +252,8 @@ impl App {
             applied_theme: None,
             applied_title: String::new(),
             release_after_window_drag: false,
+            #[cfg(target_os = "macos")]
+            native_menu: None,
             last_frame: Instant::now(),
             initial_files,
             pending_session,
@@ -501,6 +506,17 @@ impl App {
         #[cfg(target_os = "windows")]
         let attrs = winit::platform::windows::WindowAttributesExtWindows::with_undecorated_shadow(attrs, true);
         let window = Arc::new(event_loop.create_window(attrs).map_err(|e| e.to_string())?);
+        // The menus go in the macOS menu bar; a choice wakes the event loop.
+        #[cfg(target_os = "macos")]
+        if self.native_menu.is_none() {
+            let proxy = self.proxy.clone();
+            self.native_menu = Some(crate::native_menu::NativeMenu::install(&self.editor, move || {
+                if let Some(p) = &proxy {
+                    let _ = p.send_event(());
+                }
+            }));
+            self.editor.native_menu_bar = true;
+        }
 
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_with_display_handle_from_env(Box::new(
             event_loop.owned_display_handle(),
@@ -644,6 +660,18 @@ impl App {
             g.config.height = frame_size[1];
             g.surface.configure(&g.device, &g.config);
         }
+        // What was chosen in the macOS menu bar since the last frame.
+        #[cfg(target_os = "macos")]
+        let menu_action = match self.native_menu.as_mut() {
+            Some(m) => {
+                let a = m.run_chosen(&mut self.editor, &self.egui_ctx);
+                m.refresh(&self.editor);
+                a
+            }
+            None => None,
+        };
+        #[cfg(not(target_os = "macos"))]
+        let menu_action: Option<UiAction> = None;
         let mut raw = g.egui_state.take_egui_input(&g.window);
         if std::mem::take(&mut self.release_after_window_drag) {
             let (pos, modifiers) = self.egui_ctx.input(|i| (i.pointer.latest_pos().unwrap_or_default(), i.modifiers));
@@ -1004,7 +1032,7 @@ impl App {
             self.egui_repaint_at = None;
         }
 
-        if let Some(a) = action {
+        if let Some(a) = action.or(menu_action) {
             self.run_action(a);
         }
         if let Some(p) = self.editor.request_run_plugin.take() {
@@ -1461,6 +1489,11 @@ impl App {
         }
         let key = key?;
         let chord = self.chord(key);
+        // The macOS menu bar handles its own shortcuts.
+        #[cfg(target_os = "macos")]
+        if self.native_menu.as_ref().is_some_and(|m| m.takes(chord)) {
+            return None;
+        }
         // A key given to a brush from the shelf wins over a command (#259).
         if let Some(brush) = self.editor.keymap.brush_for(chord) {
             self.editor.pick_brush_from_key(brush);
