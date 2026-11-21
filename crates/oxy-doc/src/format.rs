@@ -62,6 +62,9 @@
 //!   uv:f32*6t` (u, v for each of a triangle's three corners, in the
 //!   `PIEC`'s triangle order; v points up, UDIM tiles count up from 0..1).
 //!   Older readers skip it and open the piece without UVs.
+//! - `MRUV` (optional): base-level UVs of the preceding `MRCC` or `MRES`,
+//!   using the `UVCO` layout in base triangle order. Higher levels are
+//!   derived from the base. Older readers still show the active UVs in `UVCO`.
 //! - `VMAP` (optional, since 2.5.8): vertex origin of the **preceding**
 //!   `PIEC`: `vcount:u32 source:u32*vcount`. `source[i]` is the index of
 //!   vertex `i` in the vertex array of the `PIEC` the piece was originally
@@ -218,6 +221,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
                 }
                 None => sections.push((*b"MRES", encode_multires(mr))),
             }
+            if !mr.base_uvs().is_empty() {
+                sections.push((*b"MRUV", encode_uvs(mr.base_uvs())));
+            }
             let smooth = mr.level_smooth();
             if smooth.iter().any(|s| !s) {
                 let mut b = (smooth.len() as u32).to_le_bytes().to_vec();
@@ -302,15 +308,7 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             }
         }
         if !p.mesh.uv.is_empty() && p.mesh.uv.len() == p.mesh.triangles.len() {
-            let mut b = Vec::with_capacity(4 + p.mesh.uv.len() * 24);
-            b.extend_from_slice(&(p.mesh.uv.len() as u32).to_le_bytes());
-            for t in &p.mesh.uv {
-                for c in t {
-                    b.extend_from_slice(&c.x.to_le_bytes());
-                    b.extend_from_slice(&c.y.to_le_bytes());
-                }
-            }
-            sections.push((*b"UVCO", b));
+            sections.push((*b"UVCO", encode_uvs(&p.mesh.uv)));
         }
         if !p.mesh.color.is_empty() {
             let mut b = Vec::with_capacity(4 + p.mesh.color.len() * 12);
@@ -497,17 +495,19 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
             }
             b"UVCO" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("UVCO before any piece".into()))?;
-                let mut r = Reader { data: &raw, pos: 0 };
-                let n = r.u32()? as usize;
-                if n == piece.mesh.triangles.len() {
-                    piece.mesh.uv = (0..n)
-                        .map(|_| {
-                            let mut uv = || -> Result<oxy_mesh::Vec2> { Ok(oxy_mesh::Vec2::new(r.f32()?, r.f32()?)) };
-                            Ok([uv()?, uv()?, uv()?])
-                        })
-                        .collect::<Result<_>>()?;
+                if let Some(uv) = decode_uvs(&raw, piece.mesh.triangles.len())? {
+                    piece.mesh.uv = uv;
                 } else {
                     log::warn!("ignoring UVs that don't match piece {:?}", piece.name);
+                }
+            }
+            b"MRUV" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRUV before any piece".into()))?;
+                let restored = piece.multires.as_mut().is_some_and(|mr| {
+                    decode_uvs(&raw, mr.triangle_count(0)).ok().flatten().is_some_and(|uv| mr.restore_base_uvs(uv))
+                });
+                if !restored {
+                    log::warn!("ignoring base UVs that don't match subdivision levels on piece {:?}", piece.name);
                 }
             }
             b"VCOL" => {
@@ -1532,6 +1532,31 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         instancers: Vec::new(),
         parent: None,
     })
+}
+
+fn encode_uvs(uv: &[[oxy_mesh::Vec2; 3]]) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(4 + uv.len() * 24);
+    bytes.extend_from_slice(&(uv.len() as u32).to_le_bytes());
+    for corner in uv.iter().flatten() {
+        bytes.extend_from_slice(&corner.x.to_le_bytes());
+        bytes.extend_from_slice(&corner.y.to_le_bytes());
+    }
+    bytes
+}
+
+fn decode_uvs(raw: &[u8], triangles: usize) -> Result<Option<Vec<[oxy_mesh::Vec2; 3]>>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let n = r.u32()? as usize;
+    if n != triangles {
+        return Ok(None);
+    }
+    (0..n)
+        .map(|_| {
+            let mut uv = || -> Result<oxy_mesh::Vec2> { Ok(oxy_mesh::Vec2::new(r.f32()?, r.f32()?)) };
+            Ok([uv()?, uv()?, uv()?])
+        })
+        .collect::<Result<_>>()
+        .map(Some)
 }
 
 fn encode_multires(mr: &Multires) -> Vec<u8> {

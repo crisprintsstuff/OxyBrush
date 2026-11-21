@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "oxybrush_bridge"
-version = "0.1.0"
+version = "0.1.1"
 name = "OxyBrush Bridge"
 tagline = "Send meshes to OxyBrush to sculpt, and get them back"
 maintainer = "OxyBrush contributors"

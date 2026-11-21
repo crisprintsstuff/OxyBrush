@@ -5478,7 +5478,7 @@ impl Editor {
     }
 
     /// Call once per frame: when a piece's triangles were rebuilt (remesh,
-    /// dynamic detail, decimate, subdivision levels, …) and that dropped
+    /// dynamic detail, decimate, masked subdivision, …) and that dropped
     /// its UVs, say so once. Cheap: one lookup per piece.
     pub fn watch_uvs(&mut self) {
         let mut dropped: Option<String> = None;
@@ -5496,7 +5496,7 @@ impl Editor {
         if let Some(name) = dropped {
             self.toast = Some(Toast {
                 text: format!(
-                    "{name} has no UVs any more: rebuilding its triangles (remesh, dynamic detail, decimate, subdivision levels…) drops them. Undo brings them back."
+                    "{name} has no UVs any more: rebuilding its triangles (remesh, dynamic detail, decimate, masked subdivision…) drops them. Undo brings them back."
                 ),
                 since: std::time::Instant::now(),
                 long: true,
@@ -6812,6 +6812,9 @@ impl Editor {
         match &piece.multires {
             Some(m) => m.next_level_triangles(),
             None if self.subdivision_scheme == oxy_mesh::multires::Scheme::Loop => piece.mesh.triangle_count() * 4,
+            None if !piece.mesh.uvs().is_empty() => {
+                oxy_mesh::multires::Multires::first_quad_level_triangles(&piece.mesh, piece.current_cage().as_ref())
+            }
             None => {
                 let (q, t) = piece.mesh.quad_and_triangle_counts();
                 8 * q + 6 * t
@@ -6874,11 +6877,14 @@ impl Editor {
             return;
         }
         let quads = self.subdivision_scheme == oxy_mesh::multires::Scheme::CatmullClark;
-        let n = if quads {
-            let (q, t) = self.scene.active().mesh.quad_and_triangle_counts();
+        let piece = self.scene.active();
+        let n = if quads && !piece.mesh.uvs().is_empty() {
+            oxy_mesh::multires::Multires::first_quad_level_triangles(&piece.mesh, piece.current_cage().as_ref())
+        } else if quads {
+            let (q, t) = piece.mesh.quad_and_triangle_counts();
             8 * q + 6 * t
         } else {
-            self.scene.active().mesh.triangle_count() * 4
+            piece.mesh.triangle_count() * 4
         };
         if self.max_triangles > 0 && n > self.max_triangles {
             self.status = format!(
@@ -6888,7 +6894,6 @@ impl Editor {
             return;
         }
         // One level of a level stack, kept as a plain mesh.
-        let piece = self.scene.active();
         let mut mr = self.new_level_stack(piece);
         let prepared = mr.prepare(&piece.mesh);
         let mesh = Mesh::from_data(mr.add_level_prepared_with(prepared, smooth));
@@ -12878,6 +12883,59 @@ mod tests {
         f.step_level(1);
         wait_job(&mut f);
         assert_eq!(f.scene.active().mesh.quad_and_triangle_counts(), (base.0 * 16, 0));
+    }
+
+    #[test]
+    fn subdivision_uv_islands_survive_switching_save_and_export() {
+        let dir = std::env::temp_dir().join(format!("oxy-multires-uv-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let source = dir.join("seam.obj");
+        std::fs::write(
+            &source,
+            "v 0 0 0\nv 1 0 0\nv 2 0 0\nv 0 1 0\nv 1 1 0\nv 2 1 0\n             vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nvt 2 0\nvt 3 0\nvt 3 1\nvt 2 1\n             f 1/1 2/2 5/3 4/4\nf 2/5 3/6 6/7 5/8\n",
+        )
+        .unwrap();
+        let mut e = editor();
+        e.open(&source);
+        let base = e.scene.active().mesh.uvs().to_vec();
+        assert_eq!(base.len(), 4);
+        e.add_level();
+        e.add_level();
+        let mesh = &e.scene.active().mesh;
+        assert_eq!(mesh.uvs().len(), 64);
+        assert_eq!(mesh.uvs().iter().filter(|t| t.iter().all(|uv| uv.x <= 1.0)).count(), 32);
+        assert_eq!(mesh.uvs().iter().filter(|t| t.iter().all(|uv| uv.x >= 2.0)).count(), 32);
+
+        let project = dir.join("seam.oxb");
+        assert!(e.save(&project));
+        let mut old_reader = std::fs::read(&project).unwrap();
+        let section = old_reader.windows(4).position(|tag| tag == b"MRUV").unwrap();
+        old_reader[section..section + 4].copy_from_slice(b"ZZZZ");
+        assert_eq!(oxy_doc::format::decode(&old_reader).unwrap().pieces[0].mesh.uv.len(), 64);
+        let mut reopened = editor();
+        reopened.open(&project);
+        assert_eq!(reopened.multires_level(), Some((2, 3)));
+        assert_eq!(reopened.scene.active().mesh.uvs().len(), 64);
+        reopened.step_level(-2);
+        let mut base_reopened = reopened.scene.active().mesh.uvs().to_vec();
+        // Mesh chunking can reorder triangles on load.
+        let uv_key = |triangle: &[oxy_mesh::Vec2; 3]| triangle.map(|uv| [uv.x.to_bits(), uv.y.to_bits()]);
+        base_reopened.sort_unstable_by_key(uv_key);
+        let mut expected = base;
+        expected.sort_unstable_by_key(uv_key);
+        assert_eq!(base_reopened, expected);
+        reopened.step_level(2);
+        for (extension, level) in [("obj", 2), ("glb", 1)] {
+            if level == 1 {
+                reopened.step_level(-1);
+            }
+            let path = dir.join(format!("reopened.{extension}"));
+            reopened.export(&path);
+            let exported = oxy_io::import(&path).unwrap();
+            assert_eq!(exported.uvs().len(), if level == 2 { 64 } else { 16 });
+            assert!(exported.uvs().iter().any(|t| t.iter().any(|uv| uv.x == 3.0)));
+        }
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

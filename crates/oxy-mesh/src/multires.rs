@@ -38,7 +38,7 @@
 
 use crate::retopo::Cage;
 use crate::{Mesh, MeshData};
-use glam::Vec3;
+use glam::{Vec2, Vec3};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
 
@@ -194,6 +194,7 @@ impl Polys {
 
 #[derive(Debug, Clone)]
 struct Level {
+    uv: Vec<[Vec2; 3]>,
     triangles: Vec<[u32; 3]>,
     positions: Vec<Vec3>,
     /// Empty for level 0 or when all displacements are zero.
@@ -209,6 +210,74 @@ struct Level {
     smooth: bool,
 }
 
+impl Level {
+    /// Refine each UV face independently, keeping its corners and seams.
+    /// Smoothing the 3D surface does not move corners in texture space.
+    fn refined_uvs(&self) -> Option<Vec<[Vec2; 3]>> {
+        if self.uv.is_empty() {
+            return Some(Vec::new());
+        }
+        match &self.polys {
+            None => Some(
+                self.uv
+                    .par_iter()
+                    .flat_map_iter(|&[a, b, c]| {
+                        let (ab, bc, ca) = ((a + b) * 0.5, (b + c) * 0.5, (c + a) * 0.5);
+                        [[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]
+                    })
+                    .collect(),
+            ),
+            Some(Polys::Quads(_)) => Some(
+                self.uv
+                    .par_chunks_exact(2)
+                    .flat_map_iter(|pair| quad_uv_children([pair[0][0], pair[0][1], pair[0][2], pair[1][2]]))
+                    .collect(),
+            ),
+            Some(Polys::Mixed { offsets, corners, tri_offsets, tris }) => {
+                let faces = (0..offsets.len() - 1)
+                    .into_par_iter()
+                    .map(|f| {
+                        let boundary = &corners[offsets[f] as usize..offsets[f + 1] as usize];
+                        let triangles = &tris[tri_offsets[f] as usize..tri_offsets[f + 1] as usize];
+                        let uv = polygon_uvs(boundary, triangles, &self.triangles, &self.uv)?;
+                        let center = uv.iter().sum::<Vec2>() / uv.len() as f32;
+                        Some((0..uv.len()).flat_map(|i| corner_uv_children(&uv, center, i)).collect::<Vec<_>>())
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(faces.into_iter().flatten().collect())
+            }
+        }
+    }
+}
+
+fn quad_uv_children(uv: [Vec2; 4]) -> impl Iterator<Item = [Vec2; 3]> {
+    let center = uv.iter().sum::<Vec2>() * 0.25;
+    (0..4).flat_map(move |i| corner_uv_children(&uv, center, i))
+}
+
+fn corner_uv_children(uv: &[Vec2], center: Vec2, i: usize) -> [[Vec2; 3]; 2] {
+    let a = uv[i];
+    let next = (a + uv[(i + 1) % uv.len()]) * 0.5;
+    let prev = (a + uv[(i + uv.len() - 1) % uv.len()]) * 0.5;
+    [[a, next, center], [a, center, prev]]
+}
+
+/// Return the UV at every corner of a polygon assembled from triangles.
+/// A seam inside the polygon requires keeping those triangles separate.
+fn polygon_uvs(boundary: &[u32], face_tris: &[u32], tris: &[[u32; 3]], uvs: &[[Vec2; 3]]) -> Option<Vec<Vec2>> {
+    let mut corners = vec![None; boundary.len()];
+    for &t in face_tris {
+        for (vertex, uv) in tris[t as usize].into_iter().zip(uvs[t as usize]) {
+            let i = boundary.iter().position(|&v| v == vertex)?;
+            if corners[i].is_some_and(|previous| previous != uv) {
+                return None;
+            }
+            corners[i] = Some(uv);
+        }
+    }
+    corners.into_iter().collect()
+}
+
 impl PartialEq for Level {
     fn eq(&self, other: &Self) -> bool {
         let details_eq = match (self.details.is_empty(), other.details.is_empty()) {
@@ -218,6 +287,7 @@ impl PartialEq for Level {
             (false, true) => self.details.iter().all(|d| *d == Vec3::ZERO),
         };
         details_eq
+            && self.uv == other.uv
             && self.triangles == other.triangles
             && self.positions == other.positions
             && self.refinement == other.refinement
@@ -272,6 +342,7 @@ impl Multires {
         Self {
             scheme: Scheme::Loop,
             levels: vec![Level {
+                uv: d.uv,
                 triangles: d.triangles,
                 positions: d.positions,
                 details: Vec::new(),
@@ -310,6 +381,12 @@ impl Multires {
 
     pub fn scheme(&self) -> Scheme {
         self.scheme
+    }
+
+    /// Count the first quad level, including any splits at UV seams
+    /// inside an inferred polygon.
+    pub fn first_quad_level_triangles(mesh: &Mesh, cage: Option<&Cage>) -> usize {
+        2 * base_polygons(mesh, cage).0.corner_total()
     }
 
     /// Triangles the next level up would have.
@@ -549,10 +626,12 @@ impl Multires {
     /// Level `top + 1` made from level `top`, smoothed or not.
     fn refine_level(&self, top: usize, smooth: bool) -> Level {
         let lvl = &self.levels[top];
+        let uv = lvl.refined_uvs().unwrap_or_default();
         let mut level = match &lvl.polys {
             None => {
                 let (triangles, refinement) = refine(&lvl.triangles, lvl.positions.len());
                 Level {
+                    uv,
                     triangles,
                     positions: Vec::new(),
                     details: Vec::new(),
@@ -566,6 +645,7 @@ impl Multires {
                 let (quads, refinement) = refine_cc(polys, lvl.positions.len(), &*sharp);
                 let triangles = quads.par_iter().flat_map_iter(|&[a, b, c, d]| [[a, b, c], [a, c, d]]).collect();
                 Level {
+                    uv,
                     triangles,
                     positions: Vec::new(),
                     details: Vec::new(),
@@ -792,7 +872,7 @@ impl Multires {
             groups: a.groups,
             hidden: a.hidden,
             color: a.color,
-            uv: Vec::new(),
+            uv: lvl.uv.clone(),
         }
     }
 
@@ -803,7 +883,19 @@ impl Multires {
             self.sync_from(mesh);
         }
         let attrs = self.attributes_from(mesh);
-        self.level_data(attrs)
+        let mut data = self.level_data(attrs);
+        // Older projects may have UVCO on the active mesh alone.
+        if data.uv.is_empty() && !mesh.uvs().is_empty() {
+            data.uv = vec![[Vec2::ZERO; 3]; data.triangles.len()];
+            if self.identity {
+                data.uv.copy_from_slice(mesh.uvs());
+            } else {
+                for (&src, &uv) in mesh.source_triangles().iter().zip(mesh.uvs()) {
+                    data.uv[src as usize] = uv;
+                }
+            }
+        }
+        data
     }
 
     /// For each point of `mesh` (the mesh this stack shows), its number in
@@ -821,6 +913,7 @@ impl Multires {
                 l.positions.len() * 12
                     + l.details.len() * 12
                     + l.triangles.len() * 12
+                    + l.uv.len() * 24
                     + l.positions.len() * 16
                     + l.polys.as_ref().map_or(0, Polys::bytes)
             })
@@ -833,6 +926,30 @@ impl Multires {
     /// positions (level order), and the active level. Details are derived.
     pub fn parts(&self) -> (&[[u32; 3]], Vec<&[Vec3]>, usize) {
         (&self.levels[0].triangles, self.levels.iter().map(|l| l.positions.as_slice()).collect(), self.active)
+    }
+
+    /// UVs of the base, in the order returned by `parts`.
+    pub fn base_uvs(&self) -> &[[Vec2; 3]] {
+        &self.levels[0].uv
+    }
+
+    /// Restore base UVs and derive the higher levels from the stored topology.
+    /// The base must have a single UV per corner of each stored polygon.
+    pub fn restore_base_uvs(&mut self, uv: Vec<[Vec2; 3]>) -> bool {
+        if uv.len() != self.levels[0].triangles.len() || uv.iter().flatten().any(|p| !p.is_finite()) {
+            return false;
+        }
+        self.levels[0].uv = uv;
+        for i in 1..self.levels.len() {
+            let Some(uv) = self.levels[i - 1].refined_uvs() else {
+                for level in &mut self.levels {
+                    level.uv.clear();
+                }
+                return false;
+            };
+            self.levels[i].uv = uv;
+        }
+        true
     }
 
     /// Rebuild a stack from saved parts. Returns None if the counts don't
@@ -848,6 +965,7 @@ impl Multires {
             return None;
         }
         let mut levels = vec![Level {
+            uv: Vec::new(),
             triangles: base_triangles,
             positions: base_pos,
             details: Vec::new(),
@@ -865,6 +983,7 @@ impl Multires {
             let all_zero = pos.iter().zip(&smooth).all(|(p, s)| *p == *s);
             let details = if all_zero { Vec::new() } else { pos.iter().zip(&smooth).map(|(p, s)| *p - *s).collect() };
             levels.push(Level {
+                uv: Vec::new(),
                 triangles,
                 positions: pos,
                 details,
@@ -941,6 +1060,7 @@ impl Multires {
         let mut m = Self {
             scheme: Scheme::CatmullClark,
             levels: vec![Level {
+                uv: Vec::new(),
                 triangles: base_triangles,
                 positions: base_pos,
                 details: Vec::new(),
@@ -1090,7 +1210,9 @@ fn base_polygons(mesh: &Mesh, cage: Option<&Cage>) -> (Polys, Vec<([u32; 2], f32
             push(&tris[ts[0] as usize], ts);
             continue;
         }
-        match outline(ts.iter().map(|&t| tris[t as usize])) {
+        match outline(ts.iter().map(|&t| tris[t as usize]))
+            .filter(|boundary| mesh.uvs().is_empty() || polygon_uvs(boundary, ts, tris, mesh.uvs()).is_some())
+        {
             Some(loop_) => push(&loop_, ts),
             None => {
                 for &t in ts {
@@ -1577,6 +1699,25 @@ mod tests {
             out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
         }
         (out, edges)
+    }
+
+    #[test]
+    fn subdivisions_keep_a_uv_seam_across_an_inferred_quad_diagonal() {
+        let mesh = Mesh::from_data(MeshData {
+            positions: vec![Vec3::ZERO, Vec3::X, Vec3::X + Vec3::Y, Vec3::Y],
+            triangles: vec![[0, 1, 2], [0, 2, 3]],
+            uv: vec![[Vec2::ZERO, Vec2::X, Vec2::ONE], [Vec2::splat(2.0), Vec2::splat(3.0), Vec2::new(2.0, 3.0)]],
+            ..Default::default()
+        });
+        assert_eq!(mesh.quad_and_triangle_counts(), (1, 0));
+        for (scheme, triangles) in [(Scheme::CatmullClark, 12), (Scheme::Loop, 8)] {
+            let mut stack = Multires::new_with(&mesh, scheme, None);
+            assert_eq!(stack.next_level_triangles(), triangles);
+            let level = stack.add_level(&mesh);
+            assert_eq!(level.uv.len(), triangles);
+            assert_eq!(level.uv.iter().filter(|t| t.iter().all(|uv| uv.x <= 1.0)).count(), triangles / 2);
+            assert_eq!(level.uv.iter().filter(|t| t.iter().all(|uv| uv.x >= 2.0)).count(), triangles / 2);
+        }
     }
 
     #[test]
