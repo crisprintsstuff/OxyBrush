@@ -496,6 +496,49 @@ pub struct Settings {
     pub session_files: Vec<PathBuf>,
     /// Index of the active tab within `session_files`.
     pub session_active: usize,
+    /// The material a new tab starts with.
+    pub new_tab_material: NewTabMaterial,
+    /// For [`NewTabMaterial::Chosen`]: the built-in material, used when
+    /// `new_tab_custom_matcap` is empty or not loaded.
+    pub new_tab_matcap: MatcapPreset,
+    /// For [`NewTabMaterial::Chosen`]: a custom matcap by name ("" for none).
+    pub new_tab_custom_matcap: String,
+}
+
+/// What material a new tab starts with (Preferences > General).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NewTabMaterial {
+    /// The material of the tab you were in.
+    #[default]
+    Current,
+    /// The default material (Terracotta), as before this option.
+    Default,
+    /// A material chosen in Preferences.
+    Chosen,
+}
+
+impl NewTabMaterial {
+    pub const ALL: [NewTabMaterial; 3] = [NewTabMaterial::Current, NewTabMaterial::Default, NewTabMaterial::Chosen];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            NewTabMaterial::Current => "Same as the current tab",
+            NewTabMaterial::Default => "Default material",
+            NewTabMaterial::Chosen => "A material I pick",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            NewTabMaterial::Current => "current",
+            NewTabMaterial::Default => "default",
+            NewTabMaterial::Chosen => "chosen",
+        }
+    }
+
+    pub fn from_key(k: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|m| m.key() == k)
+    }
 }
 
 /// A monitor's physical top-left corner and size.
@@ -1027,6 +1070,9 @@ impl Default for Settings {
             restore_session: true,
             session_files: Vec::new(),
             session_active: 0,
+            new_tab_material: NewTabMaterial::Current,
+            new_tab_matcap: MatcapPreset::Terracotta,
+            new_tab_custom_matcap: String::new(),
         }
     }
 }
@@ -1227,6 +1273,12 @@ impl Settings {
                 )
             }
             + &format!("restore_session = {}\nsession_active = {}\n", self.restore_session, self.session_active)
+            + &format!(
+                "new_tab_material = {}\nnew_tab_matcap = {}\nnew_tab_custom_matcap = {}\n",
+                self.new_tab_material.key(),
+                matcap_key(self.new_tab_matcap),
+                self.new_tab_custom_matcap.replace(['\n', '\r'], " ")
+            )
             + &self
                 .session_files
                 .iter()
@@ -1371,6 +1423,13 @@ impl Settings {
                     }
                 }
                 "restore_session" => s.restore_session = v.parse().unwrap_or(s.restore_session),
+                "new_tab_material" => s.new_tab_material = NewTabMaterial::from_key(v).unwrap_or(s.new_tab_material),
+                "new_tab_matcap" => {
+                    if let Some(m) = MatcapPreset::ALL.into_iter().find(|m| matcap_key(*m) == v) {
+                        s.new_tab_matcap = m;
+                    }
+                }
+                "new_tab_custom_matcap" => s.new_tab_custom_matcap = v.to_owned(),
                 "session_active" => {
                     if let Ok(n) = v.parse::<usize>() {
                         s.session_active = n;
@@ -1828,12 +1887,16 @@ mod tests {
             restore_session: false,
             session_files: vec![PathBuf::from("/work/tab1.oxb"), PathBuf::from("/work/tab2.oxb")],
             session_active: 1,
+            new_tab_material: NewTabMaterial::Chosen,
+            new_tab_matcap: MatcapPreset::Jade,
+            new_tab_custom_matcap: "Crimson Wax".into(),
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
         // Duplicate session entries are dropped and capped at MAX_SESSION_FILES.
         let many_sessions: String = (0..80).map(|i| format!("session_file = /s{}.oxb\n", i % 70)).collect();
         assert_eq!(Settings::from_text(&many_sessions).session_files.len(), MAX_SESSION_FILES);
         assert!(Settings::default().restore_session);
+        assert_eq!(Settings::default().new_tab_material, NewTabMaterial::Current, "new tabs keep the current material");
         // Duplicate recent entries are dropped and the list is capped.
         let many: String = (0..20).map(|i| format!("recent = /f{}.oxb\n", i % 15)).collect();
         assert_eq!(Settings::from_text(&many).recent_files.len(), MAX_RECENT);

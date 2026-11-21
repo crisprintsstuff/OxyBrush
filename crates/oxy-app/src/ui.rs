@@ -1343,6 +1343,52 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
     ed.show_diagnostics = open;
 }
 
+/// Preferences > General: the material a new tab starts with.
+fn new_tab_material_row(ui: &mut Ui, ed: &mut Editor) {
+    use crate::settings::NewTabMaterial;
+    ui.horizontal(|ui| {
+        ui.label("New tabs start with").on_hover_text(
+            "The material (matcap) a new tab starts with: the one of the tab you were in, the default material, or one you pick here.",
+        );
+        egui::ComboBox::from_id_salt("new_tab_material")
+            .selected_text(ed.new_tab_material.label())
+            .show_ui(ui, |ui| {
+                for m in NewTabMaterial::ALL {
+                    ui.selectable_value(&mut ed.new_tab_material, m, m.label());
+                }
+            });
+    });
+    if ed.new_tab_material != NewTabMaterial::Chosen {
+        return;
+    }
+    let current = if ed.new_tab_custom_matcap.is_empty() {
+        ed.new_tab_matcap.label().to_string()
+    } else {
+        ed.new_tab_custom_matcap.clone()
+    };
+    ui.horizontal(|ui| {
+        ui.label("   Material");
+        egui::ComboBox::from_id_salt("new_tab_matcap").selected_text(current).show_ui(ui, |ui| {
+            for m in MatcapPreset::ALL {
+                let on = ed.new_tab_custom_matcap.is_empty() && ed.new_tab_matcap == m;
+                if ui.selectable_label(on, m.label()).clicked() {
+                    ed.new_tab_matcap = m;
+                    ed.new_tab_custom_matcap.clear();
+                }
+            }
+            let names: Vec<String> = ed.custom_matcaps.iter().map(|m| m.name.clone()).collect();
+            if !names.is_empty() {
+                ui.separator();
+            }
+            for name in names {
+                if ui.selectable_label(ed.new_tab_custom_matcap == name, &name).clicked() {
+                    ed.new_tab_custom_matcap = name;
+                }
+            }
+        });
+    });
+}
+
 fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.heading("General");
     ui.label(RichText::new("Startup, tools, and default sculpting behavior.").weak().small());
@@ -1351,6 +1397,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
     tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's tabs at startup", plain::RESTORE_SESSION);
+    new_tab_material_row(ui, ed);
     tips::check_plain(
         ui,
         &mut ed.remember_brushes,
