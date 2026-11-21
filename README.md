@@ -92,6 +92,7 @@ OxyBrush remembers your window, layout, arrangement, brush order, theme, materia
 
 ### Working with other apps
 
+- **Blender:** Send selected mesh objects to OxyBrush, sculpt them, and send the result back to Blender. See the [Blender bridge installation and workflow](integrations/blender/README.md).
 - **OxyCharacter:** OxyCharacter opens its character in OxyBrush as a project with a `character.oxb.oxylink.json` file next to it. OxyBrush shows **Linked to OxyCharacter** in the top bar; sculpt, add pieces, then click it (or **File > Send back to OxyCharacter**) to send the result back. Sculpted changes to `OxyCharacter Body` return as a morph and new pieces as accessories. To keep the body a morph, use subdivision levels rather than operations that change its topology (remesh, decimate, Boolean, split, delete hidden); OxyBrush warns you once if you do.
 - **Blender:** the OxyBrush Bridge add-on sends meshes from Blender to OxyBrush and back ([RFC 0010](docs/rfcs/0010-blender-bridge.md)). It hasn't been tested inside Blender yet.
 - **An AI agent on your computer** (off unless you turn it on): **Preferences > AI agent** lets a program on this computer sculpt in the same scene as you. It listens only on this machine, shows **Agent connected** while one is here, and its edits undo like yours. Setup for common agents is in [docs/mcp.md](docs/mcp.md).

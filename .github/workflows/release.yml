@@ -241,9 +241,28 @@ jobs:
           name: flatpak
           path: dist/*
 
+  blender-extension:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Package the Blender extension
+        env:
+          OXYBRUSH_VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          git archive --format=zip \
+            --output="dist/OxyBrush-${OXYBRUSH_VERSION}-blender-extension.zip" \
+            HEAD:integrations/blender/oxybrush_bridge
+      - uses: actions/upload-artifact@v4
+        with:
+          name: blender-extension
+          path: dist/*.zip
+          if-no-files-found: error
+
   publish:
     if: github.event_name == 'release'
-    needs: [version, windows, linux, flatpak, macos]
+    needs: [version, windows, linux, flatpak, macos, blender-extension]
     runs-on: ubuntu-latest
     env:
       # Optional: an ed25519 key that signs SHA256SUMS.txt for the in-app
