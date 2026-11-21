@@ -490,6 +490,12 @@ pub struct Settings {
     pub panel_drag_scroll: PanelDragScroll,
     /// Maximum visible height of the scrollable Pieces outliner box in the inspector.
     pub pieces_box_height: f32,
+    /// Reopen the previously open saved project tabs at startup (RFC 0027).
+    pub restore_session: bool,
+    /// Open saved project paths remembered across restarts, in tab order.
+    pub session_files: Vec<PathBuf>,
+    /// Index of the active tab within `session_files`.
+    pub session_active: usize,
 }
 
 /// A monitor's physical top-left corner and size.
@@ -925,6 +931,9 @@ pub fn default_max_triangles() -> usize {
 /// How many recent files are remembered.
 pub const MAX_RECENT: usize = 10;
 
+/// Maximum number of open project tabs remembered for session restore.
+pub const MAX_SESSION_FILES: usize = 64;
+
 impl Default for Settings {
     fn default() -> Self {
         let view = ViewSettings::default();
@@ -1015,6 +1024,9 @@ impl Default for Settings {
             alpha_capture_size: 1024,
             panel_drag_scroll: PanelDragScroll::Pen,
             pieces_box_height: 240.0,
+            restore_session: true,
+            session_files: Vec::new(),
+            session_active: 0,
         }
     }
 }
@@ -1214,6 +1226,14 @@ impl Settings {
                         .join(", ")
                 )
             }
+            + &format!("restore_session = {}\nsession_active = {}\n", self.restore_session, self.session_active)
+            + &self
+                .session_files
+                .iter()
+                .filter_map(|p| p.to_str())
+                .filter(|p| !p.contains(['\n', '\r']))
+                .map(|p| format!("session_file = {p}\n"))
+                .collect::<String>()
             + &self
                 .recent_files
                 .iter()
@@ -1348,6 +1368,18 @@ impl Settings {
                     let p = PathBuf::from(v);
                     if !s.recent_files.contains(&p) {
                         s.recent_files.push(p);
+                    }
+                }
+                "restore_session" => s.restore_session = v.parse().unwrap_or(s.restore_session),
+                "session_active" => {
+                    if let Ok(n) = v.parse::<usize>() {
+                        s.session_active = n;
+                    }
+                }
+                "session_file" if !v.is_empty() && s.session_files.len() < MAX_SESSION_FILES => {
+                    let p = PathBuf::from(v);
+                    if !s.session_files.contains(&p) {
+                        s.session_files.push(p);
                     }
                 }
                 "update_last_check" => s.update_last_check = v.parse().unwrap_or(0),
@@ -1793,8 +1825,15 @@ mod tests {
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
             pieces_box_height: 280.0,
+            restore_session: false,
+            session_files: vec![PathBuf::from("/work/tab1.oxb"), PathBuf::from("/work/tab2.oxb")],
+            session_active: 1,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
+        // Duplicate session entries are dropped and capped at MAX_SESSION_FILES.
+        let many_sessions: String = (0..80).map(|i| format!("session_file = /s{}.oxb\n", i % 70)).collect();
+        assert_eq!(Settings::from_text(&many_sessions).session_files.len(), MAX_SESSION_FILES);
+        assert!(Settings::default().restore_session);
         // Duplicate recent entries are dropped and the list is capped.
         let many: String = (0..20).map(|i| format!("recent = /f{}.oxb\n", i % 15)).collect();
         assert_eq!(Settings::from_text(&many).recent_files.len(), MAX_RECENT);

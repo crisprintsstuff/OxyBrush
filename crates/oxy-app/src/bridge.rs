@@ -7,12 +7,14 @@ use glam::{Mat4, Vec3};
 use oxy_doc::{Piece, Scene, VertexOrigin};
 use oxy_io::bridge::{self, LinkManifest, Returned};
 use oxy_mesh::Mesh;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// The open link.
 #[derive(Debug, Clone)]
 pub struct Bridge {
     pub manifest: LinkManifest,
+    /// Manifest file path this link was opened from.
+    pub manifest_path: PathBuf,
     /// (piece id, object index, vertex count the object was sent with).
     pub pieces: Vec<(u64, usize, usize)>,
 }
@@ -37,8 +39,40 @@ fn file_stem(name: &str) -> String {
 }
 
 impl Editor {
+    /// Open a link manifest following tab rules: focus if already open,
+    /// reuse an untouched starter tab, or open in a new tab.
+    pub fn open_link(&mut self, path: &Path) -> bool {
+        self.show_welcome = false;
+        let canon = path.canonicalize().ok();
+        let matches = |p: &Path| p == path || (canon.is_some() && p.canonicalize().ok() == canon);
+        if let Some(existing_idx) =
+            self.documents.iter().position(|d| d.bridge.as_ref().is_some_and(|b| matches(&b.manifest_path)))
+        {
+            let prev_was_empty = self.is_empty_tab(self.active_document);
+            let prev_idx = self.active_document;
+            self.switch_tab(existing_idx);
+            if prev_was_empty && prev_idx != existing_idx && self.documents.len() > 1 {
+                self.perform_close_tab(prev_idx);
+            }
+            return true;
+        }
+        if self.is_empty_tab(self.active_document) {
+            self.open_link_now(path);
+            self.bridge.is_some()
+        } else {
+            let new_idx = self.new_tab("empty");
+            self.open_link_now(path);
+            if self.bridge.is_none() {
+                self.perform_close_tab(new_idx);
+                false
+            } else {
+                true
+            }
+        }
+    }
+
     /// Open a link manifest: one piece per object, placed as it was in the
-    /// other app. Replaces the document (unsaved changes were asked about).
+    /// other app. Replaces the active tab's document.
     pub fn open_link_now(&mut self, path: &Path) {
         let manifest = match LinkManifest::load(path) {
             Ok(m) => m,
@@ -71,7 +105,7 @@ impl Editor {
         let n = scene.pieces.len();
         self.replace_document(scene, None);
         let app = manifest.app.clone();
-        self.bridge = Some(Bridge { manifest, pieces: map });
+        self.bridge = Some(Bridge { manifest, manifest_path: path.to_path_buf(), pieces: map });
         self.status = format!("Opened {n} object{} from {app}", if n == 1 { "" } else { "s" });
     }
 
@@ -146,8 +180,7 @@ impl Editor {
         let app = m.app.clone();
         let n = returned.len();
         if close {
-            // Everything is in the other app now: start afresh without asking.
-            self.perform(crate::editor::Pending::New("sphere"));
+            self.perform_close_tab(self.active_document);
             self.status = format!("Sent {n} object{} back to {app} and closed the link", if n == 1 { "" } else { "s" });
         } else {
             self.status = format!("Sent {n} object{} back to {app}", if n == 1 { "" } else { "s" });

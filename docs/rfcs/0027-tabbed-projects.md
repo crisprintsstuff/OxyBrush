@@ -1,6 +1,6 @@
 # RFC 0027: Tabbed projects
 
-Status: Draft
+Status: Accepted (phases 1–5 implemented)
 
 ## Summary
 

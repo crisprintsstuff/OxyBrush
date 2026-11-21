@@ -510,12 +510,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(plugin_name(&test_file), "Cube Maker");
-        let mut inbox = match crate::agent::Inbox::for_plugin(&plugin_name(&test_file), wake.clone()) {
+        let ed = crate::editor::Editor::default();
+        let target_doc_id = ed.documents[ed.active_document].id;
+        let mut ed = ed;
+        let mut inbox = match crate::agent::Inbox::for_plugin(&plugin_name(&test_file), target_doc_id, wake.clone()) {
             Ok(ib) => ib,
             Err(_) => return, // port busy or network restricted
         };
         let proc = run_plugin(&test_file, &inbox.endpoint, &inbox.token(), wake).expect("spawn plugin");
-        let mut ed = crate::editor::Editor::default();
         let start = std::time::Instant::now();
         let mut res = None;
         while start.elapsed() < std::time::Duration::from_secs(30) {

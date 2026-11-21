@@ -96,6 +96,8 @@ commands! {
     Retopology => "Retopology (draw quads)", "", "Draw a new low-polygon mesh of quads by hand over the active piece: click to place points on its surface, Shift+click between them to make quads. The result is a new piece, saved with the project, and exports as quads.";
     AddTube => "Draw a tube", "", "Drag a path from the model or empty space to get a tube along it. Drag its points to shape it, Shift+drag a point to change its thickness, then Accept to add it as a new piece.";
     EditTube => "Edit tube", "", "Reopen the active piece's most recent tube to change its path, thickness, sides or caps. Accept replaces it, as one undo step. A tube that was sculpted, remeshed or regrouped since is an ordinary part of the mesh and can't be edited this way.";
+    CopyPiece => "Copy piece", "Ctrl+C", "Copy the selected piece or pieces to the clipboard so you can paste them into this or another tab.";
+    PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project tab as one undo step.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
@@ -267,6 +269,8 @@ impl Cmd {
             Cmd::UndoPiece => CommandId::UndoPiece,
             Cmd::LastStrokeAsCurve => CommandId::LastStrokeAsCurve,
             Cmd::RedoPiece => CommandId::RedoPiece,
+            Cmd::CopyPiece => CommandId::CopyPiece,
+            Cmd::PastePiece => CommandId::PastePiece,
             Cmd::Palette => CommandId::CommandPalette,
             Cmd::FindBrush => CommandId::BrushFinder,
             Cmd::QuickMenu => CommandId::QuickMenu,
@@ -934,6 +938,9 @@ pub mod plain {
     pub const UNSAVED_DISCARD: &str = "Continue, and drop the changes since the last save.";
     pub const CANCEL: &str = "Go back without doing it.";
     pub const RECOVER: &str = "Open the autosaved work.";
+    pub const RECOVER_ALL: &str = "Open every recovered autosave as its own tab.";
+    pub const DISCARD_ONE_RECOVERY: &str = "Delete this recovered autosave permanently.";
+    pub const RESTORE_SESSION: &str = "Reopen the saved project tabs that were open when OxyBrush last closed.";
     pub const KEYMAP_SETTINGS: &str = "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
     pub const SURFACE_CURSOR: &str = "Draw the brush ring flat on the surface under the pointer, at the brush size. Off the model it stays flat to the screen.";
     pub const FOCAL_LENGTH_MENU: &str = "Perspective lens in millimeters (35mm equivalent).";
@@ -1084,6 +1091,9 @@ pub mod plain {
         UNSAVED_DISCARD,
         CANCEL,
         RECOVER,
+        RECOVER_ALL,
+        DISCARD_ONE_RECOVERY,
+        RESTORE_SESSION,
         KEYMAP_SETTINGS,
         SURFACE_CURSOR,
         FOCAL_LENGTH_MENU,

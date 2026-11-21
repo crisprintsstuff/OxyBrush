@@ -579,6 +579,82 @@ impl Living {
             .collect();
         Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes, parts })
     }
+
+    /// Snapshot listed living strokes and their groups for `piece` so it can
+    /// be copied onto the piece clipboard and pasted into another tab.
+    pub(crate) fn copy_for_piece(&self, piece: &Piece) -> (Vec<LivingStroke>, Vec<StrokeGroup>) {
+        if !self.enabled {
+            return (Vec::new(), Vec::new());
+        }
+        let strokes: Vec<LivingStroke> = self
+            .strokes
+            .iter()
+            .filter(|s| {
+                s.piece == piece.id
+                    && s.listed()
+                    && s.topology == piece.mesh.topology_version()
+                    && s.points == piece.mesh.vertex_count()
+            })
+            .cloned()
+            .collect();
+        if strokes.is_empty() {
+            return (Vec::new(), Vec::new());
+        }
+        let used: BTreeSet<u32> = strokes.iter().filter_map(|s| s.group).collect();
+        let groups: Vec<StrokeGroup> =
+            self.groups.iter().filter(|g| g.piece == piece.id && used.contains(&g.id)).cloned().collect();
+        (strokes, groups)
+    }
+
+    /// Attach copied living strokes and groups to freshly pasted pieces.
+    /// Returns `Ok(count)` on success or `Err(count)` when adding them would
+    /// exceed this tab's living-stroke memory budget (the meshes are pasted
+    /// with strokes baked in, matching RFC 0027).
+    pub(crate) fn paste_for_pieces(
+        &mut self,
+        items: &[(u64, &oxy_mesh::Mesh, &[LivingStroke], &[StrokeGroup])],
+        entry_id: u64,
+    ) -> Result<usize, usize> {
+        let total_strokes: usize = items.iter().map(|(_, _, s, _)| s.len()).sum();
+        if total_strokes == 0 || !self.enabled {
+            return Ok(0);
+        }
+        let total_bytes: usize = items.iter().flat_map(|(_, _, s, _)| s.iter()).map(LivingStroke::bytes).sum();
+        let budget = self.budget_mb as usize * 1024 * 1024;
+        if self.bytes().saturating_add(total_bytes) > budget {
+            return Err(total_strokes);
+        }
+        for &(piece_id, mesh, strokes, groups) in items {
+            let mut group_map: HashMap<u32, u32> = HashMap::new();
+            for g in groups {
+                let id = self.next_group;
+                self.next_group += 1;
+                group_map.insert(g.id, id);
+                self.groups.push(StrokeGroup {
+                    id,
+                    piece: piece_id,
+                    name: g.name.clone(),
+                    strength: g.strength,
+                    visible: g.visible,
+                });
+            }
+            for s in strokes {
+                let id = self.next_id;
+                self.next_id += 1;
+                let mut cloned = s.clone();
+                cloned.id = id;
+                cloned.piece = piece_id;
+                cloned.entry = entry_id;
+                cloned.topology = mesh.topology_version();
+                cloned.points = mesh.vertex_count();
+                cloned.group = cloned.group.and_then(|g| group_map.get(&g).copied());
+                cloned.deleted = false;
+                cloned.undone = false;
+                self.strokes.push(cloned);
+            }
+        }
+        Ok(total_strokes)
+    }
 }
 
 impl Editor {

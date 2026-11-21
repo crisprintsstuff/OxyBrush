@@ -696,6 +696,17 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_on_km(ui, &ed.keymap, ed.history.can_redo(), "Redo", Cmd::Redo).clicked() {
                     ed.redo();
                 }
+                ui.separator();
+                if tips::button_on_km(ui, &ed.keymap, !ed.scene.pieces.is_empty(), "Copy piece", Cmd::CopyPiece)
+                    .clicked()
+                {
+                    ed.copy_pieces();
+                }
+                if tips::button_on_km(ui, &ed.keymap, !ed.piece_clipboard.is_empty(), "Paste piece", Cmd::PastePiece)
+                    .clicked()
+                {
+                    ed.paste_pieces();
+                }
                 let reopen = ed.can_reopen_last_stroke();
                 tips::menu(ui, "Last stroke", plain::LAST_STROKE, |ui| {
                     use crate::editor::LastStrokeAs as As;
@@ -1334,6 +1345,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
 
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
+    tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's tabs at startup", plain::RESTORE_SESSION);
     tips::check_plain(
         ui,
         &mut ed.remember_brushes,
@@ -2362,29 +2374,37 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
                         let doc = &ed.documents[i];
                         let is_active = i == ed.active_document;
                         let is_dirty = doc.is_dirty();
-                        let has_job = doc.job.is_some();
+                        let has_job = doc.job.is_some() || ed.plugin_running_doc == Some(doc.id);
+                        let is_linked = doc.link.is_some() || doc.bridge.is_some();
                         let job_label = doc.job.as_ref().map(|j| j.label.clone());
 
                         let dot = if is_dirty { "• " } else { "" };
+                        let link_mark = if is_linked { "⇄ " } else { "" };
                         let job_mark = if has_job { " ⏳" } else { "" };
-                        let label_display = format!("{dot}{title_text}{job_mark}");
+                        let label_display = format!("{dot}{link_mark}{title_text}{job_mark}");
 
-                        let tooltip = match &doc.path {
-                            Some(p) => {
-                                let mut s = p.display().to_string();
-                                if let Some(jl) = &job_label {
-                                    s.push_str(&format!("\n{jl}…"));
-                                }
-                                s
-                            }
-                            None => {
-                                let mut s = "Untitled project".to_string();
-                                if let Some(jl) = &job_label {
-                                    s.push_str(&format!("\n{jl}…"));
-                                }
-                                s
-                            }
+                        let mut tooltip = match &doc.path {
+                            Some(p) => p.display().to_string(),
+                            None => match &doc.bridge {
+                                Some(b) => format!("Linked to {}", b.app()),
+                                None => "Untitled project".to_string(),
+                            },
                         };
+                        if doc.link.is_some() {
+                            tooltip.push_str("\nLinked to OxyCharacter");
+                        } else if doc.path.is_some()
+                            && let Some(b) = &doc.bridge
+                        {
+                            tooltip.push_str(&format!("\nLinked to {}", b.app()));
+                        }
+                        if ed.plugin_running_doc == Some(doc.id)
+                            && let Some(pname) = &ed.plugin_running
+                        {
+                            tooltip.push_str(&format!("\nPlugin: {pname}…"));
+                        }
+                        if let Some(jl) = &job_label {
+                            tooltip.push_str(&format!("\n{jl}…"));
+                        }
 
                         let bg = if is_active {
                             ui.visuals().widgets.active.bg_fill
@@ -4368,6 +4388,12 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
         ed.edit_tube();
     }
+    if tips::button_on_km(ui, &ed.keymap, !ed.scene.pieces.is_empty(), "Copy piece", Cmd::CopyPiece).clicked() {
+        ed.copy_pieces();
+    }
+    if tips::button_on_km(ui, &ed.keymap, !ed.piece_clipboard.is_empty(), "Paste piece", Cmd::PastePiece).clicked() {
+        ed.paste_pieces();
+    }
     if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
         ed.duplicate_active(false);
     }
@@ -5581,6 +5607,18 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         }
                     }
                     ui.separator();
+                    if ui.button("Copy").clicked() {
+                        if !ed.is_piece_selected(piece_id) {
+                            ed.scene.set_active(i);
+                            ed.piece_pick.clear();
+                        }
+                        ed.copy_pieces();
+                        ui.close();
+                    }
+                    if ui.add_enabled(!ed.piece_clipboard.is_empty(), egui::Button::new("Paste")).clicked() {
+                        ed.paste_pieces();
+                        ui.close();
+                    }
                     if ui.button("Duplicate").clicked() {
                         action_duplicate = Some(i);
                         ui.close();
@@ -6725,7 +6763,6 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 format!("closing {name}")
             }
             Pending::OpenProject(_) => "opening another project".to_string(),
-            Pending::OpenLink(_) => "opening the objects sent from another app".to_string(),
             Pending::Revert => "reverting".to_string(),
         };
         egui::Modal::new(egui::Id::unique("unsaved")).show(&ctx, |ui| {
@@ -6744,11 +6781,18 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                 }
             });
         });
-    } else if let Some(r) = ed.recoverable.first().cloned() {
+    } else if ed.recoverable.len() == 1
+        && let Some(r) = ed.recoverable.first().cloned()
+    {
         egui::Modal::new(egui::Id::unique("recover")).show(&ctx, |ui| {
             ui.heading("Recover unsaved work?");
             let ago = r.modified.elapsed().map(|d| d.as_secs() / 60).unwrap_or(0);
-            ui.label(format!("OxyBrush found work that wasn't saved when it last closed ({ago} min ago)."));
+            let label = r
+                .source_path
+                .as_ref()
+                .and_then(|p| p.file_name())
+                .map_or_else(|| "Untitled project".to_string(), |n| n.to_string_lossy().into_owned());
+            ui.label(format!("OxyBrush found unsaved work for \"{label}\" from when it last closed ({ago} min ago)."));
             ui.add_space(8.0);
             ui.horizontal(|ui| {
                 if tips::hover(ui.button("Recover"), plain::RECOVER).clicked() {
@@ -6761,6 +6805,56 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
                     ed.recoverable.clear();
                 }
             });
+        });
+    } else if ed.recoverable.len() > 1 {
+        let items = ed.recoverable.clone();
+        egui::Modal::new(egui::Id::unique("recover_multi")).show(&ctx, |ui| {
+            ui.set_max_width(480.0);
+            ui.heading("Recover unsaved projects?");
+            ui.label(format!("OxyBrush found {} unsaved tabs from when it last closed:", items.len()));
+            ui.add_space(6.0);
+            let mut recover_one = None;
+            let mut discard_one = None;
+            egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
+                for r in &items {
+                    let ago = r.modified.elapsed().map(|d| d.as_secs() / 60).unwrap_or(0);
+                    let label = r
+                        .source_path
+                        .as_ref()
+                        .and_then(|p| p.file_name())
+                        .map_or_else(|| "Untitled".to_string(), |n| n.to_string_lossy().into_owned());
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("• {label}")).strong());
+                        ui.label(RichText::new(format!("({ago} min ago)")).weak().small());
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if tips::hover(ui.small_button("Discard"), plain::DISCARD_ONE_RECOVERY).clicked() {
+                                discard_one = Some(r.path.clone());
+                            }
+                            if tips::hover(ui.small_button("Recover"), plain::RECOVER).clicked() {
+                                recover_one = Some(r.clone());
+                            }
+                        });
+                    });
+                }
+            });
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if tips::hover(ui.button("Recover all"), plain::RECOVER_ALL).clicked() {
+                    ed.recover_all();
+                }
+                if tips::hover(ui.button("Discard all"), plain::DISCARD_RECOVERY).clicked() {
+                    ed.discard_recoverable();
+                }
+                if tips::hover(ui.button("Later"), plain::LATER).clicked() {
+                    ed.recoverable.clear();
+                }
+            });
+            if let Some(r) = recover_one {
+                ed.recover(&r);
+            }
+            if let Some(p) = discard_one {
+                ed.discard_one_recoverable(&p);
+            }
         });
     }
 }

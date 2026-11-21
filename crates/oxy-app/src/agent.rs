@@ -86,7 +86,10 @@ pub struct Inbox {
     control: Arc<oxy_mcp::Control>,
     closing: Arc<AtomicBool>,
     held: Option<Envelope>,
-    pending_job: Option<Sender<ToolResult>>,
+    /// Background job being awaited: `(doc_id, reply_channel)`.
+    pending_job: Option<(u64, Sender<ToolResult>)>,
+    /// Tab session id this inbox is latched to (`Some` for Python plugins).
+    target_doc_id: Option<u64>,
     changes: Arc<oxy_mcp::state::SharedChanges>,
     pub endpoint: String,
     /// What the undo steps of this listener's edits start with: "Agent: "
@@ -112,19 +115,22 @@ impl Inbox {
             closing,
             held: None,
             pending_job: None,
+            target_doc_id: None,
             changes,
             endpoint,
             label: AGENT_LABEL.to_owned(),
         })
     }
 
-    /// A listener of its own for one run of a Python plugin: its own port
-    /// and token (so the plugin can't be mistaken for an outside agent, and
-    /// running it doesn't turn on Settings > Local AI agent), with its
-    /// edits labelled "Plugin: <name>: ".
-    pub fn for_plugin(name: &str, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
+    /// A listener of its own for one run of a Python plugin, latched to
+    /// `target_doc_id`: its own port and token (so the plugin can't be mistaken
+    /// for an outside agent, and running it doesn't turn on Settings > Local
+    /// AI agent), with edits labelled "Plugin: <name>: " and applied to the
+    /// tab that was active when it started.
+    pub fn for_plugin(name: &str, target_doc_id: u64, wake: Arc<dyn Fn() + Send + Sync>) -> Result<Self, String> {
         let mut inbox = Self::listen(wake)?;
         inbox.label = format!("Plugin: {name}: ");
+        inbox.target_doc_id = Some(target_doc_id);
         Ok(inbox)
     }
 
@@ -144,18 +150,28 @@ impl Inbox {
     /// Run at most one queued call. `Some` is a screenshot to answer after the viewport is drawn.
     pub fn poll(&mut self, ed: &mut Editor) -> Option<Sender<ToolResult>> {
         // Note what changed since the last frame, for `changes` callers.
-        self.changes.observe(oxy_mcp::state::Snapshot::of(&doc_state(ed)));
-        if let Some(reply) = self.pending_job.take() {
-            if ed.job.is_some() {
-                self.pending_job = Some(reply);
-            } else {
-                let text = ed.status.clone();
-                let failed = text.contains("failed")
-                    || text.starts_with("Wait")
-                    || text.starts_with("Another")
-                    || text.starts_with("Could not");
-                let result = if failed { ToolResult::error(text) } else { ToolResult::ok(text) };
-                let _ = reply.send(result);
+        let observe_idx = self
+            .target_doc_id
+            .and_then(|id| ed.documents.iter().position(|d| d.id == id))
+            .unwrap_or(ed.active_document);
+        self.changes.observe(oxy_mcp::state::Snapshot::of(&doc_state_at(ed, observe_idx)));
+        if let Some((job_doc_id, reply)) = self.pending_job.take() {
+            match ed.documents.iter().find(|d| d.id == job_doc_id) {
+                None => {
+                    let _ = reply.send(ToolResult::error("the tab was closed while the operation was running"));
+                }
+                Some(doc) if doc.job.is_some() => {
+                    self.pending_job = Some((job_doc_id, reply));
+                }
+                Some(_) => {
+                    let text = ed.status.clone();
+                    let failed = text.contains("failed")
+                        || text.starts_with("Wait")
+                        || text.starts_with("Another")
+                        || text.starts_with("Could not");
+                    let result = if failed { ToolResult::error(text) } else { ToolResult::ok(text) };
+                    let _ = reply.send(result);
+                }
             }
         }
         loop {
@@ -168,33 +184,62 @@ impl Inbox {
                 }
             };
             let busy = ed.agent_input_busy();
-            let job = ed.job.is_some() || self.pending_job.is_some();
+            let job = ed.documents.iter().any(|d| d.job.is_some()) || self.pending_job.is_some();
             if (busy || job) && !is_read_only(&env.name) {
                 self.held = Some(env);
                 return None;
             }
             log::debug!("agent tool {}", env.name);
             ed.agent_label.clone_from(&self.label);
-            let applied = apply(ed, &env.name, &env.args);
+            let outcome = with_target_doc(ed, self.target_doc_id, |ed| apply(ed, &env.name, &env.args));
             ed.agent_label = AGENT_LABEL.to_owned();
-            match applied {
-                Apply::Done(result) => {
-                    let _ = env.reply.send(result);
+            match outcome {
+                Err(msg) => {
+                    let _ = env.reply.send(ToolResult::error(msg));
                 }
-                Apply::PendingJob => {
-                    self.pending_job = Some(env.reply);
-                    return None;
-                }
-                Apply::Screenshot => return Some(env.reply),
-                Apply::Background(work) => {
-                    let reply = env.reply;
-                    std::thread::spawn(move || {
-                        let _ = reply.send(work());
-                    });
-                }
+                Ok((call_doc_id, applied)) => match applied {
+                    Apply::Done(result) => {
+                        let _ = env.reply.send(result);
+                    }
+                    Apply::PendingJob => {
+                        self.pending_job = Some((call_doc_id, env.reply));
+                        return None;
+                    }
+                    Apply::Screenshot => return Some(env.reply),
+                    Apply::Background(work) => {
+                        let reply = env.reply;
+                        std::thread::spawn(move || {
+                            let _ = reply.send(work());
+                        });
+                    }
+                },
             }
         }
     }
+}
+
+fn with_target_doc<R>(
+    ed: &mut Editor,
+    target_doc_id: Option<u64>,
+    f: impl FnOnce(&mut Editor) -> R,
+) -> Result<(u64, R), String> {
+    let Some(target_id) = target_doc_id else {
+        let doc_id = ed.documents[ed.active_document].id;
+        return Ok((doc_id, f(ed)));
+    };
+    let prev_id = ed.documents[ed.active_document].id;
+    if prev_id == target_id {
+        return Ok((target_id, f(ed)));
+    }
+    let Some(target_idx) = ed.documents.iter().position(|d| d.id == target_id) else {
+        return Err("the tab this plugin started on was closed".into());
+    };
+    ed.active_document = target_idx;
+    let res = f(ed);
+    if let Some(restore_idx) = ed.documents.iter().position(|d| d.id == prev_id) {
+        ed.active_document = restore_idx;
+    }
+    Ok((target_id, res))
 }
 
 impl Drop for Inbox {
@@ -342,13 +387,18 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
 
 /// The document as the structured tools describe it.
 pub(crate) fn doc_state(ed: &Editor) -> oxy_mcp::state::DocState<'_> {
-    let c = &ed.camera;
+    doc_state_at(ed, ed.active_document)
+}
+
+fn doc_state_at(ed: &Editor, doc_idx: usize) -> oxy_mcp::state::DocState<'_> {
+    let doc = &ed.documents[doc_idx];
+    let c = &doc.camera;
     let viewport = glam::Vec2::new(ed.canvas[2].max(1.0), ed.canvas[3].max(1.0));
     oxy_mcp::state::DocState {
-        scene: &ed.scene,
-        path: ed.path.as_deref(),
-        modified: ed.is_modified(),
-        revision: ed.history.revision(),
+        scene: &doc.scene,
+        path: doc.path.as_deref(),
+        modified: doc.is_dirty(),
+        revision: doc.history.revision(),
         camera: oxy_mcp::state::CameraState {
             eye: c.eye(),
             target: c.target,
@@ -368,7 +418,7 @@ pub(crate) fn doc_state(ed: &Editor) -> oxy_mcp::state::DocState<'_> {
 }
 
 fn background(ed: &mut Editor, start: impl FnOnce(&mut Editor)) -> Apply {
-    if ed.job.is_some() {
+    if ed.documents.iter().any(|d| d.job.is_some()) {
         return Apply::Done(ToolResult::error("another operation is still running"));
     }
     start(ed);
@@ -523,12 +573,24 @@ fn select_piece(ed: &mut Editor, id: Option<u64>, index: Option<usize>, name: Op
 fn open(ed: &mut Editor, path: &std::path::Path, discard: bool) -> Apply {
     let project = path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case(oxy_doc::format::EXTENSION));
     if project {
-        if ed.is_modified() && !discard {
-            return Apply::Done(ToolResult::error("unsaved changes; save, or pass discard: true"));
+        let active_same = ed.path.as_ref().is_some_and(|p| same_file(p, path));
+        if active_same && ed.is_modified() {
+            if !discard {
+                return Apply::Done(ToolResult::error("unsaved changes; save, or pass discard: true"));
+            }
+            ed.perform(Pending::OpenProject(path.to_path_buf()));
+            let status = ed.status.clone();
+            return Apply::Done(if status.starts_with("Opened") {
+                ToolResult::ok(status)
+            } else {
+                ToolResult::error(status)
+            });
         }
-        ed.perform(Pending::OpenProject(path.to_path_buf()));
-        let status = ed.status.clone();
-        Apply::Done(if status.starts_with("Opened") { ToolResult::ok(status) } else { ToolResult::error(status) })
+        if ed.open_project(path) {
+            Apply::Done(ToolResult::ok(ed.status.clone()))
+        } else {
+            Apply::Done(ToolResult::error(ed.status.clone()))
+        }
     } else {
         import_action(ed, path)
     }
@@ -546,7 +608,7 @@ fn save(ed: &mut Editor, path: Option<std::path::PathBuf>) -> ToolResult {
 }
 
 fn import_action(ed: &mut Editor, path: &std::path::Path) -> Apply {
-    if ed.job.is_some() {
+    if ed.documents.iter().any(|d| d.job.is_some()) {
         return Apply::Done(ToolResult::error("another operation is still running"));
     }
     let before = ed.history.revision();
@@ -919,5 +981,100 @@ mod tests {
             _ => panic!("export"),
         }
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn agent_open_adds_or_focuses_tab_without_clobbering_other_tabs() {
+        let dir = std::env::temp_dir().join(format!("oxy-agent-tabs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let a = dir.join("a.oxb");
+        let b = dir.join("b.oxb");
+        let mut seed = editor();
+        assert!(seed.save(&a));
+        seed.add_primitive("cube");
+        assert!(seed.save(&b));
+
+        let mut ed = editor();
+        match apply(&mut ed, "open", &serde_json::json!({"path": a.to_str().unwrap()})) {
+            Apply::Done(r) => assert!(!r.is_error, "{}", r.text),
+            _ => panic!("open a"),
+        }
+        // Dirty tab A, then ask the agent to open B: opens a second tab without prompting or discarding A.
+        apply(&mut ed, "add_primitive", &serde_json::json!({"kind": "cube"}));
+        assert_eq!(ed.scene.pieces.len(), 2);
+        match apply(&mut ed, "open", &serde_json::json!({"path": b.to_str().unwrap()})) {
+            Apply::Done(r) => assert!(!r.is_error, "{}", r.text),
+            _ => panic!("open b"),
+        }
+        assert_eq!(ed.documents.len(), 2);
+        assert_eq!(ed.active_document, 1);
+
+        // Opening A while on B focuses tab A without discarding A's unsaved edits.
+        match apply(&mut ed, "open", &serde_json::json!({"path": a.to_str().unwrap()})) {
+            Apply::Done(r) => assert!(!r.is_error, "{}", r.text),
+            _ => panic!("focus a"),
+        }
+        assert_eq!(ed.active_document, 0);
+        assert_eq!(ed.scene.pieces.len(), 2);
+
+        // Re-opening A while already on dirty A still asks for discard: true.
+        match apply(&mut ed, "open", &serde_json::json!({"path": a.to_str().unwrap()})) {
+            Apply::Done(r) => assert!(r.is_error && r.text.contains("discard"), "{}", r.text),
+            _ => panic!("reopen dirty active a"),
+        }
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn python_plugin_inbox_latches_origin_tab_after_switch() {
+        let mut ed = editor();
+        ed.add_primitive("cube");
+        let doc0_id = ed.documents[0].id;
+        ed.new_tab("sphere");
+        assert_eq!(ed.documents.len(), 2);
+        ed.switch_tab(0);
+
+        let mut inbox = Inbox::for_plugin("TestLatch", doc0_id, Arc::new(|| {})).expect("plugin inbox");
+        assert_eq!(inbox.target_doc_id, Some(doc0_id));
+        let (tx, rx) = sync_channel(4);
+        inbox.rx = rx;
+
+        // User switches to tab 1 while the plugin runs.
+        ed.switch_tab(1);
+        let tab1_before = ed.scene.pieces.len();
+
+        let (reply_tx, reply_rx) = std::sync::mpsc::channel();
+        tx.send(Envelope {
+            name: "add_primitive".to_owned(),
+            args: serde_json::json!({"kind": "cube"}),
+            reply: reply_tx,
+        })
+        .unwrap();
+        inbox.poll(&mut ed);
+        let res = reply_rx.recv().unwrap();
+        assert!(!res.is_error, "{}", res.text);
+        assert_eq!(ed.active_document, 1, "active tab must stay on tab 1");
+        assert_eq!(ed.documents[1].scene.pieces.len(), tab1_before, "tab 1 must stay untouched");
+        assert_eq!(ed.documents[0].scene.pieces.len(), 3, "cube should be added to origin tab");
+        assert_eq!(ed.documents[0].scene.pieces.last().unwrap().name, "Cube 2");
+        assert!(
+            ed.documents[0].history.undo_labels().any(|l| l.starts_with("Plugin: TestLatch: ")),
+            "plugin undo label must record on origin tab"
+        );
+
+        // Closing the origin tab stops subsequent plugin calls from landing on the wrong tab.
+        ed.perform_close_tab(0);
+        let (reply_tx2, reply_rx2) = std::sync::mpsc::channel();
+        tx.send(Envelope {
+            name: "add_primitive".to_owned(),
+            args: serde_json::json!({"kind": "cube"}),
+            reply: reply_tx2,
+        })
+        .unwrap();
+        inbox.poll(&mut ed);
+        let err = reply_rx2.recv().unwrap();
+        assert!(err.is_error && err.text.contains("closed"), "{}", err.text);
+        assert_eq!(ed.scene.pieces.len(), tab1_before);
     }
 }

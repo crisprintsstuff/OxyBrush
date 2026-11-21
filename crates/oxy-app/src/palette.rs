@@ -111,6 +111,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::UndoPiece, "edit piece object only selective", Editor::undo_piece),
         cmd(ed, Cmd::RedoPiece, "edit piece object only selective", Editor::redo_piece),
+        cmd(ed, Cmd::CopyPiece, "pieces edit clipboard copy", |e| {
+            e.copy_pieces();
+        }),
+        cmd(ed, Cmd::PastePiece, "pieces edit clipboard paste", |e| {
+            e.paste_pieces();
+        }),
         cmd(ed, Cmd::AddSphere, "pieces primitive", |e| e.open_primitive("sphere")),
         cmd(ed, Cmd::AddCube, "pieces primitive", |e| e.open_primitive("cube")),
         cmd(ed, Cmd::AddPlane, "pieces primitive", |e| e.open_primitive("plane")),
