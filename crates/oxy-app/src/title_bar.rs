@@ -1,8 +1,8 @@
 //! OxyBrush's own title bar (RFC 0028): on Windows and Linux the window is
 //! made without the system's title bar, and the menu bar takes its place.
-//! It holds the menus, the tabs and the minimize, maximize and close
-//! buttons, moves the window when its empty part is dragged, and thin edges
-//! around the window resize it.
+//! It holds the menus, the project name and the minimize, maximize and
+//! close buttons, moves the window when its empty part is dragged, and thin
+//! edges around the window resize it. The tabs stay in their row under it.
 //!
 //! The UI only asks ([`WindowRequest`] in `Editor::window_request`); the
 //! app carries the request out on the window, because egui has no window
@@ -101,7 +101,7 @@ pub fn edge_at(screen: Rect, pos: Pos2) -> Option<Edge> {
     })
 }
 
-/// Empty bar kept free to move the window by, at the least (points).
+/// Empty bar kept free beside the title to move the window by (points).
 pub const MIN_DRAG: f32 = 48.0;
 
 /// Size of one window button for the layout.
@@ -109,15 +109,10 @@ fn button_size(ed: &Editor) -> egui::Vec2 {
     if ed.layout == crate::settings::UiLayout::Touch { vec2(52.0, 34.0) } else { vec2(44.0, 26.0) }
 }
 
-/// Width the three window buttons take (points).
-pub fn buttons_width(ed: &Editor) -> f32 {
-    3.0 * button_size(ed).x
-}
-
-/// The minimize, maximize and close buttons at the right end of the menu
-/// bar. Call last inside the menu bar; the space before them stays empty,
-/// so it moves the window.
-pub fn window_buttons(ui: &mut Ui, ed: &mut Editor) {
+/// The right side of the menu bar: the project title, centred on the
+/// window when there's room, over empty bar that moves the window, and the
+/// window buttons. Call last inside the menu bar.
+pub fn title_and_buttons(ui: &mut Ui, ed: &mut Editor, title: &str) {
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         let size = button_size(ed);
@@ -129,6 +124,18 @@ pub fn window_buttons(ui: &mut Ui, ed: &mut Editor) {
                     Button::Minimize => WindowRequest::Minimize,
                 });
             }
+        }
+        // Painted, not a label, so the bar under it stays a drag area. Left
+        // out when it doesn't fit.
+        let space = ui.available_rect_before_wrap();
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        let color = ui.visuals().weak_text_color();
+        let galley = ui.painter().layout_no_wrap(title.to_owned(), font, color);
+        let width = galley.size().x;
+        if width + MIN_DRAG < space.width() {
+            let centre = ui.ctx().content_rect().center().x;
+            let x = (centre - width / 2.0).clamp(space.left() + 12.0, space.right() - 12.0 - width);
+            ui.painter().galley(Pos2::new(x, space.center().y - galley.size().y / 2.0), galley, color);
         }
     });
 }

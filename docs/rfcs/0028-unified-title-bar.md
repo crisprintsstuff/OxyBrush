@@ -6,10 +6,10 @@ Status: Accepted — phase 1 (Windows and Linux) implemented; phase 2 (macOS men
 
 Make the top of the window one bar.
 
-- **Windows and Linux:** the menus, the tabs and the window buttons share
-  one bar drawn by OxyBrush, in place of the system title bar, the menu row
-  and the tab row. The window moves, resizes, snaps and maximizes as
-  before.
+- **Windows and Linux:** the menus, the project name and the window
+  buttons share one bar drawn by OxyBrush, in place of the system title
+  bar and the menu row. The tabs stay in their row under it. The window
+  moves, resizes, snaps and maximizes as before.
 - **macOS:** the menus move to the macOS menu bar at the top of the screen,
   as in other Mac apps. The window keeps its system title bar, and the tabs
   sit right under it.
@@ -17,18 +17,19 @@ Make the top of the window one bar.
 **Use system title bar** in Preferences brings back the current layout on
 Windows and Linux.
 
-![Phase 1 on Linux: menus, tabs and window buttons in one bar](../images/unified-title-bar.png)
+![Phase 1 on Linux: menus, project name and window buttons in one bar, the tabs under it](../images/unified-title-bar.png)
 
 ## Why
 
 Today the window has the system title bar (with only the project name in
 it), then a row of menus, then the tab row. That's three bars before the
 tools. With tabbed projects ([RFC 0027](0027-tabbed-projects.md)) the menus
-and tabs belong to the window as a whole. Merging them:
+and tabs belong to the window as a whole. Merging the title bar and the
+menus:
 
-- gives the model the height of two bars back;
-- makes the tabs look like part of the window rather than a panel inside
-  it, as in browsers and code editors;
+- gives the model the height of a bar back;
+- makes the menus and tabs look like part of the window rather than
+  panels inside it;
 - on Linux, replaces the stand-in title bar the window library draws under
   Wayland (GNOME), which doesn't match the system or OxyBrush;
 - on macOS, puts the menus where Mac users look for them.
@@ -38,20 +39,20 @@ and tabs belong to the window as a whole. Merging them:
 ### Windows and Linux
 
 ```text
-File Edit Pieces … Help │ [• dragon ×][Untitled ×] » +            —  ☐  ✕
+File Edit Pieces … Help        dragon.oxb — OxyBrush         —  ☐  ✕
+[• dragon ×][Untitled ×] » +
 ↶ ↷  Mirror X Y Z  No levels …
 ```
 
 - **Menus** on the left, as today.
-- **Tabs** after them, working as in the tab row: click to switch, drag to
-  reorder, middle-click or × to close, » lists them all, + opens a new one.
-  With many tabs they scroll sideways, always leaving some empty bar.
-- **Empty bar** after the tabs: drag it to move the window.
+- **Project name** in the middle, dimmed, as the system title bar shows it
+  now. It's left out when the window is too narrow, and stays the window's
+  title for the taskbar, Alt+Tab and window lists.
+- **Empty bar** around the name: drag it to move the window.
 - **Minimize, maximize (or restore) and close** on the right, drawn by
   OxyBrush in the theme's colors. Close turns red on hover, as on Windows,
   and asks about unsaved tabs, as the system button does.
-- The project name isn't repeated in the bar: the active tab shows it. The
-  window keeps it as its title for the taskbar, Alt+Tab and window lists.
+- **Tabs** in their own row under the bar, unchanged.
 
 ### macOS
 
@@ -95,10 +96,11 @@ The window library (winit 0.30) has what's needed:
 | macOS | unchanged | native | native |
 
 - **Hit areas:** the menu bar has a background area that responds to
-  presses and double-clicks, registered under the menus and tabs (as the
-  Pieces rows do since #391), so a click on a menu or a tab still goes to
-  it. A drag on the background calls `drag_window`. Menus, tabs and
-  buttons are never drag areas.
+  presses and double-clicks, registered under the menus (as the
+  Pieces rows do since #391), so a click on a menu still goes to it. A
+  drag on the background calls `drag_window`. The title is painted, not a
+  widget, so the bar under it is a drag area too. Menus and buttons never
+  are.
 - **Edges:** invisible areas 5 points wide along the window border, above
   everything else, show the resize cursor and start `drag_resize_window`
   in that direction. Presses there never reach the model, so they never
@@ -118,7 +120,8 @@ The window library (winit 0.30) has what's needed:
 ## Testing
 
 - Editor tests drive the real interface: dragging the empty bar asks for
-  a window move, a click on a menu or on + doesn't; a double-click
+  a window move, a click on a menu doesn't; the tab row is under the bar;
+  a double-click
   maximizes; each window button asks for its action; a press on an edge or
   corner resizes, but not while maximized; with the system title bar the
   bar is only menus. The preference is saved and read back.
@@ -132,8 +135,9 @@ The window library (winit 0.30) has what's needed:
 
 ## Phases
 
-1. **Windows and Linux:** the one bar with menus, tabs and window buttons,
-   move, double-click, resize edges, the preference.
+1. **Windows and Linux:** the one bar with menus, project name and window
+   buttons over the tab row, move, double-click, resize edges, the
+   preference.
 2. **macOS:** the menus in the macOS menu bar, from shared menu
    definitions; the tab row first in the window.
 
@@ -142,17 +146,18 @@ The window library (winit 0.30) has what's needed:
 - **Windows 11 Snap Layouts** on hover over the maximize button. That
   flyout only appears for a system-drawn button, which winit can't
   provide. Win+arrow keys and dragging to an edge still snap.
-- **Tabs in the macOS title bar** next to the window buttons. The tabs go
-  right under the title bar, as the maintainer chose.
+- **Tabs in the title bar** on any platform. The maintainer tried them in
+  the Windows and Linux bar and chose to keep them in their own row.
 
 ## Decisions
 
 The maintainer chose these on 2026-11-21:
 
-- Windows and Linux use one bar for the menus, tabs and window buttons.
+- Windows and Linux use one bar for the menus, the project name and the
+  window buttons, with the tabs in their own row under it (tabs in the bar
+  were tried and turned down).
 - macOS uses the macOS menu bar and keeps the system title bar, with the
   tabs under it.
 - Linux always starts with OxyBrush's bar; **Use system title bar** turns
   it off, rather than guessing which window managers want it.
-- The project name stays the window title (taskbar, window lists); in the
-  bar, the active tab shows it.
+- The project name stays in the middle of the bar, and the window title.

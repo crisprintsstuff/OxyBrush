@@ -870,13 +870,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
             if own_bar {
-                // The tabs, then empty space that moves the window, then
-                // the window buttons (RFC 0028).
-                ui.separator();
-                let reserved = crate::title_bar::buttons_width(ed) + crate::title_bar::MIN_DRAG + 64.0;
-                let width = (ui.available_width() - reserved).max(80.0);
-                tab_strip(ui, ed, width);
-                crate::title_bar::window_buttons(ui, ed);
+                // The project name over empty bar that moves the window,
+                // then the window buttons (RFC 0028).
+                let title = ed.title();
+                crate::title_bar::title_and_buttons(ui, ed, &title);
             }
         });
         })
@@ -2415,10 +2412,6 @@ fn edit_linear_color(ui: &mut Ui, color: &mut [f64; 3]) -> egui::Response {
 
 /// Tab bar showing open project documents across the top of the viewport.
 fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
-    // With OxyBrush's own title bar the tabs are in it (RFC 0028).
-    if ed.own_title_bar {
-        return;
-    }
     let frame = egui::Frame::new().fill(ui.visuals().window_fill).inner_margin(egui::Margin {
         left: 8,
         right: 8,
@@ -8257,18 +8250,12 @@ mod tests {
         let file = widgets_labelled(&mut ed, &ctx, "File");
         assert_eq!(file.len(), 1, "{file:?}");
         let empty = egui::pos2(1000.0, file[0].center().y);
-        // The tabs are in the same bar, after the menus, and work there.
+        // The tabs stay in their own row under the bar.
         let plus = widgets_labelled(&mut ed, &ctx, "+");
         assert!(
-            plus.iter().any(|r| (r.center().y - file[0].center().y).abs() < 6.0 && r.left() > file[0].right()),
-            "the new-tab button is in the menu bar: {plus:?} vs {file:?}"
+            plus.iter().any(|r| r.top() >= file[0].bottom() && r.top() < file[0].bottom() + 40.0),
+            "the tab row is right under the bar: {plus:?} vs {file:?}"
         );
-        let plus = *plus.iter().find(|r| (r.center().y - file[0].center().y).abs() < 6.0).unwrap();
-        assert!(plus.right() < empty.x, "room to drag after the tabs");
-        let tabs = ed.documents.len();
-        click_with(&mut ed, &ctx, plus.center(), egui::Modifiers::NONE, 1);
-        assert_eq!(ed.documents.len(), tabs + 1, "+ in the bar opens a tab");
-        assert_eq!(ed.window_request.take(), None, "and doesn't move the window");
 
         // Dragging the empty bar moves the window; a menu takes its own click.
         frames_with(
