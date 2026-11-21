@@ -53,7 +53,7 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="4.0.0-beta.21.3" date="2026-11-21" type="development">
+    <release version="4.0.0-beta.21.4" date="2026-11-21" type="development">
       <description>
         <p>Move placed recipes on the surface, edit linked mirrored pairs,
         and save recipe changes back to the Recipe Box. New tabs inherit
