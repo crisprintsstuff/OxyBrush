@@ -1162,8 +1162,10 @@ pub struct Editor {
     pub parts_library: crate::parts::PartsLibrary,
     /// Where parts are saved; None in automated runs and tests.
     pub parts_dir: Option<std::path::PathBuf>,
-    /// Show the Parts Bin strip along the bottom of the viewport.
+    /// Show the pull-out Parts Bin drawer beside the brush shelf.
     pub show_parts_bin: bool,
+    /// Whether the Parts Bin drawer is currently slid open.
+    pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
     #[allow(dead_code)]
     pub request_export_part: Option<oxy_sculpt::PartDetail>,
@@ -1487,6 +1489,7 @@ impl Default for Editor {
             parts_library: crate::parts::PartsLibrary::default(),
             parts_dir: None,
             show_parts_bin: true,
+            parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,
             shelf: Default::default(),
@@ -4265,6 +4268,7 @@ impl Editor {
         let is_dirty = match &action {
             Pending::CloseTab(idx) => self.documents.get(*idx).is_some_and(|d| d.is_dirty()),
             Pending::Quit => self.documents.iter().any(|d| d.is_dirty()),
+            Pending::New(_) => false,
             _ => self.is_modified(),
         };
         if is_dirty {
@@ -4348,7 +4352,7 @@ impl Editor {
     }
 
     /// Create or open a new document tab. If the active tab is an untouched
-    /// starter, it is reused.
+    /// starter, it is reused (used for File > New / Open).
     pub fn new_tab(&mut self, which: &str) -> usize {
         self.show_welcome = false;
         if self.is_empty_tab(self.active_document) {
@@ -4371,7 +4375,13 @@ impl Editor {
             }
             return self.active_document;
         }
+        self.add_tab(which)
+    }
 
+    /// Always open and activate a fresh document tab without reusing the active
+    /// starter tab (used by the `+` tab button, New tab, and `Ctrl+T`).
+    pub fn add_tab(&mut self, which: &str) -> usize {
+        self.show_welcome = false;
         self.pointer_up();
         self.release_pointer();
         let doc_id = self.next_doc_id;
@@ -8725,7 +8735,7 @@ impl Editor {
                 E::None
             }
             C::NewTab => {
-                self.new_tab("sphere");
+                self.add_tab("sphere");
                 E::None
             }
             C::CloseTab => {
@@ -15873,10 +15883,10 @@ mod tests {
         e.add_primitive("cube");
         assert!(e.is_modified());
         e.request(Pending::New("empty"));
-        assert!(matches!(e.pending, Some(Pending::New("empty"))), "unsaved work asks first");
-        assert_eq!(e.scene.pieces.len(), 2, "the document stays until the user confirms");
-        e.perform(Pending::New("empty"));
-        assert!(e.pending.is_none());
+        assert!(e.pending.is_none(), "File > New opens a new tab without prompting to discard");
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.documents[0].scene.pieces.len(), 2, "original dirty tab stays untouched");
+        assert_eq!(e.active_document, 1);
         assert!(e.scene.pieces.is_empty());
         assert!(e.scene.try_active().is_none());
         assert!(e.path.is_none());
@@ -16550,5 +16560,31 @@ mod tests {
         assert_eq!(e.scene.pieces.len(), 2);
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn new_tab_command_always_adds_tab_even_from_untouched_starter() {
+        let mut e = editor();
+        assert!(e.is_empty_tab(0), "initial tab should be untouched starter");
+        assert_eq!(e.documents.len(), 1);
+
+        // Explicit CommandId::NewTab (Ctrl+T) and add_tab ("+" button) always open a new tab.
+        e.perform_command(CommandId::NewTab);
+        assert_eq!(e.documents.len(), 2);
+        assert_eq!(e.active_document, 1);
+
+        e.add_tab("plane");
+        assert_eq!(e.documents.len(), 3);
+        assert_eq!(e.active_document, 2);
+
+        // File > New on a dirty tab opens a new tab without discarding or prompting.
+        e.add_primitive("cube");
+        assert!(e.is_modified());
+        e.request(Pending::New("cube"));
+        assert!(e.pending.is_none());
+        assert_eq!(e.documents.len(), 4);
+        assert_eq!(e.active_document, 3);
+        assert_eq!(e.scene.pieces[0].name, "Cube");
+        assert_eq!(e.documents[2].scene.pieces.len(), 2);
     }
 }

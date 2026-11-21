@@ -1,8 +1,32 @@
-//! Parts Bin UI strip and placement dialogs (RFC 0026: Parts Bin).
+//! Pull-out Parts Bin drawer and placement dialogs (RFC 0026: Parts Bin).
 
 use crate::editor::Editor;
 use crate::parts::{PartEntry, PlaceChoice};
-use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, Vec2};
+use crate::settings::{QuickBar, ShelfPosition, UiLayout};
+use egui::{
+    Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
+};
+
+#[derive(Clone, Copy)]
+enum ChevronDir {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+fn paint_chevron(p: &egui::Painter, center: Pos2, dir: ChevronDir, size: f32, color: Color32) {
+    let h = size * 0.5;
+    let d = size * 0.35;
+    let pts = match dir {
+        ChevronDir::Right => [center + Vec2::new(-d, -h), center + Vec2::new(d, 0.0), center + Vec2::new(-d, h)],
+        ChevronDir::Left => [center + Vec2::new(d, -h), center + Vec2::new(-d, 0.0), center + Vec2::new(d, h)],
+        ChevronDir::Up => [center + Vec2::new(-h, d), center + Vec2::new(0.0, -d), center + Vec2::new(h, d)],
+        ChevronDir::Down => [center + Vec2::new(-h, -d), center + Vec2::new(0.0, d), center + Vec2::new(h, -d)],
+    };
+    p.line_segment([pts[0], pts[1]], Stroke::new(1.5, color));
+    p.line_segment([pts[1], pts[2]], Stroke::new(1.5, color));
+}
 
 /// State for the "Save as part…" modal dialog.
 #[allow(dead_code)]
@@ -24,110 +48,341 @@ pub struct PartSlotPopup {
     pub category_text: String,
 }
 
-pub fn show_parts_bin_strip(ui: &mut egui::Ui, ed: &mut Editor) {
-    if !ed.show_parts_bin || !ed.show_panels {
+#[cfg(test)]
+pub(crate) fn last_handle_rect(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp::<Rect>(Id::unique("parts_bin_handle_rect")))
+}
+
+#[cfg(test)]
+pub(crate) fn last_drawer_rect(ctx: &egui::Context) -> Option<Rect> {
+    ctx.data(|d| d.get_temp::<Rect>(Id::unique("parts_bin_drawer_rect")))
+}
+
+/// Pull-out Parts Bin drawer anchored to the edge of the viewport matching the
+/// brush shelf (`ShelfPosition::Left`, `Right`, or `Bottom`).
+pub fn show_parts_bin_drawer(ctx: &egui::Context, ed: &mut Editor, canvas: Rect) {
+    if !ed.show_parts_bin || !ed.show_panels || canvas.width() <= 0.0 || canvas.height() <= 0.0 {
         return;
     }
 
-    let margin = 6.0;
-    let slot_size = 54.0;
-    let strip_height = slot_size + 16.0;
-    let avail = ui.available_rect_before_wrap();
+    let open_t = ctx.animate_bool_with_time(Id::unique("parts_bin_slide"), ed.parts_bin_open, 0.16);
+    let slot_size = if ed.layout == UiLayout::Touch { 64.0 } else { 54.0 };
+    let is_bottom = ed.shelf == ShelfPosition::Bottom;
 
-    // Position above bottom edge, inset from sides
-    let rect = Rect::from_min_size(
-        Pos2::new(avail.min.x + 100.0, avail.max.y - strip_height - margin),
-        Vec2::new((avail.width() - 200.0).max(200.0), strip_height),
-    );
+    let (pivot, anchor) = match ed.shelf {
+        ShelfPosition::Left => (Align2::LEFT_CENTER, canvas.left_center()),
+        ShelfPosition::Right => (Align2::RIGHT_CENTER, canvas.right_center()),
+        ShelfPosition::Bottom => {
+            let quick_bar_clearance =
+                if ed.quick_bar == QuickBar::ViewportBottom && ed.layout != UiLayout::Workstation { 64.0 } else { 0.0 };
+            (Align2::CENTER_BOTTOM, canvas.center_bottom() - Vec2::new(0.0, quick_bar_clearance))
+        }
+    };
 
-    let painter = ui.painter();
-    painter.rect_filled(rect, 6.0, Color32::from_black_alpha(190));
-    painter.rect_stroke(rect, 6.0, Stroke::new(1.0, Color32::from_white_alpha(35)), egui::StrokeKind::Inside);
+    let area_id = Id::unique(("parts_bin_drawer", ed.shelf as u8));
+    egui::Area::new(area_id).order(Order::Foreground).pivot(pivot).fixed_pos(anchor).constrain_to(canvas).show(
+        ctx,
+        |ui| {
+            let mut handle_rect = Rect::NOTHING;
+            let mut drawer_rect = Rect::NOTHING;
 
-    let mut strip_ui = ui.new_child(
-        egui::UiBuilder::new().max_rect(rect.shrink(4.0)).layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-
-    // Label / Title
-    strip_ui.label(RichText::new("Parts Bin").strong().small());
-    strip_ui.separator();
-
-    // Category filter
-    let categories = ed.parts_library.categories();
-    egui::ComboBox::from_id_salt("parts_bin_category_filter")
-        .selected_text(if ed.parts_library.selected_category.is_empty() {
-            "All"
-        } else {
-            &ed.parts_library.selected_category
-        })
-        .width(75.0)
-        .show_ui(&mut strip_ui, |ui| {
-            if ui
-                .selectable_label(
-                    ed.parts_library.selected_category == "All" || ed.parts_library.selected_category.is_empty(),
-                    "All",
-                )
-                .clicked()
-            {
-                ed.parts_library.selected_category = "All".into();
+            if is_bottom {
+                let full_w = 460.0_f32.min((canvas.width() - 40.0).max(200.0));
+                let full_h = slot_size + 52.0;
+                let cur_h = full_h * open_t;
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    ui.with_layout(Layout::top_down(Align::Center), |ui| {
+                        handle_rect = draw_handle(ui, ed, ShelfPosition::Bottom);
+                    });
+                    if cur_h > 1.0 {
+                        drawer_rect = draw_drawer_box(
+                            ui,
+                            ed,
+                            Vec2::new(full_w, cur_h),
+                            Vec2::new(full_w, full_h),
+                            true,
+                            slot_size,
+                        );
+                    }
+                });
+            } else {
+                let full_w = 248.0_f32.min((canvas.width() - 60.0).max(140.0));
+                let full_h = 340.0_f32.min((canvas.height() - 40.0).max(160.0));
+                let cur_w = full_w * open_t;
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing = Vec2::ZERO;
+                    if ed.shelf == ShelfPosition::Left {
+                        if cur_w > 1.0 {
+                            drawer_rect = draw_drawer_box(
+                                ui,
+                                ed,
+                                Vec2::new(cur_w, full_h),
+                                Vec2::new(full_w, full_h),
+                                false,
+                                slot_size,
+                            );
+                        }
+                        handle_rect = draw_handle(ui, ed, ShelfPosition::Left);
+                    } else {
+                        handle_rect = draw_handle(ui, ed, ShelfPosition::Right);
+                        if cur_w > 1.0 {
+                            drawer_rect = draw_drawer_box(
+                                ui,
+                                ed,
+                                Vec2::new(cur_w, full_h),
+                                Vec2::new(full_w, full_h),
+                                false,
+                                slot_size,
+                            );
+                        }
+                    }
+                });
             }
-            for cat in categories {
-                let sel = ed.parts_library.selected_category == cat;
-                if ui.selectable_label(sel, &cat).clicked() {
-                    ed.parts_library.selected_category = cat;
+
+            #[cfg(test)]
+            ctx.data_mut(|d| {
+                d.insert_temp(Id::unique("parts_bin_handle_rect"), handle_rect);
+                d.insert_temp(Id::unique("parts_bin_drawer_rect"), drawer_rect);
+            });
+            let _ = (handle_rect, drawer_rect);
+        },
+    );
+}
+
+fn chevron_for_drawer(shelf: ShelfPosition, open: bool) -> ChevronDir {
+    match (shelf, open) {
+        (ShelfPosition::Left, false) => ChevronDir::Right,
+        (ShelfPosition::Left, true) => ChevronDir::Left,
+        (ShelfPosition::Right, false) => ChevronDir::Left,
+        (ShelfPosition::Right, true) => ChevronDir::Right,
+        (ShelfPosition::Bottom, false) => ChevronDir::Up,
+        (ShelfPosition::Bottom, true) => ChevronDir::Down,
+    }
+}
+
+fn draw_handle(ui: &mut egui::Ui, ed: &mut Editor, shelf: ShelfPosition) -> Rect {
+    let is_bottom = shelf == ShelfPosition::Bottom;
+    let size = if is_bottom { Vec2::new(108.0, 22.0) } else { Vec2::new(22.0, 96.0) };
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    let visuals = ui.visuals();
+    let fill = if resp.hovered() || resp.dragged() {
+        visuals.widgets.hovered.bg_fill
+    } else {
+        visuals.widgets.inactive.bg_fill
+    };
+    let stroke = visuals.widgets.noninteractive.bg_stroke;
+    let rounding = match shelf {
+        ShelfPosition::Left => CornerRadius { nw: 0, ne: 6, sw: 0, se: 6 },
+        ShelfPosition::Right => CornerRadius { nw: 6, ne: 0, sw: 6, se: 0 },
+        ShelfPosition::Bottom => CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+    };
+
+    let p = ui.painter();
+    p.rect_filled(rect, rounding, fill);
+    p.rect_stroke(rect, rounding, stroke, StrokeKind::Inside);
+
+    let chevron = chevron_for_drawer(shelf, ed.parts_bin_open);
+    let text_color =
+        if resp.hovered() || ed.parts_bin_open { visuals.strong_text_color() } else { visuals.text_color() };
+
+    if is_bottom {
+        paint_chevron(p, Pos2::new(rect.min.x + 16.0, rect.center().y), chevron, 7.0, text_color);
+        p.text(
+            Pos2::new(rect.center().x + 6.0, rect.center().y),
+            Align2::CENTER_CENTER,
+            "Parts Bin",
+            egui::FontId::proportional(11.0),
+            text_color,
+        );
+    } else {
+        paint_chevron(p, Pos2::new(rect.center().x, rect.min.y + 14.0), chevron, 7.0, text_color);
+        p.text(
+            Pos2::new(rect.center().x, rect.center().y + 8.0),
+            Align2::CENTER_CENTER,
+            "P\nA\nR\nT\nS",
+            egui::FontId::proportional(8.5),
+            text_color,
+        );
+    }
+
+    let tip = if ed.parts_bin_open {
+        "Collapse the Parts Bin drawer (click or drag back)"
+    } else {
+        "Pull out the Parts Bin drawer (click or drag into viewport)"
+    };
+    let resp = resp.on_hover_text(tip);
+
+    if resp.dragged() {
+        let delta = resp.drag_delta();
+        match shelf {
+            ShelfPosition::Left => {
+                if delta.x > 6.0 {
+                    ed.parts_bin_open = true;
+                } else if delta.x < -6.0 {
+                    ed.parts_bin_open = false;
                 }
             }
-        });
+            ShelfPosition::Right => {
+                if delta.x < -6.0 {
+                    ed.parts_bin_open = true;
+                } else if delta.x > 6.0 {
+                    ed.parts_bin_open = false;
+                }
+            }
+            ShelfPosition::Bottom => {
+                if delta.y < -6.0 {
+                    ed.parts_bin_open = true;
+                } else if delta.y > 6.0 {
+                    ed.parts_bin_open = false;
+                }
+            }
+        }
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+    } else if resp.clicked() {
+        ed.parts_bin_open = !ed.parts_bin_open;
+    }
 
-    strip_ui.separator();
+    rect
+}
 
-    let entries: Vec<PartEntry> = ed.parts_library.filtered_entries().into_iter().cloned().collect();
+fn draw_drawer_box(
+    ui: &mut egui::Ui,
+    ed: &mut Editor,
+    visible_size: Vec2,
+    full_size: Vec2,
+    is_bottom: bool,
+    slot_size: f32,
+) -> Rect {
+    let (vis_rect, _block_resp) = ui.allocate_exact_size(visible_size, Sense::click_and_drag());
+    let visuals = ui.visuals();
+    let fill = visuals.panel_fill;
+    let stroke = visuals.widgets.noninteractive.bg_stroke;
+    let rounding = match ed.shelf {
+        ShelfPosition::Left => CornerRadius { nw: 0, ne: 6, sw: 0, se: 6 },
+        ShelfPosition::Right => CornerRadius { nw: 6, ne: 0, sw: 6, se: 0 },
+        ShelfPosition::Bottom => CornerRadius { nw: 6, ne: 6, sw: 0, se: 0 },
+    };
 
-    if entries.is_empty() {
-        strip_ui
-            .label(RichText::new("No parts yet. In Strokes, select strokes and choose Save as part.").weak().small());
-    } else {
-        egui::ScrollArea::horizontal().show(&mut strip_ui, |ui| {
-            ui.horizontal(|ui| {
-                for entry in &entries {
-                    let (slot_rect, resp) = ui.allocate_exact_size(Vec2::splat(slot_size), Sense::click_and_drag());
-                    let p = ui.painter();
-                    let bg = if resp.hovered() { Color32::from_white_alpha(40) } else { Color32::from_white_alpha(15) };
-                    p.rect_filled(slot_rect, 4.0, bg);
-                    p.rect_stroke(
-                        slot_rect,
-                        4.0,
-                        Stroke::new(1.0, Color32::from_white_alpha(30)),
-                        egui::StrokeKind::Inside,
-                    );
+    let p = ui.painter();
+    p.rect_filled(vis_rect, rounding, fill);
+    p.rect_stroke(vis_rect, rounding, stroke, StrokeKind::Inside);
 
-                    // Name overlay
-                    let text_rect =
-                        Rect::from_min_max(Pos2::new(slot_rect.min.x, slot_rect.max.y - 14.0), slot_rect.max);
-                    p.rect_filled(text_rect, 2.0, Color32::from_black_alpha(140));
-                    p.text(
-                        Pos2::new(slot_rect.center().x, slot_rect.max.y - 7.0),
-                        egui::Align2::CENTER_CENTER,
-                        &entry.name,
-                        egui::FontId::proportional(9.0),
-                        Color32::WHITE,
-                    );
+    // Lay out content in a full-sized inner rect clipped to the current slide extent
+    // so controls never squish or re-wrap during the slide animation.
+    let content_pos = match ed.shelf {
+        ShelfPosition::Left => Pos2::new(vis_rect.max.x - full_size.x, vis_rect.min.y),
+        ShelfPosition::Right => vis_rect.min,
+        ShelfPosition::Bottom => vis_rect.min,
+    };
+    let full_rect = Rect::from_min_size(content_pos, full_size).shrink(8.0);
 
-                    // Hover tooltip
-                    let resp = resp.on_hover_text(format!(
-                        "Part: {}\nCategory: {}\nStrokes: {}\nClick or drag onto model to place",
-                        entry.name,
-                        if entry.category.is_empty() { "None" } else { &entry.category },
-                        entry.detail.recipes.len()
-                    ));
+    let mut content_ui = ui.new_child(egui::UiBuilder::new().max_rect(full_rect).layout(Layout::top_down(Align::Min)));
+    content_ui.set_clip_rect(vis_rect.intersect(ui.clip_rect()));
 
-                    // Drag or click to place
-                    if resp.drag_started() || resp.clicked() {
-                        let _ = ed.begin_part_placement(entry.detail.clone());
+    draw_drawer_contents(&mut content_ui, ed, is_bottom, slot_size);
+
+    vis_rect
+}
+
+fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slot_size: f32) {
+    let categories = ed.parts_library.categories();
+
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Parts Bin").strong().small());
+        egui::ComboBox::from_id_salt("parts_bin_category_filter")
+            .selected_text(if ed.parts_library.selected_category.is_empty() {
+                "All"
+            } else {
+                &ed.parts_library.selected_category
+            })
+            .width(84.0)
+            .show_ui(ui, |ui| {
+                if ui
+                    .selectable_label(
+                        ed.parts_library.selected_category == "All" || ed.parts_library.selected_category.is_empty(),
+                        "All",
+                    )
+                    .clicked()
+                {
+                    ed.parts_library.selected_category = "All".into();
+                }
+                for cat in categories {
+                    let sel = ed.parts_library.selected_category == cat;
+                    if ui.selectable_label(sel, &cat).clicked() {
+                        ed.parts_library.selected_category = cat;
                     }
                 }
             });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (btn_rect, btn_resp) = ui.allocate_exact_size(Vec2::splat(20.0), Sense::click());
+            let visuals = ui.visuals();
+            if btn_resp.hovered() {
+                ui.painter().rect_filled(btn_rect, 4.0, visuals.widgets.hovered.bg_fill);
+            }
+            let collapse_dir = chevron_for_drawer(ed.shelf, true);
+            let col = if btn_resp.hovered() { visuals.strong_text_color() } else { visuals.text_color() };
+            paint_chevron(ui.painter(), btn_rect.center(), collapse_dir, 7.0, col);
+            if btn_resp.on_hover_text("Collapse Parts Bin drawer").clicked() {
+                ed.parts_bin_open = false;
+            }
         });
+    });
+
+    ui.separator();
+
+    let entries: Vec<PartEntry> = ed.parts_library.filtered_entries().into_iter().cloned().collect();
+    if entries.is_empty() {
+        ui.label(RichText::new("No parts yet. In Strokes, select strokes and choose Save as part.").weak().small());
+        return;
+    }
+
+    if is_bottom {
+        egui::ScrollArea::horizontal().auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                for entry in &entries {
+                    draw_part_slot(ui, ed, entry, slot_size);
+                }
+            });
+        });
+    } else {
+        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                for entry in &entries {
+                    draw_part_slot(ui, ed, entry, slot_size);
+                }
+            });
+        });
+    }
+}
+
+fn draw_part_slot(ui: &mut egui::Ui, ed: &mut Editor, entry: &PartEntry, slot_size: f32) {
+    let (slot_rect, resp) = ui.allocate_exact_size(Vec2::splat(slot_size), Sense::click_and_drag());
+    let p = ui.painter();
+    let visuals = ui.visuals();
+    let bg = if resp.hovered() { visuals.widgets.hovered.bg_fill } else { visuals.widgets.inactive.bg_fill };
+    p.rect_filled(slot_rect, 4.0, bg);
+    p.rect_stroke(slot_rect, 4.0, visuals.widgets.noninteractive.bg_stroke, StrokeKind::Inside);
+
+    let text_rect = Rect::from_min_max(Pos2::new(slot_rect.min.x, slot_rect.max.y - 14.0), slot_rect.max);
+    p.rect_filled(text_rect, 2.0, Color32::from_black_alpha(150));
+    p.text(
+        Pos2::new(slot_rect.center().x, slot_rect.max.y - 7.0),
+        Align2::CENTER_CENTER,
+        &entry.name,
+        egui::FontId::proportional(9.0),
+        Color32::WHITE,
+    );
+
+    let resp = resp.on_hover_text(format!(
+        "Part: {}\nCategory: {}\nStrokes: {}\nClick or drag onto model to place",
+        entry.name,
+        if entry.category.is_empty() { "None" } else { &entry.category },
+        entry.detail.recipes.len()
+    ));
+
+    if resp.drag_started() || resp.clicked() {
+        let _ = ed.begin_part_placement(entry.detail.clone());
     }
 }
 
@@ -151,7 +406,7 @@ pub fn show_placement_choice_dialog(ctx: &egui::Context, ed: &mut Editor) {
     let mut choice = None;
     let mut cancel = false;
 
-    egui::Window::new(title).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).collapsible(false).resizable(false).show(
+    egui::Window::new(title).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).collapsible(false).resizable(false).show(
         ctx,
         |ui| {
             if on_plane {

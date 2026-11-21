@@ -2903,6 +2903,7 @@ impl Editor {
         let path =
             self.parts_library.save_part(&dir, detail, category).map_err(|e| format!("Failed to save part: {e}"))?;
 
+        self.parts_bin_open = true;
         self.status = format!("Saved {name} to Parts Bin");
         Ok(path)
     }
