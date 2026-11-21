@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.22] - 2026-11-21
+
 ### Added
 
 - **Mix themes** in **Preferences > Appearance > Themes > Mix**: take the **colors** (panels, windows, text, buttons), the **controls** (Standard, Studio's bar sliders, or Sculptor's clay sliders, card tiles and silver icons) and the **shadows** under windows and menus (Standard, Studio's tight ones, Midnight's soft, wide ones) each from any theme. For example, Sculptor with Graphite's colors and Studio's shadows. Each part follows the chosen theme until you change it; choosing a theme or a Look starts again from it, and **Clear mix** goes back. Saved with the other appearance settings.
@@ -19,6 +21,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Quads in OBJ and FBX files stay quads, even when they aren't flat.** OxyBrush used to split every polygon into triangles and then guess which pairs had been quads from their shape, so a quad folded across its diagonal stayed two triangles, and neighbouring triangles were sometimes paired into the wrong quads. Quad subdivision then broke those areas into shapes that were hard to sculpt. Import now keeps the file's own polygons, including n-gons, for the wireframe, quad subdivision levels and export, and through the Blender bridge. A non-convex quad is split along its inside diagonal. Projects save these polygons in a new `POLY` section, so they survive save and reopen; older versions skip it and guess the quads as before. Files made only of triangles are unchanged.
 - **Blender models arrive upright and open in the running window.** The bridge converts between Blender’s Z-up and OxyBrush’s Y-up coordinates in both directions. A send reuses an untouched active tab. An occupied tab offers to open the model there or in another tab.
 - **Blender bridge returns work on meshes with shape keys.** Position-only edits move the Basis and keep each key's offset. Sending a new piece back again updates the object that the bridge previously created.
+- **Floating windows cover the Recipe Box drawer.** Floating panels such as Preferences now draw above the drawer and receive clicks over it.
 
 ## [4.0.0-beta.21.4] - 2026-11-21
 
@@ -1027,7 +1030,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...HEAD
+[4.0.0-beta.22]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...v4.0.0-beta.22
 [4.0.0-beta.21.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.4
 [4.0.0-beta.17]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.16...v4.0.0-beta.17
 [3.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...v3.0.0-beta
