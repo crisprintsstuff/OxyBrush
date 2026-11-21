@@ -77,18 +77,22 @@ The following four amendments to RFC 0025 were confirmed by the owner on
 
 ## What you see
 
-The strip sits on the bottom edge of the viewport, in the gap between
-the brush shelf and the settings panel. It stays on the viewport when
-the shelf is docked at the bottom, above that shelf, so the two do not
-share a row. It is one row of square slots. **View > Parts Bin** hides
-it. Hiding the panels hides it too. The Touch layout uses the same row
-with larger slots. No new shortcut, so the shortcut list is unchanged
-until one is added.
+The Parts Bin sits as a **pull-out sliding drawer** anchored to the same edge as
+the brush shelf (`ShelfPosition::Left`, `Right`, or `Bottom`), keeping the
+viewport uncluttered until pulled open:
 
-Each slot is a thumbnail and the part's name. The right-hand arrow
-shows the next page of slots. From the second page, a left-hand arrow
-goes back. A category menu at the left of the strip filters the row
-(**All**, then each category you have set). An empty bin is one slot:
+- When tucked away, a slim pull handle sits flush against the edge beside the
+  brush shelf (centered vertically for Left/Right shelves, or horizontally at
+  the bottom edge above the quick bar when the shelf is docked at the bottom).
+  Clicking or dragging the handle slides the drawer in and out; saving a new
+  part automatically slides the drawer open to show it. **View > Parts Bin**
+  and hiding the panels hide both handle and drawer. The Touch layout uses the
+  same drawer. No new shortcut, so the shortcut list is unchanged until one is
+  added.
+
+Each slot shows the part's name (and thumbnail when available). A category menu
+inside the drawer filters slots (**All**, then each category you have set), with
+scrolling when more parts are present. An empty bin explains:
 "No parts yet. In Strokes, select strokes and choose Save as part."
 
 Clicking a slot opens it upward: a larger thumbnail, the name, and the
