@@ -44,6 +44,7 @@ png.workspace = true
 zune-jpeg = "0.5"
 oxy-update.workspace = true
 rayon.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

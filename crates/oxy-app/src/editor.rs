@@ -1230,6 +1230,20 @@ pub struct Editor {
     pub request_export_preset: Option<oxy_sculpt::BrushPreset>,
     /// Set by the UI: import a preset file.
     pub request_import_preset: bool,
+    /// The user's Parts Bin library (RFC 0026).
+    pub parts_library: crate::parts::PartsLibrary,
+    /// Where parts are saved; None in automated runs and tests.
+    pub parts_dir: Option<std::path::PathBuf>,
+    /// Show the Parts Bin strip along the bottom of the viewport.
+    pub show_parts_bin: bool,
+    /// Active part placement / drag onto mesh.
+    pub part_placement: Option<crate::parts::PartPlacement>,
+    /// Set by the UI: export this part to a file.
+    #[allow(dead_code)]
+    pub request_export_part: Option<oxy_sculpt::PartDetail>,
+    /// Set by the UI: import a part file.
+    #[allow(dead_code)]
+    pub request_import_part: bool,
     /// Where the brush shelf, the settings panel and the size/strength bar go.
     pub shelf: crate::settings::ShelfPosition,
     pub panels: crate::settings::PanelSide,
@@ -1666,6 +1680,12 @@ impl Default for Editor {
             preset_dir: None,
             request_export_preset: None,
             request_import_preset: false,
+            parts_library: crate::parts::PartsLibrary::default(),
+            parts_dir: None,
+            show_parts_bin: true,
+            part_placement: None,
+            request_export_part: None,
+            request_import_part: false,
             shelf: Default::default(),
             panels: Default::default(),
             quick_bar: Default::default(),
@@ -3430,6 +3450,17 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
+        if let Some(placement) = &self.part_placement
+            && !placement.choice_open
+        {
+            let size = self.canvas_size();
+            let (o, d) = self.camera.ray(pos, size);
+            if let Some(hit) = self.scene.active().mesh.raycast(o, d) {
+                let pid = self.scene.active().id;
+                self.update_part_placement(hit.point, hit.normal, pid);
+                return true;
+            }
+        }
         if self.tube_pointer_moved(pos) || self.retopo_pointer_moved(pos) || self.poly_pointer_moved(pos) {
             return true;
         }
@@ -3778,6 +3809,10 @@ impl Editor {
     pub fn pointer_up(&mut self) {
         self.flush_drag();
         self.commit_instancer_edit();
+        if let Some(placement) = &mut self.part_placement {
+            placement.choice_open = true;
+            return;
+        }
         if self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
             return;
         }

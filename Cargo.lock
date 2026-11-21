@@ -2586,6 +2586,7 @@ dependencies = [
  "rayon",
  "rfd",
  "serde_json",
+ "sha2",
  "wgpu",
  "winit",
  "winresource",

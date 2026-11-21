@@ -29,7 +29,7 @@ pub enum RecipeEvent {
 }
 
 /// Everything needed to make a stroke again.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct StrokeRecipe {
     pub settings: BrushSettings,
     pub invert: bool,

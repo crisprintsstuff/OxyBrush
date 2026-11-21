@@ -40,11 +40,13 @@
 //! recipe and the old stored change.
 
 use crate::editor::Editor;
+use crate::parts::PlaceChoice;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
 use oxy_sculpt::recipe::AlphaLookup;
 use oxy_sculpt::{AlphaStamp, BrushKind, Falloff, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 use std::collections::{BTreeSet, HashMap};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -352,6 +354,40 @@ pub struct Living {
     editing: Option<StrokeEdit>,
     /// A re-sculpt waiting on a background job.
     resculpt_wait: Option<ResculptWait>,
+    /// Placed parts on pieces (RFC 0026: Parts Bin).
+    pub placed_parts: Vec<PlacedPart>,
+    pub next_part_id: u64,
+}
+
+/// A placed part on a piece (RFC 0026: Parts Bin).
+#[derive(Clone, Debug, PartialEq)]
+pub struct PlacedPart {
+    pub id: u64,
+    pub piece: u64,
+    pub name: String,
+    pub group: u32,
+    pub stroke_ids: Vec<u64>,
+    pub anchor: Vec3,
+    pub normal: Vec3,
+    pub tangent: Vec3,
+    pub scale: f32,
+    pub detail_size: f32,
+    pub content: [u8; 32],
+    pub flags: u8,
+    pub mirror_axis: u8,
+    pub partner: u64,
+}
+
+impl PlacedPart {
+    #[allow(dead_code)]
+    pub fn is_linked(&self) -> bool {
+        self.flags & 1 != 0
+    }
+
+    #[allow(dead_code)]
+    pub fn is_source_side(&self) -> bool {
+        self.flags & 2 != 0
+    }
 }
 
 /// Where new strokes go: a sculpt layer chosen before sculpting.
@@ -469,6 +505,11 @@ impl Living {
         self.target = None;
         self.editing = None;
         self.resculpt_wait = None;
+        self.placed_parts.clear();
+    }
+
+    pub fn parts_of(&self, piece: u64) -> Vec<PlacedPart> {
+        self.placed_parts.iter().filter(|p| p.piece == piece).cloned().collect()
     }
 }
 
@@ -1354,7 +1395,27 @@ impl Editor {
             .filter(|g| used.contains(&g.id))
             .map(|g| SavedStrokeGroup { id: g.id, name: g.name.clone(), strength: g.strength, visible: g.visible })
             .collect();
-        Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes })
+        let parts = self
+            .living
+            .parts_of(piece.id)
+            .into_iter()
+            .map(|p| oxy_doc::SavedPlacedPart {
+                id: p.id,
+                name: p.name,
+                group: p.group,
+                stroke_ids: p.stroke_ids,
+                anchor: p.anchor,
+                normal: p.normal,
+                tangent: p.tangent,
+                scale: p.scale,
+                detail_size: p.detail_size,
+                content: p.content,
+                flags: p.flags,
+                mirror_axis: p.mirror_axis,
+                partner: p.partner,
+            })
+            .collect();
+        Some(SavedStrokes { vertices: mesh.vertex_count() as u32, groups, strokes, parts })
     }
 
     /// For a glTF export: piece `piece`'s surface without its stroke
@@ -1471,6 +1532,25 @@ impl Editor {
                     no_recipe,
                 });
                 taken += 1;
+            }
+            for pp in saved.parts {
+                let group = group_ids.get(&pp.group).copied().unwrap_or(pp.group);
+                self.living.placed_parts.push(PlacedPart {
+                    id: pp.id,
+                    piece: p.id,
+                    name: pp.name,
+                    group,
+                    stroke_ids: pp.stroke_ids,
+                    anchor: pp.anchor,
+                    normal: pp.normal,
+                    tangent: pp.tangent,
+                    scale: pp.scale,
+                    detail_size: pp.detail_size,
+                    content: pp.content,
+                    flags: pp.flags,
+                    mirror_axis: pp.mirror_axis,
+                    partner: pp.partner,
+                });
             }
         }
         if found > 0 && !self.living.enabled {
@@ -2350,6 +2430,386 @@ fn add_change(mesh: &mut oxy_mesh::Mesh, vertices: &[u32], deltas: &[Vec3], colo
         {
             mesh.color[v as usize] = (mesh.color[v as usize] + *dc * k).clamp(Vec3::ZERO, Vec3::ONE);
         }
+    }
+}
+
+impl Editor {
+    /// Start placing a detail onto the active piece's surface.
+    pub fn begin_part_placement(&mut self, detail: oxy_sculpt::PartDetail) -> Result<(), String> {
+        if !self.living.enabled {
+            self.status = "Living strokes is off. Turn it on in Preferences > General to save or place a part.".into();
+            return Err(self.status.clone());
+        }
+        if self.dyntopo {
+            self.status =
+                "Dynamic detail is on, which changes the triangles, so this part can't be placed. Turn it off.".into();
+            return Err(self.status.clone());
+        }
+        let piece_id = self.scene.active().id;
+        let axis = if self.symmetry.x {
+            1
+        } else if self.symmetry.y {
+            2
+        } else if self.symmetry.z {
+            3
+        } else {
+            1 // Default X
+        };
+
+        let piece = self.scene.active();
+        let brush_r = self.world_radius(piece.mesh.bounds().center(), self.brush_radius_pt);
+        let scale =
+            if detail.reference_radius > 1e-5 { (brush_r / detail.reference_radius).clamp(0.01, 100.0) } else { 1.0 };
+
+        self.part_placement = Some(crate::parts::PartPlacement {
+            detail,
+            anchor: Vec3::ZERO,
+            normal: Vec3::Y,
+            tangent: Vec3::X,
+            twist: 0.0,
+            scale,
+            piece: piece_id,
+            choice_open: false,
+            on_plane: false,
+            mirror_axis: axis,
+        });
+        Ok(())
+    }
+
+    /// Update placement location as pointer hovers over `hit_point` with surface normal `hit_normal`.
+    pub fn update_part_placement(&mut self, hit_point: Vec3, hit_normal: Vec3, piece_id: u64) {
+        let Some(placement) = &mut self.part_placement else { return };
+        placement.piece = piece_id;
+        placement.anchor = hit_point;
+        placement.normal = hit_normal;
+
+        // Check if on symmetry plane
+        let piece = self.scene.pieces.iter().find(|p| p.id == piece_id);
+        let center = piece.and_then(|p| p.symmetry_center).unwrap_or(Vec3::ZERO);
+        let axis_vec = match placement.mirror_axis {
+            2 => Vec3::Y,
+            3 => Vec3::Z,
+            _ => Vec3::X,
+        };
+        let dist = (hit_point - center).dot(axis_vec).abs();
+
+        // 5% of footprint or mean edge length
+        let extent = placement.detail.reference_radius * placement.scale * 2.0;
+        let tol = (extent * 0.05).max(0.01);
+        placement.on_plane = dist <= tol;
+    }
+
+    /// Commit the active placement with `choice`.
+    pub fn commit_part_placement(&mut self, choice: PlaceChoice) -> Result<(), String> {
+        let Some(placement) = self.part_placement.take() else {
+            return Err("No active part placement".into());
+        };
+        if !self.living.enabled {
+            self.status = "Living strokes is off. Turn it on in Preferences > General to save or place a part.".into();
+            return Err(self.status.clone());
+        }
+        if self.dyntopo {
+            self.status =
+                "Dynamic detail is on, which changes the triangles, so this part can't be placed. Turn it off.".into();
+            return Err(self.status.clone());
+        }
+        let Some(piece) = self.scene.pieces.iter_mut().find(|p| p.id == placement.piece) else {
+            return Err("Piece not found".into());
+        };
+
+        let is_mirrored = matches!(choice, PlaceChoice::MirrorPair | PlaceChoice::MirrorHalvesMatch);
+
+        // Project source side
+        let (source_recipes, missed) = placement.detail.project_to_surface(
+            placement.anchor,
+            placement.normal,
+            placement.twist,
+            placement.scale,
+            &piece.mesh,
+        );
+
+        let sample_count: usize = source_recipes
+            .iter()
+            .map(|r| {
+                r.events
+                    .iter()
+                    .filter(|e| {
+                        matches!(e, oxy_sculpt::RecipeEvent::Sample { .. } | oxy_sculpt::RecipeEvent::Stamp { .. })
+                    })
+                    .count()
+            })
+            .sum();
+
+        if sample_count > 0 && missed > sample_count / 2 {
+            self.status =
+                "This part doesn't fit on the surface here. Scale it down, or drop it on a larger surface.".into();
+            return Err(self.status.clone());
+        }
+
+        // New stroke group for this placed part
+        let group_id = self.living.next_group;
+        self.living.next_group += 1;
+        self.living.groups.push(StrokeGroup {
+            id: group_id,
+            piece: piece.id,
+            name: placement.detail.name.clone(),
+            strength: 1.0,
+            visible: true,
+        });
+
+        self.history.begin(format!("Place {}", placement.detail.name), piece.id, &piece.mesh);
+
+        let mut touched = vec![false; piece.mesh.chunks.len()];
+        let mut source_stroke_ids = Vec::new();
+
+        for mut r in source_recipes {
+            r.symmetry = oxy_sculpt::Symmetry::default();
+            let before_positions = piece.mesh.positions.clone();
+            let before_colors = piece.mesh.color.clone();
+            let painted = piece.mesh.is_painted();
+            let mut stroke_touched = vec![false; piece.mesh.chunks.len()];
+            let history = &mut self.history;
+            let mesh = &mut piece.mesh;
+            r.replay(mesh, &mut |m, chunk| {
+                history.touch(m, chunk);
+                touched[chunk as usize] = true;
+                stroke_touched[chunk as usize] = true;
+            });
+
+            let mut moved: Vec<(u32, Vec3, Vec3)> = Vec::new();
+            for (chunk_idx, &is_t) in stroke_touched.iter().enumerate() {
+                if !is_t {
+                    continue;
+                }
+                if let Some(c) = piece.mesh.chunks.get(chunk_idx) {
+                    for v in c.vertices.start as usize..c.vertices.end as usize {
+                        let d = piece.mesh.positions[v] - before_positions[v];
+                        let dc = if painted && v < before_colors.len() {
+                            piece.mesh.color[v] - before_colors[v]
+                        } else {
+                            Vec3::ZERO
+                        };
+                        if d.length_squared() > EPS * EPS || dc.length_squared() > EPS * EPS {
+                            moved.push((v as u32, d, dc));
+                        }
+                    }
+                }
+            }
+            moved.sort_unstable_by_key(|m| m.0);
+            let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
+
+            let stroke_id = self.living.next_id;
+            self.living.next_id += 1;
+            source_stroke_ids.push(stroke_id);
+
+            self.living.strokes.push(LivingStroke {
+                id: stroke_id,
+                piece: piece.id,
+                brush: r.settings.kind,
+                made: SystemTime::now(),
+                entry: self.history.revision(),
+                topology: piece.mesh.topology_version(),
+                points: piece.mesh.vertex_count(),
+                vertices: moved.iter().map(|m| m.0).collect(),
+                deltas: moved.iter().map(|m| m.1).collect(),
+                colors: if any_color { moved.iter().map(|m| m.2).collect() } else { Vec::new() },
+                strength: 1.0,
+                deleted: false,
+                undone: false,
+                group: Some(group_id),
+                applied: 1.0,
+                recipe: Some(Arc::new(r)),
+                no_recipe: None,
+            });
+        }
+
+        let mut partner_id = 0;
+        let mut mirror_stroke_ids = Vec::new();
+
+        if is_mirrored {
+            let axis_vec = match placement.mirror_axis {
+                2 => Vec3::Y,
+                3 => Vec3::Z,
+                _ => Vec3::X,
+            };
+            let center = piece.symmetry_center.unwrap_or(Vec3::ZERO);
+
+            let mirror_point = |p: Vec3| {
+                let rel = p - center;
+                center + rel - 2.0 * rel.dot(axis_vec) * axis_vec
+            };
+            let mirror_dir = |d: Vec3| d - 2.0 * d.dot(axis_vec) * axis_vec;
+
+            let mir_anchor = mirror_point(placement.anchor);
+            let mir_normal = mirror_dir(placement.normal);
+
+            let (mirror_recipes, _) = placement.detail.project_to_surface(
+                mir_anchor,
+                mir_normal,
+                -placement.twist,
+                placement.scale,
+                &piece.mesh,
+            );
+
+            for mut r in mirror_recipes {
+                r.symmetry = oxy_sculpt::Symmetry::default();
+                let before_positions = piece.mesh.positions.clone();
+                let before_colors = piece.mesh.color.clone();
+                let painted = piece.mesh.is_painted();
+                let mut stroke_touched = vec![false; piece.mesh.chunks.len()];
+                let history = &mut self.history;
+                let mesh = &mut piece.mesh;
+                r.replay(mesh, &mut |m, chunk| {
+                    history.touch(m, chunk);
+                    touched[chunk as usize] = true;
+                    stroke_touched[chunk as usize] = true;
+                });
+
+                let mut moved: Vec<(u32, Vec3, Vec3)> = Vec::new();
+                for (chunk_idx, &is_t) in stroke_touched.iter().enumerate() {
+                    if !is_t {
+                        continue;
+                    }
+                    if let Some(c) = piece.mesh.chunks.get(chunk_idx) {
+                        for v in c.vertices.start as usize..c.vertices.end as usize {
+                            let d = piece.mesh.positions[v] - before_positions[v];
+                            let dc = if painted && v < before_colors.len() {
+                                piece.mesh.color[v] - before_colors[v]
+                            } else {
+                                Vec3::ZERO
+                            };
+                            if d.length_squared() > EPS * EPS || dc.length_squared() > EPS * EPS {
+                                moved.push((v as u32, d, dc));
+                            }
+                        }
+                    }
+                }
+                moved.sort_unstable_by_key(|m| m.0);
+                let any_color = moved.iter().any(|m| m.2 != Vec3::ZERO);
+
+                let stroke_id = self.living.next_id;
+                self.living.next_id += 1;
+                mirror_stroke_ids.push(stroke_id);
+
+                self.living.strokes.push(LivingStroke {
+                    id: stroke_id,
+                    piece: piece.id,
+                    brush: r.settings.kind,
+                    made: SystemTime::now(),
+                    entry: self.history.revision(),
+                    topology: piece.mesh.topology_version(),
+                    points: piece.mesh.vertex_count(),
+                    vertices: moved.iter().map(|m| m.0).collect(),
+                    deltas: moved.iter().map(|m| m.1).collect(),
+                    colors: if any_color { moved.iter().map(|m| m.2).collect() } else { Vec::new() },
+                    strength: 1.0,
+                    deleted: false,
+                    undone: false,
+                    group: Some(group_id),
+                    applied: 1.0,
+                    recipe: Some(Arc::new(r)),
+                    no_recipe: None,
+                });
+            }
+
+            partner_id = self.living.next_part_id + 1;
+        }
+
+        let part_id = self.living.next_part_id;
+        self.living.next_part_id += if is_mirrored { 2 } else { 1 };
+
+        let flags = if is_mirrored { 1 | 2 } else { 2 };
+        self.living.placed_parts.push(PlacedPart {
+            id: part_id,
+            piece: piece.id,
+            name: placement.detail.name.clone(),
+            group: group_id,
+            stroke_ids: source_stroke_ids,
+            anchor: placement.anchor,
+            normal: placement.normal,
+            tangent: placement.tangent,
+            scale: placement.scale,
+            detail_size: placement.detail.reference_radius,
+            content: [0u8; 32],
+            flags,
+            mirror_axis: placement.mirror_axis,
+            partner: partner_id,
+        });
+
+        if is_mirrored {
+            self.living.placed_parts.push(PlacedPart {
+                id: partner_id,
+                piece: piece.id,
+                name: placement.detail.name.clone(),
+                group: group_id,
+                stroke_ids: mirror_stroke_ids,
+                anchor: placement.anchor,
+                normal: placement.normal,
+                tangent: placement.tangent,
+                scale: placement.scale,
+                detail_size: placement.detail.reference_radius,
+                content: [0u8; 32],
+                flags: 1, // linked
+                mirror_axis: placement.mirror_axis,
+                partner: part_id,
+            });
+        }
+
+        let all_touched: Vec<u32> = touched.iter().enumerate().filter(|(_, t)| **t).map(|(i, _)| i as u32).collect();
+        piece.mesh.update_after_move(&all_touched);
+        self.history.commit();
+
+        self.status = format!("Placed {}", placement.detail.name);
+        Ok(())
+    }
+
+    /// Cancel active part placement without recording undo.
+    pub fn cancel_part_placement(&mut self) {
+        self.part_placement = None;
+    }
+
+    /// Save strokes as a reusable part in the Parts Bin.
+    pub fn save_part_from_strokes(
+        &mut self,
+        name: &str,
+        category: &str,
+        stroke_ids: &[u64],
+    ) -> Result<PathBuf, String> {
+        if !self.living.enabled {
+            return Err("Living strokes is off. Turn it on in Preferences > General to save or place a part.".into());
+        }
+        let piece = self.scene.active();
+        let strokes: Vec<&LivingStroke> = self
+            .living
+            .strokes
+            .iter()
+            .filter(|s| stroke_ids.contains(&s.id) && s.piece == piece.id && s.listed())
+            .collect();
+
+        if strokes.is_empty() {
+            return Err("No strokes selected to save as a part.".into());
+        }
+
+        // Check if any stroke lacks a recipe due to dynamic detail or whole piece tool
+        for s in &strokes {
+            if s.recipe.is_none() {
+                return Err(
+                    "Dynamic detail was on when this was drawn, so it has no recipe and can't be saved as a part."
+                        .into(),
+                );
+            }
+        }
+
+        let recipes: Vec<StrokeRecipe> = strokes.iter().map(|s| (**s.recipe.as_ref().unwrap()).clone()).collect();
+        let center = piece.symmetry_center.unwrap_or(Vec3::ZERO);
+        let detail = oxy_sculpt::PartDetail::from_recipes(name, &recipes, center, self.symmetry)?;
+
+        let dir = self.parts_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("oxy_parts"));
+        let path =
+            self.parts_library.save_part(&dir, detail, category).map_err(|e| format!("Failed to save part: {e}"))?;
+
+        self.status = format!("Saved {name} to Parts Bin");
+        Ok(path)
     }
 }
 
@@ -3377,5 +3837,78 @@ mod tests {
         e.cancel_curve();
         assert!(e.curve.is_none());
         assert_eq!(positions(&e), pos_before);
+    }
+
+    #[test]
+    fn parts_bin_save_and_place() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        let pos_after_first = positions(&e);
+
+        // 1. Save stroke as a part
+        let temp_dir = std::env::temp_dir().join(format!("oxy_test_parts_{}", std::process::id()));
+        e.parts_dir = Some(temp_dir.clone());
+        e.save_part_from_strokes("TestHorn", "Horns", &[id]).expect("saves part");
+        assert_eq!(e.parts_library.entries.len(), 1);
+        let part_entry = e.parts_library.entries[0].clone();
+
+        // 2. Begin placement on surface
+        e.begin_part_placement(part_entry.detail).expect("begins placement");
+        assert!(e.part_placement.is_some());
+
+        // Hover over a spot on the sphere
+        let (o, d) = e.camera.ray(glam::Vec2::new(340.0, 310.0), e.canvas_size());
+        let hit = e.scene.active().mesh.raycast(o, d).expect("hit mesh");
+        let pid = e.scene.active().id;
+        e.update_part_placement(hit.point, hit.normal, pid);
+
+        // Commit placement (Place one)
+        e.commit_part_placement(crate::parts::PlaceChoice::One).expect("places part");
+        assert!(e.part_placement.is_none());
+        assert_eq!(e.living.groups.len(), 1);
+        assert_eq!(e.living.groups[0].name, "TestHorn");
+        assert_eq!(e.living.placed_parts.len(), 1);
+
+        let pos_after_place = positions(&e);
+        assert_ne!(pos_after_place, pos_after_first, "mesh changed after placing part");
+
+        // 3. Placed stroke stays editable (Edit settings)
+        let placed_stroke_id = e.living.strokes[1].id;
+        e.living_open_edit(placed_stroke_id).expect("can edit placed stroke");
+        let r = e.living_edit_recipe().unwrap().settings.radius;
+        e.living_edit_setting(StrokeSetting::Radius(r * 1.5), false);
+        e.living_close_edit();
+        let pos_after_edit = positions(&e);
+        assert_ne!(pos_after_edit, pos_after_place, "placed stroke reshaped on edit");
+
+        // 4. Undoing restores the surface
+        assert!(e.history.can_undo());
+        e.undo(); // undo edit
+        e.undo(); // undo place
+        assert_eq!(positions(&e), pos_after_first, "undo restores surface before part was placed");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn parts_bin_placement_cancellation_leaves_mesh_unchanged() {
+        let mut e = editor();
+        stroke(&mut e, 300.0);
+        let id = e.living.strokes[0].id;
+        let pos_before = positions(&e);
+
+        let temp_dir = std::env::temp_dir().join(format!("oxy_test_parts_cancel_{}", std::process::id()));
+        e.parts_dir = Some(temp_dir.clone());
+        e.save_part_from_strokes("CancelTest", "Misc", &[id]).unwrap();
+        let detail = e.parts_library.entries[0].detail.clone();
+
+        e.begin_part_placement(detail).unwrap();
+        assert!(e.part_placement.is_some());
+        e.cancel_part_placement();
+        assert!(e.part_placement.is_none());
+        assert_eq!(positions(&e), pos_before, "cancellation leaves mesh untouched");
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

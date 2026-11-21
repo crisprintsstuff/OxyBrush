@@ -192,6 +192,15 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     {
                         ed.living_split_selected(axis);
                     }
+                    if ui
+                        .button("Save as part…")
+                        .on_hover_text("Save the selected strokes as a reusable part in the Parts Bin (RFC 0026).")
+                        .clicked()
+                    {
+                        let ids: Vec<u64> = ed.living.selected.iter().copied().collect();
+                        let name = format!("Part {}", ed.parts_library.entries.len() + 1);
+                        let _ = ed.save_part_from_strokes(&name, "Details", &ids);
+                    }
                     egui::ComboBox::from_id_salt("living_side_axis")
                         .width(44.0)
                         .selected_text(name)
@@ -439,6 +448,21 @@ pub(crate) fn groups(ui: &mut egui::Ui, ed: &mut Editor, pid: u64) {
                 });
                 if ui.button("Ungroup").on_hover_text("The strokes leave the group and keep how they look.").clicked() {
                     ed.living_ungroup(*gid);
+                    ui.close();
+                }
+                if ui
+                    .button("Save as part…")
+                    .on_hover_text("Save this group's strokes as a reusable part in the Parts Bin.")
+                    .clicked()
+                {
+                    let ids: Vec<u64> = ed
+                        .living
+                        .strokes
+                        .iter()
+                        .filter(|s| s.group == Some(*gid) && s.listed())
+                        .map(|s| s.id)
+                        .collect();
+                    let _ = ed.save_part_from_strokes(name, "Details", &ids);
                     ui.close();
                 }
                 if ui.button("Delete its strokes").clicked() {

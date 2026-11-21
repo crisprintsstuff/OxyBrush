@@ -186,6 +186,10 @@ impl App {
                     if let Some(dir) = &e.matcap_dir {
                         e.custom_matcaps = crate::matcaps::load_all(dir);
                     }
+                    e.parts_dir = crate::parts::library_dir();
+                    if let Some(dir) = &e.parts_dir {
+                        e.parts_library = crate::parts::PartsLibrary::load_all(dir);
+                    }
                 }
                 e.apply_settings(&settings);
                 if !auto.overrides.is_empty() {
