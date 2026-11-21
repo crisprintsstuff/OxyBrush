@@ -19,6 +19,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Grab, Topological Move, Kelvin Grab and Snake Hook pull round shapes with symmetry on.** Since 4.0.0-beta.21 a pull on or near the mirror plane came out with a flat top, as if capped ("the points are capped, so it isn't round"), and on the plane the brush's edges moved twice as far. Now a pull on the plane is exactly the brush itself, the point under the cursor follows it exactly, the brush is unchanged where the mirror copy doesn't reach, and near the plane the two sides rise as one round shape, a little higher between them than at either brush, as two overlapping pulls do.
 - **A recipe dragged from the Recipe Box lands under the pointer.** It used to land off to one side by the width of the panels.
 - **The mirror side of a mirrored pair is a mirror image.** It was a turned copy, so an asymmetric recipe (an L, a hook) came out the wrong way round on the other side.
 - **Placed recipes stay recipes after saving and reopening.** The project kept stroke numbers from the session, which change when the project opens, so a reopened recipe lost track of its strokes. Projects now store their place in the list (`PART` version 2); files from 4.0.0-beta.21 are read by stroke group.
