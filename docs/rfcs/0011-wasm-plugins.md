@@ -1,6 +1,6 @@
 # RFC 0011: Plugin API, phase 2: in-app WebAssembly plugins
 
-- **Status:** proposed for the maintainer; first version implemented in the same change for review
+- **Status:** Complete
 - **Follows:** [RFC 0007](0007-plugin-api-read-access.md) (read access over MCP),
   which named WebAssembly as the in-process route and listed panels,
   commands and overlays as phase 2.

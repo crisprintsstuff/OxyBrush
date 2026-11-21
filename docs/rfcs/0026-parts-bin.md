@@ -1,9 +1,6 @@
 # RFC 0026: Parts Bin
 
-Status: Accepted. On 2026-11-18 the owner confirmed the four RFC 0025
-amendments below, as well as scale, per-side fade and delete, refusing a
-drop while dynamic detail is on, the symmetry-plane prompt, and the
-remaining decisions recorded at the end.
+Status: Partial — phases 1–2 and the `PART` project section implemented in #379 (`.oxydetail` format, save/place, viewport Parts Bin strip, category filter, drag-and-drop placement dialog with symmetry plane handling, delete). Remaining: phase 3 (post-drop Move on surface, linked Edit/Move across mirrored pairs, Unlink, Save back / Save as new), phase 4 (rename, reorder, variations popup), and phase 5 (geodesic walk from RFC 0025 phase 6).
 
 ## Summary
 

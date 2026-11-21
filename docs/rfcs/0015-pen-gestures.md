@@ -1,6 +1,6 @@
 # RFC 0015: Pen gestures in panels and the viewport
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete (real pen-tablet hardware verification remains open in ROADMAP.md)
 
 ## Problem
 

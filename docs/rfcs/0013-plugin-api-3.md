@@ -1,6 +1,6 @@
 # RFC 0013: Plugin API 3 — topology, live preview, richer panels
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete
 - **Builds on:** [RFC 0011](0011-wasm-plugins.md) (in-app WebAssembly
   plugins, API 1 and 2) and [RFC 0007](0007-plugin-api-read-access.md)
   (the scene model plugins see)

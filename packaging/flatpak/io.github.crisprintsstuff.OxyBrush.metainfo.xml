@@ -53,6 +53,18 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.21" date="2026-11-20" type="development">
+      <description>
+        <p>Complete multi-tab project support with tab bar, keyboard shortcuts,
+        startup session restore, multi-tab crash recovery, cross-tab Copy/Paste
+        piece with living strokes, plugin/agent/bridge tab isolation, and a
+        shared 4 GiB LRU undo budget. Fix grab-family symmetry blending near the
+        mirror plane, add the Parts Bin library for reusable details and curve
+        path editing for Living Strokes, add outliner Shift-range selection and
+        batch parenting, and consolidate theme controls into Preferences &gt;
+        Appearance.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.20.2" date="2026-11-20" type="development">
       <description>
         <p>Fix inspector panel runaway width expansion in Standard and Touch

@@ -1,6 +1,6 @@
 # RFC 0023: Poly Edit element modes
 
-Status: accepted (decisions by the maintainer, 2026-11-15); implemented
+Status: Complete (accepted 2026-11-15)
 
 ## Summary
 

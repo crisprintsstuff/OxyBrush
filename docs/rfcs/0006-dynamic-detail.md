@@ -1,6 +1,6 @@
 # RFC 0006: Dynamic detail (dynamic topology), first version
 
-- **Status:** proposed for the maintainer; first version implemented in the same change for review
+- **Status:** Complete (v1 scope; further dynamic-detail work is tracked in ROADMAP.md)
 - **Requested by:** a user in [#81](https://github.com/crisprintsstuff/OxyBrush/issues/81),
   who uses a mode like this in other sculpting apps as their main way to
   start a shape. The roadmap already lists dynamic topology for Phase 4.

@@ -1,8 +1,6 @@
 # RFC 0025: Editable strokes and portable detail
 
-Status: accepted (decisions by the maintainer, 2026-11-16; Parts Bin
-amendments confirmed 2026-11-18). Phases 1 and 2 are built (recipes,
-then Edit settings). Phases 3–6 are not.
+Status: Partial — phases 1–5 implemented (recipes, Edit settings, Edit path in #377, and Parts Bin details / `.oxydetail` library in #379). Remaining: phase 6 (geodesic surface-walk mapping and optional Replay later strokes).
 
 ## Summary
 
@@ -190,10 +188,10 @@ bundled starter details, if any, are made for OxyBrush (CC0).
    or not the mesh was rebuilt. An alpha is identified by its stored
    pixels, so a capture still matches after save and open.
 2. **Edit settings:** ✅ the Edit… panel, re-sculpting one stroke. Later strokes keep their stored change. A slider previews at a reduced rate and applies the full stroke when the drag ends; a long stroke runs off the UI thread. Esc cancels. A stroke with no recipe says why.
-3. **Edit path:** the path as a curve.
-4. **Details in a project:** Save as part, place with move, turn and
-   scale, mirror.
-5. **Detail files:** export, import, the Parts Bin library across projects.
+3. **Edit path:** ✅ the path as a curve (#377).
+4. **Details in a project:** ✅ Save as part, place with move, turn and
+   scale, mirror (#379).
+5. **Detail files:** ✅ export, import, the Parts Bin library across projects (#379).
 6. **Later:** geodesic mapping for details that wrap; Replay later
    strokes.
 
@@ -224,6 +222,6 @@ confirmed on 2026-11-18:
   recipes; a separate RFC).
 - A shared online library of details.
 
-[RFC 0026](0026-parts-bin.md) (draft) specifies the Parts Bin for phases
+[RFC 0026](0026-parts-bin.md) specifies the Parts Bin for phases
 4 and 5, including the confirmed amendments above and the remaining open
 design questions.
