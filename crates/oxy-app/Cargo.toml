@@ -38,6 +38,7 @@ log.workspace = true
 env_logger.workspace = true
 serde_json.workspace = true
 rfd.workspace = true
+fs4 = "0.13.1"
 dirs.workspace = true
 png.workspace = true
 # JPEG matcaps (pure Rust; MIT OR Apache-2.0 OR Zlib).

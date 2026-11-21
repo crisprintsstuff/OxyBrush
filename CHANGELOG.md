@@ -14,6 +14,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Fixed
 
 - **Quads in OBJ and FBX files stay quads, even when they aren't flat.** OxyBrush used to split every polygon into triangles and then guess which pairs had been quads from their shape, so a quad folded across its diagonal stayed two triangles, and neighbouring triangles were sometimes paired into the wrong quads. Quad subdivision then broke those areas into shapes that were hard to sculpt. Import now keeps the file's own polygons, including n-gons, for the wireframe, quad subdivision levels and export, and through the Blender bridge. A non-convex quad is split along its inside diagonal. Projects save these polygons in a new `POLY` section, so they survive save and reopen; older versions skip it and guess the quads as before. Files made only of triangles are unchanged.
+- **Blender models arrive upright and open in the running window.** The bridge converts between Blender’s Z-up and OxyBrush’s Y-up coordinates in both directions. A send reuses an untouched active tab. An occupied tab offers to open the model there or in another tab.
 - **Blender bridge returns work on meshes with shape keys.** Position-only edits move the Basis and keep each key's offset. Sending a new piece back again updates the object that the bridge previously created.
 
 ## [4.0.0-beta.21.4] - 2026-11-21

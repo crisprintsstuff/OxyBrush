@@ -2,12 +2,25 @@
 //! (RFC 0010), first used by the Blender add-on: open the objects it sent
 //! as pieces, and send them back.
 
-use crate::editor::Editor;
+use crate::editor::{Editor, Pending};
 use glam::{Mat4, Vec3};
 use oxy_doc::{Piece, Scene, VertexOrigin};
 use oxy_io::bridge::{self, LinkManifest, Returned};
 use oxy_mesh::Mesh;
 use std::path::{Path, PathBuf};
+
+mod inbox;
+pub(crate) use inbox::{Inbox, Registration};
+
+/// A right-handed change of basis. Blender's +Z becomes OxyBrush's +Y,
+/// and Blender's front (−Y) becomes OxyBrush's front (+Z).
+fn from_app_world(app: &str) -> Mat4 {
+    if app == "Blender" {
+        Mat4::from_cols(Vec3::X.extend(0.0), (-Vec3::Z).extend(0.0), Vec3::Y.extend(0.0), glam::Vec4::W)
+    } else {
+        Mat4::IDENTITY
+    }
+}
 
 /// The open link.
 #[derive(Debug, Clone)]
@@ -39,15 +52,43 @@ fn file_stem(name: &str) -> String {
 }
 
 impl Editor {
+    /// A sender that reached an existing window can use its active tab.
+    /// Leave the choice to the user when that tab already holds work.
+    pub fn receive_bridge_link(&mut self, path: PathBuf) {
+        if self.existing_bridge_tab(&path).is_some() || self.is_empty_tab(self.active_document) {
+            self.open_link(&path);
+        } else {
+            self.pending = Some(Pending::OpenLink(path));
+        }
+    }
+
+    /// Replace the contents of one tab after confirmation. Keep the old
+    /// document until the incoming link has been read successfully.
+    pub fn replace_tab_with_bridge_link(&mut self, path: &Path) {
+        let previous = self.active_document;
+        if self.open_link(path) && self.active_document != previous {
+            let status = self.status.clone();
+            self.perform_close_tab(previous);
+            self.reorder_tab(self.active_document, previous);
+            self.status = status;
+        }
+    }
+
+    fn existing_bridge_tab(&self, path: &Path) -> Option<usize> {
+        let canonical = path.canonicalize().ok();
+        self.documents.iter().position(|doc| {
+            doc.bridge.as_ref().is_some_and(|b| {
+                b.manifest_path == path
+                    || canonical.as_ref().is_some_and(|p| b.manifest_path.canonicalize().as_ref().ok() == Some(p))
+            })
+        })
+    }
+
     /// Open a link manifest following tab rules: focus if already open,
     /// reuse an untouched starter tab, or open in a new tab.
     pub fn open_link(&mut self, path: &Path) -> bool {
         self.show_welcome = false;
-        let canon = path.canonicalize().ok();
-        let matches = |p: &Path| p == path || (canon.is_some() && p.canonicalize().ok() == canon);
-        if let Some(existing_idx) =
-            self.documents.iter().position(|d| d.bridge.as_ref().is_some_and(|b| matches(&b.manifest_path)))
-        {
+        if let Some(existing_idx) = self.existing_bridge_tab(path) {
             let prev_was_empty = self.is_empty_tab(self.active_document);
             let prev_idx = self.active_document;
             self.switch_tab(existing_idx);
@@ -60,10 +101,14 @@ impl Editor {
             self.open_link_now(path);
             self.bridge.is_some()
         } else {
+            let previous = self.active_document;
             let new_idx = self.new_tab("empty");
             self.open_link_now(path);
             if self.bridge.is_none() {
+                let status = self.status.clone();
                 self.perform_close_tab(new_idx);
+                self.switch_tab(previous);
+                self.status = status;
                 false
             } else {
                 true
@@ -81,6 +126,7 @@ impl Editor {
                 return;
             }
         };
+        let from_world = from_app_world(&manifest.app);
         let mut pieces = Vec::new();
         let mut map = Vec::new();
         for (i, o) in manifest.objects.iter().enumerate() {
@@ -92,7 +138,8 @@ impl Editor {
                 }
             };
             let sent = positions.len();
-            let world: Vec<Vec3> = positions.iter().map(|&p| o.matrix.transform_point3(p)).collect();
+            let to_scene = from_world * o.matrix;
+            let world: Vec<Vec3> = positions.iter().map(|&p| to_scene.transform_point3(p)).collect();
             let mesh = Mesh::new(world, tris);
             oxy_io::keep_polygons(&mesh, &faces);
             let origin =
@@ -117,6 +164,7 @@ impl Editor {
     pub fn send_back_link(&mut self, close: bool) {
         let Some(link) = self.bridge.clone() else { return };
         let m = &link.manifest;
+        let to_world = from_app_world(&m.app).inverse();
         let mut returned = Vec::new();
         let mut taken_names = std::collections::HashSet::new();
         for piece in &self.scene.pieces {
@@ -125,7 +173,7 @@ impl Editor {
             let result = match linked {
                 Some(&(_, i, sent)) => {
                     let o = &m.objects[i];
-                    let to_object: Mat4 = o.matrix.inverse();
+                    let to_object = o.matrix.inverse() * to_world;
                     let local: Vec<Vec3> = mesh.positions.iter().map(|&p| to_object.transform_point3(p)).collect();
                     // Same vertices as sent: write them back in the order they came.
                     let order = piece.origin.as_ref().filter(|og| {
@@ -158,7 +206,8 @@ impl Editor {
                         stem.push('_');
                     }
                     let path = m.new_pieces.join(format!("{stem}.obj"));
-                    bridge::write_obj_ordered(&path, &mesh.positions, &mesh.triangles, &piece.name).map(|()| Returned {
+                    let world: Vec<Vec3> = mesh.positions.iter().map(|&p| to_world.transform_point3(p)).collect();
+                    bridge::write_obj_ordered(&path, &world, &mesh.triangles, &piece.name).map(|()| Returned {
                         name: piece.name.clone(),
                         file: bridge::relative(m, &path),
                         same_topology: false,
@@ -201,7 +250,7 @@ mod tests {
         d
     }
 
-    /// A cube as Blender would send it: 8 vertices, 6 quads, moved by its matrix.
+    /// A Blender cube with an object-to-world scale and translation.
     fn write_link(dir: &Path) -> std::path::PathBuf {
         let mut obj = String::new();
         for i in 0..8 {
@@ -216,10 +265,48 @@ mod tests {
             &manifest,
             r#"{"format":"oxybrush-link","version":1,"app":"Blender","objects":[
                 {"name":"Cube","obj":"Cube.obj","result":"out/Cube.obj",
-                 "matrix":[2,0,0,0, 0,2,0,0, 0,0,2,0, 10,0,0,1]}]}"#,
+                 "matrix":[2,0,0,0, 0,2,0,0, 0,0,2,0, 10,3,4,1]}]}"#,
         )
         .unwrap();
         manifest
+    }
+
+    #[test]
+    fn incoming_links_reuse_the_active_tab_with_permission_and_preserve_failed_opens() {
+        let dir = link_folder();
+        let manifest = write_link(&dir);
+
+        let mut starter = Editor::default();
+        let starter_id = starter.documents[0].id;
+        starter.receive_bridge_link(manifest.clone());
+        assert_eq!(starter.documents.len(), 1);
+        assert_eq!(starter.documents[0].id, starter_id);
+        assert!(starter.pending.is_none());
+        assert_eq!(starter.bridge.as_ref().map(Bridge::app), Some("Blender"));
+
+        let mut e = Editor::default();
+        e.add_primitive("sphere");
+        assert!(e.is_modified());
+        let original = e.scene.active().id;
+        e.receive_bridge_link(manifest.clone());
+        assert_eq!(e.pending, Some(Pending::OpenLink(manifest.clone())));
+        assert_eq!(e.scene.active().id, original);
+        assert_eq!(e.documents.len(), 1);
+
+        let missing = dir.join("missing.oxylink.json");
+        e.perform(Pending::OpenLink(missing));
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.scene.active().id, original);
+        assert!(e.is_modified());
+        assert!(e.status.starts_with("Could not open the link"));
+
+        e.perform(Pending::OpenLink(manifest.clone()));
+        assert_eq!(e.documents.len(), 1);
+        assert_eq!(e.scene.active().name, "Cube");
+        e.receive_bridge_link(manifest);
+        assert!(e.pending.is_none(), "an already open link is focused");
+        assert_eq!(e.documents.len(), 1);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
@@ -235,11 +322,10 @@ mod tests {
         let piece = &e.scene.pieces[0];
         assert_eq!(piece.name, "Cube");
         assert_eq!(piece.mesh.vertex_count(), 8);
-        // Placed by its matrix: scaled 2x and moved 10 along x.
+        // Object-to-world comes first, then (x, z, -y) into the scene.
         let b = piece.mesh.bounds();
-        assert!(
-            (b.min - Vec3::new(10.0, 0.0, 0.0)).length() < 1e-5 && (b.max - Vec3::new(12.0, 2.0, 2.0)).length() < 1e-5
-        );
+        assert_eq!(b.min, Vec3::new(10.0, 4.0, -5.0));
+        assert_eq!(b.max, Vec3::new(12.0, 6.0, -3.0));
 
         // Sculpt-like edit: move every vertex up by 1 world unit; add a new piece.
         let piece = &mut e.scene.pieces[0];
@@ -250,12 +336,12 @@ mod tests {
         e.send_back_link(false);
         assert!(e.status.starts_with("Sent 2 objects back to Blender"), "{}", e.status);
 
-        // Back in object space (world y + 1 is object y + 0.5), in the sent order.
+        // OxyBrush Y + 1 is Blender local Z + 0.5, in the sent order.
         let (pos, tris) = bridge::read_obj_exact(&dir.join("out/Cube.obj")).unwrap();
         assert_eq!(pos.len(), 8);
         for (i, p) in pos.iter().enumerate() {
             let sent = Vec3::new((i & 1) as f32, ((i >> 1) & 1) as f32, ((i >> 2) & 1) as f32);
-            assert!(p.distance(sent + Vec3::new(0.0, 0.5, 0.0)) < 1e-5, "vertex {i}: {p}");
+            assert!(p.distance(sent + Vec3::new(0.0, 0.0, 0.5)) < 1e-5, "vertex {i}: {p}");
         }
         assert_eq!(tris.len(), 12);
         let returned: serde_json::Value =
@@ -265,7 +351,12 @@ mod tests {
         assert_eq!(objs[0]["same_topology"], true);
         assert_eq!(objs[0]["file"], "out/Cube.obj");
         assert_eq!(objs[1]["new"], true);
-        assert!(dir.join(objs[1]["file"].as_str().unwrap()).is_file());
+        let (new_pos, _) = bridge::read_obj_exact(&dir.join(objs[1]["file"].as_str().unwrap())).unwrap();
+        let new_piece = &e.scene.pieces[1];
+        assert_eq!(new_pos.len(), new_piece.mesh.vertex_count());
+        for (&actual, &scene) in new_pos.iter().zip(&new_piece.mesh.positions) {
+            assert_eq!(actual, Vec3::new(scene.x, -scene.z, scene.y));
+        }
 
         // A topology change is still sent, marked as such; and close ends the link.
         let piece = &mut e.scene.pieces[0];
