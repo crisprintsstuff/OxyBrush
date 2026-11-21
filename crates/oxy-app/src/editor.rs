@@ -12896,6 +12896,7 @@ mod tests {
         )
         .unwrap();
         let mut e = editor();
+        e.scene = Scene::empty();
         e.open(&source);
         let base = e.scene.active().mesh.uvs().to_vec();
         assert_eq!(base.len(), 4);
