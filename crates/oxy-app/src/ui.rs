@@ -608,7 +608,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
 
     let own_bar = ed.own_title_bar;
-    egui::Panel::top("menu").show(ui, |ui| {
+    // On macOS the menus are in the menu bar at the top of the screen.
+    if !ed.native_menu_bar {
+        egui::Panel::top("menu").show(ui, |ui| {
         // With OxyBrush's own title bar (RFC 0028) the bar's empty part
         // moves the window: an area under the menus, which take their
         // clicks first.
@@ -804,24 +806,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     });
                 });
                 tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, hard edges, vertex color, lights, wireframe and face group colors", |ui| {
-                    tips::hover(
-                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"))),
-                        plain::AO,
-                    );
-                    tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))), plain::CAVITY);
-                    hard_edge_angle_slider(ui, &mut ed.view.hard_edge_angle);
-                    tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
-                    tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
-                    tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
-                    if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
-                        ed.show_lights = true;
-                    }
-                    tips::check(ui, &mut ed.floor_grid, "Floor grid", Cmd::FloorGrid);
-                    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
-                    if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
-                        ed.show_wireframe = true;
-                    }
-                    tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
+                    shading_controls(ui, ed);
                 });
                 tips::menu(ui, "Inactive pieces", plain::INACTIVE_PIECES, |ui| inactive_pieces_menu(ui, ed));
                 tips::menu(ui, "Brush cursor", "How the brush circle is drawn over the model", |ui| {
@@ -882,6 +867,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             crate::title_bar::bar_background(&bar, ed);
         }
     });
+    }
     if own_bar {
         crate::title_bar::resize_edges(ui, ed);
     }
@@ -1010,6 +996,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     mesh_diagnostics_dialog(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
+    shading_window(ui.ctx(), ed);
     keymap::window(ui.ctx(), ed);
     if let Some(a) = crate::palette::window(ui.ctx(), ed) {
         action = Some(a);
@@ -3581,6 +3568,56 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
         "Zoom is separate: the wheel still moves you closer or further."
     };
     ui.label(RichText::new(note).weak().small());
+}
+
+/// View > Shading: ambient occlusion, cavity, hard edges and the viewport
+/// toggles.
+fn shading_controls(ui: &mut Ui, ed: &mut Editor) {
+    tips::hover(
+        ui.add(crate::widgets::Bar(
+            egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"),
+        )),
+        plain::AO,
+    );
+    tips::hover(
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.view.cavity, 0.0..=1.0).text("Cavity"))),
+        plain::CAVITY,
+    );
+    hard_edge_angle_slider(ui, &mut ed.view.hard_edge_angle);
+    tips::check(ui, &mut ed.view.flat_shading, "Flat shading", Cmd::FlatShading);
+    tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
+    tips::check(ui, &mut ed.view.lighting.enabled, "Light the viewport", Cmd::LightViewport);
+    if tips::button(ui, "Lights…", Cmd::LightsWindow).clicked() {
+        ed.show_lights = true;
+    }
+    tips::check(ui, &mut ed.floor_grid, "Floor grid", Cmd::FloorGrid);
+    tips::check_km(ui, &ed.keymap, &mut ed.view.wireframe, "Wireframe", Cmd::Wireframe);
+    if tips::button(ui, "Wireframe settings…", Cmd::WireframeWindow).clicked() {
+        ed.show_wireframe = true;
+    }
+    tips::check_km(ui, &ed.keymap, &mut ed.view.show_groups, "Face group colors", Cmd::GroupColors);
+}
+
+/// The Shading window: View > Shading and the inactive pieces look, for the
+/// macOS menu bar, where a menu can't hold sliders (RFC 0028).
+fn shading_window(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_shading {
+        return;
+    }
+    let mut open = true;
+    egui::Window::new("Shading")
+        .open(&mut open)
+        .resizable(false)
+        .collapsible(false)
+        .default_width(300.0)
+        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-64.0, 48.0))
+        .show(ctx, |ui| {
+            shading_controls(ui, ed);
+            ui.separator();
+            ui.label(RichText::new("Inactive pieces").strong());
+            inactive_pieces_menu(ui, ed);
+        });
+    ed.show_shading = open;
 }
 
 /// Floating copy of the lens controls, for the view strip and command palette.
@@ -8312,6 +8349,20 @@ mod tests {
         assert!(widgets_labelled(&mut ed, &ctx, "Close").is_empty());
         click_with(&mut ed, &ctx, empty, egui::Modifiers::NONE, 2);
         assert_eq!(ed.window_request.take(), None);
+    }
+
+    #[test]
+    fn with_the_macos_menu_bar_the_tabs_come_first() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        assert_eq!(widgets_labelled(&mut ed, &ctx, "File").len(), 1);
+        let plus_below = widgets_labelled(&mut ed, &ctx, "+").into_iter().map(|r| r.top()).fold(f32::MAX, f32::min);
+        ed.native_menu_bar = true;
+        assert!(widgets_labelled(&mut ed, &ctx, "File").is_empty(), "no menu row in the window");
+        let plus_top = widgets_labelled(&mut ed, &ctx, "+").into_iter().map(|r| r.top()).fold(f32::MAX, f32::min);
+        assert!(plus_top < plus_below - 10.0, "the tab row moves up: {plus_top} vs {plus_below}");
     }
 
     #[test]

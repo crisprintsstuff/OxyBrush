@@ -58,18 +58,21 @@ pub struct Entry {
     /// Hover text: what it does, and the shortcut when it has one.
     pub tooltip: String,
     pub act: Act,
+    /// The command it runs, for entries that are one (the macOS menu bar
+    /// finds commands by it).
+    pub cmd: Option<Cmd>,
 }
 
 fn cmd(ed: &Editor, id: Cmd, keywords: &'static str, f: fn(&mut Editor)) -> Entry {
     let detail = id.shortcut_in(&ed.keymap);
     let tooltip = id.tip_in(&ed.keymap);
-    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Run(f) }
+    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Run(f), cmd: Some(id) }
 }
 
 fn ui_cmd(ed: &Editor, id: Cmd, keywords: &'static str, a: UiAction) -> Entry {
     let detail = id.shortcut_in(&ed.keymap);
     let tooltip = id.tip_in(&ed.keymap);
-    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Ui(a) }
+    Entry { label: id.label().into(), detail, keywords, tooltip, act: Act::Ui(a), cmd: Some(id) }
 }
 
 /// Every command the palette offers (menus have the same actions).
@@ -358,6 +361,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Sculptor".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Studio".into(),
@@ -369,6 +373,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Studio".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Graphite".into(),
@@ -380,6 +385,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Graphite".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Matte".into(),
@@ -391,6 +397,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Matte".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Midnight".into(),
@@ -402,6 +409,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Midnight".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Charcoal".into(),
@@ -413,6 +421,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Charcoal".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Slate".into(),
@@ -424,6 +433,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Slate".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Warm Umber".into(),
@@ -435,6 +445,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Warm Umber".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: Studio Light".into(),
@@ -446,6 +457,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = false;
                 e.status = "Theme: Studio Light".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Theme: High Contrast".into(),
@@ -457,6 +469,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.high_contrast = true;
                 e.status = "Theme: High Contrast".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Terracotta".into(),
@@ -467,6 +480,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Terracotta;
                 e.status = "Accent: Terracotta".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Tangerine".into(),
@@ -477,6 +491,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Tangerine;
                 e.status = "Accent: Tangerine".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Cyan".into(),
@@ -487,6 +502,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Cyan;
                 e.status = "Accent: Cyan".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Emerald".into(),
@@ -497,6 +513,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Emerald;
                 e.status = "Accent: Emerald".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Amber".into(),
@@ -507,6 +524,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Amber;
                 e.status = "Accent: Amber".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Crimson".into(),
@@ -517,6 +535,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Crimson;
                 e.status = "Accent: Crimson".into();
             }),
+            cmd: None,
         },
         Entry {
             label: "Accent: Violet".into(),
@@ -527,6 +546,7 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
                 e.accent = crate::settings::AccentPreset::Violet;
                 e.status = "Accent: Violet".into();
             }),
+            cmd: None,
         },
         cmd(ed, Cmd::CheckUpdates, "help version", |e| {
             e.updater.show_window = true;
@@ -546,7 +566,32 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             e.reopen_closed_tab();
         }),
         cmd(ed, Cmd::Quit, "exit close", |e| e.request(Pending::Quit)),
+        cmd(ed, Cmd::ClearGroups, "groups face groups polygroups remove reset", |e| {
+            e.edit_faces("Clear groups", |m| m.set_groups(vec![0; m.triangle_count()]))
+        }),
+        cmd(ed, Cmd::GrowVisible, "visibility show more expand", |e| {
+            e.edit_faces("Grow visible", |m| m.grow_visible(true))
+        }),
+        cmd(ed, Cmd::ShrinkVisible, "visibility show less contract", |e| {
+            e.edit_faces("Shrink visible", |m| m.grow_visible(false))
+        }),
+        cmd(ed, Cmd::GrowMask, "masking expand dilate", |e| e.edit_mesh_mask("Grow mask", |m| m.grow_mask(true))),
+        cmd(ed, Cmd::ShrinkMask, "masking contract erode", |e| e.edit_mesh_mask("Shrink mask", |m| m.grow_mask(false))),
+        cmd(ed, Cmd::PaintBrush, "vertex color colour paint brush", |e| e.brush_kind = BrushKind::Paint),
+        cmd(ed, Cmd::SubdivideOnce, "subdivide single mesh divide resolution no levels", |e| {
+            e.subdivide(e.subdivision_smooth)
+        }),
+        cmd(ed, Cmd::Palette, "commands search find run", |e| e.palette = Some(Palette::new(PaletteMode::Everything))),
+        cmd(ed, Cmd::FindBrush, "brush pick search find", |e| e.palette = Some(Palette::new(PaletteMode::Brushes))),
     ]
+}
+
+/// Run the palette's entry for command `id`, as choosing it in the palette
+/// does. RETURNS: None when the palette has no entry for it; otherwise
+/// what the platform layer must still do (a file dialog), if anything.
+pub fn run_cmd(ed: &mut Editor, id: Cmd) -> Option<Option<UiAction>> {
+    let act = commands(ed).into_iter().find(|e| e.cmd == Some(id))?.act;
+    Some(run(ed, act))
 }
 
 fn brush_entries(ed: &Editor, prefix: &str) -> Vec<Entry> {
@@ -558,6 +603,7 @@ fn brush_entries(ed: &Editor, prefix: &str) -> Vec<Entry> {
             keywords: widgets::brush_description(k),
             tooltip: crate::tips::brush_tip(k, ed.number_key(k).as_deref()),
             act: Act::Brush(k),
+            cmd: None,
         })
         .collect()
 }
@@ -578,6 +624,7 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
                 keywords: "file",
                 tooltip: crate::tips::recent_tip(p),
                 act: Act::Recent(p.clone()),
+                cmd: None,
             }));
             for (i, p) in ed.wasm_plugins.iter().enumerate() {
                 let Some(plugin) = &p.plugin else { continue };
@@ -592,6 +639,7 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
                             p.description.clone()
                         },
                         act: Act::Plugin(i, k),
+                        cmd: None,
                     });
                 }
             }
@@ -601,6 +649,7 @@ pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
                 keywords: t.keywords,
                 tooltip: format!("Open the guide topic “{}”.", t.title),
                 act: Act::Guide(i),
+                cmd: None,
             }));
             v
         }

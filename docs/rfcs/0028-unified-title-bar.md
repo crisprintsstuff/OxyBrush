@@ -1,6 +1,6 @@
 # RFC 0028: Unified title bar
 
-Status: Accepted — phase 1 (Windows and Linux) implemented; phase 2 (macOS menu bar) next
+Status: Accepted — phase 1 (Windows and Linux) and phase 2 (macOS menu bar) implemented; phase 2 not yet tried on a Mac
 
 ## Summary
 
@@ -108,14 +108,44 @@ The window library (winit 0.30) has what's needed:
 - **After a move or resize** the system keeps the button release, so the
   app tells the interface the button went up; otherwise the next click
   would be missed.
-- **macOS menu bar (phase 2):** a native menu built from the same menu
-  definitions as the in-window menus, so each item is written once, with
-  its enabled state and check marks kept in step each frame. The library
-  for native menus must be pure Rust on macOS (for example `muda`, MIT or
-  Apache-2.0, on `objc2`), used only in macOS builds. winit's own default
-  menu is turned off.
+- **macOS menu bar (phase 2):** `menu_model` lists the menus as data,
+  in the in-window menus' order and words: each item has a label, an
+  enabled state and, for toggles and lists, a check mark. Most items are
+  a command and run the command palette's action for it (`palette::run_cmd`),
+  so a command does the same thing from the palette, a shortcut or either
+  menu; a test checks every command in the menus has one. Lists (recent
+  files, export type, materials, plugins, Boolean partners) and a few
+  others (Help's web pages) have their own actions. `native_menu` builds
+  the system menus from it with `muda` (MIT or Apache-2.0, pure Rust on
+  `objc2`), only in macOS builds, and winit's own default menu is off.
+  - **Application menu:** About OxyBrush, Settings… (⌘,), Services, Hide,
+    Hide Others, Show All and Quit OxyBrush (⌘Q), which asks about unsaved
+    tabs like File > Quit. Preferences and Quit move here from Edit and
+    File; About from Help. A Window menu has Minimize, Zoom and full screen.
+  - **State:** the model is built again at most four times a second (about
+    14 µs for its 170 items, release build) and right after a choice;
+    check marks and enabled states are updated in place, and the menus are
+    built again only when items come or go.
+  - **Sliders and colours** can't go in a native menu. View > Shading's
+    sliders and the inactive pieces look are in a **Shading** window,
+    opened from View > Shading; Focal length opens its window.
+  - **Shortcuts:** a keymap shortcut with ⌘ is shown on its item and
+    handled by the menu, and the keyboard path skips it so it runs once.
+    Text editing shortcuts (⌘A, ⌘C, ⌘V, ⌘X, ⌘Z, ⌘⇧Z) stay with the
+    keyboard path, so they still work in text fields; their items show no
+    shortcut. Shortcuts without ⌘ aren't menu shortcuts, since a Mac menu
+    would take them even while typing. Changing the keymap rebuilds the
+    menus.
+  - Right-click menus and the in-window menus on Windows and Linux are
+    unchanged.
 - Nothing changes in projects or in the GPU-free crates; the only new
   setting is `system_title_bar`.
+- **Not yet verified on a Mac:** phase 2 is type-checked and linted for
+  `aarch64-apple-darwin`, and the menu model is tested on Linux, but the
+  menu bar hasn't run on macOS. Before it's called done: every menu opens
+  and its items work, check marks and greyed items follow the editor,
+  ⌘ shortcuts fire once (and ⌘C/⌘V still edit text), Quit asks about
+  unsaved tabs, and the Help menu's search field finds items.
 
 ## Testing
 
