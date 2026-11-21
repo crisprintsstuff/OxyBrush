@@ -1049,6 +1049,17 @@ pub struct Editor {
     pub closed_tab_history: Vec<PathBuf>,
     /// Reopen previously open saved project tabs on startup (RFC 0027).
     pub restore_session: bool,
+    /// Preferences: use the system title bar at the next start (RFC 0028).
+    pub system_title_bar: bool,
+    /// This window has OxyBrush's own title bar (made without the
+    /// system's): the menu bar then holds the title and window buttons,
+    /// and the window edges resize it. Set by the app when it makes the
+    /// window.
+    pub own_title_bar: bool,
+    /// Whether the window is maximized (for the maximize/restore button).
+    pub window_maximized: bool,
+    /// What the title bar asked the window to do this frame, for the app.
+    pub window_request: Option<crate::title_bar::WindowRequest>,
     /// The material a new tab starts with (Preferences > General).
     pub new_tab_material: crate::settings::NewTabMaterial,
     /// For a chosen new-tab material: the built-in one, and a custom matcap
@@ -1441,6 +1452,10 @@ impl Default for Editor {
             next_doc_id: 2,
             closed_tab_history: Vec::new(),
             restore_session: true,
+            system_title_bar: false,
+            own_title_bar: false,
+            window_maximized: false,
+            window_request: None,
             new_tab_material: crate::settings::NewTabMaterial::Current,
             new_tab_matcap: MatcapPreset::Terracotta,
             new_tab_custom_matcap: String::new(),
@@ -1937,6 +1952,7 @@ impl Editor {
             alpha_capture_size: self.capture_alpha_size,
             pieces_box_height: self.pieces_box_height,
             restore_session: self.restore_session,
+            system_title_bar: self.system_title_bar,
             session_files,
             session_active,
             new_tab_material: self.new_tab_material,
@@ -2236,6 +2252,7 @@ impl Editor {
         self.capture_alpha_size = s.alpha_capture_size;
         self.pieces_box_height = s.pieces_box_height;
         self.restore_session = s.restore_session;
+        self.system_title_bar = s.system_title_bar;
         self.new_tab_material = s.new_tab_material;
         self.new_tab_matcap = s.new_tab_matcap;
         self.new_tab_custom_matcap = s.new_tab_custom_matcap.clone();

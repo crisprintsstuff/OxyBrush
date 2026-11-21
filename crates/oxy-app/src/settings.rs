@@ -503,6 +503,11 @@ pub struct Settings {
     pub new_tab_matcap: MatcapPreset,
     /// For [`NewTabMaterial::Chosen`]: a custom matcap by name ("" for none).
     pub new_tab_custom_matcap: String,
+    /// Use the system's title bar, with the menus in a row under it,
+    /// instead of OxyBrush's own bar holding the menus and window buttons
+    /// (RFC 0028). Read when the window is made, so it applies at the next
+    /// start.
+    pub system_title_bar: bool,
 }
 
 /// What material a new tab starts with (Preferences > General).
@@ -1073,6 +1078,7 @@ impl Default for Settings {
             new_tab_material: NewTabMaterial::Current,
             new_tab_matcap: MatcapPreset::Terracotta,
             new_tab_custom_matcap: String::new(),
+            system_title_bar: false,
         }
     }
 }
@@ -1273,6 +1279,7 @@ impl Settings {
                 )
             }
             + &format!("restore_session = {}\nsession_active = {}\n", self.restore_session, self.session_active)
+            + &format!("system_title_bar = {}\n", self.system_title_bar)
             + &format!(
                 "new_tab_material = {}\nnew_tab_matcap = {}\nnew_tab_custom_matcap = {}\n",
                 self.new_tab_material.key(),
@@ -1423,6 +1430,7 @@ impl Settings {
                     }
                 }
                 "restore_session" => s.restore_session = v.parse().unwrap_or(s.restore_session),
+                "system_title_bar" => s.system_title_bar = v.parse().unwrap_or(s.system_title_bar),
                 "new_tab_material" => s.new_tab_material = NewTabMaterial::from_key(v).unwrap_or(s.new_tab_material),
                 "new_tab_matcap" => {
                     if let Some(m) = MatcapPreset::ALL.into_iter().find(|m| matcap_key(*m) == v) {
@@ -1890,8 +1898,10 @@ mod tests {
             new_tab_material: NewTabMaterial::Chosen,
             new_tab_matcap: MatcapPreset::Jade,
             new_tab_custom_matcap: "Crimson Wax".into(),
+            system_title_bar: true,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);
+        assert!(!Settings::default().system_title_bar, "OxyBrush's own title bar by default");
         // Duplicate session entries are dropped and capped at MAX_SESSION_FILES.
         let many_sessions: String = (0..80).map(|i| format!("session_file = /s{}.oxb\n", i % 70)).collect();
         assert_eq!(Settings::from_text(&many_sessions).session_files.len(), MAX_SESSION_FILES);

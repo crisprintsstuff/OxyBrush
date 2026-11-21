@@ -35,6 +35,7 @@ mod settings;
 mod snapshot;
 mod support;
 mod tips;
+mod title_bar;
 mod tube;
 mod tube_ui;
 mod ui;

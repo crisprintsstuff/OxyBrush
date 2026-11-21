@@ -607,7 +607,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         ui.ctx().all_styles_mut(|s| s.interaction.selectable_labels = selectable);
     }
 
+    let own_bar = ed.own_title_bar;
     egui::Panel::top("menu").show(ui, |ui| {
+        // With OxyBrush's own title bar (RFC 0028) the bar's empty part
+        // moves the window: an area under the menus, which take their
+        // clicks first.
+        let bar_sense = if own_bar { egui::Sense::click_and_drag() } else { egui::Sense::hover() };
+        let bar = ui.scope_builder(egui::UiBuilder::new().sense(bar_sense), |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             tips::menu(ui, "File", plain::FILE, |ui| {
                 tips::menu(ui, "New", plain::NEW, |ui| {
@@ -863,8 +869,25 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
+            if own_bar {
+                // The tabs, then empty space that moves the window, then
+                // the window buttons (RFC 0028).
+                ui.separator();
+                let reserved = crate::title_bar::buttons_width(ed) + crate::title_bar::MIN_DRAG + 64.0;
+                let width = (ui.available_width() - reserved).max(80.0);
+                tab_strip(ui, ed, width);
+                crate::title_bar::window_buttons(ui, ed);
+            }
         });
+        })
+        .response;
+        if own_bar {
+            crate::title_bar::bar_background(&bar, ed);
+        }
     });
+    if own_bar {
+        crate::title_bar::resize_edges(ui, ed);
+    }
 
     apply_arrangement(ui.ctx(), ed);
     tab_bar(ui, ed, &mut action);
@@ -1398,6 +1421,14 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
     tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's tabs at startup", plain::RESTORE_SESSION);
     new_tab_material_row(ui, ed);
+    if cfg!(not(target_os = "macos")) {
+        tips::check_plain(
+            ui,
+            &mut ed.system_title_bar,
+            "Use system title bar",
+            "On: the window uses your system's title bar, with the menus in a row under it. Off: the menus, the project name and the window buttons share one bar at the top. Takes effect the next time OxyBrush starts.",
+        );
+    }
     tips::check_plain(
         ui,
         &mut ed.remember_brushes,
@@ -2384,6 +2415,10 @@ fn edit_linear_color(ui: &mut Ui, color: &mut [f64; 3]) -> egui::Response {
 
 /// Tab bar showing open project documents across the top of the viewport.
 fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
+    // With OxyBrush's own title bar the tabs are in it (RFC 0028).
+    if ed.own_title_bar {
+        return;
+    }
     let frame = egui::Frame::new().fill(ui.visuals().window_fill).inner_margin(egui::Margin {
         left: 8,
         right: 8,
@@ -2393,207 +2428,205 @@ fn tab_bar(ui: &mut Ui, ed: &mut Editor, _action: &mut Option<UiAction>) {
 
     egui::Panel::top("tab_bar").frame(frame).show(ui, |ui| {
         ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+            let width = (ui.available_width() - 68.0).max(80.0);
+            tab_strip(ui, ed, width);
+        });
+    });
+}
 
-            let doc_count = ed.documents.len();
-            let mut switch_to = None;
-            let mut close_tab = None;
-            let mut moved_tab = None;
-            #[cfg(test)]
-            let mut test_tabs: Vec<(egui::Rect, egui::Rect)> = Vec::with_capacity(doc_count);
+/// The tabs, the list of open tabs and the new-tab button, laid out left
+/// to right in `ui`. The tabs scroll sideways past `scroll_max_w` points.
+fn tab_strip(ui: &mut Ui, ed: &mut Editor, scroll_max_w: f32) {
+    ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
 
-            // Collect file names for disambiguation
-            let titles: Vec<String> = (0..doc_count)
-                .map(|i| {
-                    let doc = &ed.documents[i];
-                    let base = doc.title();
-                    let is_dup = ed.documents.iter().enumerate().any(|(j, d)| j != i && d.title() == base);
-                    if let (true, Some(p)) = (is_dup, &doc.path) {
-                        let parent = p
-                            .parent()
-                            .and_then(|p| p.file_name())
-                            .map(|n| n.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        if !parent.is_empty() {
-                            return format!("{parent}/{base}");
-                        }
-                    }
-                    base
-                })
-                .collect();
+    let doc_count = ed.documents.len();
+    let mut switch_to = None;
+    let mut close_tab = None;
+    let mut moved_tab = None;
+    #[cfg(test)]
+    let mut test_tabs: Vec<(egui::Rect, egui::Rect)> = Vec::with_capacity(doc_count);
 
-            let scroll_max_w = (ui.available_width() - 68.0).max(80.0);
-            let scroll_source =
-                egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() };
-            egui::ScrollArea::horizontal().scroll_source(scroll_source).max_width(scroll_max_w).show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    for (i, title_text) in titles.iter().enumerate().take(doc_count) {
-                        let doc_id = ed.documents[i].id;
-                        let doc = &ed.documents[i];
-                        let is_active = i == ed.active_document;
-                        let is_dirty = doc.is_dirty();
-                        let has_job = doc.job.is_some() || ed.plugin_running_doc == Some(doc.id);
-                        let is_linked = doc.link.is_some() || doc.bridge.is_some();
-                        let job_label = doc.job.as_ref().map(|j| j.label.clone());
+    // Collect file names for disambiguation
+    let titles: Vec<String> = (0..doc_count)
+        .map(|i| {
+            let doc = &ed.documents[i];
+            let base = doc.title();
+            let is_dup = ed.documents.iter().enumerate().any(|(j, d)| j != i && d.title() == base);
+            if let (true, Some(p)) = (is_dup, &doc.path) {
+                let parent = p
+                    .parent()
+                    .and_then(|p| p.file_name())
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                if !parent.is_empty() {
+                    return format!("{parent}/{base}");
+                }
+            }
+            base
+        })
+        .collect();
 
-                        let dot = if is_dirty { "• " } else { "" };
-                        let link_mark = if is_linked { "⇄ " } else { "" };
-                        let job_mark = if has_job { " ⏳" } else { "" };
-                        let label_display = format!("{dot}{link_mark}{title_text}{job_mark}");
+    let scroll_source =
+        egui::scroll_area::ScrollSource { drag: egui::scroll_area::DragScroll::Never, ..Default::default() };
+    egui::ScrollArea::horizontal().scroll_source(scroll_source).max_width(scroll_max_w).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            for (i, title_text) in titles.iter().enumerate().take(doc_count) {
+                let doc_id = ed.documents[i].id;
+                let doc = &ed.documents[i];
+                let is_active = i == ed.active_document;
+                let is_dirty = doc.is_dirty();
+                let has_job = doc.job.is_some() || ed.plugin_running_doc == Some(doc.id);
+                let is_linked = doc.link.is_some() || doc.bridge.is_some();
+                let job_label = doc.job.as_ref().map(|j| j.label.clone());
 
-                        let mut tooltip = match &doc.path {
-                            Some(p) => p.display().to_string(),
-                            None => match &doc.bridge {
-                                Some(b) => format!("Linked to {}", b.app()),
-                                None => "Untitled project".to_string(),
-                            },
-                        };
-                        if doc.link.is_some() {
-                            tooltip.push_str("\nLinked to OxyCharacter");
-                        } else if doc.path.is_some()
-                            && let Some(b) = &doc.bridge
-                        {
-                            tooltip.push_str(&format!("\nLinked to {}", b.app()));
-                        }
-                        if ed.plugin_running_doc == Some(doc.id)
-                            && let Some(pname) = &ed.plugin_running
-                        {
-                            tooltip.push_str(&format!("\nPlugin: {pname}…"));
-                        }
-                        if let Some(jl) = &job_label {
-                            tooltip.push_str(&format!("\n{jl}…"));
-                        }
+                let dot = if is_dirty { "• " } else { "" };
+                let link_mark = if is_linked { "⇄ " } else { "" };
+                let job_mark = if has_job { " ⏳" } else { "" };
+                let label_display = format!("{dot}{link_mark}{title_text}{job_mark}");
 
-                        let bg = if is_active {
-                            ui.visuals().widgets.active.bg_fill
-                        } else {
-                            ui.visuals().widgets.inactive.bg_fill
-                        };
+                let mut tooltip = match &doc.path {
+                    Some(p) => p.display().to_string(),
+                    None => match &doc.bridge {
+                        Some(b) => format!("Linked to {}", b.app()),
+                        None => "Untitled project".to_string(),
+                    },
+                };
+                if doc.link.is_some() {
+                    tooltip.push_str("\nLinked to OxyCharacter");
+                } else if doc.path.is_some()
+                    && let Some(b) = &doc.bridge
+                {
+                    tooltip.push_str(&format!("\nLinked to {}", b.app()));
+                }
+                if ed.plugin_running_doc == Some(doc.id)
+                    && let Some(pname) = &ed.plugin_running
+                {
+                    tooltip.push_str(&format!("\nPlugin: {pname}…"));
+                }
+                if let Some(jl) = &job_label {
+                    tooltip.push_str(&format!("\n{jl}…"));
+                }
 
-                        ui.push_id(doc_id, |ui| {
-                            let frame_resp = egui::Frame::new()
-                                .fill(bg)
-                                .corner_radius(egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 })
-                                .inner_margin(egui::Margin { left: 8, right: 4, top: 4, bottom: 4 })
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
-                                        let text_color = if is_active {
-                                            ui.visuals().strong_text_color()
-                                        } else {
-                                            ui.visuals().text_color()
-                                        };
-                                        let mut rt = RichText::new(label_display).color(text_color);
-                                        if is_active {
-                                            rt = rt.strong();
-                                        }
-                                        ui.add(egui::Label::new(rt));
+                let bg =
+                    if is_active { ui.visuals().widgets.active.bg_fill } else { ui.visuals().widgets.inactive.bg_fill };
 
-                                        let close_resp = ui.small_button("×").on_hover_text("Close tab");
-                                        if close_resp.clicked() || close_resp.middle_clicked() {
-                                            close_tab = Some(i);
-                                        }
-                                        close_resp.rect
-                                    })
-                                    .inner
-                                });
-
-                            let tab_rect = frame_resp.response.rect;
-                            let close_rect = frame_resp.inner;
-                            let body_max_x = (close_rect.left() - 2.0).max(tab_rect.min.x);
-                            let body_rect =
-                                egui::Rect::from_min_max(tab_rect.min, egui::pos2(body_max_x, tab_rect.max.y));
-
-                            let tab_interact = ui
-                                .interact(
-                                    body_rect,
-                                    ui.make_persistent_id(("tab_body", doc_id)),
-                                    egui::Sense::click_and_drag(),
-                                )
-                                .on_hover_text(tooltip);
-
-                            if tab_interact.dragged() {
-                                tab_interact.dnd_set_drag_payload(i);
-                                ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-                            }
-
-                            if let Some(from) = egui::DragAndDrop::payload::<usize>(ui.ctx())
-                                && *from != i
-                                && ui.rect_contains_pointer(tab_rect)
-                            {
-                                let pointer = ui.ctx().pointer_interact_pos();
-                                let after = pointer.is_some_and(|p| p.x > tab_rect.center().x);
-                                let x = if after { tab_rect.right() + 1.0 } else { tab_rect.left() - 1.0 };
-                                let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
-                                ui.painter().vline(x, tab_rect.y_range(), stroke);
-                                if ui.ctx().input(|inp| inp.pointer.any_released()) {
-                                    let mut to = if after { i + 1 } else { i };
-                                    if *from < to {
-                                        to -= 1;
-                                    }
-                                    if *from != to {
-                                        moved_tab = Some((*from, to));
-                                    }
+                ui.push_id(doc_id, |ui| {
+                    let frame_resp = egui::Frame::new()
+                        .fill(bg)
+                        .corner_radius(egui::CornerRadius { nw: 4, ne: 4, sw: 0, se: 0 })
+                        .inner_margin(egui::Margin { left: 8, right: 4, top: 4, bottom: 4 })
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(4.0, 0.0);
+                                let text_color = if is_active {
+                                    ui.visuals().strong_text_color()
+                                } else {
+                                    ui.visuals().text_color()
+                                };
+                                let mut rt = RichText::new(label_display).color(text_color);
+                                if is_active {
+                                    rt = rt.strong();
                                 }
-                            }
+                                ui.add(egui::Label::new(rt));
 
-                            if tab_interact.clicked() {
-                                switch_to = Some(i);
-                            }
-                            if tab_interact.middle_clicked() {
-                                close_tab = Some(i);
-                            }
-
-                            #[cfg(test)]
-                            test_tabs.push((body_rect, close_rect));
+                                let close_resp = ui.small_button("×").on_hover_text("Close tab");
+                                if close_resp.clicked() || close_resp.middle_clicked() {
+                                    close_tab = Some(i);
+                                }
+                                close_resp.rect
+                            })
+                            .inner
                         });
-                    }
-                });
-            });
 
-            // Tab overflow menu when multiple tabs exist, pinned to the right of the scroll area
-            if doc_count > 1 {
-                ui.menu_button("»", |ui| {
-                    for (idx, title) in titles.iter().enumerate() {
-                        let is_active = idx == ed.active_document;
-                        let is_dirty = ed.documents[idx].is_dirty();
-                        let dot = if is_dirty { "• " } else { "" };
-                        let text = format!("{dot}{title}");
-                        let label = if is_active { RichText::new(text).strong() } else { RichText::new(text) };
-                        if ui.selectable_label(is_active, label).clicked() {
-                            switch_to = Some(idx);
-                            ui.close();
+                    let tab_rect = frame_resp.response.rect;
+                    let close_rect = frame_resp.inner;
+                    let body_max_x = (close_rect.left() - 2.0).max(tab_rect.min.x);
+                    let body_rect = egui::Rect::from_min_max(tab_rect.min, egui::pos2(body_max_x, tab_rect.max.y));
+
+                    let tab_interact = ui
+                        .interact(body_rect, ui.make_persistent_id(("tab_body", doc_id)), egui::Sense::click_and_drag())
+                        .on_hover_text(tooltip);
+
+                    if tab_interact.dragged() {
+                        tab_interact.dnd_set_drag_payload(i);
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+
+                    if let Some(from) = egui::DragAndDrop::payload::<usize>(ui.ctx())
+                        && *from != i
+                        && ui.rect_contains_pointer(tab_rect)
+                    {
+                        let pointer = ui.ctx().pointer_interact_pos();
+                        let after = pointer.is_some_and(|p| p.x > tab_rect.center().x);
+                        let x = if after { tab_rect.right() + 1.0 } else { tab_rect.left() - 1.0 };
+                        let stroke = EStroke::new(2.5, ui.visuals().selection.stroke.color);
+                        ui.painter().vline(x, tab_rect.y_range(), stroke);
+                        if ui.ctx().input(|inp| inp.pointer.any_released()) {
+                            let mut to = if after { i + 1 } else { i };
+                            if *from < to {
+                                to -= 1;
+                            }
+                            if *from != to {
+                                moved_tab = Some((*from, to));
+                            }
                         }
                     }
-                })
-                .response
-                .on_hover_text("Open tabs list");
-            }
 
-            // "+" New Tab button, pinned outside the scroll area
-            let add_btn = ui.button("+").on_hover_text("New tab (Ctrl+T)");
-            if add_btn.clicked() {
-                ed.add_tab("sphere");
-            }
+                    if tab_interact.clicked() {
+                        switch_to = Some(i);
+                    }
+                    if tab_interact.middle_clicked() {
+                        close_tab = Some(i);
+                    }
 
-            #[cfg(test)]
-            ui.ctx().data_mut(|d| {
-                d.insert_temp(egui::Id::unique("tab_bar_test_tabs"), test_tabs);
-                d.insert_temp(egui::Id::unique("tab_bar_test_plus"), add_btn.rect);
-            });
-
-            if let Some((from, to)) = moved_tab {
-                ed.reorder_tab(from, to);
-            }
-
-            if let Some(idx) = switch_to {
-                ed.switch_tab(idx);
-            }
-            if let Some(idx) = close_tab {
-                ed.request_close_tab(idx);
+                    #[cfg(test)]
+                    test_tabs.push((body_rect, close_rect));
+                });
             }
         });
     });
+
+    // Tab overflow menu when multiple tabs exist, pinned to the right of the scroll area
+    if doc_count > 1 {
+        ui.menu_button("»", |ui| {
+            for (idx, title) in titles.iter().enumerate() {
+                let is_active = idx == ed.active_document;
+                let is_dirty = ed.documents[idx].is_dirty();
+                let dot = if is_dirty { "• " } else { "" };
+                let text = format!("{dot}{title}");
+                let label = if is_active { RichText::new(text).strong() } else { RichText::new(text) };
+                if ui.selectable_label(is_active, label).clicked() {
+                    switch_to = Some(idx);
+                    ui.close();
+                }
+            }
+        })
+        .response
+        .on_hover_text("Open tabs list");
+    }
+
+    // "+" New Tab button, pinned outside the scroll area
+    let add_btn = ui.button("+").on_hover_text("New tab (Ctrl+T)");
+    if add_btn.clicked() {
+        ed.add_tab("sphere");
+    }
+
+    #[cfg(test)]
+    ui.ctx().data_mut(|d| {
+        d.insert_temp(egui::Id::unique("tab_bar_test_tabs"), test_tabs);
+        d.insert_temp(egui::Id::unique("tab_bar_test_plus"), add_btn.rect);
+    });
+
+    if let Some((from, to)) = moved_tab {
+        ed.reorder_tab(from, to);
+    }
+
+    if let Some(idx) = switch_to {
+        ed.switch_tab(idx);
+    }
+    if let Some(idx) = close_tab {
+        ed.request_close_tab(idx);
+    }
 }
 
 /// Quick-access bar under the menus: undo, brush size, symmetry, levels, view.
@@ -8184,6 +8217,114 @@ mod tests {
             });
             out.textures_delta.clear();
         }
+    }
+
+    /// Run one frame per entry of `frames`, each with those input events.
+    fn frames_with(ed: &mut Editor, ctx: &egui::Context, frames: Vec<Vec<egui::Event>>) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let start = ctx.input(|i| i.time) + 1.0;
+        for (k, events) in frames.into_iter().enumerate() {
+            let raw = egui::RawInput {
+                screen_rect: Some(screen),
+                events,
+                time: Some(start + k as f64 * 0.05),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+            });
+            out.textures_delta.clear();
+        }
+    }
+
+    fn primary(at: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn the_own_title_bar_moves_resizes_and_closes_the_window() {
+        use crate::title_bar::{Edge, WindowRequest};
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.own_title_bar = true;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let file = widgets_labelled(&mut ed, &ctx, "File");
+        assert_eq!(file.len(), 1, "{file:?}");
+        let empty = egui::pos2(1000.0, file[0].center().y);
+        // The tabs are in the same bar, after the menus, and work there.
+        let plus = widgets_labelled(&mut ed, &ctx, "+");
+        assert!(
+            plus.iter().any(|r| (r.center().y - file[0].center().y).abs() < 6.0 && r.left() > file[0].right()),
+            "the new-tab button is in the menu bar: {plus:?} vs {file:?}"
+        );
+        let plus = *plus.iter().find(|r| (r.center().y - file[0].center().y).abs() < 6.0).unwrap();
+        assert!(plus.right() < empty.x, "room to drag after the tabs");
+        let tabs = ed.documents.len();
+        click_with(&mut ed, &ctx, plus.center(), egui::Modifiers::NONE, 1);
+        assert_eq!(ed.documents.len(), tabs + 1, "+ in the bar opens a tab");
+        assert_eq!(ed.window_request.take(), None, "and doesn't move the window");
+
+        // Dragging the empty bar moves the window; a menu takes its own click.
+        frames_with(
+            &mut ed,
+            &ctx,
+            vec![
+                vec![egui::Event::PointerMoved(empty)],
+                vec![primary(empty, true)],
+                vec![egui::Event::PointerMoved(empty + egui::vec2(30.0, 5.0))],
+                vec![egui::Event::PointerMoved(empty + egui::vec2(60.0, 10.0))],
+            ],
+        );
+        assert_eq!(ed.window_request.take(), Some(WindowRequest::Drag));
+        frames_with(&mut ed, &ctx, vec![vec![primary(empty + egui::vec2(60.0, 10.0), false)], vec![]]);
+        ed.window_request = None;
+        click_with(&mut ed, &ctx, file[0].center(), egui::Modifiers::NONE, 1);
+        assert_eq!(ed.window_request.take(), None, "a click on File opens the menu, not a window drag");
+        click_with(&mut ed, &ctx, file[0].center(), egui::Modifiers::NONE, 1);
+
+        // Double-click the empty bar: maximize.
+        click_with(&mut ed, &ctx, empty, egui::Modifiers::NONE, 2);
+        assert_eq!(ed.window_request.take(), Some(WindowRequest::ToggleMaximize));
+
+        // The window buttons.
+        for (label, want) in [
+            ("Minimize", WindowRequest::Minimize),
+            ("Maximize", WindowRequest::ToggleMaximize),
+            ("Close", WindowRequest::Close),
+        ] {
+            let at = widgets_labelled(&mut ed, &ctx, label);
+            assert_eq!(at.len(), 1, "{label}: {at:?}");
+            assert!(at[0].right() > 1300.0, "{label} is at the right end of the bar: {at:?}");
+            click_with(&mut ed, &ctx, at[0].center(), egui::Modifiers::NONE, 1);
+            assert_eq!(ed.window_request.take(), Some(want), "{label}");
+        }
+
+        // A press on the bottom edge or a corner resizes, even over the model.
+        for (at, edge) in [(egui::pos2(720.0, 898.0), Edge::South), (egui::pos2(1438.0, 898.0), Edge::SouthEast)] {
+            frames_with(&mut ed, &ctx, vec![vec![egui::Event::PointerMoved(at)], vec![primary(at, true)]]);
+            assert_eq!(ed.window_request.take(), Some(WindowRequest::Resize(edge)), "{at:?}");
+            frames_with(&mut ed, &ctx, vec![vec![primary(at, false)], vec![]]);
+        }
+
+        // Maximized: the button restores, and the edges don't resize.
+        ed.window_maximized = true;
+        assert_eq!(widgets_labelled(&mut ed, &ctx, "Restore").len(), 1);
+        let at = egui::pos2(720.0, 898.0);
+        frames_with(&mut ed, &ctx, vec![vec![egui::Event::PointerMoved(at)], vec![primary(at, true)]]);
+        assert_eq!(ed.window_request.take(), None);
+        frames_with(&mut ed, &ctx, vec![vec![primary(at, false)], vec![]]);
+
+        // With the system title bar the menu bar is only menus.
+        ed.own_title_bar = false;
+        assert!(widgets_labelled(&mut ed, &ctx, "Close").is_empty());
+        click_with(&mut ed, &ctx, empty, egui::Modifiers::NONE, 2);
+        assert_eq!(ed.window_request.take(), None);
     }
 
     #[test]
