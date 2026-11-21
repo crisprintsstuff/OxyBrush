@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **New tabs keep your material.** A new tab now starts with the material (matcap) of the tab you were in, instead of the default one. **Preferences > General > New tabs start with** can also choose the default material, or a material you pick there (built in or one you loaded).
+
 ### Changed
 
 - **The Parts Bin is now the Recipe Box**, and the strokes you save in it are **recipes**: **Save as recipe…** in the Strokes window, the Recipe Box drawer beside the brush shelf, and View > Recipe Box. The box now says what it's for, a library of reusable sculpted details to drag onto any model, instead of counting strokes. Only the names and wording changed: saved libraries and projects with placed recipes open as before.

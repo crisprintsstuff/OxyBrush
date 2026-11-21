@@ -1048,6 +1048,13 @@ pub struct Editor {
     pub closed_tab_history: Vec<PathBuf>,
     /// Reopen previously open saved project tabs on startup (RFC 0027).
     pub restore_session: bool,
+    /// The material a new tab starts with (Preferences > General).
+    pub new_tab_material: crate::settings::NewTabMaterial,
+    /// For a chosen new-tab material: the built-in one, and a custom matcap
+    /// by name ("" for none; a name that isn't loaded falls back to the
+    /// built-in one).
+    pub new_tab_matcap: MatcapPreset,
+    pub new_tab_custom_matcap: String,
     /// Monotonic counter bumped when switching/creating tabs for LRU undo eviction.
     pub(crate) tab_use_clock: u64,
     /// Process-wide undo memory budget across all open tabs (4 GiB default).
@@ -1433,6 +1440,9 @@ impl Default for Editor {
             next_doc_id: 2,
             closed_tab_history: Vec::new(),
             restore_session: true,
+            new_tab_material: crate::settings::NewTabMaterial::Current,
+            new_tab_matcap: MatcapPreset::Terracotta,
+            new_tab_custom_matcap: String::new(),
             tab_use_clock: 1,
             shared_undo_cap_bytes: 4usize << 30,
             piece_clipboard: Vec::new(),
@@ -1928,6 +1938,9 @@ impl Editor {
             restore_session: self.restore_session,
             session_files,
             session_active,
+            new_tab_material: self.new_tab_material,
+            new_tab_matcap: self.new_tab_matcap,
+            new_tab_custom_matcap: self.new_tab_custom_matcap.clone(),
         }
     }
 
@@ -2222,6 +2235,9 @@ impl Editor {
         self.capture_alpha_size = s.alpha_capture_size;
         self.pieces_box_height = s.pieces_box_height;
         self.restore_session = s.restore_session;
+        self.new_tab_material = s.new_tab_material;
+        self.new_tab_matcap = s.new_tab_matcap;
+        self.new_tab_custom_matcap = s.new_tab_custom_matcap.clone();
         if !s.remember_brushes {
             return;
         }
@@ -4378,6 +4394,22 @@ impl Editor {
         self.add_tab(which)
     }
 
+    /// The material a new tab starts with, from Preferences > General: the
+    /// current tab's, the default one, or the one chosen there.
+    pub fn new_tab_material(&self) -> (MatcapPreset, Option<usize>) {
+        use crate::settings::NewTabMaterial;
+        match self.new_tab_material {
+            NewTabMaterial::Current => (self.matcap, self.custom_matcap),
+            NewTabMaterial::Default => (MatcapPreset::Terracotta, None),
+            NewTabMaterial::Chosen => {
+                let custom = (!self.new_tab_custom_matcap.is_empty())
+                    .then(|| self.custom_matcaps.iter().position(|m| m.name == self.new_tab_custom_matcap))
+                    .flatten();
+                (self.new_tab_matcap, custom)
+            }
+        }
+    }
+
     /// Always open and activate a fresh document tab without reusing the active
     /// starter tab (used by the `+` tab button, New tab, and `Ctrl+T`).
     pub fn add_tab(&mut self, which: &str) -> usize {
@@ -4402,8 +4434,10 @@ impl Editor {
             c
         };
         self.tab_use_clock += 1;
+        let material = self.new_tab_material();
         let mut doc = Document::new(doc_id, scene, camera);
         doc.last_used = self.tab_use_clock;
+        (doc.matcap, doc.custom_matcap) = material;
         self.documents.push(doc);
         self.active_document = self.documents.len() - 1;
         self.status = status;
@@ -4469,8 +4503,10 @@ impl Editor {
             let mut camera = Camera { yaw: 0.0, pitch: 0.15, ..Default::default() };
             camera.frame(scene.bounds());
             self.tab_use_clock += 1;
+            let material = self.new_tab_material();
             let mut doc = Document::new(next_id, scene, camera);
             doc.last_used = self.tab_use_clock;
+            (doc.matcap, doc.custom_matcap) = material;
             self.documents[0] = doc;
             self.active_document = 0;
             self.show_welcome = true;
@@ -13612,6 +13648,7 @@ mod tests {
             restore_session: false,
             session_files: Vec::new(),
             session_active: 0,
+            ..Settings::default()
         };
         // The brush as the editor captures it: a bigger Clay brush.
         let base = Editor::default();
@@ -14628,6 +14665,55 @@ mod tests {
         e.undo();
         assert_eq!(e.scene.pieces.len(), 1);
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_new_tab_starts_with_the_material_preferences_say() {
+        use crate::matcaps::CustomMatcap;
+        use crate::settings::NewTabMaterial;
+        let px = |v: u8| Arc::new(vec![v; (oxy_render::MATCAP_SIZE * oxy_render::MATCAP_SIZE * 4) as usize]);
+        let mut e = Editor::default();
+        e.show_welcome = false;
+        // By default a new tab keeps the current tab's material.
+        assert_eq!(e.new_tab_material, NewTabMaterial::Current);
+        e.matcap = MatcapPreset::Jade;
+        e.add_tab("sphere");
+        assert_eq!((e.matcap, e.custom_matcap), (MatcapPreset::Jade, None), "same as the tab you were in");
+        e.add_custom_matcap(CustomMatcap { name: "Wax".into(), pixels: px(10) });
+        assert!(e.custom_matcap.is_some());
+        e.add_tab("cube");
+        assert_eq!(e.material_label(), "Wax", "a custom matcap carries over too");
+        // Default material: as before this option.
+        e.new_tab_material = NewTabMaterial::Default;
+        e.add_tab("sphere");
+        assert_eq!((e.matcap, e.custom_matcap), (MatcapPreset::Terracotta, None));
+        // A chosen one: built in, then custom by name.
+        e.new_tab_material = NewTabMaterial::Chosen;
+        e.new_tab_matcap = MatcapPreset::GreyClay;
+        e.add_tab("sphere");
+        assert_eq!((e.matcap, e.custom_matcap), (MatcapPreset::GreyClay, None));
+        e.new_tab_custom_matcap = "Wax".into();
+        e.add_tab("sphere");
+        assert_eq!(e.material_label(), "Wax");
+        // A custom name that isn't loaded falls back to the built-in choice.
+        e.new_tab_custom_matcap = "Gone".into();
+        e.add_tab("sphere");
+        assert_eq!((e.matcap, e.custom_matcap), (MatcapPreset::GreyClay, None));
+        // The other tabs keep theirs.
+        assert_eq!(e.documents[0].matcap, MatcapPreset::Jade);
+        // Closing the last tab starts a fresh one with the chosen material too.
+        while e.documents.len() > 1 {
+            e.perform_close_tab(0);
+        }
+        e.new_tab_custom_matcap.clear();
+        e.perform_close_tab(0);
+        assert_eq!(e.matcap, MatcapPreset::GreyClay);
+        // Saved with the settings.
+        let s = e.settings();
+        assert_eq!((s.new_tab_material, s.new_tab_matcap), (NewTabMaterial::Chosen, MatcapPreset::GreyClay));
+        let mut f = Editor::default();
+        f.apply_settings(&s);
+        assert_eq!(f.new_tab_material, NewTabMaterial::Chosen);
     }
 
     #[test]
