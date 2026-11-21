@@ -404,6 +404,8 @@ pub struct Settings {
     pub recent_files: Vec<PathBuf>,
     /// Active visual theme preset.
     pub theme: ThemePreset,
+    /// Parts of the look taken from other themes.
+    pub theme_mix: ThemeMix,
     /// Accent color preset.
     pub accent: AccentPreset,
     /// Custom accent RGB when `accent == AccentPreset::Custom`.
@@ -726,6 +728,115 @@ impl ThemePreset {
     }
 }
 
+/// How sliders, buttons and tiles are drawn, independent of the colors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControlStyle {
+    /// egui's own: thin rails with a round handle.
+    Standard,
+    /// Studio: bar sliders with a fill and a thin handle, squarer corners.
+    StudioBars,
+    /// Sculptor: concentric clay sliders, card brush tiles, silver-clay icons.
+    SculptorClay,
+}
+
+impl ControlStyle {
+    pub const ALL: [ControlStyle; 3] = [ControlStyle::Standard, ControlStyle::StudioBars, ControlStyle::SculptorClay];
+
+    /// The controls theme `t` comes with.
+    pub fn of(t: ThemePreset) -> Self {
+        match t {
+            ThemePreset::Studio => ControlStyle::StudioBars,
+            ThemePreset::Sculptor => ControlStyle::SculptorClay,
+            _ => ControlStyle::Standard,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ControlStyle::Standard => "Standard",
+            ControlStyle::StudioBars => "Studio bars",
+            ControlStyle::SculptorClay => "Sculptor clay",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ControlStyle::Standard => "standard",
+            ControlStyle::StudioBars => "studio",
+            ControlStyle::SculptorClay => "sculptor",
+        }
+    }
+}
+
+/// The shadow under windows and menus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowStyle {
+    /// egui's own.
+    Standard,
+    /// Studio: tight and faint, windows sit just off the panels.
+    Studio,
+    /// Midnight: soft and wide, windows float.
+    Midnight,
+}
+
+impl ShadowStyle {
+    pub const ALL: [ShadowStyle; 3] = [ShadowStyle::Standard, ShadowStyle::Studio, ShadowStyle::Midnight];
+
+    /// The shadows theme `t` comes with.
+    pub fn of(t: ThemePreset) -> Self {
+        match t {
+            ThemePreset::Studio => ShadowStyle::Studio,
+            ThemePreset::Midnight => ShadowStyle::Midnight,
+            _ => ShadowStyle::Standard,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ShadowStyle::Standard => "Standard",
+            ShadowStyle::Studio => "Studio (tight)",
+            ShadowStyle::Midnight => "Midnight (soft, wide)",
+        }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            ShadowStyle::Standard => "standard",
+            ShadowStyle::Studio => "studio",
+            ShadowStyle::Midnight => "midnight",
+        }
+    }
+}
+
+/// Parts of the look taken from another theme than the chosen one (Theme
+/// window > Mix). Each `None` follows the theme.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ThemeMix {
+    /// Panel, window, text and control colors.
+    pub colors: Option<ThemePreset>,
+    pub controls: Option<ControlStyle>,
+    pub shadows: Option<ShadowStyle>,
+}
+
+impl ThemeMix {
+    /// The theme whose colors are shown with theme `t`.
+    pub fn colors(&self, t: ThemePreset) -> ThemePreset {
+        self.colors.unwrap_or(t)
+    }
+
+    pub fn controls(&self, t: ThemePreset) -> ControlStyle {
+        self.controls.unwrap_or(ControlStyle::of(t))
+    }
+
+    pub fn shadows(&self, t: ThemePreset) -> ShadowStyle {
+        self.shadows.unwrap_or(ShadowStyle::of(t))
+    }
+
+    pub fn is_mixed(&self) -> bool {
+        *self != ThemeMix::default()
+    }
+}
+
 /// Highlight and selection accent color.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AccentPreset {
@@ -1032,6 +1143,7 @@ impl Default for Settings {
             focal_mm: oxy_render::default_focal_mm(),
             recent_files: Vec::new(),
             theme: ThemePreset::Graphite,
+            theme_mix: ThemeMix::default(),
             accent: AccentPreset::Terracotta,
             custom_accent: [0xE0, 0x7A, 0x4F],
             corner_style: CornerStyle::Rounded,
@@ -1281,6 +1393,12 @@ impl Settings {
             + &format!("restore_session = {}\nsession_active = {}\n", self.restore_session, self.session_active)
             + &format!("system_title_bar = {}\n", self.system_title_bar)
             + &format!(
+                "theme_colors = {}\ntheme_controls = {}\ntheme_shadows = {}\n",
+                self.theme_mix.colors.map_or("", |t| t.key()),
+                self.theme_mix.controls.map_or("", |c| c.key()),
+                self.theme_mix.shadows.map_or("", |c| c.key())
+            )
+            + &format!(
                 "new_tab_material = {}\nnew_tab_matcap = {}\nnew_tab_custom_matcap = {}\n",
                 self.new_tab_material.key(),
                 matcap_key(self.new_tab_matcap),
@@ -1470,6 +1588,9 @@ impl Settings {
                 "update_skip" if v.is_empty() || oxy_update::Version::parse(v).is_some() => {
                     s.update_skip = v.to_owned();
                 }
+                "theme_colors" => s.theme_mix.colors = ThemePreset::from_key(v),
+                "theme_controls" => s.theme_mix.controls = ControlStyle::ALL.into_iter().find(|c| c.key() == v),
+                "theme_shadows" => s.theme_mix.shadows = ShadowStyle::ALL.into_iter().find(|c| c.key() == v),
                 "theme" => {
                     let v = if v == "zbrush_classic" { "matte" } else { v };
                     if let Some(t) = ThemePreset::from_key(v) {
@@ -1898,6 +2019,11 @@ mod tests {
             new_tab_material: NewTabMaterial::Chosen,
             new_tab_matcap: MatcapPreset::Jade,
             new_tab_custom_matcap: "Crimson Wax".into(),
+            theme_mix: ThemeMix {
+                colors: Some(ThemePreset::Graphite),
+                controls: None,
+                shadows: Some(ShadowStyle::Studio),
+            },
             system_title_bar: true,
         };
         assert_eq!(Settings::from_text(&s.to_text()), s);

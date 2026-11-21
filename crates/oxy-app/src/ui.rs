@@ -425,6 +425,7 @@ pub fn install_fonts(ctx: &egui::Context) {
 pub fn apply_theme(
     ctx: &egui::Context,
     theme: ThemePreset,
+    mix: crate::settings::ThemeMix,
     accent: AccentPreset,
     custom_accent: [u8; 3],
     corner_style: CornerStyle,
@@ -437,7 +438,12 @@ pub fn apply_theme(
     ui_tint_intensity: f32,
     ui_brightness: f32,
 ) {
+    use crate::settings::{ControlStyle, ShadowStyle};
     let m = metrics(layout);
+    // Each part of the look can come from another theme (Theme > Mix).
+    let controls = mix.controls(theme);
+    let shadows = mix.shadows(theme);
+    let theme = mix.colors(theme);
     let is_high_contrast = high_contrast || theme == ThemePreset::HighContrast;
     let accent_rgb = accent.rgb(custom_accent);
     let accent_color = Color32::from_rgb(accent_rgb[0], accent_rgb[1], accent_rgb[2]);
@@ -467,7 +473,7 @@ pub fn apply_theme(
 
     // Studio is a little squarer than the other themes at the same corner
     // style (see `widgets::STUDIO_ROUNDING`).
-    let studio = theme == ThemePreset::Studio && !is_high_contrast;
+    let studio = controls == ControlStyle::StudioBars && !is_high_contrast;
     let corner = |r: f32| {
         let r = if studio { (r * crate::widgets::STUDIO_ROUNDING).round() } else { r };
         egui::CornerRadius::same(r.min(255.0) as u8)
@@ -502,7 +508,7 @@ pub fn apply_theme(
         v.widgets.hovered.bg_stroke = EStroke::new(1.0, accent_color.linear_multiply(0.7));
         v.widgets.active.weak_bg_fill = accent_color.linear_multiply(0.6);
         v.widgets.active.bg_fill = accent_color;
-        if theme == ThemePreset::Studio {
+        if controls == ControlStyle::StudioBars {
             // Bar sliders: a dark bar, a quiet fill up to the value and a thin
             // handle that turns to the accent while hovered or dragged. The
             // accent otherwise marks only what is selected or active.
@@ -513,23 +519,33 @@ pub fn apply_theme(
             v.widgets.inactive.bg_fill = Color32::from_gray(38);
             v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_gray(46));
             v.widgets.hovered.bg_fill = accent_color.linear_multiply(0.85);
+        }
+        if theme == ThemePreset::Studio {
             v.widgets.open.bg_stroke = EStroke::new(1.0, Color32::from_gray(64));
             v.weak_text_color = Some(Color32::from_gray(140));
-            // A tight, faint shadow: windows and menus sit just off the
-            // panels rather than floating above them.
-            let shadow = egui::Shadow { offset: [0, 2], blur: 6, spread: 0, color: Color32::from_black_alpha(70) };
-            v.window_shadow = shadow;
-            v.popup_shadow = egui::Shadow { offset: [0, 1], blur: 4, ..shadow };
         }
         if theme == ThemePreset::Midnight {
-            // Glass look: every control has a thin light-blue rim, and windows
-            // and menus float on a soft, wide shadow.
+            // Glass look: every control has a thin light-blue rim.
             v.widgets.inactive.bg_stroke = EStroke::new(1.0, Color32::from_rgb(46, 74, 110));
             v.widgets.open.bg_stroke = EStroke::new(1.0, Color32::from_rgb(58, 92, 134));
             v.weak_text_color = Some(Color32::from_rgb(143, 160, 184));
-            let shadow = egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(150) };
-            v.window_shadow = shadow;
-            v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, ..shadow };
+        }
+        match shadows {
+            // A tight, faint shadow: windows and menus sit just off the
+            // panels rather than floating above them.
+            ShadowStyle::Studio => {
+                let shadow = egui::Shadow { offset: [0, 2], blur: 6, spread: 0, color: Color32::from_black_alpha(70) };
+                v.window_shadow = shadow;
+                v.popup_shadow = egui::Shadow { offset: [0, 1], blur: 4, ..shadow };
+            }
+            // Windows and menus float on a soft, wide shadow.
+            ShadowStyle::Midnight => {
+                let shadow =
+                    egui::Shadow { offset: [0, 10], blur: 28, spread: 0, color: Color32::from_black_alpha(150) };
+                v.window_shadow = shadow;
+                v.popup_shadow = egui::Shadow { offset: [0, 6], blur: 18, ..shadow };
+            }
+            ShadowStyle::Standard => {}
         }
     }
     // A custom button color replaces the theme's fill for buttons and other
@@ -556,8 +572,8 @@ pub fn apply_theme(
     }
     install_fonts(ctx);
     ctx.set_visuals(v);
-    crate::widgets::set_studio_style(theme == ThemePreset::Studio && !is_high_contrast);
-    crate::widgets::set_sculptor_style(theme == ThemePreset::Sculptor && !is_high_contrast);
+    crate::widgets::set_studio_style(controls == ControlStyle::StudioBars && !is_high_contrast);
+    crate::widgets::set_sculptor_style(controls == ControlStyle::SculptorClay && !is_high_contrast);
     ctx.all_styles_mut(|s| {
         s.interaction.show_tooltips_only_when_still = false;
         s.interaction.tooltip_delay = 0.2;
@@ -566,7 +582,7 @@ pub fn apply_theme(
         s.spacing.button_padding = m.button_padding;
         s.spacing.interact_size.y = m.interact_height;
         s.spacing.slider_width = m.slider_width;
-        if (theme == ThemePreset::Studio || theme == ThemePreset::Sculptor) && !is_high_contrast {
+        if controls != ControlStyle::Standard && !is_high_contrast {
             // A bar as tall as a value box, rather than a thin line.
             s.spacing.slider_rail_height = (m.interact_height - 6.0).max(12.0);
         }
@@ -1848,6 +1864,7 @@ const LOOKS: [Look; 4] = [
 
 fn apply_look(ed: &mut Editor, look: &Look) {
     ed.theme = look.theme;
+    ed.theme_mix = Default::default();
     ed.high_contrast = false;
     ed.accent = look.accent;
     ed.corner_style = look.corners;
@@ -1929,6 +1946,7 @@ fn theme_tab_themes(ui: &mut Ui, ed: &mut Editor) {
             let selected = if ed.high_contrast { t == ThemePreset::HighContrast } else { ed.theme == t };
             if theme_card(ui, ed, t, selected).clicked() {
                 ed.theme = t;
+                ed.theme_mix = Default::default();
                 ed.high_contrast = t == ThemePreset::HighContrast;
                 ed.status = format!("Theme: {}", theme_name(t));
             }
@@ -1937,6 +1955,8 @@ fn theme_tab_themes(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
+    ui.add_space(8.0);
+    theme_mix_controls(ui, ed);
     ui.add_space(8.0);
     ui.label(RichText::new("Looks").strong());
     ui.label(
@@ -1951,6 +1971,54 @@ fn theme_tab_themes(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
+}
+
+/// Theme > Mix: take the colors, the controls or the shadows from another
+/// theme than the one chosen above.
+fn theme_mix_controls(ui: &mut Ui, ed: &mut Editor) {
+    use crate::settings::{ControlStyle, ShadowStyle};
+    ui.label(RichText::new("Mix").strong());
+    ui.label(
+        RichText::new("Take each part of the look from any theme. Choosing a theme above starts again from it.")
+            .weak()
+            .small(),
+    );
+    let same = format!("Same as theme ({})", theme_name(ed.theme));
+    egui::Grid::new("theme_mix").num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
+        ui.label("Colors").on_hover_text("Panels, windows, text and buttons.");
+        let shown = ed.theme_mix.colors.map_or(same.clone(), |t| theme_name(t).to_owned());
+        egui::ComboBox::from_id_salt("mix_colors").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut ed.theme_mix.colors, None, &same);
+            for t in ThemePreset::ALL {
+                ui.selectable_value(&mut ed.theme_mix.colors, Some(t), theme_name(t));
+            }
+        });
+        ui.end_row();
+
+        ui.label("Controls")
+            .on_hover_text("How sliders, buttons and brush tiles are drawn: Studio's bars, or Sculptor's clay sliders, card tiles and silver icons.");
+        let shown = ed.theme_mix.controls.map_or(same.clone(), |c| c.label().to_owned());
+        egui::ComboBox::from_id_salt("mix_controls").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut ed.theme_mix.controls, None, &same);
+            for c in ControlStyle::ALL {
+                ui.selectable_value(&mut ed.theme_mix.controls, Some(c), c.label());
+            }
+        });
+        ui.end_row();
+
+        ui.label("Shadows").on_hover_text("The shadow under windows and menus.");
+        let shown = ed.theme_mix.shadows.map_or(same.clone(), |c| c.label().to_owned());
+        egui::ComboBox::from_id_salt("mix_shadows").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut ed.theme_mix.shadows, None, &same);
+            for c in ShadowStyle::ALL {
+                ui.selectable_value(&mut ed.theme_mix.shadows, Some(c), c.label());
+            }
+        });
+        ui.end_row();
+    });
+    if ui.add_enabled(ed.theme_mix.is_mixed(), egui::Button::new("Clear mix")).clicked() {
+        ed.theme_mix = Default::default();
+    }
 }
 
 fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
@@ -2254,7 +2322,7 @@ fn theme_tab_layout_scale(ui: &mut Ui, ed: &mut Editor) {
 /// matching `apply_theme`.
 fn normal_rail_height(ed: &Editor) -> f32 {
     let m = metrics(ed.layout);
-    let bar_style = (ed.theme == ThemePreset::Studio || ed.theme == ThemePreset::Sculptor) && !ed.high_contrast;
+    let bar_style = ed.theme_mix.controls(ed.theme) != crate::settings::ControlStyle::Standard && !ed.high_contrast;
     let mut h = if bar_style {
         (m.interact_height - 6.0).max(12.0)
     } else {
@@ -7874,6 +7942,7 @@ mod tests {
         apply_theme(
             ctx,
             if high_contrast { ThemePreset::HighContrast } else { ThemePreset::Graphite },
+            Default::default(),
             AccentPreset::Terracotta,
             [0xE0, 0x7A, 0x4F],
             CornerStyle::Rounded,
@@ -8632,6 +8701,7 @@ mod tests {
         apply_theme(
             &ctx,
             ThemePreset::Midnight,
+            Default::default(),
             AccentPreset::Emerald,
             [0, 0, 0],
             CornerStyle::Pill,
@@ -8670,6 +8740,7 @@ mod tests {
             apply_theme(
                 &ctx,
                 ThemePreset::Graphite,
+                Default::default(),
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
@@ -8706,6 +8777,7 @@ mod tests {
             apply_theme(
                 &ctx,
                 theme,
+                Default::default(),
                 AccentPreset::Emerald,
                 [0, 0, 0],
                 CornerStyle::Rounded,
@@ -8737,12 +8809,66 @@ mod tests {
     }
 
     #[test]
+    fn a_theme_mix_takes_each_part_from_its_own_theme() {
+        use crate::settings::{ControlStyle, ShadowStyle, ThemeMix};
+        // The look a context gets. (The control style flags in `widgets`
+        // are global and other tests set them too, so they aren't read.)
+        let look = |theme, mix| {
+            let ctx = egui::Context::default();
+            apply_theme(
+                &ctx,
+                theme,
+                mix,
+                AccentPreset::Terracotta,
+                [0; 3],
+                CornerStyle::Rounded,
+                SliderSize::Normal,
+                None,
+                false,
+                1.0,
+                UiLayout::Standard,
+                None,
+                0.0,
+                0.0,
+            );
+            ctx.global_style()
+        };
+        let graphite = look(ThemePreset::Graphite, ThemeMix::default());
+        let studio = look(ThemePreset::Studio, ThemeMix::default());
+        let sculptor = look(ThemePreset::Sculptor, ThemeMix::default());
+        // Sculptor's controls, Graphite's colors, Studio's shadows.
+        let mix = ThemeMix { colors: Some(ThemePreset::Graphite), controls: None, shadows: Some(ShadowStyle::Studio) };
+        assert_eq!(mix.controls(ThemePreset::Sculptor), ControlStyle::SculptorClay);
+        let mixed = look(ThemePreset::Sculptor, mix);
+        let (v, g) = (&mixed.visuals, &graphite.visuals);
+        assert_eq!(v.panel_fill, g.panel_fill, "Graphite's panels");
+        assert_ne!(v.panel_fill, sculptor.visuals.panel_fill);
+        assert_eq!(v.window_fill, g.window_fill);
+        assert_eq!(v.override_text_color, g.override_text_color);
+        assert_eq!(v.window_shadow, studio.visuals.window_shadow, "Studio's tight shadow");
+        assert_ne!(v.window_shadow, g.window_shadow);
+        assert_eq!(v.popup_shadow, studio.visuals.popup_shadow);
+        assert_eq!(
+            mixed.spacing.slider_rail_height, sculptor.spacing.slider_rail_height,
+            "Sculptor's tall slider bars"
+        );
+        assert_ne!(mixed.spacing.slider_rail_height, graphite.spacing.slider_rail_height);
+        // Studio's colors don't bring its bar sliders along.
+        let colors_only =
+            look(ThemePreset::Graphite, ThemeMix { colors: Some(ThemePreset::Studio), ..Default::default() });
+        assert_eq!(colors_only.visuals.panel_fill, studio.visuals.panel_fill);
+        assert_eq!(colors_only.visuals.handle_shape, g.handle_shape);
+        assert_ne!(studio.visuals.handle_shape, g.handle_shape);
+    }
+
+    #[test]
     fn a_custom_button_color_fills_buttons_but_not_in_high_contrast() {
         let fill = |button, theme| {
             let ctx = egui::Context::default();
             apply_theme(
                 &ctx,
                 theme,
+                Default::default(),
                 AccentPreset::Terracotta,
                 [0; 3],
                 CornerStyle::Rounded,
@@ -8781,6 +8907,7 @@ mod tests {
                     apply_theme(
                         &ctx,
                         theme,
+                        Default::default(),
                         AccentPreset::Terracotta,
                         [0; 3],
                         CornerStyle::Rounded,
@@ -8819,6 +8946,7 @@ mod tests {
                     apply_theme(
                         &ctx,
                         theme,
+                        Default::default(),
                         accent,
                         [100, 150, 200],
                         corner,
@@ -9123,6 +9251,7 @@ mod tests {
         apply_theme(
             &ctx,
             ThemePreset::Graphite,
+            Default::default(),
             AccentPreset::Terracotta,
             [0; 3],
             CornerStyle::Rounded,
@@ -9196,6 +9325,54 @@ mod tests {
         click_at(&mut ed, &ctx, tabs[0].1.center());
         assert_eq!(ed.documents.len(), 1);
         assert!(ed.show_welcome);
+    }
+
+    #[test]
+    fn windows_cover_the_recipe_box_handle() {
+        // The drawer used to be on the foreground layer, drawn over every
+        // window: a window over its handle showed the handle on top and
+        // let it take the window's clicks.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.shelf = ShelfPosition::Left;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
+        let run = |ed: &mut Editor, events: Vec<egui::Event>, cover: Option<egui::Pos2>| {
+            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+            let mut out = ctx.run_ui(raw, |ui| {
+                draw(ui, ed);
+                if let Some(at) = cover {
+                    egui::Window::new("Cover")
+                        .fixed_pos(at - egui::vec2(40.0, 40.0))
+                        .fixed_size([160.0, 120.0])
+                        .show(ui.ctx(), |ui| ui.label("A window over the handle"));
+                }
+            });
+            out.textures_delta.clear();
+        };
+        for _ in 0..4 {
+            run(&mut ed, vec![], None);
+        }
+        let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle").center();
+        for _ in 0..3 {
+            run(&mut ed, vec![egui::Event::PointerMoved(handle)], Some(handle));
+        }
+        assert_eq!(
+            ctx.layer_id_at(handle).map(|l| l.order),
+            Some(egui::Order::Middle),
+            "the window is on top of the handle"
+        );
+        let button = |pressed| egui::Event::PointerButton {
+            pos: handle,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        run(&mut ed, vec![button(true)], Some(handle));
+        run(&mut ed, vec![button(false)], Some(handle));
+        run(&mut ed, vec![], Some(handle));
+        assert!(!ed.parts_bin_open, "a click on the window doesn't reach the handle under it");
     }
 
     #[test]

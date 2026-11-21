@@ -72,7 +72,10 @@ pub fn show_parts_bin_drawer(ctx: &egui::Context, ed: &mut Editor, canvas: Rect)
     };
 
     let area_id = Id::unique(("parts_bin_drawer", ed.shelf as u8));
-    egui::Area::new(area_id).order(Order::Foreground).pivot(pivot).fixed_pos(anchor).constrain_to(canvas).show(
+    // Under windows (Preferences, the Strokes window…), which used to be
+    // drawn under the drawer and its handle where they overlapped; still
+    // above the viewport, which is painted below every egui layer.
+    egui::Area::new(area_id).order(Order::Background).pivot(pivot).fixed_pos(anchor).constrain_to(canvas).show(
         ctx,
         |ui| {
             let mut handle_rect = Rect::NOTHING;
