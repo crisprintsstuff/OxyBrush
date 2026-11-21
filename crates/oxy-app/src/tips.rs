@@ -885,7 +885,7 @@ pub mod plain {
     pub const SELECTION_RECT: &str = "The selection is a rectangle.";
     pub const PAINT_COLOR: &str = "Color the Paint brush uses. Hold Alt while painting to erase.";
     pub const SECTION_PIECES: &str = "Meshes in this scene. The highlighted row is the one you sculpt.";
-    pub const SECTION_INSTANCES: &str = "Surface instances: copies of another piece on every face or point of this one, or on one face group. They follow the surface as you sculpt, and change together when you edit the piece they copy.";
+    pub const SECTION_INSTANCES: &str = "Surface instances: copies of another piece on faces, points, a face group, a mask, or scattered over the surface. They follow the surface as you sculpt, and change together when you edit the piece they copy.";
     pub const PIECE_COPIED: &str =
         "This piece is copied onto another (Instances section). It's kept hidden; use Edit source there to change it.";
     pub const INSTANCE_PICK: &str =
@@ -893,7 +893,7 @@ pub mod plain {
     pub const INSTANCE_ADD: &str =
         "Put a copy of the chosen piece on every face of this one. Change where and how below.";
     pub const INSTANCE_PLACE: &str =
-        "Where copies go: one on each face (quads stay whole), on each point, or only on the faces of one face group.";
+        "Where copies go: one per face or point, on one face group, on the masked surface, or evenly scattered.";
     pub const INSTANCE_ORIENT: &str = "Which way each copy faces around the surface normal. World direction: all face the same way and never flip. Longest edge or First edge: follow each face (neighbours can flip). Random: any way.";
     pub const INSTANCE_SIZE: &str =
         "How big each copy is: its largest side, as a share of the face it sits on, or in scene units.";
@@ -902,7 +902,8 @@ pub mod plain {
     pub const INSTANCE_VARY_SIZE: &str =
         "Make copies different sizes at random (1: from half to one and a half times).";
     pub const INSTANCE_VARY_SPIN: &str = "Turn copies at random (1: any angle).";
-    pub const INSTANCE_SEED: &str = "Picks the random sizes and turns; the same seed gives the same result every time.";
+    pub const INSTANCE_SEED: &str =
+        "Picks scatter positions, random sizes and turns. The same seed gives the same result on the same surface.";
     pub const INSTANCE_NEW_SEED: &str = "Pick another seed for a different random mix.";
     pub const INSTANCE_EDIT_SOURCE: &str = "Show the copied piece alone to sculpt, paint or reshape it with any tool. Every copy follows. Done editing source returns.";
     pub const INSTANCE_DONE_SOURCE: &str = "Hide the source again and go back to the scene as it was.";

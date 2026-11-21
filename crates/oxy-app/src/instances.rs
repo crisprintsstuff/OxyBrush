@@ -15,7 +15,7 @@ use oxy_doc::{Instancer, Piece};
 use oxy_history::Step;
 use oxy_mesh::instances::{self, Anchor, Settings};
 use oxy_mesh::{Mesh, MeshData};
-use std::sync::Arc;
+use std::sync::{Arc, mpsc};
 
 /// Make real refuses above this many triangles (a mesh too big to sculpt).
 pub const MAKE_REAL_MAX_TRIANGLES: usize = 40_000_000;
@@ -32,11 +32,20 @@ struct Inputs {
     settings: Settings,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+struct AnchorInputs {
+    topology: u64,
+    faces: u64,
+    place: instances::Place,
+    orient: instances::Orient,
+    scatter_seed: Option<u32>,
+}
+
 /// Cached anchors and transforms of one instancer.
 #[derive(Default)]
 pub struct InstanceCache {
-    /// (host topology, host face version, place, orient) the anchors were made for.
-    anchors_for: Option<(u64, u64, instances::Place, instances::Orient)>,
+    anchors_for: Option<AnchorInputs>,
+    pending: Option<(AnchorInputs, mpsc::Receiver<Vec<Anchor>>)>,
     anchors: Vec<Anchor>,
     inputs: Option<Inputs>,
     transforms: Arc<Vec<Mat4>>,
@@ -254,10 +263,48 @@ impl Editor {
             return Some(cache.transforms.clone());
         }
         let s = &ins.settings;
-        let anchors_for = Some((inputs.host_topology, inputs.host_faces, s.place, s.orient));
-        if cache.anchors_for != anchors_for {
-            cache.anchors = instances::anchors(&hp.mesh, s);
-            cache.anchors_for = anchors_for;
+        let scatter = if let instances::Place::Scatter(spacing) = s.place { Some(spacing) } else { None };
+        let anchors_for = AnchorInputs {
+            topology: inputs.host_topology,
+            faces: inputs.host_faces,
+            // The current mask is sampled in transforms, so a threshold
+            // change can reuse the same polygon anchors.
+            place: if matches!(s.place, instances::Place::Mask(_)) { instances::Place::Faces } else { s.place },
+            orient: s.orient,
+            scatter_seed: scatter.map(|_| s.seed),
+        };
+        if let Some(spacing) = scatter {
+            if let Some((key, result)) = &cache.pending {
+                match result.try_recv() {
+                    Ok(anchors) if *key == anchors_for => {
+                        cache.anchors = anchors;
+                        cache.anchors_for = Some(anchors_for);
+                    }
+                    Ok(_) | Err(mpsc::TryRecvError::Disconnected) => {}
+                    Err(mpsc::TryRecvError::Empty) => return None,
+                }
+                cache.pending = None;
+            }
+            if cache.anchors_for != Some(anchors_for) {
+                let (sender, result) = mpsc::channel();
+                let positions = hp.mesh.positions.clone();
+                let triangles = hp.mesh.triangles.clone();
+                let hidden = hp.mesh.hidden().to_vec();
+                let (seed, orient) = (s.seed, s.orient);
+                rayon::spawn(move || {
+                    let anchors = instances::scatter_anchors(&positions, &triangles, &hidden, spacing, seed, orient);
+                    let _ = sender.send(anchors);
+                });
+                cache.pending = Some((anchors_for, result));
+                cache.inputs = None;
+                return None;
+            }
+        } else {
+            cache.pending = None;
+            if cache.anchors_for != Some(anchors_for) {
+                cache.anchors = instances::anchors(&hp.mesh, s);
+                cache.anchors_for = Some(anchors_for);
+            }
         }
         cache.transforms = Arc::new(instances::transforms(&hp.mesh, &sp.mesh, &cache.anchors, s));
         cache.inputs = Some(inputs);
@@ -285,8 +332,14 @@ impl Editor {
         // Forget copies of pieces that are gone.
         let doc = &mut self.documents[self.active_document];
         let scene = &doc.scene;
-        doc.instance_cache.retain(|k, _| scene.get(k >> 16).is_some());
+        doc.instance_cache.retain(|key, _| {
+            scene.get(key >> 16).is_some_and(|piece| piece.visible && (key & 0xffff) < piece.instancers.len() as u64)
+        });
         out
+    }
+
+    pub fn instance_scatter_pending(&self) -> bool {
+        self.documents[self.active_document].instance_cache.values().any(|cache| cache.pending.is_some())
     }
 
     /// Triangles drawn for instancer `index` of the active piece.

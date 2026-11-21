@@ -1,7 +1,7 @@
 //! Pull-out Recipe Box drawer and placement dialogs (RFC 0026: Recipe Box).
 
 use crate::editor::Editor;
-use crate::parts::{PartEntry, PlaceChoice};
+use crate::parts::PlaceChoice;
 use crate::settings::{QuickBar, ShelfPosition, UiLayout};
 use egui::{
     Align, Align2, Color32, CornerRadius, Id, Layout, Order, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2,
@@ -38,15 +38,7 @@ pub struct SavePartModal {
     pub stroke_ids: Vec<u64>,
 }
 
-/// Selected slot popup state (for variations, rename, delete, export).
-#[allow(dead_code)]
-#[derive(Clone, Debug, Default)]
-pub struct PartSlotPopup {
-    pub open_part: Option<String>, // file_name
-    pub renaming: bool,
-    pub rename_text: String,
-    pub category_text: String,
-}
+const DELETE_RECIPE: &str = "delete_recipe_from_box";
 
 #[cfg(test)]
 pub(crate) fn last_handle_rect(ctx: &egui::Context) -> Option<Rect> {
@@ -148,6 +140,7 @@ pub fn show_parts_bin_drawer(ctx: &egui::Context, ed: &mut Editor, canvas: Rect)
             let _ = (handle_rect, drawer_rect);
         },
     );
+    show_delete_recipe(ctx, ed);
 }
 
 fn chevron_for_drawer(shelf: ShelfPosition, open: bool) -> ChevronDir {
@@ -294,20 +287,14 @@ fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slo
         );
         egui::ComboBox::from_id_salt("parts_bin_category_filter")
             .selected_text(if ed.parts_library.selected_category.is_empty() {
-                "All"
+                "All recipes"
             } else {
                 &ed.parts_library.selected_category
             })
             .width(84.0)
             .show_ui(ui, |ui| {
-                if ui
-                    .selectable_label(
-                        ed.parts_library.selected_category == "All" || ed.parts_library.selected_category.is_empty(),
-                        "All",
-                    )
-                    .clicked()
-                {
-                    ed.parts_library.selected_category = "All".into();
+                if ui.selectable_label(ed.parts_library.selected_category.is_empty(), "All recipes").clicked() {
+                    ed.parts_library.selected_category.clear();
                 }
                 for cat in categories {
                     let sel = ed.parts_library.selected_category == cat;
@@ -336,7 +323,8 @@ fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slo
     ui.label(RichText::new("Reusable sculpted details: drag onto any model.").weak().small());
     ui.separator();
 
-    let entries: Vec<PartEntry> = ed.parts_library.filtered_entries().into_iter().cloned().collect();
+    let entries: Vec<_> =
+        ed.parts_library.filtered_entries().into_iter().map(|entry| entry.file_name.clone()).collect();
     if entries.is_empty() {
         ui.label(
             RichText::new("Sculpt a detail, then save it with Save as recipe… in the Strokes window.").weak().small(),
@@ -363,7 +351,24 @@ fn draw_drawer_contents(ui: &mut egui::Ui, ed: &mut Editor, is_bottom: bool, slo
     }
 }
 
-fn draw_part_slot(ui: &mut egui::Ui, ed: &mut Editor, entry: &PartEntry, slot_size: f32) {
+fn draw_part_slot(ui: &mut egui::Ui, ed: &mut Editor, file: &str, slot_size: f32) {
+    let Some(entry) = ed.parts_library.entries.iter().find(|entry| entry.file_name == file) else { return };
+    let name = entry.name.clone();
+    let category = entry.category.clone();
+    let resp = ui.push_id(file, |ui| draw_part_tile(ui, &name, slot_size)).inner.on_hover_text(format!(
+        "Recipe: {name}\nCategory: {}\nClick for options or drag onto a model",
+        if category.is_empty() { "None" } else { &category },
+    ));
+    if resp.drag_started() {
+        start_recipe(ed, file);
+    }
+    let popup = egui::Popup::menu(&resp).id(Id::unique(("recipe_slot_popup", file)));
+    popup.close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        draw_recipe_options(ui, ed, file, &name, &category, slot_size);
+    });
+}
+
+fn draw_part_tile(ui: &mut egui::Ui, name: &str, slot_size: f32) -> egui::Response {
     let (slot_rect, resp) = ui.allocate_exact_size(Vec2::splat(slot_size), Sense::click_and_drag());
     let p = ui.painter();
     let visuals = ui.visuals();
@@ -376,36 +381,151 @@ fn draw_part_slot(ui: &mut egui::Ui, ed: &mut Editor, entry: &PartEntry, slot_si
     p.text(
         Pos2::new(slot_rect.center().x, slot_rect.max.y - 7.0),
         Align2::CENTER_CENTER,
-        &entry.name,
+        name,
         egui::FontId::proportional(9.0),
         Color32::WHITE,
     );
 
-    let resp = resp.on_hover_text(format!(
-        "Recipe: {}\nCategory: {}\nDrag onto a model to sculpt it there",
-        entry.name,
-        if entry.category.is_empty() { "None" } else { &entry.category },
-    ));
+    resp
+}
 
-    if resp.drag_started() || resp.clicked() {
-        let _ = ed.begin_part_placement(entry.detail.clone());
+fn start_recipe(ed: &mut Editor, file: &str) {
+    let Some(entry) = ed.parts_library.entries.iter().find(|entry| entry.file_name == file) else { return };
+    let mut detail = entry.detail.clone();
+    detail.name.clone_from(&entry.name);
+    let hash = entry.hash;
+    if ed.begin_part_placement(detail).is_ok()
+        && let Some(placement) = &mut ed.part_placement
+    {
+        placement.content = hash;
+    }
+}
+
+fn draw_recipe_options(ui: &mut egui::Ui, ed: &mut Editor, file: &str, name: &str, category: &str, slot_size: f32) {
+    let library_dir = ed.parts_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("oxy_parts"));
+    let Some(index) = ed.parts_library.entries.iter().position(|entry| entry.file_name == file) else { return };
+    let edit_id = ui.scope_id().with("edit_recipe");
+    let (mut new_name, mut new_category) = ui
+        .ctx()
+        .data(|d| d.get_temp::<(String, String)>(edit_id))
+        .unwrap_or_else(|| (name.to_owned(), category.to_owned()));
+    ui.strong(name);
+    if ui.button("Place recipe").clicked() {
+        start_recipe(ed, file);
+        ui.close();
+    }
+    ui.horizontal(|ui| {
+        ui.label("Name");
+        ui.add(egui::TextEdit::singleline(&mut new_name).desired_width(160.0));
+    });
+    ui.horizontal(|ui| {
+        ui.label("Category");
+        ui.add(egui::TextEdit::singleline(&mut new_category).desired_width(160.0));
+    });
+    if ui.button("Save name and category").clicked() {
+        match ed.parts_library.edit_part(&library_dir, file, &new_name, &new_category) {
+            Ok(()) => {
+                ed.status = format!("Updated {}", new_name.trim());
+                ui.ctx().data_mut(|d| d.remove::<(String, String)>(edit_id));
+                ui.close();
+                return;
+            }
+            Err(error) => ed.status = format!("Couldn't update the recipe: {error}"),
+        }
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(edit_id, (new_name, new_category)));
+    ui.horizontal(|ui| {
+        let n = ed.parts_library.entries.len();
+        for (label, target) in
+            [("Move earlier", index.checked_sub(1)), ("Move later", (index + 1 < n).then_some(index + 1))]
+        {
+            if ui.add_enabled(target.is_some(), egui::Button::new(label)).clicked()
+                && let Some(to) = target
+            {
+                save_recipe_order(ed, &library_dir, index, to);
+            }
+        }
+    });
+    if !category.is_empty() {
+        let variations: Vec<_> = ed
+            .parts_library
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| entry.category == category)
+            .map(|(i, entry)| (i, entry.file_name.clone(), entry.name.clone()))
+            .collect();
+        if variations.len() > 1 {
+            ui.label("Variations");
+            egui::ScrollArea::horizontal().max_width(300.0).show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    for (i, (_, variant, label)) in variations.iter().enumerate() {
+                        let resp = ui
+                            .push_id(variant, |ui| draw_part_tile(ui, label, slot_size))
+                            .inner
+                            .on_hover_text("Click to place this variation. Drag to reorder it.");
+                        if resp.clicked() {
+                            start_recipe(ed, variant);
+                            ui.close();
+                        }
+                        if let Some((from, to)) = crate::ui::reorder(ui, &resp, i, true)
+                            && let (Some((from, _, _)), Some((to, _, _))) = (variations.get(from), variations.get(to))
+                        {
+                            save_recipe_order(ed, &library_dir, *from, *to);
+                        }
+                    }
+                });
+            });
+        }
+    }
+    if ui.button("Delete recipe…").clicked() {
+        ui.ctx().data_mut(|d| d.insert_temp(Id::unique(DELETE_RECIPE), (file.to_owned(), name.to_owned())));
+        ui.close();
+    }
+}
+
+fn save_recipe_order(ed: &mut Editor, dir: &std::path::Path, from: usize, to: usize) {
+    if let Err(error) = ed.parts_library.reorder_part(dir, from, to) {
+        ed.status = format!("Couldn't reorder recipes: {error}");
+    }
+}
+
+fn show_delete_recipe(ctx: &egui::Context, ed: &mut Editor) {
+    let id = Id::unique(DELETE_RECIPE);
+    let Some((file, name)) = ctx.data(|d| d.get_temp::<(String, String)>(id)) else { return };
+    let dialog = egui::Modal::new(id).show(ctx, |ui| {
+        ui.heading(format!("Delete {name} from the Recipe Box?"));
+        ui.label("Recipes already placed on a model stay there.");
+        ui.horizontal(|ui| {
+            if ui.button("Cancel").clicked() {
+                ui.close();
+            }
+            if ui.button("Delete recipe").clicked() {
+                let dir = ed.parts_dir.clone().unwrap_or_else(|| std::env::temp_dir().join("oxy_parts"));
+                ed.status = match ed.parts_library.delete_part(&dir, &file) {
+                    Ok(()) => format!("Deleted {name} from the Recipe Box"),
+                    Err(error) => format!("Couldn't delete {name}: {error}"),
+                };
+                ui.close();
+            }
+        });
+    });
+    if dialog.should_close() {
+        ctx.data_mut(|d| d.remove::<(String, String)>(id));
     }
 }
 
 /// Choice popup shown after releasing a part onto the mesh.
 pub fn show_placement_choice_dialog(ctx: &egui::Context, ed: &mut Editor) {
-    let (choice_open, on_plane, mirror_axis, name) = match &ed.part_placement {
-        Some(p) => (p.choice_open, p.on_plane, p.mirror_axis, p.detail.name.clone()),
-        None => return,
-    };
-    if !choice_open {
-        return;
-    }
-
+    let Some(placement) = ed.part_placement.as_ref().filter(|p| p.moving.is_none()) else { return };
     if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
         ed.cancel_part_placement();
         return;
     }
+    if !placement.choice_open {
+        return;
+    }
+    let (on_plane, mirror_axis, name) = (placement.on_plane, placement.mirror_axis, placement.detail.name.clone());
 
     let title = if on_plane { "Mirror plane" } else { "Place recipe" };
 

@@ -2885,7 +2885,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
 
 /// Drag-and-drop reordering for shelf item `i`. Returns (from, to) when a
 /// dragged brush is dropped on this item.
-fn reorder(ui: &Ui, r: &egui::Response, i: usize, horizontal: bool) -> Option<(usize, usize)> {
+pub(crate) fn reorder(ui: &Ui, r: &egui::Response, i: usize, horizontal: bool) -> Option<(usize, usize)> {
     if r.dragged() {
         r.dnd_set_drag_payload(i);
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
