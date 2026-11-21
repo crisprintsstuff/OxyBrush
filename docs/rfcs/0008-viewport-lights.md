@@ -1,6 +1,6 @@
 # RFC 0008: Viewport lights and shadows
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete (extended by [RFC 0024](0024-area-lights-and-lit-matcap.md))
 - **Requested by:** users on the project's Discord. A community member built
   lights into a private copy of OxyBrush and shared a description of how it
   behaves, with a View-menu layout the maintainer liked. Only that

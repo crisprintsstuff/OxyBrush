@@ -1,6 +1,6 @@
 # RFC 0021: Gaussian splats, as reference, mesh and sculpt, with a Blender round trip (plan)
 
-Status: proposed
+Status: Proposed (not started)
 
 ## Summary
 

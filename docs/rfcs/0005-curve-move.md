@@ -1,6 +1,6 @@
 # RFC 0005: Curve Move — bend and stretch the model with a curve
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete
 - **Requested by:** a user in [#82](https://github.com/crisprintsstuff/OxyBrush/issues/82),
   who remembered a never-shipped idea from another sculpting app (curves
   used to move parts of a mesh) and asked whether OxyBrush's editable

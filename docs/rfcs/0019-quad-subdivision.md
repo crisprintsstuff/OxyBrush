@@ -1,7 +1,6 @@
 # RFC 0019: Quad subdivision levels (Catmull–Clark)
 
-Status: accepted and implemented (subdivision levels, Subdivide, retopology
-Subdivide and project). UVs come next, in [RFC 0020](0020-uvs.md).
+Status: Complete (subdivision levels, Subdivide, retopology Subdivide and project). UVs follow in [RFC 0020](0020-uvs.md).
 
 ## Summary
 

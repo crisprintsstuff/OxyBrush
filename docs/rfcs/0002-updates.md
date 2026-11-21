@@ -1,6 +1,6 @@
 # RFC 0002: Opt-in update checks
 
-- **Status:** accepted by the maintainer (2026-11-02), implemented in the same change
+- **Status:** Complete (accepted 2026-11-02)
 - **Changes:** AGENTS.md hard rules "No telemetry or network calls" and "Pure Rust"
 
 ## Problem

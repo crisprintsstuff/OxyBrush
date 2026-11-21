@@ -1,6 +1,6 @@
 # RFC 0017: Living strokes
 
-Status: accepted; phase 1 landed (record and edit, off by default: Preferences > General). Phase 3 landed except exact replay: Mirror copy, Split by side, stroke groups exported as glTF shape keys. Phase 2 landed: groups as layers, mask out, saving (`STRK`), and the plugin/MCP surface (plugin API 4 `strokes_state`/`stroke_command`, agent tools `list_strokes`/`edit_strokes`)
+Status: Complete (except optional exact replay, deferred to [RFC 0025](0025-editable-and-portable-strokes.md) phase 6). Phases 1–3 landed: recording and panel edits, groups as layers, mask out, saving (`STRK`), plugin API 4 and MCP agent tools, Mirror copy, Split by side, and glTF shape-key export.
 
 ## Summary
 

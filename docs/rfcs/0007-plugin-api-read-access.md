@@ -1,6 +1,6 @@
 # RFC 0007: Plugin API, phase 1: read access
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete
 - **Prompted by:** a contributor's writeup on adding viewport lights to a
   private build of OxyBrush. The lights had to be written into the core,
   because plugins can't reach the renderer, and the writeup proposed a

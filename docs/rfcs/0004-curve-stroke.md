@@ -1,6 +1,6 @@
 # RFC 0004: Curve strokes you can adjust before applying
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Complete
 - **Requested by:** a user, after seeing a feature like this in another sculpting app.
   Only the behaviour was taken, from a short clip of a public tutorial video the
   user shared: no documentation, code, UI layout or assets of that app were used

@@ -1,6 +1,6 @@
 # RFC 0012: Retopology tool (draw quads on a sculpt)
 
-- **Status:** proposed for the maintainer; first version implemented in the same change for review
+- **Status:** Complete
 - **Requested by:** a tester, who described Autodesk Maya's Quad Draw tool
   and asked for a tool that works like it. Only that description and the
   generally known, publicly documented controls of such tools were used

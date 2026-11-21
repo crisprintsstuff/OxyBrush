@@ -1,6 +1,6 @@
 # RFC 0009: Tube tool
 
-- **Status:** proposed for the maintainer; first version implemented in the same change for review
+- **Status:** Complete
 - **Requested by:** a tester, who shared a 66-second screen recording of a
   tube tool in another sculpting app (Nomad Sculpt). Only the behaviour seen in
   that recording was taken: no documentation, code, UI layout, icons or

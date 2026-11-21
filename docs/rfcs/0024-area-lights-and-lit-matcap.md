@@ -1,6 +1,6 @@
 # RFC 0024: Area lights, soft light falloff and the lit matcap
 
-Status: accepted (decisions by the maintainer, 2026-11-15); implemented
+Status: Complete (accepted 2026-11-15)
 
 ## Summary
 

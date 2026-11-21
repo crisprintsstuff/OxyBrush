@@ -1,6 +1,6 @@
 # RFC 0018: Poly Edit, a click-and-drag polygon modeling tool
 
-Status: accepted; phases A, B and C landed, with bevel segments and profile
+Status: Complete (phases 0, A, B, and C implemented, with bevel segments and profile)
 
 ## Summary
 

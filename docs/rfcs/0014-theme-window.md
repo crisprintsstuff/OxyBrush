@@ -1,6 +1,6 @@
 # RFC 0014: One Theme window
 
-- **Status:** proposed for the maintainer; implemented in the same change for review
+- **Status:** Superseded (implemented in 4.0.0-beta.3; consolidated into Preferences > Appearance in #376)
 
 ## Problem
 
