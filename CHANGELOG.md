@@ -4,7 +4,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-## [4.0.0-beta.21.3] - 2026-11-21
+## [4.0.0-beta.21.4] - 2026-11-21
 
 ### Added
 
@@ -1011,8 +1011,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.3...HEAD
-[4.0.0-beta.21.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.3
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...HEAD
+[4.0.0-beta.21.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.4
 [4.0.0-beta.17]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.16...v4.0.0-beta.17
 [3.0.0-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.7-beta...v3.0.0-beta
 [2.5.7-beta]: https://github.com/crisprintsstuff/OxyBrush/compare/v2.5.6-beta...v2.5.7-beta
