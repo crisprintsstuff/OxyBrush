@@ -1007,6 +1007,8 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         crate::parts_ui::show_parts_bin_drawer(ui.ctx(), ed, canvas);
     }
     crate::parts_ui::show_placement_choice_dialog(ui.ctx(), ed);
+    crate::parts_ui::show_move_window(ui.ctx(), ed);
+    crate::living_ui::save_back_confirm(ui.ctx(), ed);
     quick_menu(ui.ctx(), ed);
     brush_key_prompt(ui.ctx(), ed, canvas);
     pointer_slider(ui.ctx(), ed);

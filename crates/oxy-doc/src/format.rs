@@ -808,9 +808,24 @@ fn decode_stroke_recipes(raw: &[u8]) -> Result<Vec<Vec<u8>>> {
         .collect()
 }
 
+/// `PART`: placed recipes from the Recipe Box (RFC 0026) on the preceding
+/// `PIEC`, written after its `STRK`/`STRI`.
+///
+/// ```text
+/// version:u8                       2 (1: stroke ids were session ids)
+/// count:u32 then per placement:
+///   id:u64  name_len:u32 name:utf8  group:u32
+///   n:u32  stroke:u64*n            version 2: indices into this piece's STRK list
+///   anchor:f32*3 normal:f32*3 tangent:f32*3  scale:f32  detail_size:f32
+///   content:u8*32                  SHA-256 of the library file at the drop
+///   flags:u8                       1 linked, 2 source side, 4 mirrored frame
+///   mirror_axis:u8                 0 none, 1 X, 2 Y, 3 Z
+///   partner:u64                    the other side's id, 0 for none
+/// ```
+/// A reader skips a version it doesn't know, keeping the strokes.
 fn encode_placed_parts(parts: &[crate::SavedPlacedPart]) -> Vec<u8> {
     let mut b = Vec::new();
-    b.push(1u8); // version 1
+    b.push(2u8);
     b.extend_from_slice(&(parts.len() as u32).to_le_bytes());
     for p in parts {
         b.extend_from_slice(&p.id.to_le_bytes());
@@ -840,7 +855,7 @@ fn encode_placed_parts(parts: &[crate::SavedPlacedPart]) -> Vec<u8> {
 fn decode_placed_parts(raw: &[u8]) -> Result<Vec<crate::SavedPlacedPart>> {
     let mut r = Reader { data: raw, pos: 0 };
     let version = r.u8()?;
-    if version != 1 {
+    if version != 1 && version != 2 {
         return Ok(Vec::new());
     }
     let count = r.u32()? as usize;
@@ -879,6 +894,7 @@ fn decode_placed_parts(raw: &[u8]) -> Result<Vec<crate::SavedPlacedPart>> {
             flags,
             mirror_axis,
             partner,
+            legacy_ids: version == 1,
         });
     }
     Ok(parts)
@@ -2770,6 +2786,7 @@ mod tests {
             flags: 3,
             mirror_axis: 1,
             partner: 43,
+            legacy_ids: false,
         };
         let strokes = crate::SavedStrokes {
             vertices: scene.pieces[0].mesh.positions.len() as u32,
@@ -2784,6 +2801,15 @@ mod tests {
         let loaded = &back.pieces[0].strokes.as_ref().unwrap().parts;
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0], part);
+        // A version 1 PART (beta.21) still reads, marked as having session ids.
+        let mut raw = encode_placed_parts(std::slice::from_ref(&part));
+        assert_eq!(raw[0], 2);
+        raw[0] = 1;
+        let old = decode_placed_parts(&raw).unwrap();
+        assert!(old.len() == 1 && old[0].legacy_ids && old[0].stroke_ids == part.stroke_ids);
+        // A newer version is skipped, not misread.
+        raw[0] = 9;
+        assert!(decode_placed_parts(&raw).unwrap().is_empty());
 
         // An older reader (where PART is renamed/unknown) skips PART gracefully
         let mut skipped = bytes.clone();

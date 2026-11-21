@@ -4,12 +4,24 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Placed recipes can be moved, kept in step and saved back** ([RFC 0026](docs/rfcs/0026-parts-bin.md), phase 3). In a placed recipe's group menu in the Strokes window:
+  - **Move on surface**: click on the model where it should go. The Move window sets its **Twist** and **Size**, **Apply** keeps it where it is with them, and **Cancel** (or Esc) leaves it. A ring and an arrow show where it sits. It's sculpted again there in one undo step; strokes made after it stay as they were.
+  - A mirrored pair is **Linked**: **Edit…**, **Edit path** and **Move on surface** on one side change the other side too, in the same undo step. Fade and delete stay per side. **Unlink** stops it, and undo links them again.
+  - **Save back to Recipe Box** replaces the recipe in the box with the version on the model, after asking (and saying that fades aren't saved). **Save as new recipe** adds it under a new name and never replaces another recipe. Nothing is written to the box unless you choose one of these.
+  - A "Recipe Box" topic in the in-app guide.
+
 ### Changed
 
 - **The Parts Bin is now the Recipe Box**, and the strokes you save in it are **recipes**: **Save as recipe…** in the Strokes window, the Recipe Box drawer beside the brush shelf, and View > Recipe Box. The box now says what it's for, a library of reusable sculpted details to drag onto any model, instead of counting strokes. Only the names and wording changed: saved libraries and projects with placed recipes open as before.
 
 ### Fixed
 
+- **A recipe dragged from the Recipe Box lands under the pointer.** It used to land off to one side by the width of the panels.
+- **The mirror side of a mirrored pair is a mirror image.** It was a turned copy, so an asymmetric recipe (an L, a hook) came out the wrong way round on the other side.
+- **Placed recipes stay recipes after saving and reopening.** The project kept stroke numbers from the session, which change when the project opens, so a reopened recipe lost track of its strokes. Projects now store their place in the list (`PART` version 2); files from 4.0.0-beta.21 are read by stroke group.
+- **Undoing a drop takes the recipe's strokes and record away too**, and redo brings them back. The first mirrored pair of a session also showed its mirror side as unlinked.
 - **Left clicks in the Pieces list work again.** Clicking a piece's eye selected the piece instead of hiding it, and double-click to rename and Alt+click to isolate did nothing: the whole row's click area sat on top of its own buttons. The row now takes only the clicks that miss them, so it still selects the piece, and right-click still opens its menu.
 
 ## [4.0.0-beta.19.2] - 2026-11-20

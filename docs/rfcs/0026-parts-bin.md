@@ -1,6 +1,6 @@
 # RFC 0026: Recipe Box
 
-Status: Partial — phases 1–2 and the `PART` project section implemented in #379 (`.oxydetail` format, save/place, viewport Recipe Box strip, category filter, drag-and-drop placement dialog with symmetry plane handling, delete). Remaining: phase 3 (post-drop Move on surface, linked Edit/Move across mirrored pairs, Unlink, Save back / Save as new), phase 4 (rename, reorder, variations popup), and phase 5 (geodesic walk from RFC 0025 phase 6).
+Status: Partial — phases 1–3 implemented: phases 1–2 and the `PART` section in #379; phase 3 (Move on surface, linked Edit…/Edit path/Move across mirrored pairs, Unlink, Save back to Recipe Box / Save as new recipe, `PART` version 2) after the rename to the Recipe Box. Remaining: phase 4 (rename, reorder, variations popup) and phase 5 (geodesic walk from RFC 0025 phase 6).
 
 ## Naming
 
