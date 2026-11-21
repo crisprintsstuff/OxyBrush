@@ -100,6 +100,67 @@ impl Editor {
         self.scene.pieces.get(i).is_some_and(|p| self.piece_pick.contains(&p.id))
     }
 
+    /// Return the list of selected piece IDs: the active piece first, then any
+    /// pieces picked with Ctrl/Cmd+click or Shift-click.
+    pub fn selected_piece_ids(&self) -> Vec<u64> {
+        let mut out = Vec::new();
+        if let Some(p) = self.scene.try_active() {
+            out.push(p.id);
+        }
+        for &id in &self.piece_pick {
+            if self.scene.index_of(id).is_some() && !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        out
+    }
+
+    /// Whether piece `id` is currently selected (active or picked).
+    #[allow(dead_code)]
+    pub fn is_piece_selected(&self, id: u64) -> bool {
+        self.scene.try_active().is_some_and(|p| p.id == id) || self.piece_pick.contains(&id)
+    }
+
+    /// Shift-click range selection in the Pieces outliner: selects all pieces
+    /// between the anchor piece and piece `target_idx` according to the visible rows.
+    pub fn select_piece_range(&mut self, target_idx: usize, visible_order: &[usize], extend: bool) {
+        if self.scene.pieces.is_empty() || visible_order.is_empty() {
+            return;
+        }
+        let active_idx = self.scene.active_index();
+        let anchor_id = self.piece_select_anchor.unwrap_or_else(|| self.scene.pieces[active_idx].id);
+        let anchor_idx = self.scene.index_of(anchor_id).unwrap_or(active_idx);
+        self.piece_select_anchor = Some(self.scene.pieces[anchor_idx].id);
+
+        let anchor_pos = visible_order.iter().position(|&idx| idx == anchor_idx).unwrap_or(0);
+        let target_pos = visible_order.iter().position(|&idx| idx == target_idx).unwrap_or(anchor_pos);
+
+        let start = anchor_pos.min(target_pos);
+        let end = anchor_pos.max(target_pos);
+
+        self.scene.set_active(anchor_idx);
+
+        if !extend {
+            self.piece_pick.clear();
+        }
+
+        for &idx in &visible_order[start..=end] {
+            if idx < self.scene.pieces.len() && idx != anchor_idx {
+                let id = self.scene.pieces[idx].id;
+                if !self.piece_pick.contains(&id) {
+                    self.piece_pick.push(id);
+                }
+            }
+        }
+
+        let n = 1 + self.piece_pick.len();
+        self.status = if n > 1 {
+            format!("{n} pieces picked: the transform gizmo (T) moves them together")
+        } else {
+            "One piece".into()
+        };
+    }
+
     /// Where the gizmo sits for several pieces: the middle of their bounds.
     pub(crate) fn multi_gizmo_pivot(&self) -> Option<Vec3> {
         let pieces = self.gizmo_pieces();
@@ -320,6 +381,7 @@ impl Editor {
 
     /// Set piece `child_id`'s parent to `parent_id` (or None to unparent),
     /// recording an undo step. Returns false if rejected (e.g. cycle).
+    #[allow(dead_code)]
     pub fn set_piece_parent(&mut self, child_id: u64, parent_id: Option<u64>) -> bool {
         let Some(p) = self.scene.get(child_id) else { return false };
         if p.parent == parent_id {
@@ -348,13 +410,38 @@ impl Editor {
         true
     }
 
-    /// Detach the active piece from its parent piece, so it no longer moves with it.
+    /// Unparent multiple pieces, recording a single compound undo step.
+    pub fn unparent_pieces(&mut self, piece_ids: &[u64]) {
+        let mut steps = Vec::new();
+        let mut count = 0;
+        let mut first_name = String::new();
+        for &id in piece_ids {
+            let Some(p) = self.scene.get(id) else { continue };
+            if let Some(prev) = p.parent {
+                if first_name.is_empty() {
+                    first_name = p.name.clone();
+                }
+                self.scene.set_parent(id, None);
+                steps.push(Step::Parent { piece: id, previous: Some(prev) });
+                count += 1;
+            }
+        }
+        if !steps.is_empty() {
+            let label = if count == 1 { format!("Unparent {first_name}") } else { format!("Unparent {count} pieces") };
+            self.history.record_compound(label, steps);
+            self.status =
+                if count == 1 { format!("Unparented {first_name}") } else { format!("Unparented {count} pieces") };
+        }
+    }
+
+    /// Detach the active (or selected) piece(s) from their parent piece, so they no longer move with it.
     pub fn unparent_active(&mut self) {
-        let Some(id) = self.scene.try_active().map(|p| p.id) else { return };
-        if self.scene.parent_of(id).is_some() {
-            self.set_piece_parent(id, None);
-        } else {
+        let selected = self.selected_piece_ids();
+        let parented: Vec<u64> = selected.into_iter().filter(|&id| self.scene.parent_of(id).is_some()).collect();
+        if parented.is_empty() {
             self.status = "Active piece has no parent".into();
+        } else {
+            self.unparent_pieces(&parented);
         }
     }
 
@@ -428,54 +515,84 @@ impl Editor {
         }
     }
 
-    /// Parent piece `child_id` to `parent_id`, placing it after `parent_id` and its children.
-    pub fn place_piece_as_child(&mut self, child_id: u64, parent_id: u64) {
-        if child_id == parent_id || !self.scene.can_parent(child_id, parent_id) {
+    /// Parent multiple pieces `child_ids` to `parent_id`, placing them in order after
+    /// `parent_id` and its existing children. Records a single compound undo step.
+    pub fn place_pieces_as_children(&mut self, child_ids: &[u64], parent_id: u64) {
+        if self.scene.index_of(parent_id).is_none() {
             return;
         }
-        let Some(p) = self.scene.get(child_id) else { return };
-        let prev_parent = p.parent;
-        let child_name = p.name.clone();
         let target_name = self.scene.get(parent_id).map(|p| p.name.clone()).unwrap_or_default();
-
-        let Some(from_idx) = self.scene.index_of(child_id) else { return };
-        let Some(target_idx) = self.scene.index_of(parent_id) else { return };
-
-        let descendants = self.scene.descendants_of(parent_id);
-        let last_sub_idx = self
-            .scene
-            .pieces
+        let valid_ids: Vec<u64> = child_ids
             .iter()
-            .enumerate()
-            .filter(|(idx, p)| *idx != from_idx && (p.id == parent_id || descendants.contains(&p.id)))
-            .map(|(idx, _)| idx)
-            .max()
-            .unwrap_or(target_idx);
-
-        let dest_idx = last_sub_idx + 1;
-        let insert_idx = if from_idx < dest_idx { dest_idx.saturating_sub(1) } else { dest_idx };
-        let insert_idx = insert_idx.min(self.scene.pieces.len().saturating_sub(1));
-
-        let mut steps = Vec::new();
-        if prev_parent != Some(parent_id) {
-            self.scene.set_parent(child_id, Some(parent_id));
-            self.folded_pieces.remove(&parent_id);
-            steps.push(Step::Parent { piece: child_id, previous: prev_parent });
+            .copied()
+            .filter(|&cid| cid != parent_id && self.scene.get(cid).is_some() && self.scene.can_parent(cid, parent_id))
+            .collect();
+        if valid_ids.is_empty() {
+            return;
         }
 
-        if from_idx != insert_idx {
-            let active_id = self.scene.try_active().map(|p| p.id);
-            let piece = self.scene.pieces.remove(from_idx);
-            self.scene.pieces.insert(insert_idx, piece);
-            if let Some(i) = active_id.and_then(|id| self.scene.index_of(id)) {
-                self.scene.set_active(i);
+        let mut steps = Vec::new();
+
+        // 1. Update parent relationships
+        for &cid in &valid_ids {
+            let Some(p) = self.scene.get(cid) else { continue };
+            let prev_parent = p.parent;
+            if prev_parent != Some(parent_id) {
+                self.scene.set_parent(cid, Some(parent_id));
+                steps.push(Step::Parent { piece: cid, previous: prev_parent });
             }
-            steps.push(Step::Reordered { from: from_idx, to: insert_idx });
+        }
+        self.folded_pieces.remove(&parent_id);
+
+        // 2. Reorder pieces: move each child sequentially to after the parent and its existing descendants
+        for &cid in &valid_ids {
+            let Some(from_idx) = self.scene.index_of(cid) else { continue };
+            let descendants = self.scene.descendants_of(parent_id);
+            let last_sub_idx = self
+                .scene
+                .pieces
+                .iter()
+                .enumerate()
+                .filter(|(idx, p)| *idx != from_idx && (p.id == parent_id || descendants.contains(&p.id)))
+                .map(|(idx, _)| idx)
+                .max()
+                .unwrap_or_else(|| self.scene.index_of(parent_id).unwrap_or(0));
+
+            let dest_idx = last_sub_idx + 1;
+            let insert_idx = if from_idx < dest_idx { dest_idx.saturating_sub(1) } else { dest_idx };
+            let insert_idx = insert_idx.min(self.scene.pieces.len().saturating_sub(1));
+
+            if from_idx != insert_idx {
+                let active_id = self.scene.try_active().map(|p| p.id);
+                let piece = self.scene.pieces.remove(from_idx);
+                self.scene.pieces.insert(insert_idx, piece);
+                if let Some(i) = active_id.and_then(|id| self.scene.index_of(id)) {
+                    self.scene.set_active(i);
+                }
+                steps.push(Step::Reordered { from: from_idx, to: insert_idx });
+            }
         }
 
         if !steps.is_empty() {
-            self.history.record_compound(format!("Parent {child_name} under {target_name}"), steps);
-            self.status = format!("Parented {child_name} under {target_name}");
+            let label = if valid_ids.len() == 1 {
+                let child_name = self.scene.get(valid_ids[0]).map(|p| p.name.clone()).unwrap_or_default();
+                format!("Parent {child_name} under {target_name}")
+            } else {
+                format!("Parent {} pieces under {target_name}", valid_ids.len())
+            };
+            self.history.record_compound(label, steps);
+            self.status = if valid_ids.len() == 1 {
+                let child_name = self.scene.get(valid_ids[0]).map(|p| p.name.clone()).unwrap_or_default();
+                format!("Parented {child_name} under {target_name}")
+            } else {
+                format!("Parented {} pieces under {target_name}", valid_ids.len())
+            };
         }
+    }
+
+    /// Parent piece `child_id` to `parent_id`, placing it after `parent_id` and its children.
+    #[allow(dead_code)]
+    pub fn place_piece_as_child(&mut self, child_id: u64, parent_id: u64) {
+        self.place_pieces_as_children(&[child_id], parent_id);
     }
 }

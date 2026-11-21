@@ -1398,6 +1398,8 @@ pub struct Editor {
     /// Pieces picked with Ctrl/Cmd+click in the Pieces list, by id, that
     /// the transform gizmo moves along with the active piece.
     pub piece_pick: Vec<u64>,
+    /// Anchor piece id for Shift-click range selection in the Pieces outliner.
+    pub piece_select_anchor: Option<u64>,
     /// Pieces whose children are collapsed in the tree view outliner.
     pub folded_pieces: std::collections::HashSet<u64>,
     /// Search filter string for the Pieces outliner.
@@ -1751,6 +1753,7 @@ impl Default for Editor {
             custom_gizmo_pivot: None,
             custom_gizmo_rotation: None,
             piece_pick: Vec::new(),
+            piece_select_anchor: None,
             folded_pieces: std::collections::HashSet::new(),
             piece_filter: String::new(),
             renaming_piece: None,
@@ -10796,6 +10799,116 @@ mod tests {
         // Redo moves it back to parent p2
         e.redo();
         assert_eq!(e.scene.parent_of(p1), Some(p2));
+    }
+
+    #[test]
+    fn place_pieces_as_children_parents_multiple_pieces_and_undoes() {
+        let mut e = editor();
+        e.duplicate_active(false); // piece 1
+        e.duplicate_active(false); // piece 2
+        e.duplicate_active(false); // piece 3
+        let root = e.scene.pieces[0].id;
+        let c1 = e.scene.pieces[1].id;
+        let c2 = e.scene.pieces[2].id;
+        let c3 = e.scene.pieces[3].id;
+
+        // Parent c1, c2, c3 under root
+        e.place_pieces_as_children(&[c1, c2, c3], root);
+        assert_eq!(e.scene.parent_of(c1), Some(root));
+        assert_eq!(e.scene.parent_of(c2), Some(root));
+        assert_eq!(e.scene.parent_of(c3), Some(root));
+
+        // Reordering places them under root in sequence
+        let idx_root = e.scene.index_of(root).unwrap();
+        let idx_c1 = e.scene.index_of(c1).unwrap();
+        let idx_c2 = e.scene.index_of(c2).unwrap();
+        let idx_c3 = e.scene.index_of(c3).unwrap();
+        assert_eq!(idx_c1, idx_root + 1);
+        assert_eq!(idx_c2, idx_root + 2);
+        assert_eq!(idx_c3, idx_root + 3);
+
+        // Undo restores all to unparented in one compound step
+        e.undo();
+        assert_eq!(e.scene.parent_of(c1), None);
+        assert_eq!(e.scene.parent_of(c2), None);
+        assert_eq!(e.scene.parent_of(c3), None);
+
+        // Redo re-parents all three
+        e.redo();
+        assert_eq!(e.scene.parent_of(c1), Some(root));
+        assert_eq!(e.scene.parent_of(c2), Some(root));
+        assert_eq!(e.scene.parent_of(c3), Some(root));
+    }
+
+    #[test]
+    fn unparent_pieces_unparents_multiple_selected_and_undoes() {
+        let mut e = editor();
+        e.duplicate_active(false);
+        e.duplicate_active(false);
+        let root = e.scene.pieces[0].id;
+        let c1 = e.scene.pieces[1].id;
+        let c2 = e.scene.pieces[2].id;
+
+        e.place_pieces_as_children(&[c1, c2], root);
+        assert_eq!(e.scene.parent_of(c1), Some(root));
+        assert_eq!(e.scene.parent_of(c2), Some(root));
+
+        // Unparent multiple
+        e.unparent_pieces(&[c1, c2]);
+        assert_eq!(e.scene.parent_of(c1), None);
+        assert_eq!(e.scene.parent_of(c2), None);
+
+        // Undo restores parents
+        e.undo();
+        assert_eq!(e.scene.parent_of(c1), Some(root));
+        assert_eq!(e.scene.parent_of(c2), Some(root));
+    }
+
+    #[test]
+    fn select_piece_range_shift_click_selects_all_in_between() {
+        let mut e = editor();
+        e.duplicate_active(false); // 1
+        e.duplicate_active(false); // 2
+        e.duplicate_active(false); // 3
+        e.duplicate_active(false); // 4
+        assert_eq!(e.scene.pieces.len(), 5);
+
+        let visible: Vec<usize> = (0..5).collect();
+
+        // Start with piece 0 active, click piece 0 as anchor
+        e.scene.set_active(0);
+        e.piece_pick.clear();
+        e.piece_select_anchor = Some(e.scene.pieces[0].id);
+
+        // Shift-click piece 3: should select pieces 1, 2, 3 into pick
+        e.select_piece_range(3, &visible, false);
+        assert_eq!(e.scene.active_index(), 0);
+        assert_eq!(e.piece_pick.len(), 3);
+        assert!(e.piece_picked(1));
+        assert!(e.piece_picked(2));
+        assert!(e.piece_picked(3));
+        assert!(!e.piece_picked(4));
+
+        // Shift-click piece 1: anchor is still piece 0, range contracts to 0..=1
+        e.select_piece_range(1, &visible, false);
+        assert_eq!(e.scene.active_index(), 0);
+        assert_eq!(e.piece_pick.len(), 1);
+        assert!(e.piece_picked(1));
+        assert!(!e.piece_picked(2));
+
+        // Now select piece 4 as new anchor (normal click)
+        e.scene.set_active(4);
+        e.piece_pick.clear();
+        e.piece_select_anchor = Some(e.scene.pieces[4].id);
+
+        // Shift-click piece 1 (upwards range 1..=4)
+        e.select_piece_range(1, &visible, false);
+        assert_eq!(e.scene.active_index(), 4);
+        assert_eq!(e.piece_pick.len(), 3);
+        assert!(e.piece_picked(1));
+        assert!(e.piece_picked(2));
+        assert!(e.piece_picked(3));
+        assert!(!e.piece_picked(0));
     }
 
     #[test]
