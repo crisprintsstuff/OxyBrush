@@ -693,6 +693,9 @@ impl App {
         ed.update_poly_smooth();
         ed.check_link_topology();
         let ids: Vec<u64> = ed.scene.pieces.iter().filter(|p| p.visible).map(|p| p.id).collect();
+        // A hidden source still supplies the geometry of copies on a shown host.
+        let sources: Vec<u64> =
+            ed.scene.pieces.iter().filter(|p| p.visible).flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
         let previewing = ed.insert_preview.is_some()
             || ed.extract_preview.is_some()
             || ed.curve.is_some()
@@ -702,7 +705,7 @@ impl App {
         // A curve stroke's preview is the whole piece with the stroke
         // applied: draw it in the piece's place, looking like the piece.
         let curve_piece = ed.preview_in_place();
-        g.viewport.retain(|id| ids.contains(&id) || (previewing && id == PREVIEW_ID));
+        g.viewport.retain(|id| ids.contains(&id) || sources.contains(&id) || (previewing && id == PREVIEW_ID));
         let active = ed.scene.try_active().map(|p| p.id).unwrap_or(0);
         // Pieces with their own material: give each distinct one a slot.
         let piece_key = |p: &oxy_doc::Piece| -> Option<String> {
@@ -712,9 +715,6 @@ impl App {
             p.material.clone()
         };
         let mut wanted: Vec<String> = Vec::new();
-        // Hidden sources of surface instances are drawn as their copies.
-        let sources: Vec<u64> =
-            ed.scene.pieces.iter().filter(|p| p.visible).flat_map(|p| p.instancers.iter().map(|i| i.source)).collect();
         for p in ed.scene.pieces.iter().filter(|p| p.visible || sources.contains(&p.id)) {
             if let Some(k) = piece_key(p)
                 && ed.resolve_material(&k).is_some()
@@ -762,13 +762,14 @@ impl App {
         let poly_wire = ed.poly_wire_piece();
         let all_wires = ed.view.wireframe && ed.view.wireframe_opacity > 0.001;
         for p in ed.scene.pieces.iter_mut() {
-            if !p.visible {
+            if !p.visible && !sources.contains(&p.id) {
                 continue;
             }
-            let piece_wire = (all_wires || Some(p.id) == poly_wire)
+            let piece_wire = p.visible
+                && (all_wires || Some(p.id) == poly_wire)
                 && p.mesh.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
-            if Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
+            if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
                 items.push(oxy_render::DrawItem {
                     id: p.id,
