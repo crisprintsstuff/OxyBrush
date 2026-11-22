@@ -4904,17 +4904,8 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     );
 }
 
-/// Small plot of the pressure response curve.
-/// The pen pressure curve: pen pressure across, brush strength up. With
-/// `live`, the pen's current pressure is marked on the curve.
-fn pressure_curve_plot(ui: &mut Ui, ed: &Editor, size: egui::Vec2) -> egui::Response {
-    pressure_curve_plot_of(ui, ed, size, 0)
-}
-
-/// The strength (`which` 0) or size (1) pressure curve, as
-/// [`pressure_curve_plot`].
-fn pressure_curve_plot_of(ui: &mut Ui, ed: &Editor, size: egui::Vec2, which: usize) -> egui::Response {
-    let shape = ed.pressure_curves()[which];
+/// Plot the response against pressure, with an optional live reading.
+fn pressure_curve_plot(ui: &mut Ui, size: egui::Vec2, curve: impl Fn(f32) -> f32, live: Option<f32>) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let p = ui.painter();
     let faint = ui.visuals().widgets.noninteractive.bg_stroke.color;
@@ -4927,14 +4918,11 @@ fn pressure_curve_plot_of(ui: &mut Ui, ed: &Editor, size: egui::Vec2, which: usi
         }
         p.line_segment([to_screen(0.0, 0.0), to_screen(1.0, 1.0)], EStroke::new(1.0, faint.linear_multiply(1.6)));
     }
-    let curve =
-        |x: f32| crate::editor::map_pressure_shaped(x, ed.pressure_gamma, shape, ed.pressure_min, ed.pressure_full);
     let n = if size.x >= 100.0 { 64 } else { 16 };
     let pts: Vec<egui::Pos2> = (0..=n).map(|i| i as f32 / n as f32).map(|x| to_screen(x, curve(x))).collect();
     let accent = ui.visuals().selection.stroke.color;
     p.add(egui::Shape::line(pts, EStroke::new(1.5, accent)));
-    if size.x >= 100.0 && ed.pen_active() {
-        let x = ed.pressure.clamp(0.0, 1.0);
+    if let Some(x) = live {
         p.circle_filled(to_screen(x, curve(x)), 4.0, accent);
     }
     response
@@ -4943,14 +4931,13 @@ fn pressure_curve_plot_of(ui: &mut Ui, ed: &Editor, size: egui::Vec2, which: usi
 /// The two draggable points that shape the pressure curve, drawn on the
 /// large plot (like the two-point curves of tablet drivers). Drag a point;
 /// double-click the plot to straighten it.
-fn pressure_shape_handles(ui: &mut Ui, plot: &egui::Response, ed: &mut Editor, which: usize) {
+fn pressure_shape_handles(ui: &mut Ui, plot: &egui::Response, s: &mut [f32; 4]) {
     let rect = plot.rect;
     let resp = ui.interact(rect, plot.id.with("shape"), egui::Sense::click_and_drag());
     let to_screen = |x: f32, y: f32| egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height());
     let to_unit = |p: egui::Pos2| {
         (((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0))
     };
-    let s = if which == 0 { &mut ed.pressure_shape } else { &mut ed.pressure_shape_size };
     let held_id = plot.id.with("held");
     if resp.drag_started()
         && let Some(p) = resp.interact_pointer_pos()
@@ -4985,18 +4972,20 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new(plain::PEN_SETTINGS).weak().small());
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        ui.vertical(|ui| {
-            ui.label(RichText::new("Strength").strong());
-            let plot = pressure_curve_plot_of(ui, ed, egui::vec2(160.0, 160.0), 0);
-            pressure_shape_handles(ui, &plot, ed, 0);
-            tips::hover(plot, plain::PRESSURE_PLOT);
-        });
-        ui.vertical(|ui| {
-            ui.label(RichText::new("Size").strong());
-            let plot = pressure_curve_plot_of(ui, ed, egui::vec2(160.0, 160.0), 1);
-            pressure_shape_handles(ui, &plot, ed, 1);
-            tips::hover(plot, plain::PRESSURE_PLOT_SIZE);
-        });
+        let (gamma, min, full) = (ed.pressure_gamma, ed.pressure_min, ed.pressure_full);
+        let live = ed.pen_active().then(|| ed.pressure.clamp(0.0, 1.0));
+        for (label, shape, tip) in [
+            ("Strength", &mut ed.pressure_shape, plain::PRESSURE_PLOT),
+            ("Size", &mut ed.pressure_shape_size, plain::PRESSURE_PLOT_SIZE),
+        ] {
+            ui.vertical(|ui| {
+                ui.label(RichText::new(label).strong());
+                let response = |x| crate::editor::map_pressure_shaped(x, gamma, *shape, min, full);
+                let plot = pressure_curve_plot(ui, egui::vec2(160.0, 160.0), response, live);
+                pressure_shape_handles(ui, &plot, shape);
+                tips::hover(plot, tip);
+            });
+        }
         ui.vertical(|ui| {
             ui.label(RichText::new("Presets").strong());
             use crate::editor::LINEAR_PRESSURE_SHAPE as STRAIGHT;
@@ -6595,19 +6584,56 @@ fn stroke_section(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Spray");
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spray, 0.0..=1.0))), plain::SPRAY);
         ui.end_row();
-        ui.label("Pressure curve");
-        ui.horizontal_wrapped(|ui| {
-            tips::hover(
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.pressure_gamma, 0.3..=3.0).logarithmic(true))),
-                plain::PRESSURE_CURVE,
-            );
-            let plot = pressure_curve_plot(ui, ed, egui::vec2(36.0, 24.0)).interact(egui::Sense::click());
-            if tips::hover(plot, plain::PRESSURE_MORE).clicked() {
-                ed.open_settings(crate::editor::SettingsTab::Pen);
-            }
-        });
-        ui.end_row();
     });
+    ui.add_space(6.0);
+    brush_pressure_curves(ui, ed);
+}
+
+fn brush_pressure_curves(ui: &mut Ui, ed: &mut Editor) {
+    let kind = ed.brush_kind;
+    let defaults = ed.global_pressure_curves();
+    let overrides = ed.brush_pressure_overrides(kind);
+    let curves = ed.pressure_curves(kind);
+    let live = ed.pen_active().then(|| ed.stroke_pressure());
+    let edge = (ui.available_width() - 8.0).clamp(48.0, 104.0);
+    ui.horizontal_wrapped(|ui| {
+        for (i, label) in ["Strength pressure", "Size pressure"].into_iter().enumerate() {
+            ui.push_id(i, |ui| {
+                ui.vertical(|ui| {
+                    ui.label(label);
+                    let mut shape = curves[i];
+                    let plot = pressure_curve_plot(
+                        ui,
+                        egui::vec2(edge, edge * 0.70),
+                        |x| crate::editor::shape_pressure(x, shape),
+                        live,
+                    );
+                    let custom = ed.settings_per_brush && overrides[i].is_some();
+                    if custom {
+                        pressure_shape_handles(ui, &plot, &mut shape);
+                        if shape != curves[i] {
+                            ed.set_brush_pressure_curve(i, Some(shape));
+                        }
+                    }
+                    tips::hover(plot, plain::BRUSH_PRESSURE_PLOT);
+                    let (action, tip) = if !ed.settings_per_brush {
+                        ("Uses global", plain::BRUSH_PRESSURE_DISABLED)
+                    } else if custom {
+                        ("Use global", plain::BRUSH_PRESSURE_GLOBAL)
+                    } else {
+                        ("Customize", plain::BRUSH_PRESSURE_CUSTOMIZE)
+                    };
+                    let button = ui.add_enabled(ed.settings_per_brush, egui::Button::new(action).small());
+                    if tips::hover(button, tip).clicked() {
+                        ed.set_brush_pressure_curve(i, (!custom).then_some(defaults[i]));
+                    }
+                });
+            });
+        }
+    });
+    if ui.small_button("Pen & tablet defaults…").clicked() {
+        ed.open_settings(crate::editor::SettingsTab::Pen);
+    }
 }
 
 fn alpha_section(ui: &mut Ui, ed: &mut Editor) {

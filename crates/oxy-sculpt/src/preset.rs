@@ -36,6 +36,8 @@ pub struct BrushPreset {
     pub spacing: f32,
     pub pressure_strength: bool,
     pub pressure_radius: bool,
+    /// Strength and size curve overrides. None uses the tablet default.
+    pub pressure_curves: [Option<[f32; 4]>; 2],
     pub front_faces_only: bool,
     pub auto_smooth: f32,
     /// Gravity, 0..=1 (see `BrushSettings::gravity`).
@@ -72,6 +74,7 @@ impl BrushPreset {
             spacing: 0.15,
             pressure_strength: true,
             pressure_radius: false,
+            pressure_curves: [None; 2],
             front_faces_only: false,
             auto_smooth: 0.0,
             gravity: 0.0,
@@ -103,6 +106,11 @@ impl BrushPreset {
         kv("spacing", self.spacing.to_string());
         kv("pressure_strength", self.pressure_strength.to_string());
         kv("pressure_radius", self.pressure_radius.to_string());
+        for (key, shape) in PRESSURE_CURVE_KEYS.into_iter().zip(self.pressure_curves) {
+            if let Some([x1, y1, x2, y2]) = shape {
+                kv(key, format!("{x1}, {y1}, {x2}, {y2}"));
+            }
+        }
         kv("front_faces_only", self.front_faces_only.to_string());
         kv("auto_smooth", self.auto_smooth.to_string());
         kv("gravity", self.gravity.to_string());
@@ -136,6 +144,7 @@ impl BrushPreset {
             get(key).and_then(|v| v.parse::<f32>().ok()).filter(|x| range.contains(x))
         };
         let flag = |key: &str| get(key).and_then(|v| v.parse::<bool>().ok());
+        p.pressure_curves = PRESSURE_CURVE_KEYS.map(|key| get(key).and_then(parse_pressure_shape));
         if let Some(x) = num("radius_pt", 1.0..=1000.0) {
             p.radius_pt = x;
         }
@@ -217,6 +226,18 @@ impl BrushPreset {
             .map_err(|_| "the brush code is damaged (could not unpack it)")?;
         BrushPreset::from_text(&String::from_utf8_lossy(&text))
     }
+}
+
+const PRESSURE_CURVE_KEYS: [&str; 2] = ["pressure_shape", "pressure_shape_size"];
+
+/// Read the four unit-square control coordinates of a pressure curve.
+pub fn parse_pressure_shape(text: &str) -> Option<[f32; 4]> {
+    let mut values = text.split(',');
+    let mut shape = [0.0; 4];
+    for point in &mut shape {
+        *point = values.next()?.trim().parse().ok().filter(|x| (0.0..=1.0).contains(x))?;
+    }
+    values.next().is_none().then_some(shape)
 }
 
 fn one_line(s: &str) -> String {
@@ -370,6 +391,7 @@ mod tests {
     fn sample() -> BrushPreset {
         let mut p = BrushPreset::new("Dragon scales = big", BrushKind::ClayStrips);
         p.radius_pt = 33.5;
+        p.pressure_curves = [Some([0.4, 0.1, 0.6, 0.9]), Some([0.2, 0.3, 0.7, 0.8])];
         p.strength = 0.73;
         p.falloff = Falloff::Constant;
         p.focal_shift = -0.35;
@@ -394,6 +416,11 @@ mod tests {
         assert_eq!(q, BrushPreset::new("Untitled brush", BrushKind::Pinch));
         assert!(BrushPreset::from_text("strength = 0.5").is_err(), "a preset needs a brush");
         assert!(BrushPreset::from_text("brush = laser").is_err());
+        // Invalid, extra or nonfinite coordinates leave the global default in effect.
+        for invalid in ["NaN, 0, 1, 1", "0, 0, 1, 1, junk", "0, -1, 1, 1", "0, 1"] {
+            let t = format!("brush = clay\npressure_shape = {invalid}\n");
+            assert_eq!(BrushPreset::from_text(&t).unwrap().pressure_curves, [None; 2]);
+        }
         // Gravity: kept, and out-of-range values fall back to off.
         let mut g = BrushPreset::new("Drape", BrushKind::Clay);
         g.gravity = 0.4;
