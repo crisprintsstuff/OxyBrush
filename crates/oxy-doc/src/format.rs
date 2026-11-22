@@ -59,7 +59,7 @@
 //!   piece, nor a piece that is itself a copy) and the transform from the
 //!   original to the copy, column by column. The `PIEC` holds the copy's
 //!   mesh as it was, so older readers skip this and open an ordinary piece.
-//! - `LITE` (optional, since 4.0.0-beta.24): the **preceding** `PIEC`
+//! - `LITE` (optional, since 4.0.0-beta.23.2): the **preceding** `PIEC`
 //!   was saved shown lighter (Lighter inactive pieces): its `MRES` is at a
 //!   lower level than the one it was being worked at, `level:u32` (from 0).
 //!   The app shows that level again. Older readers skip it and open the

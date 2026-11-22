@@ -4,18 +4,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-- **Circle, ellipse and curve selections** for masking and visibility (**L** or the Mask panel's Selection row). A circle drags out from its centre and an ellipse from corner to corner; with either, Ctrl+drag draws it wherever it starts. A curve is clicked point by point and applied with Enter: everything on one side of it is masked or shown (Alt: the other side). Symmetry, Alt after the drag, and Space to move the shape work as with the rectangle and lasso.
-- **Poly Edit Knife** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370), [RFC 0033](docs/rfcs/0033-poly-edit-knife.md)). Turn on **Knife** in the Poly Edit window and click points on the model to draw a cut; clicks snap to corners and edges. Enter cuts: the path follows the visible surface, adds a point on every edge it crosses and splits every face it crosses, as one undo step. Backspace takes the last point back, Esc cancels, and clicking the first point again cuts a closed loop.
-- **Poly Edit To Circle** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370)). Round the picked points, edges or face corners toward a fitted circle. Amount controls how far they move, and the edit is one undo step.
-
-- **Per-brush pressure curves** ([#426](https://github.com/crisprintsstuff/OxyBrush/issues/426)). Stroke shows strength and size curves. Customize either one for the active brush, or let it follow the defaults in Pen & tablet. Brush presets keep the overrides.
-
-- **Alpha library** ([#425](https://github.com/crisprintsstuff/OxyBrush/issues/425)). Imported PNG alphas are available in every tab and after a restart. Projects still embed the alphas imported into them and the ones their editable strokes use.
-
-- **Mirror duplicate axes** ([#427](https://github.com/crisprintsstuff/OxyBrush/issues/427)). Choose X, Y or Z under **Pieces > Mirror duplicate** or **Mirror duplicate linked**. All six commands are also in the command palette.
+## [4.0.0-beta.23.2] - 2026-11-22
 
 ### Added
 
+- **Circle, ellipse and curve selections** for masking and visibility (**L** or the Mask panel's Selection row). A circle drags out from its centre and an ellipse from corner to corner; with either, Ctrl+drag draws it wherever it starts. A curve is clicked point by point and applied with Enter: everything on one side of it is masked or shown (Alt: the other side). Symmetry, Alt after the drag, and Space to move the shape work as with the rectangle and lasso.
+- **Poly Edit Knife** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370), [RFC 0033](docs/rfcs/0033-poly-edit-knife.md)). Turn on **Knife** in the Poly Edit window and click points on the model to draw a cut; clicks snap to corners and edges. Enter cuts: the path follows the visible surface, adds a point on every edge it crosses and splits every face it crosses, as one undo step. Backspace takes the last point back, Esc cancels, and clicking the first point again cuts a closed loop.
+- **Poly Edit To Circle** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370)). Round the picked points, edges or face corners toward a fitted circle. Amount controls how far they move, and the edit is one undo step.
+- **Per-brush pressure curves** ([#426](https://github.com/crisprintsstuff/OxyBrush/issues/426)). Stroke shows strength and size curves. Customize either one for the active brush, or let it follow the defaults in Pen & tablet. Brush presets keep the overrides.
+- **Alpha library** ([#425](https://github.com/crisprintsstuff/OxyBrush/issues/425)). Imported PNG alphas are available in every tab and after a restart. Projects still embed the alphas imported into them and the ones their editable strokes use.
+- **Mirror duplicate axes** ([#427](https://github.com/crisprintsstuff/OxyBrush/issues/427)). Choose X, Y or Z under **Pieces > Mirror duplicate** or **Mirror duplicate linked**. All six commands are also in the command palette.
 - **Lighter inactive pieces** (Preferences > General, off by default): a piece with subdivision levels that you aren't working on is shown at its highest level under a triangle budget (500,000 by default, adjustable), which frees its full-detail mesh: about 66 bytes a triangle, plus the graphics card's copy. Picking it brings its own level back, exactly as it was, in the background (about a second for a 6-million-triangle piece; leaving it takes about a quarter of a second). Export, Join, Merge, Booleans, copy, the Blender bridge, agents, plugins and undo always see the full level. Pieces tied to others (linked copies and their originals, surface instance hosts and sources, pieces with living strokes) stay in full. The Pieces list marks lighter pieces with `~` before their triangle count. A project saved while pieces are lighter records each one's own level in a new optional `LITE` section, so it comes back after reopening; older versions skip it and open the piece at the lighter level, with every level still there.
 
 ### Fixed
@@ -1079,7 +1077,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...HEAD
+[4.0.0-beta.23.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...v4.0.0-beta.23.2
 [4.0.0-beta.23]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...v4.0.0-beta.23
 [4.0.0-beta.22]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...v4.0.0-beta.22
 [4.0.0-beta.21.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.4
