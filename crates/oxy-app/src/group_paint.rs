@@ -1,7 +1,11 @@
 //! The Paint Groups brush: paint face groups with a stroke, as you would
 //! paint a mask. Each stroke makes a new group; Alt grows the group where
 //! the stroke starts; Shift smooths the borders between groups. Symmetry and "Front faces only" apply. The whole
-//! stroke is one undo step (a face edit, architecture invariant 4).
+//! stroke is one undo step (a face edit, architecture invariant 4; a Shift
+//! stroke also moves points, recorded with it as one step).
+
+/// How far a Shift dab moves border points toward a smooth line, per dab.
+const SMOOTH_STRENGTH: f32 = 0.5;
 
 use crate::editor::{Drag, Editor};
 use glam::Vec3;
@@ -33,11 +37,17 @@ impl Editor {
     }
 
     /// Start a Shift stroke with Paint Groups: smooth the borders between
-    /// groups under the brush, taking off spikes and filling notches (#303).
+    /// groups under the brush. Faces sticking out of a group or notched
+    /// into it change group (#303), and the points along each border slide
+    /// into a smooth line, as Deform's "Polish, keep group edges" does
+    /// (#440: changing whole faces alone left the stair-stepped edges of
+    /// the triangles).
     pub(crate) fn start_group_relax(&mut self, hit: RayHit, d: Vec3) {
-        let mesh = &self.scene.active().mesh;
+        let doc = &mut self.documents[self.active_document];
+        let mesh = &doc.scene.active().mesh;
         let before = mesh.groups().to_vec();
-        let piece = self.scene.active().id;
+        let piece = doc.scene.active().id;
+        doc.history.begin("Smooth groups", piece, mesh);
         self.view.show_groups = true;
         self.drag = Drag::GroupPaint { piece, group: 0, before, last: hit.point, changed: false, relax: true };
         self.group_dab(hit.point, d);
@@ -61,12 +71,17 @@ impl Editor {
         let transforms = self.symmetry.transforms();
         let front = self.front_faces_only;
         let Drag::GroupPaint { piece, group, last, changed, relax, .. } = &mut self.drag else { return };
-        let Some(target) = self.documents[self.active_document].scene.get_mut(*piece) else { return };
+        let doc = &mut self.documents[self.active_document];
+        let Some(target) = doc.scene.get_mut(*piece) else { return };
+        let history = &mut doc.history;
         for t in transforms {
             let q = center + t * (p - center);
             let facing = front.then(|| t * d);
             *changed |= if *relax {
-                target.mesh.relax_groups(q, radius, facing)
+                let regrouped = target.mesh.relax_groups(q, radius, facing);
+                let moved =
+                    target.mesh.smooth_group_borders(q, radius, SMOOTH_STRENGTH, facing, |m, c| history.touch(m, c));
+                regrouped || moved
             } else {
                 target.mesh.paint_group(q, radius, facing, *group)
             };
@@ -85,18 +100,31 @@ impl Editor {
         relax: bool,
     ) {
         if !changed {
+            if relax {
+                self.history.cancel();
+            }
             return;
         }
-        let Some(p) = self.scene.get_mut(piece) else { return };
-        if cancel || before.len() != p.mesh.triangle_count() {
-            if before.len() == p.mesh.triangle_count() {
+        let doc = &mut self.documents[self.active_document];
+        if cancel || doc.scene.get(piece).is_none_or(|p| before.len() != p.mesh.triangle_count()) {
+            if relax {
+                doc.history.revert_pending(&mut doc.scene);
+            }
+            if let Some(p) = doc.scene.get_mut(piece)
+                && before.len() == p.mesh.triangle_count()
+            {
                 p.mesh.set_groups(before);
             }
             self.status = "Group painting cancelled".into();
             return;
         }
+        let Some(p) = doc.scene.get(piece) else { return };
         let hidden = p.mesh.hidden().to_vec();
-        let label = if relax { "Smooth groups" } else { "Paint groups" };
-        self.history.record_faces(label, piece, before, hidden);
+        if relax {
+            // The moved points and the changed groups, as one step.
+            doc.history.commit_with_faces(before, hidden);
+        } else {
+            doc.history.record_faces("Paint groups", piece, before, hidden);
+        }
     }
 }

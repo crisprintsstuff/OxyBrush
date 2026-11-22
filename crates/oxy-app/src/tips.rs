@@ -916,7 +916,7 @@ pub mod plain {
     pub const SELECTION_LASSO: &str = "The selection is a lasso: draw round what you want.";
     pub const SELECTION_CIRCLE: &str = "The selection is a circle: drag out from its centre.";
     pub const SELECTION_ELLIPSE: &str = "The selection is an ellipse: drag from corner to corner of the box it fills.";
-    pub const SELECTION_CURVE: &str = "The selection is everything on one side of a line through points you click: click the first point with the mask key held (add Shift for visibility), click the rest, then press Enter. It takes the side on your right as you draw; hold Alt for the other. Backspace takes a point back, Esc cancels.";
+    pub const SELECTION_CURVE: &str = "The selection is everything on one side of a line: with the mask key held (add Shift for visibility), drag it out and let go, or click its points and press Enter. Tap Alt while drawing for a point the line bends through, twice quickly for a sharp corner. It takes the side on your right as you draw; hold Alt as you apply for the other. Backspace takes a point back, Esc cancels.";
     pub const PAINT_COLOR: &str = "Color the Paint brush uses. Hold Alt while painting to erase.";
     pub const SECTION_PIECES: &str = "Meshes in this scene. The highlighted row is the one you sculpt.";
     pub const SECTION_INSTANCES: &str = "Surface instances: copies of another piece on faces, points, a face group, a mask, or scattered over the surface. They follow the surface as you sculpt, and change together when you edit the piece they copy.";

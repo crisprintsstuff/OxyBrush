@@ -5,11 +5,70 @@
 //!
 //! Circles and ellipses become outlines tested like a lasso. A curve
 //! selects the side on your right as you draw it (below a line drawn left
-//! to right); Alt when applying takes the other side. Its ends carry on
-//! straight to the edge of the view, so the whole view is split in two.
+//! to right); Alt held when applying takes the other side. Its ends carry
+//! on straight to the edge of the view, so the whole view is split in two.
+//!
+//! A curve is drawn like a pen path (#446): drag from the first point and
+//! release to apply (or click points and press Enter). It runs straight
+//! between corner points and bends smoothly through smooth ones: a quick
+//! Alt tap while drawing adds a smooth point where the pointer is, and a
+//! second quick tap turns it into a sharp corner.
 
 use crate::editor::{Editor, SelectShape};
 use glam::Vec2;
+use std::time::{Duration, Instant};
+
+/// Alt down and up within this long is a tap (longer is held, for the
+/// other side).
+const ALT_TAP: Duration = Duration::from_millis(300);
+/// A second tap within this long of the first makes its point sharp.
+const DOUBLE_TAP: Duration = Duration::from_millis(450);
+/// Samples per piece of curve next to a smooth point.
+const CURVE_SAMPLES: usize = 16;
+/// A drag from the first point further than this (logical points) draws
+/// the curve by dragging; less is a click, and points are clicked out.
+const DRAG_PT: f32 = 6.0;
+
+/// The curve through `points` as a line of samples: straight between two
+/// corners, a smooth cubic (Catmull–Rom tangents) where an end is a smooth
+/// point. The first and last points are always ends of the line.
+pub(crate) fn curve_path(points: &[Vec2], smooth: &[bool]) -> Vec<Vec2> {
+    let n = points.len();
+    if n < 2 {
+        return points.to_vec();
+    }
+    let is_smooth = |i: usize| i > 0 && i + 1 < n && smooth.get(i).copied().unwrap_or(false);
+    let tangent = |i: usize| {
+        if is_smooth(i) {
+            (points[i + 1] - points[i - 1]) * 0.5
+        } else if i + 1 < n {
+            points[i + 1] - points[i]
+        } else {
+            points[i] - points[i - 1]
+        }
+    };
+    let mut out = vec![points[0]];
+    for i in 0..n - 1 {
+        let (a, b) = (points[i], points[i + 1]);
+        if !is_smooth(i) && !is_smooth(i + 1) {
+            out.push(b);
+            continue;
+        }
+        // A sharp end points straight at the other end.
+        let ta = if is_smooth(i) { tangent(i) } else { b - a };
+        let tb = if is_smooth(i + 1) { tangent(i + 1) } else { b - a };
+        for k in 1..=CURVE_SAMPLES {
+            let t = k as f32 / CURVE_SAMPLES as f32;
+            let (t2, t3) = (t * t, t * t * t);
+            let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+            let h10 = t3 - 2.0 * t2 + t;
+            let h01 = -2.0 * t3 + 3.0 * t2;
+            let h11 = t3 - t2;
+            out.push(a * h00 + ta * h10 + b * h01 + tb * h11);
+        }
+    }
+    out
+}
 
 /// Points on a circle or ellipse outline.
 const OUTLINE_POINTS: usize = 72;
@@ -75,12 +134,14 @@ impl Editor {
             self.select_curve_apply(other);
             return true;
         }
+        curve.held = false;
         if curve.points.last().is_none_or(|l| l.distance(p) > 1.0) {
             curve.points.push(p);
+            curve.smooth.push(false);
         }
         let n = curve.points.len();
         self.status = format!(
-            "Curve: {n} point(s); Enter applies (Alt: the other side), Backspace takes the last back, Esc cancels"
+            "Curve: {n} point(s); tap Alt for a curve point, twice for a corner; Enter applies (Alt held: the other side), Backspace takes the last back, Esc cancels"
         );
         true
     }
@@ -89,6 +150,7 @@ impl Editor {
     pub fn select_curve_back(&mut self) {
         if let Some(curve) = self.select_curve.as_mut() {
             curve.points.pop();
+            curve.smooth.pop();
             if curve.points.is_empty() {
                 self.select_curve = None;
                 self.status = "Curve selection cancelled".into();
@@ -96,15 +158,73 @@ impl Editor {
         }
     }
 
+    /// The press that started the curve is let go: after a drag, the curve
+    /// ends at the pointer and applies (Alt held: the other side); after a
+    /// click, points are clicked out from here. RETURNS: whether a curve
+    /// took the release.
+    pub(crate) fn select_curve_release(&mut self) -> bool {
+        let reach = DRAG_PT * self.pixels_per_point.max(0.5);
+        let at = self.pointer;
+        let other = self.modifiers.alt;
+        let Some(curve) = self.select_curve.as_mut() else { return false };
+        if !curve.held {
+            return false;
+        }
+        curve.held = false;
+        let dragged = at.is_some_and(|p| curve.points.iter().any(|q| q.distance(p) > reach));
+        if let (true, Some(p)) = (dragged, at) {
+            if curve.points.last().is_none_or(|l| l.distance(p) > 1.0) {
+                curve.points.push(p);
+                curve.smooth.push(false);
+            }
+            self.select_curve_apply(other);
+        }
+        true
+    }
+
+    /// Alt went down (`down`) or up while a curve is being drawn: a quick
+    /// tap adds a smooth point at the pointer, a second quick tap makes it
+    /// a sharp corner (#446).
+    pub fn select_curve_alt(&mut self, down: bool) {
+        let at = self.pointer;
+        let Some(curve) = self.select_curve.as_mut() else { return };
+        let now = Instant::now();
+        if down {
+            curve.alt_down = Some(now);
+            return;
+        }
+        let Some(start) = curve.alt_down.take() else { return };
+        if now.duration_since(start) > ALT_TAP {
+            return;
+        }
+        let double =
+            curve.last_tap.is_some_and(|(t, i)| now.duration_since(t) <= DOUBLE_TAP && i + 1 == curve.points.len());
+        if double {
+            let i = curve.points.len() - 1;
+            curve.smooth[i] = false;
+            curve.last_tap = None;
+            self.status = "Curve: corner point".into();
+            return;
+        }
+        let Some(p) = at else { return };
+        if curve.points.last().is_some_and(|l| l.distance(p) <= 1.0) {
+            return;
+        }
+        curve.points.push(p);
+        curve.smooth.push(true);
+        curve.last_tap = Some((now, curve.points.len() - 1));
+        self.status = "Curve: curve point (tap Alt again for a corner)".into();
+    }
+
     /// Apply the curve: its right-hand side (the other side with
     /// `other_side`), as one undo step.
     pub fn select_curve_apply(&mut self, other_side: bool) {
         let Some(curve) = self.select_curve.take() else { return };
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
-        let points: Vec<Vec2> = curve.points.iter().map(|p| *p - origin).collect();
+        let points: Vec<Vec2> = curve_path(&curve.points, &curve.smooth).iter().map(|p| *p - origin).collect();
         let spread = points.iter().map(|p| p.distance(points[0])).fold(0.0, f32::max);
         if points.len() < 2 || spread < 2.0 {
-            self.status = "Curve: click at least two points".into();
+            self.status = "Curve: draw or click at least two points".into();
             return;
         }
         self.select_region(curve.action, move |s| curve_side(&points, s) != other_side, false, false);
@@ -238,6 +358,68 @@ mod tests {
         assert_eq!(e.select_curve.as_ref().unwrap().points.len(), 1);
         e.cancel_drag();
         assert!(e.select_curve.is_none());
+    }
+
+    #[test]
+    fn a_curve_drawn_by_dragging_applies_on_release() {
+        // #446: drag from the first point, let go to apply.
+        let mut e = editor();
+        e.selection_shape = SelectShape::Curve;
+        e.modifiers.ctrl = true;
+        e.pointer = Some(Vec2::new(250.0, 290.0));
+        e.pointer_down(PointerButton::Primary);
+        e.modifiers.ctrl = false;
+        for k in 1..=10 {
+            e.pointer_moved(Vec2::new(250.0 + k as f32 * 30.0, 290.0));
+        }
+        assert!(e.select_curve.is_some(), "drawing while held");
+        e.pointer_up();
+        assert!(e.select_curve.is_none(), "applied on release");
+        let masked = masked_on_screen(&e);
+        assert!(!masked.is_empty() && masked.iter().all(|p| p.y > 285.0), "below the line");
+    }
+
+    #[test]
+    fn an_alt_tap_bends_the_curve_and_a_second_makes_a_corner() {
+        // #446: tap Alt while drawing for a smooth point, twice for a sharp one.
+        let mut e = editor();
+        e.selection_shape = SelectShape::Curve;
+        e.modifiers.ctrl = true;
+        e.pointer = Some(Vec2::new(250.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.modifiers.ctrl = false;
+        let tap = |e: &mut Editor| {
+            e.select_curve_alt(true);
+            e.select_curve_alt(false);
+        };
+        e.pointer_moved(Vec2::new(400.0, 250.0));
+        tap(&mut e);
+        let c = e.select_curve.clone().unwrap();
+        assert_eq!((c.points.len(), c.smooth.clone()), (2, vec![false, true]));
+        // With the next point, the line bends smoothly through it: more
+        // samples than points, none of them off the bend.
+        let path = curve_path(&[c.points[0], c.points[1], Vec2::new(550.0, 300.0)], &[false, true, false]);
+        assert!(path.len() > 3 && path.contains(&c.points[1]));
+        let ys: Vec<f32> = path.iter().map(|p| p.y).collect();
+        assert!(ys.iter().all(|&y| (248.0..=301.0).contains(&y)), "{ys:?}");
+        // A second quick tap: that point becomes a corner, no new point.
+        tap(&mut e);
+        let c = e.select_curve.clone().unwrap();
+        assert_eq!((c.points.len(), c.smooth.clone()), (2, vec![false, false]));
+        // Between corners the curve is straight: just the points.
+        assert_eq!(curve_path(&c.points, &c.smooth), c.points);
+        // A held Alt (not a tap) adds nothing.
+        e.select_curve_alt(true);
+        if let Some(c) = e.select_curve.as_mut() {
+            c.alt_down = Some(std::time::Instant::now() - std::time::Duration::from_secs(1));
+        }
+        e.select_curve_alt(false);
+        assert_eq!(e.select_curve.as_ref().unwrap().points.len(), 2);
+        // Releasing far from the points applies.
+        e.pointer_moved(Vec2::new(550.0, 300.0));
+        e.pointer_up();
+        assert!(e.select_curve.is_none());
+        assert!(!masked_on_screen(&e).is_empty());
     }
 
     #[test]

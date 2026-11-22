@@ -724,21 +724,33 @@ impl SelectShape {
     }
 }
 
-/// A curve selection being clicked out: what it will do, and its points
-/// (physical px).
-#[derive(Debug, Clone, PartialEq)]
+/// A curve selection being drawn: what it will do, and its points
+/// (physical px), each smooth (the curve bends through it) or a sharp
+/// corner. Drawn by dragging from the first point (released to apply) or
+/// by clicking points (Enter applies); an Alt tap while drawing adds a
+/// smooth point at the pointer, a second quick tap makes it sharp (#446).
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct SelectCurve {
     pub action: SelectAction,
     pub points: Vec<Vec2>,
+    /// Per point: smooth (true) or a sharp corner.
+    pub smooth: Vec<bool>,
+    /// The press that started it is still held (drawing by dragging).
+    pub held: bool,
+    /// When Alt went down while drawing, to tell a tap from a hold.
+    pub alt_down: Option<std::time::Instant>,
+    /// The last Alt tap and the point it added, for a double tap.
+    pub last_tap: Option<(std::time::Instant, usize)>,
 }
 
 /// What a box/lasso selection does on release.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SelectAction {
     /// Hide everything outside the selection.
     ShowOnly,
     /// Hide the selection.
     Hide,
+    #[default]
     Mask,
     Unmask,
 }
@@ -835,6 +847,12 @@ pub enum Drag {
     Retopo(Box<crate::retopo::RetopoDrag>),
     /// A drag in the Poly Edit tool (RFC 0018).
     PolyEdit(Box<crate::polyedit::PolyDrag>),
+    /// Ctrl/Cmd+drag in Poly Edit: paint the pick (#442), adding what the
+    /// pointer passes over (`adding`) or, when the press took its element
+    /// out of the pick, taking it out.
+    PolyPaintPick {
+        adding: bool,
+    },
     /// The transform gizmo on Poly Edit's picked faces, edges or points.
     PolyGizmo(Box<crate::polyedit::PolyGizmoDrag>),
     /// The transform gizmo over several picked pieces (#274).
@@ -1168,7 +1186,6 @@ pub struct Editor {
     /// Show inactive pieces with levels lighter (opt in), under this many
     /// triangles each.
     pub lighter_inactive: bool,
-    pub lighter_budget: usize,
     /// ...including its size (off: one size for every brush).
     pub size_per_brush: bool,
     /// Stored brush looks, including any pressure overrides for the active brush.
@@ -1316,6 +1333,9 @@ pub struct Editor {
     /// depth of the model.
     pub grab_through: bool,
     /// Size/strength menu at the cursor (right click, or hold Q).
+    /// The quick menu's Size or Focal shift slider is under the pointer
+    /// or being dragged: the brush ring shows where the menu was opened (#433).
+    pub quick_menu_ring: bool,
     pub quick_menu: Option<QuickMenu>,
     /// Key that opened a held quick menu. Releasing that key closes it.
     pub quick_menu_key: Option<keymap::KeyId>,
@@ -1567,7 +1587,6 @@ impl Default for Editor {
             remember_brushes: false,
             settings_per_brush: true,
             lighter_inactive: false,
-            lighter_budget: crate::lighter::DEFAULT_LIGHTER_BUDGET,
             size_per_brush: false,
             brush_looks: Default::default(),
             look_kind: None,
@@ -1645,6 +1664,7 @@ impl Default for Editor {
             pending: None,
             frame_ms: 0.0,
             grab_through: false,
+            quick_menu_ring: false,
             quick_menu: None,
             quick_menu_key: None,
             pointer_slider: None,
@@ -2039,7 +2059,6 @@ impl Editor {
             remember_brushes: self.remember_brushes,
             settings_per_brush: self.settings_per_brush,
             lighter_inactive: self.lighter_inactive,
-            lighter_budget: self.lighter_budget,
             size_per_brush: self.size_per_brush,
             brush_looks: if self.remember_brushes { self.brush_looks_to_save() } else { Vec::new() },
             undo_per_piece: self.undo_per_piece,
@@ -2402,7 +2421,6 @@ impl Editor {
         }
         self.settings_per_brush = s.settings_per_brush;
         self.lighter_inactive = s.lighter_inactive;
-        self.lighter_budget = s.lighter_budget;
         self.size_per_brush = s.size_per_brush;
         self.brush_looks =
             s.brush_looks.iter().filter(|l| l.kind != self.brush_kind).map(|l| (l.kind, l.clone())).collect();
@@ -2648,8 +2666,9 @@ impl Editor {
                 (false, false) => SelectAction::Mask,
                 (false, true) => SelectAction::Unmask,
             };
-            self.select_curve = Some(SelectCurve { action, points: vec![p] });
-            self.status = "Curve: click more points; Enter applies (Alt: the other side), Backspace takes the last back, Esc cancels".into();
+            self.select_curve =
+                Some(SelectCurve { action, points: vec![p], smooth: vec![false], held: true, ..Default::default() });
+            self.status = "Curve: drag (or click points); tap Alt for a curve point, twice for a corner; release (or Enter) applies, Alt held: the other side".into();
             return;
         }
         // A circle or ellipse is usually centred on what you want, so with
@@ -3573,6 +3592,7 @@ impl Editor {
             | Drag::SphereSize { .. }
             | Drag::Retopo(_)
             | Drag::PolyEdit(_)
+            | Drag::PolyPaintPick { .. }
             | Drag::PolyGizmo(_) => true,
             Drag::Orbit => {
                 // Orbit around the cursor: the pivot is picked where the
@@ -3921,6 +3941,9 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self) {
+        if self.select_curve_release() {
+            return;
+        }
         self.flush_drag();
         self.commit_instancer_edit();
         if self.part_placement.as_ref().is_some_and(|p| p.moving.is_some()) {
@@ -4324,9 +4347,10 @@ impl Editor {
         let is_click = points.len() < 2 || points.iter().all(|p| p.distance(points[0]) < 4.0);
         if is_click {
             match (action, click_group) {
-                (SelectAction::ShowOnly | SelectAction::Hide, Some(g)) => {
-                    self.edit_faces("Isolate group", |mesh| mesh.isolate_group(g))
-                }
+                (SelectAction::ShowOnly, Some(g)) => self.edit_faces("Isolate group", |mesh| mesh.isolate_group(g)),
+                // With the invert key too (Ctrl+Shift+Alt+click), the
+                // opposite: hide that group (#435).
+                (SelectAction::Hide, Some(g)) => self.edit_faces("Hide group", |mesh| mesh.hide_group(g)),
                 (SelectAction::ShowOnly | SelectAction::Hide, None) => self.edit_faces("Show all", Mesh::show_all),
                 // A click on empty space inverts the mask (with no mask,
                 // that masks everything).
@@ -12689,6 +12713,25 @@ mod tests {
         assert!(e.scene.active().mesh.any_hidden());
     }
 
+    #[test]
+    fn ctrl_shift_alt_click_hides_the_group_under_the_cursor() {
+        // #435: the opposite of Ctrl+Shift+click.
+        let mut e = editor();
+        let piece = e.scene.active_mut();
+        let groups: Vec<u32> =
+            piece.mesh.triangles.iter().map(|t| u32::from(piece.mesh.positions[t[0] as usize].x > 0.0)).collect();
+        piece.mesh.set_groups(groups.clone());
+        e.modifiers = Modifiers { ctrl: true, shift: true, alt: true };
+        center(&mut e);
+        let (o, d) = e.camera.ray(e.canvas_local(e.pointer.unwrap()), e.canvas_size());
+        let g = groups[e.scene.active().mesh.raycast(o, d).unwrap().triangle as usize];
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        let mesh = &e.scene.active().mesh;
+        assert!(mesh.groups().iter().zip(mesh.hidden()).all(|(&gg, &h)| h == (gg == g)), "only that group hidden");
+        assert_eq!(e.history.undo_labels().last(), Some("Hide group"));
+    }
+
     fn drag(e: &mut Editor, from: Vec2, to: Vec2) {
         e.pointer = Some(from);
         e.pointer_down(PointerButton::Primary);
@@ -16754,11 +16797,17 @@ mod tests {
         e.modifiers.shift = false;
         assert_eq!(e.scene.active().mesh.groups()[hole], 1, "the hole fills");
         assert_eq!(group_count(&e, 2), 0, "smoothing makes no new group");
-        assert_eq!(e.scene.active().mesh.positions, positions, "the surface doesn't move");
-        assert_eq!(e.history.undo_labels().count(), undo_count + 1);
+        // Border points slide along the surface to smooth the line (#440):
+        // they stay on the sphere (to within a sliver of its radius).
+        let moved = e.scene.active().mesh.positions.iter().zip(&positions).filter(|(a, b)| a != b).count();
+        assert!(moved > 0, "the border's points slide into a smoother line");
+        let off = e.scene.active().mesh.positions.iter().map(|p| (p.length() - 1.0).abs()).fold(0.0, f32::max);
+        assert!(off < 0.01, "{off}");
+        assert_eq!(e.history.undo_labels().count(), undo_count + 1, "points and groups in one step");
         assert_eq!(e.history.undo_labels().last(), Some("Smooth groups"));
         e.undo();
         assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
+        assert_eq!(e.scene.active().mesh.positions, positions, "undo puts the points back too");
     }
 
     #[test]

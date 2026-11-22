@@ -7,15 +7,22 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ### Added
 
 - **Knife: cut a face out of a face** ([#450](https://github.com/crisprintsstuff/OxyBrush/issues/450)). Click points inside one face, without touching its edges, then click the first point again: the loop becomes a new face, and the rest of the face becomes a ring of faces joining the loop to the face's corners (a square loop in a quad gives a quad with four quads round it, as an inset does). A loop that crosses itself is refused.
+- **Paint the pick in Poly Edit** ([#442](https://github.com/crisprintsstuff/OxyBrush/issues/442)). Ctrl/Cmd+drag picks every face, edge or point the pointer passes over; started on a picked one, it takes them out instead. A Ctrl/Cmd+click still picks or unpicks one.
+- **Curve selection as a pen path** ([#446](https://github.com/crisprintsstuff/OxyBrush/issues/446)). Drag from the first point and let go to apply (clicking points and pressing Enter still works). Tap Alt while drawing to add a point the line bends smoothly through, and tap again quickly to make it a sharp corner. Hold Alt as you apply for the other side, as before.
+- **Ctrl+Shift+Alt+click hides a face group** ([#435](https://github.com/crisprintsstuff/OxyBrush/issues/435)), the opposite of Ctrl+Shift+click, which shows only that group.
 
 ### Changed
 
 - **OxySpheres are a piece of their own, never used up** ([RFC 0034](docs/rfcs/0034-oxyspheres.md)). **Make mesh** adds a new piece made from the spheres and keeps the spheres as an OxySpheres piece (sphere icon in the Pieces list, hidden out of the mesh's way), so you can change them and make another mesh any time, however much you've sculpted the first. **Done** keeps the spheres without making a mesh. Click the OxySpheres piece, or use Pieces > Edit OxySpheres…, to open it again. Before, the spheres were kept on the mesh and lost once it was sculpted. Projects from 4.0.0-beta.23.3 open with those spheres back as an OxySpheres piece.
+- **Lighter inactive pieces show their lowest level** ([#451](https://github.com/crisprintsstuff/OxyBrush/issues/451)). They used to show the highest level under a triangle budget (500,000), so an ordinary piece didn't change and the option seemed to do nothing. The budget setting is gone.
 
 ### Fixed
 
 - **Knife cuts over an edge onto the next face reach the point you clicked.** A cut across a cap (an 8- or 12-sided face, say) and down a side often stopped at the rim, because progress along the cut was measured along the straight line between the two clicks in space instead of along the line drawn on screen. Where the cut carries on past a point clicked inside a face to that face's edge, the preview now draws that stretch dashed.
 - **New OxySpheres start on the symmetry plane** ([#449](https://github.com/crisprintsstuff/OxyBrush/issues/449)). With X symmetry on, the first sphere, and so the mirror plane, was at the view's orbit point, off centre once the view had moved.
+- **Shift with Paint Groups smooths jagged group borders** ([#440](https://github.com/crisprintsstuff/OxyBrush/issues/440)). It only changed the group of whole faces, which left the stair-stepped edges of the triangles; now the points along each border slide into a smooth line and the points around even out, as Deform's "Polish, keep group edges" does. Points move along the surface; one undo step puts back both the points and the groups.
+- **The brush ring shows while you resize from the quick menu** ([#433](https://github.com/crisprintsstuff/OxyBrush/issues/433)), at the place the menu was opened, as it does with S.
+- **macOS: the Plugins menu lists your plugins from the start** ([#448](https://github.com/crisprintsstuff/OxyBrush/issues/448)). It stayed empty until Settings > Plugins was opened.
 
 ## [4.0.0-beta.23.3] - 2026-11-22
 

@@ -808,6 +808,44 @@ impl Editor {
         };
     }
 
+    /// Whether `element` is in the pick.
+    fn poly_is_picked(&self, element: Element) -> bool {
+        let Some(pe) = self.poly_edit.as_ref() else { return false };
+        match element {
+            Element::Face(f, _) => pe.selected.contains(&f),
+            Element::Edge(a, b, _) => pe.picked_edges.contains(&edge_key(a, b)),
+            Element::Point(v) => pe.picked_points.contains(&v),
+        }
+    }
+
+    /// One step of painting the pick (#442): put `element` in the pick
+    /// (`adding`) or take it out. Only the kind already picked is painted:
+    /// in Auto mode, passing over an edge while painting faces does nothing.
+    fn poly_paint_pick(&mut self, element: Element, adding: bool) {
+        if self.poly_is_picked(element) == adding {
+            return;
+        }
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        let kind_ok = match element {
+            Element::Face(..) => pe.picked_edges.is_empty() && pe.picked_points.is_empty(),
+            Element::Edge(..) => pe.selected.is_empty() && pe.picked_points.is_empty(),
+            Element::Point(..) => pe.selected.is_empty() && pe.picked_edges.is_empty(),
+        };
+        if !kind_ok {
+            return;
+        }
+        match element {
+            Element::Face(f, _) if adding => pe.selected.push(f),
+            Element::Face(f, _) => pe.selected.retain(|&g| g != f),
+            Element::Edge(a, b, _) if adding => pe.picked_edges.push(edge_key(a, b)),
+            Element::Edge(a, b, _) => pe.picked_edges.retain(|&e| e != edge_key(a, b)),
+            Element::Point(v) if adding => pe.picked_points.push(v),
+            Element::Point(v) => pe.picked_points.retain(|&w| w != v),
+        }
+        let (n, kind) = self.poly_pick_count();
+        self.status = format!("{n} {kind} picked");
+    }
+
     /// Ctrl/Cmd+double-click (#298): the second of two quick Ctrl/Cmd+clicks
     /// on the same edge adds its edge loop to the pick (on a border, the
     /// whole border of that hole or open edge); on a face, its face loop
@@ -1059,6 +1097,12 @@ impl Editor {
         if self.modifiers.ctrl {
             if !self.poly_pick_loop(p, element) {
                 self.poly_toggle_pick(element);
+                // Dragging on paints the pick (#442): adding what the
+                // pointer passes over, or taking it out when this press
+                // took its element out.
+                if let Some(el) = element {
+                    self.drag = Drag::PolyPaintPick { adding: self.poly_is_picked(el) };
+                }
             }
             return true;
         }
@@ -1607,6 +1651,12 @@ impl Editor {
 
     /// Pointer moved: move the dragged points. True if handled.
     pub(crate) fn poly_pointer_moved(&mut self, pos: Vec2) -> bool {
+        if let Drag::PolyPaintPick { adding } = self.drag {
+            if let Some(el) = self.poly_element_at(pos) {
+                self.poly_paint_pick(el, adding);
+            }
+            return true;
+        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_moved(pos);
             return true;
@@ -1674,6 +1724,10 @@ impl Editor {
     /// Let go: keep what the drag did as one undo step. A press without a
     /// drag changes nothing (except an inserted loop, which stays).
     pub(crate) fn poly_pointer_up(&mut self) -> bool {
+        if matches!(self.drag, Drag::PolyPaintPick { .. }) {
+            self.drag = Drag::None;
+            return true;
+        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_up();
             return true;
@@ -2538,6 +2592,43 @@ mod tests {
         assert_eq!(cage(&e).faces.len(), 4 + 8, "{}", e.status);
         assert!(cage(&e).border_edges().is_empty(), "the tube closes both holes");
         polyedit::validate(cage(&e)).unwrap();
+    }
+
+    #[test]
+    fn ctrl_drag_paints_the_pick_and_from_a_picked_face_takes_it_out() {
+        // #442: a 3×3×3 cube, looking at the front.
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Cube", oxy_mesh::primitives::cube(3, 1.0)));
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
+        e.start_poly_edit();
+        e.poly_edit.as_mut().unwrap().mode = ElementMode::Faces;
+        let at = |e: &Editor, x: f32, y: f32| e.camera.project(Vec3::new(x, y, 0.5), e.canvas_size()).unwrap();
+        let ctrl_drag = |e: &mut Editor, from: Vec2, to: Vec2| {
+            e.modifiers.ctrl = true;
+            e.pointer = Some(from);
+            e.pointer_down(PointerButton::Primary);
+            for k in 1..=30 {
+                e.pointer_moved(from.lerp(to, k as f32 / 30.0));
+            }
+            e.pointer_up();
+            e.modifiers.ctrl = false;
+        };
+        // Across the middle row of the front: its three faces.
+        let (left, right) = (at(&e, -0.33, 0.0), at(&e, 0.33, 0.0));
+        ctrl_drag(&mut e, left, right);
+        assert_eq!(e.poly_selection().len(), 3, "{}", e.status);
+        // Down the middle column from the picked middle face: takes out
+        // the faces it passes that are picked (the middle one), adds none.
+        let (mid, below) = (at(&e, 0.0, 0.0), at(&e, 0.0, -0.33));
+        ctrl_drag(&mut e, mid, below);
+        assert_eq!(e.poly_selection().len(), 2);
+        // A plain Ctrl+click still toggles one face (not so soon after the
+        // last press there that it counts as a double-click, a loop pick).
+        e.poly_edit.as_mut().unwrap().last_pick = None;
+        ctrl_drag(&mut e, mid, mid);
+        assert_eq!(e.poly_selection().len(), 3);
+        assert_eq!(e.history.undo_labels().count(), 0, "picking isn't an edit");
     }
 
     #[test]

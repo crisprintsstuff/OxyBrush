@@ -197,7 +197,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.label(RichText::new("Bridge: click the second face (Esc cancels)").color(REACH_EDGE));
                 }
                 ui.label(
-                    RichText::new("Ctrl/Cmd+click to pick several, then click or drag one of them to act on them all.")
+                    RichText::new("Ctrl/Cmd+click to pick several (Ctrl/Cmd+drag paints the pick), then click or drag one of them to act on them all.")
                         .weak()
                         .small(),
                 );
