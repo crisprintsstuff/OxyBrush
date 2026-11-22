@@ -6,6 +6,7 @@
 mod agent;
 mod app;
 mod bridge;
+mod brush_looks;
 mod deform_ui;
 mod document;
 mod editor;
@@ -16,6 +17,7 @@ mod instances;
 mod instances_ui;
 mod keymap;
 mod lights_ui;
+mod links;
 mod living;
 mod living_ui;
 mod matcaps;

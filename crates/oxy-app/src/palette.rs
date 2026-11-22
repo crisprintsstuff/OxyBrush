@@ -143,6 +143,11 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::EditTube, "pieces tube edit change reshape again path thickness", |e| e.edit_tube()),
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
         cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
+        cmd(ed, Cmd::DuplicateLinked, "pieces copy instance linked clone", |e| e.duplicate_linked(false)),
+        cmd(ed, Cmd::MirrorDuplicateLinked, "pieces copy instance linked clone symmetry x mirror", |e| {
+            e.duplicate_linked(true)
+        }),
+        cmd(ed, Cmd::Unlink, "pieces linked copy instance unlink independent", Editor::unlink_active),
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),
         cmd(ed, Cmd::Unparent, "pieces unparent detach parent", Editor::unparent_active),
         cmd(ed, Cmd::Solo, "pieces isolate", Editor::solo_active),

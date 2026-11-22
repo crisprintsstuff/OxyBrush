@@ -8,7 +8,7 @@
 pub mod autosave;
 pub mod format;
 
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 use oxy_mesh::multires::Multires;
 use oxy_mesh::retopo::Cage;
 use oxy_mesh::{Aabb, Mesh, MeshData};
@@ -61,6 +61,20 @@ pub struct Piece {
     /// The piece this piece is parented to, if any. Transforming the parent
     /// transforms this piece and all other descendants with it.
     pub parent: Option<u64>,
+    /// When this piece is a linked copy of another (#327): its mesh is the
+    /// original's, moved by the transform, and the app keeps it so.
+    pub link: Option<PieceLink>,
+}
+
+/// What a linked copy is a copy of: the original piece and where the copy
+/// sits relative to it. A transform that mirrors (negative determinant)
+/// makes a mirrored copy.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PieceLink {
+    /// The original piece's id.
+    pub source: u64,
+    /// Original space to copy space.
+    pub transform: Mat4,
 }
 
 /// Copies of one piece (the source) on the surface of the piece that owns
@@ -230,6 +244,7 @@ impl Piece {
             material: None,
             instancers: Vec::new(),
             parent: None,
+            link: None,
         }
     }
 
@@ -276,6 +291,7 @@ impl Piece {
                     material: self.material.clone(),
                     instancers: Vec::new(),
                     parent: None,
+                    link: None,
                     polygons: None,
                 }
             }
@@ -293,6 +309,7 @@ impl Piece {
                 material: self.material.clone(),
                 instancers: Vec::new(),
                 parent: None,
+                link: None,
                 polygons: SavedPolygons::of(&self.mesh),
             },
         }
@@ -328,6 +345,9 @@ pub struct PieceData {
     pub instancers: Vec<SavedInstancer>,
     /// The `PARN` section: parent piece index. Filled in by [`Scene::to_data`].
     pub parent: Option<u32>,
+    /// The `LINK` section: the original's index and the transform, when
+    /// the piece is a linked copy. Filled in by [`Scene::to_data`].
+    pub link: Option<(u32, Mat4)>,
     /// The `POLY` section: which edges of `mesh` lie inside the polygons it
     /// was imported or built from, so its quads stay quads after it's
     /// opened again. None when the quads are guessed from the shape.
@@ -440,6 +460,7 @@ impl PieceData {
             material: self.material,
             instancers: Vec::new(),
             parent: None,
+            link: None,
         }
     }
 }
@@ -702,6 +723,7 @@ impl Scene {
         let mut pieces: Vec<PieceData> = self.pieces.iter().map(Piece::to_data).collect();
         for (data, p) in pieces.iter_mut().zip(&self.pieces) {
             data.parent = p.parent.and_then(|pid| self.index_of(pid)).map(|idx| idx as u32);
+            data.link = p.link.and_then(|l| Some((self.index_of(l.source)? as u32, l.transform)));
             data.instancers = p
                 .instancers
                 .iter()
@@ -722,6 +744,7 @@ impl Scene {
         let saved_instancers: Vec<Vec<SavedInstancer>> =
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
         let saved_parents: Vec<Option<u32>> = data.pieces.iter_mut().map(|p| p.parent.take()).collect();
+        let saved_links: Vec<Option<(u32, Mat4)>> = data.pieces.iter_mut().map(|p| p.link.take()).collect();
         let mut pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
         // Sources and parents are found by their place in the list; ids are new.
         let ids: Vec<u64> = pieces.iter().map(|p| p.id).collect();
@@ -732,6 +755,17 @@ impl Scene {
                     p.parent = Some(ids[parent_idx]);
                 } else {
                     log::warn!("ignoring invalid parent index {parent_idx} on piece {:?}", p.name);
+                }
+            }
+        }
+        for (i, (p, link)) in pieces.iter_mut().zip(&saved_links).enumerate() {
+            if let Some((source, transform)) = *link {
+                let source = source as usize;
+                // A copy of a copy, or of itself, isn't made by the app.
+                if source < ids.len() && source != i && saved_links[source].is_none() {
+                    p.link = Some(PieceLink { source: ids[source], transform });
+                } else {
+                    log::warn!("ignoring an invalid link on piece {:?}", p.name);
                 }
             }
         }

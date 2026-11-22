@@ -24,6 +24,10 @@ use rayon::prelude::*;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// The seam blend [`boolean_union`] and friends use, in voxels: enough
+/// to take the sawtooth off the crease, small enough to keep it crisp.
+pub const DEFAULT_BOOLEAN_BLEND: f32 = 2.0;
+
 /// Largest supported resolution for dense regular grid mode.
 pub const MAX_RESOLUTION: u32 = 320;
 
@@ -316,7 +320,17 @@ fn fold_shell(grid: &mut oxy_vdb::VdbFloatGrid, shell: Shell) {
 /// open meshes have their holes closed; with one, the band is wide enough
 /// for the wall.
 fn union_level_set(meshes: &[&Mesh], h: f32, shell: Option<Shell>) -> Result<oxy_vdb::VdbFloatGrid, RemeshError> {
-    let half_width = shell.map_or(3.5, |s| (s.thickness / h + 3.0).max(3.5));
+    union_level_set_band(meshes, h, shell, 3.5)
+}
+
+/// [`union_level_set`] with a band at least `min_half_width` voxels wide.
+fn union_level_set_band(
+    meshes: &[&Mesh],
+    h: f32,
+    shell: Option<Shell>,
+    min_half_width: f32,
+) -> Result<oxy_vdb::VdbFloatGrid, RemeshError> {
+    let half_width = shell.map_or(3.5, |s| (s.thickness / h + 3.0).max(3.5)).max(min_half_width);
     let mut combined: Option<oxy_vdb::VdbFloatGrid> = None;
     for m in meshes {
         let (positions, triangles) = (&m.positions, &m.triangles);
@@ -400,12 +414,16 @@ pub fn vdb_remesh(meshes: &[&Mesh], opts: VdbRemeshOptions) -> Result<Mesh, Reme
     Ok(mesh)
 }
 
-/// CSG volumetric Boolean operation between two meshes (Union, Difference, Intersection).
+/// CSG volumetric Boolean operation between two meshes (Union, Difference,
+/// Intersection), with the seam rounded over `blend` voxels (0: a sharp
+/// crease, which the voxels can only follow as a sawtooth; see
+/// [`oxy_vdb::csg_operation_blended`]).
 pub fn boolean_mesh(
     target: &Mesh,
     tool: &Mesh,
     op: oxy_vdb::BooleanOp,
     voxel_size: Option<f32>,
+    blend: f32,
 ) -> Result<Mesh, RemeshError> {
     if target.triangle_count() == 0 || tool.triangle_count() == 0 {
         return Err(RemeshError::Empty);
@@ -416,30 +434,82 @@ pub fn boolean_mesh(
         (extent.max_element() / 128.0).max(1e-5)
     });
 
-    let mut target_grid = union_level_set(&[target], h, None)?;
-    let tool_grid = union_level_set(&[tool], h, None)?;
+    // The band must reach past the fillet, or its values are clamped.
+    let blend = blend.max(0.0);
+    // It also tells how far each result vertex is from either input, out
+    // to past where `keep_away_from_seam` hands over.
+    let band = blend + 3.5;
+    let mut target_grid = union_level_set_band(&[target], h, None, band)?;
+    let tool_grid = union_level_set_band(&[tool], h, None, band)?;
+    let target_before = target_grid.clone();
 
-    oxy_vdb::csg_operation(&mut target_grid, &tool_grid, op);
+    oxy_vdb::csg_operation_blended(&mut target_grid, &tool_grid, op, blend * h);
 
     let mut mesh = oxy_vdb::volume_to_mesh(
         &target_grid,
         oxy_vdb::VolumeToMeshOptions { isovalue: 0.0, adaptivity: 0.0, smooth_passes: 1 },
     )
     .ok_or(RemeshError::NoSurface)?;
+    keep_away_from_seam(&mut mesh, [target, tool], [&target_before, &tool_grid], h, blend);
     crate::transfer_attributes(&[target, tool], &mut mesh);
     Ok(mesh)
 }
 
+/// Put the parts of a Boolean's result away from the new seam back where
+/// they were: each vertex further than the fillet from one input moves
+/// onto the other input's surface, along its own normal (so it can't
+/// slide over its neighbours), by at most a voxel (the most the voxel
+/// surface is off; a larger move means the closest point found isn't the
+/// right one). Near the seam the voxel result stays, with a smooth
+/// hand-over between.
+///
+/// Why: the result is rebuilt from voxels everywhere, and smoothing it
+/// rounds concave spots out a little each time, so an earlier seam (or
+/// any detail) blurred with every later Boolean (#285).
+///
+/// `inputs` are the two meshes and `fields` their distance grids (the
+/// distance to each, out to their band).
+fn keep_away_from_seam(mesh: &mut Mesh, inputs: [&Mesh; 2], fields: [&oxy_vdb::VdbFloatGrid; 2], h: f32, blend: f32) {
+    let ([a], [b]) = ([inputs[0]], [inputs[1]]);
+    let (sa, sb) = ([a], [b]);
+    let projectors = [crate::SurfaceProjector::new(&sa), crate::SurfaceProjector::new(&sb)];
+    // Fully kept beyond `far` from the other surface, untouched within `near`.
+    let near = (blend + 1.0) * h;
+    let far = (blend + 3.0) * h;
+    let moved: Vec<Vec3> = mesh
+        .positions
+        .par_iter()
+        .zip(mesh.normals.par_iter())
+        .map(|(&p, &n)| {
+            let (da, db) = (fields[0].eval_trilinear(p).abs(), fields[1].eval_trilinear(p).abs());
+            let (own, other) = if da <= db { (0, db) } else { (1, da) };
+            let t = ((other - near) / (far - near)).clamp(0.0, 1.0);
+            if t <= 0.0 {
+                return p;
+            }
+            let Some(q) = projectors[own].closest_point(p) else { return p };
+            let w = t * t * (3.0 - 2.0 * t);
+            let along = (q - p).dot(n);
+            if along.abs() > h {
+                return p;
+            }
+            p + n * (along * w)
+        })
+        .collect();
+    mesh.positions = moved;
+    mesh.refresh_all();
+}
+
 pub fn boolean_union(a: &Mesh, b: &Mesh) -> Result<Mesh, RemeshError> {
-    boolean_mesh(a, b, oxy_vdb::BooleanOp::Union, None)
+    boolean_mesh(a, b, oxy_vdb::BooleanOp::Union, None, DEFAULT_BOOLEAN_BLEND)
 }
 
 pub fn boolean_difference(target: &Mesh, tool: &Mesh) -> Result<Mesh, RemeshError> {
-    boolean_mesh(target, tool, oxy_vdb::BooleanOp::Difference, None)
+    boolean_mesh(target, tool, oxy_vdb::BooleanOp::Difference, None, DEFAULT_BOOLEAN_BLEND)
 }
 
 pub fn boolean_intersection(a: &Mesh, b: &Mesh) -> Result<Mesh, RemeshError> {
-    boolean_mesh(a, b, oxy_vdb::BooleanOp::Intersection, None)
+    boolean_mesh(a, b, oxy_vdb::BooleanOp::Intersection, None, DEFAULT_BOOLEAN_BLEND)
 }
 
 /// Dense regular-grid remesher (legacy narrow-band array).
@@ -836,6 +906,7 @@ pub fn closest_point_on_triangle(p: Vec3, a: Vec3, b: Vec3, c: Vec3) -> Vec3 {
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+    use oxy_vdb::BooleanOp;
 
     fn euler(m: &Mesh) -> i64 {
         let mut edges = std::collections::HashSet::new();
@@ -1250,6 +1321,74 @@ mod tests {
         let result = boolean_difference(&target, &tool).unwrap();
         assert!(result.vertex_count() > 50);
         assert!(result.triangle_count() > 50);
+    }
+
+    /// A unit sphere at `c`, fine enough that its facets are well under a voxel.
+    fn ball(c: Vec3, r: f32) -> Mesh {
+        let mut d = primitives::icosphere(5, r).to_data();
+        d.positions.iter_mut().for_each(|p| *p += c);
+        Mesh::from_data(d)
+    }
+
+    /// How the result's vertices near the seam of two spheres spread about
+    /// the (blended) surface, in voxels: max minus min.
+    fn seam_spread(m: &Mesh, [ca, cb]: [Vec3; 2], h: f32, blend: f32, skip: Option<(Vec3, f32)>) -> f32 {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for p in &m.positions {
+            let (da, db) = (p.distance(ca) - 1.0, p.distance(cb) - 1.0);
+            let clear = skip.is_none_or(|(c, r)| p.distance(c) - r > 4.0 * h);
+            if (da - db).abs() < 2.0 * h && clear {
+                let e = oxy_vdb::smooth_min(da, db, blend * h) / h;
+                (lo, hi) = (lo.min(e), hi.max(e));
+            }
+        }
+        hi - lo
+    }
+
+    #[test]
+    fn a_blended_seam_is_smoother_and_a_later_boolean_leaves_it_alone() {
+        // #285: two overlapping spheres. The hard crease comes out as a
+        // sawtooth; the blend rounds it into a fillet the voxels follow.
+        let centres = [Vec3::new(-0.7, 0.0, 0.0), Vec3::new(0.7, 0.2, 0.1)];
+        let (a, b) = (ball(centres[0], 1.0), ball(centres[1], 1.0));
+        let h = 3.6 / 64.0;
+        let hard = boolean_mesh(&a, &b, BooleanOp::Union, Some(h), 0.0).unwrap();
+        let soft = boolean_mesh(&a, &b, BooleanOp::Union, Some(h), DEFAULT_BOOLEAN_BLEND).unwrap();
+        let (hard_spread, soft_spread) =
+            (seam_spread(&hard, centres, h, 0.0, None), seam_spread(&soft, centres, h, DEFAULT_BOOLEAN_BLEND, None));
+        assert!(soft_spread < 0.6 * hard_spread, "seam spread {hard_spread} -> {soft_spread} voxels");
+        // Away from the seam the surface is where it was.
+        let off = soft
+            .positions
+            .iter()
+            .map(|p| (p.distance(centres[0]) - 1.0, p.distance(centres[1]) - 1.0))
+            .filter(|(da, db)| (da - db).abs() > (DEFAULT_BOOLEAN_BLEND + 3.0) * h)
+            .map(|(da, db)| da.min(db).abs())
+            .fold(0.0, f32::max);
+        assert!(off < 0.05 * h, "away from the seam it's where it was: {off}");
+
+        // A second Boolean elsewhere leaves the first seam as it was.
+        let third = (Vec3::new(0.0, -1.5, 0.0), 0.5);
+        let again =
+            boolean_mesh(&soft, &ball(third.0, third.1), BooleanOp::Union, Some(h), DEFAULT_BOOLEAN_BLEND).unwrap();
+        let after = seam_spread(&again, centres, h, DEFAULT_BOOLEAN_BLEND, Some(third));
+        assert!(after < soft_spread * 1.25 + 0.02, "first seam spread {soft_spread} -> {after} voxels");
+        let away: f32 = again
+            .positions
+            .iter()
+            .filter(|p| p.distance(third.0) - third.1 > 4.0 * h)
+            .map(|p| (p.distance(centres[0]) - 1.0, p.distance(centres[1]) - 1.0))
+            .filter(|(da, db)| (da - db).abs() > (DEFAULT_BOOLEAN_BLEND + 3.0) * h)
+            .map(|(da, db)| da.min(db).abs())
+            .fold(0.0, f32::max);
+        assert!(away < 0.05 * h, "the rest stays put: {away}");
+    }
+
+    #[test]
+    fn smooth_min_is_min_away_from_the_crease_and_rounds_it() {
+        assert_eq!(oxy_vdb::smooth_min(0.3, -0.2, 0.0), -0.2);
+        assert_eq!(oxy_vdb::smooth_min(1.0, -0.5, 0.4), -0.5, "exact when far apart");
+        assert!((oxy_vdb::smooth_min(0.0, 0.0, 0.4) + 0.1).abs() < 1e-6, "k/4 below at the crease");
     }
 
     #[test]

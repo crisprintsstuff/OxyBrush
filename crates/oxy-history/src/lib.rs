@@ -86,6 +86,11 @@ enum Change {
         piece: u64,
         parent: Option<u64>,
     },
+    /// The piece became, or stopped being, a linked copy.
+    Link {
+        piece: u64,
+        link: Option<oxy_doc::PieceLink>,
+    },
     /// Several changes applied as one; order alternates on each swap.
     Compound(Vec<Change>),
 }
@@ -108,6 +113,8 @@ pub enum Step {
     Visible { piece: u64, previous: bool },
     /// The piece's parent was changed; this is its previous parent id.
     Parent { piece: u64, previous: Option<u64> },
+    /// The piece's link (linked copy) was changed; this is the old one.
+    Link { piece: u64, previous: Option<oxy_doc::PieceLink> },
 }
 
 impl From<Step> for Change {
@@ -125,6 +132,7 @@ impl From<Step> for Change {
             Step::Visible { piece, previous } => Change::Visible { piece, visible: previous },
             Step::Reordered { from, to } => Change::Reorder { from: to, to: from },
             Step::Parent { piece, previous } => Change::Parent { piece, parent: previous },
+            Step::Link { piece, previous } => Change::Link { piece, link: previous },
         }
     }
 }
@@ -193,6 +201,7 @@ impl Change {
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Parent { piece, .. }
+            | Change::Link { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
             Change::Piece { .. } | Change::Reorder { .. } => None,
             Change::Compound(c) => {
@@ -215,6 +224,7 @@ impl Change {
             | Change::Instancers { piece, .. }
             | Change::Visible { piece, .. }
             | Change::Parent { piece, .. }
+            | Change::Link { piece, .. }
             | Change::Cage { piece, .. } => *piece == id,
             Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
             Change::Reorder { .. } => true,
@@ -236,6 +246,7 @@ impl Change {
             Change::CompressedFaces { data, .. } => data.len() + 32,
             Change::Instancers { list, .. } => list.len() * 64 + 32,
             Change::Visible { .. } | Change::Reorder { .. } | Change::Parent { .. } => 16,
+            Change::Link { .. } => 80,
             Change::Piece { piece, .. } => piece.as_ref().map_or(0, |p| mesh_bytes(&p.mesh)),
             Change::Cage { mesh, cage, .. } => {
                 mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
@@ -293,6 +304,11 @@ impl Change {
             Change::Parent { piece, parent } => {
                 let p = scene.get_mut(*piece)?;
                 std::mem::swap(&mut p.parent, parent);
+                Some(*piece)
+            }
+            Change::Link { piece, link } => {
+                let p = scene.get_mut(*piece)?;
+                std::mem::swap(&mut p.link, link);
                 Some(*piece)
             }
             Change::Piece { index, piece } => match piece.take() {

@@ -1453,8 +1453,22 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ui,
         &mut ed.remember_brushes,
         "Remember brush settings between sessions",
-        "On: the brush you were using, with its size, falloff, stroke and alpha, and every brush's strength, come back the next time OxyBrush starts. Off: every session starts with the default brushes. Saved brush presets are kept either way.",
+        "On: the brush you were using, with its size, falloff, stroke and alpha, and every brush's strength (and, with Settings per brush, every brush's settings), come back the next time OxyBrush starts. Off: every session starts with the default brushes. Saved brush presets are kept either way.",
     );
+    tips::check_plain(
+        ui,
+        &mut ed.settings_per_brush,
+        "Settings per brush",
+        "On: each brush keeps its own falloff, focal shift, spacing, stroke, stabilizer, auto smooth, spray, pressure switches and alpha, and gets them back when you pick it again. Off: those settings are shared by every brush. Strength and gravity are always per brush; the pen's pressure curves are shared.",
+    );
+    ui.add_enabled_ui(ed.settings_per_brush, |ui| {
+        tips::check_plain(
+            ui,
+            &mut ed.size_per_brush,
+            "Size per brush",
+            "On: each brush also keeps its own size. Off: one size for every brush, as most sculptors prefer.",
+        );
+    });
     tips::check_plain(
         ui,
         &mut ed.undo_per_piece,
@@ -4628,6 +4642,18 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Mirror duplicate (X)", Cmd::MirrorDuplicate).clicked() {
         ed.duplicate_active(true);
     }
+    if tips::button(ui, "Duplicate linked", Cmd::DuplicateLinked).clicked() {
+        ed.duplicate_linked(false);
+    }
+    if tips::button(ui, "Mirror duplicate linked (X)", Cmd::MirrorDuplicateLinked).clicked() {
+        ed.duplicate_linked(true);
+    }
+    if let Some(original) = ed.active_link_source() {
+        ui.label(RichText::new(format!("Linked copy of {original}")).weak().small());
+        if tips::button(ui, "Unlink copy", Cmd::Unlink).clicked() {
+            ed.unlink_active();
+        }
+    }
     if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
         ed.delete_active();
     }
@@ -4846,6 +4872,13 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
 /// The pen pressure curve: pen pressure across, brush strength up. With
 /// `live`, the pen's current pressure is marked on the curve.
 fn pressure_curve_plot(ui: &mut Ui, ed: &Editor, size: egui::Vec2) -> egui::Response {
+    pressure_curve_plot_of(ui, ed, size, 0)
+}
+
+/// The strength (`which` 0) or size (1) pressure curve, as
+/// [`pressure_curve_plot`].
+fn pressure_curve_plot_of(ui: &mut Ui, ed: &Editor, size: egui::Vec2, which: usize) -> egui::Response {
+    let shape = ed.pressure_curves()[which];
     let (rect, response) = ui.allocate_exact_size(size, egui::Sense::hover());
     let p = ui.painter();
     let faint = ui.visuals().widgets.noninteractive.bg_stroke.color;
@@ -4858,9 +4891,8 @@ fn pressure_curve_plot(ui: &mut Ui, ed: &Editor, size: egui::Vec2) -> egui::Resp
         }
         p.line_segment([to_screen(0.0, 0.0), to_screen(1.0, 1.0)], EStroke::new(1.0, faint.linear_multiply(1.6)));
     }
-    let curve = |x: f32| {
-        crate::editor::map_pressure_shaped(x, ed.pressure_gamma, ed.pressure_shape, ed.pressure_min, ed.pressure_full)
-    };
+    let curve =
+        |x: f32| crate::editor::map_pressure_shaped(x, ed.pressure_gamma, shape, ed.pressure_min, ed.pressure_full);
     let n = if size.x >= 100.0 { 64 } else { 16 };
     let pts: Vec<egui::Pos2> = (0..=n).map(|i| i as f32 / n as f32).map(|x| to_screen(x, curve(x))).collect();
     let accent = ui.visuals().selection.stroke.color;
@@ -4875,14 +4907,14 @@ fn pressure_curve_plot(ui: &mut Ui, ed: &Editor, size: egui::Vec2) -> egui::Resp
 /// The two draggable points that shape the pressure curve, drawn on the
 /// large plot (like the two-point curves of tablet drivers). Drag a point;
 /// double-click the plot to straighten it.
-fn pressure_shape_handles(ui: &mut Ui, plot: &egui::Response, ed: &mut Editor) {
+fn pressure_shape_handles(ui: &mut Ui, plot: &egui::Response, ed: &mut Editor, which: usize) {
     let rect = plot.rect;
     let resp = ui.interact(rect, plot.id.with("shape"), egui::Sense::click_and_drag());
     let to_screen = |x: f32, y: f32| egui::pos2(rect.left() + x * rect.width(), rect.bottom() - y * rect.height());
     let to_unit = |p: egui::Pos2| {
         (((p.x - rect.left()) / rect.width()).clamp(0.0, 1.0), ((rect.bottom() - p.y) / rect.height()).clamp(0.0, 1.0))
     };
-    let s = &mut ed.pressure_shape;
+    let s = if which == 0 { &mut ed.pressure_shape } else { &mut ed.pressure_shape_size };
     let held_id = plot.id.with("held");
     if resp.drag_started()
         && let Some(p) = resp.interact_pointer_pos()
@@ -4917,9 +4949,18 @@ fn settings_pen_tab(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new(plain::PEN_SETTINGS).weak().small());
     ui.add_space(6.0);
     ui.horizontal(|ui| {
-        let plot = pressure_curve_plot(ui, ed, egui::vec2(180.0, 180.0));
-        pressure_shape_handles(ui, &plot, ed);
-        tips::hover(plot, plain::PRESSURE_PLOT);
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Strength").strong());
+            let plot = pressure_curve_plot_of(ui, ed, egui::vec2(160.0, 160.0), 0);
+            pressure_shape_handles(ui, &plot, ed, 0);
+            tips::hover(plot, plain::PRESSURE_PLOT);
+        });
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Size").strong());
+            let plot = pressure_curve_plot_of(ui, ed, egui::vec2(160.0, 160.0), 1);
+            pressure_shape_handles(ui, &plot, ed, 1);
+            tips::hover(plot, plain::PRESSURE_PLOT_SIZE);
+        });
         ui.vertical(|ui| {
             ui.label(RichText::new("Presets").strong());
             use crate::editor::LINEAR_PRESSURE_SHAPE as STRAIGHT;
@@ -6168,6 +6209,17 @@ fn boolean_row(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ed.boolean_operation(with, op);
             }
         }
+    });
+    ui.horizontal(|ui| {
+        tips::hover(ui.label("Seam blend"), plain::BOOLEAN_BLEND);
+        tips::hover(
+            ui.add(
+                egui::Slider::new(&mut ed.boolean_blend, 0.0..=crate::settings::MAX_BOOLEAN_BLEND)
+                    .step_by(0.25)
+                    .suffix(" voxels"),
+            ),
+            plain::BOOLEAN_BLEND,
+        );
     });
 }
 
