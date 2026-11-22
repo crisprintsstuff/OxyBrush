@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **OxySpheres are a piece of their own, never used up** ([RFC 0034](docs/rfcs/0034-oxyspheres.md)). **Make mesh** adds a new piece made from the spheres and keeps the spheres as an OxySpheres piece (sphere icon in the Pieces list, hidden out of the mesh's way), so you can change them and make another mesh any time, however much you've sculpted the first. **Done** keeps the spheres without making a mesh. Click the OxySpheres piece, or use Pieces > Edit OxySpheres…, to open it again. Before, the spheres were kept on the mesh and lost once it was sculpted. Projects from 4.0.0-beta.23.3 open with those spheres back as an OxySpheres piece.
+
+### Fixed
+
+- **New OxySpheres start on the symmetry plane** ([#449](https://github.com/crisprintsstuff/OxyBrush/issues/449)). With X symmetry on, the first sphere, and so the mirror plane, was at the view's orbit point, off centre once the view had moved.
+
 ## [4.0.0-beta.23.3] - 2026-11-22
 
 ### Added

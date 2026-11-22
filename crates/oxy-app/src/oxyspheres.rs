@@ -1,16 +1,20 @@
 //! OxySpheres (RFC 0034): block out a shape with a tree of spheres, then
 //! turn it into a mesh to sculpt.
 //!
-//! While the armature is open it lives only here and in the preview slot
-//! the renderer draws, with its own undo steps (as an open tube has). The
-//! scene and its history change once, when the skin is made: a new piece
-//! ("Add OxySpheres") or, when editing a piece made with OxySpheres, a new
-//! mesh for it ("Edit OxySpheres"), each one undo step (invariant 4). The
-//! skin is made on a worker thread (invariant 5).
+//! The spheres are a piece of their own (an OxySpheres piece, see
+//! [`oxy_doc::Piece::spheres`]) that is never used up: Make mesh adds a new
+//! piece made from them and leaves them as they are, so they can be edited
+//! and make another mesh any time, however much the earlier one was
+//! sculpted. While they are open for editing they live only here and in
+//! the preview slot the renderer draws, with their own undo steps (as an
+//! open tube has). The scene and its history change once, when they are
+//! closed with Done or Make mesh, in one undo step (invariant 4). The mesh
+//! is made on a worker thread (invariant 5).
 
 use crate::editor::{Drag, Editor, JobResult};
 use glam::{Vec2, Vec3};
 use oxy_doc::{ArmatureRecipe, Piece};
+use oxy_history::Step;
 use oxy_mesh::Mesh;
 use oxy_mesh::armature::Armature;
 
@@ -21,9 +25,6 @@ const PICK_PT: f32 = 8.0;
 const ADD_AFTER_PT: f32 = 4.0;
 /// A new child's radius, from its parent's.
 const CHILD_SCALE: f32 = 0.75;
-/// A piece remembers this many armatures, so undoing an update brings
-/// back one that can still be edited.
-const MAX_RECIPES: usize = 8;
 /// Most steps the open armature remembers.
 const UNDO_STEPS: usize = 200;
 /// Resolution of the skin shown with Show the mesh (the made skin uses
@@ -78,8 +79,8 @@ pub struct SphereEdit {
     pub blend: f32,
     /// Show the skin instead of the spheres (at a lower resolution).
     pub show_skin: bool,
-    /// Editing the armature of this piece: its id and its hidden faces
-    /// before they were all hidden for the edit.
+    /// Editing this OxySpheres piece: its id and its hidden faces before
+    /// they were all hidden for the edit. None: new spheres.
     pub replace: Option<(u64, Vec<bool>)>,
     /// What the viewport draws.
     pub preview: Mesh,
@@ -143,8 +144,11 @@ impl SphereEdit {
 }
 
 impl Editor {
-    /// Open a new armature: one sphere in the middle of the view, about a
-    /// tenth of the view high, on the X mirror plane while X symmetry is on.
+    /// Open new spheres: one sphere in the middle of the view, about a
+    /// tenth of the view high. With X symmetry on, it sits on the symmetry
+    /// plane (the active piece's, else the world's), which is the mirror
+    /// plane of the spheres (#449: it used to be the orbit point's, off
+    /// centre once the view had been moved).
     pub fn start_spheres(&mut self) {
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish".into();
@@ -152,14 +156,17 @@ impl Editor {
         }
         self.cancel_tube();
         self.cancel_spheres();
-        let center = self.camera.target;
+        let mut center = self.camera.target;
         let radius = (self.world_per_pixel_at(center) * self.canvas_size().y * 0.06).max(1e-3);
-        let mirror = self.symmetry.x.then_some(center.x);
+        let mirror = self.symmetry.x.then(|| self.symmetry_center().x);
+        if let Some(x) = mirror {
+            center.x = x;
+        }
         let armature = Armature::new(center, radius, mirror);
         let mut edit = SphereEdit::new(armature, 160, 0.3, None);
         edit.selected = Some(0);
         self.spheres = Some(edit);
-        self.status = "OxySpheres: drag from the sphere to add one; Enter makes the mesh".into();
+        self.status = "OxySpheres: drag from the sphere to add one; Enter makes a mesh".into();
     }
 
     pub fn cancel_spheres(&mut self) {
@@ -168,17 +175,16 @@ impl Editor {
         if matches!(self.drag, Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereSize { .. }) {
             self.drag = Drag::None;
         }
-        self.status = "OxySpheres cancelled".into();
+        self.status = "OxySpheres closed without changes".into();
     }
 
-    /// Whether the active piece was made with OxySpheres and is still that
-    /// skin (sculpting, remeshing or subdividing it makes it an ordinary mesh).
+    /// Whether the active piece is an OxySpheres piece.
     pub fn can_edit_spheres(&self) -> bool {
-        self.scene.try_active().is_some_and(|p| p.armature_recipe().is_some())
+        self.scene.try_active().is_some_and(Piece::is_spheres)
     }
 
-    /// Reopen the armature of the active piece. Its faces are hidden while
-    /// it is open; making the mesh replaces them.
+    /// Open the active OxySpheres piece for editing. Its own drawing is
+    /// hidden while the spheres are open.
     pub fn edit_spheres(&mut self) {
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish".into();
@@ -187,15 +193,15 @@ impl Editor {
         self.cancel_tube();
         self.cancel_spheres();
         let Some(piece) = self.scene.try_active() else { return };
-        let Some(r) = piece.armature_recipe().cloned() else {
-            self.status = "This piece wasn't made with OxySpheres, or it was changed since".into();
+        let Some(r) = piece.spheres.as_deref().cloned() else {
+            self.status = "Pick an OxySpheres piece to edit its spheres".into();
             return;
         };
         let (id, before) = (piece.id, piece.mesh.hidden().to_vec());
         let n = before.len();
         self.scene.active_mut().mesh.set_hidden(vec![true; n]);
         self.spheres = Some(SphereEdit::new(r.armature, r.resolution, r.blend, Some((id, before))));
-        self.status = "Editing OxySpheres: Enter updates the mesh, Esc keeps it as it was".into();
+        self.status = "Editing OxySpheres: Enter makes a new mesh from them, Done keeps them, Esc as they were".into();
     }
 
     /// Show again the faces of the piece being edited (see `edit_spheres`).
@@ -208,8 +214,57 @@ impl Editor {
         }
     }
 
-    /// Make the skin, on a worker thread: a new piece, or the new mesh of
-    /// the piece being edited.
+    /// The OxySpheres piece the open spheres become: the edited one with
+    /// its new spheres, or a new one. `visible`: shown afterwards.
+    fn spheres_piece_of(&self, edit: &SphereEdit, visible: bool) -> Piece {
+        let recipe = ArmatureRecipe::spheres(edit.armature.clone(), edit.resolution, edit.blend);
+        let old = edit.replace.as_ref().and_then(|(id, _)| self.scene.index_of(*id)).map(|i| &self.scene.pieces[i]);
+        let name = old.map_or_else(|| self.scene.unique_name("OxySpheres"), |p| p.name.clone());
+        let mut piece = Piece::spheres_piece(name, recipe);
+        if let Some(old) = old {
+            // Same piece: same id, place in the hierarchy and material.
+            piece.id = old.id;
+            piece.parent = old.parent;
+            piece.material = old.material.clone();
+        }
+        piece.visible = visible;
+        piece
+    }
+
+    /// Put the OxySpheres piece in the scene in place of the one edited
+    /// (or at the end), and return the undo steps.
+    fn place_spheres_piece(&mut self, piece: Piece, replace: Option<u64>) -> Vec<Step> {
+        match replace.and_then(|id| self.scene.index_of(id)) {
+            Some(i) => {
+                let old = std::mem::replace(&mut self.scene.pieces[i], piece);
+                vec![Step::Removed { index: i, piece: Box::new(old) }, Step::Inserted { index: i }]
+            }
+            None => {
+                self.scene.pieces.push(piece);
+                vec![Step::Inserted { index: self.scene.pieces.len() - 1 }]
+            }
+        }
+    }
+
+    /// Done: keep the spheres as they are now, without making a mesh (one
+    /// undo step). New spheres become a new OxySpheres piece.
+    pub fn finish_spheres(&mut self) {
+        let Some(edit) = self.spheres.take() else { return };
+        self.restore_spheres_hidden(&edit);
+        let replace = edit.replace.as_ref().map(|(id, _)| *id);
+        let piece = self.spheres_piece_of(&edit, true);
+        let name = piece.name.clone();
+        let steps = self.place_spheres_piece(piece, replace);
+        if let Some(i) = self.scene.pieces.iter().position(|p| p.name == name && p.is_spheres()) {
+            self.scene.set_active(i);
+        }
+        self.history.record_compound(format!("OxySpheres: {name}"), steps);
+        self.status = format!("{name} kept; Pieces > Edit OxySpheres or a click on it opens it again");
+    }
+
+    /// Make mesh: a new piece made from the spheres, on a worker thread.
+    /// The spheres stay, as an OxySpheres piece (hidden, out of the
+    /// mesh's way), to make another mesh any time.
     pub fn accept_spheres(&mut self) {
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish".into();
@@ -218,47 +273,32 @@ impl Editor {
         let Some(edit) = self.spheres.take() else { return };
         self.restore_spheres_hidden(&edit);
         let opts = oxy_topo::SkinOptions { resolution: edit.resolution, blend: edit.blend_world(), smooth_passes: 2 };
-        let into = edit.replace.as_ref().map(|(id, _)| *id);
-        let (armature, resolution, blend) = (edit.armature, edit.resolution, edit.blend);
-        let label = if into.is_some() { "Edit OxySpheres" } else { "Add OxySpheres" };
-        self.start_job(format!("{label} ({resolution})"), Vec::new(), move || {
+        let replace = edit.replace.as_ref().map(|(id, _)| *id);
+        let spheres = Box::new(self.spheres_piece_of(&edit, false));
+        let armature = edit.armature;
+        let resolution = edit.resolution;
+        self.start_job(format!("OxySpheres: make mesh ({resolution})"), Vec::new(), move || {
             let mesh = oxy_topo::skin_armature(&armature, opts).map_err(|e| e.to_string())?;
-            Ok(JobResult::Skin {
-                recipe: Box::new(ArmatureRecipe::new(armature, resolution, blend, &mesh)),
-                mesh,
-                into,
-            })
+            Ok(JobResult::Skin { spheres, replace, mesh })
         });
     }
 
-    /// Put a finished skin in the scene (one undo step).
-    pub(crate) fn finish_skin(&mut self, recipe: ArmatureRecipe, mesh: Mesh, into: Option<u64>, secs: f32) -> String {
+    /// Put a finished mesh in the scene as a new piece, with its spheres
+    /// piece updated or added (one undo step).
+    pub(crate) fn finish_skin(&mut self, spheres: Piece, replace: Option<u64>, mesh: Mesh, secs: f32) -> String {
         let tris = mesh.triangle_count();
-        if let Some(i) = into.and_then(|id| self.scene.index_of(id)) {
-            let piece = &mut self.scene.pieces[i];
-            let id = piece.id;
-            let previous = std::mem::replace(&mut piece.mesh, mesh);
-            let levels = piece.multires.take();
-            piece.armatures.push(recipe);
-            if piece.armatures.len() > MAX_RECIPES {
-                piece.armatures.remove(0);
-            }
-            let name = piece.name.clone();
-            self.scene.set_active(i);
-            self.history.record_topology("Edit OxySpheres", id, previous, levels);
-            return format!("{name} updated: {tris} triangles in {secs:.1} s");
-        }
-        let name = self.scene.unique_name("OxySpheres");
-        let mirror = recipe.armature.mirror;
-        let root = recipe.armature.spheres[0].center;
+        let spheres_name = spheres.name.clone();
+        let symmetry_center = spheres.symmetry_center;
+        let mut steps = self.place_spheres_piece(spheres, replace);
+        let name = self.scene.unique_name(&format!("{spheres_name} mesh"));
         let mut piece = Piece::new(name.clone(), mesh);
-        piece.symmetry_center = Some(match mirror {
-            Some(x) => Vec3::new(x, root.y, root.z),
-            None => oxy_sculpt::estimate_symmetry_center(&piece.mesh.positions),
-        });
-        piece.armatures.push(recipe);
-        self.add_piece(piece, &format!("Add {name}"));
-        format!("Added {name}: {tris} triangles in {secs:.1} s; Pieces > Edit OxySpheres reopens it")
+        piece.symmetry_center = symmetry_center;
+        self.scene.pieces.push(piece);
+        let at = self.scene.pieces.len() - 1;
+        steps.push(Step::Inserted { index: at });
+        self.scene.set_active(at);
+        self.history.record_compound(format!("OxySpheres: make {name}"), steps);
+        format!("Made {name}: {tris} triangles in {secs:.1} s. {spheres_name} is kept (hidden) to make another")
     }
 
     /// Record a step of the open armature's history once its gesture is
@@ -409,6 +449,14 @@ impl Editor {
     /// Handle a press while OxySpheres is open. True if it took it.
     pub(crate) fn spheres_pointer_down(&mut self, p: Vec2) -> bool {
         if self.spheres.is_none() {
+            // A press on the active OxySpheres piece opens it: there's
+            // nothing to sculpt on the spheres themselves.
+            let on_spheres = self.scene.try_active().is_some_and(|piece| piece.is_spheres() && piece.visible)
+                && self.surface_hit_at(p).is_some();
+            if on_spheres {
+                self.edit_spheres();
+                return self.spheres.is_some();
+            }
             return false;
         }
         let m = self.active_modifiers();

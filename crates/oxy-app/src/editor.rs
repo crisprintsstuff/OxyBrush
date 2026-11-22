@@ -1047,9 +1047,10 @@ pub enum JobResult {
     Relevel { mesh: Mesh, multires: oxy_mesh::multires::Multires },
     /// Files read for Import, applied on the UI thread as new pieces.
     Imported(ImportRead),
-    /// An OxySpheres skin (RFC 0034): a new piece, or the new mesh of the
-    /// piece `into`.
-    Skin { recipe: Box<oxy_doc::ArmatureRecipe>, mesh: Mesh, into: Option<u64> },
+    /// An OxySpheres mesh (RFC 0034), to add as a new piece, with the
+    /// OxySpheres piece `spheres` that made it, in place of the piece
+    /// `replace` (or added).
+    Skin { spheres: Box<Piece>, replace: Option<u64>, mesh: Mesh },
 }
 
 /// A change to the active piece's subdivision levels.
@@ -8164,10 +8165,10 @@ impl Editor {
                 doc.history.record("Make surface instances real", Step::Inserted { index: at });
                 format!("Made {copies} copies real as {name} ({tris} triangles); the copies and their source are kept")
             }
-            Ok(JobResult::Skin { recipe, mesh, into }) => {
+            Ok(JobResult::Skin { spheres, replace, mesh }) => {
                 let prev_active = self.active_document;
                 self.active_document = doc_idx;
-                let st = self.finish_skin(*recipe, mesh, into, secs);
+                let st = self.finish_skin(*spheres, replace, mesh, secs);
                 self.active_document = prev_active;
                 st
             }
@@ -11349,7 +11350,7 @@ mod tests {
     }
 
     #[test]
-    fn oxyspheres_make_a_piece_that_can_be_edited_again_and_undone() {
+    fn oxyspheres_stay_a_piece_of_their_own_that_makes_meshes_any_time() {
         let mut e = editor();
         e.start_spheres();
         {
@@ -11361,40 +11362,74 @@ mod tests {
         }
         e.update_spheres();
         assert!(e.preview_mesh_mut().is_some(), "the spheres are drawn");
+        // Make mesh: the spheres become a piece (hidden) and the mesh another.
         e.accept_spheres();
         wait_job(&mut e);
-        assert_eq!(e.scene.pieces.len(), 2);
-        assert_eq!(e.scene.active().name, "OxySpheres");
-        assert_eq!(e.history.undo_labels().last(), Some("Add OxySpheres"));
-        assert!(e.can_edit_spheres());
+        assert_eq!(e.scene.pieces.len(), 3, "the sphere, the spheres and the mesh");
+        let spheres = e.scene.pieces.iter().position(|p| p.is_spheres()).unwrap();
+        assert!(!e.scene.pieces[spheres].visible, "out of the mesh's way");
+        assert_eq!(e.scene.active().name, "OxySpheres mesh");
+        assert!(!e.scene.active().is_spheres() && !e.can_edit_spheres());
+        assert_eq!(e.history.undo_labels().count(), 1, "one undo step");
         let first = e.scene.active().mesh.clone();
 
-        // Reopen: the piece is hidden while the spheres are open; Cancel shows it.
+        // Sculpting the mesh doesn't touch the spheres.
+        let n = e.scene.active().mesh.vertex_count();
+        e.scene.active_mut().mesh.positions[n / 2] += Vec3::splat(0.05);
+        // Reopen the spheres: hidden drawing while open; Cancel leaves them.
+        e.scene.set_active(spheres);
+        assert!(e.can_edit_spheres());
         e.edit_spheres();
         assert_eq!(e.spheres.as_ref().unwrap().armature.len(), 3, "mirrored by default with X symmetry");
-        assert!(e.scene.active().mesh.hidden().iter().all(|&h| h));
         e.cancel_spheres();
-        assert!(e.scene.active().mesh.hidden().iter().all(|&h| !h));
+        assert_eq!(e.history.undo_labels().count(), 1);
 
-        // Update: a bigger end sphere makes a new mesh, one undo step.
+        // A bigger end sphere, then Make mesh again: a second mesh, the
+        // first one kept, and the spheres updated in place.
         e.edit_spheres();
         e.spheres.as_mut().unwrap().armature.set_radius(1, 0.5);
         e.accept_spheres();
         wait_job(&mut e);
-        assert_eq!(e.history.undo_labels().last(), Some("Edit OxySpheres"));
+        assert_eq!(e.scene.pieces.len(), 4);
+        assert_eq!(e.scene.pieces.iter().filter(|p| p.is_spheres()).count(), 1);
         assert_ne!(e.scene.active().mesh.triangle_count(), first.triangle_count());
-        assert!(e.can_edit_spheres());
-        // Undo brings back the first mesh, which can still be edited.
+        assert_eq!(e.scene.pieces[spheres].spheres.as_ref().unwrap().armature.spheres[1].radius, 0.5);
+        // Undo takes the second mesh away and brings the old spheres back.
         e.undo();
-        assert_eq!(e.scene.active().mesh.positions, first.positions);
-        assert!(e.can_edit_spheres());
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.scene.pieces[spheres].spheres.as_ref().unwrap().armature.spheres[1].radius < 0.5);
+
+        // Done keeps the spheres without making a mesh, shown, one step.
+        e.scene.set_active(spheres);
         e.edit_spheres();
-        assert!(e.spheres.as_ref().unwrap().armature.spheres[1].radius < 0.5);
-        e.cancel_spheres();
-        // Sculpting it makes it an ordinary mesh.
-        let n = e.scene.active().mesh.vertex_count();
-        e.scene.active_mut().mesh.positions[n / 2] += Vec3::splat(0.05);
-        assert!(!e.can_edit_spheres());
+        e.spheres.as_mut().unwrap().armature.set_radius(1, 0.3);
+        e.finish_spheres();
+        assert_eq!(e.scene.pieces.len(), 3);
+        assert!(e.scene.pieces[spheres].visible);
+        assert_eq!(e.scene.pieces[spheres].spheres.as_ref().unwrap().armature.spheres[1].radius, 0.3);
+        // A press on the shown spheres opens them; nothing is sculpted.
+        e.scene.set_active(spheres);
+        let bounds = e.scene.pieces[spheres].mesh.bounds();
+        e.camera.frame(bounds);
+        let at = e.tube_screen(e.scene.pieces[spheres].spheres.as_ref().unwrap().armature.spheres[0].center).unwrap();
+        e.pointer = Some(at);
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_up();
+        assert!(e.spheres.is_some(), "{}", e.status);
+    }
+
+    #[test]
+    fn new_oxyspheres_start_on_the_symmetry_plane_wherever_the_view_is() {
+        // #449: with the view moved, the first sphere (and so the mirror
+        // plane) followed the orbit point off centre.
+        let mut e = editor();
+        e.symmetry.x = true;
+        e.camera.target = Vec3::new(0.7, 0.2, 0.1);
+        e.start_spheres();
+        let a = &e.spheres.as_ref().unwrap().armature;
+        let x = e.symmetry_center().x;
+        assert_eq!(a.mirror, Some(x));
+        assert_eq!(a.spheres[0].center.x, x);
     }
 
     fn wait_job(e: &mut Editor) {
