@@ -97,7 +97,7 @@ commands! {
     AddTube => "Draw a tube", "", "Drag a path from the model or empty space to get a tube along it. Drag its points to shape it, Shift+drag a point to change its thickness, then Accept to add it as a new piece.";
     EditTube => "Edit tube", "", "Reopen the active piece's most recent tube to change its path, thickness, sides or caps. Accept replaces it, as one undo step. A tube that was sculpted, remeshed or regrouped since is an ordinary part of the mesh and can't be edited this way.";
     AddSpheres => "Add OxySpheres", "", "Block out a shape with spheres: drag from a sphere to pull out a new one, Shift+drag to move one, Ctrl+drag to resize it, and click a link to add a sphere on it. Make mesh turns the spheres into one smooth piece to sculpt.";
-    EditSpheres => "Edit OxySpheres", "", "Reopen the spheres the active piece was made from, to change them and make its mesh again (one undo step). A piece that was sculpted, remeshed or subdivided since is an ordinary mesh and can't be reopened.";
+    EditSpheres => "Edit OxySpheres", "", "Open the active OxySpheres piece to change its spheres, then make another mesh from them (Make mesh) or keep them (Done). The meshes made before stay as they are.";
     CopyPiece => "Copy piece", "Ctrl+C", "Copy the selected piece or pieces to the clipboard so you can paste them into this or another tab.";
     PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project tab as one undo step.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";

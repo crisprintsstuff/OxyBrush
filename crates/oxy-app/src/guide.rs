@@ -265,7 +265,7 @@ Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc
 - The viewport shows the mesh as it will be, a little coarser; turn off Show the mesh to see the plain spheres. Each sphere's outline is drawn over it.\n\
 - Resolution sets how fine the mesh is; Blend how round the joins between links are.\n\
 - While the spheres are open, Undo and Redo step through their edits; undoing past the first edit closes them.\n\n\
-Make mesh (or Enter) adds the mesh as a new piece, in one undo step; Cancel (or Esc) discards the spheres. Pieces > Edit OxySpheres… reopens the spheres of the active piece, and Update mesh replaces its mesh, as long as it hasn't been sculpted, remeshed or subdivided since. The spheres are saved with the project.",
+The spheres are a piece of their own (an OxySpheres piece, with a sphere icon in the Pieces list), never used up. Make mesh (or Enter) adds a new piece made from them and keeps them, hidden out of its way; Done keeps them as they are without making a mesh; Cancel (or Esc) leaves them as they were (or discards new ones). Each is one undo step. To change them again and make another mesh, pick the OxySpheres piece and click it, or use Pieces > Edit OxySpheres…, however much the meshes made from them were sculpted since. They are saved with the project.",
     },
     Topic {
         title: "Poly Edit (model polygons)",

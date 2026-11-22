@@ -8,7 +8,7 @@ use glam::Vec2;
 
 const HINT: &str = "Drag from a sphere to pull out a new one. Shift+drag a sphere to move it, Ctrl+drag it up or down to resize it, Alt+click it (or Delete) to remove it with the spheres below. Click a link to add a sphere on it. Drag away from the spheres to orbit.";
 
-/// Settings for the open armature, with Make mesh and Cancel (Enter / Esc).
+/// Settings for the open spheres, with Make mesh (Enter), Done and Cancel (Esc).
 pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     if ed.spheres.is_none() {
         return;
@@ -23,6 +23,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     });
     let mut accept = enter && !typing;
     let mut cancel = esc;
+    let mut done = false;
     if delete && !typing {
         ed.spheres_delete_selected();
     }
@@ -92,12 +93,21 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.label(egui::RichText::new(HINT).small().weak());
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                let (make, keep) = if e.replace.is_some() {
-                    ("Update mesh", "Keep the piece as it was (Esc)")
+                accept |= ui
+                    .button("Make mesh")
+                    .on_hover_text(
+                        "Make a new piece from the spheres (Enter). The spheres stay, to make another any time.",
+                    )
+                    .clicked();
+                done |= ui
+                    .button("Done")
+                    .on_hover_text("Keep the spheres as they are now, as a piece of their own, without making a mesh")
+                    .clicked();
+                let keep = if e.replace.is_some() {
+                    "Keep the spheres as they were (Esc)"
                 } else {
-                    ("Make mesh", "Discard the spheres (Esc)")
+                    "Discard the spheres (Esc)"
                 };
-                accept |= ui.button(make).on_hover_text("Turn the spheres into a mesh to sculpt (Enter)").clicked();
                 cancel |= ui.button("Cancel").on_hover_text(keep).clicked();
             });
         });
@@ -109,6 +119,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     ed.spheres_settle(held);
     if cancel {
         ed.cancel_spheres();
+    } else if done {
+        ed.finish_spheres();
     } else if accept {
         ed.accept_spheres();
     }

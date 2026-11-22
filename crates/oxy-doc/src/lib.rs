@@ -44,11 +44,11 @@ pub struct Piece {
     /// How the tubes in this piece were made, newest last, so they can be
     /// edited again (RFC 0009); written as the `TUBE` section.
     pub tubes: Vec<TubeRecipe>,
-    /// The OxySpheres armatures this piece's mesh was made from (RFC 0034),
-    /// newest last, so the one the mesh still is ([`ArmatureRecipe::matches`])
-    /// can be edited again; older ones stay so undo brings back a mesh
-    /// that can be. The matching one is written as the `ARMS` section.
-    pub armatures: Vec<ArmatureRecipe>,
+    /// Set on an OxySpheres piece (RFC 0034): the spheres themselves, kept
+    /// as a piece of their own. Its `mesh` only draws them; Make mesh turns
+    /// them into a new piece and leaves this one as it is, so it can make
+    /// another mesh any time. Written as the `ARMS` section (version 2).
+    pub spheres: Option<Box<ArmatureRecipe>>,
     /// A Curve Move curve that was open on this piece when the project was
     /// saved (RFC 0005), written as the `CURV` section. Set only by loading;
     /// the app takes it and reopens the curve.
@@ -226,10 +226,12 @@ impl TubeRecipe {
     }
 }
 
-/// How a piece was made with OxySpheres (RFC 0034): the armature and the
-/// skin settings. Valid while the piece's mesh is still the skin, unchanged
-/// ([`ArmatureRecipe::matches`]); sculpting, remeshing or subdividing it
-/// makes it an ordinary mesh.
+/// OxySpheres (RFC 0034): the armature and the settings its mesh is made
+/// with. On an OxySpheres piece ([`Piece::spheres`]) the triangle count and
+/// fingerprint are unused (0). Projects from 4.0.0-beta.23.3 kept it on the
+/// mesh made from it instead, valid while that mesh was unchanged
+/// ([`ArmatureRecipe::matches`]); opening one gives the spheres back as a
+/// piece of their own.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ArmatureRecipe {
     pub armature: oxy_mesh::armature::Armature,
@@ -248,6 +250,11 @@ impl ArmatureRecipe {
     pub fn new(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32, mesh: &Mesh) -> Self {
         let (triangles, fingerprint) = group_fingerprint(mesh, 0);
         ArmatureRecipe { armature, resolution, blend, triangles, fingerprint }
+    }
+
+    /// The settings for an OxySpheres piece (no mesh to match).
+    pub fn spheres(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32) -> Self {
+        ArmatureRecipe { armature, resolution, blend, triangles: 0, fingerprint: Vec3::ZERO }
     }
 
     /// Whether `mesh` is still the skin this recipe made.
@@ -282,7 +289,7 @@ impl Piece {
             symmetry_center: None,
             cage: None,
             tubes: Vec::new(),
-            armatures: Vec::new(),
+            spheres: None,
             curve: None,
             strokes: None,
             material: None,
@@ -308,13 +315,23 @@ impl Piece {
         self.tubes.iter().rev().find(|r| r.matches(&self.mesh))
     }
 
-    /// The OxySpheres armature the piece was made from, while its mesh is
-    /// still that skin.
-    pub fn armature_recipe(&self) -> Option<&ArmatureRecipe> {
-        if self.multires.is_some() {
-            return None;
-        }
-        self.armatures.iter().rev().find(|r| r.matches(&self.mesh))
+    /// An OxySpheres piece named `name`: its mesh draws the spheres of
+    /// `recipe`, and its symmetry centre is on their mirror plane.
+    pub fn spheres_piece(name: impl Into<String>, recipe: ArmatureRecipe) -> Self {
+        let a = &recipe.armature;
+        let root = a.spheres.first().map_or(Vec3::ZERO, |s| s.center);
+        let mut piece = Piece::new(name, a.preview(24));
+        piece.symmetry_center = Some(match a.mirror {
+            Some(x) => Vec3::new(x, root.y, root.z),
+            None => root,
+        });
+        piece.spheres = Some(Box::new(recipe));
+        piece
+    }
+
+    /// Whether this is an OxySpheres piece (see [`Piece::spheres`]).
+    pub fn is_spheres(&self) -> bool {
+        self.spheres.is_some()
     }
 
     /// The cage with the mesh's current vertex positions, if it still
@@ -340,7 +357,8 @@ impl Piece {
                     symmetry_center: self.symmetry_center,
                     cage: None,
                     tubes: Vec::new(),
-                    armature: None,
+                    spheres: self.spheres.clone(),
+                    skin_of: None,
                     curve: None,
                     strokes: None,
                     material: self.material.clone(),
@@ -360,7 +378,8 @@ impl Piece {
                 symmetry_center: self.symmetry_center,
                 cage: self.current_cage(),
                 tubes: self.tubes.clone(),
-                armature: self.armature_recipe().cloned().map(Box::new),
+                spheres: self.spheres.clone(),
+                skin_of: None,
                 curve: self.curve.clone(),
                 strokes: None,
                 material: self.material.clone(),
@@ -391,8 +410,12 @@ pub struct PieceData {
     pub cage: Option<Cage>,
     /// The `TUBE` section: how its tubes were made.
     pub tubes: Vec<TubeRecipe>,
-    /// The `ARMS` section: the OxySpheres armature its mesh was made from.
-    pub armature: Option<Box<ArmatureRecipe>>,
+    /// The `ARMS` section (version 2): this is an OxySpheres piece.
+    pub spheres: Option<Box<ArmatureRecipe>>,
+    /// The `ARMS` section as 4.0.0-beta.23.3 wrote it (version 1): the
+    /// spheres this piece's mesh was made from. Read only: opening it adds
+    /// them as an OxySpheres piece of their own.
+    pub skin_of: Option<Box<ArmatureRecipe>>,
     /// The `CURV` section: a Curve Move curve open when it was saved.
     pub curve: Option<Box<SavedCurve>>,
     /// The `STRK` section: editable strokes (Living strokes), with point
@@ -517,7 +540,7 @@ impl PieceData {
             symmetry_center: self.symmetry_center,
             cage,
             tubes: self.tubes,
-            armatures: self.armature.map(|a| vec![*a]).unwrap_or_default(),
+            spheres: self.spheres,
             curve: self.curve,
             strokes,
             material: self.material,
@@ -809,7 +832,22 @@ impl Scene {
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
         let saved_parents: Vec<Option<u32>> = data.pieces.iter_mut().map(|p| p.parent.take()).collect();
         let saved_links: Vec<Option<(u32, Mat4)>> = data.pieces.iter_mut().map(|p| p.link.take()).collect();
+        let skins_of: Vec<Option<Box<ArmatureRecipe>>> = data.pieces.iter_mut().map(|p| p.skin_of.take()).collect();
         let mut pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
+        // A mesh saved with the spheres it was made from (4.0.0-beta.23.3)
+        // gets them back as an OxySpheres piece, at the end so the saved
+        // places of the other pieces still hold.
+        let from_skins: Vec<Piece> = pieces
+            .iter()
+            .zip(skins_of)
+            .filter_map(|(p, r)| {
+                let r = r.filter(|r| p.multires.is_none() && r.matches(&p.mesh))?;
+                let mut s = Piece::spheres_piece(format!("{} spheres", p.name), *r);
+                s.visible = false;
+                Some(s)
+            })
+            .collect();
+        pieces.extend(from_skins);
         // Sources and parents are found by their place in the list; ids are new.
         let ids: Vec<u64> = pieces.iter().map(|p| p.id).collect();
         for (i, (p, &parent_idx)) in pieces.iter_mut().zip(&saved_parents).enumerate() {

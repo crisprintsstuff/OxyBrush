@@ -5685,7 +5685,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                                     }
 
                                     // Piece type icon
-                                    let (piece_icon, icon_tip) = if !p.tubes.is_empty() {
+                                    let (piece_icon, icon_tip) = if p.is_spheres() {
+                                        (Icon::Sphere, "OxySpheres: click it, or Edit OxySpheres, to change the spheres or make a mesh")
+                                    } else if !p.tubes.is_empty() {
                                         (Icon::Wireframe, "Tube piece")
                                     } else if p.cage.is_some() {
                                         (Icon::Wireframe, "Retopology cage")

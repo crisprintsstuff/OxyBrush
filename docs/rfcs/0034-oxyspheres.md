@@ -8,9 +8,8 @@ Status: Phase 1 implemented (4.0.0-beta.23.3), issue [#437](https://github.com/c
 then turns it into one smooth, closed mesh to sculpt. Each sphere is a
 joint; each link from a sphere to its parent is the tapering shape that
 joins the two. Pieces > + Add > **OxySpheres…** opens a new armature;
-**Make mesh** (Enter) adds the mesh as a new piece, and Pieces > **Edit
-OxySpheres…** reopens the armature later, while the mesh hasn't been
-changed since.
+**Make mesh** (Enter) adds the mesh as a new piece and keeps the spheres
+as a piece of their own, to change them and make another mesh any time.
 
 ## Why
 
@@ -63,19 +62,42 @@ default), 253k in 714 ms at 320.
 - The viewport shows the mesh as it will be, at a coarser resolution (48
   while dragging, 72 otherwise), with each sphere's outline and the links
   drawn over it; **Show the mesh** off shows the plain spheres instead.
-- Undo and Redo step through the open armature's own edits, as in an
-  open tube; the scene's history changes once, when the mesh is made
-  (Add OxySpheres, or Edit OxySpheres for a piece being edited). The skin
+- Undo and Redo step through the open spheres' own edits, as in an open
+  tube; the scene's history changes once, when they are closed. The mesh
   is made on a worker thread.
+
+### The spheres are a piece of their own (since 4.0.0-beta.24)
+
+The spheres live on as an **OxySpheres piece**, never used up, the way a
+sphere armature works in other sculpting tools: its mesh only draws the
+spheres, and it is the thing you come back to.
+
+- **Make mesh** (Enter) adds a new piece made from the spheres ("…
+  mesh") and keeps the spheres, as a new OxySpheres piece or in place of
+  the one edited, hidden so the mesh is in view. One undo step.
+- **Done** keeps the spheres as they are without making a mesh (shown).
+  **Cancel** leaves them as they were. One undo step.
+- **Opening them again:** a click on the active OxySpheres piece (there's
+  nothing to sculpt on it) or Pieces > Edit OxySpheres…. Meshes made
+  before stay as they are, however much they were sculpted.
+- New spheres start on the symmetry plane (#449): with X symmetry on,
+  the first sphere and so the mirror plane were at the orbit point, off
+  centre once the view had moved.
+
+In 4.0.0-beta.23.3 the spheres were kept on the mesh made from them, and
+could be reopened only while that mesh was unchanged; Make mesh on an
+edited piece replaced its mesh. That lost the spheres as soon as the
+mesh was sculpted.
 
 ### Saving
 
-The piece keeps the armature it was made from. The `ARMS` section stores
-it (see `oxy_doc::format`), written only while the mesh is still that
-skin (its triangle count and position fingerprint match). Older versions
-skip it and open an ordinary piece. A piece keeps its last few armatures
-in memory, so undoing an Edit OxySpheres brings back a mesh that can be
-reopened too.
+The `ARMS` section (see `oxy_doc::format`), version 2, marks an
+OxySpheres piece and holds its spheres and settings. Version 1, written
+by 4.0.0-beta.23.3 on a mesh made from spheres, is still read: when the
+mesh is unchanged, its spheres come back as an OxySpheres piece (hidden)
+at the end of the list. Older versions skip the section, and
+4.0.0-beta.23.3 skips version 2: they open an OxySpheres piece as an
+ordinary mesh of the spheres.
 
 ## Not in phase 1 (later phases)
 
