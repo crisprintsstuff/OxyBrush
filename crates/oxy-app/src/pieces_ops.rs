@@ -378,6 +378,48 @@ impl Editor {
         self.piece_pick.clear();
     }
 
+    /// Make piece `idx` active and pick everything under it in the
+    /// hierarchy (#414), so the gizmo, Join picked and Merge picked work on
+    /// the whole branch.
+    pub fn select_hierarchy(&mut self, idx: usize) {
+        let Some(id) = self.scene.pieces.get(idx).map(|p| p.id) else { return };
+        self.scene.set_active(idx);
+        let below = self.scene.descendants_of(id);
+        let n = below.len() + 1;
+        self.piece_pick = below;
+        self.status = format!("Selected {n} pieces: {} and everything under it", self.scene.pieces[idx].name);
+    }
+
+    /// Join piece `idx` and everything under it into one piece, as they are.
+    pub fn join_hierarchy(&mut self, idx: usize) {
+        self.select_hierarchy(idx);
+        self.join_picked();
+    }
+
+    /// Fuse piece `idx` and everything under it into one closed surface
+    /// (voxel remesh).
+    pub fn merge_hierarchy(&mut self, idx: usize) {
+        self.select_hierarchy(idx);
+        self.merge_picked();
+    }
+
+    /// Fuse the active piece and the picked pieces into one closed surface
+    /// (voxel remesh), like Merge + remesh for just these.
+    pub fn merge_picked(&mut self) {
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let ids = self.selected_piece_ids();
+        if ids.len() < 2 {
+            self.status =
+                "Merge picked needs the active piece plus at least one picked piece (Cmd+click to pick)".into();
+            return;
+        }
+        self.merge_pieces(&ids);
+        self.piece_pick.clear();
+    }
+
     /// Show only piece `idx`; if only piece `idx` is already visible, show all pieces (#297).
     pub fn isolate_piece(&mut self, idx: usize) {
         if idx >= self.scene.pieces.len() {

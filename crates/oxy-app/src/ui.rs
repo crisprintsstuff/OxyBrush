@@ -609,6 +609,26 @@ pub fn apply_theme(
     ctx.set_zoom_factor(ui_scale);
 }
 
+/// A right-click command on a piece row in the Pieces list (#414).
+#[derive(Clone, Copy, PartialEq)]
+enum TreeAction {
+    Select,
+    Join,
+    Merge,
+    JoinPicked,
+    MergePicked,
+    SplitLoose,
+    SplitGroups,
+}
+
+fn busy_job(ed: &mut Editor) -> bool {
+    if ed.job.is_some() {
+        ed.status = "Wait for the running operation to finish first".into();
+        return true;
+    }
+    false
+}
+
 /// Draw all panels. Returns a UI action and the remaining canvas rect (points).
 pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     let mut action = None;
@@ -4816,7 +4836,7 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     }
     ui.separator();
     ui.label(
-        RichText::new("Ctrl+Shift+drag: show only the selection\nCtrl+Shift+Alt+drag: hide the selection")
+        RichText::new("Ctrl+Shift+drag: show only the selection\nCtrl+Shift+Alt+drag: hide the selection\nOn empty space: invert visibility\nHold Space: move the box or lasso")
             .weak()
             .small(),
     );
@@ -5408,6 +5428,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     let mut action_toggle_fold = None;
     let mut action_duplicate = None;
     let mut action_delete = None;
+    // Hierarchy and split commands from the right-click menu (#414).
+    let mut action_tree: Option<(usize, TreeAction)> = None;
     let command = ui.input(|i| i.modifiers.command || i.modifiers.ctrl || i.modifiers.mac_cmd)
         || ed.modifiers.ctrl
         || ed.touch_modifiers.ctrl;
@@ -5845,6 +5867,26 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                             ui.close();
                         }
                     }
+                    // Hierarchy and multi-piece commands (#414).
+                    ui.separator();
+                    let several = is_selected && selected_ids.len() > 1;
+                    let mut tree_item = |ui: &mut Ui, label: &str, tip: &str, act: TreeAction| {
+                        if ui.button(label).on_hover_text(tip).clicked() {
+                            action_tree = Some((i, act));
+                            ui.close();
+                        }
+                    };
+                    if has_children {
+                        tree_item(ui, "Select hierarchy", plain::SELECT_HIERARCHY, TreeAction::Select);
+                        tree_item(ui, "Join hierarchy", plain::JOIN_HIERARCHY, TreeAction::Join);
+                        tree_item(ui, "Merge + remesh hierarchy", plain::MERGE_HIERARCHY, TreeAction::Merge);
+                    }
+                    if several {
+                        tree_item(ui, "Join picked", plain::JOIN_PICKED_MENU, TreeAction::JoinPicked);
+                        tree_item(ui, "Merge + remesh picked", plain::MERGE_PICKED, TreeAction::MergePicked);
+                    }
+                    tree_item(ui, "Split into loose parts", plain::SPLIT_LOOSE_MENU, TreeAction::SplitLoose);
+                    tree_item(ui, "Split by face groups", plain::SPLIT_GROUPS_MENU, TreeAction::SplitGroups);
                     ui.separator();
                     if ui.button("Copy").clicked() {
                         if !ed.is_piece_selected(piece_id) {
@@ -5955,6 +5997,20 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if let Some(i) = action_focus {
         ed.scene.set_active(i);
         ed.frame_active();
+    }
+    if let Some((i, act)) = action_tree.filter(|_| !busy_job(ed)) {
+        match act {
+            TreeAction::Select => ed.select_hierarchy(i),
+            TreeAction::Join => ed.join_hierarchy(i),
+            TreeAction::Merge => ed.merge_hierarchy(i),
+            TreeAction::JoinPicked => ed.join_picked(),
+            TreeAction::MergePicked => ed.merge_picked(),
+            TreeAction::SplitLoose | TreeAction::SplitGroups => {
+                ed.scene.set_active(i);
+                ed.piece_pick.clear();
+                ed.split_active(act == TreeAction::SplitLoose);
+            }
+        }
     }
     if let Some(p) = action_toggle_vis.and_then(|i| ed.scene.pieces.get_mut(i)) {
         p.visible = !p.visible;

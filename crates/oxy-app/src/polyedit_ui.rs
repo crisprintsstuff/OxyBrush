@@ -18,11 +18,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     }
     let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let mut done = esc && !matches!(ed.drag, Drag::PolyEdit(_)) && !ctx.egui_wants_keyboard_input();
-    // Esc first drops a half-done two-click action.
-    if done && let Some(pe) = ed.poly_edit.as_mut().filter(|pe| pe.pending.is_some()) {
-        pe.pending = None;
+    // Esc first drops a half-done two-click action, then the pick (#298).
+    if done && ed.poly_escape() {
         done = false;
-        ed.status = "Poly Edit: cancelled".into();
     }
     let repeat_key = ed.keymap.primary(crate::keymap::CommandId::PolyRepeat);
     let mut subdivide: Option<(u32, bool)> = None;
@@ -165,6 +163,19 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 });
                 ui.label(RichText::new(pe.edge_action.help()).weak().small());
+                if pe.edge_action == EdgeAction::Bridge {
+                    ui.horizontal(|ui| {
+                        ui.label("Rows");
+                        ui.add(egui::DragValue::new(&mut pe.bridge_segments).range(1..=64))
+                            .on_hover_text("Rows of faces along the bridge");
+                        ui.label("Twist");
+                        ui.add(egui::DragValue::new(&mut pe.bridge_twist).range(-32..=32))
+                            .on_hover_text("Turn one end by this many points, for a twisted bridge");
+                    });
+                    if let Some(Pending::BridgeHole(_)) = pe.pending {
+                        ui.label(RichText::new("Bridge: click an edge of the second hole (Esc cancels)").color(REACH_EDGE));
+                    }
+                }
                 if pe.edge_action == EdgeAction::InsertLoop {
                     ui.checkbox(&mut pe.loop_pair, "Two loops").on_hover_text(
                         "Cut two loops at once, the same distance in from each end of the edge; dragging moves them together, in or out. Shift+click puts them at thirds.",
@@ -455,6 +466,11 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
                 if let (Some(pa), Some(pb)) = (screen[a as usize], screen[b as usize]) {
                     painter.line_segment([pa, pb], Stroke::new(3.0, PICKED));
                 }
+            }
+        }
+        Some(Pending::BridgeHole([a, b])) => {
+            if let (Some(Some(pa)), Some(Some(pb))) = (screen.get(a as usize), screen.get(b as usize)) {
+                painter.line_segment([*pa, *pb], Stroke::new(3.0, PICKED));
             }
         }
         Some(Pending::SplitFrom(v)) if (v as usize) < screen.len() => {

@@ -6,7 +6,18 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Duplicate keeps subdivision levels** ([#366](https://github.com/crisprintsstuff/OxyBrush/issues/366)). Duplicate and Mirror duplicate used to copy only the level shown; the copy now has every level, with its detail and paint, so you can step it up and down like the original (Mirror duplicate mirrors each level). It also keeps the piece's material.
+- **Hierarchy commands in the Pieces list's right-click menu** ([#414](https://github.com/crisprintsstuff/OxyBrush/issues/414)). On a piece with children: **Select hierarchy** picks it and everything under it, **Join hierarchy** joins them into one piece as they are, and **Merge hierarchy** merges and remeshes them. With several pieces picked, **Join picked** and **Merge picked** are there too, and **Split loose parts** and **Split by groups** for any piece.
+- **Bridge for edges in Poly Edit** ([#378](https://github.com/crisprintsstuff/OxyBrush/issues/378)): click a border edge of one hole, then one of another, to join the two holes with a tube of faces (Rows and Twist as for faces; follows Mirror).
+- **Shift smooths face group borders with the Paint Groups brush** ([#303](https://github.com/crisprintsstuff/OxyBrush/issues/303)). Hold Shift and stroke over a jagged border: each face joins the group most of its neighbours are in, so spikes and stray faces go and straight borders stay. The surface doesn't move; each stroke is one undo step.
+- **Ctrl/Cmd+double-click picks a loop in Poly Edit** ([#298](https://github.com/crisprintsstuff/OxyBrush/issues/298)): on an edge, its edge loop (on a hole's edge, the whole border of the hole); on a face, its face loop across the nearest edge. Added to what's already picked.
+- **Ctrl+Shift+drag on empty space inverts visibility** ([#329](https://github.com/crisprintsstuff/OxyBrush/issues/329)): a visibility box or lasso drawn around none of the model swaps hidden and shown faces, as Ctrl+Shift+click on empty space shows everything.
+- **Hold Space to move a box or lasso while drawing it** ([#329](https://github.com/crisprintsstuff/OxyBrush/issues/329)), for masking or visibility: it keeps its shape and follows the pointer until you let go of Space.
 - **The brush ring shows while you resize with S** ([#418](https://github.com/crisprintsstuff/OxyBrush/issues/418)). The size and focal shift sliders open under the pointer, which hid the ring; it now stays on the model where you pressed the key, over the slider, and grows and shrinks as you drag.
+
+### Changed
+
+- **A stray click no longer clears the pick in Poly Edit** ([#298](https://github.com/crisprintsstuff/OxyBrush/issues/298)). Clicking empty space by accident, or a press there meant to orbit, kept dropping faces, edges or points picked one by one. Now **Esc** clears the pick (a first Esc still drops a half-done bridge or split; with nothing picked, Esc closes the tool), and so does Ctrl/Cmd+click on empty space.
 
 ### Fixed
 
