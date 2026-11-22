@@ -771,6 +771,7 @@ impl App {
         ed.tick_hold(Instant::now());
         ed.update_curve();
         ed.update_tube();
+        ed.update_spheres();
         ed.update_primitive();
         ed.update_poly_smooth();
         ed.check_link_topology();
@@ -782,6 +783,7 @@ impl App {
             || ed.extract_preview.is_some()
             || ed.curve.is_some()
             || ed.tube.is_some()
+            || ed.spheres.is_some()
             || ed.primitive_edit.is_some()
             || ed.preview_in_place().is_some();
         // A curve stroke's preview is the whole piece with the stroke

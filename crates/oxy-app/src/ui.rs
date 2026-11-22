@@ -1024,6 +1024,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::lights_ui::window(ui.ctx(), ed);
     crate::wasm_plugins::panels(ui.ctx(), ed);
     crate::tube_ui::window(ui.ctx(), ed);
+    crate::oxyspheres_ui::window(ui.ctx(), ed);
     crate::retopo_ui::window(ui.ctx(), ed);
     crate::polyedit_ui::window(ui.ctx(), ed);
     crate::primitive_ui::window(ui.ctx(), ed);
@@ -1067,6 +1068,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     ed.update_plugin_previews();
     crate::wasm_plugins::overlays(ui, ed, canvas);
     crate::tube_ui::overlay(ui, ed, canvas);
+    crate::oxyspheres_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
     crate::polyedit_ui::overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
@@ -4654,6 +4656,9 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
             ed.start_tube();
         }
+        if tips::button(ui, "OxySpheres…", Cmd::AddSpheres).clicked() {
+            ed.start_spheres();
+        }
         ui.separator();
         for (label, which, cmd) in
             [("Human (female)", "human_female", Cmd::AddHumanFemale), ("Human (male)", "human_male", Cmd::AddHumanMale)]
@@ -4665,6 +4670,9 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     });
     if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
         ed.edit_tube();
+    }
+    if tips::button_on(ui, ed.can_edit_spheres(), "Edit OxySpheres…", Cmd::EditSpheres).clicked() {
+        ed.edit_spheres();
     }
     if tips::button_on_km(ui, &ed.keymap, !ed.scene.pieces.is_empty(), "Copy piece", Cmd::CopyPiece).clicked() {
         ed.copy_pieces();
@@ -6174,9 +6182,15 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             if tips::button(ui, "Tube (draw)…", Cmd::AddTube).clicked() {
                 ed.start_tube();
             }
+            if tips::button(ui, "OxySpheres…", Cmd::AddSpheres).clicked() {
+                ed.start_spheres();
+            }
         });
         if tips::button_on(ui, ed.can_edit_tube(), "Edit tube…", Cmd::EditTube).clicked() {
             ed.edit_tube();
+        }
+        if tips::button_on(ui, ed.can_edit_spheres(), "Edit OxySpheres…", Cmd::EditSpheres).clicked() {
+            ed.edit_spheres();
         }
         if tips::button_on(ui, !ed.scene.pieces.is_empty(), "Duplicate", Cmd::Duplicate).clicked() {
             ed.duplicate_active(None);

@@ -762,6 +762,26 @@ pub enum Drag {
         points: Vec<Vec2>,
         anchor: Vec3,
     },
+    /// OxySpheres, Add: pulling a new sphere out of `parent`, on the view
+    /// plane through `at` (where the press hit it). `child` is None until
+    /// the pointer has moved far enough.
+    SphereAdd {
+        parent: usize,
+        at: Vec3,
+        start: Vec2,
+        child: Option<usize>,
+    },
+    /// OxySpheres, Move: `offset` from the pointer's point to the centre.
+    SphereMove {
+        index: usize,
+        offset: Vec3,
+    },
+    /// OxySpheres, Size: dragging up or down from `start_y`.
+    SphereSize {
+        index: usize,
+        start_y: f32,
+        start: f32,
+    },
     /// Moving one of the open tube's control points.
     TubePoint {
         index: usize,
@@ -1027,6 +1047,9 @@ pub enum JobResult {
     Relevel { mesh: Mesh, multires: oxy_mesh::multires::Multires },
     /// Files read for Import, applied on the UI thread as new pieces.
     Imported(ImportRead),
+    /// An OxySpheres skin (RFC 0034): a new piece, or the new mesh of the
+    /// piece `into`.
+    Skin { recipe: Box<oxy_doc::ArmatureRecipe>, mesh: Mesh, into: Option<u64> },
 }
 
 /// A change to the active piece's subdivision levels.
@@ -2531,6 +2554,10 @@ impl Editor {
         if self.select_curve_click(p) {
             return;
         }
+        // An open armature takes every click in the viewport.
+        if self.spheres_pointer_down(p) {
+            return;
+        }
         // In Poly Edit the gizmo works on the picked elements, and comes
         // before the tool's own clicks.
         if self.poly_edit.is_some() && self.gizmo.is_some() && self.poly_gizmo_down(p) {
@@ -3031,7 +3058,12 @@ impl Editor {
     /// the model too. Left alone during a drag and while a curve or tube is
     /// open, whose sizes were fixed when they started.
     pub fn sync_model_radius(&mut self) {
-        if !self.radius_on_model || !matches!(self.drag, Drag::None) || self.curve.is_some() || self.tube.is_some() {
+        if !self.radius_on_model
+            || !matches!(self.drag, Drag::None)
+            || self.curve.is_some()
+            || self.tube.is_some()
+            || self.spheres.is_some()
+        {
             return;
         }
         let per_pt = self.radius_world_per_pt();
@@ -3511,7 +3543,11 @@ impl Editor {
                 return true;
             }
         }
-        if self.tube_pointer_moved(pos) || self.retopo_pointer_moved(pos) || self.poly_pointer_moved(pos) {
+        if self.spheres_pointer_moved(pos)
+            || self.tube_pointer_moved(pos)
+            || self.retopo_pointer_moved(pos)
+            || self.poly_pointer_moved(pos)
+        {
             return true;
         }
         if let Drag::Stroke { hold: Some(h), .. } = &mut self.drag {
@@ -3531,6 +3567,9 @@ impl Editor {
             Drag::TubeDraw { .. }
             | Drag::TubePoint { .. }
             | Drag::TubeRadius { .. }
+            | Drag::SphereAdd { .. }
+            | Drag::SphereMove { .. }
+            | Drag::SphereSize { .. }
             | Drag::Retopo(_)
             | Drag::PolyEdit(_)
             | Drag::PolyGizmo(_) => true,
@@ -3908,7 +3947,7 @@ impl Editor {
             }
             return;
         }
-        if self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
+        if self.spheres_pointer_up() || self.tube_pointer_up() || self.retopo_pointer_up() || self.poly_pointer_up() {
             return;
         }
         if let (Some(p0), Some(p)) = (self.rmb_press.take(), self.pointer)
@@ -4465,6 +4504,11 @@ impl Editor {
             self.tube_undo();
             return;
         }
+        // So is an open armature (RFC 0034).
+        if self.spheres.is_some() {
+            self.spheres_undo();
+            return;
+        }
         if self.undo_per_piece { self.undo_piece() } else { self.undo_scene() }
     }
 
@@ -4472,6 +4516,10 @@ impl Editor {
     pub fn redo(&mut self) {
         if self.tube.is_some() {
             self.tube_redo();
+            return;
+        }
+        if self.spheres.is_some() {
+            self.spheres_redo();
             return;
         }
         if self.undo_per_piece { self.redo_piece() } else { self.redo_scene() }
@@ -4543,6 +4591,9 @@ impl Editor {
         if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
             self.cancel_tube();
         }
+        if self.spheres.as_ref().is_some_and(|e| e.replace.is_some()) {
+            self.cancel_spheres();
+        }
         if undo && self.retopo_undo_draft_point() {
             return false;
         }
@@ -4566,6 +4617,9 @@ impl Editor {
         // A tube being edited hides its old faces; put them back first.
         if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
             self.cancel_tube();
+        }
+        if self.spheres.as_ref().is_some_and(|e| e.replace.is_some()) {
+            self.cancel_spheres();
         }
         // Loose retopology points placed before the first face aren't in
         // the scene yet: undo takes them back one by one.
@@ -4597,6 +4651,9 @@ impl Editor {
         }
         if self.tube.as_ref().is_some_and(|t| t.replace.is_some()) {
             self.cancel_tube();
+        }
+        if self.spheres.as_ref().is_some_and(|e| e.replace.is_some()) {
+            self.cancel_spheres();
         }
         self.pointer_up();
         if self.job.is_some() {
@@ -4723,6 +4780,7 @@ impl Editor {
             && doc.link.is_none()
             && !self.wasm_plugins.iter().any(|p| p.preview.as_ref().is_some_and(|pv| pv.doc_id == doc.id))
             && doc.tube.is_none()
+            && doc.spheres.is_none()
             && doc.poly_edit.is_none()
             && doc.retopo.is_none()
             && doc.curve.is_none()
@@ -4743,6 +4801,7 @@ impl Editor {
                 self.poly_edit = None;
                 self.retopo = None;
                 self.cancel_tube();
+                self.cancel_spheres();
                 self.curve = None;
                 self.extract_preview = None;
                 self.primitive_edit = None;
@@ -6847,6 +6906,7 @@ impl Editor {
         let active = self.active_document;
         let doc = &self.documents[active];
         let others = self.tube.is_some()
+            || doc.spheres.is_some()
             || doc.primitive_edit.is_some()
             || doc.insert_preview.is_some()
             || doc.extract_preview.is_some()
@@ -6859,6 +6919,9 @@ impl Editor {
         }
         if self.tube.is_some() {
             return self.tube.as_mut().map(|t| &mut t.preview);
+        }
+        if self.spheres.is_some() {
+            return self.spheres.as_mut().map(|e| &mut e.preview);
         }
         let doc = &mut self.documents[active];
         if let Some(p) = &mut doc.primitive_edit {
@@ -6875,7 +6938,7 @@ impl Editor {
     /// The piece a preview is drawn in place of (an open curve stroke, or
     /// a plugin's live preview), when the preview looks like the piece.
     pub fn preview_in_place(&self) -> Option<u64> {
-        if self.tube.is_some() || self.primitive_edit.is_some() {
+        if self.tube.is_some() || self.spheres.is_some() || self.primitive_edit.is_some() {
             return None;
         }
         if let Some(c) = &self.curve
@@ -8100,6 +8163,13 @@ impl Editor {
                 doc.scene.set_active(at);
                 doc.history.record("Make surface instances real", Step::Inserted { index: at });
                 format!("Made {copies} copies real as {name} ({tris} triangles); the copies and their source are kept")
+            }
+            Ok(JobResult::Skin { recipe, mesh, into }) => {
+                let prev_active = self.active_document;
+                self.active_document = doc_idx;
+                let st = self.finish_skin(*recipe, mesh, into, secs);
+                self.active_document = prev_active;
+                st
             }
             Ok(JobResult::Primitive(name, mesh)) => {
                 let doc = &mut self.documents[doc_idx];
@@ -11200,6 +11270,131 @@ mod tests {
         e.cancel_tube();
         assert!(e.tube.is_none() && !e.tube_armed);
         assert_eq!(e.scene.pieces.len(), 1);
+    }
+
+    fn sphere_screen(e: &Editor, i: usize) -> Vec2 {
+        e.tube_screen(e.spheres.as_ref().unwrap().armature.spheres[i].center).unwrap()
+    }
+
+    fn drag_on(e: &mut Editor, from: Vec2, to: Vec2) {
+        e.pointer = Some(from);
+        e.pointer_down(PointerButton::Primary);
+        for k in 1..=10 {
+            e.pointer_moved(from.lerp(to, k as f32 / 10.0));
+        }
+        e.pointer_up();
+        e.spheres_settle(false);
+    }
+
+    #[test]
+    fn oxyspheres_drags_add_move_resize_and_delete_spheres_with_their_own_undo() {
+        let mut e = editor();
+        e.symmetry.x = true;
+        e.start_spheres();
+        e.spheres_settle(false);
+        let root = sphere_screen(&e, 0);
+        let len = |e: &Editor| e.spheres.as_ref().unwrap().armature.len();
+        // A click on the root only picks it.
+        drag_on(&mut e, root, root);
+        assert_eq!(len(&e), 1);
+        // Dragging from it pulls out a child, and its mirror twin.
+        drag_on(&mut e, root, root + Vec2::new(160.0, -20.0));
+        assert_eq!(len(&e), 3, "{}", e.status);
+        let a = e.spheres.as_ref().unwrap().armature.clone();
+        assert!(a.spheres[1].center.x > a.spheres[0].center.x + 0.3);
+        assert!((a.spheres[2].center.x + a.spheres[1].center.x - 2.0 * a.spheres[0].center.x).abs() < 1e-4);
+        assert_eq!(e.spheres.as_ref().unwrap().selected, Some(1));
+        // Shift+drag moves it (and the twin); Ctrl+drag up makes it bigger.
+        let child = sphere_screen(&e, 1);
+        e.modifiers.shift = true;
+        drag_on(&mut e, child, child + Vec2::new(0.0, -60.0));
+        e.modifiers.shift = false;
+        let b = e.spheres.as_ref().unwrap().armature.clone();
+        assert!(b.spheres[1].center.y > a.spheres[1].center.y + 0.1);
+        assert_eq!(b.spheres[2].center.y, b.spheres[1].center.y);
+        assert_eq!(b.len(), 3, "moving doesn't add");
+        let child = sphere_screen(&e, 1);
+        e.modifiers.ctrl = true;
+        drag_on(&mut e, child, child + Vec2::new(0.0, -120.0));
+        e.modifiers.ctrl = false;
+        let c = e.spheres.as_ref().unwrap().armature.clone();
+        assert!((c.spheres[1].radius / b.spheres[1].radius - 2.0).abs() < 0.05, "doubled");
+        assert_eq!(c.spheres[2].radius, c.spheres[1].radius);
+        // A click on the link puts a sphere on it, on both sides.
+        let mid = sphere_screen(&e, 0).lerp(sphere_screen(&e, 1), 0.5);
+        drag_on(&mut e, mid, mid);
+        assert_eq!(len(&e), 5, "{}", e.status);
+        // Undo steps back through the armature, not the scene.
+        e.undo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, c);
+        e.undo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, b);
+        e.redo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, c);
+        // Alt+click removes the child with its twin; Delete can't take the root.
+        e.modifiers.alt = true;
+        let child = sphere_screen(&e, 1);
+        drag_on(&mut e, child, child);
+        e.modifiers.alt = false;
+        assert_eq!(len(&e), 1);
+        e.spheres.as_mut().unwrap().selected = Some(0);
+        e.spheres_delete_selected();
+        assert_eq!(len(&e), 1);
+        // Dragging away from the spheres orbits.
+        let yaw = e.camera.yaw;
+        drag_on(&mut e, Vec2::new(60.0, 60.0), Vec2::new(140.0, 60.0));
+        assert!((e.camera.yaw - yaw).abs() > 1e-3);
+        assert_eq!(e.scene.pieces.len(), 1, "nothing in the scene yet");
+        assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn oxyspheres_make_a_piece_that_can_be_edited_again_and_undone() {
+        let mut e = editor();
+        e.start_spheres();
+        {
+            let s = e.spheres.as_mut().unwrap();
+            s.resolution = 40;
+            let r = s.armature.spheres[0].radius;
+            let c = s.armature.spheres[0].center;
+            s.armature.add_child(0, c + Vec3::X * r * 3.0, r * 0.6);
+        }
+        e.update_spheres();
+        assert!(e.preview_mesh_mut().is_some(), "the spheres are drawn");
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 2);
+        assert_eq!(e.scene.active().name, "OxySpheres");
+        assert_eq!(e.history.undo_labels().last(), Some("Add OxySpheres"));
+        assert!(e.can_edit_spheres());
+        let first = e.scene.active().mesh.clone();
+
+        // Reopen: the piece is hidden while the spheres are open; Cancel shows it.
+        e.edit_spheres();
+        assert_eq!(e.spheres.as_ref().unwrap().armature.len(), 3, "mirrored by default with X symmetry");
+        assert!(e.scene.active().mesh.hidden().iter().all(|&h| h));
+        e.cancel_spheres();
+        assert!(e.scene.active().mesh.hidden().iter().all(|&h| !h));
+
+        // Update: a bigger end sphere makes a new mesh, one undo step.
+        e.edit_spheres();
+        e.spheres.as_mut().unwrap().armature.set_radius(1, 0.5);
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.history.undo_labels().last(), Some("Edit OxySpheres"));
+        assert_ne!(e.scene.active().mesh.triangle_count(), first.triangle_count());
+        assert!(e.can_edit_spheres());
+        // Undo brings back the first mesh, which can still be edited.
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, first.positions);
+        assert!(e.can_edit_spheres());
+        e.edit_spheres();
+        assert!(e.spheres.as_ref().unwrap().armature.spheres[1].radius < 0.5);
+        e.cancel_spheres();
+        // Sculpting it makes it an ordinary mesh.
+        let n = e.scene.active().mesh.vertex_count();
+        e.scene.active_mut().mesh.positions[n / 2] += Vec3::splat(0.05);
+        assert!(!e.can_edit_spheres());
     }
 
     fn wait_job(e: &mut Editor) {

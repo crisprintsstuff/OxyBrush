@@ -44,6 +44,11 @@ pub struct Piece {
     /// How the tubes in this piece were made, newest last, so they can be
     /// edited again (RFC 0009); written as the `TUBE` section.
     pub tubes: Vec<TubeRecipe>,
+    /// The OxySpheres armatures this piece's mesh was made from (RFC 0034),
+    /// newest last, so the one the mesh still is ([`ArmatureRecipe::matches`])
+    /// can be edited again; older ones stay so undo brings back a mesh
+    /// that can be. The matching one is written as the `ARMS` section.
+    pub armatures: Vec<ArmatureRecipe>,
     /// A Curve Move curve that was open on this piece when the project was
     /// saved (RFC 0005), written as the `CURV` section. Set only by loading;
     /// the app takes it and reopens the curve.
@@ -221,6 +226,40 @@ impl TubeRecipe {
     }
 }
 
+/// How a piece was made with OxySpheres (RFC 0034): the armature and the
+/// skin settings. Valid while the piece's mesh is still the skin, unchanged
+/// ([`ArmatureRecipe::matches`]); sculpting, remeshing or subdividing it
+/// makes it an ordinary mesh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ArmatureRecipe {
+    pub armature: oxy_mesh::armature::Armature,
+    /// Voxels along the armature's longest side.
+    pub resolution: u32,
+    /// The fillet where links meet, as a fraction of the median radius.
+    pub blend: f32,
+    /// The skin's triangle count and [`group_fingerprint`] (of face group
+    /// 0, which holds every triangle of a skin) when it was made.
+    pub triangles: u32,
+    pub fingerprint: Vec3,
+}
+
+impl ArmatureRecipe {
+    /// A recipe for `armature` skinned as `mesh`.
+    pub fn new(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32, mesh: &Mesh) -> Self {
+        let (triangles, fingerprint) = group_fingerprint(mesh, 0);
+        ArmatureRecipe { armature, resolution, blend, triangles, fingerprint }
+    }
+
+    /// Whether `mesh` is still the skin this recipe made.
+    pub fn matches(&self, mesh: &Mesh) -> bool {
+        if mesh.triangle_count() != self.triangles as usize {
+            return false;
+        }
+        let (n, sum) = group_fingerprint(mesh, 0);
+        n == self.triangles && n > 0 && sum.distance(self.fingerprint) <= 1e-3 + n as f32 * 1e-6
+    }
+}
+
 /// For each vertex of a loaded piece, its index in the vertex array of the
 /// file the piece originally came from. Valid only while the mesh still has
 /// the topology it was loaded with.
@@ -243,6 +282,7 @@ impl Piece {
             symmetry_center: None,
             cage: None,
             tubes: Vec::new(),
+            armatures: Vec::new(),
             curve: None,
             strokes: None,
             material: None,
@@ -268,6 +308,15 @@ impl Piece {
         self.tubes.iter().rev().find(|r| r.matches(&self.mesh))
     }
 
+    /// The OxySpheres armature the piece was made from, while its mesh is
+    /// still that skin.
+    pub fn armature_recipe(&self) -> Option<&ArmatureRecipe> {
+        if self.multires.is_some() {
+            return None;
+        }
+        self.armatures.iter().rev().find(|r| r.matches(&self.mesh))
+    }
+
     /// The cage with the mesh's current vertex positions, if it still
     /// describes the mesh (its vertex `i` is the mesh's vertex `i`).
     pub fn current_cage(&self) -> Option<Cage> {
@@ -291,6 +340,7 @@ impl Piece {
                     symmetry_center: self.symmetry_center,
                     cage: None,
                     tubes: Vec::new(),
+                    armature: None,
                     curve: None,
                     strokes: None,
                     material: self.material.clone(),
@@ -310,6 +360,7 @@ impl Piece {
                 symmetry_center: self.symmetry_center,
                 cage: self.current_cage(),
                 tubes: self.tubes.clone(),
+                armature: self.armature_recipe().cloned().map(Box::new),
                 curve: self.curve.clone(),
                 strokes: None,
                 material: self.material.clone(),
@@ -340,6 +391,8 @@ pub struct PieceData {
     pub cage: Option<Cage>,
     /// The `TUBE` section: how its tubes were made.
     pub tubes: Vec<TubeRecipe>,
+    /// The `ARMS` section: the OxySpheres armature its mesh was made from.
+    pub armature: Option<Box<ArmatureRecipe>>,
     /// The `CURV` section: a Curve Move curve open when it was saved.
     pub curve: Option<Box<SavedCurve>>,
     /// The `STRK` section: editable strokes (Living strokes), with point
@@ -464,6 +517,7 @@ impl PieceData {
             symmetry_center: self.symmetry_center,
             cage,
             tubes: self.tubes,
+            armatures: self.armature.map(|a| vec![*a]).unwrap_or_default(),
             curve: self.curve,
             strokes,
             material: self.material,

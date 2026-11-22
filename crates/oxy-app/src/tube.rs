@@ -367,7 +367,7 @@ impl Editor {
     }
 
     /// The point under the pointer on the view plane through `at`.
-    fn tube_on_plane(&self, pixel: Vec2, at: Vec3) -> Option<Vec3> {
+    pub(crate) fn tube_on_plane(&self, pixel: Vec2, at: Vec3) -> Option<Vec3> {
         let (o, d) = self.camera.ray(self.canvas_local(pixel), self.canvas_size());
         let forward = self.camera.forward();
         let denom = d.dot(forward);

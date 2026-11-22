@@ -140,6 +140,10 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             e.edge_loop_masked()
         }),
         cmd(ed, Cmd::AddTube, "pieces tube pipe horn tentacle curve path sweep", |e| e.start_tube()),
+        cmd(ed, Cmd::AddSpheres, "pieces oxyspheres spheres armature base mesh block out figure character", |e| {
+            e.start_spheres()
+        }),
+        cmd(ed, Cmd::EditSpheres, "pieces oxyspheres spheres armature edit again reshape", |e| e.edit_spheres()),
         cmd(ed, Cmd::EditTube, "pieces tube edit change reshape again path thickness", |e| e.edit_tube()),
         cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(None)),
         cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry", |e| e.duplicate_active(Some(Axis::X))),
