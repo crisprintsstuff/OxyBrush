@@ -39,7 +39,8 @@ pub const DEFAULT_LIGHTER_BUDGET: usize = 500_000;
 pub(crate) struct Light {
     level: usize,
     topology: u64,
-    triangles: u64,
+    /// None for a piece opened lighter from a file (nothing to give back).
+    triangles: Option<u64>,
     /// That mesh's triangle order (its `source_triangles`), to build it
     /// again with the same points in the same places: the usual build
     /// orders triangles by position, so after a stroke it would number the
@@ -123,7 +124,7 @@ impl Editor {
         let light = Light {
             level: mr.active(),
             topology: piece.mesh.topology_version(),
-            triangles: triangles_hash(&piece.mesh),
+            triangles: Some(triangles_hash(&piece.mesh)),
             order: piece.mesh.source_triangles().to_vec(),
         };
         let prepared = mr.prepare(&piece.mesh);
@@ -152,8 +153,9 @@ impl Editor {
         let busy = self.documents.iter().any(|d| d.job.is_some());
         let rebuild = move |mut mr: oxy_mesh::multires::Multires, prepared| {
             let data = mr.set_level_prepared(prepared, light.level);
-            let mut mesh = Mesh::from_data_in_order(data, Some(&light.order));
-            if triangles_hash(&mesh) == light.triangles {
+            let order = (!light.order.is_empty()).then_some(light.order.as_slice());
+            let mut mesh = Mesh::from_data_in_order(data, order);
+            if light.triangles == Some(triangles_hash(&mesh)) {
                 mesh.adopt_topology_version(light.topology);
             }
             mr.bind(&mesh);
@@ -205,6 +207,30 @@ impl Editor {
             .collect();
         if !touched.is_empty() {
             self.restore_light_pieces(Some(&touched));
+        }
+    }
+
+    /// The level piece `id` is really at while shown lighter, for saving
+    /// (the `LITE` section).
+    pub(crate) fn own_level(&self, doc: usize, id: u64) -> Option<u32> {
+        self.documents[doc].light.get(&id).map(|l| l.level as u32)
+    }
+
+    /// After opening a project: pieces saved shown lighter are lighter
+    /// again, with the level they were really at, so picking them (or the
+    /// option being off) brings that level back.
+    pub(crate) fn adopt_saved_levels(&mut self) {
+        let doc = &mut self.documents[self.active_document];
+        doc.light.clear();
+        doc.light_active = None;
+        for p in &mut doc.scene.pieces {
+            let Some(level) = p.own_level.take() else { continue };
+            let Some(mr) = p.multires.as_ref().filter(|m| m.is_bound_to(&p.mesh)) else { continue };
+            let level = level as usize;
+            if level > mr.active() && level < mr.level_count() {
+                let light = Light { level, topology: 0, triangles: None, order: Vec::new() };
+                doc.light.insert(p.id, light);
+            }
         }
     }
 
@@ -328,6 +354,35 @@ mod tests {
         let worst =
             e.scene.pieces[0].mesh.positions.iter().zip(&before).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
         assert!(worst < 1e-5, "the stroke is undone: {worst}");
+    }
+
+    #[test]
+    fn a_project_saved_lighter_opens_with_its_own_levels_coming_back() {
+        let mut e = editor();
+        e.lighter_inactive = true;
+        e.sync_lighter();
+        assert_eq!(tris(&e, 0), LIGHT);
+        let bytes = oxy_doc::format::encode(&e.scene_data());
+        // Reopened with the option on: still lighter, and picking it brings
+        // its own level back.
+        let mut back = Editor::default();
+        back.lighter_inactive = true;
+        back.lighter_budget = 2_000;
+        let scene = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        back.replace_document(scene, None);
+        back.scene.set_active(1);
+        back.sync_lighter();
+        wait_job(&mut back);
+        assert_eq!(back.scene.pieces[0].mesh.triangle_count(), LIGHT);
+        assert!(back.is_light(back.scene.pieces[0].id));
+        pick(&mut back, 0);
+        assert_eq!(back.scene.pieces[0].mesh.triangle_count(), FULL, "its own level");
+        // Reopened with the option off: everything comes back in full.
+        let mut off = Editor::default();
+        let scene = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        off.replace_document(scene, None);
+        off.sync_lighter();
+        assert_eq!(off.scene.pieces[0].mesh.triangle_count(), FULL);
     }
 
     #[test]

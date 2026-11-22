@@ -59,6 +59,11 @@
 //!   piece, nor a piece that is itself a copy) and the transform from the
 //!   original to the copy, column by column. The `PIEC` holds the copy's
 //!   mesh as it was, so older readers skip this and open an ordinary piece.
+//! - `LITE` (optional, since 4.0.0-beta.24): the **preceding** `PIEC`
+//!   was saved shown lighter (Lighter inactive pieces): its `MRES` is at a
+//!   lower level than the one it was being worked at, `level:u32` (from 0).
+//!   The app shows that level again. Older readers skip it and open the
+//!   piece at the saved level, with every level still there.
 //! - `POLY` (optional, since 4.0.0-beta.22): the polygons of the
 //!   **preceding** `PIEC` when it was imported from (or built from) quads
 //!   and n-gons, as the edges inside them: `dcount:u32 diagonal:u32*2d
@@ -341,6 +346,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(parent) = p.parent {
             sections.push((*b"PARN", parent.to_le_bytes().to_vec()));
+        }
+        if let Some(level) = p.own_level {
+            sections.push((*b"LITE", level.to_le_bytes().to_vec()));
         }
         if let Some((source, transform)) = p.link {
             let mut b = source.to_le_bytes().to_vec();
@@ -773,6 +781,11 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PARN before any piece".into()))?;
                 let mut r = Reader { data: &raw, pos: 0 };
                 piece.parent = Some(r.u32()?);
+            }
+            b"LITE" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("LITE before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                piece.own_level = Some(r.u32()?);
             }
             b"LINK" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("LINK before any piece".into()))?;
@@ -1640,6 +1653,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         instancers: Vec::new(),
         parent: None,
         link: None,
+        own_level: None,
         polygons: None,
     })
 }
@@ -1949,6 +1963,7 @@ mod tests {
                     instancers: Vec::new(),
                     parent: None,
                     link: None,
+                    own_level: None,
                     polygons: None,
                 },
                 PieceData {
@@ -1966,6 +1981,7 @@ mod tests {
                     instancers: Vec::new(),
                     parent: None,
                     link: None,
+                    own_level: None,
                     polygons: None,
                 },
             ],
@@ -2142,6 +2158,7 @@ mod tests {
             instancers: Vec::new(),
             parent: None,
             link: None,
+            own_level: None,
             polygons: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
@@ -2830,6 +2847,7 @@ mod tests {
                 instancers: Vec::new(),
                 parent: None,
                 link: None,
+                own_level: None,
                 polygons: None,
             }],
             active: 0,
@@ -3076,6 +3094,21 @@ mod tests {
         assert!(opened.pieces[1].link.is_none());
         scene.pieces[1].link = Some((0, glam::Mat4::ZERO));
         assert_eq!(decode(&encode(&scene)).unwrap().pieces[1].link, None);
+    }
+
+    #[test]
+    fn a_saved_own_level_round_trips_and_older_readers_skip_it() {
+        let mut scene = sample();
+        scene.pieces[1].own_level = Some(3);
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"LITE").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!((back.pieces[0].own_level, back.pieces[1].own_level), (None, Some(3)));
+        assert_eq!(crate::Scene::from_data(back).unwrap().pieces[1].own_level, Some(3));
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"LITE").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        assert_eq!(decode(&skipped).unwrap().pieces[1].own_level, None);
     }
 
     #[test]

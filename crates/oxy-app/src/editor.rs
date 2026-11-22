@@ -4563,6 +4563,7 @@ impl Editor {
         }
         self.reopen_saved_curve();
         self.living_adopt_loaded();
+        self.adopt_saved_levels();
     }
 
     /// Whether tab `index` is an untouched starter document (no path, no
@@ -4950,6 +4951,7 @@ impl Editor {
         data.alphas = Self::doc_saved_alphas(doc);
         for (d, p) in data.pieces.iter_mut().zip(&doc.scene.pieces) {
             d.strokes = doc.living.saved(p);
+            d.own_level = self.own_level(idx, p.id);
         }
         if let Some(c) = doc.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
             && let Some(i) = doc.scene.index_of(c.piece)
