@@ -5,6 +5,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 ## [Unreleased]
 
 - **Circle, ellipse and curve selections** for masking and visibility (**L** or the Mask panel's Selection row). A circle drags out from its centre and an ellipse from corner to corner; with either, Ctrl+drag draws it wherever it starts. A curve is clicked point by point and applied with Enter: everything on one side of it is masked or shown (Alt: the other side). Symmetry, Alt after the drag, and Space to move the shape work as with the rectangle and lasso.
+- **Poly Edit Knife** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370), [RFC 0033](docs/rfcs/0033-poly-edit-knife.md)). Turn on **Knife** in the Poly Edit window and click points on the model to draw a cut; clicks snap to corners and edges. Enter cuts: the path follows the visible surface, adds a point on every edge it crosses and splits every face it crosses, as one undo step. Backspace takes the last point back, Esc cancels, and clicking the first point again cuts a closed loop.
 - **Poly Edit To Circle** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370)). Round the picked points, edges or face corners toward a fitted circle. Amount controls how far they move, and the edit is one undo step.
 
 - **Per-brush pressure curves** ([#426](https://github.com/crisprintsstuff/OxyBrush/issues/426)). Stroke shows strength and size curves. Customize either one for the active brush, or let it follow the defaults in Pen & tablet. Brush presets keep the overrides.

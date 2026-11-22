@@ -259,6 +259,9 @@ pub struct PolyEdit {
     pub bridge_twist: i32,
     /// The first click of a two-click action (bridge, split face).
     pub pending: Option<Pending>,
+    /// The Knife's path while one is being drawn (#370): the points
+    /// clicked so far. None when the Knife isn't on.
+    pub knife: Option<Vec<oxy_mesh::knife::KnifePoint>>,
     /// The last dragged amount for faces, edges and points, for Repeat.
     pub last: [Option<f32>; 3],
     /// Crease weight the Crease actions set, 0 to 1.
@@ -497,6 +500,7 @@ impl Editor {
             bridge_segments: 1,
             bridge_twist: 0,
             pending: None,
+            knife: None,
             last: [None; 3],
             crease_weight: 1.0,
             bevel_segments: 1,
@@ -644,7 +648,7 @@ impl Editor {
     }
 
     /// Window position of cage point `v`.
-    fn poly_screen(&self, c: &Cage, v: u32) -> Option<Vec2> {
+    pub(crate) fn poly_screen(&self, c: &Cage, v: u32) -> Option<Vec2> {
         let s = self.camera.project(c.positions[v as usize], self.canvas_size())?;
         Some(s + Vec2::new(self.canvas[0], self.canvas[1]))
     }
@@ -863,6 +867,9 @@ impl Editor {
     /// two-click action (bridge, split), or else clear the pick. RETURNS:
     /// true if there was either; false means Esc closes the tool.
     pub(crate) fn poly_escape(&mut self) -> bool {
+        if self.poly_knife_cancel() {
+            return true;
+        }
         let Some(pe) = self.poly_edit.as_mut() else { return false };
         if pe.pending.take().is_some() {
             self.status = "Poly Edit: cancelled".into();
@@ -1019,6 +1026,10 @@ impl Editor {
             return false;
         }
         self.poly_sync();
+        // The Knife takes clicks on the model as points of its path.
+        if self.poly_knife_down(p) {
+            return true;
+        }
         let element = self.poly_element_at(p);
         // Ctrl/Cmd+click picks faces to act on together (empty space
         // clears); a double-click picks the loop through an edge or face.
@@ -1044,7 +1055,7 @@ impl Editor {
     }
 
     /// The piece's mesh and polygons now, for an undo step.
-    fn poly_before(&self) -> Option<(usize, Mesh, Option<Cage>)> {
+    pub(crate) fn poly_before(&self) -> Option<(usize, Mesh, Option<Cage>)> {
         let i = self.poly_piece_index()?;
         let piece = &self.scene.pieces[i];
         Some((i, piece.mesh.clone(), piece.cage.clone()))
@@ -2195,7 +2206,7 @@ impl Editor {
     }
 
     /// Put `cage` in place (rebuilding the mesh) as one undo step.
-    fn poly_commit(&mut self, label: &str, before_mesh: Mesh, before_cage: Option<Cage>, cage: Cage) {
+    pub(crate) fn poly_commit(&mut self, label: &str, before_mesh: Mesh, before_cage: Option<Cage>, cage: Cage) {
         self.poly_commit_order(label, before_mesh, before_cage, cage);
     }
 

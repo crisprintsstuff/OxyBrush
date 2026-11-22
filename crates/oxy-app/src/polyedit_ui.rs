@@ -3,7 +3,7 @@
 use crate::editor::{Drag, Editor};
 use crate::polyedit::{EdgeAction, ElementMode, FaceAction, Pending, PointAction, outline_edges};
 use egui::{Color32, RichText, Stroke};
-use glam::Vec2;
+use glam::{Vec2, Vec3};
 use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
 use oxy_mesh::retopo::{corners, ear_clip};
 
@@ -15,6 +15,15 @@ const MAX_DRAWN_FACES: usize = 20_000;
 pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     if ed.poly_edit.is_none() {
         return;
+    }
+    // The Knife's keys, while it's on and nothing is typed into.
+    if ed.poly_knife_on() && !ctx.egui_wants_keyboard_input() {
+        if ctx.input(|i| i.key_pressed(egui::Key::Enter)) {
+            ed.poly_knife_apply();
+        }
+        if ctx.input(|i| i.key_pressed(egui::Key::Backspace)) {
+            ed.poly_knife_back();
+        }
     }
     let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
     let mut done = esc && !matches!(ed.drag, Drag::PolyEdit(_)) && !ctx.egui_wants_keyboard_input();
@@ -49,6 +58,27 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     if r.clicked() {
                         ed.set_poly_mode(m);
                     }
+                }
+            });
+            // The Knife (#370): draw a cut across the faces.
+            let knife = ed.poly_knife_on();
+            ui.horizontal_wrapped(|ui| {
+                if ui
+                    .selectable_label(knife, "Knife")
+                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges. Enter cuts, Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop.")
+                    .clicked()
+                {
+                    ed.poly_knife_toggle();
+                }
+                if knife {
+                    let n = ed.poly_edit.as_ref().and_then(|pe| pe.knife.as_ref()).map_or(0, |p| p.len());
+                    if ui.add_enabled(n >= 2, egui::Button::new("Cut")).on_hover_text("Cut along the path (Enter)").clicked() {
+                        ed.poly_knife_apply();
+                    }
+                    if ui.add_enabled(n > 0, egui::Button::new("Undo point")).on_hover_text("Take the last point back (Backspace)").clicked() {
+                        ed.poly_knife_back();
+                    }
+                    ui.label(RichText::new(format!("{n} point(s)")).weak().small());
                 }
             });
             let (picked, kind) = ed.poly_pick_count();
@@ -359,8 +389,9 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
     if ed.poly_edit.is_none() {
         return;
     }
+    let knife = ed.poly_knife_on();
     let preview = match ed.pointer {
-        Some(p) if matches!(ed.drag, Drag::None) => ed.poly_preview_at(p),
+        Some(p) if matches!(ed.drag, Drag::None) && !knife => ed.poly_preview_at(p),
         _ => crate::polyedit::Preview::default(),
     };
     let reach = preview.faces.clone();
@@ -498,6 +529,7 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
         _ => {}
     }
+    draw_knife(ed, &painter, size, origin, ppp);
     if reach.is_empty() {
         return;
     }
@@ -528,6 +560,43 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
     }
 }
+
+/// The Knife's cut as it would run, the clicked points, and where the
+/// pointer would add the next one.
+fn draw_knife(ed: &Editor, painter: &egui::Painter, size: Vec2, origin: Vec2, ppp: f32) {
+    let hover = ed.pointer.filter(|_| matches!(ed.drag, Drag::None));
+    if let Some((along, clicked)) = ed.poly_knife_preview(hover) {
+        let to_screen = |p: Vec3| {
+            ed.camera.project(p, size).map(|s| {
+                let w = s + origin;
+                egui::pos2(w.x / ppp, w.y / ppp)
+            })
+        };
+        let line: Vec<egui::Pos2> = along.iter().filter_map(|&p| to_screen(p)).collect();
+        for pair in line.windows(2) {
+            painter.line_segment([pair[0], pair[1]], Stroke::new(2.5, KNIFE));
+        }
+        for &p in &along {
+            if let Some(q) = to_screen(p) {
+                painter.circle_filled(q, 3.0, KNIFE);
+            }
+        }
+        let n = clicked.len();
+        for (i, &p) in clicked.iter().enumerate() {
+            if let Some(q) = to_screen(p) {
+                // The last one is the pointer's: hollow.
+                if hover.is_some() && i + 1 == n {
+                    painter.circle_stroke(q, 5.0, Stroke::new(1.5, KNIFE));
+                } else {
+                    painter.circle_filled(q, 5.0, KNIFE);
+                }
+            }
+        }
+    }
+}
+
+/// The Knife's cut line.
+const KNIFE: Color32 = Color32::from_rgb(255, 196, 64);
 
 /// Bevel rows and profile, for both face and edge bevels.
 fn bevel_options(ui: &mut egui::Ui, pe: &mut crate::polyedit::PolyEdit) {
