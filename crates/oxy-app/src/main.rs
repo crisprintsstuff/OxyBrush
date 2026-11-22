@@ -34,6 +34,7 @@ mod pieces_ops;
 mod plugins;
 mod polyedit;
 mod polyedit_ui;
+mod polyknife;
 mod pose;
 mod presets;
 mod primitive_ui;
