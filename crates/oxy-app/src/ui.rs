@@ -3752,7 +3752,7 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             }
             let r = widgets::drag_button(ui, Icon::Zoom, plain::ZOOM);
             if r.dragged() {
-                ed.camera.zoom(-r.drag_delta().y * 0.05);
+                ed.zoom_camera(-r.drag_delta().y * 0.05);
             }
             ui.separator();
             let ortho = ed.camera.orthographic;
@@ -5616,18 +5616,32 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                                             ),
                                             plain::PIECE_RENAME,
                                         );
-                                        if !ui.memory(|m| m.has_focus(edit_id)) && doc.rename_text == piece_name {
+                                        // Take focus once, with the whole name selected so
+                                        // typing replaces it (#413). Asking again every frame
+                                        // the name was unchanged kept the field focused
+                                        // after a click elsewhere.
+                                        let started = ui.make_persistent_id(("piece_rename_started", piece_id));
+                                        if !ui.data(|d| d.get_temp::<bool>(started).unwrap_or(false)) {
+                                            ui.data_mut(|d| d.insert_temp(started, true));
                                             text_resp.request_focus();
+                                            let mut state =
+                                                egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+                                            state.cursor.set_char_range(Some(
+                                                egui::text::CCursorRange::select_all_str(&doc.rename_text),
+                                            ));
+                                            state.store(ui.ctx(), edit_id);
                                         }
                                         if text_resp.lost_focus() || ui.input(|i_in| i_in.key_pressed(egui::Key::Enter))
                                         {
                                             let trimmed = doc.rename_text.trim();
-                                            if !trimmed.is_empty() {
+                                            if !trimmed.is_empty() && trimmed != piece_name {
                                                 commit_rename = Some(trimmed.to_string());
                                             }
                                             doc.renaming_piece = None;
+                                            ui.data_mut(|d| d.remove::<bool>(started));
                                         } else if ui.input(|i_in| i_in.key_pressed(egui::Key::Escape)) {
                                             doc.renaming_piece = None;
+                                            ui.data_mut(|d| d.remove::<bool>(started));
                                         }
                                     } else {
                                         let text_color = if is_active {
@@ -7699,7 +7713,13 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
 }
 
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
-    if !ed.pointer_in_canvas() || ed.retopo.is_some() || ed.poly_edit.is_some() {
+    if ed.retopo.is_some() || ed.poly_edit.is_some() {
+        return;
+    }
+    if size_slider_ring(ui, ed, canvas) {
+        return;
+    }
+    if !ed.pointer_in_canvas() {
         return;
     }
     let Some(p) = ed.pointer else { return };
@@ -7883,6 +7903,29 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             }
         }
     }
+}
+
+/// While the S (size) or focal shift slider is open, the brush ring at
+/// the place it was opened from, over the slider, so you see the size you
+/// are setting (#418). (The ring is otherwise hidden while the pointer is
+/// over a panel, and the slider opens right under it.) RETURNS: whether
+/// it drew it.
+fn size_slider_ring(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) -> bool {
+    use crate::editor::SliderKind;
+    let Some(ps) = ed.pointer_slider.filter(|s| matches!(s.kind, SliderKind::Size | SliderKind::FocalShift)) else {
+        return false;
+    };
+    let pos = egui::pos2(ps.pos.x, ps.pos.y) / ed.pixels_per_point;
+    if !canvas.contains(pos) {
+        return false;
+    }
+    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("size_slider_ring"));
+    let painter = ui.ctx().layer_painter(layer).with_clip_rect(canvas);
+    let color = ed.accent_color();
+    if !try_draw_surface_cursor(&painter, ed, ps.pos, ed.brush_radius_pt, color, true) {
+        paint_screen_cursor(&painter, pos, ed.brush_radius_pt, ed.focal_ring(), color);
+    }
+    true
 }
 
 pub(crate) fn fmt_count(n: usize) -> String {
@@ -8488,6 +8531,45 @@ mod tests {
         let id = ed.scene.pieces[1].id;
         assert_eq!(ed.documents[ed.active_document].renaming_piece, Some(id), "double-click renames");
         assert_eq!(ed.scene.pieces.len(), n);
+    }
+
+    #[test]
+    fn renaming_a_piece_selects_its_name_and_a_click_away_ends_it() {
+        // #413: the name field stayed focused after a click elsewhere when
+        // the name hadn't changed, and the old name had to be deleted by hand.
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        test_apply_theme(&ctx, false, 1.0, ed.layout);
+        let name = ed.scene.pieces[0].name.clone();
+        let at = widgets_labelled(&mut ed, &ctx, &name).first().expect("the name").center();
+        click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 2);
+        let id = ed.scene.pieces[0].id;
+        assert_eq!(ed.documents[ed.active_document].renaming_piece, Some(id));
+        // A click on the model without typing: renaming ends, name unchanged.
+        click_with(&mut ed, &ctx, egui::pos2(700.0, 450.0), egui::Modifiers::NONE, 1);
+        frames_with(&mut ed, &ctx, vec![vec![], vec![]]);
+        assert_eq!(ed.documents[ed.active_document].renaming_piece, None, "a click away ends renaming");
+        assert_eq!(ed.scene.pieces[0].name, name);
+        assert!(ctx.memory(|m| m.focused()).is_none(), "nothing keeps the keyboard");
+        // Again, and type: the new name replaces the whole old one.
+        click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 2);
+        frames_with(&mut ed, &ctx, vec![vec![egui::Event::Text("Head".into())], vec![]]);
+        frames_with(
+            &mut ed,
+            &ctx,
+            vec![
+                vec![egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: Default::default(),
+                }],
+                vec![],
+            ],
+        );
+        assert_eq!(ed.scene.pieces[0].name, "Head");
     }
 
     #[test]

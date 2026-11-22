@@ -1534,6 +1534,10 @@ pub fn lathe(profile: &[(f32, f32)], segments: u32, cap_bottom: bool, cap_top: b
     }
     let at = |row: (bool, u32), k: usize| if row.0 { row.1 + (k % n) as u32 } else { row.1 };
     let mut tris = Vec::new();
+    // The diagonal of each side quad, so the mesh knows its quads rather
+    // than guessing them from the shape: a tall, thin quad (one row, many
+    // segments) was paired with its neighbours' triangles instead (#415).
+    let mut diagonals = Vec::new();
     for w in rows.windows(2) {
         let (lo, hi) = (w[0], w[1]);
         for k in 0..n {
@@ -1542,6 +1546,7 @@ pub fn lathe(profile: &[(f32, f32)], segments: u32, cap_bottom: bool, cap_top: b
                 (true, true) => {
                     tris.push([a, b, d]);
                     tris.push([a, d, c]);
+                    diagonals.push([a, d]);
                 }
                 (true, false) => tris.push([a, b, c]),
                 (false, true) => tris.push([a, d, c]),
@@ -1566,7 +1571,23 @@ pub fn lathe(profile: &[(f32, f32)], segments: u32, cap_bottom: bool, cap_top: b
     if cap_top {
         cap(*rows.last().unwrap(), profile.last().unwrap().1, true);
     }
-    Mesh::new(positions, tris)
+    let mesh = Mesh::new(positions, tris);
+    // `Mesh::new` renumbers the points.
+    let mut at_mesh = vec![0u32; mesh.vertex_count()];
+    for (v, &s) in mesh.source_vertices().iter().enumerate() {
+        at_mesh[s as usize] = v as u32;
+    }
+    mesh.set_quad_diagonals(
+        diagonals
+            .into_iter()
+            .map(|[a, d]| {
+                let (a, d) = (at_mesh[a as usize], at_mesh[d as usize]);
+                [a.min(d), a.max(d)]
+            })
+            .collect(),
+    );
+    mesh.set_ngon_edges(Default::default());
+    mesh
 }
 
 /// Cylinder along Y, centred at the origin, with `height_segments` rows of
@@ -1632,6 +1653,25 @@ mod lathe_tests {
         let open = cylinder_with(12, 2, 1.0, 1.0, false);
         assert!(!closed_and_volume(&open).0);
         assert!(open.positions.iter().all(|p| p.is_finite()));
+    }
+
+    #[test]
+    fn lathed_sides_are_quads_and_caps_stay_triangles_at_any_segment_count() {
+        // #415: one row with many segments makes tall, thin quads, whose
+        // triangles the shape-based guess paired with their neighbours'.
+        for segments in 3..=64 {
+            for rows in [1, 2] {
+                let c = cylinder_with(segments, rows, 0.7, 1.8, true);
+                assert_eq!(
+                    c.quad_and_triangle_counts(),
+                    ((segments * rows) as usize, (2 * segments) as usize),
+                    "{segments} segments, {rows} rows"
+                );
+            }
+            let k = cone_with(segments, 1, 0.7, 1.8, true);
+            assert_eq!(k.quad_count(), 0, "a one-row cone is all triangles");
+            assert_eq!(cone_with(segments, 3, 0.7, 1.8, true).quad_count(), (2 * segments) as usize);
+        }
     }
 
     #[test]

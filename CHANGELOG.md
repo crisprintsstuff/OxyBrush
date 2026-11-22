@@ -4,6 +4,18 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **The brush ring shows while you resize with S** ([#418](https://github.com/crisprintsstuff/OxyBrush/issues/418)). The size and focal shift sliders open under the pointer, which hid the ring; it now stays on the model where you pressed the key, over the slider, and grows and shrinks as you drag.
+
+### Fixed
+
+- **A long lens no longer puts the camera inside the model** ([#419](https://github.com/crisprintsstuff/OxyBrush/issues/419)). Zooming in moved the camera toward the orbit centre in the middle of the model, so at 200 mm a close-up passed through the front surface, and switching back to a shorter lens left the camera inside. Zooming in near the model and changing the focal length now move the orbit centre onto the surface in the middle of the view first, so the camera slows down at the surface. Further out, the orbit centre stays where it was.
+- **The wireframe no longer shows edges from the far side** ([#417](https://github.com/crisprintsstuff/OxyBrush/issues/417)). Lines were lifted toward the camera by a fixed amount in depth-buffer units, which at the back of a model was large enough to show hidden edges near the silhouette of a low-poly shape. They are now lifted by 0.6% of their distance.
+- **Painted detail survives stepping down a subdivision level and back** ([#416](https://github.com/crisprintsstuff/OxyBrush/issues/416)). Each level now keeps the paint it has beyond what the level below gives, as it does for sculpted detail, and adds it back on the way up; paint added on a lower level still shows through. Projects save it in a new optional `MRPT` section, so it also survives saving at a lower level and reopening; older versions skip it.
+- **Cylinders and cones from Pieces > Add keep their side quads** ([#415](https://github.com/crisprintsstuff/OxyBrush/issues/415)). One row with many segments makes tall, thin quads, and from 26 segments the shape-based guess paired some of their triangles with their neighbours', so the wireframe and quad subdivision showed turned edges. The quads are now recorded when the shape is made.
+- **Renaming a piece** ([#413](https://github.com/crisprintsstuff/OxyBrush/issues/413)): the name is selected when renaming starts, so typing replaces it, and a click elsewhere ends renaming even when the name wasn't changed (the field used to stay focused, even while sculpting).
+
 ## [4.0.0-beta.22] - 2026-11-21
 
 ### Added

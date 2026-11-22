@@ -199,6 +199,12 @@ struct Level {
     positions: Vec<Vec3>,
     /// Empty for level 0 or when all displacements are zero.
     details: Vec<Vec3>,
+    /// Vertex color this level has beyond what carrying the level below's
+    /// colors up gives (per point, added on the way up), so painted detail
+    /// finer than the level below survives stepping down and back up
+    /// (#416). Empty when there is none or the stack is unpainted; filled
+    /// when the level is left for a lower one.
+    paint: Vec<Vec3>,
     /// None for level 0.
     refinement: Option<Refinement>,
     /// The level's polygons (Catmull–Clark stacks only).
@@ -286,7 +292,14 @@ impl PartialEq for Level {
             (true, false) => other.details.iter().all(|d| *d == Vec3::ZERO),
             (false, true) => self.details.iter().all(|d| *d == Vec3::ZERO),
         };
+        let paint_eq = match (self.paint.is_empty(), other.paint.is_empty()) {
+            (true, true) => true,
+            (false, false) => self.paint == other.paint,
+            (true, false) => other.paint.iter().all(|d| *d == Vec3::ZERO),
+            (false, true) => self.paint.iter().all(|d| *d == Vec3::ZERO),
+        };
         details_eq
+            && paint_eq
             && self.uv == other.uv
             && self.triangles == other.triangles
             && self.positions == other.positions
@@ -297,6 +310,7 @@ impl PartialEq for Level {
 }
 
 /// Per-level copies of mask, face groups and visibility, in level order.
+#[derive(Clone)]
 struct Attributes {
     mask: Vec<f32>,
     /// Empty when the mesh is unpainted.
@@ -346,6 +360,7 @@ impl Multires {
                 triangles: d.triangles,
                 positions: d.positions,
                 details: Vec::new(),
+                paint: Vec::new(),
                 refinement: None,
                 polys: None,
                 smooth: true,
@@ -635,6 +650,7 @@ impl Multires {
                     triangles,
                     positions: Vec::new(),
                     details: Vec::new(),
+                    paint: Vec::new(),
                     refinement: Some(Refinement::Loop(refinement)),
                     polys: None,
                     smooth,
@@ -649,6 +665,7 @@ impl Multires {
                     triangles,
                     positions: Vec::new(),
                     details: Vec::new(),
+                    paint: Vec::new(),
                     refinement: Some(Refinement::Cc(refinement)),
                     polys: Some(Polys::Quads(quads)),
                     smooth,
@@ -733,7 +750,9 @@ impl Multires {
             self.active += 1;
         }
         while self.active > target {
+            let fine = attrs.color.clone();
             attrs = self.attributes_down(self.active, attrs);
+            self.keep_paint(self.active, &fine, &attrs);
             self.active -= 1;
         }
         self.level_data(attrs)
@@ -827,8 +846,38 @@ impl Multires {
         a
     }
 
-    /// Attributes of level `k − 1` carried up to level `k`.
+    /// Remember what level `k`'s colors `fine` have beyond carrying the
+    /// level below (`coarse`, just carried down) back up.
+    fn keep_paint(&mut self, k: usize, fine: &[Vec3], coarse: &Attributes) {
+        let paint = if fine.is_empty() || coarse.color.is_empty() {
+            Vec::new()
+        } else {
+            let up = self.attributes_up_carried(k, coarse.clone());
+            if up.color.len() != fine.len() {
+                Vec::new()
+            } else {
+                let diff: Vec<Vec3> = fine.iter().zip(&up.color).map(|(f, u)| *f - *u).collect();
+                if diff.iter().all(|d| d.abs().max_element() < 1e-6) { Vec::new() } else { diff }
+            }
+        };
+        self.levels[k].paint = paint;
+    }
+
+    /// Attributes of level `k − 1` carried up to level `k`, with the
+    /// level's own paint added back.
     fn attributes_up(&self, k: usize, a: Attributes) -> Attributes {
+        let mut up = self.attributes_up_carried(k, a);
+        let paint = &self.levels[k].paint;
+        if !up.color.is_empty() && paint.len() == up.color.len() {
+            for (c, d) in up.color.iter_mut().zip(paint) {
+                *c = (*c + *d).clamp(Vec3::ZERO, Vec3::ONE);
+            }
+        }
+        up
+    }
+
+    /// Attributes of level `k − 1` carried up to level `k` (interpolated).
+    fn attributes_up_carried(&self, k: usize, a: Attributes) -> Attributes {
         let r = match self.levels[k].refinement.as_ref().expect("refined level") {
             Refinement::Loop(r) => r,
             Refinement::Cc(r) => return cc_attributes_up(self.levels[k - 1].polys.as_ref().expect("quad level"), r, a),
@@ -933,6 +982,26 @@ impl Multires {
         &self.levels[0].uv
     }
 
+    /// Each level's own paint (see `Level::paint`), in level point order,
+    /// for saving: empty for a level without any.
+    pub fn level_paint(&self) -> Vec<&[Vec3]> {
+        self.levels.iter().map(|l| l.paint.as_slice()).collect()
+    }
+
+    /// Restore saved per-level paint. RETURNS: false, changing nothing,
+    /// when it doesn't match the levels (count, point counts, finite).
+    pub fn restore_level_paint(&mut self, paint: Vec<Vec<Vec3>>) -> bool {
+        let fits = paint.len() == self.levels.len()
+            && paint.iter().zip(&self.levels).all(|(p, l)| p.is_empty() || p.len() == l.positions.len())
+            && paint.iter().flatten().all(|c| c.is_finite());
+        if fits {
+            for (l, p) in self.levels.iter_mut().zip(paint) {
+                l.paint = p;
+            }
+        }
+        fits
+    }
+
     /// Restore base UVs and derive the higher levels from the stored topology.
     /// The base must have a single UV per corner of each stored polygon.
     pub fn restore_base_uvs(&mut self, uv: Vec<[Vec2; 3]>) -> bool {
@@ -969,6 +1038,7 @@ impl Multires {
             triangles: base_triangles,
             positions: base_pos,
             details: Vec::new(),
+            paint: Vec::new(),
             refinement: None,
             polys: None,
             smooth: true,
@@ -987,6 +1057,7 @@ impl Multires {
                 triangles,
                 positions: pos,
                 details,
+                paint: Vec::new(),
                 refinement: Some(Refinement::Loop(refinement)),
                 polys: None,
                 smooth: true,
@@ -1064,6 +1135,7 @@ impl Multires {
                 triangles: base_triangles,
                 positions: base_pos,
                 details: Vec::new(),
+                paint: Vec::new(),
                 refinement: None,
                 polys: Some(Polys::Mixed { offsets, corners, tri_offsets, tris }),
                 smooth: true,
@@ -1973,6 +2045,71 @@ mod level_switch_tests {
         let mesh = Mesh::from_data(data);
         m.bind(&mesh);
         mesh
+    }
+
+    #[test]
+    fn fine_paint_survives_stepping_down_and_back_up() {
+        // #416: painting at the top level, then a lower level and back,
+        // lost the paint finer than the lower level.
+        for quads in [false, true] {
+            let base = if quads {
+                let mut cage = cube_cage();
+                cage.build_mesh().unwrap()
+            } else {
+                crate::primitives::icosphere(1, 1.0)
+            };
+            let mut mr = if quads { Multires::new_catmull_clark(&base, None) } else { Multires::new(&base) };
+            let d1 = mr.add_level(&base);
+            let m1 = rebuild_q(&mut mr, d1);
+            let d2 = mr.add_level(&m1);
+            let mut m2 = rebuild_q(&mut mr, d2);
+            // A pattern only the top level can hold: every point a colour
+            // from its own position.
+            let paint = |p: Vec3| Vec3::new((p.x * 7.0).sin() * 0.5 + 0.5, (p.y * 5.0).cos() * 0.5 + 0.5, 0.3);
+            m2.color = m2.positions.iter().map(|&p| paint(p)).collect();
+            m2.refresh_all();
+            let painted: Vec<Vec3> = m2.color.clone();
+            let src = m2.source_vertices().to_vec();
+
+            // Down to the base and back up, without edits: exactly as it was.
+            let d = mr.set_level(&m2, 0);
+            let m0 = rebuild_q(&mut mr, d);
+            let d = mr.set_level(&m0, 2);
+            let back = Mesh::from_data(d.clone());
+            let level_order = |m: &Mesh| -> Vec<Vec3> {
+                let mut out = vec![Vec3::ZERO; m.vertex_count()];
+                for (v, &s) in m.source_vertices().iter().enumerate() {
+                    out[s as usize] = m.color[v];
+                }
+                out
+            };
+            let mut want = vec![Vec3::ZERO; painted.len()];
+            for (v, &s) in src.iter().enumerate() {
+                want[s as usize] = painted[v];
+            }
+            let got = level_order(&back);
+            let worst = got.iter().zip(&want).map(|(a, b)| (*a - *b).abs().max_element()).fold(0.0, f32::max);
+            assert!(worst < 1e-4, "quads {quads}: paint changed by {worst}");
+
+            // Paint the whole base red: the top level turns red where the
+            // pattern was flat white-ish, and keeps its fine variation.
+            let mut m2 = rebuild_q(&mut mr, d);
+            let d = mr.set_level(&m2, 0);
+            let mut m0 = rebuild_q(&mut mr, d);
+            let before_base: Vec<Vec3> = m0.color.clone();
+            m0.color.iter_mut().for_each(|c| *c = (*c + Vec3::new(0.2, -0.1, 0.0)).clamp(Vec3::ZERO, Vec3::ONE));
+            m0.refresh_all();
+            assert_ne!(before_base, m0.color);
+            let d = mr.set_level(&m0, 2);
+            m2 = Mesh::from_data(d);
+            let got = level_order(&m2);
+            let shifted = got.iter().zip(&want).filter(|(a, b)| a.x > b.x + 0.05).count();
+            assert!(
+                shifted > got.len() / 2,
+                "quads {quads}: the base's paint reaches the top ({shifted} of {})",
+                got.len()
+            );
+        }
     }
 
     fn cube_cage() -> Cage {

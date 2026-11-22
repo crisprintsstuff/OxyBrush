@@ -1993,6 +1993,12 @@ impl Editor {
         if (mm - self.focal_mm).abs() < 1e-4 {
             return;
         }
+        // Keep the framing at the surface in view, not at a target deep
+        // inside the model (a long lens then a short one used to put the
+        // camera inside it, #419).
+        let mut next = self.camera;
+        next.set_focal_length_mm(mm);
+        self.anchor_view_to_surface(next.distance);
         self.camera.set_focal_length_mm(mm);
         self.focal_mm = mm;
         if announce {
@@ -3338,7 +3344,7 @@ impl Editor {
                 // unless the keymap says drag down, as in ZBrush.
                 let sign = if self.keymap.zoom_drag_down_in { 1.0 } else { -1.0 };
                 let ppp = self.pixels_per_point.max(0.1);
-                self.camera.zoom(sign * delta.y / ppp * 0.05);
+                self.zoom_camera(sign * delta.y / ppp * 0.05);
                 true
             }
             Drag::MaskGesture { .. } => true,
@@ -4145,13 +4151,55 @@ impl Editor {
     /// Zoom the view in (positive) or out by keyboard steps, towards the
     /// middle of the viewport. Not affected by the wheel settings.
     pub fn zoom_view(&mut self, steps: f32) {
-        self.camera.zoom(steps * KEY_ZOOM_STEPS);
+        self.zoom_camera(steps * KEY_ZOOM_STEPS);
     }
 
     pub fn scroll(&mut self, steps: f32) {
         if self.keymap.wheel_zoom {
             let invert = self.keymap.invert_wheel_zoom;
-            self.camera.zoom(if invert { -steps } else { steps });
+            self.zoom_camera(if invert { -steps } else { steps });
+        }
+    }
+
+    /// Zoom the camera (positive in). Zooming in first moves the orbit
+    /// target onto the surface in the middle of the view when that surface
+    /// is in front of it, so the camera slows down at the model instead of
+    /// passing into it (#419).
+    pub fn zoom_camera(&mut self, steps: f32) {
+        if steps > 0.0 {
+            let mut next = self.camera;
+            next.zoom(steps);
+            self.anchor_view_to_surface(next.distance);
+        }
+        self.camera.zoom(steps);
+    }
+
+    /// Put the orbit target on the nearest visible surface at the middle
+    /// of the view, when that surface is in front of the target and the
+    /// camera, at distance `next_distance` from the target, would come
+    /// within twice the surface's distance in front of the target: about
+    /// to reach it. Further out the target stays where it is, so orbiting
+    /// around the centre is unchanged. The view doesn't move.
+    pub fn anchor_view_to_surface(&mut self, next_distance: f32) {
+        if self.camera.orthographic {
+            return;
+        }
+        let size = self.canvas_size();
+        let (o, d) = self.camera.ray(size * 0.5, size);
+        let hit = self
+            .scene
+            .pieces
+            .iter()
+            .filter(|p| p.visible)
+            .filter_map(|p| p.mesh.raycast(o, d))
+            .map(|h| h.point)
+            .min_by(|a, b| (*a - o).length_squared().total_cmp(&(*b - o).length_squared()));
+        if let Some(point) = hit {
+            let depth = (point - self.camera.eye()).dot(self.camera.forward());
+            let gap = self.camera.distance - depth;
+            if gap > 0.0 && next_distance < 2.0 * gap {
+                self.camera.anchor_at_depth(depth);
+            }
         }
     }
 
@@ -9181,6 +9229,37 @@ fn base_mesh(bytes: &[u8]) -> Mesh {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_long_lens_then_zooming_in_never_puts_the_camera_inside_the_model() {
+        // #419: at 200 mm, zooming in toward the orbit target (the model's
+        // centre) passed the camera through the front of the model, and
+        // going back to 50 mm kept it inside.
+        let mut e = Editor::default();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.frame();
+        let bounds = e.scene.active().mesh.bounds();
+        let (centre, radius) = (bounds.center(), bounds.extent().max_element() * 0.5);
+        let outside = |e: &Editor| (e.camera.eye() - centre).length() > radius;
+        e.set_focal_mm(200.0);
+        for _ in 0..80 {
+            e.scroll(1.0);
+            assert!(outside(&e), "zoomed into the model: eye {:?}", e.camera.eye());
+        }
+        e.set_focal_mm(50.0);
+        assert!(outside(&e), "a shorter lens put the camera inside the model");
+        for _ in 0..40 {
+            e.scroll(1.0);
+            assert!(outside(&e));
+        }
+        // Far out, zooming in a little doesn't move the orbit centre.
+        let mut far = Editor::default();
+        far.canvas = [0.0, 0.0, 800.0, 600.0];
+        far.frame();
+        let target = far.camera.target;
+        far.scroll(1.0);
+        assert_eq!(far.camera.target, target);
+    }
 
     #[test]
     fn export_without_an_extension_takes_the_chosen_type() {
