@@ -4620,6 +4620,17 @@ fn help_menu(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
+fn mirror_duplicate_menu(ui: &mut Ui, ed: &mut Editor, title: &str, axes: [(&str, Cmd); 3]) {
+    ui.menu_button(title, |ui| {
+        for (label, cmd) in axes {
+            if tips::button(ui, label, cmd).clicked() {
+                crate::palette::run_cmd(ed, cmd);
+                ui.close();
+            }
+        }
+    });
+}
+
 fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     tips::menu(ui, "Add", plain::ADD, |ui| {
         for (label, which, cmd) in [
@@ -4657,17 +4668,18 @@ fn piece_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.paste_pieces();
     }
     if tips::button(ui, "Duplicate", Cmd::Duplicate).clicked() {
-        ed.duplicate_active(false);
+        ed.duplicate_active(None);
     }
-    if tips::button(ui, "Mirror duplicate (X)", Cmd::MirrorDuplicate).clicked() {
-        ed.duplicate_active(true);
-    }
+    mirror_duplicate_menu(ui, ed, crate::menu_model::MIRROR_DUPLICATE, crate::menu_model::MIRROR_DUPLICATE_AXES);
     if tips::button(ui, "Duplicate linked", Cmd::DuplicateLinked).clicked() {
-        ed.duplicate_linked(false);
+        ed.duplicate_linked(None);
     }
-    if tips::button(ui, "Mirror duplicate linked (X)", Cmd::MirrorDuplicateLinked).clicked() {
-        ed.duplicate_linked(true);
-    }
+    mirror_duplicate_menu(
+        ui,
+        ed,
+        crate::menu_model::MIRROR_DUPLICATE_LINKED,
+        crate::menu_model::MIRROR_DUPLICATE_LINKED_AXES,
+    );
     if let Some(original) = ed.active_link_source() {
         ui.label(RichText::new(format!("Linked copy of {original}")).weak().small());
         if tips::button(ui, "Unlink copy", Cmd::Unlink).clicked() {
@@ -6114,7 +6126,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if let Some(i) = action_duplicate {
         ed.scene.set_active(i);
-        ed.duplicate_active(false);
+        ed.duplicate_active(None);
     }
     if let Some(i) = action_delete {
         ed.scene.set_active(i);
@@ -6173,7 +6185,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.edit_tube();
         }
         if tips::button_on(ui, !ed.scene.pieces.is_empty(), "Duplicate", Cmd::Duplicate).clicked() {
-            ed.duplicate_active(false);
+            ed.duplicate_active(None);
         }
         if tips::button_on(ui, ed.scene.pieces.len() > 1, "Delete", Cmd::DeletePiece).clicked() {
             ed.delete_active();
@@ -8623,7 +8635,7 @@ mod tests {
         // rename or Alt+click to isolate.
         let mut ed = Editor::default();
         ed.show_welcome = false;
-        ed.duplicate_active(false);
+        ed.duplicate_active(None);
         ed.scene.set_active(0);
         let ctx = egui::Context::default();
         test_apply_theme(&ctx, false, 1.0, ed.layout);

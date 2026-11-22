@@ -11,7 +11,7 @@ use crate::ui::UiAction;
 use crate::widgets;
 use egui::{RichText, Ui};
 use oxy_render::BackgroundStyle;
-use oxy_sculpt::BrushKind;
+use oxy_sculpt::{Axis, BrushKind};
 use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,11 +141,19 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         }),
         cmd(ed, Cmd::AddTube, "pieces tube pipe horn tentacle curve path sweep", |e| e.start_tube()),
         cmd(ed, Cmd::EditTube, "pieces tube edit change reshape again path thickness", |e| e.edit_tube()),
-        cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(false)),
-        cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry x", |e| e.duplicate_active(true)),
-        cmd(ed, Cmd::DuplicateLinked, "pieces copy instance linked clone", |e| e.duplicate_linked(false)),
-        cmd(ed, Cmd::MirrorDuplicateLinked, "pieces copy instance linked clone symmetry x mirror", |e| {
-            e.duplicate_linked(true)
+        cmd(ed, Cmd::Duplicate, "pieces copy", |e| e.duplicate_active(None)),
+        cmd(ed, Cmd::MirrorDuplicate, "pieces copy symmetry", |e| e.duplicate_active(Some(Axis::X))),
+        cmd(ed, Cmd::MirrorDuplicateY, "pieces copy symmetry", |e| e.duplicate_active(Some(Axis::Y))),
+        cmd(ed, Cmd::MirrorDuplicateZ, "pieces copy symmetry", |e| e.duplicate_active(Some(Axis::Z))),
+        cmd(ed, Cmd::DuplicateLinked, "pieces copy instance linked clone", |e| e.duplicate_linked(None)),
+        cmd(ed, Cmd::MirrorDuplicateLinked, "pieces copy instance clone symmetry", |e| {
+            e.duplicate_linked(Some(Axis::X))
+        }),
+        cmd(ed, Cmd::MirrorDuplicateLinkedY, "pieces copy instance clone symmetry", |e| {
+            e.duplicate_linked(Some(Axis::Y))
+        }),
+        cmd(ed, Cmd::MirrorDuplicateLinkedZ, "pieces copy instance clone symmetry", |e| {
+            e.duplicate_linked(Some(Axis::Z))
         }),
         cmd(ed, Cmd::Unlink, "pieces linked copy instance unlink independent", Editor::unlink_active),
         cmd(ed, Cmd::DeletePiece, "pieces remove", Editor::delete_active),

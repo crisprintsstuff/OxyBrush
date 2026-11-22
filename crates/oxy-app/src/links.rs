@@ -20,6 +20,7 @@ use glam::{DMat4, DVec3, DVec4, Mat4, Vec3};
 use oxy_doc::{Piece, PieceLink};
 use oxy_history::Step;
 use oxy_mesh::Mesh;
+use oxy_sculpt::Axis;
 use rayon::prelude::*;
 
 /// What a copy was last synced from: the versions of both meshes then,
@@ -114,8 +115,8 @@ pub(crate) fn fit_affine(from: &[Vec3], to: &[Vec3]) -> Option<(Mat4, f32)> {
 
 impl Editor {
     /// Add a linked copy of the active piece (mirrored across the piece's
-    /// symmetry plane in X when `mirror_x`), one undo step.
-    pub fn duplicate_linked(&mut self, mirror_x: bool) {
+    /// symmetry plane when an axis is given), one undo step.
+    pub fn duplicate_linked(&mut self, mirror_axis: Option<Axis>) {
         if !self.need_piece() {
             return;
         }
@@ -125,26 +126,32 @@ impl Editor {
             Some(l) => (l.source, l.transform),
             None => (src.id, Mat4::IDENTITY),
         };
-        let centre = src.symmetry_center.unwrap_or(Vec3::ZERO);
-        let mirror = Mat4::from_translation(centre)
-            * Mat4::from_scale(Vec3::new(-1.0, 1.0, 1.0))
-            * Mat4::from_translation(-centre);
-        let transform = if mirror_x { mirror * base } else { base };
+        let transform = match mirror_axis {
+            Some(axis) => {
+                let centre = src.symmetry_center.unwrap_or(Vec3::ZERO);
+                let scale = Vec3::ONE - 2.0 * axis.vector();
+                Mat4::from_translation(centre) * Mat4::from_scale(scale) * Mat4::from_translation(-centre) * base
+            }
+            None => base,
+        };
         let Some(source) = self.scene.get(source_id) else { return };
         let (mesh, map) = build_copy(&source.mesh, transform);
-        let base_name =
-            if mirror_x { format!("{} (linked mirror)", source.name) } else { format!("{} (linked)", source.name) };
+        let base_name = if mirror_axis.is_some() {
+            format!("{} (linked mirror)", source.name)
+        } else {
+            format!("{} (linked)", source.name)
+        };
         let name = self.scene.unique_name(&base_name);
         let piece = Piece {
             parent: src.parent,
-            symmetry_center: src.symmetry_center.map(|c| if mirror_x { mirror.transform_point3(c) } else { c }),
+            symmetry_center: src.symmetry_center,
             material: source.material.clone(),
             link: Some(PieceLink { source: source_id, transform }),
             ..Piece::new(name.clone(), mesh)
         };
         let (id, seen) = (piece.id, LinkSeen::new(&source.mesh, &piece.mesh, map));
         self.link_seen.insert(id, seen);
-        self.add_piece(piece, if mirror_x { "Mirror duplicate linked" } else { "Duplicate linked" });
+        self.add_piece(piece, if mirror_axis.is_some() { "Mirror duplicate linked" } else { "Duplicate linked" });
         self.status = format!(
             "Created {name}: it follows {} until you unlink it",
             self.scene.get(source_id).map_or("", |p| p.name.as_str())
@@ -340,7 +347,7 @@ mod tests {
     #[test]
     fn a_mirrored_linked_copy_follows_sculpting_on_the_original_and_faces_out() {
         let mut e = editor();
-        e.duplicate_linked(true);
+        e.duplicate_linked(Some(Axis::X));
         frame(&mut e);
         assert_eq!(e.scene.pieces.len(), 2);
         assert_eq!(e.scene.pieces[1].link.map(|l| l.source), Some(e.scene.pieces[0].id));
@@ -364,9 +371,31 @@ mod tests {
     }
 
     #[test]
+    fn linked_mirrors_use_the_chosen_axis_through_the_symmetry_center() {
+        for (axis, expected) in [(Axis::Y, Vec3::new(2.0, 6.0, 0.0)), (Axis::Z, Vec3::new(2.0, 0.0, 8.0))] {
+            let mut e = editor();
+            let center = Vec3::new(1.0, 3.0, 4.0);
+            e.scene.active_mut().symmetry_center = Some(center);
+            e.duplicate_linked(Some(axis));
+            let copy = e.scene.active();
+            assert_eq!(copy.symmetry_center, Some(center));
+            assert!((copy.mesh.bounds().center() - expected).length() < 1e-5);
+            assert!(copy.mesh.signed_volume() > 0.0);
+            assert!(follows(&e));
+
+            // A reflected copy's transform is also used when the original changes.
+            let original = &mut e.scene.pieces[0].mesh;
+            original.positions[0] += Vec3::new(0.1, 0.2, 0.3);
+            original.refresh_all();
+            e.sync_links();
+            assert!(follows(&e));
+        }
+    }
+
+    #[test]
     fn moving_a_copy_keeps_it_linked_where_it_was_put() {
         let mut e = editor();
-        e.duplicate_linked(false);
+        e.duplicate_linked(None);
         e.sync_links();
         // Move the copy up (as the gizmo does: positions, then update).
         let copy = &mut e.scene.pieces[1].mesh;
@@ -386,7 +415,7 @@ mod tests {
     #[test]
     fn copies_cant_be_sculpted_and_unlink_frees_them() {
         let mut e = editor();
-        e.duplicate_linked(false);
+        e.duplicate_linked(None);
         let copy = e.scene.pieces[1].id;
         // Put it beside the original so it can be clicked.
         let m = &mut e.scene.pieces[1].mesh;
@@ -411,7 +440,7 @@ mod tests {
     #[test]
     fn a_new_topology_on_the_original_rebuilds_the_copy_and_a_save_keeps_the_link() {
         let mut e = editor();
-        e.duplicate_linked(true);
+        e.duplicate_linked(Some(Axis::X));
         e.sync_links();
         let src = &mut e.scene.pieces[0];
         src.mesh = Mesh::from_data(primitives::icosphere(2, 0.5).to_data());
@@ -428,7 +457,7 @@ mod tests {
     #[test]
     fn paint_and_mask_on_the_original_reach_the_copy() {
         let mut e = editor();
-        e.duplicate_linked(true);
+        e.duplicate_linked(Some(Axis::X));
         e.sync_links();
         let m = &mut e.scene.pieces[0].mesh;
         let n = m.vertex_count();

@@ -236,6 +236,13 @@ fn edit_menu(ed: &Editor) -> Vec<Node> {
     v
 }
 
+pub const MIRROR_DUPLICATE: &str = "Mirror duplicate";
+pub const MIRROR_DUPLICATE_LINKED: &str = "Mirror duplicate linked";
+pub const MIRROR_DUPLICATE_AXES: [(&str, Cmd); 3] =
+    [("X", Cmd::MirrorDuplicate), ("Y", Cmd::MirrorDuplicateY), ("Z", Cmd::MirrorDuplicateZ)];
+pub const MIRROR_DUPLICATE_LINKED_AXES: [(&str, Cmd); 3] =
+    [("X", Cmd::MirrorDuplicateLinked), ("Y", Cmd::MirrorDuplicateLinkedY), ("Z", Cmd::MirrorDuplicateLinkedZ)];
+
 fn pieces_menu(ed: &Editor, busy: bool) -> Vec<Node> {
     let mut v = vec![
         sub(
@@ -258,9 +265,12 @@ fn pieces_menu(ed: &Editor, busy: bool) -> Vec<Node> {
         cmd_on(Cmd::CopyPiece, "Copy piece", !ed.scene.pieces.is_empty()),
         cmd_on(Cmd::PastePiece, "Paste piece", !ed.piece_clipboard.is_empty()),
         cmd(Cmd::Duplicate, "Duplicate"),
-        cmd(Cmd::MirrorDuplicate, "Mirror duplicate (X)"),
+        sub(MIRROR_DUPLICATE, MIRROR_DUPLICATE_AXES.into_iter().map(|(label, id)| cmd(id, label)).collect()),
         cmd(Cmd::DuplicateLinked, "Duplicate linked"),
-        cmd(Cmd::MirrorDuplicateLinked, "Mirror duplicate linked (X)"),
+        sub(
+            MIRROR_DUPLICATE_LINKED,
+            MIRROR_DUPLICATE_LINKED_AXES.into_iter().map(|(label, id)| cmd(id, label)).collect(),
+        ),
         cmd_on(Cmd::Unlink, "Unlink copy", ed.active_link_source().is_some()),
         cmd_on(Cmd::DeletePiece, "Delete", ed.scene.pieces.len() > 1),
         cmd(Cmd::Solo, "Solo / show all"),
@@ -674,6 +684,45 @@ mod tests {
             std::hint::black_box(menus(&ed));
         }
         println!("menus(): {:?} each, {} items", t.elapsed() / n, items(&ed).len());
+    }
+
+    #[test]
+    fn mirror_duplicate_menus_offer_and_run_all_axes() {
+        let ctx = egui::Context::default();
+        for (title, linked) in [(MIRROR_DUPLICATE, false), (MIRROR_DUPLICATE_LINKED, true)] {
+            let mut ed = Editor::default();
+            let offset = glam::Vec3::new(2.0, 3.0, 4.0);
+            let mut data = oxy_mesh::primitives::icosphere(1, 1.0).to_data();
+            data.positions.iter_mut().for_each(|p| *p += offset);
+            let mut original = oxy_doc::Piece::new("Ball", oxy_mesh::Mesh::from_data(data));
+            original.symmetry_center = Some(glam::Vec3::ZERO);
+            let source = original.id;
+            ed.replace_document(oxy_doc::Scene::new(original), None);
+            let nodes = pieces_menu(&ed, false);
+            let axes = nodes
+                .iter()
+                .find_map(|node| match node {
+                    Node::Sub { label, items, .. } if label == title => Some(items),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(axes.len(), 3);
+            for (node, (label, scale)) in axes.iter().zip([
+                ("X", glam::Vec3::new(-1.0, 1.0, 1.0)),
+                ("Y", glam::Vec3::new(1.0, -1.0, 1.0)),
+                ("Z", glam::Vec3::new(1.0, 1.0, -1.0)),
+            ]) {
+                let Node::Item(item) = node else { panic!("expected an axis command") };
+                assert_eq!(item.label, label);
+                ed.scene.set_active(0);
+                activate(&mut ed, &ctx, item.id);
+                let copy = ed.scene.active();
+                assert_eq!(copy.link.map(|link| link.source), linked.then_some(source));
+                assert!((copy.mesh.bounds().center() - offset * scale).length() < 1e-5, "{title} {label}");
+                assert!(copy.mesh.signed_volume() > 0.0);
+            }
+            assert_eq!(ed.scene.pieces.len(), 4);
+        }
     }
 
     #[test]

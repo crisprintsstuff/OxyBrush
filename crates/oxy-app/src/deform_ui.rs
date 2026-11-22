@@ -682,8 +682,8 @@ mod tests {
     #[test]
     fn repeat_on_this_piece_and_on_the_others() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         e.scene.set_active(0);
         let others: Vec<Vec<Vec3>> = (1..3).map(|i| e.scene.pieces[i].mesh.positions.clone()).collect();
         e.deform_repeat_active();
