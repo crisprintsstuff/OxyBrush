@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Lighter inactive pieces** (Preferences > General, off by default): a piece with subdivision levels that you aren't working on is shown at its highest level under a triangle budget (500,000 by default, adjustable), which frees its full-detail mesh: about 66 bytes a triangle, plus the graphics card's copy. Picking it brings its own level back, exactly as it was, in the background (about a second for a 6-million-triangle piece; leaving it takes about a quarter of a second). Export, Join, Merge, Booleans, copy, the Blender bridge, agents, plugins and undo always see the full level. Pieces tied to others (linked copies and their originals, surface instance hosts and sources, pieces with living strokes) stay in full. The Pieces list marks lighter pieces with `~` before their triangle count.
+
+### Fixed
+
+- **Undo can no longer scramble a mesh rebuilt outside the history.** A stroke's undo step only fits the mesh it was recorded on; a piece rebuilt meanwhile without an undo step (a linked copy after its original was remeshed) now skips that step instead of moving the wrong points.
+
 ## [4.0.0-beta.23] - 2026-11-22
 
 ### Added

@@ -261,6 +261,7 @@ impl Editor {
     /// Repeat the last deformer on every other visible piece, each around
     /// its own bounding box, as one undo step.
     pub fn deform_repeat_others(&mut self) {
+        self.restore_light_pieces(None);
         let Some(last) = self.deform_last else {
             self.status = "Nothing to repeat yet: drag a deformer first".into();
             return;

@@ -257,6 +257,17 @@ impl Mesh {
     /// Build from [`MeshData`]. Triangles and vertices are reordered for
     /// locality; per-triangle and per-vertex attributes follow them.
     pub fn from_data(data: MeshData) -> Self {
+        Self::from_data_in_order(data, None)
+    }
+
+    /// [`Self::from_data`] with the triangles in the order `order` gives
+    /// (indices into `data.triangles`, as [`Self::source_triangles`] of an
+    /// earlier build returns): the same order makes the same points, chunks
+    /// and numbering, so a mesh rebuilt from the same level of a level stack
+    /// lines up with the one before, whatever moved since. An `order` that
+    /// isn't exactly the valid triangles, each once, is ignored (the usual
+    /// spatial order is used).
+    pub fn from_data_in_order(data: MeshData, order: Option<&[u32]>) -> Self {
         let MeshData { positions, triangles, mask, groups, hidden, color, uv } = data;
         let uv = (uv.len() == triangles.len()).then_some(uv);
         let mask = (mask.len() == positions.len()).then_some(mask);
@@ -280,8 +291,20 @@ impl Mesh {
             })
             .collect();
         keyed.par_sort_unstable();
-        let source_triangle: Vec<u32> = keyed.par_iter().map(|&k| k as u32).collect();
+        let spatial: Vec<u32> = keyed.par_iter().map(|&k| k as u32).collect();
         drop(keyed);
+        // The given order, when it holds exactly the same triangles.
+        let source_triangle: Vec<u32> = match order {
+            Some(o) if o.len() == spatial.len() => {
+                let mut seen = vec![false; triangles.len()];
+                let fits = o.iter().all(|&i| {
+                    let i = i as usize;
+                    i < triangles.len() && valid(&triangles[i]) && !std::mem::replace(&mut seen[i], true)
+                });
+                if fits { o.to_vec() } else { spatial }
+            }
+            _ => spatial,
+        };
         let mut triangles: Vec<[u32; 3]> = source_triangle.par_iter().map(|&i| triangles[i as usize]).collect();
         let groups: Vec<u32> =
             source_triangle.par_iter().map(|&i| groups.get(i as usize).copied().unwrap_or(0)).collect();
@@ -1664,6 +1687,16 @@ impl Mesh {
         self.topology_version
     }
 
+    /// Take topology version `v` back, for a mesh rebuilt with exactly the
+    /// triangles, in the same order, that a mesh with version `v` had (a
+    /// subdivision level shown again), so undo steps and anything else tied
+    /// to that version still fit it. PRECONDITION: same triangles, same
+    /// order; anything else makes those steps apply to the wrong points.
+    pub fn adopt_topology_version(&mut self, v: u64) {
+        self.topology_version = v;
+        self.mark_all_dirty();
+    }
+
     /// The chunk that owns point `v`.
     pub fn vertex_chunk_of(&self, v: u32) -> Option<&u32> {
         self.vertex_chunk.get(v as usize)
@@ -2356,6 +2389,23 @@ mod tests {
                 let c = (p[0] + p[1] + p[2]) / 3.0;
                 (0..3).all(|k| uv[k].distance(uv_of(p[k], c)) < 1e-5)
             })
+    }
+
+    #[test]
+    fn a_rebuild_in_the_old_order_numbers_points_the_same_after_they_move() {
+        let data = primitives::icosphere(4, 1.0).to_data();
+        let first = Mesh::from_data(data.clone());
+        // Move points a lot: the spatial order would change.
+        let mut moved = data.clone();
+        moved.positions.iter_mut().for_each(|p| *p = Vec3::new(p.z * 3.0, -p.x, p.y * 0.5));
+        let order = first.source_triangles().to_vec();
+        let again = Mesh::from_data_in_order(moved.clone(), Some(&order));
+        assert_eq!(again.triangles, first.triangles, "same triangles, same numbering");
+        assert_eq!(again.source_vertices(), first.source_vertices());
+        assert_ne!(Mesh::from_data(moved.clone()).triangles, first.triangles, "the usual build reorders");
+        // An order that doesn't fit is ignored.
+        let bad = vec![0u32; order.len()];
+        assert_eq!(Mesh::from_data_in_order(moved.clone(), Some(&bad)).triangles, Mesh::from_data(moved).triangles);
     }
 
     #[test]

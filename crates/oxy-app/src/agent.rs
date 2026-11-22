@@ -190,6 +190,8 @@ impl Inbox {
                 return None;
             }
             log::debug!("agent tool {}", env.name);
+            // An agent may read or change any piece: show them all in full.
+            let _ = with_target_doc(ed, self.target_doc_id, |ed| ed.restore_light_pieces(None));
             ed.agent_label.clone_from(&self.label);
             let outcome = with_target_doc(ed, self.target_doc_id, |ed| apply(ed, &env.name, &env.args));
             ed.agent_label = AGENT_LABEL.to_owned();

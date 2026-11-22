@@ -1471,6 +1471,26 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
     });
     tips::check_plain(
         ui,
+        &mut ed.lighter_inactive,
+        "Lighter inactive pieces",
+        "On: a piece with subdivision levels that you aren't working on is shown at a lower level, under the triangle count below, to save memory. Picking it brings its own level back (a moment for very dense pieces). Export, Join, Merge, Booleans and undo always use the full level. Pieces tied to others (linked copies, surface instances, living strokes) stay as they are.",
+    );
+    ui.add_enabled_ui(ed.lighter_inactive, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Up to");
+            let mut k = (ed.lighter_budget / 1000) as u32;
+            if ui
+                .add(egui::DragValue::new(&mut k).range(10..=50_000).speed(10).suffix("k triangles"))
+                .on_hover_text("The most triangles a lighter piece shows: the highest level under this.")
+                .changed()
+            {
+                ed.lighter_budget = k as usize * 1000;
+            }
+            ui.label("each");
+        });
+    });
+    tips::check_plain(
+        ui,
         &mut ed.undo_per_piece,
         "Undo works on the active piece",
         "On: Undo and Redo (Ctrl+Z) take back changes to the active piece only, even if you changed other pieces since; Edit > Undo in whole scene does the usual undo. Off: Undo takes back the last change anywhere, and Ctrl+Alt+Z undoes on the active piece.",
@@ -5558,6 +5578,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 let piece_name = p.name.clone();
                 let piece_triangles = p.mesh.triangle_count();
                 let is_visible = p.visible;
+                // Shown lighter (Lighter inactive pieces): a lower level for now.
+                let light = doc.light.contains_key(&piece_id);
 
                 // The row's own click (select, and the right-click menu) is
                 // registered *under* the widgets in it, so the eye button,
@@ -5787,12 +5809,20 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 
                                     // Right-aligned triangle count and child counter
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        let tri_lbl = ui.label(
-                                            RichText::new(fmt_count(piece_triangles)).monospace().weak().small(),
-                                        );
+                                        let shown = if light {
+                                            format!("~{}", fmt_count(piece_triangles))
+                                        } else {
+                                            fmt_count(piece_triangles)
+                                        };
+                                        let tri_lbl = ui.label(RichText::new(shown).monospace().weak().small());
                                         let vert_count = fmt_count(p.mesh.vertex_count());
                                         let tri_count = fmt_count(piece_triangles);
-                                        tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices"));
+                                        let note = if light {
+                                            "\nShown lighter while you work on another piece; pick it to see its full level."
+                                        } else {
+                                            ""
+                                        };
+                                        tri_lbl.on_hover_text(format!("{tri_count} triangles\n{vert_count} vertices{note}"));
 
                                         if row.is_folded && row.child_count > 0 {
                                             ui.label(RichText::new(format!("+{}", row.child_count)).weak().small());
