@@ -88,9 +88,11 @@ impl Editor {
         }
         // A click on the last point again finishes the cut, so it can be
         // done with a pen alone (Enter and the Cut button do the same).
-        let last = self.poly_edit.as_ref().and_then(|pe| pe.knife.as_ref()).and_then(|path| {
-            (path.len() >= 2).then(|| path.last().copied()).flatten()
-        });
+        let last = self
+            .poly_edit
+            .as_ref()
+            .and_then(|pe| pe.knife.as_ref())
+            .and_then(|path| (path.len() >= 2).then(|| path.last().copied()).flatten());
         if last.is_some_and(|l| {
             self.camera.project(l.pos, self.canvas_size()).is_some_and(|s| (s + origin).distance(p) <= reach)
         }) {
@@ -107,7 +109,9 @@ impl Editor {
         if closes {
             self.poly_knife_apply();
         } else {
-            self.status = format!("Knife: {n} point(s); Enter or a click on the last point cuts, Backspace takes the last back, Esc cancels");
+            self.status = format!(
+                "Knife: {n} point(s); Enter or a click on the last point cuts, Backspace takes the last back, Esc cancels"
+            );
         }
         true
     }

@@ -1321,22 +1321,25 @@ impl Editor {
                     return;
                 }
                 // Two whole hole borders make a tube; anything else a strip.
-                let bridge = |c: &mut Cage, x: &[[u32; 2]], y: &[[u32; 2]], twist: i32| {
-                    match (polyedit::edge_chain(x), polyedit::edge_chain(y)) {
-                        (polyedit::EdgeChain::Loop(_), polyedit::EdgeChain::Loop(_)) => {
-                            polyedit::bridge_borders(c, x[0], y[0], segments, twist)
-                        }
-                        (polyedit::EdgeChain::Loop(_), _) | (_, polyedit::EdgeChain::Loop(_)) => {
-                            Err("pick a whole hole border on both sides for a tube, or a row of edges on both")
-                        }
-                        _ => polyedit::bridge_edges(c, x, y, segments),
+                let bridge = |c: &mut Cage, x: &[[u32; 2]], y: &[[u32; 2]], twist: i32| match (
+                    polyedit::edge_chain(x),
+                    polyedit::edge_chain(y),
+                ) {
+                    (polyedit::EdgeChain::Loop(_), polyedit::EdgeChain::Loop(_)) => {
+                        polyedit::bridge_borders(c, x[0], y[0], segments, twist)
                     }
+                    (polyedit::EdgeChain::Loop(_), _) | (_, polyedit::EdgeChain::Loop(_)) => {
+                        Err("pick a whole hole border on both sides for a tube, or a row of edges on both")
+                    }
+                    _ => polyedit::bridge_edges(c, x, y, segments),
                 };
                 // With Mirror on, the mirror images of the two sides bridge
                 // too (points keep their numbers through a bridge).
                 let mirrored = self.poly_mirror().and_then(|(cx, tol)| {
                     let m = |v: u32| polyedit::mirror_point(&cage, v, cx, tol);
-                    let side = |s: &[[u32; 2]]| s.iter().map(|&[x, y]| Some(edge_key(m(x)?, m(y)?))).collect::<Option<Vec<_>>>();
+                    let side = |s: &[[u32; 2]]| {
+                        s.iter().map(|&[x, y]| Some(edge_key(m(x)?, m(y)?))).collect::<Option<Vec<_>>>()
+                    };
                     let (ma, mb) = (side(&one)?, side(&two)?);
                     let own: std::collections::HashSet<u32> = one.iter().chain(&two).flatten().copied().collect();
                     (!ma.iter().chain(&mb).flatten().any(|v| own.contains(v))).then_some((ma, mb))
@@ -2496,14 +2499,20 @@ mod tests {
         let mid = |e: &Editor, [a, b]: [u32; 2]| (cage(e).positions[a as usize] + cage(e).positions[b as usize]) * 0.5;
         let flat = |p: Vec3| Vec3::new(p.x, 0.0, p.z);
         let low = lows[0];
-        let high = *highs.iter().max_by(|x, y| {
-            let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
-            d(**x).total_cmp(&d(**y))
-        }).unwrap();
-        let above = *highs.iter().min_by(|x, y| {
-            let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
-            d(**x).total_cmp(&d(**y))
-        }).unwrap();
+        let high = *highs
+            .iter()
+            .max_by(|x, y| {
+                let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
+                d(**x).total_cmp(&d(**y))
+            })
+            .unwrap();
+        let above = *highs
+            .iter()
+            .min_by(|x, y| {
+                let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
+                d(**x).total_cmp(&d(**y))
+            })
+            .unwrap();
         e.poly_edge_down(Vec2::ZERO, low[0], low[1], 0.5);
         e.poly_edge_down(Vec2::ZERO, above[0], above[1], 0.5);
         assert_eq!(cage(&e).faces.len(), 4);

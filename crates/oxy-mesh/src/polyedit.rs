@@ -821,11 +821,7 @@ pub fn edge_chain(edges: &[[u32; 2]]) -> EdgeChain {
     let mut path = vec![start];
     let mut prev = u32::MAX;
     let mut at = start;
-    loop {
-        let Some(&to) = next[&at].iter().find(|&&w| w != prev && (path.len() < 2 || w != path[path.len() - 2]))
-        else {
-            break;
-        };
+    while let Some(&to) = next[&at].iter().find(|&&w| w != prev) {
         if closed && to == start {
             break;
         }
@@ -896,7 +892,11 @@ pub fn bridge_edges(
     let mut rows: Vec<Vec<u32>> = vec![pa.clone()];
     for r in 1..segments {
         let t = r as f32 / segments as f32;
-        rows.push((0..n).map(|i| if pa[i] == pb[i] { pa[i] } else { work.add_vertex(pos(pa[i]).lerp(pos(pb[i]), t)) }).collect());
+        rows.push(
+            (0..n)
+                .map(|i| if pa[i] == pb[i] { pa[i] } else { work.add_vertex(pos(pa[i]).lerp(pos(pb[i]), t)) })
+                .collect(),
+        );
     }
     rows.push(pb);
     let group = new_group(&work);
@@ -904,11 +904,8 @@ pub fn bridge_edges(
     for r in 0..segments {
         let (lo, hi) = (&rows[r], &rows[r + 1]);
         for i in 0..n - 1 {
-            let quad = if runs_forward {
-                [lo[i], hi[i], hi[i + 1], lo[i + 1]]
-            } else {
-                [lo[i], lo[i + 1], hi[i + 1], hi[i]]
-            };
+            let quad =
+                if runs_forward { [lo[i], hi[i], hi[i + 1], lo[i + 1]] } else { [lo[i], lo[i + 1], hi[i + 1], hi[i]] };
             let mut k: Vec<u32> = Vec::with_capacity(4);
             for v in quad {
                 if k.last() != Some(&v) && (k.len() < 3 || k[0] != v) {
