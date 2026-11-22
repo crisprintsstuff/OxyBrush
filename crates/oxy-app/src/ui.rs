@@ -3474,22 +3474,25 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         let r = widgets::tile(ui, alpha_tex.as_ref(), &caption, plain::ALPHA_TILE, size);
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Alphas").strong());
-            egui::Grid::new("alpha_picker").spacing([6.0, 6.0]).show(ui, |ui| {
-                let none = tips::alpha_tip("None");
-                if widgets::thumb(ui, None, "None", ed.alpha.is_none(), &none).clicked() {
-                    ed.alpha = None;
-                }
-                let alphas = ed.alphas.clone();
-                for (i, a) in alphas.iter().enumerate() {
-                    let t = alpha_texture(&ctx, a);
-                    let tip = tips::alpha_tip(&a.name);
-                    if widgets::thumb(ui, Some(&t), &a.name, ed.alpha == Some(i), &tip).clicked() {
-                        ed.alpha = Some(i);
+            let height = (ui.ctx().content_rect().height() * 0.5).max(100.0);
+            egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+                egui::Grid::new("alpha_picker").spacing([6.0, 6.0]).show(ui, |ui| {
+                    let none = tips::alpha_tip("None");
+                    if widgets::thumb(ui, None, "None", ed.alpha.is_none(), &none).clicked() {
+                        ed.alpha = None;
                     }
-                    if i % 4 == 2 {
-                        ui.end_row();
+                    let alphas = ed.alphas.clone();
+                    for (i, a) in alphas.iter().enumerate() {
+                        let t = alpha_texture(&ctx, a);
+                        let tip = tips::alpha_tip(&a.name);
+                        if widgets::thumb(ui, Some(&t), &a.name, ed.alpha == Some(i), &tip).clicked() {
+                            ed.alpha = Some(i);
+                        }
+                        if i % 4 == 2 {
+                            ui.end_row();
+                        }
                     }
-                }
+                });
             });
             if tips::hover(ui.button("Load image…"), plain::LOAD_IMAGE).clicked() {
                 ed.request_load_alpha = true;
@@ -3610,9 +3613,10 @@ fn custom_matcap_texture(ctx: &egui::Context, m: &crate::matcaps::CustomMatcap) 
     })
 }
 
-/// Alpha preview texture (cached per alpha name and size).
+/// Cache the preview for this alpha. A project and the library can have
+/// different images with the same name and size.
 fn alpha_texture(ctx: &egui::Context, a: &oxy_sculpt::Alpha) -> egui::TextureHandle {
-    widgets::cached_texture(ctx, ("alpha", a.name.clone(), a.size), || {
+    widgets::cached_texture(ctx, ("alpha", a as *const oxy_sculpt::Alpha, a.name.as_str(), a.size), || {
         let (n, px) = a.to_preview_luma8(128);
         egui::ColorImage::from_gray([n as usize, n as usize], &px)
     })

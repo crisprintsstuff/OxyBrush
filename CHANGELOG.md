@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Alpha library** ([#425](https://github.com/crisprintsstuff/OxyBrush/issues/425)). Imported PNG alphas are available in every tab and after a restart. Projects still embed the alphas imported into them and the ones their editable strokes use.
+
 - **Mirror duplicate axes** ([#427](https://github.com/crisprintsstuff/OxyBrush/issues/427)). Choose X, Y or Z under **Pieces > Mirror duplicate** or **Mirror duplicate linked**. All six commands are also in the command palette.
 
 ### Added

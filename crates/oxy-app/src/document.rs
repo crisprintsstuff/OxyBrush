@@ -55,8 +55,10 @@ pub struct Document {
     pub camera: Camera,
     pub(crate) snap_orbit: Option<(f32, f32)>,
 
-    // Local Alphas (ALPH section)
+    // The picker combines built-ins, project alphas and shared imports.
     pub alphas: Vec<Arc<Alpha>>,
+    /// Picker indices for alphas that belong only to the user library.
+    pub(crate) library_only_alphas: std::collections::HashSet<usize>,
     pub alpha: Option<usize>,
     pub alpha_rotation_deg: f32,
     pub alpha_follow_stroke: bool,
@@ -183,6 +185,7 @@ impl Document {
             camera,
             snap_orbit: None,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
+            library_only_alphas: Default::default(),
             alpha: None,
             alpha_rotation_deg: 0.0,
             alpha_follow_stroke: false,
@@ -289,6 +292,17 @@ impl Document {
                 None => "Untitled".into(),
             },
         }
+    }
+
+    pub(crate) fn add_library_alpha(&mut self, alpha: Arc<Alpha>) {
+        self.library_only_alphas.insert(self.alphas.len());
+        self.alphas.push(alpha);
+    }
+
+    pub(crate) fn add_project_alpha(&mut self, alpha: Arc<Alpha>) {
+        self.alphas.push(alpha);
+        self.alpha = Some(self.alphas.len() - 1);
+        self.alphas_unsaved = true;
     }
 
     /// Whether this document has changes since the last save.

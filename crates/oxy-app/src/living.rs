@@ -3411,6 +3411,26 @@ mod tests {
     }
 
     #[test]
+    fn a_stroke_from_the_alpha_library_stays_editable_without_the_library() {
+        let mut e = editor();
+        let alpha = Arc::new(oxy_sculpt::Alpha::from_luma16("Spots", 16, 16, &[45001; 256]).unwrap());
+        e.documents[0].add_library_alpha(alpha);
+        e.alpha = Some(e.alphas.len() - 1);
+        stroke(&mut e, 300.0);
+        assert_eq!(e.living.strokes.len(), 1);
+        let dir = std::env::temp_dir().join(format!("oxy-library-stroke-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = dir.join("stroke.oxb");
+        assert!(e.save(&project));
+
+        let mut reopened = editor();
+        reopened.open(&project);
+        let recipe = reopened.living.strokes[0].recipe.as_ref().expect("the embedded alpha can be resolved");
+        assert_eq!(recipe.alpha.as_ref().unwrap().alpha.name, "Spots");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn editing_the_alpha_resculpts() {
         let mut e = editor();
         e.alpha = Some(e.alphas.iter().position(|a| a.name == "Scales").expect("scales"));
