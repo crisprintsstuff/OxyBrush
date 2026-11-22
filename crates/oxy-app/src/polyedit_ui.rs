@@ -65,7 +65,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .selectable_label(knife, "Knife")
-                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges. Enter cuts, Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop.")
+                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges; a point inside a face carries the cut on to that face's edge. Enter, the Cut button or a click on the last point again cuts; Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop.")
                     .clicked()
                 {
                     ed.poly_knife_toggle();
@@ -218,10 +218,10 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                             .on_hover_text("Rows of faces along the bridge");
                         ui.label("Twist");
                         ui.add(egui::DragValue::new(&mut pe.bridge_twist).range(-32..=32))
-                            .on_hover_text("Turn one end by this many points, for a twisted bridge");
+                            .on_hover_text("For a tube between two holes: turn one end by this many points");
                     });
-                    if let Some(Pending::BridgeHole(_)) = pe.pending {
-                        ui.label(RichText::new("Bridge: click an edge of the second hole (Esc cancels)").color(REACH_EDGE));
+                    if let Some(Pending::BridgeEdge(_)) = pe.pending {
+                        ui.label(RichText::new("Bridge: click the edge to join it to (Esc cancels)").color(REACH_EDGE));
                     }
                 }
                 if pe.edge_action == EdgeAction::InsertLoop {
@@ -517,7 +517,7 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
                 }
             }
         }
-        Some(Pending::BridgeHole([a, b])) => {
+        Some(Pending::BridgeEdge([a, b])) => {
             if let (Some(Some(pa)), Some(Some(pb))) = (screen.get(a as usize), screen.get(b as usize)) {
                 painter.line_segment([*pa, *pb], Stroke::new(3.0, PICKED));
             }

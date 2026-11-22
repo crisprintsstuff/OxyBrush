@@ -793,6 +793,145 @@ pub fn bridge_borders(
     Ok(made)
 }
 
+/// What a set of edges is, for Bridge: a path of points (an open chain),
+/// a closed loop, or neither (branching, or in pieces).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EdgeChain {
+    Open(Vec<u32>),
+    Loop(Vec<u32>),
+    Broken,
+}
+
+/// Put `edges` in order along the path they make.
+pub fn edge_chain(edges: &[[u32; 2]]) -> EdgeChain {
+    if edges.is_empty() {
+        return EdgeChain::Broken;
+    }
+    let mut next: HashMap<u32, Vec<u32>> = HashMap::new();
+    for &[a, b] in edges {
+        next.entry(a).or_default().push(b);
+        next.entry(b).or_default().push(a);
+    }
+    if next.values().any(|n| n.len() > 2) {
+        return EdgeChain::Broken;
+    }
+    let ends: Vec<u32> = next.iter().filter(|(_, n)| n.len() == 1).map(|(&v, _)| v).collect();
+    let closed = ends.is_empty();
+    let start = if closed { edges[0][0] } else { *ends.iter().min().expect("an end") };
+    let mut path = vec![start];
+    let mut prev = u32::MAX;
+    let mut at = start;
+    loop {
+        let Some(&to) = next[&at].iter().find(|&&w| w != prev && (path.len() < 2 || w != path[path.len() - 2]))
+        else {
+            break;
+        };
+        if closed && to == start {
+            break;
+        }
+        path.push(to);
+        (prev, at) = (at, to);
+        if path.len() > edges.len() + 1 {
+            return EdgeChain::Broken;
+        }
+    }
+    let used = if closed { path.len() } else { path.len() - 1 };
+    if used != edges.len() {
+        return EdgeChain::Broken;
+    }
+    if closed { EdgeChain::Loop(path) } else { EdgeChain::Open(path) }
+}
+
+/// Bridge two open chains of border edges with a strip of quads, `segments`
+/// rows deep (#378): one edge to one edge makes one quad, a chain of three
+/// edges to another of three makes three side by side. Ends the two chains
+/// share become triangles. The strip faces the same way as the faces on
+/// both sides, which fixes how their ends pair up. On a copy: `c` is unchanged on failure.
+///
+/// RETURNS: the new faces, or why it can't be done.
+pub fn bridge_edges(
+    c: &mut Cage,
+    first: &[[u32; 2]],
+    second: &[[u32; 2]],
+    segments: u32,
+) -> Result<Vec<usize>, &'static str> {
+    let (EdgeChain::Open(pa), EdgeChain::Open(mut pb)) = (edge_chain(first), edge_chain(second)) else {
+        return Err("each side must be one edge, or picked edges in a row");
+    };
+    let border: HashSet<[u32; 2]> = c.border_edges().into_iter().collect();
+    if first.iter().chain(second).any(|&[a, b]| !border.contains(&edge_key(a, b))) {
+        return Err("bridge edges on an open border (with a face on one side only)");
+    }
+    if pa.len() != pb.len() {
+        return Err("the two sides need the same number of edges");
+    }
+    let pos = |v: u32| c.positions[v as usize];
+    // Which way the face on each side runs along it (a -> b or b -> a).
+    let face_of = c.edge_faces();
+    let runs_along = |p: &[u32]| {
+        face_of.get(&edge_key(p[0], p[1])).and_then(|f| f.first()).is_some_and(|&f| {
+            let k = corners(&c.faces[f]);
+            let i = k.iter().position(|&v| v == p[0]).expect("corner");
+            k[(i + 1) % k.len()] == p[1]
+        })
+    };
+    // The strip must run against the faces on both sides, so the second
+    // side is paired in the direction that makes its face run the other
+    // way from the first's: the ends pair up by orientation, which keeps
+    // the surface consistently facing out.
+    let runs_forward = runs_along(&pa);
+    if runs_along(&pb) == runs_forward {
+        pb.reverse();
+    }
+    let n = pa.len();
+    let shared: HashSet<u32> = pa.iter().copied().filter(|v| pb.contains(v)).collect();
+    if (0..n).any(|i| shared.contains(&pa[i]) && pa[i] != pb[i]) {
+        return Err("the two sides cross: they share a point that isn't at the same end");
+    }
+    if (0..n - 1).any(|i| pa[i] == pb[i] && pa[i + 1] == pb[i + 1]) {
+        return Err("pick two different edges");
+    }
+    let mut work = c.clone();
+    let segments = segments.max(1) as usize;
+    let mut rows: Vec<Vec<u32>> = vec![pa.clone()];
+    for r in 1..segments {
+        let t = r as f32 / segments as f32;
+        rows.push((0..n).map(|i| if pa[i] == pb[i] { pa[i] } else { work.add_vertex(pos(pa[i]).lerp(pos(pb[i]), t)) }).collect());
+    }
+    rows.push(pb);
+    let group = new_group(&work);
+    let mut made = Vec::new();
+    for r in 0..segments {
+        let (lo, hi) = (&rows[r], &rows[r + 1]);
+        for i in 0..n - 1 {
+            let quad = if runs_forward {
+                [lo[i], hi[i], hi[i + 1], lo[i + 1]]
+            } else {
+                [lo[i], lo[i + 1], hi[i + 1], hi[i]]
+            };
+            let mut k: Vec<u32> = Vec::with_capacity(4);
+            for v in quad {
+                if k.last() != Some(&v) && (k.len() < 3 || k[0] != v) {
+                    k.push(v);
+                }
+            }
+            if k.len() > 2 && k[0] == k[k.len() - 1] {
+                k.pop();
+            }
+            if k.len() < 3 {
+                continue;
+            }
+            work.faces.push(Face::with_group(k, group));
+            made.push(work.faces.len() - 1);
+        }
+    }
+    if work.edge_faces().values().any(|f| f.len() > 2) {
+        return Err("that would join three faces at one edge");
+    }
+    *c = work;
+    Ok(made)
+}
+
 /// Close the hole whose border `(a, b)` is on with one face (a polygon
 /// with as many corners as the hole has points), in a new face group.
 /// Returns the new face, or None when `(a, b)` isn't on a closed border.
@@ -964,6 +1103,70 @@ mod tests {
         delete_faces(&mut d, &[0, 1]);
         assert!(bridge_borders(&mut d, [0, 1], [1, 2], 2, 0).is_err());
         assert!(bridge_borders(&mut d, [0, 4], [4, 5], 2, 0).is_err(), "a side edge isn't on a hole");
+    }
+
+    /// Two separate strips of two quads each, one above the other, facing +Z.
+    fn two_strips() -> Cage {
+        let mut c = Cage::default();
+        for y in [0.0, 1.0, 3.0, 4.0] {
+            for x in 0..3 {
+                c.add_vertex(Vec3::new(x as f32, y, 0.0));
+            }
+        }
+        // Rows: 0-2 (y 0), 3-5 (y 1), 6-8 (y 3), 9-11 (y 4).
+        for (lo, hi) in [(0u32, 3u32), (6, 9)] {
+            for x in 0..2 {
+                c.faces.push(Face::new(vec![lo + x, lo + x + 1, hi + x + 1, hi + x]));
+            }
+        }
+        c
+    }
+
+    #[test]
+    fn bridging_two_edges_makes_one_quad_not_a_tube() {
+        let mut c = two_strips();
+        // The top edge of the lower strip's left quad to the bottom edge of
+        // the upper strip's left quad.
+        let made = bridge_edges(&mut c, &[[3, 4]], &[[6, 7]], 1).unwrap();
+        assert_eq!(made.len(), 1);
+        assert_eq!(c.faces.len(), 5);
+        assert_eq!(c.positions.len(), 12, "no new points");
+        validate(&c).unwrap();
+        // It faces the same way as the faces it joins (+Z).
+        let pts: Vec<Vec3> = c.faces[made[0]].corners.iter().map(|&v| c.positions[v as usize]).collect();
+        assert!(polygon_normal(&pts).z > 0.0);
+        // Rows: two rows, one new pair of points.
+        let mut c = two_strips();
+        let made = bridge_edges(&mut c, &[[3, 4]], &[[6, 7]], 2).unwrap();
+        assert_eq!((made.len(), c.positions.len()), (2, 14));
+        validate(&c).unwrap();
+    }
+
+    #[test]
+    fn bridging_chains_pairs_them_end_to_end_and_shared_ends_make_triangles() {
+        // Two edges in a row to two edges in a row (given in any order).
+        let mut c = two_strips();
+        let made = bridge_edges(&mut c, &[[4, 5], [3, 4]], &[[7, 6], [8, 7]], 1).unwrap();
+        assert_eq!(made.len(), 2);
+        assert_eq!(c.border_edges().len(), 10, "one sheet now, two quads wide and three high");
+        validate(&c).unwrap();
+        // Different lengths, or edges inside the surface, don't bridge.
+        let mut c = two_strips();
+        assert!(bridge_edges(&mut c, &[[3, 4]], &[[6, 7], [7, 8]], 1).is_err());
+        assert!(bridge_edges(&mut c, &[[1, 4]], &[[6, 7]], 1).is_err(), "an inner edge");
+        // Two edges meeting at a corner: a triangle fills between them.
+        let mut c = two_strips();
+        let made = bridge_edges(&mut c, &[[3, 4]], &[[0, 3]], 1).unwrap();
+        assert_eq!(made.len(), 1);
+        assert_eq!(c.faces[made[0]].corners.len(), 3);
+    }
+
+    #[test]
+    fn edge_chains_are_ordered_or_rejected() {
+        assert_eq!(edge_chain(&[[2, 3], [1, 2]]), EdgeChain::Open(vec![1, 2, 3]));
+        assert!(matches!(edge_chain(&[[0, 1], [1, 2], [2, 0]]), EdgeChain::Loop(p) if p.len() == 3));
+        assert_eq!(edge_chain(&[[0, 1], [2, 3]]), EdgeChain::Broken);
+        assert_eq!(edge_chain(&[[0, 1], [0, 2], [0, 3]]), EdgeChain::Broken);
     }
 
     /// An `n` × `n` grid of quads in the XY plane facing +Z.

@@ -8,6 +8,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 - **OxySpheres** ([#437](https://github.com/crisprintsstuff/OxyBrush/issues/437), [RFC 0034](docs/rfcs/0034-oxyspheres.md)). Block out a figure or creature with a tree of spheres, then turn it into one smooth mesh to sculpt. Pieces > + Add > **OxySpheres…** opens one sphere; drag from a sphere to pull out a new one, **Shift+drag** to move one, **Ctrl+drag** to resize it, click a link to add a sphere on it, and **Alt+click** or **Delete** to remove a sphere with the ones below it. With Mirror across X (on with X symmetry), both sides change together. The viewport shows the mesh as it will be. **Make mesh** (Enter) adds it as a new piece in one undo step; **Resolution** sets how fine it is and **Blend** how round the joins are. **Pieces > Edit OxySpheres…** reopens the spheres while the mesh hasn't been sculpted, remeshed or subdivided since. Projects keep the spheres in a new optional `ARMS` section that older versions skip.
 
+### Changed
+
+- **Poly Edit edge Bridge joins edges, not whole holes.** Click a border edge, then another: one quad joins them (Rows for more). Pick a row of border edges on each side and click one of each for a strip of quads; picking two whole hole borders (Ctrl/Cmd+double-click) still makes a tube. Before, any two edges bridged the whole holes they were on.
+
+### Fixed
+
+- **The Knife always finishes a cut.** A cut that started or ended inside a face (not on an edge) dropped those ends, so a cut between two neighbouring faces, or within one face, cut nothing. Ends inside a face now carry on to that face's edge. A click on the last point again also cuts, so a pen alone can finish (as well as Enter and Cut).
+
 ## [4.0.0-beta.23.2] - 2026-11-22
 
 ### Added

@@ -146,7 +146,7 @@ impl EdgeAction {
             }
             EdgeAction::CloseHole => "Click a border edge to fill the hole it's on with one face.",
             EdgeAction::Bridge => {
-                "Click a border edge of one hole, then of another with as many points: a tube of faces joins the two holes. Set the rows and twist below."
+                "Click a border edge, then another: a quad joins the two. To bridge several edges at once, pick a row of edges on each side (Ctrl/Cmd+click) and click one of each: a strip of quads joins the rows. Pick two whole hole borders (Ctrl/Cmd+double-click) for a tube between the holes. Set the rows (and the tube's twist) below."
             }
         }
     }
@@ -327,8 +327,9 @@ pub fn soft_weight(d: f32, radius: f32, falloff: f32) -> f32 {
 pub enum Pending {
     /// Bridge from this face.
     BridgeFrom(usize),
-    /// Bridge from the hole this border edge is on.
-    BridgeHole([u32; 2]),
+    /// Bridge from this border edge (with the picked edges in a row with
+    /// it, when it's picked).
+    BridgeEdge([u32; 2]),
     /// Split a face from this point.
     SplitFrom(u32),
 }
@@ -948,6 +949,28 @@ impl Editor {
         }
     }
 
+    /// One side of an edge Bridge: the picked edges in a row with `edge`
+    /// when it's picked, else `edge` alone.
+    fn poly_bridge_side(&self, edge: [u32; 2]) -> Vec<[u32; 2]> {
+        let key = edge_key(edge[0], edge[1]);
+        let picked = self.poly_picked_edges();
+        if !picked.contains(&key) {
+            return vec![key];
+        }
+        let mut side = vec![key];
+        let mut k = 0;
+        while k < side.len() {
+            let [x, y] = side[k];
+            for &e in picked {
+                if !side.contains(&e) && (e.contains(&x) || e.contains(&y)) {
+                    side.push(e);
+                }
+            }
+            k += 1;
+        }
+        side
+    }
+
     /// The edges the edge action reaches from `(a, b)`, mirrored too.
     fn poly_edges(&self, a: u32, b: u32) -> Vec<[u32; 2]> {
         let (Some(pe), Some(c)) = (self.poly_edit.as_ref(), self.poly_cage()) else { return Vec::new() };
@@ -1285,29 +1308,47 @@ impl Editor {
             }
             EdgeAction::Bridge => {
                 let pe = self.poly_edit.as_mut().expect("checked");
-                let Some(Pending::BridgeHole(first)) = pe.pending else {
-                    pe.pending = Some(Pending::BridgeHole([a, b]));
-                    self.status = "Bridge: now click a border edge of the hole to join it to (Esc to cancel)".into();
+                let Some(Pending::BridgeEdge(first)) = pe.pending else {
+                    pe.pending = Some(Pending::BridgeEdge([a, b]));
+                    self.status = "Bridge: now click the edge to join it to (Esc to cancel)".into();
                     return;
                 };
                 pe.pending = None;
                 let (segments, twist) = (pe.bridge_segments, pe.bridge_twist);
-                // With Mirror on, the mirror images of the two edges bridge
+                let (one, two) = (self.poly_bridge_side(first), self.poly_bridge_side([a, b]));
+                if one.contains(&edge_key(a, b)) {
+                    self.status = "Bridge: click an edge of the other side".into();
+                    return;
+                }
+                // Two whole hole borders make a tube; anything else a strip.
+                let bridge = |c: &mut Cage, x: &[[u32; 2]], y: &[[u32; 2]], twist: i32| {
+                    match (polyedit::edge_chain(x), polyedit::edge_chain(y)) {
+                        (polyedit::EdgeChain::Loop(_), polyedit::EdgeChain::Loop(_)) => {
+                            polyedit::bridge_borders(c, x[0], y[0], segments, twist)
+                        }
+                        (polyedit::EdgeChain::Loop(_), _) | (_, polyedit::EdgeChain::Loop(_)) => {
+                            Err("pick a whole hole border on both sides for a tube, or a row of edges on both")
+                        }
+                        _ => polyedit::bridge_edges(c, x, y, segments),
+                    }
+                };
+                // With Mirror on, the mirror images of the two sides bridge
                 // too (points keep their numbers through a bridge).
                 let mirrored = self.poly_mirror().and_then(|(cx, tol)| {
                     let m = |v: u32| polyedit::mirror_point(&cage, v, cx, tol);
-                    let (ma, mb) = ([m(first[0])?, m(first[1])?], [m(a)?, m(b)?]);
-                    let own: std::collections::HashSet<u32> = [first[0], first[1], a, b].into();
-                    (!ma.iter().chain(&mb).any(|v| own.contains(v))).then_some((ma, mb))
+                    let side = |s: &[[u32; 2]]| s.iter().map(|&[x, y]| Some(edge_key(m(x)?, m(y)?))).collect::<Option<Vec<_>>>();
+                    let (ma, mb) = (side(&one)?, side(&two)?);
+                    let own: std::collections::HashSet<u32> = one.iter().chain(&two).flatten().copied().collect();
+                    (!ma.iter().chain(&mb).flatten().any(|v| own.contains(v))).then_some((ma, mb))
                 });
-                match polyedit::bridge_borders(&mut cage, first, [a, b], segments, twist) {
+                match bridge(&mut cage, &one, &two, twist) {
                     Ok(mut made) => {
                         if let Some((ma, mb)) = mirrored
-                            && let Ok(more) = polyedit::bridge_borders(&mut cage, ma, mb, segments, -twist)
+                            && let Ok(more) = bridge(&mut cage, &ma, &mb, -twist)
                         {
                             made.extend(more);
                         }
-                        self.poly_commit("Poly Edit: bridge holes", before_mesh, before_cage, cage);
+                        self.poly_commit("Poly Edit: bridge", before_mesh, before_cage, cage);
                         self.status = format!("Bridged with {} new faces", made.len());
                     }
                     Err(why) => self.status = format!("Bridge: {why}"),
@@ -2432,7 +2473,7 @@ mod tests {
     }
 
     #[test]
-    fn edge_bridge_joins_two_holes_in_two_clicks() {
+    fn edge_bridge_joins_two_edges_and_two_picked_hole_borders_make_a_tube() {
         // #378: Bridge in the Edges section.
         let mut e = editor();
         start(&mut e);
@@ -2444,20 +2485,50 @@ mod tests {
         e.poly_commit("test: open the ends", before_mesh, before_cage, c);
         let border = cage(&e).border_edges();
         assert_eq!(border.len(), 8);
-        let y = |v: u32| cage(&e).positions[v as usize].y;
-        let low = *border.iter().find(|[a, b]| y(*a) < 0.0 && y(*b) < 0.0).unwrap();
-        let high = *border.iter().find(|[a, b]| y(*a) > 0.0 && y(*b) > 0.0).unwrap();
+        let y = |e: &Editor, v: u32| cage(e).positions[v as usize].y;
+        let lows: Vec<[u32; 2]> = border.iter().copied().filter(|[a, b]| y(&e, *a) < 0.0 && y(&e, *b) < 0.0).collect();
+        let highs: Vec<[u32; 2]> = border.iter().copied().filter(|[a, b]| y(&e, *a) > 0.0 && y(&e, *b) > 0.0).collect();
         let pe = e.poly_edit.as_mut().unwrap();
-        (pe.edge_action, pe.bridge_segments) = (EdgeAction::Bridge, 2);
+        (pe.edge_action, pe.bridge_segments) = (EdgeAction::Bridge, 1);
+        // Two edges on opposite sides: one quad across the inside, and the
+        // holes stay open. (An edge right above the other would make a
+        // second face on the cube's side, which is refused.)
+        let mid = |e: &Editor, [a, b]: [u32; 2]| (cage(e).positions[a as usize] + cage(e).positions[b as usize]) * 0.5;
+        let flat = |p: Vec3| Vec3::new(p.x, 0.0, p.z);
+        let low = lows[0];
+        let high = *highs.iter().max_by(|x, y| {
+            let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
+            d(**x).total_cmp(&d(**y))
+        }).unwrap();
+        let above = *highs.iter().min_by(|x, y| {
+            let d = |h: [u32; 2]| flat(mid(&e, h)).distance(flat(mid(&e, low)));
+            d(**x).total_cmp(&d(**y))
+        }).unwrap();
         e.poly_edge_down(Vec2::ZERO, low[0], low[1], 0.5);
-        assert_eq!(e.poly_edit.as_ref().unwrap().pending, Some(Pending::BridgeHole(low)));
+        e.poly_edge_down(Vec2::ZERO, above[0], above[1], 0.5);
+        assert_eq!(cage(&e).faces.len(), 4);
+        assert!(e.status.contains("three faces"), "{}", e.status);
+        e.poly_edge_down(Vec2::ZERO, low[0], low[1], 0.5);
+        assert_eq!(e.poly_edit.as_ref().unwrap().pending, Some(Pending::BridgeEdge(low)));
         assert_eq!(cage(&e).faces.len(), 4, "nothing changes on the first click");
+        e.poly_edge_down(Vec2::ZERO, high[0], high[1], 0.5);
+        assert_eq!(cage(&e).faces.len(), 5, "{}", e.status);
+        assert_eq!(cage(&e).border_edges().len(), 8, "the holes are still open, their edges joined");
+        polyedit::validate(cage(&e)).unwrap();
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 4, "one undo step");
+
+        // Both whole borders picked: a tube closes the two holes.
+        let topology = e.scene.active().mesh.topology_version();
+        let pe = e.poly_edit.as_mut().unwrap();
+        pe.picked_edges = lows.iter().chain(&highs).copied().collect();
+        pe.selected_topology = topology;
+        pe.bridge_segments = 2;
+        e.poly_edge_down(Vec2::ZERO, low[0], low[1], 0.5);
         e.poly_edge_down(Vec2::ZERO, high[0], high[1], 0.5);
         assert_eq!(cage(&e).faces.len(), 4 + 8, "{}", e.status);
         assert!(cage(&e).border_edges().is_empty(), "the tube closes both holes");
         polyedit::validate(cage(&e)).unwrap();
-        e.undo();
-        assert_eq!(cage(&e).faces.len(), 4, "one undo step");
     }
 
     #[test]

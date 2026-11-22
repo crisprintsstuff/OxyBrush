@@ -244,10 +244,66 @@ pub fn knife_plan(c: &Cage, points: &[KnifePoint], view: KnifeView) -> Result<Kn
             break;
         }
     }
+    // An end clicked inside a face (not on an edge or corner) carries the
+    // cut straight on to that face's border, so the face is split all the
+    // way across instead of the end being dropped (a cut from one face into
+    // the next, or across one face, used to cut nothing). Not for a closed
+    // loop, whose ends meet.
+    let closed = points.len() >= 3 && snap_node(&points[0]) == snap_node(&points[points.len() - 1]);
+    if !closed && nodes.len() >= 2 {
+        if let (Node::Inside(f, p), Some(next)) = (nodes[0].0, nodes.get(1).map(|n| node_pos(c, n.0)))
+            && let Some(node) = border_along(c, f, view, next, p, eps)
+        {
+            nodes[0].1 = Some(f);
+            nodes.insert(0, (node, None));
+        }
+        let last = nodes.len() - 1;
+        if let (Node::Inside(f, p), Some(before)) = (nodes[last].0, nodes.get(last - 1).map(|n| node_pos(c, n.0)))
+            && let Some(node) = border_along(c, f, view, before, p, eps)
+        {
+            nodes.push((node, Some(f)));
+        }
+    }
     if nodes.len() < 2 {
         return Err("the path doesn't cross the model");
     }
     Ok(KnifePlan { nodes })
+}
+
+/// Where the line from `from` through `to` (cut along the plane through
+/// the eye and both) leaves face `f` past `to`: the nearest crossing of one
+/// of its edges, or a corner on the line, beyond `to`.
+fn border_along(c: &Cage, f: usize, view: KnifeView, from: Vec3, to: Vec3, eps: f32) -> Option<Node> {
+    let toward = if view.orthographic { view.forward } else { from - view.eye };
+    let normal = (to - from).cross(toward).normalize_or_zero();
+    let dir = (to - from).normalize_or_zero();
+    if normal == Vec3::ZERO || dir == Vec3::ZERO {
+        return None;
+    }
+    let side = |p: Vec3| (p - from).dot(normal);
+    let ahead = |p: Vec3| (p - from).dot(dir);
+    let s_to = ahead(to);
+    let k = corners(&c.faces[f]);
+    let mut best: Option<(f32, Node)> = None;
+    for i in 0..k.len() {
+        let (p, q) = (k[i], k[(i + 1) % k.len()]);
+        let (pp, qp) = (c.positions[p as usize], c.positions[q as usize]);
+        let (dp, dq) = (side(pp), side(qp));
+        let node = if dp.abs() <= eps {
+            Node::Point(p)
+        } else if (dp < 0.0) != (dq < 0.0) && dq.abs() > eps {
+            let t = dp / (dp - dq);
+            let [lo, hi] = edge_key(p, q);
+            Node::Edge([lo, hi], if lo == p { t } else { 1.0 - t })
+        } else {
+            continue;
+        };
+        let s = ahead(node_pos(c, node));
+        if s > s_to + eps && best.is_none_or(|(b, _)| s < b) {
+            best = Some((s, node));
+        }
+    }
+    best.map(|(_, n)| n)
 }
 
 /// Cut the cage along `plan`. RETURNS: how many faces the cut added.
@@ -409,24 +465,50 @@ mod tests {
     }
 
     #[test]
-    fn points_inside_a_face_become_corners_and_loose_ends_are_dropped() {
+    fn points_inside_a_face_become_corners_and_an_end_inside_a_face_cuts_on_to_its_border() {
         let mut c = grid();
-        // Start inside the middle face, bend inside it, leave through its
-        // right edge and end inside the next face: one split, with the
-        // bend as a corner; the two ends inside faces are dropped.
+        // From the middle face's left edge, bend inside it, leave through
+        // its right edge and end inside the next face: the middle face is
+        // split with the bend as a corner, and the end carries on to the
+        // right border, splitting that face too.
         let pts = [
-            inside(&c, Vec3::new(1.2, 1.3, 0.0)),
             KnifePoint { snap: KnifeSnap::Edge([5, 9], 0.5), pos: Vec3::new(1.0, 1.5, 0.0) },
             inside(&c, Vec3::new(1.5, 1.7, 0.0)),
             inside(&c, Vec3::new(2.5, 1.5, 0.0)),
         ];
         let plan = knife_plan(&c, &pts, view()).unwrap();
         let made = knife_cut(&mut c, &plan).unwrap();
-        assert_eq!(made, 1, "only the middle face is cut from side to side");
+        assert_eq!(made, 2);
         crate::polyedit::validate(&c).unwrap();
-        let bend = c.positions.iter().position(|p| p.distance(Vec3::new(1.5, 1.7, 0.0)) < 1e-5);
-        assert!(bend.is_some_and(|v| c.faces.iter().filter(|f| f.corners.contains(&(v as u32))).count() == 2));
-        assert!(!c.positions.iter().any(|p| p.distance(Vec3::new(2.5, 1.5, 0.0)) < 1e-5), "loose end dropped");
+        let corner_of = |c: &Cage, p: Vec3| {
+            let v = c.positions.iter().position(|q| q.distance(p) < 1e-4).expect("a point there") as u32;
+            c.faces.iter().filter(|f| f.corners.contains(&v)).count()
+        };
+        assert_eq!(corner_of(&c, Vec3::new(1.5, 1.7, 0.0)), 2, "the bend");
+        assert_eq!(corner_of(&c, Vec3::new(2.5, 1.5, 0.0)), 2, "the end inside the face");
+        assert!(c.positions.iter().any(|p| (p.x - 3.0).abs() < 1e-4 && p.y > 1.0 && p.y < 2.0), "on the border");
+    }
+
+    #[test]
+    fn clicks_inside_faces_still_cut() {
+        // Both inside one face: it is split across, from border to border.
+        let mut c = grid();
+        let pts = [inside(&c, Vec3::new(1.3, 1.5, 0.0)), inside(&c, Vec3::new(1.7, 1.5, 0.0))];
+        let plan = knife_plan(&c, &pts, view()).unwrap();
+        let made = knife_cut(&mut c, &plan).unwrap();
+        assert_eq!(made, 1);
+        assert_eq!(c.faces.len(), 10);
+        crate::polyedit::validate(&c).unwrap();
+        // Inside two neighbouring faces: both are split.
+        let mut c = grid();
+        let pts = [inside(&c, Vec3::new(1.5, 1.5, 0.0)), inside(&c, Vec3::new(2.5, 1.5, 0.0))];
+        let plan = knife_plan(&c, &pts, view()).unwrap();
+        let made = knife_cut(&mut c, &plan).unwrap();
+        assert_eq!(made, 2);
+        crate::polyedit::validate(&c).unwrap();
+        // The clicked points stay as corners of the halves (four
+        // pentagons), and the left face gains a corner where the cut lands.
+        assert_eq!(c.faces.iter().filter(|f| f.len() == 5).count(), 5);
     }
 
     #[test]
@@ -480,7 +562,9 @@ mod tests {
         let view = KnifeView { eye: Vec3::new(3.0, 3.0, 3.0), forward: Vec3::NEG_ONE.normalize(), orthographic: false };
         let plan = knife_plan(&cube, &[a, b], view).unwrap();
         assert!(plan.crossings() >= 1, "crosses the edge between front and top");
-        // Both ends inside faces: nothing cut from side to side.
-        assert!(knife_cut(&mut cube, &plan).is_err());
+        // Both ends inside faces: each carries on to its face's border, so
+        // the front and the top are both split.
+        assert_eq!(knife_cut(&mut cube, &plan).unwrap(), 2);
+        crate::polyedit::validate(&cube).unwrap();
     }
 }
