@@ -765,6 +765,34 @@ pub fn extrude_border(c: &mut Cage, edges: &[[u32; 2]]) -> (Slide, Vec<usize>) {
     (slide, made)
 }
 
+/// Bridge two holes (or open borders): border edge `first` is on one,
+/// `second` on another with as many points, and a tube of quads joins
+/// them, with `segments` rows and `twist` extra steps of rotation (#378).
+/// Each hole is closed with a face and the two faces are bridged
+/// ([`crate::polyshape::bridge_faces`]), on a copy: `c` is unchanged on
+/// failure.
+///
+/// RETURNS: the new faces, or why it can't be done.
+pub fn bridge_borders(
+    c: &mut Cage,
+    first: [u32; 2],
+    second: [u32; 2],
+    segments: u32,
+    twist: i32,
+) -> Result<Vec<usize>, &'static str> {
+    let mut work = c.clone();
+    let fa = close_hole(&mut work, first[0], first[1]).ok_or("click an edge on the border of a hole")?;
+    let fb = close_hole(&mut work, second[0], second[1])
+        .ok_or("click an edge on the border of another hole (the second edge is on the same one)")?;
+    let made = crate::polyshape::bridge_faces(&mut work, fa, fb, segments, twist).map_err(|why| match why {
+        "the two faces need the same number of corners" => "the two holes need the same number of points",
+        "the faces touch; pick two faces that share no point" => "the two holes share a point",
+        other => other,
+    })?;
+    *c = work;
+    Ok(made)
+}
+
 /// Close the hole whose border `(a, b)` is on with one face (a polygon
 /// with as many corners as the hole has points), in a new face group.
 /// Returns the new face, or None when `(a, b)` isn't on a closed border.
@@ -912,6 +940,30 @@ mod tests {
         let quads = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 4, 7, 3]];
         let faces = quads.iter().enumerate().map(|(i, q)| Face::with_group(q.to_vec(), i as u32)).collect();
         Cage { positions, faces, ..Default::default() }
+    }
+
+    #[test]
+    fn bridging_two_holes_joins_them_with_a_tube() {
+        // #378: an open-ended box (top and bottom removed) has two square
+        // holes; bridging an edge of each closes it with a tube through it.
+        let mut c = cube();
+        delete_faces(&mut c, &[0, 1]);
+        assert_eq!(c.border_edges().len(), 8);
+        let (bottom, top) = ([0, 1], [4, 5]);
+        // One row would join corners already joined by the box's sides.
+        let before = c.clone();
+        assert!(bridge_borders(&mut c, bottom, top, 1, 0).is_err());
+        assert_eq!(c.faces.len(), before.faces.len(), "unchanged on failure");
+        assert_eq!(c.positions.len(), before.positions.len());
+        let made = bridge_borders(&mut c, bottom, top, 2, 0).unwrap();
+        assert_eq!(made.len(), 8, "two rows of four quads");
+        assert!(c.border_edges().is_empty(), "closed: no border left");
+        assert_eq!(c.positions.len(), 8 + 4, "one ring of new points between");
+        // Same hole twice, or an edge that isn't on a border: refused.
+        let mut d = cube();
+        delete_faces(&mut d, &[0, 1]);
+        assert!(bridge_borders(&mut d, [0, 1], [1, 2], 2, 0).is_err());
+        assert!(bridge_borders(&mut d, [0, 4], [4, 5], 2, 0).is_err(), "a side edge isn't on a hole");
     }
 
     /// An `n` × `n` grid of quads in the XY plane facing +Z.

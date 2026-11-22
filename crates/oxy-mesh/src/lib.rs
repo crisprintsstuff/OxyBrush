@@ -754,6 +754,71 @@ impl Mesh {
         changed
     }
 
+    /// Smooth face group borders within `radius` of `center` (#303): a
+    /// visible face that has at least two of its edge neighbours in one
+    /// other group joins that group, which takes off spikes and fills
+    /// notches along a jagged border. `facing`: only faces turned towards
+    /// the viewer (its look direction), as "Front faces only". Hidden faces
+    /// are left alone and don't count. RETURNS: whether any face changed.
+    pub fn relax_groups(&mut self, center: Vec3, radius: f32, facing: Option<Vec3>) -> bool {
+        let r2 = radius * radius;
+        let reach = Aabb { min: center - Vec3::splat(radius), max: center + Vec3::splat(radius) };
+        let mut changes: Vec<(usize, u32)> = Vec::new();
+        for c in 0..self.chunks.len() {
+            let b = &self.chunks[c].aabb;
+            let overlaps = b.min.cmple(reach.max).all() && b.max.cmpge(reach.min).all();
+            if !overlaps && !self.loose_bounds[c] {
+                continue;
+            }
+            for t in self.chunks[c].triangles.clone() {
+                let t = t as usize;
+                if self.hidden[t] {
+                    continue;
+                }
+                let tri = self.triangles[t];
+                let [a, b, d] = tri.map(|v| self.positions[v as usize]);
+                if ((a + b + d) / 3.0).distance_squared(center) > r2 {
+                    continue;
+                }
+                if let Some(dir) = facing
+                    && (b - a).cross(d - a).dot(dir) >= 0.0
+                {
+                    continue;
+                }
+                // The group of each edge neighbour (visible ones only).
+                let mut around = [u32::MAX; 3];
+                for i in 0..3 {
+                    let (x, y) = (tri[i], tri[(i + 1) % 3]);
+                    let ty = self.vertex_triangles(y);
+                    if let Some(&n) = self
+                        .vertex_triangles(x)
+                        .iter()
+                        .find(|&&n| n as usize != t && ty.contains(&n) && !self.hidden[n as usize])
+                    {
+                        around[i] = self.groups[n as usize];
+                    }
+                }
+                let own = self.groups[t];
+                let wins = around
+                    .iter()
+                    .copied()
+                    .filter(|&g| g != u32::MAX && g != own)
+                    .find(|&g| around.iter().filter(|&&h| h == g).count() >= 2);
+                if let Some(g) = wins {
+                    changes.push((t, g));
+                }
+            }
+        }
+        // All at once, so the result doesn't depend on the order faces are seen.
+        for &(t, g) in &changes {
+            self.groups[t] = g;
+        }
+        if !changes.is_empty() {
+            self.face_version = NEXT_TOPOLOGY_VERSION.fetch_add(1, Ordering::Relaxed);
+        }
+        !changes.is_empty()
+    }
+
     pub fn set_hidden(&mut self, hidden: Vec<bool>) {
         assert_eq!(hidden.len(), self.triangles.len());
         self.hidden = hidden;
@@ -2199,6 +2264,30 @@ fn triangulate_cap(poly: &[u32], positions: &[Vec3], normal: Vec3, triangles: &m
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn relaxing_groups_takes_off_spikes_and_keeps_straight_borders() {
+        // #303: Shift with the Paint Groups brush.
+        let mut m = crate::primitives::plane(10, 2.0);
+        let centre = |m: &Mesh, t: usize| m.triangles[t].iter().map(|&v| m.positions[v as usize]).sum::<Vec3>() / 3.0;
+        let mut groups: Vec<u32> = (0..m.triangle_count()).map(|t| u32::from(centre(&m, t).x > 0.0)).collect();
+        let straight = groups.clone();
+        // A stray face of group 1 deep in group 0.
+        let stray = (0..m.triangle_count()).find(|&t| centre(&m, t).x < -0.6 && centre(&m, t).z.abs() < 0.3).unwrap();
+        groups[stray] = 1;
+        m.set_groups(groups);
+        let version = m.face_version();
+        assert!(m.relax_groups(Vec3::ZERO, 5.0, None));
+        assert_ne!(m.face_version(), version, "the renderer sees the change");
+        assert_eq!(m.groups(), &straight[..], "the spike went, the straight border stayed");
+        assert!(!m.relax_groups(Vec3::ZERO, 5.0, None), "nothing left to smooth");
+        // Out of reach: unchanged.
+        let mut g = straight.clone();
+        g[stray] = 1;
+        m.set_groups(g.clone());
+        assert!(!m.relax_groups(Vec3::new(5.0, 0.0, 5.0), 0.5, None));
+        assert_eq!(m.groups(), &g[..]);
+    }
+
     #[test]
     fn replace_positions_matches_moving_every_point() {
         let mut a = crate::primitives::icosphere(3, 1.0);

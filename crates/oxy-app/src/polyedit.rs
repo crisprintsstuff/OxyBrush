@@ -93,10 +93,11 @@ pub enum EdgeAction {
     Delete,
     ExtrudeBorder,
     CloseHole,
+    Bridge,
 }
 
 impl EdgeAction {
-    pub const ALL: [EdgeAction; 8] = [
+    pub const ALL: [EdgeAction; 9] = [
         EdgeAction::InsertLoop,
         EdgeAction::Slide,
         EdgeAction::Bevel,
@@ -105,6 +106,7 @@ impl EdgeAction {
         EdgeAction::Delete,
         EdgeAction::ExtrudeBorder,
         EdgeAction::CloseHole,
+        EdgeAction::Bridge,
     ];
 
     pub fn label(self) -> &'static str {
@@ -117,6 +119,7 @@ impl EdgeAction {
             EdgeAction::Delete => "Delete",
             EdgeAction::ExtrudeBorder => "Extrude border",
             EdgeAction::CloseHole => "Close hole",
+            EdgeAction::Bridge => "Bridge",
         }
     }
 
@@ -142,6 +145,9 @@ impl EdgeAction {
                 "Drag a border edge (the edge of a hole or an open surface) outwards to pull new faces out of it. Reach Edge loop takes the whole border."
             }
             EdgeAction::CloseHole => "Click a border edge to fill the hole it's on with one face.",
+            EdgeAction::Bridge => {
+                "Click a border edge of one hole, then of another with as many points: a tube of faces joins the two holes. Set the rows and twist below."
+            }
         }
     }
 }
@@ -289,9 +295,10 @@ pub struct PolyEdit {
     pub soft: bool,
     pub soft_radius: f32,
     pub soft_falloff: f32,
-    /// Where a plain press on empty space started: released without a drag
-    /// it clears the pick, dragged it only orbits and keeps the pick.
-    empty_press: Option<Vec2>,
+    /// The last Ctrl/Cmd+click that picked something, and when and where:
+    /// a second one on the same edge or face soon after is a double-click,
+    /// which picks its whole loop (#298).
+    last_pick: Option<(std::time::Instant, Vec2, Element)>,
     /// A gizmo pivot you placed (Alt+click or Alt+drag), with the points
     /// picked when you did: it applies only to that pick.
     pivot: Option<(Vec3, Vec<u32>)>,
@@ -315,6 +322,8 @@ pub fn soft_weight(d: f32, radius: f32, falloff: f32) -> f32 {
 pub enum Pending {
     /// Bridge from this face.
     BridgeFrom(usize),
+    /// Bridge from the hole this border edge is on.
+    BridgeHole([u32; 2]),
     /// Split a face from this point.
     SplitFrom(u32),
 }
@@ -503,7 +512,7 @@ impl Editor {
             picked_points: Vec::new(),
             loop_pair: false,
             groups_seen: 0,
-            empty_press: None,
+            last_pick: None,
             pivot: None,
             normal_axes: false,
         });
@@ -791,6 +800,78 @@ impl Editor {
         };
     }
 
+    /// Ctrl/Cmd+double-click (#298): the second of two quick Ctrl/Cmd+clicks
+    /// on the same edge adds its edge loop to the pick (on a border, the
+    /// whole border of that hole or open edge); on a face, its face loop
+    /// across the edge nearest the pointer. RETURNS: true if it was a
+    /// double-click and the loop was picked (the click is then used up).
+    fn poly_pick_loop(&mut self, p: Vec2, element: Option<Element>) -> bool {
+        let now = std::time::Instant::now();
+        let near = 6.0 * self.pixels_per_point;
+        let Some(pe) = self.poly_edit.as_mut() else { return false };
+        let last = pe.last_pick.take();
+        let Some(element) = element else { return false };
+        let same = |a: Element, b: Element| match (a, b) {
+            (Element::Edge(a0, a1, _), Element::Edge(b0, b1, _)) => edge_key(a0, a1) == edge_key(b0, b1),
+            (Element::Face(f, _), Element::Face(g, _)) => f == g,
+            _ => false,
+        };
+        let double = last.is_some_and(|(at, q, before)| {
+            now.duration_since(at).as_secs_f32() < 0.4 && q.distance(p) <= near && same(before, element)
+        });
+        if !double {
+            pe.last_pick = Some((now, p, element));
+            return false;
+        }
+        let Some(c) = self.poly_cage() else { return false };
+        match element {
+            Element::Edge(a, b, _) => {
+                let edges = polyedit::reach_edges(c, a, b, EdgeReach::Loop);
+                self.poly_pick_begin();
+                let pe = self.poly_edit.as_mut().expect("checked");
+                pe.selected.clear();
+                pe.picked_points.clear();
+                for e in edges {
+                    if !pe.picked_edges.contains(&e) {
+                        pe.picked_edges.push(e);
+                    }
+                }
+            }
+            Element::Face(f, edge) => {
+                let faces = polyedit::reach_faces(c, f, Some(edge), Reach::Loop);
+                self.poly_pick_begin();
+                let pe = self.poly_edit.as_mut().expect("checked");
+                pe.picked_edges.clear();
+                pe.picked_points.clear();
+                for g in faces {
+                    if !pe.selected.contains(&g) {
+                        pe.selected.push(g);
+                    }
+                }
+            }
+            Element::Point(_) => return false,
+        }
+        let (n, kind) = self.poly_pick_count();
+        self.status = format!("{n} {kind} picked (the loop): click or drag one of them to act on them together");
+        true
+    }
+
+    /// Esc with no drag going (from the tool's window): drop a half-made
+    /// two-click action (bridge, split), or else clear the pick. RETURNS:
+    /// true if there was either; false means Esc closes the tool.
+    pub(crate) fn poly_escape(&mut self) -> bool {
+        let Some(pe) = self.poly_edit.as_mut() else { return false };
+        if pe.pending.take().is_some() {
+            self.status = "Poly Edit: cancelled".into();
+            return true;
+        }
+        if self.poly_pick_count().0 == 0 {
+            return false;
+        }
+        self.poly_toggle_pick(None);
+        true
+    }
+
     /// Switching modes turns the pick into the new kind (RFC 0023): faces
     /// into their sides or corners, edges into their ends or the faces
     /// they close, points into the edges or faces they make up. Auto keeps
@@ -873,7 +954,7 @@ impl Editor {
         let reach = match pe.edge_action {
             EdgeAction::InsertLoop => EdgeReach::Ring,
             EdgeAction::CloseHole => EdgeReach::Loop,
-            EdgeAction::Spin => EdgeReach::One,
+            EdgeAction::Spin | EdgeAction::Bridge => EdgeReach::One,
             EdgeAction::Crease => pe.edge_reach,
             _ => pe.edge_reach,
         };
@@ -935,22 +1016,20 @@ impl Editor {
             return false;
         }
         self.poly_sync();
-        if let Some(pe) = self.poly_edit.as_mut() {
-            pe.empty_press = None;
-        }
         let element = self.poly_element_at(p);
-        // Ctrl/Cmd+click picks faces to act on together (empty space clears).
+        // Ctrl/Cmd+click picks faces to act on together (empty space
+        // clears); a double-click picks the loop through an edge or face.
         if self.modifiers.ctrl {
-            self.poly_toggle_pick(element);
+            if !self.poly_pick_loop(p, element) {
+                self.poly_toggle_pick(element);
+            }
             return true;
         }
         let Some(element) = element else {
-            // Not on the piece: orbit, as with any tool. A click that never
-            // drags also clears the pick (see `poly_pointer_up`).
+            // Not on the piece: orbit, as with any tool. The pick stays, so
+            // a stray click doesn't lose it (#298); Esc or Ctrl/Cmd+click on
+            // empty space clears it.
             self.drag = Drag::Orbit;
-            if let Some(pe) = self.poly_edit.as_mut() {
-                pe.empty_press = Some(p);
-            }
             return true;
         };
         match element {
@@ -1189,6 +1268,36 @@ impl Editor {
                 } else {
                     format!("Cleared the crease on {} edge(s)", edges.len())
                 };
+            }
+            EdgeAction::Bridge => {
+                let pe = self.poly_edit.as_mut().expect("checked");
+                let Some(Pending::BridgeHole(first)) = pe.pending else {
+                    pe.pending = Some(Pending::BridgeHole([a, b]));
+                    self.status = "Bridge: now click a border edge of the hole to join it to (Esc to cancel)".into();
+                    return;
+                };
+                pe.pending = None;
+                let (segments, twist) = (pe.bridge_segments, pe.bridge_twist);
+                // With Mirror on, the mirror images of the two edges bridge
+                // too (points keep their numbers through a bridge).
+                let mirrored = self.poly_mirror().and_then(|(cx, tol)| {
+                    let m = |v: u32| polyedit::mirror_point(&cage, v, cx, tol);
+                    let (ma, mb) = ([m(first[0])?, m(first[1])?], [m(a)?, m(b)?]);
+                    let own: std::collections::HashSet<u32> = [first[0], first[1], a, b].into();
+                    (!ma.iter().chain(&mb).any(|v| own.contains(v))).then_some((ma, mb))
+                });
+                match polyedit::bridge_borders(&mut cage, first, [a, b], segments, twist) {
+                    Ok(mut made) => {
+                        if let Some((ma, mb)) = mirrored
+                            && let Ok(more) = polyedit::bridge_borders(&mut cage, ma, mb, segments, -twist)
+                        {
+                            made.extend(more);
+                        }
+                        self.poly_commit("Poly Edit: bridge holes", before_mesh, before_cage, cage);
+                        self.status = format!("Bridged with {} new faces", made.len());
+                    }
+                    Err(why) => self.status = format!("Bridge: {why}"),
+                }
             }
             EdgeAction::Spin => {
                 let n = edges.iter().filter(|&&[x, y]| polyshape::spin_edge(&mut cage, x, y)).count();
@@ -1507,13 +1616,6 @@ impl Editor {
     /// Let go: keep what the drag did as one undo step. A press without a
     /// drag changes nothing (except an inserted loop, which stays).
     pub(crate) fn poly_pointer_up(&mut self) -> bool {
-        let press = self.poly_edit.as_mut().and_then(|pe| pe.empty_press.take());
-        if let (Some(p0), Some(p)) = (press, self.pointer)
-            && matches!(self.drag, Drag::Orbit)
-            && p0.distance(p) < 5.0 * self.pixels_per_point
-        {
-            self.poly_toggle_pick(None);
-        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_up();
             return true;
@@ -2279,6 +2381,85 @@ mod tests {
         e.poly_cage().expect("the tool has a cage")
     }
 
+    #[test]
+    fn edge_bridge_joins_two_holes_in_two_clicks() {
+        // #378: Bridge in the Edges section.
+        let mut e = editor();
+        start(&mut e);
+        // Open both ends of the cube: two square holes.
+        let (top, bottom) = (face_towards(&e, Vec3::Y), face_towards(&e, -Vec3::Y));
+        let (_, before_mesh, before_cage) = e.poly_before().unwrap();
+        let mut c = before_cage.clone().unwrap();
+        polyedit::delete_faces(&mut c, &[top, bottom]);
+        e.poly_commit("test: open the ends", before_mesh, before_cage, c);
+        let border = cage(&e).border_edges();
+        assert_eq!(border.len(), 8);
+        let y = |v: u32| cage(&e).positions[v as usize].y;
+        let low = *border.iter().find(|[a, b]| y(*a) < 0.0 && y(*b) < 0.0).unwrap();
+        let high = *border.iter().find(|[a, b]| y(*a) > 0.0 && y(*b) > 0.0).unwrap();
+        let pe = e.poly_edit.as_mut().unwrap();
+        (pe.edge_action, pe.bridge_segments) = (EdgeAction::Bridge, 2);
+        e.poly_edge_down(Vec2::ZERO, low[0], low[1], 0.5);
+        assert_eq!(e.poly_edit.as_ref().unwrap().pending, Some(Pending::BridgeHole(low)));
+        assert_eq!(cage(&e).faces.len(), 4, "nothing changes on the first click");
+        e.poly_edge_down(Vec2::ZERO, high[0], high[1], 0.5);
+        assert_eq!(cage(&e).faces.len(), 4 + 8, "{}", e.status);
+        assert!(cage(&e).border_edges().is_empty(), "the tube closes both holes");
+        polyedit::validate(cage(&e)).unwrap();
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 4, "one undo step");
+    }
+
+    #[test]
+    fn ctrl_double_click_picks_the_edge_or_face_loop() {
+        // #298: a 3×3×3 cube, looking at the front.
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Cube", oxy_mesh::primitives::cube(3, 1.0)));
+        let bounds = e.scene.bounds();
+        e.camera.frame(bounds);
+        e.start_poly_edit();
+        let ctrl_click = |e: &mut Editor, p: Vec2| {
+            e.modifiers.ctrl = true;
+            drag(e, p, p);
+            e.modifiers.ctrl = false;
+        };
+        // A vertical edge in the middle of the front face: its loop runs
+        // round the cube, three edges on each of four sides.
+        let c = cage(&e);
+        let front = c.positions.iter().map(|p| p.z).fold(f32::MIN, f32::max);
+        let [a, b] = *c
+            .edges()
+            .iter()
+            .find(|&&[a, b]| {
+                let (pa, pb) = (c.positions[a as usize], c.positions[b as usize]);
+                pa.z > front - 1e-4
+                    && pb.z > front - 1e-4
+                    && (pa.x - pb.x).abs() < 1e-4
+                    && pa.x.abs() < 0.6 * front
+                    && (pa.y + pb.y).abs() < 1e-4
+            })
+            .unwrap();
+        let mid = (e.poly_screen(c, a).unwrap() + e.poly_screen(c, b).unwrap()) * 0.5;
+        e.poly_edit.as_mut().unwrap().mode = ElementMode::Edges;
+        ctrl_click(&mut e, mid);
+        assert_eq!(e.poly_picked_edges().len(), 1, "one click picks the edge");
+        ctrl_click(&mut e, mid);
+        assert_eq!(e.poly_picked_edges().len(), 12, "a double-click picks its loop: {}", e.status);
+        assert!(e.poly_picked_edges().contains(&edge_key(a, b)));
+        // A third click is a single click again: it takes the edge out.
+        ctrl_click(&mut e, mid);
+        assert_eq!(e.poly_picked_edges().len(), 11);
+
+        // Faces: the middle of the front face, across its nearest edge.
+        e.poly_edit.as_mut().unwrap().mode = ElementMode::Faces;
+        let centre = e.poly_screen(cage(&e), a).unwrap() + Vec2::new(4.0, 0.0);
+        ctrl_click(&mut e, centre);
+        assert_eq!(e.poly_selection().len(), 1);
+        assert!(e.poly_picked_edges().is_empty(), "a face starts a new pick");
+        ctrl_click(&mut e, centre);
+        assert_eq!(e.poly_selection().len(), 12, "the face loop round the cube: {}", e.status);
+    }
+
     /// The cube's face pointing most along `dir`.
     fn face_towards(e: &Editor, dir: Vec3) -> usize {
         let c = cage(e);
@@ -2288,7 +2469,7 @@ mod tests {
     }
 
     #[test]
-    fn clicking_empty_space_clears_the_pick_but_orbiting_keeps_it() {
+    fn a_stray_click_or_orbit_keeps_the_pick_and_escape_clears_it() {
         let mut e = editor();
         start(&mut e);
         let front = face_towards(&e, Vec3::Z);
@@ -2296,9 +2477,23 @@ mod tests {
         let corner = Vec2::new(5.0, 5.0);
         assert!(e.poly_element_at(corner).is_none());
         drag(&mut e, corner, corner + Vec2::new(60.0, 20.0));
-        assert_eq!(e.poly_selection(), [front], "orbiting is not a click");
+        assert_eq!(e.poly_selection(), [front], "orbiting keeps the pick");
         drag(&mut e, corner, corner);
-        assert!(e.poly_selection().is_empty(), "a click off the model clears the pick");
+        assert_eq!(e.poly_selection(), [front], "so does a stray click off the model (#298)");
+        // Esc first drops a half-made bridge, then the pick.
+        e.poly_edit.as_mut().unwrap().pending = Some(Pending::BridgeFrom(front));
+        assert!(e.poly_escape());
+        assert!(e.poly_edit.as_ref().unwrap().pending.is_none());
+        assert_eq!(e.poly_selection(), [front]);
+        assert!(e.poly_escape());
+        assert!(e.poly_selection().is_empty(), "Esc clears the pick");
+        assert!(!e.poly_escape(), "then Esc closes the tool");
+        // Ctrl+click on empty space still clears it too.
+        e.poly_toggle_pick(Some(Element::Face(front, [0, 0])));
+        e.modifiers.ctrl = true;
+        drag(&mut e, corner, corner);
+        e.modifiers.ctrl = false;
+        assert!(e.poly_selection().is_empty());
     }
 
     #[test]
@@ -3112,9 +3307,13 @@ mod tests {
         assert_eq!(e.poly_selection().len(), 2, "{}", e.status);
         assert_eq!(cage(&e).faces.len(), 6, "picking changes nothing");
         assert!(!e.history.can_undo());
-        // Ctrl+click a picked face again unpicks it; pick it back.
+        // Ctrl+click a picked face again unpicks it; pick it back. (Each
+        // a while after the last: quick ones are a double-click.)
+        let pause = |e: &mut Editor| e.poly_edit.as_mut().unwrap().last_pick = None;
+        pause(&mut e);
         click(&mut e, other_px);
         assert_eq!(e.poly_selection().len(), 1);
+        pause(&mut e);
         click(&mut e, other_px);
         e.modifiers.ctrl = false;
         // Dragging a picked face extrudes both: more faces than one extrusion (10).

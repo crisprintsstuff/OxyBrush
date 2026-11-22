@@ -309,6 +309,21 @@ impl PartialEq for Level {
     }
 }
 
+/// Reverse the winding of `triangles` (and their corner `uv`, if any). For
+/// a quad level (`quads`), also swap each pair `2f`, `2f + 1`: quad
+/// `[a, b, c, d]` (triangles `a b c`, `a c d`) mirrored is `[a, d, c, b]`,
+/// whose triangles are `a d c` and `a c b`.
+fn mirror_faces(triangles: &mut [[u32; 3]], uv: &mut [[Vec2; 3]], quads: bool) {
+    triangles.iter_mut().for_each(|t| t.swap(1, 2));
+    uv.iter_mut().for_each(|u| u.swap(1, 2));
+    if quads {
+        triangles.chunks_mut(2).filter(|c| c.len() == 2).for_each(|c| c.swap(0, 1));
+        if uv.len() == triangles.len() {
+            uv.chunks_mut(2).filter(|c| c.len() == 2).for_each(|c| c.swap(0, 1));
+        }
+    }
+}
+
 /// Per-level copies of mask, face groups and visibility, in level order.
 #[derive(Clone)]
 struct Attributes {
@@ -980,6 +995,53 @@ impl Multires {
     /// UVs of the base, in the order returned by `parts`.
     pub fn base_uvs(&self) -> &[[Vec2; 3]] {
         &self.levels[0].uv
+    }
+
+    /// Mirror the whole stack across the YZ plane (x → −x), with `active`
+    /// (the active level's data, in level order, as [`Self::export_active`]
+    /// returns it) mirrored the same way: for a mirrored duplicate that keeps
+    /// its subdivision levels (#366). Subdivision is linear, so every level
+    /// is the mirror of what it was; winding is reversed so faces still
+    /// point out. Quad levels also reverse each quad's corners and swap its
+    /// two triangles, so triangles `2f` and `2f + 1` still make quad `f`
+    /// (`Polys::Quads`), and `active`'s per-triangle data moves with them.
+    ///
+    /// PRECONDITION: `active` is the active level's data in level order.
+    pub fn mirror_x(&mut self, active: &mut MeshData) {
+        let flip = |p: &mut Vec3| p.x = -p.x;
+        for (k, lvl) in self.levels.iter_mut().enumerate() {
+            lvl.positions.iter_mut().for_each(flip);
+            lvl.details.iter_mut().for_each(flip);
+            let quads = matches!(lvl.polys, Some(Polys::Quads(_)));
+            mirror_faces(&mut lvl.triangles, &mut lvl.uv, quads);
+            match &mut lvl.polys {
+                Some(Polys::Quads(q)) => q.iter_mut().for_each(|[_, b, _, d]| std::mem::swap(b, d)),
+                Some(Polys::Mixed { offsets, corners, .. }) => {
+                    for f in 0..offsets.len() - 1 {
+                        let (a, b) = (offsets[f] as usize, offsets[f + 1] as usize);
+                        if b > a + 1 {
+                            corners[a + 1..b].reverse();
+                        }
+                    }
+                }
+                None => {}
+            }
+            if k == self.active {
+                active.positions.iter_mut().for_each(flip);
+                let mut uv = std::mem::take(&mut active.uv);
+                mirror_faces(&mut active.triangles, &mut uv, quads);
+                active.uv = uv;
+                if quads {
+                    if active.groups.len().is_multiple_of(2) {
+                        active.groups.chunks_mut(2).for_each(|c| c.swap(0, 1));
+                    }
+                    if active.hidden.len().is_multiple_of(2) {
+                        active.hidden.chunks_mut(2).for_each(|c| c.swap(0, 1));
+                    }
+                }
+            }
+        }
+        self.identity = false;
     }
 
     /// Each level's own paint (see `Level::paint`), in level point order,
@@ -2109,6 +2171,51 @@ mod level_switch_tests {
                 "quads {quads}: the base's paint reaches the top ({shifted} of {})",
                 got.len()
             );
+        }
+    }
+
+    #[test]
+    fn a_mirrored_stack_is_every_level_mirrored_and_faces_point_out() {
+        for quads in [false, true] {
+            let base = if quads { cube_cage().build_mesh().unwrap() } else { crate::primitives::icosphere(1, 1.0) };
+            // Lopsided, so the mirror differs from the original.
+            let mut base = base;
+            base.positions.iter_mut().for_each(|p| p.x += 0.3 * p.y.max(0.0));
+            base.refresh_all();
+            let mut mr = if quads { Multires::new_catmull_clark(&base, None) } else { Multires::new(&base) };
+            let d = mr.add_level(&base);
+            let m1 = rebuild_q(&mut mr, d);
+            let d = mr.add_level(&m1);
+            let m2 = rebuild_q(&mut mr, d);
+            let before: Vec<Vec<Vec3>> = mr.parts().1.iter().map(|l| l.to_vec()).collect();
+            let mut data = mr.export_active(&m2);
+            let mut mirrored = mr.clone();
+            mirrored.mirror_x(&mut data);
+            let after = mirrored.parts().1;
+            for (k, (a, b)) in before.iter().zip(after).enumerate() {
+                assert!(a.iter().zip(b).all(|(p, q)| *q == Vec3::new(-p.x, p.y, p.z)), "level {k} mirrored");
+            }
+            let volume = |d: &MeshData| d.signed_volume();
+            assert!(volume(&data) > 0.0, "quads {quads}: the mirrored top faces out ({})", volume(&data));
+            // Stepping down and adding a level again stays consistent.
+            let top = Mesh::from_data(data);
+            mirrored.bind(&top);
+            if quads {
+                assert_eq!(top.quad_and_triangle_counts().1, 0, "still all quads");
+            }
+            let down = mirrored.set_level(&top, 0);
+            assert!(down.signed_volume() > 0.0);
+            let down = Mesh::from_data(down);
+            mirrored.bind(&down);
+            let back = mirrored.set_level(&down, 2);
+            assert!(back.signed_volume() > 0.0);
+            let back = Mesh::from_data(back);
+            mirrored.bind(&back);
+            let next = mirrored.add_level(&back);
+            assert!(next.signed_volume() > 0.0, "quads {quads}: a new level after mirroring faces out");
+            let mut orig = mr.clone();
+            let orig_next = orig.add_level(&m2);
+            assert!((next.signed_volume() - orig_next.signed_volume()).abs() < 1e-3 * orig_next.signed_volume().abs());
         }
     }
 
