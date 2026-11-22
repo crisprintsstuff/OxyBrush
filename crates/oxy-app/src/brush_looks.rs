@@ -12,7 +12,7 @@
 //! before a stroke, rather than at each of them.
 
 use crate::editor::{Editor, StrokeMode};
-use oxy_sculpt::BrushPreset;
+use oxy_sculpt::{BrushKind, BrushPreset};
 
 impl Editor {
     /// Put away the previous brush's settings and bring back the current
@@ -40,8 +40,21 @@ impl Editor {
         if self.settings_per_brush {
             let mut look = self.capture_preset(kind.label());
             look.kind = kind;
+            look.pressure_curves = self.brush_pressure_overrides(kind);
             self.brush_looks.insert(kind, look);
         }
+    }
+
+    pub(crate) fn brush_pressure_overrides(&self, kind: BrushKind) -> [Option<[f32; 4]>; 2] {
+        self.brush_looks.get(&kind).map_or([None; 2], |look| look.pressure_curves)
+    }
+
+    pub(crate) fn set_brush_pressure_curve(&mut self, index: usize, shape: Option<[f32; 4]>) {
+        let kind = self.brush_kind;
+        if !self.brush_looks.contains_key(&kind) {
+            self.brush_looks.insert(kind, self.capture_preset(kind.label()));
+        }
+        self.brush_looks.get_mut(&kind).expect("brush look exists").pressure_curves[index] = shape;
     }
 
     /// A brush's own settings, without changing the brush, the status line

@@ -1102,7 +1102,7 @@ pub struct Editor {
     pub lighter_budget: usize,
     /// ...including its size (off: one size for every brush).
     pub size_per_brush: bool,
-    /// The settings of brushes put away, by brush.
+    /// Stored brush looks, including any pressure overrides for the active brush.
     pub(crate) brush_looks: std::collections::HashMap<BrushKind, oxy_sculpt::BrushPreset>,
     /// The brush whose settings are the ones in effect.
     pub(crate) look_kind: Option<BrushKind>,
@@ -2316,8 +2316,8 @@ impl Editor {
         if !s.remember_brushes {
             return;
         }
-        // The brush last used, as it was. Its pressure curve is the one above
-        // (the preset carries one too), and restoring it says nothing.
+        // Restore the last brush without replacing the saved tablet calibration
+        // with the calibration carried by the preset.
         if let Some(b) = &s.brush {
             let (status, gamma) = (std::mem::take(&mut self.status), self.pressure_gamma);
             self.apply_preset(b);
@@ -2336,6 +2336,9 @@ impl Editor {
         self.size_per_brush = s.size_per_brush;
         self.brush_looks =
             s.brush_looks.iter().filter(|l| l.kind != self.brush_kind).map(|l| (l.kind, l.clone())).collect();
+        if let Some(brush) = &s.brush {
+            self.brush_looks.insert(brush.kind, brush.clone());
+        }
         self.look_kind = Some(self.brush_kind);
     }
 
@@ -2908,9 +2911,19 @@ impl Editor {
         )
     }
 
-    /// The pressure curves strokes use: [strength, size].
-    pub fn pressure_curves(&self) -> [[f32; 4]; 2] {
+    pub fn global_pressure_curves(&self) -> [[f32; 4]; 2] {
         [self.pressure_shape, self.pressure_shape_size]
+    }
+
+    /// The curves a stroke of this kind uses, in strength and size order.
+    pub fn pressure_curves(&self, kind: BrushKind) -> [[f32; 4]; 2] {
+        let [strength, size] = self.global_pressure_curves();
+        if self.settings_per_brush {
+            let [strength_override, size_override] = self.brush_pressure_overrides(kind);
+            [strength_override.unwrap_or(strength), size_override.unwrap_or(size)]
+        } else {
+            [strength, size]
+        }
     }
 
     /// World units per logical point where the brush size is measured:
@@ -3048,7 +3061,7 @@ impl Editor {
             noise_scale: self.noise_scale,
             crease_pinch: self.crease_pinch,
             insert_shape: self.insert_shape,
-            pressure_curves: self.pressure_curves(),
+            pressure_curves: self.pressure_curves(kind),
         };
         // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
         let stamp =
@@ -3129,6 +3142,7 @@ impl Editor {
             spacing: self.spacing,
             pressure_strength: self.pressure_strength,
             pressure_radius: self.pressure_radius,
+            pressure_curves: self.brush_pressure_overrides(k),
             front_faces_only: self.front_faces_only,
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(k),
@@ -3153,6 +3167,7 @@ impl Editor {
         self.put_away_look(self.brush_kind);
         self.look_kind = Some(p.kind);
         self.brush_kind = p.kind;
+        self.brush_looks.insert(p.kind, p.clone());
         self.brush_radius_pt = p.radius_pt;
         *self.strength_mut(p.kind) = p.strength;
         self.falloff = p.falloff;
@@ -6433,7 +6448,7 @@ impl Editor {
         let falloff = self.falloff;
         let strength = self.strength(BrushKind::CurveMove);
         let radius = self.brush_radius_pt * self.curve_world_per_pt();
-        let pressure_curves = self.pressure_curves();
+        let pressure_curves = self.pressure_curves(BrushKind::CurveMove);
         let doc = &mut self.documents[self.active_document];
         let Some(c) = doc.curve.as_mut() else { return };
         let Some(piece) = doc.scene.pieces.iter().find(|p| p.id == c.piece) else { return };
@@ -13185,6 +13200,77 @@ mod tests {
             _ => panic!("expected a stabilized stroke"),
         }
         e.pointer_up();
+    }
+
+    #[test]
+    fn strokes_use_independent_curves_for_the_brush_that_draws_them() {
+        let mut e = editor();
+        let draw_strength = [0.15, 0.5, 0.55, 0.95];
+        let clay_size = [0.5, 0.05, 0.9, 0.6];
+        let global_size = [0.25, 0.15, 0.7, 0.9];
+        e.pressure_shape_size = global_size;
+        e.brush_kind = BrushKind::Draw;
+        e.sync_brush_look();
+        e.set_brush_pressure_curve(0, Some(draw_strength));
+        let draw = e.new_stroke(BrushKind::Draw, false, 0.2, 0.0);
+        assert_eq!(draw.settings().pressure_curves, [draw_strength, global_size]);
+
+        e.brush_kind = BrushKind::Clay;
+        e.sync_brush_look();
+        assert_eq!(e.pressure_curves(BrushKind::Clay), [LINEAR_PRESSURE_SHAPE, global_size]);
+        e.set_brush_pressure_curve(1, Some(clay_size));
+        assert_eq!(
+            e.new_stroke(BrushKind::Clay, false, 0.2, 0.0).settings().pressure_curves,
+            [LINEAR_PRESSURE_SHAPE, clay_size]
+        );
+        assert_eq!(
+            e.new_stroke(BrushKind::Draw, false, 0.2, 0.0).settings().pressure_curves,
+            [draw_strength, global_size]
+        );
+        e.set_brush_pressure_curve(1, None);
+        assert_eq!(e.pressure_curves(BrushKind::Clay)[1], global_size);
+
+        e.settings_per_brush = false;
+        assert_eq!(e.pressure_curves(BrushKind::Draw), e.global_pressure_curves());
+        e.brush_kind = BrushKind::Draw;
+        e.sync_brush_look();
+        e.settings_per_brush = true;
+        e.set_brush_pressure_curve(0, None);
+        assert_eq!(e.pressure_curves(BrushKind::Draw)[0], LINEAR_PRESSURE_SHAPE);
+        assert_eq!(draw.settings().pressure_curves[0], draw_strength, "a stroke keeps the shape it began with");
+    }
+
+    #[test]
+    fn brush_pressure_overrides_survive_preference_and_preset_round_trips() {
+        let mut e = editor();
+        e.remember_brushes = true;
+        let strength = [0.4, 0.1, 0.6, 0.9];
+        let size = [0.2, 0.4, 0.65, 0.9];
+        e.brush_kind = BrushKind::Draw;
+        e.sync_brush_look();
+        e.set_brush_pressure_curve(0, Some(strength));
+        e.brush_kind = BrushKind::Clay;
+        e.sync_brush_look();
+        e.set_brush_pressure_curve(1, Some(size));
+        e.pressure_gamma = 1.5;
+        let text = e.settings().to_text();
+
+        let mut next = editor();
+        next.apply_settings(&crate::settings::Settings::from_text(&text));
+        assert_eq!(next.brush_kind, BrushKind::Clay);
+        assert_eq!(next.pressure_curves(BrushKind::Clay), [LINEAR_PRESSURE_SHAPE, size]);
+        assert_eq!(next.pressure_curves(BrushKind::Draw), [strength, LINEAR_PRESSURE_SHAPE]);
+        assert_eq!(next.pressure_gamma, 1.5);
+
+        let code = next.capture_preset("Soft clay").to_code();
+        let preset = oxy_sculpt::BrushPreset::from_code(&code).unwrap();
+        let mut other = editor();
+        other.pressure_shape = strength;
+        other.apply_preset(&preset);
+        assert_eq!(other.pressure_curves(BrushKind::Clay), [strength, size]);
+        let legacy = oxy_sculpt::BrushPreset::from_text("brush = clay\n").unwrap();
+        other.apply_preset(&legacy);
+        assert_eq!(other.pressure_curves(BrushKind::Clay), [strength, LINEAR_PRESSURE_SHAPE]);
     }
 
     #[test]

@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Per-brush pressure curves** ([#426](https://github.com/crisprintsstuff/OxyBrush/issues/426)). Stroke shows strength and size curves. Customize either one for the active brush, or let it follow the defaults in Pen & tablet. Brush presets keep the overrides.
+
 - **Alpha library** ([#425](https://github.com/crisprintsstuff/OxyBrush/issues/425)). Imported PNG alphas are available in every tab and after a restart. Projects still embed the alphas imported into them and the ones their editable strokes use.
 
 - **Mirror duplicate axes** ([#427](https://github.com/crisprintsstuff/OxyBrush/issues/427)). Choose X, Y or Z under **Pieces > Mirror duplicate** or **Mirror duplicate linked**. All six commands are also in the command palette.

@@ -1609,14 +1609,11 @@ impl Settings {
                     s.pressure_min = v.parse().ok().filter(|x| (0.0..=0.5).contains(x)).unwrap_or(s.pressure_min)
                 }
                 "pressure_shape" | "pressure_shape_size" => {
-                    let v: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-                    if let [a, b, c, d] = v[..]
-                        && [a, b, c, d].iter().all(|x| (0.0..=1.0).contains(x))
-                    {
+                    if let Some(shape) = oxy_sculpt::preset::parse_pressure_shape(v) {
                         if k == "pressure_shape" {
-                            s.pressure_shape = [a, b, c, d];
+                            s.pressure_shape = shape;
                         } else {
-                            s.pressure_shape_size = [a, b, c, d];
+                            s.pressure_shape_size = shape;
                         }
                     }
                 }

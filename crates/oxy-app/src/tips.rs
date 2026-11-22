@@ -847,7 +847,12 @@ pub mod plain {
     pub const EXTRACT_CANCEL: &str = "Close without adding anything (Esc).";
     pub const PRESSURE_CURVE: &str =
         "Below 1 a light touch goes further. Above 1 the brush stays firm until you press harder.";
-    pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
+    pub const BRUSH_PRESSURE_PLOT: &str = "Calibrated pen pressure across, brush response up. Customize to drag the points. Double-click a custom curve to straighten it.";
+    pub const BRUSH_PRESSURE_DISABLED: &str =
+        "Turn on Settings per brush in Preferences > General to customize this curve.";
+    pub const BRUSH_PRESSURE_GLOBAL: &str =
+        "Clear this brush's override and follow the curve in Preferences > Pen & tablet.";
+    pub const BRUSH_PRESSURE_CUSTOMIZE: &str = "Start with the global curve and tune it for this brush.";
     pub const PEN_SETTINGS: &str =
         "How hard you press the pen and how strong the brush gets. Remembered between sessions.";
     pub const PRESSURE_PLOT_SIZE: &str = "Pen pressure across, brush size up, when Pen pressure sets radius is on. Drag the two points to shape it; double-click to straighten it. Response, Lightest touch and Full press below apply to both curves.";
