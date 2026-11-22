@@ -65,7 +65,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .selectable_label(knife, "Knife")
-                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges; a point inside a face carries the cut on to that face's edge. Enter, the Cut button or a click on the last point again cuts; Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop.")
+                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges; a point inside a face carries the cut on to that face's edge. Enter, the Cut button or a click on the last point again cuts; Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop; a loop inside one face cuts a new face out of it.")
                     .clicked()
                 {
                     ed.poly_knife_toggle();
@@ -565,7 +565,9 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
 /// pointer would add the next one.
 fn draw_knife(ed: &Editor, painter: &egui::Painter, size: Vec2, origin: Vec2, ppp: f32) {
     let hover = ed.pointer.filter(|_| matches!(ed.drag, Drag::None));
-    if let Some((along, clicked)) = ed.poly_knife_preview(hover) {
+    if let Some(crate::polyknife::KnifePreview { along, clicked, extended: (ext_start, ext_end) }) =
+        ed.poly_knife_preview(hover)
+    {
         let to_screen = |p: Vec3| {
             ed.camera.project(p, size).map(|s| {
                 let w = s + origin;
@@ -573,8 +575,16 @@ fn draw_knife(ed: &Editor, painter: &egui::Painter, size: Vec2, origin: Vec2, pp
             })
         };
         let line: Vec<egui::Pos2> = along.iter().filter_map(|&p| to_screen(p)).collect();
-        for pair in line.windows(2) {
-            painter.line_segment([pair[0], pair[1]], Stroke::new(2.5, KNIFE));
+        let last = line.len().saturating_sub(2);
+        for (i, pair) in line.windows(2).enumerate() {
+            // Past a click inside a face the cut carries on to the face's
+            // edge: dashed, so it reads as "the cut goes on to here", not as
+            // where the path was drawn.
+            if (i == 0 && ext_start) || (i == last && ext_end) {
+                painter.add(egui::Shape::dashed_line(&[pair[0], pair[1]], Stroke::new(1.5, KNIFE), 5.0, 4.0));
+            } else {
+                painter.line_segment([pair[0], pair[1]], Stroke::new(2.5, KNIFE));
+            }
         }
         for &p in &along {
             if let Some(q) = to_screen(p) {
