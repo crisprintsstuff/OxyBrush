@@ -5,8 +5,8 @@
 //! points (what lies under the line drawn on screen), face to face; it adds
 //! a point on every edge it crosses and splits every face it passes through
 //! along its piece of the path. Points clicked inside a face become corners
-//! of the cut. A path end left inside a face is dropped: a polygon can't
-//! hold a loose edge.
+//! of the cut. A path end clicked inside a face carries on to that face's
+//! edge, since a polygon can't hold a loose edge.
 //!
 //! [`knife_plan`] works the path out without changing anything (for the
 //! preview); [`knife_cut`] applies a plan.
@@ -55,12 +55,22 @@ enum Node {
 #[derive(Debug, Clone, Default)]
 pub struct KnifePlan {
     nodes: Vec<(Node, Option<usize>)>,
+    /// Whether the first and the last node were added past a clicked end
+    /// inside a face, carrying the cut on to the face's edge.
+    extended: (bool, bool),
 }
 
 impl KnifePlan {
     /// The cut as positions along the surface, for drawing.
     pub fn path(&self, c: &Cage) -> Vec<Vec3> {
         self.nodes.iter().map(|(n, _)| node_pos(c, *n)).collect()
+    }
+
+    /// Whether the cut carries on past the first and the last clicked point
+    /// (each clicked inside a face) to the face's edge: the path's first
+    /// and last pieces are those extensions.
+    pub fn extended(&self) -> (bool, bool) {
+        self.extended
     }
 
     /// How many edges the cut crosses or ends on.
@@ -134,6 +144,63 @@ fn inside_face(c: &Cage, f: usize, p: Vec3) -> bool {
     inside
 }
 
+/// The line drawn on screen between two clicked points `a` and `b`, as the
+/// plane through the eye and both (along the view, orthographic) that the
+/// cut follows, and how far along that line a point on the plane is.
+///
+/// Why progress is measured on screen and not along the straight line from
+/// `a` to `b` in space: a cut over a convex edge (across a cap and down a
+/// side) crosses edges that lie further along that 3D line than `b` does,
+/// although they come before it on screen, and the cut stopped there.
+struct ScreenLine {
+    a: Vec3,
+    normal: Vec3,
+    /// Perspective: the eye, and the plane's in-plane axes from it (the
+    /// direction to `a` and the one at right angles toward `b`), scaled by
+    /// the distance to `a` so progress is in about scene units near `a`.
+    eye: Option<(Vec3, Vec3, Vec3, f32)>,
+    /// Orthographic: the screen direction from `a` toward `b`.
+    dir: Vec3,
+}
+
+impl ScreenLine {
+    fn new(view: KnifeView, a: Vec3, b: Vec3) -> Option<Self> {
+        let toward = if view.orthographic { view.forward } else { a - view.eye };
+        let normal = (b - a).cross(toward).normalize_or_zero();
+        if normal == Vec3::ZERO {
+            return None;
+        }
+        if view.orthographic {
+            let f = view.forward.normalize_or_zero();
+            let d = (b - a) - f * (b - a).dot(f);
+            return Some(ScreenLine { a, normal, eye: None, dir: d.normalize_or_zero() });
+        }
+        let ea = a - view.eye;
+        let e1 = ea.normalize_or_zero();
+        let e2 = ((b - view.eye) - e1 * (b - view.eye).dot(e1)).normalize_or_zero();
+        if e1 == Vec3::ZERO || e2 == Vec3::ZERO {
+            return None;
+        }
+        Some(ScreenLine { a, normal, eye: Some((view.eye, e1, e2, ea.length())), dir: Vec3::ZERO })
+    }
+
+    /// Which side of the cut's plane `p` is on (signed distance).
+    fn side(&self, p: Vec3) -> f32 {
+        (p - self.a).dot(self.normal)
+    }
+
+    /// How far along the screen line toward `b` the point `p` is seen.
+    fn ahead(&self, p: Vec3) -> f32 {
+        match self.eye {
+            Some((eye, e1, e2, scale)) => {
+                let r = p - eye;
+                r.dot(e2).atan2(r.dot(e1)) * scale
+            }
+            None => (p - self.a).dot(self.dir),
+        }
+    }
+}
+
 /// Work out the cut along `points` in `view`. RETURNS: the plan, or why
 /// there's nothing to cut.
 pub fn knife_plan(c: &Cage, points: &[KnifePoint], view: KnifeView) -> Result<KnifePlan, &'static str> {
@@ -155,14 +222,9 @@ pub fn knife_plan(c: &Cage, points: &[KnifePoint], view: KnifeView) -> Result<Kn
     for pair in points.windows(2) {
         let (a, b) = (pair[0].pos, pair[1].pos);
         let (start, end) = (snap_node(&pair[0]), snap_node(&pair[1]));
-        let toward = if view.orthographic { view.forward } else { a - view.eye };
-        let normal = (b - a).cross(toward).normalize_or_zero();
-        let dir = (b - a).normalize_or_zero();
-        if normal == Vec3::ZERO || dir == Vec3::ZERO {
-            continue;
-        }
-        let side = |p: Vec3| (p - a).dot(normal);
-        let ahead = |p: Vec3| (p - a).dot(dir);
+        let Some(line) = ScreenLine::new(view, a, b) else { continue };
+        let side = |p: Vec3| line.side(p);
+        let ahead = |p: Vec3| line.ahead(p);
         let total = ahead(b);
         let mut here = start;
         let mut from: Option<usize> = None;
@@ -250,38 +312,36 @@ pub fn knife_plan(c: &Cage, points: &[KnifePoint], view: KnifeView) -> Result<Kn
     // the next, or across one face, used to cut nothing). Not for a closed
     // loop, whose ends meet.
     let closed = points.len() >= 3 && snap_node(&points[0]) == snap_node(&points[points.len() - 1]);
+    let mut extended = (false, false);
     if !closed && nodes.len() >= 2 {
         if let (Node::Inside(f, p), Some(next)) = (nodes[0].0, nodes.get(1).map(|n| node_pos(c, n.0)))
             && let Some(node) = border_along(c, f, view, next, p, eps)
         {
             nodes[0].1 = Some(f);
             nodes.insert(0, (node, None));
+            extended.0 = true;
         }
         let last = nodes.len() - 1;
         if let (Node::Inside(f, p), Some(before)) = (nodes[last].0, nodes.get(last - 1).map(|n| node_pos(c, n.0)))
             && let Some(node) = border_along(c, f, view, before, p, eps)
         {
             nodes.push((node, Some(f)));
+            extended.1 = true;
         }
     }
     if nodes.len() < 2 {
         return Err("the path doesn't cross the model");
     }
-    Ok(KnifePlan { nodes })
+    Ok(KnifePlan { nodes, extended })
 }
 
 /// Where the line from `from` through `to` (cut along the plane through
 /// the eye and both) leaves face `f` past `to`: the nearest crossing of one
 /// of its edges, or a corner on the line, beyond `to`.
 fn border_along(c: &Cage, f: usize, view: KnifeView, from: Vec3, to: Vec3, eps: f32) -> Option<Node> {
-    let toward = if view.orthographic { view.forward } else { from - view.eye };
-    let normal = (to - from).cross(toward).normalize_or_zero();
-    let dir = (to - from).normalize_or_zero();
-    if normal == Vec3::ZERO || dir == Vec3::ZERO {
-        return None;
-    }
-    let side = |p: Vec3| (p - from).dot(normal);
-    let ahead = |p: Vec3| (p - from).dot(dir);
+    let line = ScreenLine::new(view, from, to)?;
+    let side = |p: Vec3| line.side(p);
+    let ahead = |p: Vec3| line.ahead(p);
     let s_to = ahead(to);
     let k = corners(&c.faces[f]);
     let mut best: Option<(f32, Node)> = None;
@@ -306,8 +366,111 @@ fn border_along(c: &Cage, f: usize, view: KnifeView, from: Vec3, to: Vec3, eps: 
     best.map(|(_, n)| n)
 }
 
+/// The face and the points of a plan that is a closed loop of points all
+/// clicked inside one face (the first point clicked again to close it).
+fn inner_loop(plan: &KnifePlan) -> Option<(usize, Vec<Vec3>)> {
+    let n = &plan.nodes;
+    if n.len() < 4 || n[0].0 != n[n.len() - 1].0 {
+        return None;
+    }
+    let Node::Inside(f, _) = n[0].0 else { return None };
+    let points: Option<Vec<Vec3>> = n[..n.len() - 1]
+        .iter()
+        .map(|(node, _)| match *node {
+            Node::Inside(g, p) if g == f => Some(p),
+            _ => None,
+        })
+        .collect();
+    points.map(|p| (f, p))
+}
+
+/// Cut a new face out of face `f` along the closed loop `points` (inside
+/// it, in order). A polygon can't have a hole, so the part of `f` around
+/// the new face becomes a ring of faces: each loop point is joined to the
+/// corner of `f` nearest it in direction, seen from the loop's middle, and
+/// each piece between two loop points and their corners is a face (a
+/// triangle where both reach the same corner). A square loop in a quad
+/// makes the new quad and four quads around it, as an inset does.
+///
+/// PRECONDITION: the points lie on face `f`. RETURNS: how many faces were
+/// added, or why the loop can't be cut (it folds back on itself, as seen
+/// from its middle, or the corners can't be shared out in order).
+fn cut_inner_loop(c: &mut Cage, f: usize, points: &[Vec3]) -> Result<usize, &'static str> {
+    let k = points.len();
+    if k < 3 {
+        return Err("click at least three points inside the face for a loop");
+    }
+    let normal = face_normal(c, f);
+    if normal == Vec3::ZERO {
+        return Err("the face is too thin to cut a loop in");
+    }
+    let mid = points.iter().copied().sum::<Vec3>() / k as f32;
+    let u = normal.any_orthonormal_vector();
+    let w = normal.cross(u);
+    let angle = |p: Vec3| {
+        let d = p - mid;
+        d.dot(w).atan2(d.dot(u))
+    };
+    // The loop turning the same way as the face.
+    let mut inner: Vec<Vec3> = points.to_vec();
+    if crate::retopo::polygon_normal(&inner).dot(normal) < 0.0 {
+        inner.reverse();
+    }
+    // Seen from its middle, the loop must go round once, always forward.
+    let tau = std::f32::consts::TAU;
+    let step = |a: f32, b: f32| (b - a).rem_euclid(tau);
+    let turn: f32 = (0..k).map(|i| step(angle(inner[i]), angle(inner[(i + 1) % k]))).sum();
+    if (turn - tau).abs() > 1e-3 {
+        return Err("draw the loop round its middle, without folding back");
+    }
+    let outer: Vec<u32> = corners(&c.faces[f]).to_vec();
+    let m = outer.len();
+    let anchor: Vec<usize> = inner
+        .iter()
+        .map(|&p| {
+            let a = angle(p);
+            (0..m)
+                .min_by(|&x, &y| {
+                    let d = |o: usize| {
+                        let t = step(a, angle(c.positions[outer[o] as usize]));
+                        t.min(tau - t)
+                    };
+                    d(x).total_cmp(&d(y))
+                })
+                .expect("a face has corners")
+        })
+        .collect();
+    // Walking the loop once must walk the face's corners once, forward.
+    let walked: usize = (0..k).map(|i| (anchor[(i + 1) % k] + m - anchor[i]) % m).sum();
+    if walked != m {
+        return Err("the loop's shape is too far from the face's to join them");
+    }
+    let group = c.faces[f].group;
+    let v: Vec<u32> = inner.iter().map(|&p| c.add_vertex(p)).collect();
+    c.faces[f] = Face::with_group(v.clone(), group);
+    for i in 0..k {
+        let j = (i + 1) % k;
+        let mut ring = Vec::new();
+        let mut o = anchor[i];
+        ring.push(outer[o]);
+        while o != anchor[j] {
+            o = (o + 1) % m;
+            ring.push(outer[o]);
+        }
+        ring.push(v[j]);
+        ring.push(v[i]);
+        c.faces.push(Face::with_group(ring, group));
+    }
+    Ok(k)
+}
+
 /// Cut the cage along `plan`. RETURNS: how many faces the cut added.
 pub fn knife_cut(c: &mut Cage, plan: &KnifePlan) -> Result<usize, &'static str> {
+    // A closed loop clicked inside one face, touching none of its edges,
+    // cuts a new face out of it (#450).
+    if let Some((f, points)) = inner_loop(plan) {
+        return cut_inner_loop(c, f, &points);
+    }
     // Chains: a point on a face's border, the points inside that face, and
     // the next point on its border, with the face they cross.
     let mut chains: Vec<Vec<Node>> = Vec::new();
@@ -566,5 +729,101 @@ mod tests {
         // the front and the top are both split.
         assert_eq!(knife_cut(&mut cube, &plan).unwrap(), 2);
         crate::polyedit::validate(&cube).unwrap();
+    }
+    /// An 8-sided prism (8-gon caps), y from -0.5 to 0.5, radius 1.
+    fn prism() -> Cage {
+        let n = 8u32;
+        let mut c = Cage::default();
+        for y in [-0.5f32, 0.5] {
+            for k in 0..n {
+                let a = std::f32::consts::TAU * k as f32 / n as f32;
+                c.add_vertex(Vec3::new(a.cos(), y, -a.sin()));
+            }
+        }
+        for k in 0..n {
+            let j = (k + 1) % n;
+            c.faces.push(Face::new(vec![k, j, n + j, n + k]));
+        }
+        c.faces.push(Face::new((0..n).rev().collect()));
+        c.faces.push(Face::new((n..2 * n).collect()));
+        c
+    }
+
+    #[test]
+    fn a_cut_over_a_convex_edge_reaches_a_point_below_it() {
+        // From a corner at the back of the top cap, across the cap and down
+        // the front-right side. The rim it crosses lies further along the
+        // straight line between the two points than the end does, although
+        // it comes first on screen: the cut used to stop at the corner.
+        let mut c = prism();
+        let eye = Vec3::new(1.33832, 3.0982447, 4.3264246);
+        let view = KnifeView { eye, forward: (-eye).normalize(), orthographic: false };
+        let a = KnifePoint { snap: KnifeSnap::Point(11), pos: c.positions[11] };
+        let side = 7; // corners 7, 0, 8, 15
+        let pos = Vec3::new(0.8656472, 0.26541042, 0.32435584);
+        let b = KnifePoint { snap: KnifeSnap::Face(side), pos };
+        let plan = knife_plan(&c, &[a, b], view).unwrap();
+        assert!(plan.path(&c).iter().any(|q| q.distance(pos) < 1e-4), "reaches the end: {:?}", plan.path(&c));
+        assert_eq!(plan.extended(), (false, true), "only the end inside a face carries on");
+        let made = knife_cut(&mut c, &plan).unwrap();
+        assert!(made >= 2, "the top cap and the side: {made}");
+        crate::polyedit::validate(&c).unwrap();
+        assert!(c.faces.iter().filter(|f| f.len() >= 5).count() >= 2, "the cap halves are still polygons");
+    }
+    #[test]
+    fn a_closed_loop_inside_a_face_cuts_a_new_face_out_of_it() {
+        // #450: four clicks inside the middle quad of the grid and the first
+        // again: a new quad in the middle, four quads around it.
+        let mut c = grid();
+        let f = face_at(&c, Vec3::new(1.5, 1.5, 0.0));
+        let corners_at = [(1.2, 1.2), (1.8, 1.2), (1.8, 1.8), (1.2, 1.8)];
+        let mut pts: Vec<KnifePoint> = corners_at
+            .iter()
+            .map(|&(x, y)| KnifePoint { snap: KnifeSnap::Face(f), pos: Vec3::new(x, y, 0.0) })
+            .collect();
+        pts.push(pts[0]);
+        let plan = knife_plan(&c, &pts, view()).unwrap();
+        assert_eq!(plan.path(&c).len(), 5, "the loop is the preview");
+        let faces = c.faces.len();
+        assert_eq!(knife_cut(&mut c, &plan).unwrap(), 4);
+        assert_eq!(c.faces.len(), faces + 4);
+        crate::polyedit::validate(&c).unwrap();
+        assert!(c.faces.iter().all(|f| f.len() == 4), "all quads, as an inset");
+        // The middle face is the loop, facing the same way as before.
+        let inner = (0..c.faces.len()).find(|&g| c.faces[g].corners.iter().all(|&v| v >= 16)).unwrap();
+        assert!(face_normal(&c, inner).z > 0.9);
+        // Drawn the other way round (clockwise), the same.
+        let mut c2 = grid();
+        let mut back: Vec<KnifePoint> = pts[..4].iter().rev().copied().collect();
+        back.push(back[0]);
+        let plan = knife_plan(&c2, &back, view()).unwrap();
+        assert_eq!(knife_cut(&mut c2, &plan).unwrap(), 4);
+        crate::polyedit::validate(&c2).unwrap();
+        // A triangle loop: three faces round it, one of them reaching two corners.
+        let mut c3 = grid();
+        let mut tri: Vec<KnifePoint> = [(1.3, 1.3), (1.7, 1.3), (1.5, 1.7)]
+            .iter()
+            .map(|&(x, y)| KnifePoint { snap: KnifeSnap::Face(f), pos: Vec3::new(x, y, 0.0) })
+            .collect();
+        tri.push(tri[0]);
+        let plan = knife_plan(&c3, &tri, view()).unwrap();
+        assert_eq!(knife_cut(&mut c3, &plan).unwrap(), 3);
+        crate::polyedit::validate(&c3).unwrap();
+    }
+
+    #[test]
+    fn a_loop_that_folds_back_on_itself_is_refused() {
+        let mut c = grid();
+        let f = face_at(&c, Vec3::new(1.5, 1.5, 0.0));
+        // A bow tie: it crosses itself.
+        let mut pts: Vec<KnifePoint> = [(1.2, 1.2), (1.8, 1.8), (1.8, 1.2), (1.2, 1.8)]
+            .iter()
+            .map(|&(x, y)| KnifePoint { snap: KnifeSnap::Face(f), pos: Vec3::new(x, y, 0.0) })
+            .collect();
+        pts.push(pts[0]);
+        let plan = knife_plan(&c, &pts, view()).unwrap();
+        let before = c.faces.len();
+        assert!(knife_cut(&mut c, &plan).is_err());
+        assert_eq!(c.faces.len(), before, "unchanged");
     }
 }

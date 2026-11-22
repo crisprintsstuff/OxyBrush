@@ -4,12 +4,17 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Knife: cut a face out of a face** ([#450](https://github.com/crisprintsstuff/OxyBrush/issues/450)). Click points inside one face, without touching its edges, then click the first point again: the loop becomes a new face, and the rest of the face becomes a ring of faces joining the loop to the face's corners (a square loop in a quad gives a quad with four quads round it, as an inset does). A loop that crosses itself is refused.
+
 ### Changed
 
 - **OxySpheres are a piece of their own, never used up** ([RFC 0034](docs/rfcs/0034-oxyspheres.md)). **Make mesh** adds a new piece made from the spheres and keeps the spheres as an OxySpheres piece (sphere icon in the Pieces list, hidden out of the mesh's way), so you can change them and make another mesh any time, however much you've sculpted the first. **Done** keeps the spheres without making a mesh. Click the OxySpheres piece, or use Pieces > Edit OxySpheres…, to open it again. Before, the spheres were kept on the mesh and lost once it was sculpted. Projects from 4.0.0-beta.23.3 open with those spheres back as an OxySpheres piece.
 
 ### Fixed
 
+- **Knife cuts over an edge onto the next face reach the point you clicked.** A cut across a cap (an 8- or 12-sided face, say) and down a side often stopped at the rim, because progress along the cut was measured along the straight line between the two clicks in space instead of along the line drawn on screen. Where the cut carries on past a point clicked inside a face to that face's edge, the preview now draws that stretch dashed.
 - **New OxySpheres start on the symmetry plane** ([#449](https://github.com/crisprintsstuff/OxyBrush/issues/449)). With X symmetry on, the first sphere, and so the mirror plane, was at the view's orbit point, off centre once the view had moved.
 
 ## [4.0.0-beta.23.3] - 2026-11-22
