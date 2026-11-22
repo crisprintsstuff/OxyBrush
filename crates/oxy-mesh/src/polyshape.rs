@@ -13,7 +13,7 @@
 
 use crate::polyedit::{Adjacency, Slide, face_normal, new_group, remove_unused_points};
 use crate::retopo::{Cage, Face, corners, edge_key};
-use glam::Vec3;
+use glam::{DMat3, DVec3, Vec3};
 use std::collections::{HashMap, HashSet};
 
 /// The face running each directed edge `(a, b)` (corner `a` then `b`).
@@ -797,6 +797,103 @@ pub fn equalize(c: &mut Cage, points: &[u32], amount: f32) -> Vec<u32> {
     moves.into_iter().map(|(v, _)| v).collect()
 }
 
+/// Move a selection towards a circle in its least-squares plane. The
+/// center is fitted in that plane, and the radius is the mean projected
+/// distance from it. Directions within the plane stay the same.
+pub fn circle_positions(points: &[Vec3], amount: f32) -> Result<Vec<Vec3>, &'static str> {
+    if points.len() < 3 || points.iter().any(|p| !p.is_finite()) {
+        return Err("pick at least three points");
+    }
+    if !amount.is_finite() {
+        return Err("the amount must be finite");
+    }
+    let n = points.len() as f64;
+    let center = points.iter().map(|p| p.as_dvec3()).sum::<DVec3>() / n;
+    let mut cov = DMat3::ZERO;
+    for p in points {
+        let d = p.as_dvec3() - center;
+        cov += DMat3::from_cols(d * d.x, d * d.y, d * d.z);
+    }
+    let normal = least_squares_normal(cov).ok_or("the picked points are collinear")?;
+    let (u, v) = normal.any_orthonormal_pair();
+    let mut projected: Vec<DVec3> = points
+        .iter()
+        .map(|p| {
+            let d = p.as_dvec3() - center;
+            d - normal * d.dot(normal)
+        })
+        .collect();
+    // In centroid-relative plane coordinates, least-squares fit
+    // x² + y² = 2 cx x + 2 cy y + b. The constant drops out of
+    // the two normal equations for (cx, cy) because x and y have zero mean.
+    let (mut xx, mut xy, mut yy, mut xr, mut yr) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    for p in &projected {
+        let (x, y) = (p.dot(u), p.dot(v));
+        let r2 = x * x + y * y;
+        xx += x * x;
+        xy += x * y;
+        yy += y * y;
+        xr += x * r2 * 0.5;
+        yr += y * r2 * 0.5;
+    }
+    let det = xx * yy - xy * xy;
+    let offset = u * ((yy * xr - xy * yr) / det) + v * ((xx * yr - xy * xr) / det);
+    let center = center + offset;
+    for p in &mut projected {
+        *p -= offset;
+    }
+    let radius = projected.iter().map(|p| p.length()).sum::<f64>() / n;
+    if projected.iter().any(|p| p.length() <= radius * 1e-7) {
+        return Err("a picked point is at the center; pick the outline");
+    }
+    // Two points on one ray would land at the same place on the circle.
+    let mut angles: Vec<f64> = projected.iter().map(|p| p.dot(v).atan2(p.dot(u))).collect();
+    angles.sort_unstable_by(f64::total_cmp);
+    if angles.windows(2).any(|a| a[1] - a[0] < 1e-7)
+        || angles[0] + std::f64::consts::TAU - angles[angles.len() - 1] < 1e-7
+    {
+        return Err("some picked points would overlap; pick the outline");
+    }
+    let t = amount.clamp(0.0, 1.0) as f64;
+    Ok(points
+        .iter()
+        .zip(projected)
+        .map(|(p, d)| p.as_dvec3().lerp(center + d.normalize() * radius, t).as_vec3())
+        .collect())
+}
+
+/// Unit eigenvector of the least variance, obtained by cyclic Jacobi
+/// rotations of the symmetric 3 × 3 covariance matrix.
+fn least_squares_normal(mut cov: DMat3) -> Option<DVec3> {
+    let scale = cov.x_axis.x.max(cov.y_axis.y).max(cov.z_axis.z);
+    if scale == 0.0 {
+        return None;
+    }
+    let mut basis = DMat3::IDENTITY;
+    for _ in 0..10 {
+        for (i, j) in [(0, 1), (0, 2), (1, 2)] {
+            let cross = cov.col(j)[i];
+            if cross.abs() <= 1e-12 * scale {
+                continue;
+            }
+            let angle = 0.5 * (2.0 * cross).atan2(cov.col(j)[j] - cov.col(i)[i]);
+            let (sin, cos) = angle.sin_cos();
+            let mut cols = [DVec3::X, DVec3::Y, DVec3::Z];
+            cols[i][i] = cos;
+            cols[j][j] = cos;
+            cols[i][j] = -sin;
+            cols[j][i] = sin;
+            let rot = DMat3::from_cols(cols[0], cols[1], cols[2]);
+            cov = rot.transpose() * cov * rot;
+            basis *= rot;
+        }
+    }
+    let value = |i| cov.col(i)[i];
+    let mut axes = [0, 1, 2];
+    axes.sort_unstable_by(|&a, &b| value(a).total_cmp(&value(b)));
+    (value(axes[1]) > 1e-10 * scale).then(|| basis.col(axes[0]))
+}
+
 /// Drop unused points after an edit (re-exported for the app).
 pub fn tidy(c: &mut Cage) {
     remove_unused_points(c);
@@ -1081,6 +1178,35 @@ mod tests {
         let back: Vec<f32> = slide.verts.iter().map(|&v| c.positions[v as usize].x).collect();
         assert!((back[0] - 1.0).abs() > 0.4 && (back[0] - xs[0]).abs() > 0.9, "and to the other: {back:?}");
         validate(&c).unwrap();
+    }
+
+    #[test]
+    fn to_circle_fits_a_tilted_outline_and_blends_by_amount() {
+        let u = Vec3::new(1.0, 2.0, 0.0).normalize();
+        let v = Vec3::new(-2.0, 1.0, 5.0).normalize();
+        let n = u.cross(v).normalize();
+        let center = Vec3::new(10.0, -20.0, 3.0);
+        let points =
+            [center + u * 2.0 + n * 0.1, center - u * 2.0 + n * 0.1, center + v - n * 0.1, center - v - n * 0.1];
+        let expected = [center + u * 1.5, center - u * 1.5, center + v * 1.5, center - v * 1.5];
+        let fitted = circle_positions(&points, 1.0).unwrap();
+        let halfway = circle_positions(&points, 0.5).unwrap();
+        for i in 0..points.len() {
+            assert!(fitted[i].distance(expected[i]) < 1e-5, "{fitted:?}");
+            assert!(halfway[i].distance(points[i].lerp(expected[i], 0.5)) < 1e-5);
+        }
+        assert_eq!(circle_positions(&points, 0.0).unwrap(), points);
+    }
+
+    #[test]
+    fn to_circle_preserves_an_unevenly_spaced_circle_and_rejects_invalid_picks() {
+        let points = [0.0f32, 0.3, 0.75, 1.3, 1.8].map(|a| Vec3::new(a.cos(), a.sin(), 0.0));
+        let fitted = circle_positions(&points, 1.0).unwrap();
+        assert!(fitted.iter().zip(points).all(|(a, b)| a.distance(b) < 1e-5));
+        assert!(circle_positions(&points[..2], 1.0).is_err());
+        assert!(circle_positions(&[Vec3::ZERO, Vec3::X, Vec3::X * 2.0], 1.0).is_err());
+        let with_center = [Vec3::X, -Vec3::X, Vec3::Y, -Vec3::Y, Vec3::ZERO];
+        assert!(circle_positions(&with_center, 1.0).is_err());
     }
 
     #[test]

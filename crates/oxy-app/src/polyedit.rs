@@ -250,6 +250,8 @@ pub struct PolyEdit {
     pub point_action: PointAction,
     /// Extrude and inset each face on its own instead of as one region.
     pub each: bool,
+    /// Blend toward a fitted circle when running To Circle.
+    pub circle_amount: f32,
     /// Do the same to the mirrored elements across the piece's X symmetry plane.
     pub mirror: bool,
     /// Bridge: rows of faces along the tube, and extra steps of twist.
@@ -490,6 +492,7 @@ impl Editor {
             edge_reach: EdgeReach::One,
             point_action: PointAction::Move,
             each: false,
+            circle_amount: 1.0,
             mirror: self.symmetry.x,
             bridge_segments: 1,
             bridge_twist: 0,
@@ -1710,6 +1713,42 @@ impl Editor {
             piece.cage = d.before_cage;
         }
         self.status = "Poly Edit: cancelled".into();
+    }
+
+    /// Round the explicit pick as a single circle, keeping the mesh's
+    /// topology and attributes so it can still be edited after the move.
+    pub fn poly_to_circle(&mut self) {
+        let Some(pe) = self.poly_edit.as_ref() else { return };
+        let amount = pe.circle_amount;
+        if amount <= 0.0 {
+            return;
+        }
+        let points = self.poly_gizmo_points();
+        let Some(cage) = self.poly_cage() else { return };
+        let positions: Vec<_> = points.iter().map(|&v| cage.positions[v as usize]).collect();
+        let targets = match polyshape::circle_positions(&positions, amount) {
+            Ok(targets) => targets,
+            Err(why) => {
+                self.status = format!("To Circle: {why}");
+                return;
+            }
+        };
+        let extent = positions.iter().map(|p| p.distance(positions[0])).fold(0.0, f32::max);
+        let moves: Vec<_> = points
+            .into_iter()
+            .zip(positions.into_iter().zip(targets))
+            .filter_map(|(v, (p, q))| (p.distance(q) > extent * 1e-6).then_some((v, q)))
+            .collect();
+        if moves.is_empty() {
+            self.status = "To Circle: no points moved".into();
+            return;
+        }
+        let Some((i, before_mesh, before_cage)) = self.poly_before() else { return };
+        self.poly_set_points(&moves);
+        let id = self.scene.pieces[i].id;
+        self.history.record_cage("Poly Edit: To Circle", id, before_mesh, before_cage);
+        self.update_poly_smooth();
+        self.status = format!("To Circle: moved {} point(s)", moves.len());
     }
 
     /// The cage points the gizmo moves: the picked faces' corners, edges'
@@ -3438,6 +3477,50 @@ mod tests {
         e.finish_poly_edit();
         e.perform_command(CommandId::Brush2);
         assert_ne!(e.brush_kind, brush);
+    }
+
+    #[test]
+    fn to_circle_rounds_picked_edges_in_one_undo_step_without_losing_mesh_attributes() {
+        let mut e = editor();
+        let mesh = &mut e.scene.active_mut().mesh;
+        mesh.positions.iter_mut().for_each(|p| p.x *= 2.0);
+        mesh.mask[0] = 0.45;
+        mesh.color[0] = Vec3::new(0.2, 0.4, 0.5);
+        mesh.refresh_all();
+        e.start_poly_edit();
+        e.modifiers.ctrl = true;
+        click(&mut e, centre());
+        e.modifiers.ctrl = false;
+        e.set_poly_mode(ElementMode::Edges);
+        assert_eq!(e.poly_pick_count(), (4, "edges"));
+        let points = e.poly_gizmo_points();
+        let before = e.scene.active().mesh.to_data();
+        // Widen one corner of the picked front quad so it needs rounding.
+        let corner = points[0];
+        e.poly_set_points(&[(corner, before.positions[corner as usize] + Vec3::X * 0.4)]);
+        let before = e.scene.active().mesh.to_data();
+        let topo = e.scene.active().mesh.topology_version();
+        e.poly_to_circle();
+        let after = e.scene.active().mesh.to_data();
+        assert_ne!(after.positions, before.positions);
+        let selected: Vec<_> = points.iter().map(|&v| after.positions[v as usize]).collect();
+        let before_selected: Vec<_> = points.iter().map(|&v| before.positions[v as usize]).collect();
+        assert_ne!(selected, before_selected);
+        assert!(selected.iter().all(|p| p.z == selected[0].z));
+        assert_eq!(e.poly_pick_count(), (4, "edges"));
+        assert_eq!(e.scene.active().mesh.topology_version(), topo);
+        for (i, (a, b)) in before.positions.iter().zip(&after.positions).enumerate() {
+            if !points.contains(&(i as u32)) {
+                assert_eq!(a, b);
+            }
+        }
+        assert_eq!(after.mask, before.mask);
+        assert_eq!(after.color, before.color);
+        assert_eq!(after.triangles, before.triangles);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.to_data(), before);
+        e.redo();
+        assert_eq!(e.scene.active().mesh.to_data(), after);
     }
 
     #[test]

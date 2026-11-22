@@ -60,6 +60,24 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 });
             }
+            if picked > 0 {
+                let mut to_circle = false;
+                if let Some(pe) = ed.poly_edit.as_mut() {
+                    ui.horizontal_wrapped(|ui| {
+                        to_circle = ui.add_enabled(pe.circle_amount > 0.0, egui::Button::new("To Circle"))
+                            .on_hover_text("Move the picked points toward a fitted circle. Pick the outline of an opening to round it.")
+                            .clicked();
+                        ui.add(crate::widgets::Bar(
+                            egui::Slider::new(&mut pe.circle_amount, 0.0..=1.0)
+                                .text("Amount")
+                                .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
+                        ));
+                    });
+                }
+                if to_circle {
+                    ed.poly_to_circle();
+                }
+            }
             // The transform gizmo on what's picked (#272): T or these.
             ui.horizontal(|ui| {
                 use crate::pose::GizmoMode;
