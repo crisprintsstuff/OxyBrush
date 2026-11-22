@@ -65,7 +65,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.horizontal_wrapped(|ui| {
                 if ui
                     .selectable_label(knife, "Knife")
-                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges; a point inside a face carries the cut on to that face's edge. Enter, the Cut button or a click on the last point again cuts; Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop.")
+                    .on_hover_text("Click points on the model to draw a cut; it splits the faces it crosses, adding points where it crosses edges. Clicks snap to corners and edges; a point inside a face carries the cut on to that face's edge. Enter, the Cut button or a click on the last point again cuts; Backspace takes the last point back, Esc cancels. Click the first point again to cut a closed loop; a loop inside one face cuts a new face out of it.")
                     .clicked()
                 {
                     ed.poly_knife_toggle();

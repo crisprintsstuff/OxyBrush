@@ -38,6 +38,13 @@ wanted. A knife draws the edge directly.
   edge, because a polygon can't hold a loose edge (at first such ends were
   dropped, so a cut between two neighbouring faces, or within one, cut
   nothing). Both halves keep the face's group.
+- **A loop inside one face** (#450). Points all clicked inside one face,
+  closed on the first, cut a new face out of it. A polygon can't have a
+  hole, so the rest becomes a ring of faces: each loop point joins the
+  face's corner nearest it in direction (seen from the loop's middle),
+  and each piece between two loop points and their corners is a face, a
+  triangle where both reach the same corner. A square loop in a quad
+  gives an inset. A loop that folds back on itself is refused.
 - **Controls.** Enter, **Cut**, or a click on the last point again (for
   a pen without a keyboard) applies, Backspace or **Undo point**
   takes the last point back, Esc clears the path and a second Esc turns

@@ -268,6 +268,30 @@ mod tests {
     }
 
     #[test]
+    fn a_loop_clicked_inside_a_face_and_closed_on_its_first_point_cuts_a_face_out() {
+        // #450: four clicks inside the middle of the front, then the first
+        // point again: a new face there, with a ring of faces round it.
+        let mut e = editor();
+        let faces = e.poly_cage().unwrap().faces.len();
+        e.poly_knife_toggle();
+        let loop_at = [(-0.1, -0.1), (0.1, -0.1), (0.1, 0.1), (-0.1, 0.1)];
+        let clicks: Vec<Vec2> = loop_at.iter().map(|&(x, y)| at(&e, Vec3::new(x, y, 0.5))).collect();
+        for &p in &clicks {
+            click(&mut e, p);
+        }
+        assert!(
+            e.poly_edit.as_ref().unwrap().knife.as_ref().unwrap().iter().all(|p| matches!(p.snap, KnifeSnap::Face(_))),
+            "inside the face"
+        );
+        click(&mut e, clicks[0]);
+        assert_eq!(e.history.undo_labels().last(), Some("Poly Edit: knife"), "{}", e.status);
+        assert_eq!(e.poly_cage().unwrap().faces.len(), faces + 4);
+        oxy_mesh::polyedit::validate(e.poly_cage().unwrap()).unwrap();
+        e.undo();
+        assert_eq!(e.poly_cage().unwrap().faces.len(), faces);
+    }
+
+    #[test]
     fn backspace_and_escape_take_points_back_then_turn_the_knife_off() {
         let mut e = editor();
         e.poly_knife_toggle();
