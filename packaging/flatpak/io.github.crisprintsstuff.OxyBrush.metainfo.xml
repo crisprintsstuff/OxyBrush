@@ -53,6 +53,16 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.23" date="2026-11-22" type="development">
+      <description>
+        <p>Make linked and mirrored copies of a piece that follow it as you
+        sculpt. Each brush keeps its own settings and alpha, with separate
+        pen pressure curves for strength and size. Boolean seams come out
+        smooth. Poly Edit picks whole loops and bridges holes. Fixes long-lens
+        zoom, far-side wireframe edges and painted detail across subdivision
+        levels.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.22" date="2026-11-21" type="development">
       <description>
         <p>Mix theme colors, controls and shadows. Use the unified title bar
