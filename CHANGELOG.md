@@ -18,6 +18,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Every slider follows the theme.** Seam blend (Booleans), the surface instance settings (Lift, Turn, Vary size, Vary turn, mask threshold), the Recipe Box move panel (Twist, Size) and the interface tint sliders (hue, intensity, brightness) were plain sliders, so with Studio or Sculptor controls they didn't match the rest.
 - **Undo can no longer scramble a mesh rebuilt outside the history.** A stroke's undo step only fits the mesh it was recorded on; a piece rebuilt meanwhile without an undo step (a linked copy after its original was remeshed) now skips that step instead of moving the wrong points.
 
 ## [4.0.0-beta.23] - 2026-11-22

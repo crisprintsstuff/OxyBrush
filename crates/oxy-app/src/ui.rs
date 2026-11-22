@@ -2099,7 +2099,7 @@ fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Color hue:");
         let mut hue = ed.ui_tint_hue;
         let slider = egui::Slider::new(&mut hue, 0.0..=360.0).suffix("°").show_value(true);
-        if ui.add(slider).changed() {
+        if ui.add(crate::widgets::Bar(slider)).changed() {
             ed.ui_tint_hue = hue;
             let rgb = hue_to_rgb(hue);
             ed.ui_tint_color = Some(rgb);
@@ -2121,7 +2121,7 @@ fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
         ui.label("Color intensity:");
         let mut intensity_pct = (ed.ui_tint_intensity * 100.0).round();
         let slider = egui::Slider::new(&mut intensity_pct, 0.0..=100.0).suffix("%").show_value(true);
-        if ui.add(slider).changed() {
+        if ui.add(crate::widgets::Bar(slider)).changed() {
             ed.ui_tint_intensity = (intensity_pct / 100.0).clamp(0.0, 1.0);
             if ed.ui_tint_color.is_none() && ed.ui_tint_intensity > 0.0 {
                 ed.ui_tint_color = Some(hue_to_rgb(ed.ui_tint_hue));
@@ -2134,7 +2134,7 @@ fn theme_tab_colors(ui: &mut Ui, ed: &mut Editor) {
         ui.label("UI brightness:");
         let mut brightness_pct = (ed.ui_brightness * 100.0).round();
         let slider = egui::Slider::new(&mut brightness_pct, -50.0..=50.0).suffix("%").show_value(true);
-        if ui.add(slider).changed() {
+        if ui.add(crate::widgets::Bar(slider)).changed() {
             ed.ui_brightness = (brightness_pct / 100.0).clamp(-0.5, 0.5);
         }
     });
@@ -6248,11 +6248,11 @@ fn boolean_row(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.horizontal(|ui| {
         tips::hover(ui.label("Seam blend"), plain::BOOLEAN_BLEND);
         tips::hover(
-            ui.add(
+            ui.add(crate::widgets::Bar(
                 egui::Slider::new(&mut ed.boolean_blend, 0.0..=crate::settings::MAX_BOOLEAN_BLEND)
                     .step_by(0.25)
                     .suffix(" voxels"),
-            ),
+            )),
             plain::BOOLEAN_BLEND,
         );
     });
