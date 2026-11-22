@@ -172,7 +172,7 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
         match &mut s.place {
             Place::Mask(threshold) => {
                 ui.label("Mask threshold");
-                ui.add(egui::Slider::new(threshold, 0.01..=1.0)).on_hover_text("Copy onto visible faces whose average mask meets this value.");
+                ui.add(crate::widgets::Bar(egui::Slider::new(threshold, 0.01..=1.0))).on_hover_text("Copy onto visible faces whose average mask meets this value.");
             }
             Place::Scatter(spacing) => {
                 ui.label("Spacing");
@@ -232,16 +232,16 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
         ui.end_row();
 
         tips::hover(ui.label("Lift"), plain::INSTANCE_OFFSET);
-        ui.add(egui::Slider::new(&mut s.offset, -1.0..=1.0));
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut s.offset, -1.0..=1.0)));
         ui.end_row();
         tips::hover(ui.label("Turn"), plain::INSTANCE_SPIN);
-        ui.add(egui::Slider::new(&mut s.spin, -180.0..=180.0).suffix("°"));
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut s.spin, -180.0..=180.0).suffix("°")));
         ui.end_row();
         tips::hover(ui.label("Vary size"), plain::INSTANCE_VARY_SIZE);
-        ui.add(egui::Slider::new(&mut s.vary_size, 0.0..=1.0));
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut s.vary_size, 0.0..=1.0)));
         ui.end_row();
         tips::hover(ui.label("Vary turn"), plain::INSTANCE_VARY_SPIN);
-        ui.add(egui::Slider::new(&mut s.vary_spin, 0.0..=1.0));
+        ui.add(crate::widgets::Bar(egui::Slider::new(&mut s.vary_spin, 0.0..=1.0)));
         ui.end_row();
         tips::hover(ui.label("Seed"), plain::INSTANCE_SEED);
         ui.horizontal(|ui| {

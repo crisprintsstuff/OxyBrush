@@ -630,14 +630,19 @@ pub fn show_move_window(ctx: &egui::Context, ed: &mut Editor) {
             let mut degrees = twist.to_degrees();
             ui.horizontal(|ui| {
                 ui.label("Twist");
-                if ui.add(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°")).changed() {
+                if ui.add(crate::widgets::Bar(egui::Slider::new(&mut degrees, -180.0..=180.0).suffix("°"))).changed() {
                     twist = degrees.to_radians();
                 }
             });
             let mut percent = scale / frame.scale.max(1e-4) * 100.0;
             ui.horizontal(|ui| {
                 ui.label("Size");
-                if ui.add(egui::Slider::new(&mut percent, 10.0..=400.0).suffix("%").logarithmic(true)).changed() {
+                if ui
+                    .add(crate::widgets::Bar(
+                        egui::Slider::new(&mut percent, 10.0..=400.0).suffix("%").logarithmic(true),
+                    ))
+                    .changed()
+                {
                     scale = frame.scale * percent / 100.0;
                 }
             });
