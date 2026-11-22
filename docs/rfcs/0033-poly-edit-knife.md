@@ -30,9 +30,12 @@ wanted. A knife draws the edge directly.
   when several cuts cross it, keeping the edge's crease on both halves.
   Each crossed face is split in two along its piece of the path; points
   clicked inside a face become corners of the cut. A path that starts or
-  ends inside a face loses that end, because a polygon can't hold a loose
-  edge. Both halves keep the face's group.
-- **Controls.** Enter or **Cut** applies, Backspace or **Undo point**
+  ends inside a face carries on, straight along the cut, to that face's
+  edge, because a polygon can't hold a loose edge (at first such ends were
+  dropped, so a cut between two neighbouring faces, or within one, cut
+  nothing). Both halves keep the face's group.
+- **Controls.** Enter, **Cut**, or a click on the last point again (for
+  a pen without a keyboard) applies, Backspace or **Undo point**
   takes the last point back, Esc clears the path and a second Esc turns
   the Knife off. Clicking the first point again closes the loop and cuts.
   Presses off the model still orbit. The path, the clicked points and the

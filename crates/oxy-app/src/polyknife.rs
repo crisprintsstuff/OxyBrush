@@ -21,7 +21,7 @@ impl Editor {
         if pe.knife.take().is_none() {
             pe.knife = Some(Vec::new());
             pe.pending = None;
-            self.status = "Knife: click points on the model to draw the cut; Enter cuts, Backspace takes the last point back, Esc cancels".into();
+            self.status = "Knife: click points on the model to draw the cut; Enter (or a click on the last point) cuts, Backspace takes the last point back, Esc cancels".into();
         } else {
             self.status = "Knife off".into();
         }
@@ -86,6 +86,19 @@ impl Editor {
         if let Some(f) = on_first {
             point = f;
         }
+        // A click on the last point again finishes the cut, so it can be
+        // done with a pen alone (Enter and the Cut button do the same).
+        let last = self
+            .poly_edit
+            .as_ref()
+            .and_then(|pe| pe.knife.as_ref())
+            .and_then(|path| (path.len() >= 2).then(|| path.last().copied()).flatten());
+        if last.is_some_and(|l| {
+            self.camera.project(l.pos, self.canvas_size()).is_some_and(|s| (s + origin).distance(p) <= reach)
+        }) {
+            self.poly_knife_apply();
+            return true;
+        }
         let Some(path) = self.poly_edit.as_mut().and_then(|pe| pe.knife.as_mut()) else { return false };
         let closes = path.len() >= 3 && path.first().is_some_and(|f| same_spot(f, &point));
         if path.last().is_some_and(|l| same_spot(l, &point)) {
@@ -96,7 +109,9 @@ impl Editor {
         if closes {
             self.poly_knife_apply();
         } else {
-            self.status = format!("Knife: {n} point(s); Enter cuts, Backspace takes the last back, Esc cancels");
+            self.status = format!(
+                "Knife: {n} point(s); Enter or a click on the last point cuts, Backspace takes the last back, Esc cancels"
+            );
         }
         true
     }
@@ -222,6 +237,22 @@ mod tests {
         oxy_mesh::polyedit::validate(e.poly_cage().unwrap()).unwrap();
         e.undo();
         assert_eq!(e.poly_cage().unwrap().faces.len(), faces);
+    }
+
+    #[test]
+    fn clicks_inside_faces_cut_and_a_click_on_the_last_point_finishes() {
+        let mut e = editor();
+        let faces = e.poly_cage().unwrap().faces.len();
+        e.poly_knife_toggle();
+        // Inside two neighbouring faces of the front, then the last point again.
+        let (a, b) = (at(&e, Vec3::new(-0.15, 0.05, 0.5)), at(&e, Vec3::new(0.25, 0.05, 0.5)));
+        click(&mut e, a);
+        click(&mut e, b);
+        click(&mut e, b);
+        assert_eq!(e.history.undo_labels().last(), Some("Poly Edit: knife"), "{}", e.status);
+        assert!(e.poly_cage().unwrap().faces.len() > faces + 1, "both faces split, end to end");
+        oxy_mesh::polyedit::validate(e.poly_cage().unwrap()).unwrap();
+        assert!(e.poly_edit.as_ref().unwrap().knife.as_ref().unwrap().is_empty(), "ready for the next cut");
     }
 
     #[test]
