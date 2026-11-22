@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.23.2](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Cut new edges with the Poly Edit Knife and round outlines with To Circle, mask or show with circle, ellipse and curve selections, give each brush its own pressure curves, keep imported alphas in a shared library, and choose the axis for mirror duplicates.
+> **Beta:** [v4.0.0-beta.23.3](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Block out a figure with **OxySpheres**, a tree of spheres turned into one smooth mesh to sculpt; bridge single edges or rows of edges in Poly Edit; and finish Knife cuts that start or end inside a face.
 
 **Highlights**
 

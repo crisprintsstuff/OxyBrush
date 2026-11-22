@@ -64,7 +64,7 @@
 //!   lower level than the one it was being worked at, `level:u32` (from 0).
 //!   The app shows that level again. Older readers skip it and open the
 //!   piece at the saved level, with every level still there.
-//! - `ARMS` (optional, since 4.0.0-beta.24): the OxySpheres armature the
+//! - `ARMS` (optional, since 4.0.0-beta.23.3): the OxySpheres armature the
 //!   **preceding** `PIEC`'s mesh was made from (RFC 0034), so it can be
 //!   edited again: `version:u32` (1) `resolution:u32 blend:f32
 //!   triangles:u32 fingerprint:f32*3 mirrored:u8 mirror_x:f32 count:u32`,

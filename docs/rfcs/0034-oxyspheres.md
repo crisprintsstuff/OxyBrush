@@ -1,6 +1,6 @@
 # RFC 0034: OxySpheres
 
-Status: Phase 1 implemented (unreleased), issue [#437](https://github.com/crisprintsstuff/OxyBrush/issues/437)
+Status: Phase 1 implemented (4.0.0-beta.23.3), issue [#437](https://github.com/crisprintsstuff/OxyBrush/issues/437)
 
 ## Summary
 

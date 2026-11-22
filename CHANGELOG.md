@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.23.3] - 2026-11-22
+
 ### Added
 
 - **OxySpheres** ([#437](https://github.com/crisprintsstuff/OxyBrush/issues/437), [RFC 0034](docs/rfcs/0034-oxyspheres.md)). Block out a figure or creature with a tree of spheres, then turn it into one smooth mesh to sculpt. Pieces > + Add > **OxySpheres…** opens one sphere; drag from a sphere to pull out a new one, **Shift+drag** to move one, **Ctrl+drag** to resize it, click a link to add a sphere on it, and **Alt+click** or **Delete** to remove a sphere with the ones below it. With Mirror across X (on with X symmetry), both sides change together. The viewport shows the mesh as it will be. **Make mesh** (Enter) adds it as a new piece in one undo step; **Resolution** sets how fine it is and **Blend** how round the joins are. **Pieces > Edit OxySpheres…** reopens the spheres while the mesh hasn't been sculpted, remeshed or subdivided since. Projects keep the spheres in a new optional `ARMS` section that older versions skip.
@@ -1089,7 +1091,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...HEAD
+[4.0.0-beta.23.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...v4.0.0-beta.23.3
 [4.0.0-beta.23.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...v4.0.0-beta.23.2
 [4.0.0-beta.23]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...v4.0.0-beta.23
 [4.0.0-beta.22]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...v4.0.0-beta.22
