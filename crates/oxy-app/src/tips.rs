@@ -707,6 +707,19 @@ pub mod plain {
     pub const UPDATES: &str = "Whether OxyBrush looks for new versions. Off unless you turn it on.";
     pub const RESET_ORDER: &str = "Put the brushes back in the default order. Number keys follow that order.";
     pub const BRUSH_HOTKEY: &str = "Press the key (with Ctrl, Shift or Alt if you like) that should pick this brush. It wins over a command on the same key, and the number keys still pick by shelf order. Esc cancels.";
+    pub const SELECT_HIERARCHY: &str =
+        "Make this piece active and pick every piece under it, so the transform gizmo moves the whole branch.";
+    pub const JOIN_HIERARCHY: &str =
+        "Join this piece and every piece under it into one piece, exactly as they are (no remesh). One undo step.";
+    pub const MERGE_HIERARCHY: &str =
+        "Fuse this piece and every piece under it into one closed surface with a voxel remesh. One undo step.";
+    pub const JOIN_PICKED_MENU: &str =
+        "Join the active piece and the picked pieces into one piece, exactly as they are. One undo step.";
+    pub const MERGE_PICKED: &str =
+        "Fuse the active piece and the picked pieces into one closed surface with a voxel remesh. One undo step.";
+    pub const SPLIT_LOOSE_MENU: &str =
+        "Make a separate piece of each part of this piece that isn't connected to the rest.";
+    pub const SPLIT_GROUPS_MENU: &str = "Make a separate piece of each face group of this piece.";
     pub const WELCOME_STARTUP: &str = "Show the welcome window the next time OxyBrush starts.";
     #[allow(dead_code)]
     pub const HIGH_CONTRAST: &str = "Stronger borders and brighter text.";
@@ -998,6 +1011,13 @@ pub mod plain {
         UPDATES,
         RESET_ORDER,
         WELCOME_STARTUP,
+        SELECT_HIERARCHY,
+        JOIN_HIERARCHY,
+        MERGE_HIERARCHY,
+        JOIN_PICKED_MENU,
+        MERGE_PICKED,
+        SPLIT_LOOSE_MENU,
+        SPLIT_GROUPS_MENU,
         HIGH_CONTRAST,
         UI_SCALE,
         DEFORM_AXIS,

@@ -711,6 +711,8 @@ pub enum Drag {
         before: Vec<u32>,
         last: Vec3,
         changed: bool,
+        /// Shift: smooth group borders instead of painting (#303).
+        relax: bool,
     },
     /// Drawing a tube's path (screen points), from `anchor` in the world.
     TubeDraw {
@@ -780,6 +782,9 @@ pub enum Drag {
         points: Vec<Vec2>,
         lasso: bool,
         click_group: Option<u32>,
+        /// Where the pointer was while Space is held: the box or lasso
+        /// moves with the pointer instead of growing (#329).
+        pan_from: Option<Vec2>,
     },
     /// Drag up or down to zoom (a mouse-navigation binding).
     Zoom,
@@ -1766,6 +1771,12 @@ impl Editor {
         })
     }
 
+    /// A box or lasso (or cut line) is being drawn, which Space moves:
+    /// the key's own command waits.
+    pub fn space_moves_drag(&self) -> bool {
+        matches!(self.drag, Drag::Select { .. } | Drag::CurveCut { .. })
+    }
+
     pub fn is_stroking(&self) -> bool {
         matches!(
             self.drag,
@@ -2534,7 +2545,8 @@ impl Editor {
                 .filter(|(i, _)| *i == active)
                 .map(|(_, hit)| self.scene.active().mesh.groups()[hit.triangle as usize]);
             let action = if m.alt { SelectAction::Hide } else { SelectAction::ShowOnly };
-            self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group };
+            self.drag =
+                Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group, pan_from: None };
             return;
         }
         // Mask key on the model, with something masked: a click blurs the
@@ -2555,7 +2567,13 @@ impl Editor {
                 self.drag = Drag::MaskGesture { start: p };
             } else {
                 let action = if m.alt { SelectAction::Unmask } else { SelectAction::Mask };
-                self.drag = Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group: None };
+                self.drag = Drag::Select {
+                    action,
+                    points: vec![p],
+                    lasso: self.selection_lasso,
+                    click_group: None,
+                    pan_from: None,
+                };
             }
             return;
         }
@@ -2603,6 +2621,12 @@ impl Editor {
         let (kind, invert) = self.effective_brush();
         if kind.is_curve_cut() {
             self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+            return;
+        }
+        // Shift with Paint Groups smooths group borders (Shift otherwise
+        // makes any brush Smooth, which doesn't touch groups) (#303).
+        if self.brush_kind == BrushKind::PaintGroups && kind == BrushKind::Smooth {
+            self.start_group_relax(hit, d);
             return;
         }
         if kind == BrushKind::PaintGroups {
@@ -3476,7 +3500,15 @@ impl Editor {
                 self.multi_gizmo_moved(pos);
                 true
             }
-            Drag::Select { points, lasso, .. } => {
+            Drag::Select { points, pan_from, .. } if self.space_held => {
+                // Space held: move the whole box or lasso with the pointer.
+                let from = pan_from.or(prev).unwrap_or(pos);
+                points.iter_mut().for_each(|p| *p += pos - from);
+                *pan_from = Some(pos);
+                true
+            }
+            Drag::Select { points, lasso, pan_from, .. } => {
+                *pan_from = None;
                 if *lasso {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
                         points.push(pos);
@@ -3748,7 +3780,9 @@ impl Editor {
                 let recipe = stroke.take_recipe();
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
-            Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, false),
+            Drag::GroupPaint { piece, before, changed, relax, .. } => {
+                self.finish_group_paint(piece, before, changed, false, relax)
+            }
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.status = "Gizmo pivot repositioned".into();
@@ -3808,7 +3842,7 @@ impl Editor {
                     self.living_resculpt_path(id, &samples, false);
                 }
             }
-            Drag::Select { action, points, lasso, click_group } => {
+            Drag::Select { action, points, lasso, click_group, .. } => {
                 // Alt pressed after a mask box (not held from the start,
                 // which means unmask) masks everything but the box.
                 let outside = action == SelectAction::Mask && self.modifiers.alt;
@@ -3869,7 +3903,9 @@ impl Editor {
                 let recipe = stroke.take_recipe();
                 self.finish_stroke(stroke.kind(), stroke.last_position(), dyn_topo, hold, recipe)
             }
-            Drag::GroupPaint { piece, before, changed, .. } => self.finish_group_paint(piece, before, changed, true),
+            Drag::GroupPaint { piece, before, changed, relax, .. } => {
+                self.finish_group_paint(piece, before, changed, true, relax)
+            }
             Drag::Gizmo(g) => {
                 if g.reposition_pivot {
                     self.custom_gizmo_pivot = Some(g.pivot);
@@ -4158,6 +4194,18 @@ impl Editor {
                 });
             }
             SelectAction::ShowOnly | SelectAction::Hide => {
+                // A box or lasso drawn around none of the visible model
+                // (dragged on empty space) inverts visibility (#329).
+                let mesh = &self.scene.active().mesh;
+                let any = mesh
+                    .triangles
+                    .iter()
+                    .zip(mesh.hidden())
+                    .any(|(t, &h)| !h && inside(t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0));
+                if !any {
+                    self.edit_faces("Invert visibility", Mesh::invert_visibility);
+                    return;
+                }
                 let label = if action == SelectAction::ShowOnly { "Show selection" } else { "Hide selection" };
                 self.edit_faces(label, |mesh| {
                     let hidden = mesh
@@ -5773,16 +5821,32 @@ impl Editor {
             return;
         }
         let src = self.scene.active();
-        let mut data = src.mesh.to_data();
+        // A piece with subdivision levels keeps them (#366): the copy gets
+        // the stack too, mirrored with the mesh for a mirror duplicate.
+        let mut multires = src.multires.clone();
+        let mut data = match multires.as_mut() {
+            Some(mr) => mr.export_active(&src.mesh),
+            None => src.mesh.to_data(),
+        };
         if mirror_x {
-            data.positions.iter_mut().for_each(|p| p.x = -p.x);
-            data.flip_winding();
+            match multires.as_mut() {
+                Some(mr) => mr.mirror_x(&mut data),
+                None => {
+                    data.positions.iter_mut().for_each(|p| p.x = -p.x);
+                    data.flip_winding();
+                }
+            }
+        }
+        let mesh = Mesh::from_data(data);
+        if let Some(mr) = multires.as_mut() {
+            mr.bind(&mesh);
         }
         let base = if mirror_x { format!("{} (mirror)", src.name) } else { src.name.clone() };
         let symmetry_center = src.symmetry_center.map(|c| if mirror_x { c * Vec3::new(-1.0, 1.0, 1.0) } else { c });
+        let material = src.material.clone();
         let name = self.scene.unique_name(&base);
         self.add_piece(
-            Piece { parent: src.parent, symmetry_center, ..Piece::new(name.clone(), Mesh::from_data(data)) },
+            Piece { parent: src.parent, symmetry_center, multires, material, ..Piece::new(name.clone(), mesh) },
             if mirror_x { "Mirror duplicate" } else { "Duplicate" },
         );
         self.status = format!("Created {name}");
@@ -7265,14 +7329,25 @@ impl Editor {
         if !self.need_piece() {
             return;
         }
-        let active = self.scene.active().id;
-        let visible: Vec<&Piece> = self.scene.pieces.iter().filter(|p| p.visible).collect();
+        let visible: Vec<u64> = self.scene.pieces.iter().filter(|p| p.visible).map(|p| p.id).collect();
         if visible.len() < 2 || !self.scene.active().visible {
             self.status = "Merge needs the active piece plus at least one more visible piece".into();
             return;
         }
-        let meshes: Vec<Mesh> = visible.iter().map(|p| p.mesh.clone()).collect();
-        let consumed = visible.iter().map(|p| p.id).filter(|&id| id != active).collect();
+        self.merge_pieces(&visible);
+    }
+
+    /// Fuse pieces `ids` (the active one among them) into the active piece
+    /// with a voxel remesh, in the background; the others are removed.
+    pub fn merge_pieces(&mut self, ids: &[u64]) {
+        let active = self.scene.active().id;
+        let pieces: Vec<&Piece> = self.scene.pieces.iter().filter(|p| ids.contains(&p.id)).collect();
+        if pieces.len() < 2 || !ids.contains(&active) {
+            self.status = "Merge needs the active piece plus at least one more piece".into();
+            return;
+        }
+        let meshes: Vec<Mesh> = pieces.iter().map(|p| p.mesh.clone()).collect();
+        let consumed = pieces.iter().map(|p| p.id).filter(|&id| id != active).collect();
         let opts = self.remesh_options();
         self.start_job(format!("Merge {} pieces", meshes.len()), consumed, move || {
             let refs: Vec<&Mesh> = meshes.iter().collect();
@@ -9279,6 +9354,88 @@ fn base_mesh(bytes: &[u8]) -> Mesh {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hierarchy_commands_select_join_and_merge_a_branch() {
+        // #414: Select, Join and Merge + remesh hierarchy from the Pieces
+        // list's right-click menu.
+        let tree = || {
+            let mut e = editor();
+            let ball = |name: &str, x: f32| {
+                let mut m = primitives::icosphere(2, 0.5).to_data();
+                m.positions.iter_mut().for_each(|p| p.x += x);
+                Piece::new(name, Mesh::from_data(m))
+            };
+            let mut scene = Scene::new(ball("Body", 0.0));
+            scene.pieces.push(ball("Arm", 0.8));
+            scene.pieces.push(ball("Hand", 1.6));
+            scene.pieces.push(ball("Hat", -0.8));
+            e.replace_document(scene, None);
+            let id = |e: &Editor, n: &str| e.scene.pieces.iter().find(|p| p.name == n).unwrap().id;
+            let (body, arm, hand) = (id(&e, "Body"), id(&e, "Arm"), id(&e, "Hand"));
+            assert!(e.set_piece_parent(arm, Some(body)));
+            assert!(e.set_piece_parent(hand, Some(arm)));
+            e
+        };
+        let index = |e: &Editor, n: &str| e.scene.pieces.iter().position(|p| p.name == n).unwrap();
+
+        let mut e = tree();
+        e.select_hierarchy(index(&e, "Body"));
+        let mut names: Vec<String> = e
+            .selected_piece_ids()
+            .iter()
+            .map(|&id| e.scene.pieces[e.scene.index_of(id).unwrap()].name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, ["Arm", "Body", "Hand"], "the branch, not the hat");
+
+        let mut e = tree();
+        e.join_hierarchy(index(&e, "Body"));
+        let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(e.scene.pieces.len(), 2, "body, arm and hand joined: {names:?}");
+        assert!(names.contains(&"Hat"));
+        e.undo();
+        assert_eq!(e.scene.pieces.len(), 4, "one undo step");
+
+        let mut e = tree();
+        e.merge_hierarchy(index(&e, "Arm"));
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 3, "arm and hand fused into one");
+    }
+
+    #[test]
+    fn duplicates_keep_subdivision_levels() {
+        // #366: Duplicate and Mirror duplicate dropped the levels.
+        let mut e = editor();
+        e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
+        e.add_level();
+        wait_job(&mut e);
+        e.add_level();
+        wait_job(&mut e);
+        e.step_level(-1);
+        wait_job(&mut e);
+        let (levels, active) = (e.scene.active().multires.as_ref().unwrap().level_count(), 1);
+        for mirror in [false, true] {
+            e.scene.set_active(0);
+            e.duplicate_active(mirror);
+            let copy = e.scene.active();
+            let mr = copy.multires.as_ref().expect("the copy keeps its levels");
+            assert_eq!((mr.level_count(), mr.active()), (levels, active), "mirror {mirror}");
+            assert!(mr.is_bound_to(&copy.mesh));
+            let bounds = copy.mesh.bounds();
+            let orig = e.scene.pieces[0].mesh.bounds();
+            if mirror {
+                assert!((bounds.min.x + orig.max.x).abs() < 1e-4, "mirrored across x");
+            } else {
+                assert_eq!(bounds.min, orig.min);
+            }
+            assert!(copy.mesh.signed_volume() > 0.0, "faces point out");
+        }
+        // The copy can step up and down like the original.
+        e.step_level(1);
+        wait_job(&mut e);
+        assert_eq!(e.multires_level(), Some((2, 3)));
+    }
 
     #[test]
     fn a_long_lens_then_zooming_in_never_puts_the_camera_inside_the_model() {
@@ -12174,6 +12331,65 @@ mod tests {
         let total = e.scene.active().mesh.vertex_count();
         assert_eq!(masked(&e), total - inside, "the complement of the box is masked");
         assert!(e.history.undo_labels().any(|l| l == "Mask outside selection"));
+    }
+
+    #[test]
+    fn ctrl_shift_drag_on_empty_space_inverts_visibility() {
+        // #329: a Ctrl+Shift box around none of the model inverts
+        // visibility; one around part of it still shows only that part.
+        let mut e = editor();
+        e.symmetry = oxy_sculpt::Symmetry::default();
+        e.modifiers = Modifiers { ctrl: true, shift: true, alt: false };
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(400.0, 595.0));
+        let hidden = |e: &Editor| e.scene.active().mesh.hidden().to_vec();
+        let half = hidden(&e);
+        let n = half.iter().filter(|&&h| h).count();
+        assert!(n > 0 && n < half.len(), "the box shows its half: {n}");
+        drag(&mut e, Vec2::new(5.0, 5.0), Vec2::new(60.0, 60.0));
+        assert!(hidden(&e).iter().zip(&half).all(|(a, b)| a != b), "inverted");
+        assert_eq!(e.history.undo_labels().last(), Some("Invert visibility"));
+        e.undo();
+        assert_eq!(hidden(&e), half);
+    }
+
+    #[test]
+    fn holding_space_moves_the_box_or_lasso_being_drawn() {
+        // #329: the box keeps its size and moves with the pointer while
+        // Space is held, then grows again from where it was put.
+        let mut e = editor();
+        e.modifiers.ctrl = true;
+        e.pointer = Some(Vec2::new(100.0, 100.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(200.0, 150.0));
+        e.space_held = true;
+        assert!(e.space_moves_drag(), "Space's own command waits");
+        e.pointer_moved(Vec2::new(250.0, 150.0));
+        e.pointer_moved(Vec2::new(300.0, 180.0));
+        let Drag::Select { points, .. } = &e.drag else { panic!("still drawing") };
+        assert_eq!(points[..], [Vec2::new(200.0, 130.0), Vec2::new(300.0, 180.0)]);
+        e.space_held = false;
+        e.pointer_moved(Vec2::new(320.0, 200.0));
+        let Drag::Select { points, .. } = &e.drag else { panic!("still drawing") };
+        assert_eq!(points[..], [Vec2::new(200.0, 130.0), Vec2::new(320.0, 200.0)], "then it grows again");
+        e.pointer_up();
+        e.modifiers.ctrl = false;
+
+        // A lasso moves every point and adds none while Space is held.
+        e.selection_lasso = true;
+        e.modifiers.ctrl = true;
+        e.pointer = Some(Vec2::new(100.0, 100.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(150.0, 100.0));
+        e.pointer_moved(Vec2::new(150.0, 150.0));
+        e.space_held = true;
+        e.pointer_moved(Vec2::new(160.0, 150.0));
+        e.pointer_moved(Vec2::new(170.0, 160.0));
+        let Drag::Select { points, .. } = &e.drag else { panic!("still drawing") };
+        let want = [Vec2::new(120.0, 110.0), Vec2::new(170.0, 110.0), Vec2::new(170.0, 160.0)];
+        assert_eq!(points[..], want);
+        e.space_held = false;
+        e.pointer_up();
+        assert!(!e.space_moves_drag());
     }
 
     #[test]
@@ -15935,6 +16151,44 @@ mod tests {
         assert_eq!(group_count(&e, 1), painted, "one undo step per stroke");
         e.undo();
         assert_eq!(group_count(&e, 0), tris);
+    }
+
+    #[test]
+    fn paint_groups_with_shift_smooths_group_borders_as_one_undo_step() {
+        let mut e = editor();
+        e.symmetry.x = false;
+        e.brush_kind = BrushKind::PaintGroups;
+        drag(&mut e, Vec2::new(370.0, 300.0), Vec2::new(430.0, 300.0));
+        // Punch a one-face hole in the middle of the painted group.
+        let mesh = &e.scene.active().mesh;
+        let centroid = |t: &[u32; 3]| t.iter().map(|&v| mesh.positions[v as usize]).sum::<Vec3>() / 3.0;
+        let ones: Vec<usize> = (0..mesh.triangle_count()).filter(|&f| mesh.groups()[f] == 1).collect();
+        let middle = ones.iter().map(|&f| centroid(&mesh.triangles[f])).sum::<Vec3>() / ones.len() as f32;
+        let hole = *ones
+            .iter()
+            .min_by(|&&a, &&b| {
+                let da = centroid(&mesh.triangles[a]).distance(middle);
+                let db = centroid(&mesh.triangles[b]).distance(middle);
+                da.total_cmp(&db)
+            })
+            .unwrap();
+        let mut groups = mesh.groups().to_vec();
+        groups[hole] = 0;
+        e.scene.active_mut().mesh.set_groups(groups.clone());
+        let positions = e.scene.active().mesh.positions.clone();
+        let undo_count = e.history.undo_labels().count();
+
+        // Shift+drag over it: the hole fills, nothing new is painted.
+        e.modifiers.shift = true;
+        drag(&mut e, Vec2::new(370.0, 300.0), Vec2::new(430.0, 300.0));
+        e.modifiers.shift = false;
+        assert_eq!(e.scene.active().mesh.groups()[hole], 1, "the hole fills");
+        assert_eq!(group_count(&e, 2), 0, "smoothing makes no new group");
+        assert_eq!(e.scene.active().mesh.positions, positions, "the surface doesn't move");
+        assert_eq!(e.history.undo_labels().count(), undo_count + 1);
+        assert_eq!(e.history.undo_labels().last(), Some("Smooth groups"));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups(), &groups[..]);
     }
 
     #[test]

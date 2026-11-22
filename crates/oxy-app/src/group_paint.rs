@@ -1,6 +1,6 @@
 //! The Paint Groups brush: paint face groups with a stroke, as you would
 //! paint a mask. Each stroke makes a new group; Alt grows the group where
-//! the stroke starts. Symmetry and "Front faces only" apply. The whole
+//! the stroke starts; Shift smooths the borders between groups. Symmetry and "Front faces only" apply. The whole
 //! stroke is one undo step (a face edit, architecture invariant 4).
 
 use crate::editor::{Drag, Editor};
@@ -28,7 +28,18 @@ impl Editor {
             self.view.show_groups = true;
             self.status = "Showing face groups while you paint them (View > Face groups hides them)".into();
         }
-        self.drag = Drag::GroupPaint { piece, group, before, last: hit.point, changed: false };
+        self.drag = Drag::GroupPaint { piece, group, before, last: hit.point, changed: false, relax: false };
+        self.group_dab(hit.point, d);
+    }
+
+    /// Start a Shift stroke with Paint Groups: smooth the borders between
+    /// groups under the brush, taking off spikes and filling notches (#303).
+    pub(crate) fn start_group_relax(&mut self, hit: RayHit, d: Vec3) {
+        let mesh = &self.scene.active().mesh;
+        let before = mesh.groups().to_vec();
+        let piece = self.scene.active().id;
+        self.view.show_groups = true;
+        self.drag = Drag::GroupPaint { piece, group: 0, before, last: hit.point, changed: false, relax: true };
         self.group_dab(hit.point, d);
     }
 
@@ -49,19 +60,30 @@ impl Editor {
         let center = self.symmetry_center();
         let transforms = self.symmetry.transforms();
         let front = self.front_faces_only;
-        let Drag::GroupPaint { piece, group, last, changed, .. } = &mut self.drag else { return };
+        let Drag::GroupPaint { piece, group, last, changed, relax, .. } = &mut self.drag else { return };
         let Some(target) = self.documents[self.active_document].scene.get_mut(*piece) else { return };
         for t in transforms {
             let q = center + t * (p - center);
             let facing = front.then(|| t * d);
-            *changed |= target.mesh.paint_group(q, radius, facing, *group);
+            *changed |= if *relax {
+                target.mesh.relax_groups(q, radius, facing)
+            } else {
+                target.mesh.paint_group(q, radius, facing, *group)
+            };
         }
         *last = p;
     }
 
     /// End the stroke: one undo step if anything changed, or (Escape) put
     /// the groups back.
-    pub(crate) fn finish_group_paint(&mut self, piece: u64, before: Vec<u32>, changed: bool, cancel: bool) {
+    pub(crate) fn finish_group_paint(
+        &mut self,
+        piece: u64,
+        before: Vec<u32>,
+        changed: bool,
+        cancel: bool,
+        relax: bool,
+    ) {
         if !changed {
             return;
         }
@@ -74,6 +96,7 @@ impl Editor {
             return;
         }
         let hidden = p.mesh.hidden().to_vec();
-        self.history.record_faces("Paint groups", piece, before, hidden);
+        let label = if relax { "Smooth groups" } else { "Paint groups" };
+        self.history.record_faces(label, piece, before, hidden);
     }
 }

@@ -1468,6 +1468,10 @@ impl App {
             }
             return None;
         }
+        // Space moves a box, lasso or cut line being drawn instead.
+        if key == Some(KeyId::Space) && self.editor.space_moves_drag() {
+            return None;
+        }
         // The quick menu is held: it opens on the press and closes when that key is released.
         if let Some(key) = key {
             let chord = self.chord(key);
