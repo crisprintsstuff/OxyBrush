@@ -99,9 +99,13 @@ commands! {
     CopyPiece => "Copy piece", "Ctrl+C", "Copy the selected piece or pieces to the clipboard so you can paste them into this or another tab.";
     PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project tab as one undo step.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
-    MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
+    MirrorDuplicate => "Mirror duplicate (X)", "", "Copy the active piece, flipped across X.";
+    MirrorDuplicateY => "Mirror duplicate (Y)", "", "Copy the active piece, flipped across Y.";
+    MirrorDuplicateZ => "Mirror duplicate (Z)", "", "Copy the active piece, flipped across Z.";
     DuplicateLinked => "Duplicate linked", "", "Make a linked copy of the active piece: it follows the original as you sculpt, paint or remesh it. Move, turn or scale the copy with the transform gizmo; Unlink it to change it on its own.";
-    MirrorDuplicateLinked => "Mirror duplicate linked", "", "Make a linked copy of the active piece, flipped across X: sculpt one ear, horn or hand and its mirror image follows. Move the copy with the transform gizmo; Unlink it to change it on its own.";
+    MirrorDuplicateLinked => "Mirror duplicate linked (X)", "", "Make a linked copy, flipped across X. Sculpt the original and the copy follows.";
+    MirrorDuplicateLinkedY => "Mirror duplicate linked (Y)", "", "Make a linked copy, flipped across Y. Sculpt the original and the copy follows.";
+    MirrorDuplicateLinkedZ => "Mirror duplicate linked (Z)", "", "Make a linked copy, flipped across Z. Sculpt the original and the copy follows.";
     Unlink => "Unlink copy", "", "Make the active linked copy an ordinary piece, which no longer follows its original.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
     Unparent => "Unparent piece", "", "Detach the active piece from its parent piece, so it no longer moves with it.";

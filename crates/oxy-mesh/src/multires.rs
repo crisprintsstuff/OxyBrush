@@ -997,7 +997,12 @@ impl Multires {
         &self.levels[0].uv
     }
 
-    /// Mirror the whole stack across the YZ plane (x → −x), with `active`
+    /// Mirror the whole stack across the YZ plane (x → −x).
+    pub fn mirror_x(&mut self, active: &mut MeshData) {
+        self.mirror(active, Vec3::new(-1.0, 1.0, 1.0));
+    }
+
+    /// Mirror the whole stack across a coordinate plane, with `active`
     /// (the active level's data, in level order, as [`Self::export_active`]
     /// returns it) mirrored the same way: for a mirrored duplicate that keeps
     /// its subdivision levels (#366). Subdivision is linear, so every level
@@ -1007,8 +1012,9 @@ impl Multires {
     /// (`Polys::Quads`), and `active`'s per-triangle data moves with them.
     ///
     /// PRECONDITION: `active` is the active level's data in level order.
-    pub fn mirror_x(&mut self, active: &mut MeshData) {
-        let flip = |p: &mut Vec3| p.x = -p.x;
+    /// `scale` is −1 along the reflected axis and 1 along the other axes.
+    pub fn mirror(&mut self, active: &mut MeshData, scale: Vec3) {
+        let flip = |p: &mut Vec3| *p *= scale;
         for (k, lvl) in self.levels.iter_mut().enumerate() {
             lvl.positions.iter_mut().for_each(flip);
             lvl.details.iter_mut().for_each(flip);

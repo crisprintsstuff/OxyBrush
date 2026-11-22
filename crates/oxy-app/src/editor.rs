@@ -11,7 +11,7 @@ use oxy_history::Step;
 use oxy_mesh::{Mesh, MeshData, primitives, topo};
 use oxy_render::{BackgroundStyle, Camera, MatcapPreset, ViewSettings, default_focal_mm, quantize_focal_mm};
 use oxy_sculpt::{
-    Alpha, AlphaStamp, BrushKind, BrushSettings, BuiltinAlpha, Falloff, StoredChange, Stroke, StrokeRecipe,
+    Alpha, AlphaStamp, Axis, BrushKind, BrushSettings, BuiltinAlpha, Falloff, StoredChange, Stroke, StrokeRecipe,
     StrokeSample, Symmetry,
 };
 use oxy_topo::RemeshOptions;
@@ -5843,7 +5843,7 @@ impl Editor {
         self.status = format!("Added {name}");
     }
 
-    pub fn duplicate_active(&mut self, mirror_x: bool) {
+    pub fn duplicate_active(&mut self, mirror_axis: Option<Axis>) {
         if !self.need_piece() {
             return;
         }
@@ -5855,11 +5855,12 @@ impl Editor {
             Some(mr) => mr.export_active(&src.mesh),
             None => src.mesh.to_data(),
         };
-        if mirror_x {
+        let reflection = mirror_axis.map(|axis| Vec3::ONE - 2.0 * axis.vector());
+        if let Some(scale) = reflection {
             match multires.as_mut() {
-                Some(mr) => mr.mirror_x(&mut data),
+                Some(mr) => mr.mirror(&mut data, scale),
                 None => {
-                    data.positions.iter_mut().for_each(|p| p.x = -p.x);
+                    data.positions.iter_mut().for_each(|p| *p *= scale);
                     data.flip_winding();
                 }
             }
@@ -5868,13 +5869,13 @@ impl Editor {
         if let Some(mr) = multires.as_mut() {
             mr.bind(&mesh);
         }
-        let base = if mirror_x { format!("{} (mirror)", src.name) } else { src.name.clone() };
-        let symmetry_center = src.symmetry_center.map(|c| if mirror_x { c * Vec3::new(-1.0, 1.0, 1.0) } else { c });
+        let base = if reflection.is_some() { format!("{} (mirror)", src.name) } else { src.name.clone() };
+        let symmetry_center = src.symmetry_center.map(|c| c * reflection.unwrap_or(Vec3::ONE));
         let material = src.material.clone();
         let name = self.scene.unique_name(&base);
         self.add_piece(
             Piece { parent: src.parent, symmetry_center, multires, material, ..Piece::new(name.clone(), mesh) },
-            if mirror_x { "Mirror duplicate" } else { "Duplicate" },
+            if reflection.is_some() { "Mirror duplicate" } else { "Duplicate" },
         );
         self.status = format!("Created {name}");
     }
@@ -9448,7 +9449,11 @@ mod tests {
     fn duplicates_keep_subdivision_levels() {
         // #366: Duplicate and Mirror duplicate dropped the levels.
         let mut e = editor();
-        e.replace_document(Scene::new(Piece::new("Ball", primitives::icosphere(2, 1.0))), None);
+        let offset = Vec3::new(2.0, 3.0, 4.0);
+        let mut data = primitives::icosphere(2, 1.0).to_data();
+        data.positions.iter_mut().for_each(|p| *p += offset);
+        let piece = Piece { symmetry_center: Some(offset), ..Piece::new("Ball", Mesh::from_data(data)) };
+        e.replace_document(Scene::new(piece), None);
         e.add_level();
         wait_job(&mut e);
         e.add_level();
@@ -9456,20 +9461,20 @@ mod tests {
         e.step_level(-1);
         wait_job(&mut e);
         let (levels, active) = (e.scene.active().multires.as_ref().unwrap().level_count(), 1);
-        for mirror in [false, true] {
+        for (axis, expected) in [
+            (None, offset),
+            (Some(Axis::X), Vec3::new(-2.0, 3.0, 4.0)),
+            (Some(Axis::Y), Vec3::new(2.0, -3.0, 4.0)),
+            (Some(Axis::Z), Vec3::new(2.0, 3.0, -4.0)),
+        ] {
             e.scene.set_active(0);
-            e.duplicate_active(mirror);
+            e.duplicate_active(axis);
             let copy = e.scene.active();
             let mr = copy.multires.as_ref().expect("the copy keeps its levels");
-            assert_eq!((mr.level_count(), mr.active()), (levels, active), "mirror {mirror}");
+            assert_eq!((mr.level_count(), mr.active()), (levels, active), "axis {axis:?}");
             assert!(mr.is_bound_to(&copy.mesh));
-            let bounds = copy.mesh.bounds();
-            let orig = e.scene.pieces[0].mesh.bounds();
-            if mirror {
-                assert!((bounds.min.x + orig.max.x).abs() < 1e-4, "mirrored across x");
-            } else {
-                assert_eq!(bounds.min, orig.min);
-            }
+            assert!((copy.mesh.bounds().center() - expected).length() < 1e-4, "axis {axis:?}");
+            assert_eq!(copy.symmetry_center, Some(expected));
             assert!(copy.mesh.signed_volume() > 0.0, "faces point out");
         }
         // The copy can step up and down like the original.
@@ -10505,7 +10510,7 @@ mod tests {
     #[test]
     fn undo_on_this_piece_skips_the_others_and_the_setting_makes_it_the_default() {
         let mut e = editor();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         let head = 0;
         e.scene.set_active(head);
         let (h0, t0) = (e.scene.pieces[0].mesh.positions[0], e.scene.pieces[1].mesh.positions[0]);
@@ -11099,7 +11104,7 @@ mod tests {
         assert!(e.scene.active().mesh.triangle_count() > before, "inserted: {}", e.status);
         assert!(!e.status.contains("limit"), "{}", e.status);
         let pieces = e.scene.pieces.len();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         assert_eq!(e.scene.pieces.len(), pieces + 1, "duplicated: {}", e.status);
 
         let mut e = dyntopo_editor();
@@ -11316,8 +11321,8 @@ mod tests {
     #[test]
     fn merge_down_joins_the_active_piece_with_the_one_below() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         assert_eq!(e.scene.pieces.len(), 3);
         // Hidden pieces still merge down: it's about the list, not the view.
         e.scene.pieces[1].visible = false;
@@ -11342,7 +11347,7 @@ mod tests {
     #[test]
     fn the_gizmo_moves_picked_pieces_together_in_one_undo_step() {
         let mut e = editor();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         e.scene.set_active(0);
         // Move the copy aside, so the two have a middle between them.
         let shift = Vec3::new(0.0, 1.5, 0.0);
@@ -11393,8 +11398,8 @@ mod tests {
     #[test]
     fn join_combines_visible_pieces_without_remeshing() {
         let mut e = editor();
-        e.duplicate_active(true);
-        e.duplicate_active(false);
+        e.duplicate_active(Some(Axis::X));
+        e.duplicate_active(None);
         assert_eq!(e.scene.pieces.len(), 3);
         // Hide the last one: it stays out of the join.
         e.scene.pieces[2].visible = false;
@@ -11432,9 +11437,9 @@ mod tests {
     #[test]
     fn reorder_piece_moves_item_in_list_and_undo_redo_round_trips() {
         let mut e = editor();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         e.scene.pieces[1].name = "Piece 1".into();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         e.scene.pieces[2].name = "Piece 2".into();
         e.scene.pieces[0].name = "Piece 0".into();
         e.scene.set_active(1); // "Piece 1" is active
@@ -11464,8 +11469,8 @@ mod tests {
     #[test]
     fn join_picked_combines_only_picked_pieces_without_affecting_others() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         assert_eq!(e.scene.pieces.len(), 3);
         e.scene.pieces[0].name = "Piece 0".into();
         e.scene.pieces[1].name = "Piece 1".into();
@@ -11496,8 +11501,8 @@ mod tests {
     #[test]
     fn isolate_piece_toggles_between_isolated_and_all_visible() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         assert_eq!(e.scene.pieces.len(), 3);
         assert!(e.scene.pieces.iter().all(|p| p.visible));
 
@@ -11526,7 +11531,7 @@ mod tests {
     #[test]
     fn parenting_and_unparenting_with_undo_redo() {
         let mut e = editor();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         let parent_id = e.scene.pieces[0].id;
         let child_id = e.scene.pieces[1].id;
 
@@ -11558,8 +11563,8 @@ mod tests {
     #[test]
     fn parent_cycle_prevention_in_editor() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         let a = e.scene.pieces[0].id;
         let b = e.scene.pieces[1].id;
         let c = e.scene.pieces[2].id;
@@ -11578,7 +11583,7 @@ mod tests {
     #[test]
     fn parent_transform_propagates_to_descendants_and_child_leaves_parent_intact() {
         let mut e = editor();
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         e.scene.set_active(0);
         let parent_id = e.scene.pieces[0].id;
         let child_id = e.scene.pieces[1].id;
@@ -11634,8 +11639,8 @@ mod tests {
     #[test]
     fn delete_parent_unparents_children_and_undo_restores() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         let p0 = e.scene.pieces[0].id;
         let p1 = e.scene.pieces[1].id;
         let p2 = e.scene.pieces[2].id;
@@ -11661,8 +11666,8 @@ mod tests {
     #[test]
     fn place_piece_as_child_moves_child_to_another_parent_and_undoes() {
         let mut e = editor();
-        e.duplicate_active(false); // piece 1
-        e.duplicate_active(false); // piece 2
+        e.duplicate_active(None); // piece 1
+        e.duplicate_active(None); // piece 2
         let p0 = e.scene.pieces[0].id; // Parent A
         let p1 = e.scene.pieces[1].id; // Child
         let p2 = e.scene.pieces[2].id; // Parent B
@@ -11686,9 +11691,9 @@ mod tests {
     #[test]
     fn place_pieces_as_children_parents_multiple_pieces_and_undoes() {
         let mut e = editor();
-        e.duplicate_active(false); // piece 1
-        e.duplicate_active(false); // piece 2
-        e.duplicate_active(false); // piece 3
+        e.duplicate_active(None); // piece 1
+        e.duplicate_active(None); // piece 2
+        e.duplicate_active(None); // piece 3
         let root = e.scene.pieces[0].id;
         let c1 = e.scene.pieces[1].id;
         let c2 = e.scene.pieces[2].id;
@@ -11725,8 +11730,8 @@ mod tests {
     #[test]
     fn unparent_pieces_unparents_multiple_selected_and_undoes() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         let root = e.scene.pieces[0].id;
         let c1 = e.scene.pieces[1].id;
         let c2 = e.scene.pieces[2].id;
@@ -11749,10 +11754,10 @@ mod tests {
     #[test]
     fn select_piece_range_shift_click_selects_all_in_between() {
         let mut e = editor();
-        e.duplicate_active(false); // 1
-        e.duplicate_active(false); // 2
-        e.duplicate_active(false); // 3
-        e.duplicate_active(false); // 4
+        e.duplicate_active(None); // 1
+        e.duplicate_active(None); // 2
+        e.duplicate_active(None); // 3
+        e.duplicate_active(None); // 4
         assert_eq!(e.scene.pieces.len(), 5);
 
         let visible: Vec<usize> = (0..5).collect();
@@ -11796,8 +11801,8 @@ mod tests {
     #[test]
     fn place_piece_relative_unparents_child_when_dropped_next_to_root() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         let p0 = e.scene.pieces[0].id;
         let p1 = e.scene.pieces[1].id;
         let p2 = e.scene.pieces[2].id;
@@ -11825,9 +11830,9 @@ mod tests {
     #[test]
     fn place_piece_relative_moves_child_between_parents() {
         let mut e = editor();
-        e.duplicate_active(false);
-        e.duplicate_active(false);
-        e.duplicate_active(false);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
+        e.duplicate_active(None);
         let parent_a = e.scene.pieces[0].id;
         let child_a = e.scene.pieces[1].id;
         let parent_b = e.scene.pieces[2].id;
@@ -12257,7 +12262,7 @@ mod tests {
         e.add_primitive("cube");
         assert_eq!(e.scene.pieces.len(), 2);
         assert_eq!(e.scene.active().name, "Cube");
-        e.duplicate_active(true);
+        e.duplicate_active(Some(Axis::X));
         assert_eq!(e.scene.pieces.len(), 3);
         e.delete_active();
         assert_eq!(e.scene.pieces.len(), 2);
@@ -14551,7 +14556,7 @@ mod tests {
         assert_eq!(e.symmetry_center(), e.scene.active().mesh.bounds().center());
 
         // A mirrored duplicate mirrors its centre with it.
-        e.duplicate_active(true);
+        e.duplicate_active(Some(Axis::X));
         let dup = e.scene.active().symmetry_center.unwrap();
         assert_eq!(dup.x, -e.scene.pieces[0].symmetry_center.unwrap().x);
     }
@@ -16582,7 +16587,7 @@ mod tests {
         assert!(!e.history.can_undo());
         assert!(!matches!(e.drag, Drag::Stroke { .. }));
 
-        e.duplicate_active(false);
+        e.duplicate_active(None);
         e.start_poly_edit();
         e.start_retopo();
         e.toggle_gizmo(GizmoMode::Combined);

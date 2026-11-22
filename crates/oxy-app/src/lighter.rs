@@ -398,7 +398,7 @@ mod tests {
         // A linked copy's original isn't lightened: the copy follows it.
         let mut e = editor();
         e.scene.set_active(0);
-        e.duplicate_linked(true);
+        e.duplicate_linked(Some(oxy_sculpt::Axis::X));
         e.sync_links();
         e.lighter_inactive = true;
         e.scene.set_active(1);

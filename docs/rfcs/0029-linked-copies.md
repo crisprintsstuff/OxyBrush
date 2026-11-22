@@ -1,6 +1,6 @@
 # RFC 0029: Linked copies
 
-Status: Implemented (unreleased), from issue #327
+Status: Implemented, from issue #327, with axis selection from #427
 
 ## Summary
 
@@ -23,6 +23,12 @@ its own plane; linked copies work across pieces, at any position,
 orientation and scale, and also for repeated parts that aren't mirrored.
 
 ## Design
+
+- **Mirror axis.** Pieces > Mirror duplicate linked offers X, Y or Z. The
+  selected coordinate is reflected about the plane through the piece's
+  symmetry center (the origin when unset). Pieces > Mirror duplicate
+  offers the same axes, with its plane through the world origin. The
+  command palette lists each axis as its own command.
 
 - **Data.** A piece may have `link: Option<PieceLink>`: the original's id
   and a transform (original space to copy space). A transform with a

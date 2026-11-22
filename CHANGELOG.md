@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Mirror duplicate axes** ([#427](https://github.com/crisprintsstuff/OxyBrush/issues/427)). Choose X, Y or Z under **Pieces > Mirror duplicate** or **Mirror duplicate linked**. All six commands are also in the command palette.
+
 ### Added
 
 - **Lighter inactive pieces** (Preferences > General, off by default): a piece with subdivision levels that you aren't working on is shown at its highest level under a triangle budget (500,000 by default, adjustable), which frees its full-detail mesh: about 66 bytes a triangle, plus the graphics card's copy. Picking it brings its own level back, exactly as it was, in the background (about a second for a 6-million-triangle piece; leaving it takes about a quarter of a second). Export, Join, Merge, Booleans, copy, the Blender bridge, agents, plugins and undo always see the full level. Pieces tied to others (linked copies and their originals, surface instance hosts and sources, pieces with living strokes) stay in full. The Pieces list marks lighter pieces with `~` before their triangle count. A project saved while pieces are lighter records each one's own level in a new optional `LITE` section, so it comes back after reopening; older versions skip it and open the piece at the lighter level, with every level still there.
