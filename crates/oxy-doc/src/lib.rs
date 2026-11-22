@@ -64,6 +64,10 @@ pub struct Piece {
     /// When this piece is a linked copy of another (#327): its mesh is the
     /// original's, moved by the transform, and the app keeps it so.
     pub link: Option<PieceLink>,
+    /// The subdivision level the piece was really at when it was saved
+    /// shown lighter (the `LITE` section): it was saved at a lower level to
+    /// save memory, and the app brings this one back. Set only by loading.
+    pub own_level: Option<u32>,
 }
 
 /// What a linked copy is a copy of: the original piece and where the copy
@@ -245,6 +249,7 @@ impl Piece {
             instancers: Vec::new(),
             parent: None,
             link: None,
+            own_level: None,
         }
     }
 
@@ -292,6 +297,7 @@ impl Piece {
                     instancers: Vec::new(),
                     parent: None,
                     link: None,
+                    own_level: None,
                     polygons: None,
                 }
             }
@@ -310,6 +316,7 @@ impl Piece {
                 instancers: Vec::new(),
                 parent: None,
                 link: None,
+                own_level: None,
                 polygons: SavedPolygons::of(&self.mesh),
             },
         }
@@ -348,6 +355,8 @@ pub struct PieceData {
     /// The `LINK` section: the original's index and the transform, when
     /// the piece is a linked copy. Filled in by [`Scene::to_data`].
     pub link: Option<(u32, Mat4)>,
+    /// The `LITE` section: see [`Piece::own_level`]. Filled in by the app.
+    pub own_level: Option<u32>,
     /// The `POLY` section: which edges of `mesh` lie inside the polygons it
     /// was imported or built from, so its quads stay quads after it's
     /// opened again. None when the quads are guessed from the shape.
@@ -461,6 +470,7 @@ impl PieceData {
             instancers: Vec::new(),
             parent: None,
             link: None,
+            own_level: self.own_level,
         }
     }
 }

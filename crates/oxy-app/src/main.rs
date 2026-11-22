@@ -16,6 +16,7 @@ mod guide;
 mod instances;
 mod instances_ui;
 mod keymap;
+mod lighter;
 mod lights_ui;
 mod links;
 mod living;

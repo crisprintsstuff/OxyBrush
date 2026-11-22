@@ -12,6 +12,7 @@ oxy-mesh.workspace = true
 oxy-doc.workspace = true
 glam.workspace = true
 lz4_flex.workspace = true
+log.workspace = true
 
 [lints]
 workspace = true

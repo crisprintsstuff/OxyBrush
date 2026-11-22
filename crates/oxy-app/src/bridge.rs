@@ -162,6 +162,7 @@ impl Editor {
     /// unchanged, in the order they were sent); pieces made here go to its
     /// new-pieces folder. With `close`, the document is closed afterwards.
     pub fn send_back_link(&mut self, close: bool) {
+        self.restore_light_pieces(None);
         let Some(link) = self.bridge.clone() else { return };
         let m = &link.manifest;
         let to_world = from_app_world(&m.app).inverse();

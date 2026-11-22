@@ -2673,6 +2673,7 @@ name = "oxy-history"
 version = "4.0.0-beta.23"
 dependencies = [
  "glam",
+ "log",
  "lz4_flex",
  "oxy-doc",
  "oxy-mesh",

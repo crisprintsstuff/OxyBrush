@@ -449,6 +449,9 @@ pub struct Settings {
     /// Each brush keeps its own settings (#305), and also its size.
     pub settings_per_brush: bool,
     pub size_per_brush: bool,
+    /// Show inactive pieces with levels lighter, under this many triangles.
+    pub lighter_inactive: bool,
+    pub lighter_budget: usize,
     /// Each brush's settings (with `remember_brushes`): `brush_look` lines.
     pub brush_looks: Vec<oxy_sculpt::BrushPreset>,
     pub undo_per_piece: bool,
@@ -1179,6 +1182,8 @@ impl Default for Settings {
             settings_per_brush: true,
             size_per_brush: false,
             brush_looks: Vec::new(),
+            lighter_inactive: false,
+            lighter_budget: crate::lighter::DEFAULT_LIGHTER_BUDGET,
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
@@ -1349,6 +1354,7 @@ impl Settings {
             )
             + &format!("remember_brushes = {}\n", self.remember_brushes)
             + &format!("settings_per_brush = {}\nsize_per_brush = {}\n", self.settings_per_brush, self.size_per_brush)
+            + &format!("lighter_inactive = {}\nlighter_budget = {}\n", self.lighter_inactive, self.lighter_budget)
             + &self.brush_looks.iter().map(|l| format!("brush_look = {}\n", l.to_code())).collect::<String>()
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
@@ -1703,6 +1709,14 @@ impl Settings {
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
                 "settings_per_brush" => s.settings_per_brush = v.parse().unwrap_or(s.settings_per_brush),
                 "size_per_brush" => s.size_per_brush = v.parse().unwrap_or(s.size_per_brush),
+                "lighter_inactive" => s.lighter_inactive = v.parse().unwrap_or(s.lighter_inactive),
+                "lighter_budget" => {
+                    if let Ok(n) = v.parse::<usize>()
+                        && (10_000..=50_000_000).contains(&n)
+                    {
+                        s.lighter_budget = n;
+                    }
+                }
                 "brush_look" => {
                     if let Ok(l) = oxy_sculpt::BrushPreset::from_code(v)
                         && !s.brush_looks.iter().any(|x| x.kind == l.kind)
@@ -2036,6 +2050,8 @@ mod tests {
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
             brush_gravity: vec![(BrushKind::Clay, 0.5)],
             remember_brushes: false,
+            lighter_inactive: true,
+            lighter_budget: 250_000,
             settings_per_brush: false,
             size_per_brush: true,
             brush_looks: vec![oxy_sculpt::BrushPreset::new("Clay", BrushKind::Clay)],

@@ -30,12 +30,16 @@ pub(crate) struct ChunkSnapshot {
 }
 
 enum Change {
+    /// Points edited in place. `topology` is the mesh's topology version
+    /// when they were recorded: the snapshots only fit that mesh.
     Chunks {
         piece: u64,
+        topology: u64,
         snaps: Vec<ChunkSnapshot>,
     },
     CompressedChunks {
         piece: u64,
+        topology: u64,
         uncompressed_bytes: usize,
         data: Vec<u8>,
     },
@@ -140,12 +144,12 @@ impl From<Step> for Change {
 impl Change {
     fn compress(&mut self) {
         match self {
-            Change::Chunks { piece, snaps } => {
-                let p = *piece;
+            Change::Chunks { piece, topology, snaps } => {
+                let (p, topology) = (*piece, *topology);
                 let raw = compress::encode_snapshots(snaps);
                 let uncompressed_bytes = raw.len();
                 let data = compress::compress_bytes(&raw);
-                *self = Change::CompressedChunks { piece: p, uncompressed_bytes, data };
+                *self = Change::CompressedChunks { piece: p, topology, uncompressed_bytes, data };
             }
             Change::Faces { piece, groups, hidden } => {
                 let p = *piece;
@@ -165,12 +169,12 @@ impl Change {
 
     fn ensure_uncompressed(&mut self) {
         match self {
-            Change::CompressedChunks { piece, uncompressed_bytes, data } => {
-                let p = *piece;
+            Change::CompressedChunks { piece, topology, uncompressed_bytes, data } => {
+                let (p, topology) = (*piece, *topology);
                 let raw = compress::decompress_bytes(data, *uncompressed_bytes)
                     .expect("corrupt compressed chunks in history");
                 let snaps = compress::decode_snapshots(&raw).expect("corrupt chunk snapshots");
-                *self = Change::Chunks { piece: p, snaps };
+                *self = Change::Chunks { piece: p, topology, snaps };
             }
             Change::CompressedFaces { piece, uncompressed_bytes, data } => {
                 let p = *piece;
@@ -259,8 +263,15 @@ impl Change {
     fn swap(&mut self, scene: &mut Scene) -> Option<u64> {
         self.ensure_uncompressed();
         match self {
-            Change::Chunks { piece, snaps } => {
+            Change::Chunks { piece, topology, snaps } => {
                 let mesh = &mut scene.get_mut(*piece)?.mesh;
+                // Recorded on another mesh (one rebuilt outside history):
+                // the snapshots don't fit, so leave this mesh alone rather
+                // than scramble it.
+                if mesh.topology_version() != *topology {
+                    log::warn!("skipping an undo step recorded on a different mesh of piece {piece}");
+                    return Some(*piece);
+                }
                 let mut chunks = Vec::with_capacity(snaps.len());
                 for s in snaps.iter_mut() {
                     let r = mesh.chunks[s.chunk as usize].vertices.clone();
@@ -285,6 +296,10 @@ impl Change {
             }
             Change::Faces { piece, groups, hidden } => {
                 let mesh = &mut scene.get_mut(*piece)?.mesh;
+                if groups.len() != mesh.triangle_count() {
+                    log::warn!("skipping a face step recorded on a different mesh of piece {piece}");
+                    return Some(*piece);
+                }
                 let old_groups = std::mem::replace(groups, mesh.groups().to_vec());
                 let old_hidden = std::mem::replace(hidden, mesh.hidden().to_vec());
                 mesh.set_groups(old_groups);
@@ -387,6 +402,7 @@ struct Entry {
 struct Pending {
     label: String,
     piece: u64,
+    topology: u64,
     touched: Vec<bool>,
     snapshots: Vec<ChunkSnapshot>,
     color: bool,
@@ -450,7 +466,7 @@ impl History {
     #[allow(clippy::type_complexity)]
     pub fn newest_chunks_before(&self, piece: u64) -> Option<Vec<(u32, &[Vec3], &[Vec3])>> {
         match &self.undo.back()?.change {
-            Change::Chunks { piece: p, snaps } if *p == piece => {
+            Change::Chunks { piece: p, snaps, .. } if *p == piece => {
                 Some(snaps.iter().map(|s| (s.chunk, s.positions.as_slice(), s.color.as_slice())).collect())
             }
             _ => None,
@@ -494,6 +510,7 @@ impl History {
             color,
             label: label.into(),
             piece,
+            topology: mesh.topology_version(),
             touched: vec![false; mesh.chunks.len()],
             snapshots: Vec::new(),
         });
@@ -548,7 +565,7 @@ impl History {
         if let Some(p) = self.pending.take()
             && !p.snapshots.is_empty()
         {
-            self.push(p.label, Change::Chunks { piece: p.piece, snaps: p.snapshots });
+            self.push(p.label, Change::Chunks { piece: p.piece, topology: p.topology, snaps: p.snapshots });
         }
     }
 
@@ -590,7 +607,7 @@ impl History {
         if p.snapshots.is_empty() {
             self.push(p.label, faces);
         } else {
-            let chunks = Change::Chunks { piece: p.piece, snaps: p.snapshots };
+            let chunks = Change::Chunks { piece: p.piece, topology: p.topology, snaps: p.snapshots };
             self.push(p.label, Change::Compound(vec![chunks, faces]));
         }
     }
@@ -644,6 +661,26 @@ impl History {
 
     pub fn used_bytes(&self) -> usize {
         self.undo.iter().chain(&self.redo).map(|e| e.change.bytes()).sum()
+    }
+
+    /// Whether the next undo (of piece `only`'s newest change, with
+    /// per-piece undo) would change piece `id`.
+    pub fn next_undo_touches(&self, only: Option<u64>, id: u64) -> bool {
+        let entry = match only {
+            Some(o) => self.undo.iter().rev().find(|e| e.change.touches(o)),
+            None => self.undo.back(),
+        };
+        entry.is_some_and(|e| e.change.touches(id))
+            || self.pending.as_ref().is_some_and(|p| p.piece == id && only.is_none_or(|o| o == id))
+    }
+
+    /// The same for the next redo.
+    pub fn next_redo_touches(&self, only: Option<u64>, id: u64) -> bool {
+        let entry = match only {
+            Some(o) => self.redo.iter().rev().find(|e| e.change.touches(o)),
+            None => self.redo.last(),
+        };
+        entry.is_some_and(|e| e.change.touches(id))
     }
 
     pub fn can_undo(&self) -> bool {
@@ -766,6 +803,43 @@ impl History {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn undo_leaves_a_mesh_rebuilt_outside_history_alone() {
+        // A stroke recorded on one mesh can't be put back on another with
+        // different points (a piece rebuilt without an undo step).
+        let mut scene = Scene::new(Piece::new("A", oxy_mesh::primitives::icosphere(3, 1.0)));
+        let id = scene.pieces[0].id;
+        let mut h = History::default();
+        h.begin("Stroke", id, &scene.pieces[0].mesh);
+        h.touch(&scene.pieces[0].mesh, 0);
+        scene.pieces[0].mesh.positions[0] *= 2.0;
+        h.commit();
+        assert!(h.next_undo_touches(None, id) && h.next_undo_touches(Some(id), id));
+        assert!(!h.next_undo_touches(None, id + 1));
+        let rebuilt = Mesh::from_data(oxy_mesh::primitives::icosphere(2, 1.0).to_data());
+        let before = rebuilt.positions.clone();
+        scene.pieces[0].mesh = rebuilt;
+        assert_eq!(h.undo(&mut scene).as_deref(), Some("Stroke"));
+        assert_eq!(scene.pieces[0].mesh.positions, before, "left alone");
+        // Built again from the same data under its old version: the step fits.
+        let data = oxy_mesh::primitives::icosphere(3, 1.0).to_data();
+        let mut again = History::default();
+        let mut scene = Scene::new(Piece::new("A", Mesh::from_data(data.clone())));
+        let id = scene.pieces[0].id;
+        let original = scene.pieces[0].mesh.positions[0];
+        again.begin("Stroke", id, &scene.pieces[0].mesh);
+        again.touch(&scene.pieces[0].mesh, 0);
+        scene.pieces[0].mesh.positions[0] *= 2.0;
+        again.commit();
+        let v = scene.pieces[0].mesh.topology_version();
+        let mut rebuilt = Mesh::from_data(data);
+        rebuilt.positions[0] *= 2.0;
+        rebuilt.adopt_topology_version(v);
+        scene.pieces[0].mesh = rebuilt;
+        again.undo(&mut scene);
+        assert_eq!(scene.pieces[0].mesh.positions[0], original);
+    }
 
     #[test]
     fn prefix_recent_undo_labels_only_the_newest_steps() {

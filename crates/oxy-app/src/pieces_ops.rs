@@ -234,6 +234,8 @@ impl Editor {
                 }
             })
             .collect();
+        let moved: Vec<u64> = self.gizmo_pieces().iter().map(|&i| self.scene.pieces[i].id).collect();
+        self.restore_light_pieces(Some(&moved));
         self.drag = Drag::MultiGizmo(Box::new(MultiGizmoDrag {
             mode,
             handle,
@@ -330,6 +332,7 @@ impl Editor {
     /// Join the active piece with the one below it in the Pieces list, as
     /// they are (no remesh), as one undo step (#274).
     pub fn merge_down(&mut self) {
+        self.restore_light_pieces(None);
         let active = self.scene.active_index();
         if active + 1 >= self.scene.pieces.len() {
             self.status = "Merge down: there's no piece below this one in the list".into();
@@ -657,6 +660,7 @@ impl Editor {
     /// Copy the active piece (plus any pieces picked with Ctrl/Cmd+click or
     /// Shift-click) to the app clipboard without modifying undo history.
     pub fn copy_pieces(&mut self) -> usize {
+        self.restore_light_pieces(None);
         if self.scene.pieces.is_empty() {
             self.status = "Nothing to copy".into();
             return 0;

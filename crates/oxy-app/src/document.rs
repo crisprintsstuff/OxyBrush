@@ -46,6 +46,10 @@ pub struct Document {
     pub living: Living,
     /// What each linked copy was last synced from (#327), by copy id.
     pub(crate) link_seen: std::collections::HashMap<u64, crate::links::LinkSeen>,
+    /// Pieces shown lighter (Lighter inactive pieces), and the active piece
+    /// when that was last looked at.
+    pub(crate) light: std::collections::HashMap<u64, crate::lighter::Light>,
+    pub(crate) light_active: Option<u64>,
 
     // Camera & View
     pub camera: Camera,
@@ -174,6 +178,8 @@ impl Document {
             history: History::default(),
             living: Living::new(),
             link_seen: Default::default(),
+            light: Default::default(),
+            light_active: None,
             camera,
             snap_orbit: None,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),

@@ -350,6 +350,7 @@ impl Editor {
     }
 
     fn launch_plugin(&mut self, slot: usize, command: usize, preview: bool) {
+        self.restore_light_pieces(None);
         if self.documents.iter().any(|d| d.job.is_some()) {
             if !preview {
                 self.status = "Another operation is still running".into();

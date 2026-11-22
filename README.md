@@ -88,7 +88,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 ![Brushes in a strip along the bottom, with size and strength centered at the top of the viewport](docs/images/arrange-bottom.png)
 
-OxyBrush remembers your window, layout, arrangement, brush order, theme, material and other preferences between sessions. Turn on **Remember brush settings between sessions** (Preferences > General) to keep the current brush and every brush's own settings too.
+OxyBrush remembers your window, layout, arrangement, brush order, theme, material and other preferences between sessions. Turn on **Remember brush settings between sessions** (Preferences > General) to keep the current brush and every brush's own settings too. **Lighter inactive pieces** (same place) shows pieces with subdivision levels at a lower level while you work on another, to save memory on big scenes.
 
 ### Working with other apps
 

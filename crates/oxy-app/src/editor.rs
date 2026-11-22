@@ -929,10 +929,17 @@ pub struct Job {
     consumed: Vec<u64>,
     /// The job holds the target piece's subdivision levels (moved out of
     /// the piece while it runs), so saving must wait for it.
-    holds_levels: bool,
+    pub(crate) holds_levels: bool,
     /// Prepended to undo labels this job records (an agent's "Agent: ").
     pub(crate) undo_prefix: String,
     rx: mpsc::Receiver<Result<JobResult, String>>,
+}
+
+impl Job {
+    /// Whether the job works on piece `id`.
+    pub(crate) fn touches(&self, id: u64) -> bool {
+        self.target == id || self.consumed.contains(&id)
+    }
 }
 
 /// Meshes read from files, ready to add as pieces.
@@ -973,6 +980,8 @@ pub enum JobResult {
         multires: Option<oxy_mesh::multires::Multires>,
         previous: Option<oxy_mesh::multires::Multires>,
     },
+    /// A lightened piece shown at its own level again (no undo step).
+    Relevel { mesh: Mesh, multires: oxy_mesh::multires::Multires },
     /// Files read for Import, applied on the UI thread as new pieces.
     Imported(ImportRead),
 }
@@ -1087,6 +1096,10 @@ pub struct Editor {
     pub remember_brushes: bool,
     /// Each brush keeps its own settings (#305); see `brush_looks`.
     pub settings_per_brush: bool,
+    /// Show inactive pieces with levels lighter (opt in), under this many
+    /// triangles each.
+    pub lighter_inactive: bool,
+    pub lighter_budget: usize,
     /// ...including its size (off: one size for every brush).
     pub size_per_brush: bool,
     /// The settings of brushes put away, by brush.
@@ -1481,6 +1494,8 @@ impl Default for Editor {
             view: ViewSettings::default(),
             remember_brushes: false,
             settings_per_brush: true,
+            lighter_inactive: false,
+            lighter_budget: crate::lighter::DEFAULT_LIGHTER_BUDGET,
             size_per_brush: false,
             brush_looks: Default::default(),
             look_kind: None,
@@ -1949,6 +1964,8 @@ impl Editor {
             },
             remember_brushes: self.remember_brushes,
             settings_per_brush: self.settings_per_brush,
+            lighter_inactive: self.lighter_inactive,
+            lighter_budget: self.lighter_budget,
             size_per_brush: self.size_per_brush,
             brush_looks: if self.remember_brushes { self.brush_looks_to_save() } else { Vec::new() },
             undo_per_piece: self.undo_per_piece,
@@ -2310,6 +2327,8 @@ impl Editor {
             *self.gravity_mut(k) = v;
         }
         self.settings_per_brush = s.settings_per_brush;
+        self.lighter_inactive = s.lighter_inactive;
+        self.lighter_budget = s.lighter_budget;
         self.size_per_brush = s.size_per_brush;
         self.brush_looks =
             s.brush_looks.iter().filter(|l| l.kind != self.brush_kind).map(|l| (l.kind, l.clone())).collect();
@@ -4323,6 +4342,7 @@ impl Editor {
             return;
         }
         let id = self.scene.active().id;
+        self.restore_light_for_history(false, Some(id));
         let name = self.scene.active().name.clone();
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.undo_piece(&mut doc.scene, id);
@@ -4351,6 +4371,7 @@ impl Editor {
             return;
         }
         let id = self.scene.active().id;
+        self.restore_light_for_history(true, Some(id));
         let name = self.scene.active().name.clone();
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.redo_piece(&mut doc.scene, id);
@@ -4411,6 +4432,7 @@ impl Editor {
             self.status = "Wait for the running operation to finish before undoing".into();
             return;
         }
+        self.restore_light_for_history(false, None);
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.undo(&mut doc.scene);
         if result.is_some() {
@@ -4436,6 +4458,7 @@ impl Editor {
             self.status = "Wait for the running operation to finish before redoing".into();
             return;
         }
+        self.restore_light_for_history(true, None);
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.redo(&mut doc.scene);
         if result.is_some() {
@@ -4540,6 +4563,7 @@ impl Editor {
         }
         self.reopen_saved_curve();
         self.living_adopt_loaded();
+        self.adopt_saved_levels();
     }
 
     /// Whether tab `index` is an untouched starter document (no path, no
@@ -4927,6 +4951,7 @@ impl Editor {
         data.alphas = Self::doc_saved_alphas(doc);
         for (d, p) in data.pieces.iter_mut().zip(&doc.scene.pieces) {
             d.strokes = doc.living.saved(p);
+            d.own_level = self.own_level(idx, p.id);
         }
         if let Some(c) = doc.curve.as_ref().filter(|c| c.kind == BrushKind::CurveMove)
             && let Some(i) = doc.scene.index_of(c.piece)
@@ -5543,6 +5568,7 @@ impl Editor {
     /// Save As elsewhere. OxyCharacter sees the new modification time and
     /// imports the changes.
     pub fn send_back(&mut self) {
+        self.restore_light_pieces(None);
         let Some(link) = &self.link else {
             self.status = "This document didn't come from OxyCharacter".into();
             return;
@@ -5612,6 +5638,7 @@ impl Editor {
     /// (morph targets), so the layers can be dialled in Blender or a game
     /// engine; the file shows the surface as it is now.
     pub fn export(&mut self, path: &Path) {
+        self.restore_light_pieces(None);
         if !self.scene.pieces.iter().any(|p| p.visible) {
             self.status = "Nothing to export: the scene has no visible pieces.".into();
             return;
@@ -7340,6 +7367,7 @@ impl Editor {
     /// Fuse pieces `ids` (the active one among them) into the active piece
     /// with a voxel remesh, in the background; the others are removed.
     pub fn merge_pieces(&mut self, ids: &[u64]) {
+        self.restore_light_pieces(None);
         let active = self.scene.active().id;
         let pieces: Vec<&Piece> = self.scene.pieces.iter().filter(|p| ids.contains(&p.id)).collect();
         if pieces.len() < 2 || !ids.contains(&active) {
@@ -7357,6 +7385,7 @@ impl Editor {
 
     /// Volumetric CSG boolean between the active piece and another piece.
     pub fn boolean_operation(&mut self, tool_id: u64, op: oxy_topo::BooleanOp) {
+        self.restore_light_pieces(None);
         if !self.need_piece() {
             return;
         }
@@ -7737,6 +7766,7 @@ impl Editor {
     /// place. One undo step. Subdivision levels are dropped (the current
     /// level is what's joined). Merge and remesh is the fused alternative.
     pub fn join_visible(&mut self) {
+        self.restore_light_pieces(None);
         if self.job.is_some() {
             self.status = "Wait for the running operation to finish first".into();
             return;
@@ -7754,6 +7784,7 @@ impl Editor {
     /// as they are, in the active piece's place: one undo step labelled
     /// `label`. Used by Join and Merge down.
     pub(crate) fn join_pieces(&mut self, mut joined: Vec<usize>, label: &str) {
+        self.restore_light_pieces(None);
         let active = self.scene.active_index();
         joined.sort_unstable();
         joined.dedup();
@@ -7831,6 +7862,16 @@ impl Editor {
     fn apply_job_result(&mut self, doc_idx: usize, job: Job, result: Result<JobResult, String>, secs: f32) -> String {
         let is_active = doc_idx == self.active_document;
         match result {
+            Ok(JobResult::Relevel { mesh, multires }) => {
+                let doc = &mut self.documents[doc_idx];
+                let Some(index) = doc.scene.index_of(job.target) else {
+                    return format!("{}: the piece was deleted meanwhile", job.label);
+                };
+                let piece = &mut doc.scene.pieces[index];
+                piece.mesh = mesh;
+                piece.multires = Some(multires);
+                format!("{} ({secs:.1} s)", job.label)
+            }
             Ok(JobResult::Levels { mesh, multires, previous }) => {
                 let doc = &mut self.documents[doc_idx];
                 let Some(index) = doc.scene.index_of(job.target) else {
