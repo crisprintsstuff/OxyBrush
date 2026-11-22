@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- **Knife cuts over an edge onto the next face reach the point you clicked.** A cut across a cap (an 8- or 12-sided face, say) and down a side often stopped at the rim, because progress along the cut was measured along the straight line between the two clicks in space instead of along the line drawn on screen. Where the cut carries on past a point clicked inside a face to that face's edge, the preview now draws that stretch dashed.
+
 ## [4.0.0-beta.23.3] - 2026-11-22
 
 ### Added

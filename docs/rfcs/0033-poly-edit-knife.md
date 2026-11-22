@@ -26,6 +26,10 @@ wanted. A knife draws the edge directly.
   what lies under the line drawn on screen. It is traced face to face
   across shared edges (and through corners), preferring faces turned
   toward the eye, so it cuts what you see rather than the far side.
+  Progress toward the next click is measured along the screen line (the
+  angle seen from the eye), not along the straight line between the two
+  points in space: over a convex edge the rim lies further along that 3D
+  line than a point below it on the side, and the cut used to stop there.
 - **Splitting.** Each crossed edge gets a point, in order along the edge
   when several cuts cross it, keeping the edge's crease on both halves.
   Each crossed face is split in two along its piece of the path; points

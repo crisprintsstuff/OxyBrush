@@ -145,15 +145,16 @@ impl Editor {
     /// The cut as it would run, for drawing: the planned path along the
     /// surface, and the clicked points (with `hover`, where the pointer is,
     /// as the next one).
-    pub fn poly_knife_preview(&self, hover: Option<Vec2>) -> Option<(Vec<Vec3>, Vec<Vec3>)> {
+    pub fn poly_knife_preview(&self, hover: Option<Vec2>) -> Option<KnifePreview> {
         let mut path = self.poly_edit.as_ref()?.knife.clone()?;
         let c = self.poly_cage()?;
         if let Some(p) = hover.and_then(|p| self.poly_knife_snap(p)) {
             path.push(p);
         }
         let clicked = path.iter().map(|p| p.pos).collect();
-        let along = knife::knife_plan(c, &path, self.knife_view()).map(|plan| plan.path(c)).unwrap_or_default();
-        Some((along, clicked))
+        let plan = knife::knife_plan(c, &path, self.knife_view()).ok();
+        let along = plan.as_ref().map(|p| p.path(c)).unwrap_or_default();
+        Some(KnifePreview { along, clicked, extended: plan.map_or((false, false), |p| p.extended()) })
     }
 
     /// Cut along the path, one undo step. The Knife stays on for the next cut.
@@ -176,6 +177,17 @@ impl Editor {
     }
 }
 
+/// The Knife's cut as it would run, for drawing.
+pub struct KnifePreview {
+    /// The planned path along the surface.
+    pub along: Vec<Vec3>,
+    /// The clicked points (and the pointer's, as the next one).
+    pub clicked: Vec<Vec3>,
+    /// Whether the path's first and last pieces carry the cut on past a
+    /// click inside a face to the face's edge.
+    pub extended: (bool, bool),
+}
+
 /// Two clicks on the same corner, or at the same place.
 fn same_spot(a: &KnifePoint, b: &KnifePoint) -> bool {
     match (a.snap, b.snap) {
@@ -189,7 +201,7 @@ mod tests {
     use crate::editor::{Editor, PointerButton};
     use glam::{Vec2, Vec3};
     use oxy_doc::{Piece, Scene};
-    use oxy_mesh::knife::KnifeSnap;
+    use oxy_mesh::knife::{self, KnifeSnap};
 
     fn editor() -> Editor {
         let mut e = Editor::default();
@@ -228,7 +240,7 @@ mod tests {
         assert!(matches!(first.snap, KnifeSnap::Edge(..)), "snapped to the border edge: {first:?}");
         click(&mut e, right);
         assert_eq!(e.poly_edit.as_ref().unwrap().knife.as_ref().unwrap().len(), 2);
-        let (along, _) = e.poly_knife_preview(None).unwrap();
+        let along = e.poly_knife_preview(None).unwrap().along;
         assert_eq!(along.len(), 4, "the two ends and two edges between");
         e.poly_knife_apply();
         assert_eq!(e.poly_cage().unwrap().faces.len(), faces + 3, "{}", e.status);
@@ -272,5 +284,76 @@ mod tests {
         e.poly_knife_toggle();
         click(&mut e, Vec2::new(5.0, 5.0));
         assert!(e.poly_edit.as_ref().unwrap().knife.as_ref().unwrap().is_empty());
+    }
+    /// An `n`-sided prism with n-gon caps; `wobble` lifts every other top
+    /// corner, so the top cap isn't flat.
+    fn prism(n: u32, wobble: f32) -> Editor {
+        use oxy_mesh::retopo::{Cage, Face};
+        let mut c = Cage::default();
+        for bottom in [true, false] {
+            for k in 0..n {
+                let a = std::f32::consts::TAU * k as f32 / n as f32;
+                let y = if bottom { -0.5 } else { 0.5 + wobble * ((k % 2) as f32 - 0.5) };
+                c.add_vertex(Vec3::new(a.cos(), y, -a.sin()));
+            }
+        }
+        for k in 0..n {
+            let j = (k + 1) % n;
+            c.faces.push(Face::new(vec![k, j, n + j, n + k]));
+        }
+        c.faces.push(Face::new((0..n).rev().collect()));
+        c.faces.push(Face::new((n..2 * n).collect()));
+        let (mesh, _) = c.build_mesh_with_order().unwrap();
+        let mut e = Editor::default();
+        e.scene = Scene::new(Piece::new("Prism", mesh));
+        e.show_welcome = false;
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.camera = oxy_render::Camera::default();
+        (e.camera.pitch, e.camera.yaw) = (0.6, 0.3);
+        let b = e.scene.bounds();
+        e.camera.frame(b);
+        e.symmetry.x = false;
+        e.start_poly_edit();
+        // Keep the n-gons (a cage rebuilt from the triangles would guess quads).
+        let (_, before_mesh, before_cage) = e.poly_before().unwrap();
+        e.poly_commit("test: prism", before_mesh, before_cage, c);
+        e
+    }
+
+    #[test]
+    fn random_cuts_over_n_gon_caps_reach_every_click_and_keep_the_cage_valid() {
+        // Two or three clicks anywhere on a prism with 8- and 12-sided caps
+        // (one of them not flat), seen from above. A cut over the cap's rim
+        // onto a side used to stop at the rim.
+        let mut seed = 12345u64;
+        let mut rnd = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32) / (1u64 << 31) as f32
+        };
+        for (n, wobble) in [(8, 0.0), (12, 0.15)] {
+            let e = prism(n, wobble);
+            assert!(e.poly_cage().unwrap().faces.iter().any(|f| f.len() == n as usize), "n-gon caps kept");
+            let mut tried = 0;
+            for _ in 0..300 {
+                let count = if rnd() < 0.5 { 2 } else { 3 };
+                let clicks: Vec<Vec2> =
+                    (0..count).map(|_| Vec2::new(200.0 + rnd() * 400.0, 100.0 + rnd() * 400.0)).collect();
+                let Some(points) = clicks.iter().map(|&p| e.poly_knife_snap(p)).collect::<Option<Vec<_>>>() else {
+                    continue;
+                };
+                tried += 1;
+                let c = e.poly_cage().unwrap();
+                let plan = knife::knife_plan(c, &points, e.knife_view()).unwrap();
+                let path = plan.path(c);
+                for p in &points {
+                    assert!(path.iter().any(|q| q.distance(p.pos) < 1e-4), "{n}-gon: stops short of {p:?}: {path:?}");
+                }
+                let mut cut = c.clone();
+                if knife::knife_cut(&mut cut, &plan).is_ok() {
+                    oxy_mesh::polyedit::validate(&cut).unwrap();
+                }
+            }
+            assert!(tried > 50, "{tried} cuts landed on the model");
+        }
     }
 }
