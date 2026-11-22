@@ -39,6 +39,7 @@ mod presets;
 mod primitive_ui;
 mod retopo;
 mod retopo_ui;
+mod select_shapes;
 mod settings;
 mod snapshot;
 mod support;

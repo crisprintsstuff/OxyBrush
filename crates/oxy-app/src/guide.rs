@@ -152,7 +152,9 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
         title: "Masking",
         keywords: "mask protect freeze unmask invert blur selection",
         body: "Masked areas (shown darker or tinted) are protected from brushes. Hold Ctrl and paint to mask; add Alt to unmask.\n\n\
-- Ctrl+drag on empty space masks a rectangle; press L to switch to a lasso. With symmetry on, the mirrored area is masked too.\n\
+- Ctrl+drag on empty space masks a rectangle; press L (or use Selection in the Mask panel) to switch to a lasso, a circle, an ellipse or a curve. With symmetry on, the mirrored area is masked too.\n\
+- Circle: drag out from its centre. Ellipse: drag from one corner of the box it fills to the other. With either, Ctrl+drag draws it wherever it starts, on the model too.\n\
+- Curve: Ctrl+click the first point (Ctrl+Shift+click for visibility), click the others, then press Enter (or click the last point again). Everything on one side of the line is masked (or shown): the side on your right as you draw, so below a line drawn left to right; hold Alt when you apply for the other side. Ticks on the line show the side. Its ends carry on straight to the edge of the view. Backspace takes the last point back, Esc cancels.\n\
 - Ctrl+click on empty space inverts the mask (with no mask, that masks everything). A Ctrl box around empty space clears it.\n\
 - Ctrl+Shift+I inverts the mask, Alt+M clears it, M shows or hides it. Mask > Fill masks everything. Invert and Fill work on what's visible: hidden parts keep their mask.\n\
 - The Mask menu can also grow, shrink and sharpen the mask, or mask cavities or peaks automatically. Mask border masks the edge of an open surface or of what's left visible after hiding part of it; Mask group borders masks the lines where face groups meet. Grow the mask to widen either.\n\

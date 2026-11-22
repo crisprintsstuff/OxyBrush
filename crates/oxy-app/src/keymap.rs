@@ -598,7 +598,7 @@ const COMMANDS: &[CommandMeta] = &[
         defaults: &["shift+o"],
     },
     CommandMeta { id: CommandId::SymmetryX, name: "Toggle X symmetry", group: "Brushes", defaults: &["x"] },
-    CommandMeta { id: CommandId::SelectionLasso, name: "Rectangle / lasso", group: "Brushes", defaults: &["l"] },
+    CommandMeta { id: CommandId::SelectionLasso, name: "Selection shape", group: "Brushes", defaults: &["l"] },
     CommandMeta { id: CommandId::GizmoCycle, name: "Transform gizmo", group: "Brushes", defaults: &["t"] },
     CommandMeta { id: CommandId::GizmoMove, name: "Transform: move", group: "Brushes", defaults: &[] },
     CommandMeta { id: CommandId::GizmoRotate, name: "Transform: rotate", group: "Brushes", defaults: &[] },

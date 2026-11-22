@@ -1061,6 +1061,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     draw_curve(ui, ed, canvas);
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);
+    draw_select_curve(ui, ed, canvas);
     crate::lights_ui::markers(ui, ed, canvas);
     ed.update_plugin_overlays();
     ed.update_plugin_previews();
@@ -6892,8 +6893,19 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
     tips::check_km(ui, &ed.keymap, &mut ed.view.show_mask, "Show mask", Cmd::ShowMask);
     ui.horizontal_wrapped(|ui| {
         ui.label("Selection");
-        tips::hover(ui.selectable_value(&mut ed.selection_lasso, false, "Rectangle"), plain::SELECTION_RECT);
-        tips::hover(ui.selectable_value(&mut ed.selection_lasso, true, "Lasso"), Cmd::Lasso.tip());
+        use crate::editor::SelectShape;
+        for (shape, tip) in [
+            (SelectShape::Rectangle, plain::SELECTION_RECT),
+            (SelectShape::Lasso, plain::SELECTION_LASSO),
+            (SelectShape::Circle, plain::SELECTION_CIRCLE),
+            (SelectShape::Ellipse, plain::SELECTION_ELLIPSE),
+            (SelectShape::Curve, plain::SELECTION_CURVE),
+        ] {
+            if tips::hover(ui.selectable_label(ed.selection_shape == shape, shape.label()), tip).clicked() {
+                ed.selection_shape = shape;
+                ed.select_curve = None;
+            }
+        }
         widgets::keycap(ui, Cmd::Lasso.shortcut());
     });
     ui.horizontal_wrapped(|ui| {
@@ -7892,8 +7904,74 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
     }
 }
 
+/// The colour a masking or visibility selection is drawn in.
+fn select_color(action: crate::editor::SelectAction) -> Color32 {
+    match action {
+        crate::editor::SelectAction::Mask => Color32::from_rgb(110, 150, 255),
+        crate::editor::SelectAction::Unmask => Color32::from_rgb(200, 200, 255),
+        crate::editor::SelectAction::ShowOnly => Color32::from_rgb(230, 230, 120),
+        crate::editor::SelectAction::Hide => Color32::from_rgb(240, 120, 100),
+    }
+}
+
+/// A curve selection being clicked out: its points, the line on to the
+/// pointer, its ends carried on to the edge of the view, and ticks on the
+/// side it will select (Alt shows the other side). Enter applies,
+/// Backspace takes the last point back.
+fn draw_select_curve(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
+    if ed.select_curve.is_none() {
+        return;
+    }
+    if !ui.ctx().egui_wants_keyboard_input() {
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Enter)) {
+            let other = ed.modifiers.alt;
+            ed.select_curve_apply(other);
+            return;
+        }
+        if ui.ctx().input(|i| i.key_pressed(egui::Key::Backspace)) {
+            ed.select_curve_back();
+        }
+    }
+    let Some(curve) = ed.select_curve.clone() else { return };
+    let ppp = ed.pixels_per_point.max(0.1);
+    let to_pt = |v: glam::Vec2| egui::pos2(v.x / ppp, v.y / ppp);
+    let mut pts: Vec<glam::Vec2> = curve.points.clone();
+    if let Some(p) = ed.pointer.filter(|_| ed.pointer_in_canvas()) {
+        pts.push(p);
+    }
+    let painter = ui.painter().with_clip_rect(canvas);
+    let c = select_color(curve.action);
+    let stroke = EStroke::new(1.5, c);
+    for pair in pts.windows(2) {
+        painter.line_segment([to_pt(pair[0]), to_pt(pair[1])], stroke);
+    }
+    for &p in &curve.points {
+        painter.circle_filled(to_pt(p), 3.5, c);
+    }
+    if pts.len() >= 2 {
+        let faint = EStroke::new(1.0, c.linear_multiply(0.5));
+        let far = 4000.0;
+        let (a, b) = (pts[0], pts[1]);
+        let d = (b - a).normalize_or_zero();
+        painter.line_segment([to_pt(a), to_pt(a - d * far)], faint);
+        let (y, z) = (pts[pts.len() - 2], pts[pts.len() - 1]);
+        let d = (z - y).normalize_or_zero();
+        painter.line_segment([to_pt(z), to_pt(z + d * far)], faint);
+        // Ticks toward the side it selects: the right as you draw (y down).
+        let flip = if ed.modifiers.alt { -1.0 } else { 1.0 };
+        for pair in pts.windows(2) {
+            let d = (pair[1] - pair[0]).normalize_or_zero();
+            let n = glam::Vec2::new(-d.y, d.x) * flip;
+            let mid = (pair[0] + pair[1]) * 0.5;
+            let tick = EStroke::new(2.5, c);
+            painter.line_segment([to_pt(mid), to_pt(mid + n * 16.0 * ppp)], tick);
+            painter.circle_filled(to_pt(mid + n * 16.0 * ppp), 2.5, c);
+        }
+    }
+}
+
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
-    if ed.retopo.is_some() || ed.poly_edit.is_some() {
+    if ed.retopo.is_some() || ed.poly_edit.is_some() || ed.select_curve.is_some() {
         return;
     }
     if size_slider_ring(ui, ed, canvas) {
@@ -7931,7 +8009,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     // Copy what the drag needs before any `&mut ed` call. Matching on
     // `ed.drag` holds a borrow that the surface cursor cannot share.
     enum Mark {
-        Select { points: Vec<Vec2>, lasso: bool, action: crate::editor::SelectAction },
+        Select { points: Vec<Vec2>, shape: crate::editor::SelectShape, action: crate::editor::SelectAction },
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
         InsertPrimitive { start_pixel: Vec2 },
@@ -7941,8 +8019,8 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
     let (fallback_kind, fallback_invert) = ed.effective_brush();
     let mark = match &ed.drag {
-        Drag::Select { points, lasso, action, .. } => {
-            Mark::Select { points: points.clone(), lasso: *lasso, action: *action }
+        Drag::Select { points, shape, action, .. } => {
+            Mark::Select { points: points.clone(), shape: *shape, action: *action }
         }
         Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
         Drag::MaskGesture { start } => Mark::MaskGesture { start: *start },
@@ -7955,15 +8033,15 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         _ => Mark::Brush { kind: fallback_kind, invert: fallback_invert },
     };
     match mark {
-        Mark::Select { points, lasso, action } => {
-            let c = match action {
-                crate::editor::SelectAction::Mask => Color32::from_rgb(110, 150, 255),
-                crate::editor::SelectAction::Unmask => Color32::from_rgb(200, 200, 255),
-                crate::editor::SelectAction::ShowOnly => Color32::from_rgb(230, 230, 120),
-                crate::editor::SelectAction::Hide => Color32::from_rgb(240, 120, 100),
-            };
+        Mark::Select { points, shape, action } => {
+            let c = select_color(action);
             let stroke = EStroke::new(1.5, c);
-            if lasso {
+            if matches!(shape, crate::editor::SelectShape::Circle | crate::editor::SelectShape::Ellipse) {
+                let ends = [points[0], glam::Vec2::new(pos.x, pos.y) * ed.pixels_per_point];
+                let ring: Vec<egui::Pos2> =
+                    crate::select_shapes::select_outline(shape, &ends).into_iter().map(to_pt).collect();
+                painter.add(egui::Shape::convex_polygon(ring, c.linear_multiply(0.08), stroke));
+            } else if shape == crate::editor::SelectShape::Lasso {
                 let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
                 pts.push(pos);
                 painter.add(egui::Shape::closed_line(pts, stroke));
