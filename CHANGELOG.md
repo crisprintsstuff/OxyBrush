@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Poly Edit To Circle** ([#370](https://github.com/crisprintsstuff/OxyBrush/issues/370)). Round the picked points, edges or face corners toward a fitted circle. Amount controls how far they move, and the edit is one undo step.
+
 - **Per-brush pressure curves** ([#426](https://github.com/crisprintsstuff/OxyBrush/issues/426)). Stroke shows strength and size curves. Customize either one for the active brush, or let it follow the defaults in Pen & tablet. Brush presets keep the overrides.
 
 - **Alpha library** ([#425](https://github.com/crisprintsstuff/OxyBrush/issues/425)). Imported PNG alphas are available in every tab and after a restart. Projects still embed the alphas imported into them and the ones their editable strokes use.
