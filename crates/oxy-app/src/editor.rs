@@ -1183,6 +1183,8 @@ pub struct Editor {
     pub presets: Vec<oxy_sculpt::BrushPreset>,
     /// Where presets are saved; None in automated runs and tests (nothing is written).
     pub preset_dir: Option<std::path::PathBuf>,
+    pub alpha_dir: Option<PathBuf>,
+    alpha_library: Vec<Arc<Alpha>>,
     /// Set by the UI: export this preset to a file (platform layer opens a dialog).
     pub request_export_preset: Option<oxy_sculpt::BrushPreset>,
     /// Set by the UI: import a preset file.
@@ -1536,6 +1538,8 @@ impl Default for Editor {
             updater: Default::default(),
             presets: Vec::new(),
             preset_dir: None,
+            alpha_dir: None,
+            alpha_library: Vec::new(),
             request_export_preset: None,
             request_import_preset: false,
             parts_library: crate::parts::PartsLibrary::default(),
@@ -3173,7 +3177,14 @@ impl Editor {
         self.alpha = match &p.alpha {
             None => None,
             Some(name) => {
-                let found = self.alphas.iter().position(|a| a.name.eq_ignore_ascii_case(name));
+                // Prefer a project's embedded alpha when its name also exists in the library.
+                let found = self
+                    .alphas
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| a.name.eq_ignore_ascii_case(name))
+                    .min_by_key(|(i, _)| self.library_only_alphas.contains(i))
+                    .map(|(i, _)| i);
                 if found.is_none() {
                     self.status = format!(
                         "Brush preset: {} (its alpha \"{name}\" isn't loaded; load that image to use it)",
@@ -3304,26 +3315,40 @@ impl Editor {
         };
     }
 
-    /// Add a user alpha and select it.
-    pub fn add_alpha(&mut self, alpha: Alpha) {
-        self.status = format!("Loaded alpha {}", alpha.name);
-        self.alphas.push(Arc::new(alpha));
-        self.alpha = Some(self.alphas.len() - 1);
-        self.alphas_unsaved = true;
+    pub fn open_alpha_library(&mut self, dir: PathBuf) {
+        for alpha in crate::alpha_library::load_all(&dir) {
+            let alpha = Arc::new(alpha);
+            for doc in &mut self.documents {
+                doc.add_library_alpha(alpha.clone());
+            }
+            self.alpha_library.push(alpha);
+        }
+        self.alpha_dir = Some(dir);
     }
 
-    /// The alphas saved with the project: every one after the built-ins
-    /// (captured from view or loaded from an image), at 16 bits.
-    #[allow(dead_code)]
-    fn saved_alphas(&self) -> Vec<oxy_doc::AlphaData> {
-        self.alphas[BuiltinAlpha::ALL.len().min(self.alphas.len())..]
-            .iter()
-            .map(|a| oxy_doc::AlphaData {
-                name: a.name.clone(),
-                size: a.size,
-                data: a.data.iter().copied().map(Alpha::quantize_u16).collect(),
-            })
-            .collect()
+    pub fn finish_alpha_import(&mut self, doc_id: u64, imported: crate::alpha_library::Imported) {
+        let crate::alpha_library::Imported { alpha, library_error } = imported;
+        let name = alpha.name.clone();
+        let alpha = Arc::new(alpha);
+        let target = self.documents.iter().position(|doc| doc.id == doc_id);
+        if library_error.is_none() {
+            self.alpha_library.push(alpha.clone());
+            for (idx, doc) in self.documents.iter_mut().enumerate() {
+                if Some(idx) == target {
+                    doc.add_project_alpha(alpha.clone());
+                } else {
+                    doc.add_library_alpha(alpha.clone());
+                }
+            }
+            self.status = format!("Added {name} to the alpha library");
+        } else if let Some(err) = library_error {
+            self.status = if let Some(idx) = target {
+                self.documents[idx].add_project_alpha(alpha);
+                format!("Loaded {name} for this project. Could not save it to the alpha library: {err}")
+            } else {
+                format!("Could not save {name} to the alpha library: {err}")
+            };
+        }
     }
 
     /// Add the alphas a project was saved with, skipping any already in the
@@ -3335,14 +3360,18 @@ impl Editor {
             if a.size == 0 || a.data.len() != n {
                 continue;
             }
-            let data: Vec<f32> = a.data.iter().map(|&v| v as f32 / 65535.0).collect();
             let same = |b: &Alpha| {
-                b.name == a.name && b.size == a.size && b.data.iter().zip(&data).all(|(x, y)| (x - y).abs() < 1e-4)
+                b.name == a.name
+                    && b.size == a.size
+                    && b.data.iter().zip(&a.data).all(|(&live, &saved)| Alpha::quantize_u16(live) == saved)
             };
             if let Some(k) = a.name.strip_prefix("Capture ").and_then(|k| k.parse::<u32>().ok()) {
                 self.captures = self.captures.max(k);
             }
-            if !self.alphas.iter().any(|b| same(b)) {
+            if let Some(index) = self.alphas.iter().position(|b| same(b)) {
+                self.library_only_alphas.remove(&index);
+            } else {
+                let data = a.data.into_iter().map(|v| v as f32 / 65535.0).collect();
                 self.alphas.push(Arc::new(Alpha { name: a.name, size: a.size, data }));
             }
         }
@@ -4657,6 +4686,9 @@ impl Editor {
         self.tab_use_clock += 1;
         let material = self.new_tab_material();
         let mut doc = Document::new(doc_id, scene, camera);
+        for alpha in &self.alpha_library {
+            doc.add_library_alpha(alpha.clone());
+        }
         doc.last_used = self.tab_use_clock;
         (doc.matcap, doc.custom_matcap) = material;
         self.documents.push(doc);
@@ -4726,6 +4758,9 @@ impl Editor {
             self.tab_use_clock += 1;
             let material = self.new_tab_material();
             let mut doc = Document::new(next_id, scene, camera);
+            for alpha in &self.alpha_library {
+                doc.add_library_alpha(alpha.clone());
+            }
             doc.last_used = self.tab_use_clock;
             (doc.matcap, doc.custom_matcap) = material;
             self.documents[0] = doc;
@@ -4935,9 +4970,25 @@ impl Editor {
     }
 
     pub(crate) fn doc_saved_alphas(doc: &Document) -> Vec<oxy_doc::AlphaData> {
-        doc.alphas[BuiltinAlpha::ALL.len().min(doc.alphas.len())..]
+        // An editable stroke stores an alpha fingerprint in its recipe.
+        // Keep its source pixels even when the alpha came from the user library.
+        let used: std::collections::HashSet<_> =
+            if doc.living.enabled && doc.living.save && !doc.library_only_alphas.is_empty() {
+                doc.living
+                    .strokes
+                    .iter()
+                    .filter_map(|s| s.recipe.as_ref()?.alpha.as_ref())
+                    .map(|stamp| Arc::as_ptr(&stamp.alpha))
+                    .collect()
+            } else {
+                Default::default()
+            };
+        doc.alphas
             .iter()
-            .map(|a| oxy_doc::AlphaData {
+            .enumerate()
+            .skip(BuiltinAlpha::ALL.len())
+            .filter(|(i, a)| !doc.library_only_alphas.contains(i) || used.contains(&Arc::as_ptr(a)))
+            .map(|(_, a)| oxy_doc::AlphaData {
                 name: a.name.clone(),
                 size: a.size,
                 data: a.data.iter().copied().map(Alpha::quantize_u16).collect(),
@@ -7906,9 +7957,7 @@ impl Editor {
                 let name = alpha.name.clone();
                 let n = alpha.size;
                 let doc = &mut self.documents[doc_idx];
-                doc.alphas.push(Arc::new(alpha));
-                doc.alpha = Some(doc.alphas.len() - 1);
-                doc.alphas_unsaved = true;
+                doc.add_project_alpha(Arc::new(alpha));
                 format!("{name} ({n}×{n}) added to the alphas and selected in {secs:.1} s")
             }
             Ok(JobResult::Resculpt { id, mesh, change }) => {
@@ -13228,12 +13277,69 @@ mod tests {
     }
 
     #[test]
-    fn user_alpha_is_added_and_selected() {
+    fn imported_alphas_are_shared_persistent_and_kept_in_the_importing_project() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-library-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("Spots.png");
+        let library = dir.join("library");
+        let pixels = (0..256u16).map(|i| 16380 + i).collect::<Vec<_>>();
+        let alpha = Alpha::from_luma16("Spots", 16, 16, &pixels).unwrap();
+        crate::support::write_alpha_png(&alpha, &src).unwrap();
+
         let mut e = editor();
-        let n = e.alphas.len();
-        e.add_alpha(Alpha::from_luma("mine", 8, 8, &[200; 64]).unwrap());
-        assert_eq!(e.alphas.len(), n + 1);
-        assert_eq!(e.alpha, Some(n));
+        let target = e.documents[0].id;
+        let other = e.add_tab("empty");
+        e.open_alpha_library(library.clone());
+        let result = crate::alpha_library::import(&src, e.alpha_dir.as_deref()).unwrap();
+        assert!(result.library_error.is_none());
+        e.finish_alpha_import(target, result);
+        let imported = &e.documents[0];
+        assert_eq!(imported.alphas[imported.alpha.unwrap()].name, "Spots");
+        assert!(imported.is_dirty());
+        assert_eq!(Editor::doc_saved_alphas(imported)[0].data, pixels);
+        assert!(e.alpha.is_none(), "the dialog belongs to the tab that opened it");
+        assert_eq!(e.alphas.last().unwrap().name, "Spots");
+        assert!(e.doc_scene_data(other).alphas.is_empty(), "unrelated projects stay small");
+        assert!(!e.is_modified());
+
+        let future = e.add_tab("empty");
+        assert!(Arc::ptr_eq(e.alphas.last().unwrap(), e.documents[0].alphas.last().unwrap()));
+        assert!(e.doc_scene_data(future).alphas.is_empty());
+
+        let duplicate = crate::alpha_library::import(&src, Some(&library)).unwrap();
+        assert_eq!(duplicate.alpha.name, "Spots 2");
+        std::fs::remove_file(&src).unwrap();
+        let mut next = editor();
+        next.open_alpha_library(library);
+        let library = &next.alphas[BuiltinAlpha::ALL.len()..];
+        assert_eq!(library.iter().map(|a| a.name.as_str()).collect::<Vec<_>>(), ["Spots", "Spots 2"]);
+        assert_eq!(library[0].data, alpha.data);
+        let saved = e.doc_scene_data(0).alphas;
+        next.adopt_alphas(saved);
+        assert_eq!(next.alphas.len(), BuiltinAlpha::ALL.len() + 2, "the embedded copy is deduplicated");
+        assert_eq!(next.doc_scene_data(0).alphas.len(), 1);
+        assert!(!next.is_modified());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn alpha_import_with_an_unwritable_library_still_loads_into_the_project() {
+        let dir = std::env::temp_dir().join(format!("oxy-alpha-import-fallback-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("Spots.png");
+        let alpha = Alpha::from_luma("Spots", 16, 16, &[200; 256]).unwrap();
+        crate::support::write_alpha_png(&alpha, &src).unwrap();
+        let mut e = editor();
+        let doc_id = e.documents[0].id;
+        // A file in place of the directory makes creation fail on any platform.
+        let result = crate::alpha_library::import(&src, Some(&src)).unwrap();
+        assert!(result.library_error.is_some());
+        e.finish_alpha_import(doc_id, result);
+        assert!(e.is_modified());
+        assert_eq!(e.alphas[e.alpha.unwrap()].name, "Spots");
+        assert!(e.status.contains("Could not save it to the alpha library"));
+        assert!(e.alpha_library.is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

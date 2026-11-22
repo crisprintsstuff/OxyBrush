@@ -4,6 +4,7 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod agent;
+mod alpha_library;
 mod app;
 mod bridge;
 mod brush_looks;

@@ -751,7 +751,8 @@ pub mod plain {
     pub const ALPHA_TILE: &str = "An image that shapes each dab. Click to pick one, or none.";
     pub const MATERIAL_TILE: &str = "How the clay is shaded. Click to pick a material.";
     pub const PANEL_DRAG_SCROLL: &str = "A pen reaches OxyBrush as a mouse without a wheel. With a pen (recognised by its pressure), dragging empty space in a panel scrolls it, as a finger does on a touch screen. Always also does it with a mouse, for pens whose drivers send no pressure. Never turns it off (touch screens still scroll).";
-    pub const LOAD_IMAGE: &str = "Load a grayscale PNG. White is full strength, black is none.";
+    pub const LOAD_IMAGE: &str =
+        "Import a PNG into your alpha library for use in any project. White is full strength, black is none.";
     pub const CAPTURE_SIZE: &str = "Size of the next captured alpha, in pixels. Larger sizes give smoother edges; 4096 takes a few seconds on a dense model.";
     pub const REMOVE_MATCAP: &str = "Remove this material from your library. The file is deleted.";
     pub const ORBIT: &str = "Drag to orbit. You can also drag empty space in the view.";

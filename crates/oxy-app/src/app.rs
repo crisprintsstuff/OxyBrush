@@ -131,7 +131,7 @@ enum DialogReply {
     Save { path: Option<PathBuf>, and_continue: bool },
     SaveAs(Option<PathBuf>),
     LoadMatcap(Option<PathBuf>),
-    LoadAlpha(Option<PathBuf>),
+    LoadAlpha { doc_id: u64, imported: Option<Result<crate::alpha_library::Imported, String>> },
     ExportAlpha(Option<PathBuf>),
     ImportBrush(Option<PathBuf>),
     ExportBrush { preset: oxy_sculpt::BrushPreset, path: Option<PathBuf> },
@@ -206,6 +206,9 @@ impl App {
                     e.matcap_dir = crate::matcaps::library_dir();
                     if let Some(dir) = &e.matcap_dir {
                         e.custom_matcaps = crate::matcaps::load_all(dir);
+                    }
+                    if let Some(dir) = crate::alpha_library::library_dir() {
+                        e.open_alpha_library(dir);
                     }
                     e.parts_dir = crate::parts::library_dir();
                     if let Some(dir) = &e.parts_dir {
@@ -1211,7 +1214,12 @@ impl App {
                 if let Some(g) = &self.gfx {
                     dialog = dialog.set_parent(&g.window);
                 }
-                self.spawn_dialog(dialog.pick_file(), DialogReply::LoadAlpha);
+                let doc_id = self.editor.documents[self.editor.active_document].id;
+                let dir = self.editor.alpha_dir.clone();
+                self.spawn_dialog(dialog.pick_file(), move |path| DialogReply::LoadAlpha {
+                    doc_id,
+                    imported: path.map(|path| crate::alpha_library::import(&path, dir.as_deref())),
+                });
             }
             UiAction::ExportAlpha => {
                 if self.dialog_active {
@@ -1376,9 +1384,9 @@ impl App {
                     }
                 }
                 DialogReply::ExportAlpha(Some(p)) => self.editor.export_alpha(&p),
-                DialogReply::LoadAlpha(Some(p)) => match crate::support::load_alpha_png(&p) {
-                    Ok(alpha) => self.editor.add_alpha(alpha),
-                    Err(e) => self.editor.status = format!("Could not load {}: {e}", p.display()),
+                DialogReply::LoadAlpha { doc_id, imported: Some(result) } => match result {
+                    Ok(imported) => self.editor.finish_alpha_import(doc_id, imported),
+                    Err(err) => self.editor.status = err,
                 },
                 DialogReply::ImportBrush(Some(p)) => match crate::presets::read_file(&p) {
                     Ok(preset) => {
