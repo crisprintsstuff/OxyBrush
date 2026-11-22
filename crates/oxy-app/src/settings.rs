@@ -380,6 +380,8 @@ pub struct Settings {
     pub pressure_full: f32,
     /// Two-point pressure curve shape, [x1, y1, x2, y2] in 0..1.
     pub pressure_shape: [f32; 4],
+    /// The size curve's shape (#305), like `pressure_shape`.
+    pub pressure_shape_size: [f32; 4],
     /// Draw the brush cursor in the surface's tangent plane. Off (the default)
     /// keeps the ring flat to the screen.
     pub surface_cursor: bool,
@@ -431,6 +433,8 @@ pub struct Settings {
     pub extract_smooth: usize,
     /// Preferred volumetric remeshing engine (OpenVDB sparse or Regular Grid).
     pub remesh_engine: oxy_topo::RemeshEngine,
+    /// How far a Boolean rounds its seam, in voxels (0: sharp).
+    pub boolean_blend: f32,
     /// The brush in use and its settings when OxyBrush last closed (a
     /// brush-preset code line); None keeps the defaults.
     pub brush: Option<oxy_sculpt::BrushPreset>,
@@ -442,6 +446,11 @@ pub struct Settings {
     /// start. Off (the default) starts every session with the default
     /// brushes.
     pub remember_brushes: bool,
+    /// Each brush keeps its own settings (#305), and also its size.
+    pub settings_per_brush: bool,
+    pub size_per_brush: bool,
+    /// Each brush's settings (with `remember_brushes`): `brush_look` lines.
+    pub brush_looks: Vec<oxy_sculpt::BrushPreset>,
     pub undo_per_piece: bool,
     /// Closing the transform gizmo (Done, another tool) puts back changes
     /// not applied with Apply. Off: closing keeps everything.
@@ -1090,6 +1099,9 @@ pub fn default_max_triangles() -> usize {
 /// How many recent files are remembered.
 pub const MAX_RECENT: usize = 10;
 
+/// The widest Boolean seam blend, in voxels.
+pub const MAX_BOOLEAN_BLEND: f32 = 4.0;
+
 /// Maximum number of open project tabs remembered for session restore.
 pub const MAX_SESSION_FILES: usize = 64;
 
@@ -1132,6 +1144,7 @@ impl Default for Settings {
             pressure_min: 0.0,
             pressure_full: 1.0,
             pressure_shape: crate::editor::LINEAR_PRESSURE_SHAPE,
+            pressure_shape_size: crate::editor::LINEAR_PRESSURE_SHAPE,
             surface_cursor: false,
             floor_grid: true,
             hide_cursor_during_stroke: true,
@@ -1158,10 +1171,14 @@ impl Default for Settings {
             extract_thickness: 0.02,
             extract_smooth: 2,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            boolean_blend: oxy_topo::DEFAULT_BOOLEAN_BLEND,
             brush: None,
             brush_strengths: Vec::new(),
             brush_gravity: Vec::new(),
             remember_brushes: false,
+            settings_per_brush: true,
+            size_per_brush: false,
+            brush_looks: Vec::new(),
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
@@ -1305,23 +1322,34 @@ impl Settings {
                 oxy_topo::RemeshEngine::Vdb => "vdb",
                 oxy_topo::RemeshEngine::RegularGrid => "regular_grid",
             },
-        ) + &format!(
-            "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\ncurve_move_centred = {}\ndyntopo = {}\ndyntopo_detail = {}\nlighting = {}\n",
-            self.pressure_gamma,
-            self.pressure_min,
-            self.pressure_full,
-            self.pressure_shape[0],
-            self.pressure_shape[1],
-            self.pressure_shape[2],
-            self.pressure_shape[3],
-            self.floor_grid,
-            self.hold_to_curve,
-            self.hold_to_curve_ask,
-            self.curve_move_centred,
-            self.dyntopo,
-            self.dyntopo_detail,
-            self.lighting.to_line()
-        ) + &format!("remember_brushes = {}\n", self.remember_brushes)
+        ) + &format!("boolean_blend = {}\n", self.boolean_blend)
+            + &format!(
+                "pressure_shape_size = {}, {}, {}, {}\n",
+                self.pressure_shape_size[0],
+                self.pressure_shape_size[1],
+                self.pressure_shape_size[2],
+                self.pressure_shape_size[3]
+            )
+            + &format!(
+                "pressure_gamma = {}\npressure_min = {}\npressure_full = {}\npressure_shape = {}, {}, {}, {}\nfloor_grid = {}\nhold_to_curve = {}\nhold_to_curve_ask = {}\ncurve_move_centred = {}\ndyntopo = {}\ndyntopo_detail = {}\nlighting = {}\n",
+                self.pressure_gamma,
+                self.pressure_min,
+                self.pressure_full,
+                self.pressure_shape[0],
+                self.pressure_shape[1],
+                self.pressure_shape[2],
+                self.pressure_shape[3],
+                self.floor_grid,
+                self.hold_to_curve,
+                self.hold_to_curve_ask,
+                self.curve_move_centred,
+                self.dyntopo,
+                self.dyntopo_detail,
+                self.lighting.to_line()
+            )
+            + &format!("remember_brushes = {}\n", self.remember_brushes)
+            + &format!("settings_per_brush = {}\nsize_per_brush = {}\n", self.settings_per_brush, self.size_per_brush)
+            + &self.brush_looks.iter().map(|l| format!("brush_look = {}\n", l.to_code())).collect::<String>()
             + &format!("undo_per_piece = {}\n", self.undo_per_piece)
             + &format!("gizmo_done_reverts = {}\n", self.gizmo_done_reverts)
             + &format!("gizmo_pivot_follows = {}\n", self.gizmo_pivot_follows)
@@ -1574,12 +1602,16 @@ impl Settings {
                 "pressure_min" => {
                     s.pressure_min = v.parse().ok().filter(|x| (0.0..=0.5).contains(x)).unwrap_or(s.pressure_min)
                 }
-                "pressure_shape" => {
+                "pressure_shape" | "pressure_shape_size" => {
                     let v: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
                     if let [a, b, c, d] = v[..]
                         && [a, b, c, d].iter().all(|x| (0.0..=1.0).contains(x))
                     {
-                        s.pressure_shape = [a, b, c, d];
+                        if k == "pressure_shape" {
+                            s.pressure_shape = [a, b, c, d];
+                        } else {
+                            s.pressure_shape_size = [a, b, c, d];
+                        }
                     }
                 }
                 "pressure_full" => {
@@ -1669,6 +1701,15 @@ impl Settings {
                     }
                 }
                 "remember_brushes" => s.remember_brushes = v.parse().unwrap_or(s.remember_brushes),
+                "settings_per_brush" => s.settings_per_brush = v.parse().unwrap_or(s.settings_per_brush),
+                "size_per_brush" => s.size_per_brush = v.parse().unwrap_or(s.size_per_brush),
+                "brush_look" => {
+                    if let Ok(l) = oxy_sculpt::BrushPreset::from_code(v)
+                        && !s.brush_looks.iter().any(|x| x.kind == l.kind)
+                    {
+                        s.brush_looks.push(l);
+                    }
+                }
                 "undo_per_piece" => s.undo_per_piece = v.parse().unwrap_or(s.undo_per_piece),
                 "gizmo_done_reverts" => s.gizmo_done_reverts = v.parse().unwrap_or(s.gizmo_done_reverts),
                 "gizmo_pivot_follows" => s.gizmo_pivot_follows = v.parse().unwrap_or(s.gizmo_pivot_follows),
@@ -1739,6 +1780,13 @@ impl Settings {
                 "brush" => s.brush = oxy_sculpt::BrushPreset::from_code(v).ok(),
                 "brush_strengths" => s.brush_strengths = parse_brush_values(v, 0.0..=4.0),
                 "brush_gravity" => s.brush_gravity = parse_brush_values(v, 0.0..=1.0),
+                "boolean_blend" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=MAX_BOOLEAN_BLEND).contains(&x)
+                    {
+                        s.boolean_blend = x;
+                    }
+                }
                 "remesh_engine" => {
                     s.remesh_engine = match v {
                         "regular_grid" => oxy_topo::RemeshEngine::RegularGrid,
@@ -1954,6 +2002,7 @@ mod tests {
             pressure_min: 0.1,
             pressure_full: 0.8,
             pressure_shape: [0.4, 0.1, 0.6, 0.9],
+            pressure_shape_size: [0.2, 0.3, 0.7, 0.8],
             surface_cursor: true,
             floor_grid: false,
             hide_cursor_during_stroke: false,
@@ -1979,6 +2028,7 @@ mod tests {
             extract_thickness: 0.035,
             extract_smooth: 3,
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
+            boolean_blend: 0.5,
             brush: Some(oxy_sculpt::BrushPreset {
                 radius_pt: 72.5,
                 ..oxy_sculpt::BrushPreset::new("Last brush", BrushKind::ClayStrips)
@@ -1986,6 +2036,9 @@ mod tests {
             brush_strengths: vec![(BrushKind::Draw, 0.25), (BrushKind::ClayStrips, 0.75)],
             brush_gravity: vec![(BrushKind::Clay, 0.5)],
             remember_brushes: false,
+            settings_per_brush: false,
+            size_per_brush: true,
+            brush_looks: vec![oxy_sculpt::BrushPreset::new("Clay", BrushKind::Clay)],
             undo_per_piece: false,
             gizmo_done_reverts: true,
             gizmo_pivot_follows: false,

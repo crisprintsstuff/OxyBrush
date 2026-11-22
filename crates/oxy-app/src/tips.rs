@@ -100,6 +100,9 @@ commands! {
     PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project tab as one undo step.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate piece", "", "Copy the active piece, flipped across X.";
+    DuplicateLinked => "Duplicate linked", "", "Make a linked copy of the active piece: it follows the original as you sculpt, paint or remesh it. Move, turn or scale the copy with the transform gizmo; Unlink it to change it on its own.";
+    MirrorDuplicateLinked => "Mirror duplicate linked", "", "Make a linked copy of the active piece, flipped across X: sculpt one ear, horn or hand and its mirror image follows. Move the copy with the transform gizmo; Unlink it to change it on its own.";
+    Unlink => "Unlink copy", "", "Make the active linked copy an ordinary piece, which no longer follows its original.";
     DeletePiece => "Delete piece", "", "Remove the active piece.";
     Unparent => "Unparent piece", "", "Detach the active piece from its parent piece, so it no longer moves with it.";
     Solo => "Solo piece / show all", "Alt+S", "Show only the active piece, or show every piece again.";
@@ -829,6 +832,7 @@ pub mod plain {
     pub const PRESSURE_MORE: &str = "The pen pressure curve. Click for more pen settings (Preferences > Pen & tablet).";
     pub const PEN_SETTINGS: &str =
         "How hard you press the pen and how strong the brush gets. Remembered between sessions.";
+    pub const PRESSURE_PLOT_SIZE: &str = "Pen pressure across, brush size up, when Pen pressure sets radius is on. Drag the two points to shape it; double-click to straighten it. Response, Lightest touch and Full press below apply to both curves.";
     pub const PRESSURE_PLOT: &str = "Pen pressure across, brush strength up. Drag the two points to shape the curve (an S shape gives fine control at both ends); double-click to straighten it. The dot shows your pen while it touches the tablet; the faint diagonal is a straight response.";
     pub const PRESSURE_S: &str =
         "Gentle at both the lightest and the hardest presses, quick in between: fine control at both ends.";
@@ -854,6 +858,7 @@ pub mod plain {
     pub const BOOLEAN_SUBTRACT: &str = "Cut this piece's shape out of the active piece.";
     pub const BOOLEAN_UNION: &str = "Fuse this piece's shape into the active piece, as one closed surface.";
     pub const BOOLEAN_INTERSECT: &str = "Keep only the part of the active piece that is inside this piece.";
+    pub const BOOLEAN_BLEND: &str = "Round the seam where the pieces meet over this many voxels (the voxel size is set by Resolution under Voxel remesh). 0 keeps it sharp, but the voxels can only follow a sharp seam as a jagged line; 2 (the default) takes most of that off and stays crisp; raise it for a softer, smoother seam.";
     pub const PRINT_SCALE: &str =
         "How many millimeters one scene unit is when printed. Sizes, volume and weights below follow it.";
     pub const PRINT_MEASURE: &str = "Measure the active piece again (after sculpting, or after switching pieces).";

@@ -4,6 +4,14 @@
 //! - Union: target ∪ tool = min(d_A, d_B)
 //! - Difference: target \ tool = max(d_A, -d_B)
 //! - Intersection: target ∩ tool = max(d_A, d_B)
+//!
+//! With a blend radius `k` the hard `min`/`max` become the polynomial
+//! smooth minimum and maximum (Quilez, "Smooth minimum", 2013):
+//! `smin(a, b, k) = min(a, b) - k/4 * max(k - |a - b|, 0)^2 / k^2`. Where the
+//! two surfaces cross, the hard combination makes a crease sharper than a
+//! voxel, which surface extraction can only follow as a sawtooth; the
+//! blend rounds it into a fillet about `k/4` deep that the grid resolves.
+//! Away from the crease (|a - b| >= k) the result is exact.
 
 use crate::tree::{LEAF_VOXELS, LeafNode, VdbFloatGrid};
 use glam::IVec3;
@@ -22,6 +30,23 @@ pub enum BooleanOp {
 /// - `Difference`: `target` \ `tool`
 /// - `Intersection`: `target` ∩ `tool`
 pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: BooleanOp) {
+    csg_operation_blended(target, tool, op, 0.0);
+}
+
+/// The polynomial smooth minimum of `a` and `b` over `k` (`min` when `k` is 0).
+pub fn smooth_min(a: f32, b: f32, k: f32) -> f32 {
+    if k <= 0.0 {
+        return a.min(b);
+    }
+    let t = (k - (a - b).abs()).max(0.0) / k;
+    a.min(b) - t * t * k * 0.25
+}
+
+/// [`csg_operation`] with the crease where the two surfaces meet rounded
+/// over `blend` (world units; 0: sharp). PRECONDITION: both grids' narrow
+/// bands reach at least `blend` past the surface, or the fillet is cut
+/// short where a value was clamped.
+pub fn csg_operation_blended(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: BooleanOp, blend: f32) {
     let bg_a = target.background;
     let bg_b = tool.background;
     let combined_bg = match op {
@@ -55,9 +80,9 @@ pub fn csg_operation(target: &mut VdbFloatGrid, tool: &VdbFloatGrid, op: Boolean
                     if let Some(lb) = leaf_b { (lb.values[offset], lb.mask.is_set(offset)) } else { (bg_b, false) };
 
                 let v_out = match op {
-                    BooleanOp::Union => va.min(vb),
-                    BooleanOp::Difference => va.max(-vb),
-                    BooleanOp::Intersection => va.max(vb),
+                    BooleanOp::Union => smooth_min(va, vb, blend),
+                    BooleanOp::Difference => -smooth_min(-va, vb, blend),
+                    BooleanOp::Intersection => -smooth_min(-va, -vb, blend),
                 };
 
                 let is_active = match op {

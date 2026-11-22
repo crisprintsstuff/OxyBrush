@@ -740,6 +740,8 @@ impl App {
         ed.deform_poll();
         ed.sync_model_radius();
         ed.living_sync();
+        ed.sync_links();
+        ed.sync_brush_look();
         ed.enforce_shared_undo_cap();
         ed.watch_uvs();
         ed.tick_gizmo_session();

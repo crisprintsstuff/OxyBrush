@@ -75,8 +75,9 @@ pub type AlphaFinder<'a> = dyn Fn(AlphaLookup<'_>) -> Option<Arc<Alpha>> + 'a;
 /// Bytes a saved recipe starts with, and the layout version after them.
 const MAGIC: &[u8; 4] = b"OXSR";
 /// 1 named an alpha by name plus a sample of raw bits. 2 names it by a
-/// hash of every pixel as stored (16-bit), and does not use the name.
-const VERSION: u8 = 3;
+/// hash of every pixel as stored (16-bit), and does not use the name. 3
+/// adds the alpha's invert flag; 4 the pressure curves (#305).
+const VERSION: u8 = 4;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -123,6 +124,7 @@ impl StrokeRecipe {
     ///               8 invert, 16 grab_through, 32 has alpha
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
+    /// [version 4: strength_curve:f32*4 size_curve:f32*4]
     /// [alpha: name:text size:u32 id:u64 rotation:f32 follow:u8 up:f32*3]
     /// events:u32 then per event  tag:u8
     ///   0 sample:   position:f32*3 normal:f32*3 pressure:f32 spacing:f32 strength:f32 max_dabs:u32
@@ -179,6 +181,11 @@ impl StrokeRecipe {
         for v in [self.center, self.view, self.paint] {
             put_vec3(&mut b, v);
         }
+        if version >= 4 {
+            for x in self.settings.pressure_curves.iter().flatten() {
+                put_f32(&mut b, *x);
+            }
+        }
         if let Some(a) = &self.alpha {
             put_text(&mut b, &a.alpha.name);
             b.extend_from_slice(&a.alpha.size.to_le_bytes());
@@ -233,7 +240,7 @@ impl StrokeRecipe {
             return Err("not a stroke recipe".into());
         }
         let version = r.u8()?;
-        if version != 1 && version != 2 && version != VERSION {
+        if !(1..=VERSION).contains(&version) {
             return Err(format!("stroke recipe version {version} is newer than this version reads"));
         }
         let kind = preset::kind_from_key(&r.text()?).ok_or("unknown brush")?;
@@ -264,7 +271,9 @@ impl StrokeRecipe {
             noise_scale,
             crease_pinch,
             insert_shape,
+            pressure_curves: [crate::LINEAR_PRESSURE_SHAPE; 2],
         };
+        let mut settings = settings;
         let sym = r.u8()?;
         let radial = r.u32()?;
         let radial_axis = match r.u8()? {
@@ -275,6 +284,14 @@ impl StrokeRecipe {
         };
         let symmetry = Symmetry { x: sym & 1 != 0, y: sym & 2 != 0, z: sym & 4 != 0, radial, radial_axis };
         let (center, view, paint) = (r.vec3()?, r.vec3()?, r.vec3()?);
+        // Older recipes saved pressure already shaped: straight curves.
+        if version >= 4 {
+            for curve in &mut settings.pressure_curves {
+                for x in curve.iter_mut() {
+                    *x = r.f32()?;
+                }
+            }
+        }
         let alpha = if flags & 32 != 0 {
             let name = r.text()?;
             let size = r.u32()?;
@@ -666,6 +683,7 @@ mod tests {
                 gravity: 0.4,
                 auto_smooth: 0.2,
                 pressure_radius: true,
+                pressure_curves: [[0.6, 0.1, 0.8, 0.4], [0.2, 0.7, 0.4, 0.95]],
                 ..Default::default()
             };
             let symmetry = Symmetry { x: true, ..Default::default() };
@@ -708,6 +726,10 @@ mod tests {
             let mut third = base.clone();
             loaded.replay(&mut third, &mut |_, _| {});
             assert_eq!(third.positions, live.positions, "{kind:?} replays exactly from bytes");
+            // A version 3 recipe (before the curves) reads with straight ones.
+            let old = StrokeRecipe::from_bytes(&recipe.encode(3), &find).expect("reads back");
+            assert_eq!(old.settings.pressure_curves, [crate::LINEAR_PRESSURE_SHAPE; 2]);
+            assert_eq!(old.events, recipe.events);
         }
     }
 

@@ -346,6 +346,35 @@ pub struct BrushSettings {
     pub crease_pinch: f32,
     /// Insert shape for BrushKind::InsertPrimitive.
     pub insert_shape: InsertShape,
+    /// How pen pressure turns into strength and into size (#305): each a
+    /// [`shape_pressure`] curve, applied to the sample's pressure.
+    pub pressure_curves: [[f32; 4]; 2],
+}
+
+/// A straight two-point pressure shape (no change).
+pub const LINEAR_PRESSURE_SHAPE: [f32; 4] = [1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+
+/// The cubic through (0,0), (x1,y1), (x2,y2), (1,1), evaluated at `x`.
+pub fn shape_pressure(x: f32, shape: [f32; 4]) -> f32 {
+    if shape == LINEAR_PRESSURE_SHAPE {
+        return x.clamp(0.0, 1.0);
+    }
+    let [x1, y1, x2, y2] = shape.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 });
+    let cubic = |t: f32, a: f32, b: f32| {
+        let u = 1.0 - t;
+        3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+    };
+    // x(t) never decreases for control x in 0..1: find t by bisection.
+    let (mut lo, mut hi) = (0.0f32, 1.0f32);
+    for _ in 0..24 {
+        let mid = 0.5 * (lo + hi);
+        if cubic(mid, x1, x2) < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    cubic(0.5 * (lo + hi), y1, y2).clamp(0.0, 1.0)
 }
 
 impl Default for BrushSettings {
@@ -366,6 +395,7 @@ impl Default for BrushSettings {
             noise_scale: 3.0,
             crease_pinch: 0.3,
             insert_shape: InsertShape::Sphere,
+            pressure_curves: [LINEAR_PRESSURE_SHAPE; 2],
         }
     }
 }
@@ -1059,10 +1089,17 @@ impl Stroke {
 
     fn make_dab(&self, s: StrokeSample) -> Dab {
         let p = s.pressure.clamp(0.0, 1.0);
-        let radius =
-            if self.settings.pressure_radius { self.settings.radius * (0.2 + 0.8 * p) } else { self.settings.radius };
-        let strength =
-            if self.settings.pressure_strength { self.settings.strength * p } else { self.settings.strength };
+        let [strength_curve, size_curve] = self.settings.pressure_curves;
+        let radius = if self.settings.pressure_radius {
+            self.settings.radius * (0.2 + 0.8 * shape_pressure(p, size_curve))
+        } else {
+            self.settings.radius
+        };
+        let strength = if self.settings.pressure_strength {
+            self.settings.strength * shape_pressure(p, strength_curve)
+        } else {
+            self.settings.strength
+        };
         let (radius, strength) = (radius * self.modulation.0, strength * self.modulation.1);
         let drag = self.last_dab.map_or(Vec3::ZERO, |l| s.position - l);
         // Direction in the tangent plane.
@@ -1971,6 +2008,39 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strength_and_size_follow_their_own_pressure_curves() {
+        // #305: the same light stroke with a steep size curve makes a wider
+        // dab than with a flat one, at the same strength, and the other
+        // way round.
+        let base = oxy_mesh::primitives::icosphere(5, 1.0);
+        let run = |curves: [[f32; 4]; 2]| {
+            let settings = BrushSettings {
+                kind: BrushKind::Draw,
+                radius: 0.25,
+                strength: 0.5,
+                pressure_radius: true,
+                pressure_curves: curves,
+                ..Default::default()
+            };
+            let mut mesh = base.clone();
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false);
+            let p = Vec3::Y;
+            stroke.add_sample(&mut mesh, StrokeSample { position: p, normal: p, pressure: 0.3 }, &mut |_, _| {});
+            let peak = mesh.positions.iter().zip(&base.positions).map(|(a, b)| a.distance(*b)).fold(0.0, f32::max);
+            // The dab's footprint, relative to its own height.
+            let moved =
+                mesh.positions.iter().zip(&base.positions).filter(|(a, b)| a.distance(**b) > 0.01 * peak).count();
+            (moved, peak)
+        };
+        let (soft, firm) = ([0.1, 0.9, 0.2, 1.0], [0.9, 0.0, 1.0, 0.1]);
+        let (wide, narrow) = (run([LINEAR_PRESSURE_SHAPE, soft]), run([LINEAR_PRESSURE_SHAPE, firm]));
+        assert!(wide.0 > narrow.0 * 2, "size follows its curve: {wide:?} {narrow:?}");
+        let (strong, weak) = (run([soft, LINEAR_PRESSURE_SHAPE]), run([firm, LINEAR_PRESSURE_SHAPE]));
+        assert!(strong.0.abs_diff(weak.0) * 10 <= strong.0, "same size: {strong:?} {weak:?}");
+        assert!(strong.1 > weak.1 * 2.0, "strength follows its curve: {strong:?} {weak:?}");
+    }
 
     #[test]
     fn movement_brush_defaults_are_moderate_and_front_face_filter_is_off() {

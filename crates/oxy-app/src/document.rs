@@ -44,6 +44,8 @@ pub struct Document {
     pub scene: Scene,
     pub history: History,
     pub living: Living,
+    /// What each linked copy was last synced from (#327), by copy id.
+    pub(crate) link_seen: std::collections::HashMap<u64, crate::links::LinkSeen>,
 
     // Camera & View
     pub camera: Camera,
@@ -171,6 +173,7 @@ impl Document {
             scene,
             history: History::default(),
             living: Living::new(),
+            link_seen: Default::default(),
             camera,
             snap_orbit: None,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),

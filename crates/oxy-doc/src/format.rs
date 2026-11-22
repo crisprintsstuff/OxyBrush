@@ -53,6 +53,12 @@
 //!   **preceding** `PIEC`: `parent:u32`, the parent piece's place among the
 //!   file's pieces (from 0; not this piece). Transforming the parent transforms
 //!   this piece with it. Older readers skip it and keep pieces independent.
+//! - `LINK` (optional, since 4.0.0-beta.23): the **preceding** `PIEC` is
+//!   a linked copy of another piece (#327): `source:u32 transform:f32*16`,
+//!   the original's place among the file's pieces (from 0; never this
+//!   piece, nor a piece that is itself a copy) and the transform from the
+//!   original to the copy, column by column. The `PIEC` holds the copy's
+//!   mesh as it was, so older readers skip this and open an ordinary piece.
 //! - `POLY` (optional, since 4.0.0-beta.22): the polygons of the
 //!   **preceding** `PIEC` when it was imported from (or built from) quads
 //!   and n-gons, as the edges inside them: `dcount:u32 diagonal:u32*2d
@@ -335,6 +341,13 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(parent) = p.parent {
             sections.push((*b"PARN", parent.to_le_bytes().to_vec()));
+        }
+        if let Some((source, transform)) = p.link {
+            let mut b = source.to_le_bytes().to_vec();
+            for x in transform.to_cols_array() {
+                b.extend(x.to_le_bytes());
+            }
+            sections.push((*b"LINK", b));
         }
         if let Some(st) = p.strokes.as_ref().filter(|st| !st.strokes.is_empty() || !st.parts.is_empty()) {
             if !st.strokes.is_empty() {
@@ -760,6 +773,21 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PARN before any piece".into()))?;
                 let mut r = Reader { data: &raw, pos: 0 };
                 piece.parent = Some(r.u32()?);
+            }
+            b"LINK" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("LINK before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let source = r.u32()?;
+                let mut cols = [0.0f32; 16];
+                for c in &mut cols {
+                    *c = r.f32()?;
+                }
+                let transform = glam::Mat4::from_cols_array(&cols);
+                if transform.is_finite() && transform.determinant().abs() > 1e-12 {
+                    piece.link = Some((source, transform));
+                } else {
+                    log::warn!("ignoring a damaged link on piece {:?}", piece.name);
+                }
             }
             b"STRK" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STRK before any piece".into()))?;
@@ -1611,6 +1639,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         material: None,
         instancers: Vec::new(),
         parent: None,
+        link: None,
         polygons: None,
     })
 }
@@ -1919,6 +1948,7 @@ mod tests {
                     material: None,
                     instancers: Vec::new(),
                     parent: None,
+                    link: None,
                     polygons: None,
                 },
                 PieceData {
@@ -1935,6 +1965,7 @@ mod tests {
                     material: None,
                     instancers: Vec::new(),
                     parent: None,
+                    link: None,
                     polygons: None,
                 },
             ],
@@ -2110,6 +2141,7 @@ mod tests {
             material: None,
             instancers: Vec::new(),
             parent: None,
+            link: None,
             polygons: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
@@ -2797,6 +2829,7 @@ mod tests {
                 material: None,
                 instancers: Vec::new(),
                 parent: None,
+                link: None,
                 polygons: None,
             }],
             active: 0,
@@ -3014,6 +3047,35 @@ mod tests {
         skipped[at..at + 4].copy_from_slice(b"NOPE");
         let decoded = decode(&skipped).unwrap();
         assert_eq!(decoded.pieces[1].parent, None);
+    }
+
+    #[test]
+    fn linked_copies_round_trip_in_oxb_and_older_readers_get_plain_pieces() {
+        // #327: piece 1 is a mirrored copy of piece 0.
+        let mut scene = sample();
+        let mirror = glam::Mat4::from_scale(glam::Vec3::new(-1.0, 1.0, 1.0));
+        scene.pieces[1].link = Some((0, mirror));
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"LINK").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[0].link, None);
+        assert_eq!(back.pieces[1].link, Some((0, mirror)));
+        let opened = crate::Scene::from_data(back).unwrap();
+        let link = opened.pieces[1].link.expect("linked");
+        assert_eq!((link.source, link.transform), (opened.pieces[0].id, mirror));
+
+        // An older reader skips it: both open as ordinary pieces.
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"LINK").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        assert_eq!(decode(&skipped).unwrap().pieces[1].link, None);
+
+        // A copy of itself, or a broken transform, isn't trusted.
+        scene.pieces[1].link = Some((1, mirror));
+        let opened = crate::Scene::from_data(decode(&encode(&scene)).unwrap()).unwrap();
+        assert!(opened.pieces[1].link.is_none());
+        scene.pieces[1].link = Some((0, glam::Mat4::ZERO));
+        assert_eq!(decode(&encode(&scene)).unwrap().pieces[1].link, None);
     }
 
     #[test]

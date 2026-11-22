@@ -6,7 +6,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Linked copies** ([#327](https://github.com/crisprintsstuff/OxyBrush/issues/327)). Pieces > **Duplicate linked** and **Mirror duplicate linked** make a copy that follows its original: sculpt, paint or remesh the original and the copy changes with it, live (sculpt one ear, its mirror image follows). Move, turn or scale the copy with the transform gizmo and it stays linked in its new place; **Unlink copy** makes it an ordinary piece. Copies can't be sculpted themselves. Projects keep the link in a new optional `LINK` section; older versions open the copy as an ordinary piece.
+- **Settings per brush** ([#305](https://github.com/crisprintsstuff/OxyBrush/issues/305)). Each brush keeps its own falloff, focal shift, spacing, stroke mode, stabilizer, auto smooth, spray, pressure switches and **alpha**, and gets them back when you pick it again; strength and gravity were per brush already. Size stays shared unless **Size per brush** is on. Both are in Preferences > General, and Remember brush settings between sessions keeps every brush's settings.
+- **Separate pressure curves for strength and size** ([#305](https://github.com/crisprintsstuff/OxyBrush/issues/305)): Preferences > Pen & tablet has a Strength curve and a Size curve, so a light touch can make a thin line at full strength, or the other way round. Living-stroke recipes save both (recipe version 4; older recipes replay as before).
+- **Seam blend for Booleans** ([#285](https://github.com/crisprintsstuff/OxyBrush/issues/285)): the seam where two pieces meet is rounded over a few voxels (2 by default; 0 keeps a sharp crease), in the Boolean row.
+
 - **The brush ring shows while you resize with S** ([#418](https://github.com/crisprintsstuff/OxyBrush/issues/418)). The size and focal shift sliders open under the pointer, which hid the ring; it now stays on the model where you pressed the key, over the slider, and grows and shrinks as you drag.
+
+### Changed
+
+- **Smoother Boolean seams that stay put** ([#285](https://github.com/crisprintsstuff/OxyBrush/issues/285)). A sharp seam is thinner than a voxel, so it came out as a sawtooth, and every Boolean rebuilt and smoothed the whole piece, softening earlier seams a little each time. Now the seam is blended (see above), and away from it each point goes back onto the surface it came from, so the rest of the piece, earlier seams included, keeps its shape. On two overlapping spheres the seam's spread around the surface drops from 0.42 to 0.11 voxels, and a later Boolean elsewhere barely changes it (0.11 to 0.13 voxels; it used to double). A Boolean takes 10–20% longer.
 
 ### Fixed
 

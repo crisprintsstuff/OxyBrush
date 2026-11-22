@@ -719,6 +719,8 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             noise_scale: ed.noise_scale,
             crease_pinch: ed.crease_pinch,
             insert_shape: ed.insert_shape,
+            // An agent gives each sample's pressure as it means it.
+            pressure_curves: [oxy_sculpt::LINEAR_PRESSURE_SHAPE; 2],
         },
         symmetry: ed.symmetry,
         symmetry_center: ed.symmetry_center(),

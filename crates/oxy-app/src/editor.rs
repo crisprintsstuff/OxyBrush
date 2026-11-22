@@ -628,8 +628,7 @@ pub fn map_pressure(raw: f32, gamma: f32, min: f32, full: f32) -> f32 {
     map_pressure_shaped(raw, gamma, LINEAR_PRESSURE_SHAPE, min, full)
 }
 
-/// A straight two-point pressure shape (no change).
-pub const LINEAR_PRESSURE_SHAPE: [f32; 4] = [1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0];
+pub use oxy_sculpt::{LINEAR_PRESSURE_SHAPE, shape_pressure};
 
 /// [`map_pressure`] with a two-point shape on top of the curve: a cubic
 /// from (0, 0) to (1, 1) through the control points `shape` = [x1, y1, x2,
@@ -640,26 +639,6 @@ pub fn map_pressure_shaped(raw: f32, gamma: f32, shape: [f32; 4], min: f32, full
     let min = min.clamp(0.0, 0.5);
     let bent = x.powf(gamma.clamp(0.2, 5.0));
     min + (1.0 - min) * shape_pressure(bent, shape)
-}
-
-/// The cubic through (0,0), (x1,y1), (x2,y2), (1,1), evaluated at `x`.
-pub fn shape_pressure(x: f32, shape: [f32; 4]) -> f32 {
-    let [x1, y1, x2, y2] = shape.map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.5 });
-    let cubic = |t: f32, a: f32, b: f32| {
-        let u = 1.0 - t;
-        3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
-    };
-    // x(t) never decreases for control x in 0..1: find t by bisection.
-    let (mut lo, mut hi) = (0.0f32, 1.0f32);
-    for _ in 0..24 {
-        let mid = 0.5 * (lo + hi);
-        if cubic(mid, x1, x2) < x {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    cubic(0.5 * (lo + hi), y1, y2).clamp(0.0, 1.0)
 }
 
 impl SettingsTab {
@@ -1090,6 +1069,8 @@ pub struct Editor {
     /// Two-point shape of the pressure curve: the inner control points of
     /// a cubic from (0, 0) to (1, 1), as [x1, y1, x2, y2] (straight by default).
     pub pressure_shape: [f32; 4],
+    /// The same for brush size, when pressure changes the size (#305).
+    pub pressure_shape_size: [f32; 4],
     /// Box/lasso selections use a lasso instead of a rectangle.
     pub selection_lasso: bool,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
@@ -1099,6 +1080,14 @@ pub struct Editor {
     pub view: ViewSettings,
     /// Keep the brush and its settings for the next session (Preferences).
     pub remember_brushes: bool,
+    /// Each brush keeps its own settings (#305); see `brush_looks`.
+    pub settings_per_brush: bool,
+    /// ...including its size (off: one size for every brush).
+    pub size_per_brush: bool,
+    /// The settings of brushes put away, by brush.
+    pub(crate) brush_looks: std::collections::HashMap<BrushKind, oxy_sculpt::BrushPreset>,
+    /// The brush whose settings are the ones in effect.
+    pub(crate) look_kind: Option<BrushKind>,
     /// Ctrl+Z (Undo and Redo) works on the active piece only, instead of
     /// the whole scene.
     pub undo_per_piece: bool,
@@ -1373,6 +1362,8 @@ pub struct Editor {
     pub extract_thickness: f32,
     /// Number of Laplacian boundary smoothing iterations for Mask Extract.
     pub extract_smooth: usize,
+    /// How far a Boolean rounds its seam, in voxels (0: sharp) (#285).
+    pub boolean_blend: f32,
     /// 3D Print tools dialog visibility.
     pub show_print_dialog: bool,
     /// Mesh topology diagnostics dialog visibility.
@@ -1478,11 +1469,16 @@ impl Default for Editor {
             stamp_queued: false,
             pressure_full: 1.0,
             pressure_shape: LINEAR_PRESSURE_SHAPE,
+            pressure_shape_size: LINEAR_PRESSURE_SHAPE,
             selection_lasso: false,
             request_load_alpha: false,
             request_export_alpha: false,
             view: ViewSettings::default(),
             remember_brushes: false,
+            settings_per_brush: true,
+            size_per_brush: false,
+            brush_looks: Default::default(),
+            look_kind: None,
             undo_per_piece: false,
             gizmo_done_reverts: false,
             gizmo_pivot_follows: true,
@@ -1621,6 +1617,7 @@ impl Default for Editor {
             max_triangles: crate::settings::default_max_triangles(),
             extract_thickness: 0.02,
             extract_smooth: 2,
+            boolean_blend: oxy_topo::DEFAULT_BOOLEAN_BLEND,
             show_print_dialog: false,
             show_diagnostics: false,
             edge_loop_both_sides: true,
@@ -1897,6 +1894,7 @@ impl Editor {
             pressure_min: self.pressure_min,
             pressure_full: self.pressure_full,
             pressure_shape: self.pressure_shape,
+            pressure_shape_size: self.pressure_shape_size,
             surface_cursor: self.surface_cursor,
             floor_grid: self.floor_grid,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
@@ -1926,6 +1924,7 @@ impl Editor {
             extract_thickness: self.extract_thickness,
             extract_smooth: self.extract_smooth,
             remesh_engine: self.remesh_engine,
+            boolean_blend: self.boolean_blend,
             brush: self.remember_brushes.then(|| self.capture_preset("Last brush")),
             brush_strengths: if self.remember_brushes {
                 BrushKind::ALL.iter().map(|&k| (k, self.strength(k))).collect()
@@ -1938,6 +1937,9 @@ impl Editor {
                 Vec::new()
             },
             remember_brushes: self.remember_brushes,
+            settings_per_brush: self.settings_per_brush,
+            size_per_brush: self.size_per_brush,
+            brush_looks: if self.remember_brushes { self.brush_looks_to_save() } else { Vec::new() },
             undo_per_piece: self.undo_per_piece,
             gizmo_done_reverts: self.gizmo_done_reverts,
             gizmo_pivot_follows: self.gizmo_pivot_follows,
@@ -2214,6 +2216,7 @@ impl Editor {
         self.pressure_min = s.pressure_min;
         self.pressure_full = s.pressure_full;
         self.pressure_shape = s.pressure_shape;
+        self.pressure_shape_size = s.pressure_shape_size;
         self.apply_focal_mm(s.focal_mm, false);
         self.surface_cursor = s.surface_cursor;
         self.floor_grid = s.floor_grid;
@@ -2242,6 +2245,7 @@ impl Editor {
         self.extract_thickness = s.extract_thickness;
         self.extract_smooth = s.extract_smooth;
         self.remesh_engine = s.remesh_engine;
+        self.boolean_blend = s.boolean_blend;
         self.remember_brushes = s.remember_brushes;
         self.undo_per_piece = s.undo_per_piece;
         self.gizmo_done_reverts = s.gizmo_done_reverts;
@@ -2294,6 +2298,11 @@ impl Editor {
         for &(k, v) in &s.brush_gravity {
             *self.gravity_mut(k) = v;
         }
+        self.settings_per_brush = s.settings_per_brush;
+        self.size_per_brush = s.size_per_brush;
+        self.brush_looks =
+            s.brush_looks.iter().filter(|l| l.kind != self.brush_kind).map(|l| (l.kind, l.clone())).collect();
+        self.look_kind = Some(self.brush_kind);
     }
 
     /// Install an `.oxyaddon` into the plugins folder and reload plugins.
@@ -2420,6 +2429,7 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        self.sync_brush_look();
         self.orbit_picked = false;
         // The size on the model, measured where this press lands.
         self.sync_model_radius();
@@ -2584,6 +2594,12 @@ impl Editor {
     /// Start a stroke (or a line/stamp) at `hit`, under window pixel `p`
     /// along ray direction `d`.
     fn start_stroke_at(&mut self, p: Vec2, hit: oxy_mesh::RayHit, d: Vec3) {
+        // A linked copy takes its shape from its original (#327).
+        if let Some(original) = self.active_link_source() {
+            self.status = format!("This is a linked copy of {original}: sculpt {original}, or Unlink this copy first");
+            self.drag = Drag::Orbit;
+            return;
+        }
         let (kind, invert) = self.effective_brush();
         if kind.is_curve_cut() {
             self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
@@ -2626,7 +2642,8 @@ impl Editor {
         }
         let radius = self.world_radius(hit.point, self.brush_radius_pt);
         let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
-        let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
+        let sample =
+            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
         let dyn_topo = self.dyntopo_for(kind).then(|| {
             let piece = self.scene.active();
             Box::new(DynStroke {
@@ -2831,6 +2848,24 @@ impl Editor {
         )
     }
 
+    /// The pen's pressure for a stroke sample: calibrated (response,
+    /// lightest touch, full press) but not yet shaped. Each dab shapes it
+    /// with the strength and size curves the stroke carries (#305).
+    pub fn stroke_pressure(&self) -> f32 {
+        map_pressure_shaped(
+            self.pressure,
+            self.pressure_gamma,
+            LINEAR_PRESSURE_SHAPE,
+            self.pressure_min,
+            self.pressure_full,
+        )
+    }
+
+    /// The pressure curves strokes use: [strength, size].
+    pub fn pressure_curves(&self) -> [[f32; 4]; 2] {
+        [self.pressure_shape, self.pressure_shape_size]
+    }
+
     /// World units per logical point where the brush size is measured:
     /// the surface under the pointer, else where it was last measured, else
     /// the middle of the active piece.
@@ -2966,6 +3001,7 @@ impl Editor {
             noise_scale: self.noise_scale,
             crease_pinch: self.crease_pinch,
             insert_shape: self.insert_shape,
+            pressure_curves: self.pressure_curves(),
         };
         // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
         let stamp =
@@ -3065,6 +3101,10 @@ impl Editor {
 
     /// Switch to a preset's brush and settings.
     pub fn apply_preset(&mut self, p: &oxy_sculpt::BrushPreset) {
+        // The brush in use keeps its settings; the preset's become its brush's.
+        self.sync_brush_look();
+        self.put_away_look(self.brush_kind);
+        self.look_kind = Some(p.kind);
         self.brush_kind = p.kind;
         self.brush_radius_pt = p.radius_pt;
         *self.strength_mut(p.kind) = p.strength;
@@ -3458,7 +3498,7 @@ impl Editor {
                 if pos.distance(*start) >= 4.0 * ppp {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
-                    let pressure = self.pressure();
+                    let pressure = self.stroke_pressure();
                     let local = self.canvas_local(pos);
                     let doc = &mut self.documents[self.active_document];
                     let (o, ray_d) = doc.camera.ray(local, size);
@@ -3482,7 +3522,7 @@ impl Editor {
                 if pos.distance(*start) >= 4.0 * ppp {
                     let (s, h, d) = (*start, *hit, *ray_dir);
                     self.start_stroke_at(s, h, d);
-                    let pressure = self.pressure();
+                    let pressure = self.stroke_pressure();
                     let local = self.canvas_local(pos);
                     let doc = &mut self.documents[self.active_document];
                     let (o, ray_d) = doc.camera.ray(local, size);
@@ -3507,7 +3547,7 @@ impl Editor {
     /// Feed a pointer position into the active stroke.
     pub fn stroke_to(&mut self, pos: Vec2) -> bool {
         let size = self.canvas_size();
-        let pressure_now = self.pressure();
+        let pressure_now = self.stroke_pressure();
         let stabilizer_pt = self.stabilizer_pt;
         let ppp = self.pixels_per_point;
         let (stroke, grab_plane, lazy) = match &mut self.drag {
@@ -3979,7 +4019,8 @@ impl Editor {
             ((drag.length() / self.pixels_per_point).max(4.0), -drag.y.atan2(drag.x))
         };
         let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
-        let sample = StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.pressure() };
+        let sample =
+            StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
         if kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
@@ -4009,7 +4050,7 @@ impl Editor {
         let ray = |p: Vec2| self.camera.ray(p - origin, size);
         let (o, d) = ray(start);
         let Some(hit) = self.scene.active().mesh.raycast(o, d) else { return };
-        let pressure = self.pressure();
+        let pressure = self.stroke_pressure();
         // Line: sample the straight screen segment every 2 px.
         let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, self.brush_radius_pt), 0.0);
         let steps = ((end - start).length() / 2.0).ceil().max(1.0) as usize;
@@ -5879,7 +5920,7 @@ impl Editor {
             fade_in: self.curve_fade_in,
             fade_out: self.curve_fade_out,
             world_per_pt: self.world_radius(points[0].0, 1.0),
-            pressure: self.pressure(),
+            pressure: self.stroke_pressure(),
             revision: self.history.revision(),
             topology: piece.mesh.topology_version(),
             weights: vec![(1.0, 1.0); points.len()],
@@ -6249,6 +6290,7 @@ impl Editor {
         let falloff = self.falloff;
         let strength = self.strength(BrushKind::CurveMove);
         let radius = self.brush_radius_pt * self.curve_world_per_pt();
+        let pressure_curves = self.pressure_curves();
         let doc = &mut self.documents[self.active_document];
         let Some(c) = doc.curve.as_mut() else { return };
         let Some(piece) = doc.scene.pieces.iter().find(|p| p.id == c.piece) else { return };
@@ -6287,7 +6329,14 @@ impl Editor {
         }
         let built = CurveKey {
             shape: c.shape(),
-            settings: BrushSettings { kind: BrushKind::CurveMove, radius, strength, falloff, ..Default::default() },
+            settings: BrushSettings {
+                kind: BrushKind::CurveMove,
+                radius,
+                strength,
+                falloff,
+                pressure_curves,
+                ..Default::default()
+            },
         };
         if c.built.as_ref() == Some(&built) {
             return;
@@ -7255,10 +7304,11 @@ impl Editor {
         };
         let consumed = vec![tool_id];
         let res = self.remesh_resolution;
+        let blend = self.boolean_blend;
         self.start_job(format!("{op_name} {tool_name}"), consumed, move || {
             let extent = target_mesh.bounds().union(&tool_mesh.bounds()).extent();
             let h = (extent.max_element() / res as f32).max(1e-5);
-            oxy_topo::boolean_mesh(&target_mesh, &tool_mesh, op, Some(h))
+            oxy_topo::boolean_mesh(&target_mesh, &tool_mesh, op, Some(h), blend)
                 .map(JobResult::Mesh)
                 .map_err(|e| e.to_string())
         });
