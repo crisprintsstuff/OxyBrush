@@ -689,6 +689,49 @@ impl ThemeTab {
     }
 }
 
+/// The shape box/lasso selections draw (masking and visibility).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SelectShape {
+    #[default]
+    Rectangle,
+    Lasso,
+    /// Dragged out from its centre.
+    Circle,
+    /// Filling the box dragged from corner to corner.
+    Ellipse,
+    /// An open line through clicked points: everything on one side of it.
+    Curve,
+}
+
+impl SelectShape {
+    pub const ALL: [SelectShape; 5] =
+        [SelectShape::Rectangle, SelectShape::Lasso, SelectShape::Circle, SelectShape::Ellipse, SelectShape::Curve];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SelectShape::Rectangle => "Rectangle",
+            SelectShape::Lasso => "Lasso",
+            SelectShape::Circle => "Circle",
+            SelectShape::Ellipse => "Ellipse",
+            SelectShape::Curve => "Curve",
+        }
+    }
+
+    /// The next shape (the `L` key goes round them).
+    pub fn next(self) -> Self {
+        let i = Self::ALL.iter().position(|&x| x == self).unwrap_or(0);
+        Self::ALL[(i + 1) % Self::ALL.len()]
+    }
+}
+
+/// A curve selection being clicked out: what it will do, and its points
+/// (physical px).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectCurve {
+    pub action: SelectAction,
+    pub points: Vec<Vec2>,
+}
+
 /// What a box/lasso selection does on release.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SelectAction {
@@ -780,7 +823,7 @@ pub enum Drag {
     Select {
         action: SelectAction,
         points: Vec<Vec2>,
-        lasso: bool,
+        shape: SelectShape,
         click_group: Option<u32>,
         /// Where the pointer was while Space is held: the box or lasso
         /// moves with the pointer instead of growing (#329).
@@ -1085,8 +1128,10 @@ pub struct Editor {
     pub pressure_shape: [f32; 4],
     /// The same for brush size, when pressure changes the size (#305).
     pub pressure_shape_size: [f32; 4],
-    /// Box/lasso selections use a lasso instead of a rectangle.
-    pub selection_lasso: bool,
+    /// The shape masking and visibility selections draw.
+    pub selection_shape: SelectShape,
+    /// A curve selection being clicked out (`SelectShape::Curve`).
+    pub select_curve: Option<SelectCurve>,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
     pub request_load_alpha: bool,
     /// Ask the app for a file to export the selected alpha to.
@@ -1490,7 +1535,8 @@ impl Default for Editor {
             pressure_full: 1.0,
             pressure_shape: LINEAR_PRESSURE_SHAPE,
             pressure_shape_size: LINEAR_PRESSURE_SHAPE,
-            selection_lasso: false,
+            selection_shape: SelectShape::Rectangle,
+            select_curve: None,
             request_load_alpha: false,
             request_export_alpha: false,
             view: ViewSettings::default(),
@@ -2481,6 +2527,10 @@ impl Editor {
             self.drag = self.drag_for_nav(self.keymap.nav_action(nav_button, self.active_modifiers()), button);
             return;
         }
+        // A curve selection being clicked out takes every click.
+        if self.select_curve_click(p) {
+            return;
+        }
         // In Poly Edit the gizmo works on the picked elements, and comes
         // before the tool's own clicks.
         if self.poly_edit.is_some() && self.gizmo.is_some() && self.poly_gizmo_down(p) {
@@ -2562,6 +2612,36 @@ impl Editor {
             return;
         }
 
+        // A curve selection starts with a click (see `select_curve_click`).
+        if m.ctrl && self.selection_shape == SelectShape::Curve {
+            let action = match (m.shift, m.alt) {
+                (true, false) => SelectAction::ShowOnly,
+                (true, true) => SelectAction::Hide,
+                (false, false) => SelectAction::Mask,
+                (false, true) => SelectAction::Unmask,
+            };
+            self.select_curve = Some(SelectCurve { action, points: vec![p] });
+            self.status = "Curve: click more points; Enter applies (Alt: the other side), Backspace takes the last back, Esc cancels".into();
+            return;
+        }
+        // A circle or ellipse is usually centred on what you want, so with
+        // those shapes the mask key draws one wherever it starts (with a
+        // rectangle or lasso, the mask key on the model paints the mask).
+        if m.ctrl
+            && !m.shift
+            && matches!(self.selection_shape, SelectShape::Circle | SelectShape::Ellipse)
+            && self.keymap.mask_empty != keymap::MaskEmpty::Clear
+        {
+            let action = if m.alt { SelectAction::Unmask } else { SelectAction::Mask };
+            self.drag = Drag::Select {
+                action,
+                points: vec![p],
+                shape: self.selection_shape,
+                click_group: None,
+                pan_from: None,
+            };
+            return;
+        }
         // Mask+Smooth drag: box/lasso visibility (Invert hides the selection).
         // A click without dragging isolates the group under the cursor, or
         // shows everything on empty space.
@@ -2572,7 +2652,7 @@ impl Editor {
                 .map(|(_, hit)| self.scene.active().mesh.groups()[hit.triangle as usize]);
             let action = if m.alt { SelectAction::Hide } else { SelectAction::ShowOnly };
             self.drag =
-                Drag::Select { action, points: vec![p], lasso: self.selection_lasso, click_group, pan_from: None };
+                Drag::Select { action, points: vec![p], shape: self.selection_shape, click_group, pan_from: None };
             return;
         }
         // Mask key on the model, with something masked: a click blurs the
@@ -2596,7 +2676,7 @@ impl Editor {
                 self.drag = Drag::Select {
                     action,
                     points: vec![p],
-                    lasso: self.selection_lasso,
+                    shape: self.selection_shape,
                     click_group: None,
                     pan_from: None,
                 };
@@ -3570,9 +3650,9 @@ impl Editor {
                 *pan_from = Some(pos);
                 true
             }
-            Drag::Select { points, lasso, pan_from, .. } => {
+            Drag::Select { points, shape, pan_from, .. } => {
                 *pan_from = None;
-                if *lasso {
+                if *shape == SelectShape::Lasso {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
                         points.push(pos);
                     }
@@ -3905,11 +3985,11 @@ impl Editor {
                     self.living_resculpt_path(id, &samples, false);
                 }
             }
-            Drag::Select { action, points, lasso, click_group, .. } => {
+            Drag::Select { action, points, shape, click_group, .. } => {
                 // Alt pressed after a mask box (not held from the start,
                 // which means unmask) masks everything but the box.
                 let outside = action == SelectAction::Mask && self.modifiers.alt;
-                self.finish_select(action, points, lasso, click_group, outside)
+                self.finish_select(action, points, shape, click_group, outside)
             }
             Drag::MaskGesture { start } => {
                 let moved = self.pointer.is_some_and(|p| p.distance(start) >= 4.0 * self.pixels_per_point.max(0.1));
@@ -3945,6 +4025,10 @@ impl Editor {
     /// Cancel an in-progress drag without applying it (Escape).
     pub fn cancel_drag(&mut self) {
         self.insert_preview = None;
+        if self.select_curve.take().is_some() {
+            self.status = "Curve selection cancelled".into();
+            return;
+        }
         if self.deform_drag.is_some() {
             self.deform_cancel();
             return;
@@ -4193,7 +4277,7 @@ impl Editor {
         &mut self,
         action: SelectAction,
         points: Vec<Vec2>,
-        lasso: bool,
+        shape: SelectShape,
         click_group: Option<u32>,
         outside: bool,
     ) {
@@ -4211,15 +4295,26 @@ impl Editor {
             return;
         }
         let origin = Vec2::new(self.canvas[0], self.canvas[1]);
-        let poly: Vec<Vec2> = if lasso {
-            points.iter().map(|p| *p - origin).collect()
-        } else {
-            let (a, b) = (points[0] - origin, points[points.len() - 1] - origin);
-            vec![a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y)]
-        };
+        let local: Vec<Vec2> = points.iter().map(|p| *p - origin).collect();
+        let poly = crate::select_shapes::select_outline(shape, &local);
+        self.select_region(action, move |s| point_in_polygon(s, &poly), outside, true);
+    }
+
+    /// Apply a masking or visibility selection: `inside` says whether a
+    /// point on the canvas (canvas pixels) is selected. With
+    /// `empty_special`, a selection holding none of the model clears the
+    /// mask or inverts visibility (a box drawn on empty space); otherwise
+    /// it changes nothing.
+    pub(crate) fn select_region(
+        &mut self,
+        action: SelectAction,
+        inside: impl Fn(Vec2) -> bool + Clone,
+        outside: bool,
+        empty_special: bool,
+    ) {
         let camera = self.camera;
         let size = self.canvas_size();
-        let inside = move |p: Vec3| camera.project(p, size).is_some_and(|s| point_in_polygon(s, &poly));
+        let inside = move |p: Vec3| camera.project(p, size).is_some_and(&inside);
         match action {
             SelectAction::Mask | SelectAction::Unmask => {
                 // Masking follows symmetry like a stroke: a vertex is picked
@@ -4235,8 +4330,10 @@ impl Editor {
                 let any =
                     (0..mesh.vertex_count()).any(|v| !mesh.is_vertex_hidden(v as u32) && inside(mesh.positions[v]));
                 if !any {
-                    if action == SelectAction::Mask {
+                    if action == SelectAction::Mask && empty_special {
                         self.clear_mask();
+                    } else if !empty_special {
+                        self.status = "Nothing of the model on that side".into();
                     }
                     return;
                 }
@@ -4266,7 +4363,11 @@ impl Editor {
                     .zip(mesh.hidden())
                     .any(|(t, &h)| !h && inside(t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0));
                 if !any {
-                    self.edit_faces("Invert visibility", Mesh::invert_visibility);
+                    if empty_special {
+                        self.edit_faces("Invert visibility", Mesh::invert_visibility);
+                    } else {
+                        self.status = "Nothing of the model on that side".into();
+                    }
                     return;
                 }
                 let label = if action == SelectAction::ShowOnly { "Show selection" } else { "Hide selection" };
@@ -8937,8 +9038,9 @@ impl Editor {
                 E::None
             }
             C::SelectionLasso => {
-                self.selection_lasso = !self.selection_lasso;
-                self.status = format!("Selection: {}", if self.selection_lasso { "lasso" } else { "rectangle" });
+                self.selection_shape = self.selection_shape.next();
+                self.select_curve = None;
+                self.status = format!("Selection: {}", self.selection_shape.label().to_lowercase());
                 E::None
             }
             C::GizmoCycle => {
@@ -12485,7 +12587,7 @@ mod tests {
         e.modifiers.ctrl = false;
 
         // A lasso moves every point and adds none while Space is held.
-        e.selection_lasso = true;
+        e.selection_shape = SelectShape::Lasso;
         e.modifiers.ctrl = true;
         e.pointer = Some(Vec2::new(100.0, 100.0));
         e.pointer_down(PointerButton::Primary);
@@ -12518,7 +12620,7 @@ mod tests {
     #[test]
     fn lasso_hides_and_ctrl_click_inverts_and_empty_box_clears() {
         let mut e = editor();
-        e.selection_lasso = true;
+        e.selection_shape = SelectShape::Lasso;
         e.modifiers = Modifiers { ctrl: true, shift: true, alt: true };
         // Triangle-shaped lasso around the center: hide it.
         e.pointer = Some(Vec2::new(300.0, 200.0));

@@ -207,7 +207,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | Ctrl+drag on empty space | Mask a rectangle or lasso, mirrored when symmetry is on (Ctrl+Alt: unmask; a box around nothing clears the mask; Ctrl+click: invert the mask) |
 | Ctrl+Shift+drag | Show only the selection (Ctrl+Shift+Alt: hide it; a box around none of the model inverts visibility) |
 | Space (hold, while drawing a box or lasso) | Move the box or lasso |
-| `L` | Rectangle / lasso selection |
+| `L` | Selection shape for masking and visibility: rectangle, lasso, circle (drag from the centre), ellipse (corner to corner) or curve (click points, Enter; it takes the side on your right, Alt the other) |
 | Ctrl+click on the model | Blur the mask (Ctrl+Alt+click: sharpen it); dragging paints the mask as before |
 | Ctrl+M | Mask the face group under the cursor |
 | Ctrl+Shift+W | Group from mask: the masked faces become a new face group (with nothing masked, the visible faces do) |

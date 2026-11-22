@@ -212,7 +212,7 @@ commands! {
     Strength => "Brush strength", "- and =", "How strong each dab is.";
     Raise => "Raise", "", "Brushes add clay. Hold Alt to carve for one stroke.";
     Carve => "Carve", "", "Brushes remove clay. Hold Alt to raise for one stroke.";
-    Lasso => "Rectangle / lasso", "L", "Switch the selection between a rectangle and a lasso.";
+    Lasso => "Selection shape", "L", "Switch the selection shape: rectangle, lasso, circle, ellipse, curve.";
     MaskGroup => "Mask face group", "Ctrl+M", "Mask the face group under the pointer.";
     QuickMenu => "Quick menu", "Q", "Hold Q, or right-click the view, for size, strength and Raise or Carve next to the cursor.";
     ClearGroups => "Clear groups", "", "Put every face back in the same group.";
@@ -911,6 +911,10 @@ pub mod plain {
     pub const REMESH_RES: &str = "Voxel grid size for remeshing. Higher keeps more detail.";
     pub const KEEP: &str = "Share of triangles to keep when decimating.";
     pub const SELECTION_RECT: &str = "The selection is a rectangle.";
+    pub const SELECTION_LASSO: &str = "The selection is a lasso: draw round what you want.";
+    pub const SELECTION_CIRCLE: &str = "The selection is a circle: drag out from its centre.";
+    pub const SELECTION_ELLIPSE: &str = "The selection is an ellipse: drag from corner to corner of the box it fills.";
+    pub const SELECTION_CURVE: &str = "The selection is everything on one side of a line through points you click: click the first point with the mask key held (add Shift for visibility), click the rest, then press Enter. It takes the side on your right as you draw; hold Alt for the other. Backspace takes a point back, Esc cancels.";
     pub const PAINT_COLOR: &str = "Color the Paint brush uses. Hold Alt while painting to erase.";
     pub const SECTION_PIECES: &str = "Meshes in this scene. The highlighted row is the one you sculpt.";
     pub const SECTION_INSTANCES: &str = "Surface instances: copies of another piece on faces, points, a face group, a mask, or scattered over the surface. They follow the surface as you sculpt, and change together when you edit the piece they copy.";
@@ -1101,6 +1105,10 @@ pub mod plain {
         REMESH_RES,
         KEEP,
         SELECTION_RECT,
+        SELECTION_LASSO,
+        SELECTION_CIRCLE,
+        SELECTION_ELLIPSE,
+        SELECTION_CURVE,
         PAINT_COLOR,
         SECTION_PIECES,
         SECTION_BRUSH,
