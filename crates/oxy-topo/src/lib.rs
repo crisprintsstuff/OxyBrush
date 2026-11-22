@@ -5,6 +5,7 @@
 pub mod decimate;
 pub mod print3d;
 pub mod remesh;
+pub mod skin;
 pub mod transfer;
 pub mod winding;
 
@@ -19,4 +20,5 @@ pub use remesh::{
     VdbRemeshOptions, boolean_difference, boolean_intersection, boolean_mesh, boolean_union, regular_grid_remesh,
     vdb_remesh, voxel_remesh,
 };
+pub use skin::{SkinOptions, skin_armature};
 pub use transfer::{SurfaceProjector, transfer_attributes};

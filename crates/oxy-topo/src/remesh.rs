@@ -181,22 +181,22 @@ impl std::fmt::Display for RemeshError {
 
 impl std::error::Error for RemeshError {}
 
-struct Grid {
-    origin: Vec3,
-    h: f32,
-    dims: UVec3,
+pub(crate) struct Grid {
+    pub(crate) origin: Vec3,
+    pub(crate) h: f32,
+    pub(crate) dims: UVec3,
 }
 
 impl Grid {
-    fn index(&self, i: u32, j: u32, k: u32) -> usize {
+    pub(crate) fn index(&self, i: u32, j: u32, k: u32) -> usize {
         (i as usize) + self.dims.x as usize * (j as usize + self.dims.y as usize * k as usize)
     }
 
-    fn point(&self, i: u32, j: u32, k: u32) -> Vec3 {
+    pub(crate) fn point(&self, i: u32, j: u32, k: u32) -> Vec3 {
         self.origin + Vec3::new(i as f32, j as f32, k as f32) * self.h
     }
 
-    fn len(&self) -> usize {
+    pub(crate) fn len(&self) -> usize {
         self.dims.x as usize * self.dims.y as usize * self.dims.z as usize
     }
 }
@@ -733,7 +733,7 @@ fn mesh_sdf(grid: &Grid, tris: &[[Vec3; 3]], sign: Option<&oxy_vdb::SignOverride
 /// in each cell so close surfaces aren't pinched together (the same rules
 /// as the VDB engine: `oxy_vdb::volume_to_mesh::cell_pieces`), then any
 /// pinch left (a tunnel through a cell) split.
-fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
+pub(crate) fn surface_nets(grid: &Grid, sdf: &[f32]) -> (Vec<Vec3>, Vec<[u32; 3]>) {
     use glam::IVec3;
     use oxy_vdb::volume_to_mesh::{NO_VERTEX, cell_edge, cell_pieces, has_ambiguous_face};
     let d = grid.dims;

@@ -253,6 +253,21 @@ How fine it gets depends on the Detail slider and the brush size: a smaller brus
 Accept (or Enter) adds the tube as a new piece, in one undo step; Cancel (or Esc) discards it. To change it later, Pieces > Edit tube… reopens the active piece's last tube, as long as it hasn't been sculpted, remeshed or regrouped since; Update tube replaces it. To fuse it with the model, use Merge + remesh in the Pieces panel, which fuses the visible pieces into one surface with a voxel remesh; Join keeps them as they are, in one piece.",
     },
     Topic {
+        title: "OxySpheres",
+        keywords: "oxyspheres spheres armature skeleton base mesh block out blockout figure creature character limb joint skin mirror",
+        body: "OxySpheres blocks out a shape with a tree of spheres, then turns it into one smooth mesh to sculpt. Pieces > + Add > OxySpheres… (or the command palette) opens one sphere in the middle of the view.\n\n\
+- Drag from a sphere to pull out a new one. A click without dragging only picks a sphere, for the Radius slider.\n\
+- Shift+drag a sphere to move it; Ctrl+drag it up or down to make it bigger or smaller. The window's Move and Size modes make that the plain drag. With Spheres below follow, moving a sphere moves the ones hanging from it.\n\
+- Click the line between two spheres to put a sphere on it.\n\
+- Alt+click a sphere, or pick it and press Delete, to remove it with the spheres below it. The first sphere stays.\n\
+- Drag away from the spheres to orbit.\n\
+- Mirror across X (on when X symmetry is) adds, moves, resizes and removes spheres on both sides of the plane through the first sphere.\n\
+- The viewport shows the mesh as it will be, a little coarser; turn off Show the mesh to see the plain spheres. Each sphere's outline is drawn over it.\n\
+- Resolution sets how fine the mesh is; Blend how round the joins between links are.\n\
+- While the spheres are open, Undo and Redo step through their edits; undoing past the first edit closes them.\n\n\
+Make mesh (or Enter) adds the mesh as a new piece, in one undo step; Cancel (or Esc) discards the spheres. Pieces > Edit OxySpheres… reopens the spheres of the active piece, and Update mesh replaces its mesh, as long as it hasn't been sculpted, remeshed or subdivided since. The spheres are saved with the project.",
+    },
+    Topic {
         title: "Poly Edit (model polygons)",
         keywords: "poly edit polygon modeling modes soft selection falloff proportional gizmo transform rotate scale faces edges points vertices select pick box extrude inset bevel chamfer bridge slide spin split equalize to circle circularize repeat crease smooth subdivide catmull clark subdivision surface sharp move delete faces edges points edge loop insert close hole weld reach group flat island hard surface low poly",
         body: "Tools > Poly Edit (model polygons)… models the active piece by its faces. It's for low-polygon pieces: a primitive from + Add (Divisions 1 or 2), a retopology mesh, or anything up to 400,000 triangles without subdivision levels.\n\nModes: press 1 for Faces, 2 for Edges, 3 for Points (or use the buttons at the top of the window). The window then shows only that kind's actions, and a click picks that kind: anywhere on a face, the nearest edge, the nearest point. 4 is Auto: what's under the pointer decides, and all actions show. Faces is the default; the keys pick brushes again once Poly Edit is closed. Ctrl/Cmd+click picks several elements of the current kind; switching modes turns the pick into the new kind (a face's sides or corners, the faces that picked edges or points close). The transform gizmo works on the pick too: with something picked, press T (or choose All, Move, Rotate or Scale under Gizmo in the window) and drag its arrows, rings or cubes to move, turn or scale what's picked. Shift+drag extrudes picked faces or border edges first and moves the new ones (on a scale handle, it insets the faces); the new geometry stays picked, so you can keep extruding. Soft selection (under Gizmo) makes the gizmo also move the points near the pick, less the further they are, for smooth bulges and bends: Radius sets how far it reaches and Falloff how quickly it fades (soft to sharp); orange dots show the points it will move. The mode buttons are also at the top of the brush shelf while Poly Edit is open.\n\n\

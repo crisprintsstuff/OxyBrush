@@ -27,6 +27,8 @@ mod matcaps;
 mod menu_model;
 #[cfg(target_os = "macos")]
 mod native_menu;
+mod oxyspheres;
+mod oxyspheres_ui;
 mod palette;
 mod parts;
 mod parts_ui;

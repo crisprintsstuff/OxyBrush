@@ -1,0 +1,96 @@
+# RFC 0034: OxySpheres
+
+Status: Phase 1 implemented (unreleased), issue [#437](https://github.com/crisprintsstuff/OxyBrush/issues/437)
+
+## Summary
+
+**OxySpheres** blocks out a shape with a tree of spheres (an armature),
+then turns it into one smooth, closed mesh to sculpt. Each sphere is a
+joint; each link from a sphere to its parent is the tapering shape that
+joins the two. Pieces > + Add > **OxySpheres…** opens a new armature;
+**Make mesh** (Enter) adds the mesh as a new piece, and Pieces > **Edit
+OxySpheres…** reopens the armature later, while the mesh hasn't been
+changed since.
+
+## Why
+
+Starting a figure, a creature or a prop from a sphere means pulling every
+limb out of it with Grab or Snake Hook, which stretches the triangles and
+loses volume. A base mesh from a few spheres gets the proportions and the
+pose right first, with even triangles everywhere.
+
+## Design
+
+### The armature (`oxy_mesh::armature`)
+
+- A tree: sphere 0 is the root; every other sphere has a parent.
+  Validated on load (no cycles, positive finite radii).
+- **Mirroring** across the X plane through the root: spheres come in pairs
+  (each knows its twin) or sit on the plane. Adding, moving, resizing or
+  deleting one does the same, mirrored, to its twin. A child pulled out of
+  a sphere on the plane, near the plane, snaps onto it.
+- **The shape** is the union, over every link, of the spheres swept along
+  it with the radius going linearly from one end to the other (a "round
+  cone"). Its signed distance is exact and cheap: for a point, the nearest
+  swept sphere is found in closed form (the derivation is in
+  `RoundCone::distance`). Links are joined with a quadratic smooth
+  minimum, **Blend** wide, which rounds the creases where they meet.
+
+### The skin (`oxy_topo::skin_armature`)
+
+The distance is sampled on a regular grid (Resolution voxels along the
+longest side, up to 320), each link writing only into its own box, and the
+zero level set is extracted with the surface nets the voxel remesh
+already uses. Two passes of relaxing and pulling each point back onto the
+exact surface (along the distance's gradient) take the voxel steps off
+without shrinking it. The result is closed, evenly dense, and ready for
+the brushes, dynamic detail or subdivision levels.
+
+Release-build timings (`topo_timing`, a 35-sphere mirrored figure with
+fingers): 12.8k triangles in 36 ms at 72, 63k in 168 ms at 160 (the
+default), 253k in 714 ms at 320.
+
+### Editing
+
+- **Drag from a sphere** pulls out a new one (Add, the default); a click
+  without moving only picks it. **Shift+drag** moves a sphere and
+  **Ctrl+drag** resizes it in any mode; the window's Move and Size modes
+  make that the plain drag. **Spheres below follow** moves a branch.
+- **Click a link** to put a sphere on it (on both sides when mirrored).
+- **Alt+click** or **Delete** removes a sphere with everything below it;
+  the root stays.
+- Dragging away from the spheres orbits.
+- The viewport shows the mesh as it will be, at a coarser resolution (48
+  while dragging, 72 otherwise), with each sphere's outline and the links
+  drawn over it; **Show the mesh** off shows the plain spheres instead.
+- Undo and Redo step through the open armature's own edits, as in an
+  open tube; the scene's history changes once, when the mesh is made
+  (Add OxySpheres, or Edit OxySpheres for a piece being edited). The skin
+  is made on a worker thread.
+
+### Saving
+
+The piece keeps the armature it was made from. The `ARMS` section stores
+it (see `oxy_doc::format`), written only while the mesh is still that
+skin (its triangle count and position fingerprint match). Older versions
+skip it and open an ordinary piece. A piece keeps its last few armatures
+in memory, so undoing an Edit OxySpheres brings back a mesh that can be
+reopened too.
+
+## Not in phase 1 (later phases)
+
+- A quad skin that follows the links' directions (an adaptive base mesh
+  with edge loops around each limb), built from the armature's own
+  topology, as described for sphere skeletons in Ji, Liu and Wang, *B-Mesh:
+  A Fast Modeling System for Base Meshes of 3D Articulated Shapes*
+  (Pacific Graphics 2010).
+- Rotating a branch around its parent (posing), scaling a branch.
+- Spheres that only shape the link they sit on, without adding a joint.
+- Snapping a new armature to the surface of another piece, and binding an
+  existing mesh to an armature to pose it.
+
+## Naming
+
+"OxySpheres" is OxyBrush's own name (the issue's suggestion); the generic
+description is armature spheres. No other product's feature names are
+used in the code or the interface.

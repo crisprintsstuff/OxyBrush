@@ -114,6 +114,8 @@ pub struct Document {
     // In-progress tool states & previews
     pub poly_edit: Option<PolyEdit>,
     pub tube: Option<TubeEdit>,
+    /// An open OxySpheres armature (RFC 0034).
+    pub spheres: Option<crate::oxyspheres::SphereEdit>,
     pub tube_armed: bool,
     pub tube_shape: oxy_mesh::primitives::TubeShape,
     pub tube_profile: Option<oxy_mesh::primitives::TubeProfile>,
@@ -237,6 +239,7 @@ impl Document {
             subdivision_smooth: true,
             poly_edit: None,
             tube: None,
+            spheres: None,
             tube_armed: false,
             tube_shape: oxy_mesh::primitives::TubeShape::default(),
             tube_profile: None,

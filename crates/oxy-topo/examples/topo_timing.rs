@@ -4,6 +4,7 @@ use oxy_topo::{RemeshOptions, decimate, voxel_remesh};
 use std::time::Instant;
 
 fn main() {
+    skin_timing();
     let sphere = primitives::icosphere(7, 1.0);
     for res in [128, 256, 512] {
         let t = Instant::now();
@@ -45,4 +46,36 @@ fn main() {
         d.triangle_count(),
         t.elapsed().as_secs_f64() * 1e3
     );
+}
+
+/// OxySpheres skin (RFC 0034): a mirrored figure with five fingers per
+/// hand, 35 spheres in all.
+fn skin_timing() {
+    use glam::Vec3;
+    use oxy_mesh::armature::Armature;
+    let mut a = Armature::new(Vec3::ZERO, 0.35, Some(0.0));
+    let chest = a.add_child(0, Vec3::new(0.0, 0.75, 0.0), 0.4);
+    a.add_child(chest, Vec3::new(0.0, 1.35, 0.05), 0.28);
+    let sh = a.add_child(chest, Vec3::new(0.45, 0.9, 0.0), 0.18);
+    let el = a.add_child(sh, Vec3::new(0.85, 0.55, 0.0), 0.12);
+    let hand = a.add_child(el, Vec3::new(1.05, 0.15, 0.1), 0.1);
+    for f in 0..5 {
+        let x = 1.05 + (f as f32 - 2.0) * 0.04;
+        let k = a.add_child(hand, Vec3::new(x, 0.0, 0.1), 0.03);
+        a.add_child(k, Vec3::new(x, -0.12, 0.12), 0.025);
+    }
+    let hip = a.add_child(0, Vec3::new(0.22, -0.15, 0.0), 0.2);
+    let kn = a.add_child(hip, Vec3::new(0.27, -0.75, 0.05), 0.14);
+    a.add_child(kn, Vec3::new(0.28, -1.3, 0.0), 0.11);
+    for res in [72, 160, 320] {
+        let t = Instant::now();
+        let opts = oxy_topo::SkinOptions { resolution: res, blend: 0.05, smooth_passes: 2 };
+        let m = oxy_topo::skin_armature(&a, opts).unwrap();
+        println!(
+            "skin {} spheres @ {res}: {} tris in {:.0} ms",
+            a.len(),
+            m.triangle_count(),
+            t.elapsed().as_secs_f64() * 1e3
+        );
+    }
 }

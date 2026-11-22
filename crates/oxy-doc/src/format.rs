@@ -64,6 +64,14 @@
 //!   lower level than the one it was being worked at, `level:u32` (from 0).
 //!   The app shows that level again. Older readers skip it and open the
 //!   piece at the saved level, with every level still there.
+//! - `ARMS` (optional, since 4.0.0-beta.24): the OxySpheres armature the
+//!   **preceding** `PIEC`'s mesh was made from (RFC 0034), so it can be
+//!   edited again: `version:u32` (1) `resolution:u32 blend:f32
+//!   triangles:u32 fingerprint:f32*3 mirrored:u8 mirror_x:f32 count:u32`,
+//!   then per sphere `center:f32*3 radius:f32 parent:u32 twin:u32`
+//!   (`u32::MAX`: none). Sphere 0 is the root. Written only while the
+//!   mesh is still the skin. Older readers skip it and open the skin as an
+//!   ordinary piece; a damaged or unknown-version section is ignored.
 //! - `POLY` (optional, since 4.0.0-beta.22): the polygons of the
 //!   **preceding** `PIEC` when it was imported from (or built from) quads
 //!   and n-gons, as the edges inside them: `dcount:u32 diagonal:u32*2d
@@ -350,6 +358,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if let Some(level) = p.own_level {
             sections.push((*b"LITE", level.to_le_bytes().to_vec()));
         }
+        if let Some(a) = &p.armature {
+            sections.push((*b"ARMS", encode_armature(a)));
+        }
         if let Some((source, transform)) = p.link {
             let mut b = source.to_le_bytes().to_vec();
             for x in transform.to_cols_array() {
@@ -481,6 +492,66 @@ impl<'a> Reader<'a> {
     fn check(&self, count: usize, size: usize) -> Result<()> {
         if count.checked_mul(size).is_none_or(|n| n > self.remaining()) { Err(truncated()) } else { Ok(()) }
     }
+}
+
+/// The `ARMS` section (see the module docs).
+fn encode_armature(a: &crate::ArmatureRecipe) -> Vec<u8> {
+    let spheres = &a.armature.spheres;
+    let mut b = Vec::with_capacity(41 + spheres.len() * 24);
+    let u = |b: &mut Vec<u8>, x: u32| b.extend_from_slice(&x.to_le_bytes());
+    let f = |b: &mut Vec<u8>, x: f32| b.extend_from_slice(&x.to_le_bytes());
+    u(&mut b, 1);
+    u(&mut b, a.resolution);
+    f(&mut b, a.blend);
+    u(&mut b, a.triangles);
+    for x in a.fingerprint.to_array() {
+        f(&mut b, x);
+    }
+    b.push(a.armature.mirror.is_some() as u8);
+    f(&mut b, a.armature.mirror.unwrap_or(0.0));
+    u(&mut b, spheres.len() as u32);
+    for s in spheres {
+        for x in s.center.to_array() {
+            f(&mut b, x);
+        }
+        f(&mut b, s.radius);
+        u(&mut b, s.parent.unwrap_or(u32::MAX));
+        u(&mut b, s.twin.unwrap_or(u32::MAX));
+    }
+    b
+}
+
+/// RETURNS: the recipe; None for a version this reader doesn't know.
+/// A malformed tree (see [`oxy_mesh::armature::Armature::is_valid`]) is an
+/// error.
+fn decode_armature(raw: &[u8]) -> Result<Option<crate::ArmatureRecipe>> {
+    use oxy_mesh::armature::{Armature, Sphere};
+    let mut r = Reader { data: raw, pos: 0 };
+    if r.u32()? != 1 {
+        return Ok(None);
+    }
+    let resolution = r.u32()?;
+    let blend = r.f32()?;
+    let triangles = r.u32()?;
+    let fingerprint = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+    let mirrored = r.u8()? != 0;
+    let mirror_x = r.f32()?;
+    let count = r.u32()? as usize;
+    r.check(count, 24)?;
+    let opt = |x: u32| (x != u32::MAX).then_some(x);
+    let mut spheres = Vec::with_capacity(count);
+    for _ in 0..count {
+        let center = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+        let radius = r.f32()?;
+        let parent = opt(r.u32()?);
+        let twin = opt(r.u32()?);
+        spheres.push(Sphere { center, radius, parent, twin });
+    }
+    let armature = Armature { spheres, mirror: (mirrored && mirror_x.is_finite()).then_some(mirror_x) };
+    if !armature.is_valid() || !blend.is_finite() {
+        return Err(Error::Corrupt("malformed OxySpheres armature".into()));
+    }
+    Ok(Some(crate::ArmatureRecipe { armature, resolution, blend, triangles, fingerprint }))
 }
 
 fn truncated() -> Error {
@@ -781,6 +852,14 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("PARN before any piece".into()))?;
                 let mut r = Reader { data: &raw, pos: 0 };
                 piece.parent = Some(r.u32()?);
+            }
+            b"ARMS" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("ARMS before any piece".into()))?;
+                match decode_armature(&raw) {
+                    Ok(Some(a)) => piece.armature = Some(Box::new(a)),
+                    Ok(None) => log::warn!("ignoring an OxySpheres armature of a newer version on {:?}", piece.name),
+                    Err(e) => log::warn!("ignoring a damaged OxySpheres armature on piece {:?}: {e}", piece.name),
+                }
             }
             b"LITE" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("LITE before any piece".into()))?;
@@ -1654,6 +1733,7 @@ fn decode_piece(raw: &[u8]) -> Result<PieceData> {
         parent: None,
         link: None,
         own_level: None,
+        armature: None,
         polygons: None,
     })
 }
@@ -1964,6 +2044,7 @@ mod tests {
                     parent: None,
                     link: None,
                     own_level: None,
+                    armature: None,
                     polygons: None,
                 },
                 PieceData {
@@ -1982,6 +2063,7 @@ mod tests {
                     parent: None,
                     link: None,
                     own_level: None,
+                    armature: None,
                     polygons: None,
                 },
             ],
@@ -2159,6 +2241,7 @@ mod tests {
             parent: None,
             link: None,
             own_level: None,
+            armature: None,
             polygons: None,
         };
         let bytes = encode(&SceneData { pieces: vec![piece], active: 0, alphas: Vec::new() });
@@ -2848,6 +2931,7 @@ mod tests {
                 parent: None,
                 link: None,
                 own_level: None,
+                armature: None,
                 polygons: None,
             }],
             active: 0,
@@ -3109,6 +3193,35 @@ mod tests {
         let at = skipped.windows(4).position(|w| w == b"LITE").unwrap();
         skipped[at..at + 4].copy_from_slice(b"NOPE");
         assert_eq!(decode(&skipped).unwrap().pieces[1].own_level, None);
+    }
+
+    #[test]
+    fn an_armature_round_trips_and_older_readers_skip_it() {
+        use oxy_mesh::armature::Armature;
+        let mut scene = sample();
+        let mut arm = Armature::new(Vec3::ZERO, 0.5, Some(0.0));
+        let a = arm.add_child(0, Vec3::new(1.0, 0.0, 0.0), 0.3);
+        arm.add_child(a, Vec3::new(1.5, 0.5, 0.0), 0.2);
+        let recipe =
+            crate::ArmatureRecipe::new(arm, 120, 0.3, &crate::Scene::from_data(scene.clone()).unwrap().pieces[1].mesh);
+        scene.pieces[1].armature = Some(Box::new(recipe.clone()));
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"ARMS").count(), 1);
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[1].armature.as_deref(), Some(&recipe));
+        assert!(back.pieces[0].armature.is_none());
+        let opened = crate::Scene::from_data(back).unwrap();
+        assert_eq!(opened.pieces[1].armature_recipe(), Some(&recipe), "the mesh is still the skin");
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"ARMS").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        assert!(decode(&skipped).unwrap().pieces[1].armature.is_none());
+        // A broken tree is ignored, not trusted.
+        let mut bad = recipe;
+        bad.armature.spheres[1].parent = Some(2);
+        bad.armature.spheres[2].parent = Some(1);
+        scene.pieces[1].armature = Some(Box::new(bad));
+        assert!(decode(&encode(&scene)).unwrap().pieces[1].armature.is_none());
     }
 
     #[test]
