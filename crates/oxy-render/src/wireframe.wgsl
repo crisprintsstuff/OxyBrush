@@ -35,12 +35,37 @@ struct VsOut {
     @builtin(position) clip: vec4<f32>,
 };
 
+// How far an edge is drawn in front of its faces, as a share of its
+// distance from the camera, so the lines don't flicker into the surface.
+const LIFT: f32 = 0.006;
+
+// `p` moved towards the camera by LIFT of its depth, along the line of
+// sight, so it lands on the same pixel. A fixed nudge in depth-buffer units
+// (as before) grows with the square of the distance: at the back of a model
+// it put hidden edges in front of faces seen at a glancing angle (#417).
+fn toward_camera(p: vec3<f32>) -> vec3<f32> {
+    // The camera position and forward direction from the view matrix.
+    let r0 = u.view[0].xyz;
+    let r1 = u.view[1].xyz;
+    let r2 = u.view[2].xyz;
+    let t = u.view[3].xyz;
+    // The view rotation's rows are the camera's axes, so its columns'
+    // dot products with the translation give the eye: eye = -Rᵀt.
+    let eye = -vec3<f32>(dot(r0, t), dot(r1, t), dot(r2, t));
+    let forward = -vec3<f32>(r0.z, r1.z, r2.z);
+    let depth = dot(p - eye, forward);
+    // Orthographic: every line of sight is `forward`. Perspective: through the eye.
+    let ortho = abs((u.view_proj * vec4<f32>(eye, 1.0)).w) > 0.5;
+    if ortho {
+        return p - forward * (depth * LIFT);
+    }
+    return eye + (p - eye) * (1.0 - LIFT);
+}
+
 @vertex
 fn vs_wireframe(v: VsIn) -> VsOut {
     var o: VsOut;
-    o.clip = u.view_proj * vec4<f32>(v.position, 1.0);
-    // Nudge depth slightly towards near plane to eliminate Z-fighting on lines
-    o.clip.z = o.clip.z - 0.00015 * o.clip.w;
+    o.clip = u.view_proj * vec4<f32>(toward_camera(v.position), 1.0);
     return o;
 }
 
@@ -49,9 +74,7 @@ fn vs_wireframe(v: VsIn) -> VsOut {
 fn vs_wireframe_instanced(v: VsIn, inst: InstIn) -> VsOut {
     var o: VsOut;
     let model = mat4x4<f32>(inst.m0, inst.m1, inst.m2, inst.m3);
-    o.clip = u.view_proj * (model * vec4<f32>(v.position, 1.0));
-    // Nudge depth slightly towards near plane to eliminate Z-fighting on lines
-    o.clip.z = o.clip.z - 0.00015 * o.clip.w;
+    o.clip = u.view_proj * vec4<f32>(toward_camera((model * vec4<f32>(v.position, 1.0)).xyz), 1.0);
     return o;
 }
 

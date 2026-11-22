@@ -78,6 +78,14 @@
 //! - `MRUV` (optional): base-level UVs of the preceding `MRCC` or `MRES`,
 //!   using the `UVCO` layout in base triangle order. Higher levels are
 //!   derived from the base. Older readers still show the active UVs in `UVCO`.
+//! - `MRPT` (optional, since 4.0.0-beta.23): vertex color each level of
+//!   the preceding `MRCC` or `MRES` has beyond what carrying the level
+//!   below up gives, so paint finer than a lower level comes back when the
+//!   project is reopened at that level and stepped up: `count:u32` (the
+//!   number of levels), then per level `n:u32 rgb:f32*3n`, `n` 0 or the
+//!   level's point count, in level point order. Written only when a level
+//!   has some. Older readers skip it and lose that finer paint above the
+//!   saved level; the saved level's own colors are in `VCOL`.
 //! - `VMAP` (optional, since 2.5.8): vertex origin of the **preceding**
 //!   `PIEC`: `vcount:u32 source:u32*vcount`. `source[i]` is the index of
 //!   vertex `i` in the vertex array of the `PIEC` the piece was originally
@@ -236,6 +244,19 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             }
             if !mr.base_uvs().is_empty() {
                 sections.push((*b"MRUV", encode_uvs(mr.base_uvs())));
+            }
+            let paint = mr.level_paint();
+            if paint.iter().any(|p| !p.is_empty()) {
+                let mut b = (paint.len() as u32).to_le_bytes().to_vec();
+                for level in paint {
+                    b.extend_from_slice(&(level.len() as u32).to_le_bytes());
+                    for c in level {
+                        for x in c.to_array() {
+                            b.extend_from_slice(&x.to_le_bytes());
+                        }
+                    }
+                }
+                sections.push((*b"MRPT", b));
             }
             let smooth = mr.level_smooth();
             if smooth.iter().any(|s| !s) {
@@ -528,6 +549,28 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                 match decode_polygons(&raw, piece.mesh.positions.len()) {
                     Ok(p) => piece.polygons = Some(p),
                     Err(e) => log::warn!("ignoring polygons that don't match piece {:?}: {e}", piece.name),
+                }
+            }
+            b"MRPT" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRPT before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let mut read = || -> Result<Vec<Vec<Vec3>>> {
+                    let count = r.u32()? as usize;
+                    r.check(count, 4)?;
+                    (0..count)
+                        .map(|_| {
+                            let n = r.u32()? as usize;
+                            r.check(n, 12)?;
+                            (0..n).map(|_| Ok(Vec3::new(r.f32()?, r.f32()?, r.f32()?))).collect()
+                        })
+                        .collect()
+                };
+                let restored = match read() {
+                    Ok(paint) => piece.multires.as_mut().is_some_and(|mr| mr.restore_level_paint(paint)),
+                    Err(_) => false,
+                };
+                if !restored {
+                    log::warn!("ignoring level paint that doesn't match subdivision levels on piece {:?}", piece.name);
                 }
             }
             b"MRUV" => {
@@ -2645,6 +2688,49 @@ mod tests {
         plain.pieces[0].multires = None;
         let old = decode(&encode(&plain)).unwrap();
         assert_eq!(old.pieces[0].mesh.triangles.len(), mr.triangle_count(1));
+    }
+
+    #[test]
+    fn level_paint_survives_save_and_reopen_at_a_lower_level() {
+        use crate::Piece;
+        // Paint at the top of two levels, step down to the base, save.
+        let base = primitives::icosphere(1, 1.0);
+        let mut mr = Multires::new(&base);
+        let mut m = oxy_mesh::Mesh::from_data(mr.add_level(&base));
+        mr.bind(&m);
+        m = oxy_mesh::Mesh::from_data(mr.add_level(&m));
+        mr.bind(&m);
+        m.color = m.positions.iter().map(|p| Vec3::new((p.x * 9.0).sin() * 0.5 + 0.5, 0.2, 0.7)).collect();
+        m.refresh_all();
+        let level_colors = |m: &oxy_mesh::Mesh| {
+            let mut out = vec![Vec3::ZERO; m.vertex_count()];
+            for (v, &s) in m.source_vertices().iter().enumerate() {
+                out[s as usize] = m.color[v];
+            }
+            out
+        };
+        let painted = level_colors(&m);
+        m = oxy_mesh::Mesh::from_data(mr.set_level(&m, 0));
+        mr.bind(&m);
+        let scene = SceneData {
+            pieces: vec![Piece { multires: Some(mr), ..Piece::new("Head", m) }.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+        };
+        let bytes = encode(&scene);
+        assert_eq!(bytes.windows(4).filter(|w| w == b"MRPT").count(), 1);
+        // Reopen and step back up: the fine paint is there.
+        let mut piece = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        let mr = piece.multires.as_mut().unwrap();
+        let top = oxy_mesh::Mesh::from_data(mr.set_level(&piece.mesh, 2));
+        let worst =
+            level_colors(&top).iter().zip(&painted).map(|(a, b)| (*a - *b).abs().max_element()).fold(0.0, f32::max);
+        assert!(worst < 1e-4, "paint changed by {worst}");
+        // An older reader (without MRPT) still opens the project.
+        let mut skipped = bytes.clone();
+        let at = skipped.windows(4).position(|w| w == b"MRPT").unwrap();
+        skipped[at..at + 4].copy_from_slice(b"NOPE");
+        assert!(decode(&skipped).is_ok());
     }
 
     #[test]

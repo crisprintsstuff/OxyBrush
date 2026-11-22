@@ -223,6 +223,22 @@ impl Camera {
         self.target += (-right * delta_pixels.x + self.up() * delta_pixels.y) * s;
     }
 
+    /// Move the orbit target along the view to `depth` in front of the eye,
+    /// leaving the view exactly as it is: used to put the target on the
+    /// surface in the middle of the view when it is in front of the target,
+    /// so zooming in stops at the surface instead of passing through it, and
+    /// a lens change keeps the framing there (#419). Perspective only (an
+    /// orthographic view's size is the distance); no effect unless `depth`
+    /// is in front of the target.
+    pub fn anchor_at_depth(&mut self, depth: f32) {
+        if self.orthographic || !depth.is_finite() || depth <= 1e-3 || depth >= self.distance {
+            return;
+        }
+        let eye = self.eye();
+        self.target = eye + self.forward() * depth;
+        self.distance = depth;
+    }
+
     /// Positive `steps` zooms in.
     pub fn zoom(&mut self, steps: f32) {
         self.distance = (self.distance * 0.9f32.powf(steps)).clamp(1e-3, 1e5);
@@ -399,6 +415,47 @@ mod tests {
         let radius = bounds.extent().length() * 0.5;
         let old = (radius / (DEFAULT_FOV_Y * 0.5).sin()) * 1.1;
         assert!((classic.distance - old).abs() / old < 1e-4, "{} vs {old}", classic.distance);
+    }
+
+    #[test]
+    fn the_wireframe_shader_finds_the_eye_and_forward_from_the_view_matrix() {
+        // wireframe.wgsl's `toward_camera` reads these from the view matrix
+        // (columns as WGSL sees them): eye = -(col0·t, col1·t, col2·t),
+        // forward = -(col0.z, col1.z, col2.z).
+        let c = Camera { target: Vec3::new(0.5, -0.2, 1.0), distance: 6.0, yaw: 0.7, pitch: -0.3, ..Camera::default() };
+        let v = c.view();
+        let (r0, r1, r2, t) = (v.x_axis.truncate(), v.y_axis.truncate(), v.z_axis.truncate(), v.w_axis.truncate());
+        let eye = -Vec3::new(r0.dot(t), r1.dot(t), r2.dot(t));
+        let forward = -Vec3::new(r0.z, r1.z, r2.z);
+        assert!((eye - c.eye()).length() < 1e-4, "{eye} vs {}", c.eye());
+        assert!((forward - c.forward()).length() < 1e-5);
+        // Moving a point towards the eye keeps its pixel and brings it nearer.
+        let p = Vec3::new(0.9, 0.3, 0.2);
+        let q = eye + (p - eye) * (1.0 - 0.003);
+        let vp = c.view_projection(1.5);
+        let (a, b) = (vp.project_point3(p), vp.project_point3(q));
+        assert!((a.truncate() - b.truncate()).length() < 1e-5);
+        assert!(b.z < a.z);
+    }
+
+    #[test]
+    fn anchoring_keeps_the_view_and_moves_the_target_forward() {
+        let mut c = Camera { distance: 10.0, yaw: 0.4, pitch: 0.2, ..Camera::default() };
+        let before = c.view_projection(1.5);
+        c.anchor_at_depth(4.0);
+        assert!((c.distance - 4.0).abs() < 1e-6);
+        let after = c.view_projection(1.5);
+        // Same eye and direction; only the depth range follows the distance.
+        assert!((c.eye() - Camera { distance: 10.0, yaw: 0.4, pitch: 0.2, ..Camera::default() }.eye()).length() < 1e-4);
+        let p = Vec3::new(0.3, 0.1, 2.0);
+        let (a, b) = (before.project_point3(p), after.project_point3(p));
+        assert!((a.truncate() - b.truncate()).length() < 1e-4, "{a} vs {b}");
+        // Behind the target, or orthographic: unchanged.
+        c.anchor_at_depth(9.0);
+        assert_eq!(c.distance, 4.0);
+        c.orthographic = true;
+        c.anchor_at_depth(1.0);
+        assert_eq!(c.distance, 4.0);
     }
 
     #[test]
