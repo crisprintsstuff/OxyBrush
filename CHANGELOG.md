@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.23] - 2026-11-22
+
 ### Added
 
 - **Linked copies** ([#327](https://github.com/crisprintsstuff/OxyBrush/issues/327)). Pieces > **Duplicate linked** and **Mirror duplicate linked** make a copy that follows its original: sculpt, paint or remesh the original and the copy changes with it, live (sculpt one ear, its mirror image follows). Move, turn or scale the copy with the transform gizmo and it stays linked in its new place; **Unlink copy** makes it an ordinary piece. Copies can't be sculpted themselves. Projects keep the link in a new optional `LINK` section; older versions open the copy as an ordinary piece.
@@ -1058,7 +1060,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...HEAD
+[4.0.0-beta.23]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...v4.0.0-beta.23
 [4.0.0-beta.22]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.4...v4.0.0-beta.22
 [4.0.0-beta.21.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.21.2...v4.0.0-beta.21.4
 [4.0.0-beta.17]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.16...v4.0.0-beta.17

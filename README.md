@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.22](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Mix themes, use the updated menus and title bar, organize the Recipe Box, place masked or scattered instances, and send upright models from Blender to the running window. Subdivision preserves imported UVs and respects the original OBJ and FBX polygons. **Testers wanted:** see [Help test OxyBrush](#help-test-oxybrush), or say hi on [Discord](https://discord.gg/Vfm7Km7xvG).
+> **Beta:** [v4.0.0-beta.23](https://github.com/crisprintsstuff/OxyBrush/releases/latest) runs on Windows, Linux and macOS. Make linked and mirrored copies that follow the original, give each brush its own settings, alpha and pressure curves, get smoother Boolean seams, and model faster in Poly Edit with loop picks and edge bridges. Plus fixes for long lenses, the wireframe, painted detail across levels and more.
 
 **Highlights**
 
