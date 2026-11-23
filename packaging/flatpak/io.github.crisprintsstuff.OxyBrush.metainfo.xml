@@ -53,6 +53,15 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.24" date="2026-11-23" type="development">
+      <description>
+        <p>OxySpheres are a piece of their own that makes new meshes any time.
+        The Knife cuts a face out of a face and follows cuts over edges, curve
+        selection draws like a pen path, Ctrl/Cmd+drag paints the Poly Edit
+        pick, Paint Groups smooths jagged group borders, and inactive pieces
+        show their lowest level when lighter.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.23.3" date="2026-11-22" type="development">
       <description>
         <p>Block out a figure or creature with OxySpheres, a tree of spheres
