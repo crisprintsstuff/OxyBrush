@@ -69,7 +69,7 @@ fn skin_timing() {
     a.add_child(kn, Vec3::new(0.28, -1.3, 0.0), 0.11);
     for res in [72, 160, 320] {
         let t = Instant::now();
-        let opts = oxy_topo::SkinOptions { resolution: res, blend: 0.05, smooth_passes: 2 };
+        let opts = oxy_topo::SkinOptions { resolution: res, blend: 0.05, smooth_passes: 2, ..Default::default() };
         let m = oxy_topo::skin_armature(&a, opts).unwrap();
         println!(
             "skin {} spheres @ {res}: {} tris in {:.0} ms",

@@ -45,7 +45,19 @@ exact surface (along the distance's gradient) take the voxel steps off
 without shrinking it. The result is closed, evenly dense, and ready for
 the brushes, dynamic detail or subdivision levels.
 
-Release-build timings (`topo_timing`, a 35-sphere mirrored figure with
+Since 4.0.0-beta.24.2 the grid is sparse (only 8×8×8-voxel bricks near
+the surface are sampled), and the voxel size is the smaller of the
+figure's longest side over Resolution and a third of the thinnest
+sphere's radius (no finer than 1/1500 of the figure): sized by the
+figure alone, a thin limb got two or three voxels across and came out
+jagged even at the highest resolution. The live view while editing keeps
+the figure-wide size, to stay quick. A mirrored 35-sphere figure with
+fingers (radius 0.025) now makes 351k triangles in about 1.1 s (release
+build), whatever the Resolution, since its fingers set the voxel size.
+A quad skin built from the spheres themselves (below) would avoid the
+cost; it is the next phase.
+
+Earlier release-build timings (`topo_timing`, a 35-sphere mirrored figure with
 fingers): 12.8k triangles in 36 ms at 72, 63k in 168 ms at 160 (the
 default), 253k in 714 ms at 320.
 
@@ -74,7 +86,11 @@ spheres, and it is the thing you come back to.
 
 - **Make mesh** (Enter) adds a new piece made from the spheres ("…
   mesh") and keeps the spheres, as a new OxySpheres piece or in place of
-  the one edited, hidden so the mesh is in view. One undo step.
+  the one edited, hidden so the mesh is in view. One undo step. Since
+  4.0.0-beta.24.2, the spheres remember the mesh they made last (its
+  triangle count and position fingerprint, in `ARMS`): while that mesh is
+  unchanged, Make mesh updates it instead of adding another; once it was
+  sculpted, a new piece keeps the sculpting.
 - **Done** keeps the spheres as they are without making a mesh (shown).
   **Cancel** leaves them as they were. One undo step.
 - **Opening them again:** a click on the active OxySpheres piece (there's

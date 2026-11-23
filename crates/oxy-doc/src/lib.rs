@@ -228,7 +228,8 @@ impl TubeRecipe {
 
 /// OxySpheres (RFC 0034): the armature and the settings its mesh is made
 /// with. On an OxySpheres piece ([`Piece::spheres`]) the triangle count and
-/// fingerprint are unused (0). Projects from 4.0.0-beta.23.3 kept it on the
+/// fingerprint are those of the mesh it made last (0 before any), so Make
+/// mesh can update that mesh while it is unchanged. Projects from 4.0.0-beta.23.3 kept it on the
 /// mesh made from it instead, valid while that mesh was unchanged
 /// ([`ArmatureRecipe::matches`]); opening one gives the spheres back as a
 /// piece of their own.

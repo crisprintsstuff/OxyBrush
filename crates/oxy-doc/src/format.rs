@@ -70,7 +70,8 @@
 //!   radius:f32 parent:u32 twin:u32` (`u32::MAX`: none); sphere 0 is the
 //!   root. Version 2 (since 4.0.0-beta.24): the **preceding** `PIEC` is an
 //!   OxySpheres piece, the spheres themselves (its mesh only draws them;
-//!   triangles and fingerprint are 0). Version 1 (4.0.0-beta.23.3 only):
+//!   triangles and fingerprint are those of the mesh they made last, 0
+//!   before any, so Make mesh can update it while it is unchanged). Version 1 (4.0.0-beta.23.3 only):
 //!   the spheres the preceding piece's mesh was made from, valid while the
 //!   mesh is unchanged; readers add them back as an OxySpheres piece at the
 //!   end of the list. Older readers skip the section, and 4.0.0-beta.23.3
