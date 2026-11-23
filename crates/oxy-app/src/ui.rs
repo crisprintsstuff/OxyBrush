@@ -6441,6 +6441,17 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             );
             ui.end_row();
         }
+        if ed.brush_kind.supports_accumulate() {
+            ui.label("");
+            let mut accumulate = ed.brush_accumulates(ed.brush_kind);
+            if ui.checkbox(&mut accumulate, "Accumulate")
+                .on_hover_text("Let overlapping dabs build on each other. Turn off to limit each point to the strongest dab in this stroke.")
+                .changed()
+            {
+                ed.set_brush_accumulate(accumulate);
+            }
+            ui.end_row();
+        }
         if ed.brush_kind.uses_gravity() {
             ui.label("Gravity");
             let k = ed.brush_kind;

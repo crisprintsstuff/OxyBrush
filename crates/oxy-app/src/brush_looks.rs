@@ -40,9 +40,20 @@ impl Editor {
         if self.settings_per_brush {
             let mut look = self.capture_preset(kind.label());
             look.kind = kind;
+            look.accumulate = self.brush_accumulates(kind);
             look.pressure_curves = self.brush_pressure_overrides(kind);
             self.brush_looks.insert(kind, look);
         }
+    }
+
+    pub(crate) fn brush_accumulates(&self, kind: BrushKind) -> bool {
+        self.brush_looks.get(&kind).is_none_or(|look| look.accumulate)
+    }
+
+    pub(crate) fn set_brush_accumulate(&mut self, accumulate: bool) {
+        let kind = self.brush_kind;
+        let current = self.capture_preset(kind.label());
+        self.brush_looks.entry(kind).or_insert(current).accumulate = accumulate;
     }
 
     pub(crate) fn brush_pressure_overrides(&self, kind: BrushKind) -> [Option<[f32; 4]>; 2] {
@@ -102,6 +113,25 @@ impl Editor {
 mod tests {
     use crate::editor::{Editor, StrokeMode};
     use oxy_sculpt::{BrushKind, Falloff};
+
+    #[test]
+    fn accumulate_is_per_brush_and_round_trips_when_settings_are_shared() {
+        let mut editor = Editor::default();
+        editor.remember_brushes = true;
+        editor.settings_per_brush = false;
+        editor.brush_kind = BrushKind::Draw;
+        editor.set_brush_accumulate(false);
+        editor.brush_kind = BrushKind::Clay;
+        editor.sync_brush_look();
+        assert!(editor.brush_accumulates(BrushKind::Clay));
+        let settings = crate::settings::Settings::from_text(&editor.settings().to_text());
+        let mut loaded = Editor::default();
+        loaded.apply_settings(&settings);
+        assert!(!loaded.brush_accumulates(BrushKind::Draw));
+        assert!(loaded.brush_accumulates(BrushKind::Clay));
+        loaded.apply_preset(&oxy_sculpt::BrushPreset::from_text("brush = draw").unwrap());
+        assert!(loaded.brush_accumulates(BrushKind::Draw));
+    }
 
     #[test]
     fn each_brush_keeps_its_own_settings_and_alpha() {

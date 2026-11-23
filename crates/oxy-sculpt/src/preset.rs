@@ -39,6 +39,7 @@ pub struct BrushPreset {
     /// Strength and size curve overrides. None uses the tablet default.
     pub pressure_curves: [Option<[f32; 4]>; 2],
     pub front_faces_only: bool,
+    pub accumulate: bool,
     pub auto_smooth: f32,
     /// Gravity, 0..=1 (see `BrushSettings::gravity`).
     pub gravity: f32,
@@ -76,6 +77,7 @@ impl BrushPreset {
             pressure_radius: false,
             pressure_curves: [None; 2],
             front_faces_only: false,
+            accumulate: true,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -112,6 +114,9 @@ impl BrushPreset {
             }
         }
         kv("front_faces_only", self.front_faces_only.to_string());
+        if !self.accumulate {
+            kv("accumulate", "false".into());
+        }
         kv("auto_smooth", self.auto_smooth.to_string());
         kv("gravity", self.gravity.to_string());
         kv("spray", self.spray.to_string());
@@ -168,6 +173,9 @@ impl BrushPreset {
         }
         if let Some(b) = flag("front_faces_only") {
             p.front_faces_only = b;
+        }
+        if let Some(b) = flag("accumulate") {
+            p.accumulate = b;
         }
         if let Some(x) = num("auto_smooth", 0.0..=1.0) {
             p.auto_smooth = x;

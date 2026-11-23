@@ -225,6 +225,11 @@ impl BrushKind {
             ))
     }
 
+    /// Height brushes that offer a per-stroke dab buildup limit.
+    pub fn supports_accumulate(self) -> bool {
+        matches!(self, Self::Draw | Self::Inflate | Self::Clay | Self::ClayStrips)
+    }
+
     /// Brushes that move a captured region with the pointer instead of dabbing.
     pub fn is_grab_like(self) -> bool {
         matches!(
@@ -331,6 +336,8 @@ pub struct BrushSettings {
     pub pressure_radius: bool,
     /// Skip vertices facing away from the dab normal (protects thin parts).
     pub front_faces_only: bool,
+    /// Allow successive dabs to build on each other within one stroke.
+    pub accumulate: bool,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
     /// Gravity: the surface under the brush also sags downward (world -Y)
@@ -389,6 +396,7 @@ impl Default for BrushSettings {
             pressure_strength: true,
             pressure_radius: false,
             front_faces_only: false,
+            accumulate: true,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -699,11 +707,12 @@ fn blend_weighted_deltas(weighted: Vec3, sum_w: f32, max_w: f32) -> Vec3 {
     weighted * (max_w / sum_w)
 }
 
-/// Per-vertex state for the Layer brush: original position, original
-/// normal, and the highest weight applied so far this stroke.
+/// Per-vertex state for Layer and the optional buildup limit.
 #[derive(Default)]
 struct LayerState {
+    /// Original position, original normal, and highest weight for Layer.
     vertices: HashMap<u32, (Vec3, Vec3, f32)>,
+    buildup: HashMap<u32, f32>,
 }
 
 /// Adaptive time budget for dabs along a stroke.
@@ -990,6 +999,8 @@ impl Stroke {
         let map = |v: u32| new_of_old.get(v as usize).copied().filter(|&n| n != u32::MAX);
         self.layer.vertices =
             std::mem::take(&mut self.layer.vertices).into_iter().filter_map(|(v, s)| Some((map(v)?, s))).collect();
+        self.layer.buildup =
+            std::mem::take(&mut self.layer.buildup).into_iter().filter_map(|(v, d)| Some((map(v)?, d))).collect();
         if let Some(g) = &mut self.grab {
             g.verts.retain_mut(|b| match map(b.index) {
                 Some(n) => {
@@ -1995,12 +2006,38 @@ fn apply_kernel(
         return;
     }
 
-    let new_positions = target_positions(mesh, &settings, invert, dab, &affected);
+    let capped = !settings.accumulate && kind.supports_accumulate();
+    let without_sag;
+    let kernel_dab = if capped {
+        without_sag = Dab { sag: Vec3::ZERO, ..*dab };
+        &without_sag
+    } else {
+        dab
+    };
+    let new_positions = target_positions(mesh, &settings, invert, kernel_dab, &affected);
 
     let mut moved = Vec::with_capacity(new_positions.len());
-    for (v, p) in new_positions {
-        mesh.positions[v as usize] = p;
-        moved.push(v);
+    if capped {
+        for ((v, candidate), (_, weight)) in new_positions.into_iter().zip(affected) {
+            let position = &mut mesh.positions[v as usize];
+            let delta = candidate - *position;
+            let length = delta.length();
+            let maximum = layer.buildup.entry(v).or_default();
+            let mut step = dab.sag * weight;
+            if length > *maximum {
+                step += delta * ((length - *maximum) / length);
+                *maximum = length;
+            }
+            if step != Vec3::ZERO {
+                *position += step;
+                moved.push(v);
+            }
+        }
+    } else {
+        for (v, p) in new_positions {
+            mesh.positions[v as usize] = p;
+            moved.push(v);
+        }
     }
     mesh.update_after_move(&moved);
 }
@@ -2008,6 +2045,60 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accumulate_limits_overlap_and_resets_between_strokes() {
+        let settings = BrushSettings {
+            radius: 0.25,
+            strength: 0.8,
+            falloff: Falloff::Constant,
+            accumulate: false,
+            ..Default::default()
+        };
+        for invert in [false, true] {
+            let base = oxy_mesh::primitives::icosphere(4, 1.0);
+            let center = base.positions.iter().position(|p| *p == Vec3::Y).unwrap();
+            let mut mesh = base.clone();
+            let mut stroke = Stroke::new(settings, Symmetry::default(), invert);
+            let mut sample = StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 0.5 };
+            let mut touch = |_: &Mesh, _: u32| {};
+            stroke.apply_dab(&mut mesh, sample, &mut touch);
+            let first = mesh.positions[center].y;
+            stroke.apply_dab(&mut mesh, sample, &mut touch);
+            assert!((mesh.positions[center].y - first).abs() < 1e-6);
+            sample.pressure = 1.0;
+            stroke.apply_dab(&mut mesh, sample, &mut touch);
+            let stronger = mesh.positions[center].y;
+            assert!(((stronger - 1.0).abs() - 2.0 * (first - 1.0).abs()).abs() < 1e-5);
+            let mut next = Stroke::new(settings, Symmetry::default(), invert);
+            next.apply_dab(&mut mesh, sample, &mut touch);
+            assert!((mesh.positions[center].y - 1.0).abs() > (stronger - 1.0).abs());
+
+            let mut mesh = base;
+            let mut accumulating =
+                Stroke::new(BrushSettings { accumulate: true, ..settings }, Symmetry::default(), invert);
+            accumulating.apply_dab(&mut mesh, sample, &mut touch);
+            accumulating.apply_dab(&mut mesh, sample, &mut touch);
+            assert!((mesh.positions[center].y - 1.0).abs() > (stronger - 1.0).abs());
+        }
+    }
+
+    #[test]
+    fn accumulate_is_recorded_and_legacy_recipes_keep_the_default() {
+        for accumulate in [true, false] {
+            let mut mesh = oxy_mesh::primitives::icosphere(3, 1.0);
+            let settings = BrushSettings { accumulate, ..Default::default() };
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_recording();
+            stroke.add_sample(
+                &mut mesh,
+                StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 },
+                &mut |_, _| {},
+            );
+            let bytes = stroke.take_recipe().unwrap().to_bytes();
+            assert_eq!(bytes[4], if accumulate { 4 } else { 5 });
+            assert_eq!(StrokeRecipe::from_bytes(&bytes, &|_| None).unwrap().settings.accumulate, accumulate);
+        }
+    }
 
     #[test]
     fn strength_and_size_follow_their_own_pressure_curves() {

@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 fn main() {
+    let accumulate = !std::env::args().any(|arg| arg == "--no-accumulate");
     let t = Instant::now();
     let mut mesh = primitives::icosphere(8, 1.0);
     println!(
@@ -40,7 +41,8 @@ fn main() {
         (BrushKind::Crease, 0.3, false, 0.0, 0.0),
         (BrushKind::SharpCrease, 0.3, false, 0.0, 0.0),
     ] {
-        let settings = BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, ..Default::default() };
+        let settings =
+            BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, accumulate, ..Default::default() };
         let stamp = with_alpha.then(|| AlphaStamp {
             alpha: alpha.clone(),
             rotation: 0.0,
@@ -79,7 +81,8 @@ fn main() {
         (BrushKind::Clay, 0.3, false, 0.0, 0.0),
         (BrushKind::Crease, 0.3, false, 0.0, 0.0),
     ] {
-        let settings = BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, ..Default::default() };
+        let settings =
+            BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, accumulate, ..Default::default() };
         let stamp = with_alpha.then(|| AlphaStamp {
             alpha: alpha.clone(),
             rotation: 0.0,
