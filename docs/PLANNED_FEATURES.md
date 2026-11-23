@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.24.2](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.2);
+[4.0.0-beta.24.3](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.3);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -108,6 +108,9 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
 ## Recently shipped (for context)
+
+- **4.0.0-beta.24.3:** per-brush Accumulate, an experimental OxySpheres
+  quad base mesh, and reliable regeneration after duplicating a piece.
 
 - **4.0.0-beta.24.2:** OxySpheres make rounder thin limbs and update the
   last unsculpted mesh. Closed Knife cuts keep a polygon rim, and inactive

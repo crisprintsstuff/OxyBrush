@@ -4,15 +4,16 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-- Added a per-brush **Accumulate** switch for Draw, Inflate, Clay, and Clay Strips.
+## [4.0.0-beta.24.3] - 2026-11-23
 
 ### Added
 
-- **Experimental OxySpheres quad base mesh.** Choose it under Output to generate limb loops for a chain or a single three-way junction. Voxel skin remains the default.
+- **Per-brush Accumulate.** Draw, Inflate, Clay, and Clay Strips have an **Accumulate** checkbox just below **Auto smooth**. It starts on. Turn it off to limit each point to the strongest dab within one stroke. Start another stroke to build further. Presets and remembered brush settings keep the choice. [#469](https://github.com/crisprintsstuff/OxyBrush/pull/469)
+- **Experimental OxySpheres quad base mesh.** Choose **Output > Quad base mesh** before clicking **Make mesh** to get a low-density cage with edge loops along a chain or a single three-way junction. **Voxel skin** is still the default. If the arrangement is unsupported, the armature stays open so you can adjust it or switch outputs. [#465](https://github.com/crisprintsstuff/OxyBrush/pull/465)
 
 ### Fixed
 
-- **OxySpheres updates the correct piece.** Make mesh tracks the last generated piece across reordering and save/reopen. Identical duplicates stay independent, and painted, masked, or partly hidden meshes are preserved.
+- **OxySpheres updates the correct piece.** Make mesh tracks the piece it generated across reordering and save/reopen. Identical duplicates stay independent, and painted, masked, or partly hidden meshes are preserved. Older projects without a saved mesh reference create a new piece on their first regeneration. [#463](https://github.com/crisprintsstuff/OxyBrush/pull/463)
 
 ## [4.0.0-beta.24.2] - 2026-11-23
 
@@ -1135,7 +1136,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...HEAD
+[4.0.0-beta.24.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...v4.0.0-beta.24.3
 [4.0.0-beta.24.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...v4.0.0-beta.24.2
 [4.0.0-beta.24]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...v4.0.0-beta.24
 [4.0.0-beta.23.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...v4.0.0-beta.23.3
