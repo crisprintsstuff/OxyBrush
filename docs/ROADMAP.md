@@ -100,6 +100,9 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 ## Proposed next work
 
+- [Per-brush Accumulate](rfcs/0039-brush-accumulate.md) adds a buildup
+  switch for Draw, Inflate, Clay, and Clay Strips.
+
 - [OxySpheres quad base mesh](rfcs/0038-oxyspheres-quad-base-mesh.md)
   has an experimental implementation for a chain or a single three-way
   junction. Artist feedback on the junction and subdivided profile is next.

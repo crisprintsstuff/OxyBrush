@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- Added a per-brush **Accumulate** switch for Draw, Inflate, Clay, and Clay Strips.
+
 ### Added
 
 - **Experimental OxySpheres quad base mesh.** Choose it under Output to generate limb loops for a chain or a single three-way junction. Voxel skin remains the default.
