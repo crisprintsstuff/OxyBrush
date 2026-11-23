@@ -244,18 +244,20 @@ pub struct ArmatureRecipe {
     /// 0, which holds every triangle of a skin) when it was made.
     pub triangles: u32,
     pub fingerprint: Vec3,
+    /// Generated piece ID in a scene, or its zero-based piece index in SceneData.
+    pub generated_mesh: Option<u64>,
 }
 
 impl ArmatureRecipe {
     /// A recipe for `armature` skinned as `mesh`.
     pub fn new(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32, mesh: &Mesh) -> Self {
         let (triangles, fingerprint) = group_fingerprint(mesh, 0);
-        ArmatureRecipe { armature, resolution, blend, triangles, fingerprint }
+        ArmatureRecipe { armature, resolution, blend, triangles, fingerprint, generated_mesh: None }
     }
 
     /// The settings for an OxySpheres piece (no mesh to match).
     pub fn spheres(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32) -> Self {
-        ArmatureRecipe { armature, resolution, blend, triangles: 0, fingerprint: Vec3::ZERO }
+        ArmatureRecipe { armature, resolution, blend, triangles: 0, fingerprint: Vec3::ZERO, generated_mesh: None }
     }
 
     /// Whether `mesh` is still the skin this recipe made.
@@ -343,6 +345,10 @@ impl Piece {
     }
 
     pub fn to_data(&self) -> PieceData {
+        let mut spheres = self.spheres.clone();
+        if let Some(recipe) = spheres.as_deref_mut() {
+            recipe.generated_mesh = None;
+        }
         match &self.multires {
             // With levels, the mesh is saved in level order so it can be
             // matched back to the stack on load.
@@ -358,7 +364,7 @@ impl Piece {
                     symmetry_center: self.symmetry_center,
                     cage: None,
                     tubes: Vec::new(),
-                    spheres: self.spheres.clone(),
+                    spheres,
                     skin_of: None,
                     curve: None,
                     strokes: None,
@@ -379,7 +385,7 @@ impl Piece {
                 symmetry_center: self.symmetry_center,
                 cage: self.current_cage(),
                 tubes: self.tubes.clone(),
-                spheres: self.spheres.clone(),
+                spheres,
                 skin_of: None,
                 curve: self.curve.clone(),
                 strokes: None,
@@ -494,7 +500,10 @@ impl SavedPolygons {
 }
 
 impl PieceData {
-    pub fn into_piece(self) -> Piece {
+    pub fn into_piece(mut self) -> Piece {
+        if let Some(recipe) = self.spheres.as_deref_mut() {
+            recipe.generated_mesh = None;
+        }
         let mesh = Mesh::from_data(self.mesh);
         if let Some(p) = self.polygons.as_ref().filter(|_| self.multires.is_none()) {
             p.apply(&mesh);
@@ -810,6 +819,9 @@ impl Scene {
     pub fn to_data(&self) -> SceneData {
         let mut pieces: Vec<PieceData> = self.pieces.iter().map(Piece::to_data).collect();
         for (data, p) in pieces.iter_mut().zip(&self.pieces) {
+            if let (Some(saved), Some(recipe)) = (data.spheres.as_deref_mut(), p.spheres.as_deref()) {
+                saved.generated_mesh = recipe.generated_mesh.and_then(|id| self.index_of(id)).map(|i| i as u64);
+            }
             data.parent = p.parent.and_then(|pid| self.index_of(pid)).map(|idx| idx as u32);
             data.link = p.link.and_then(|l| Some((self.index_of(l.source)? as u32, l.transform)));
             data.instancers = p
@@ -833,6 +845,8 @@ impl Scene {
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
         let saved_parents: Vec<Option<u32>> = data.pieces.iter_mut().map(|p| p.parent.take()).collect();
         let saved_links: Vec<Option<(u32, Mat4)>> = data.pieces.iter_mut().map(|p| p.link.take()).collect();
+        let saved_skin_targets: Vec<_> =
+            data.pieces.iter().map(|p| p.spheres.as_deref().and_then(|r| r.generated_mesh)).collect();
         let skins_of: Vec<Option<Box<ArmatureRecipe>>> = data.pieces.iter_mut().map(|p| p.skin_of.take()).collect();
         let mut pieces: Vec<Piece> = data.pieces.into_iter().map(PieceData::into_piece).collect();
         // A mesh saved with the spheres it was made from (4.0.0-beta.23.3)
@@ -842,7 +856,8 @@ impl Scene {
             .iter()
             .zip(skins_of)
             .filter_map(|(p, r)| {
-                let r = r.filter(|r| p.multires.is_none() && r.matches(&p.mesh))?;
+                let mut r = r.filter(|r| p.multires.is_none() && r.matches(&p.mesh))?;
+                r.generated_mesh = Some(p.id);
                 let mut s = Piece::spheres_piece(format!("{} spheres", p.name), *r);
                 s.visible = false;
                 Some(s)
@@ -883,6 +898,14 @@ impl Scene {
                     ok.then(|| Instancer { source: ids[s.source as usize], settings: s.settings })
                 })
                 .collect();
+        }
+        let mesh_targets: Vec<_> = pieces.iter().map(|p| (!p.is_spheres()).then_some(p.id)).collect();
+        for (p, target) in pieces.iter_mut().zip(saved_skin_targets) {
+            if let Some(recipe) = p.spheres.as_deref_mut() {
+                recipe.generated_mesh = target
+                    .and_then(|index| usize::try_from(index).ok())
+                    .and_then(|index| mesh_targets.get(index).copied().flatten());
+            }
         }
         // Break any cycles that might exist from corrupt files:
         let temp_scene = Scene { pieces, active: 0 };

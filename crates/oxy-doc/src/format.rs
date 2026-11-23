@@ -65,6 +65,7 @@
 //!   The app shows that level again. Older readers skip it and open the
 //!   piece at the saved level, with every level still there.
 //! - `ARMS` (optional, since 4.0.0-beta.23.3): OxySpheres (RFC 0034).
+//! - `ARML` (optional): u64 index of the mesh last made by the preceding `ARMS` recipe.
 //!   `version:u32 resolution:u32 blend:f32 triangles:u32 fingerprint:f32*3
 //!   mirrored:u8 mirror_x:f32 count:u32`, then per sphere `center:f32*3
 //!   radius:f32 parent:u32 twin:u32` (`u32::MAX`: none); sphere 0 is the
@@ -365,6 +366,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(a) = &p.spheres {
             sections.push((*b"ARMS", encode_armature(a, 2)));
+            if let Some(index) = a.generated_mesh {
+                sections.push((*b"ARML", index.to_le_bytes().to_vec()));
+            }
         }
         if let Some((source, transform)) = p.link {
             let mut b = source.to_le_bytes().to_vec();
@@ -559,7 +563,10 @@ fn decode_armature(raw: &[u8]) -> Result<Option<(u32, crate::ArmatureRecipe)>> {
     if !armature.is_valid() || !blend.is_finite() {
         return Err(Error::Corrupt("malformed OxySpheres armature".into()));
     }
-    Ok(Some((version, crate::ArmatureRecipe { armature, resolution, blend, triangles, fingerprint })))
+    Ok(Some((
+        version,
+        crate::ArmatureRecipe { armature, resolution, blend, triangles, fingerprint, generated_mesh: None },
+    )))
 }
 
 fn truncated() -> Error {
@@ -868,6 +875,12 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Ok(Some((_, a))) => piece.skin_of = Some(Box::new(a)),
                     Ok(None) => log::warn!("ignoring an OxySpheres armature of a newer version on {:?}", piece.name),
                     Err(e) => log::warn!("ignoring a damaged OxySpheres armature on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"ARML" => {
+                if let Some(recipe) = scene.pieces.last_mut().and_then(|p| p.spheres.as_deref_mut()) {
+                    let mut r = Reader { data: &raw, pos: 0 };
+                    recipe.generated_mesh = r.u64().ok();
                 }
             }
             b"LITE" => {
@@ -3239,6 +3252,31 @@ mod tests {
     }
 
     #[test]
+    fn an_oxyspheres_mesh_reference_is_optional_and_must_point_to_a_mesh() {
+        let mut scene = crate::Scene::from_data(sample()).unwrap();
+        let arm = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.5, None);
+        let mut recipe = crate::ArmatureRecipe::spheres(arm, 100, 0.2);
+        recipe.generated_mesh = Some(scene.pieces[1].id);
+        scene.pieces.push(crate::Piece::spheres_piece("OxySpheres", recipe));
+        let mut data = scene.to_data();
+        let bytes = encode(&data);
+        let opened = crate::Scene::from_data(decode(&bytes).unwrap()).unwrap();
+        assert_eq!(opened.pieces[2].spheres.as_ref().unwrap().generated_mesh, Some(opened.pieces[1].id));
+
+        let mut old = bytes;
+        let tag = old.windows(4).position(|w| w == b"ARML").unwrap();
+        old[tag..tag + 4].copy_from_slice(b"NOPE");
+        let opened = crate::Scene::from_data(decode(&old).unwrap()).unwrap();
+        assert_eq!(opened.pieces[2].spheres.as_ref().unwrap().generated_mesh, None);
+
+        for invalid_index in [2, u64::MAX] {
+            data.pieces[2].spheres.as_mut().unwrap().generated_mesh = Some(invalid_index);
+            let opened = crate::Scene::from_data(decode(&encode(&data)).unwrap()).unwrap();
+            assert_eq!(opened.pieces[2].spheres.as_ref().unwrap().generated_mesh, None);
+        }
+    }
+
+    #[test]
     fn a_beta_23_3_mesh_with_its_spheres_gets_them_back_as_a_piece() {
         // Version 1: the spheres were kept on the mesh made from them.
         use oxy_mesh::armature::Armature;
@@ -3255,6 +3293,7 @@ mod tests {
         assert_eq!(opened.pieces.len(), 3, "the spheres come back as a piece");
         let s = &opened.pieces[2];
         assert!(s.is_spheres() && !s.visible);
+        assert_eq!(s.spheres.as_ref().unwrap().generated_mesh, Some(opened.pieces[1].id));
         assert!(!opened.pieces[1].is_spheres(), "the mesh stays a mesh");
     }
 

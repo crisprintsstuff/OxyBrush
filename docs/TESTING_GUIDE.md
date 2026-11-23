@@ -1,7 +1,6 @@
-# Alpha testing guide
+# Beta testing guide
 
-Thanks for helping test OxyBrush! This is an early alpha: things will break,
-and that's exactly what we need to hear about. Twenty minutes of trying it
+Thanks for helping test OxyBrush! Reports from different systems and workflows help us find regressions. Twenty minutes of trying it
 and one honest report is a real contribution.
 
 ## 1. Install
@@ -41,6 +40,22 @@ Optional: check your download against `SHA256SUMS.txt` (`sha256sum -c SHA256SUMS
 8. **Save** with **Ctrl+S** (a `.oxb` project), and **Export** with **Ctrl+E** (glTF/GLB, OBJ, STL or PLY). Try a `.glb` in another 3D tool or game engine: each piece should arrive as its own object. In the **Pieces** menu, try **Make LOD chain** and **Split into loose parts** (on a model made of separate parts, e.g. an imported OBJ).
 9. **Brush presets:** in the right panel, click **Presets…**, try a starter preset, then save your own brush and right-click it > **Copy brush code**. Paste that code into the **Paste a brush code** field on another computer (or after deleting the preset) to get the brush back.
 10. **Alphas and selection:** pick an alpha (right panel > Alpha, e.g. Scales), set Stroke mode to **Stamp** and drag on the model. Try the **Stabilizer** slider for smooth lines. **Ctrl+drag** on empty space to mask a rectangle (press **L** for lasso), **Ctrl+Shift+drag** to show only part of the model.
+
+## Beta.24.2 smoke test
+
+1. **OxySpheres.** Make a mesh from a sphere with a thin branch. Edit the
+   spheres and make the mesh again. The original generated piece should
+   update. Sculpt on that piece, then make the mesh again. The sculpted
+   piece should stay and a new piece should appear. Save, reopen, and check
+   that a subsequent update still targets the latest generated piece.
+2. **Poly Edit Knife.** Close a square cut entirely inside one face of a
+   cube. Look for a new inner face surrounded by a polygon rim. Undo once
+   to restore the original face and redo once to restore the cut.
+3. **Lighter inactive pieces.** Enable it in Preferences > General. With
+   two visible pieces at higher subdivision levels, sculpt on one. The
+   other should draw at its lowest level during the stroke and return to
+   its original display as soon as the stroke ends. Save and reopen to
+   check that both pieces retained their levels.
 
 ## 3. What we most want to know
 

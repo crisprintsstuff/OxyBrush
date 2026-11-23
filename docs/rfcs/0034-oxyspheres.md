@@ -87,10 +87,10 @@ spheres, and it is the thing you come back to.
 - **Make mesh** (Enter) adds a new piece made from the spheres ("…
   mesh") and keeps the spheres, as a new OxySpheres piece or in place of
   the one edited, hidden so the mesh is in view. One undo step. Since
-  4.0.0-beta.24.2, the spheres remember the mesh they made last (its
-  triangle count and position fingerprint, in `ARMS`): while that mesh is
-  unchanged, Make mesh updates it instead of adding another; once it was
-  sculpted, a new piece keeps the sculpting.
+  4.0.0-beta.24.2, Make mesh can update the last generated piece while
+  it is unchanged. The spheres track the exact piece, so a duplicate
+  stays independent. If the target has been edited or removed, Make mesh
+  creates a new piece.
 - **Done** keeps the spheres as they are without making a mesh (shown).
   **Cancel** leaves them as they were. One undo step.
 - **Opening them again:** a click on the active OxySpheres piece (there's
@@ -114,6 +114,13 @@ mesh is unchanged, its spheres come back as an OxySpheres piece (hidden)
 at the end of the list. Older versions skip the section, and
 4.0.0-beta.23.3 skips version 2: they open an OxySpheres piece as an
 ordinary mesh of the spheres.
+
+The optional `ARML` section associates an OxySpheres piece with the
+zero-based index of its last generated mesh. Older readers skip it.
+Projects saved with version 2 of `ARMS` and without `ARML` can still
+edit their spheres. Their first Make mesh creates a new piece and
+records its identity for subsequent updates. Version 1 identifies the
+mesh directly because the recipe is saved on the generated piece.
 
 ## Not in phase 1 (later phases)
 

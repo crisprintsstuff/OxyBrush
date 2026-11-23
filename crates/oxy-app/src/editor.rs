@@ -11486,6 +11486,58 @@ mod tests {
     }
 
     #[test]
+    fn oxyspheres_update_the_original_after_a_duplicate_is_reordered_and_saved() {
+        let mut e = editor();
+        e.start_spheres();
+        e.spheres.as_mut().unwrap().resolution = 40;
+        e.accept_spheres();
+        wait_job(&mut e);
+
+        let original = e.scene.active_index();
+        e.duplicate_active(None);
+        let duplicate = e.scene.active_index();
+        let duplicate_name = e.scene.active().name.clone();
+        e.scene.pieces.swap(original, duplicate);
+
+        let bytes = oxy_doc::format::encode(&e.scene.to_data());
+        let scene = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        e.replace_document(scene, None);
+        let original_id = e.scene.pieces[duplicate].id;
+        let duplicate_id = e.scene.pieces[original].id;
+        let original_before = e.scene.get(original_id).unwrap().mesh.positions.clone();
+        let duplicate_before = e.scene.get(duplicate_id).unwrap().mesh.positions.clone();
+        let spheres = e.scene.pieces.iter().position(|p| p.is_spheres()).unwrap();
+        e.scene.set_active(spheres);
+        e.edit_spheres();
+        let armature = &mut e.spheres.as_mut().unwrap().armature;
+        armature.set_radius(0, armature.spheres[0].radius * 1.5);
+        e.accept_spheres();
+        wait_job(&mut e);
+
+        assert_eq!(e.scene.pieces.len(), 4);
+        assert_eq!(e.scene.active().id, original_id);
+        let duplicate = e.scene.get(duplicate_id).unwrap();
+        assert_eq!(duplicate.name, duplicate_name);
+        assert_eq!(duplicate.mesh.positions, duplicate_before);
+        assert_ne!(e.scene.active().mesh.positions, original_before);
+        e.undo();
+        assert_eq!(e.scene.get(original_id).unwrap().mesh.positions, original_before);
+        e.redo();
+        assert_ne!(e.scene.get(original_id).unwrap().mesh.positions, original_before);
+
+        // Painting does not change the geometry fingerprint, but regeneration
+        // must still preserve the paint by creating a new piece.
+        e.scene.get_mut(original_id).unwrap().mesh.color[0] = Vec3::ZERO;
+        e.scene.set_active(spheres);
+        e.edit_spheres();
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 5);
+        assert_ne!(e.scene.active().id, original_id);
+        assert_eq!(e.scene.get(original_id).unwrap().mesh.color[0], Vec3::ZERO);
+    }
+
+    #[test]
     fn new_oxyspheres_start_on_the_symmetry_plane_wherever_the_view_is() {
         // #449: with the view moved, the first sphere (and so the mirror
         // plane) followed the orbit point off centre.

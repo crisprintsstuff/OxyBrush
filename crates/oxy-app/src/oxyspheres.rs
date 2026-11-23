@@ -229,6 +229,7 @@ impl Editor {
         // Keep knowing which mesh they made last (see `finish_skin`).
         if let Some(r) = old.and_then(|p| p.spheres.as_deref()) {
             (recipe.triangles, recipe.fingerprint) = (r.triangles, r.fingerprint);
+            recipe.generated_mesh = r.generated_mesh;
         }
         let name = old.map_or_else(|| self.scene.unique_name("OxySpheres"), |p| p.name.clone());
         let mut piece = Piece::spheres_piece(name, recipe);
@@ -305,24 +306,27 @@ impl Editor {
         let tris = mesh.triangle_count();
         let spheres_name = spheres.name.clone();
         let symmetry_center = spheres.symmetry_center;
-        // The mesh these spheres made last time, if it hasn't been
-        // sculpted (or otherwise changed) since: Make mesh updates it
-        // instead of adding another. Once sculpted, a new piece keeps the
-        // sculpting.
-        let last = replace
-            .and_then(|id| self.scene.get(id))
-            .and_then(|p| p.spheres.as_deref())
-            .filter(|r| r.triangles > 0)
-            .cloned();
-        let target = last.and_then(|r| {
-            self.scene.pieces.iter().position(|p| !p.is_spheres() && p.multires.is_none() && r.matches(&p.mesh))
+        // Check only the piece this armature generated. Matching geometry
+        // elsewhere in the scene may be an independent copy.
+        let last = replace.and_then(|id| self.scene.get(id)).and_then(|source| source.spheres.as_deref());
+        let target = last.and_then(|recipe| {
+            let index = self.scene.index_of(recipe.generated_mesh?)?;
+            let p = &self.scene.pieces[index];
+            (!p.is_spheres()
+                && p.link.is_none()
+                && p.multires.is_none()
+                && !p.mesh.has_uvs()
+                && !p.mesh.is_painted()
+                && p.mesh.mask.iter().all(|&m| m == 0.0)
+                && p.mesh.hidden().iter().all(|&hidden| !hidden)
+                && recipe.matches(&p.mesh))
+            .then_some(index)
         });
-        // Remember this mesh, to find it next time.
-        if let Some(r) = spheres.spheres.as_deref_mut() {
-            (r.triangles, r.fingerprint) = oxy_doc::group_fingerprint(&mesh, 0);
-        }
-        let mut steps = self.place_spheres_piece(spheres, replace);
+        let recipe = spheres.spheres.as_deref_mut().expect("skin has an OxySpheres piece");
+        (recipe.triangles, recipe.fingerprint) = oxy_doc::group_fingerprint(&mesh, 0);
         if let Some(i) = target {
+            recipe.generated_mesh = Some(self.scene.pieces[i].id);
+            let mut steps = self.place_spheres_piece(spheres, replace);
             let piece = &mut self.scene.pieces[i];
             let name = piece.name.clone();
             let previous = std::mem::replace(&mut piece.mesh, mesh);
@@ -336,6 +340,8 @@ impl Editor {
         let name = self.scene.unique_name(&format!("{spheres_name} mesh"));
         let mut piece = Piece::new(name.clone(), mesh);
         piece.symmetry_center = symmetry_center;
+        recipe.generated_mesh = Some(piece.id);
+        let mut steps = self.place_spheres_piece(spheres, replace);
         self.scene.pieces.push(piece);
         let at = self.scene.pieces.len() - 1;
         steps.push(Step::Inserted { index: at });
