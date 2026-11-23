@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- **OxySpheres updates the correct piece.** Make mesh tracks the last generated piece across reordering and save/reopen. Identical duplicates stay independent, and painted, masked, or partly hidden meshes are preserved.
+
 ## [4.0.0-beta.24.2] - 2026-11-23
 
 ### Changed
