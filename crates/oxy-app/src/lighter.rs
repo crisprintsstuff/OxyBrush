@@ -1,8 +1,10 @@
 //! Lighter inactive pieces (opt in, Preferences > General): a piece with
 //! subdivision levels that isn't the one you're working on is shown at its
-//! highest level under a triangle budget (500,000 by default), which frees
-//! its full-detail mesh (about 66 bytes a triangle, plus the GPU's copy).
-//! Picking it again brings its level back.
+//! lowest level, which frees its full-detail mesh (about 66 bytes a
+//! triangle, plus the GPU's copy). Picking it again brings its level back.
+//! (It used to be the highest level under a triangle budget, 500,000 by
+//! default; ordinary pieces were under it and didn't change at all, so it
+//! looked like it did nothing, #451.)
 //!
 //! The level stack already keeps every level, so nothing is lost: a piece
 //! is lightened by stepping its stack down and rebuilding the smaller mesh,
@@ -29,9 +31,6 @@
 use crate::editor::{Editor, JobResult};
 use oxy_mesh::Mesh;
 use std::hash::{Hash, Hasher};
-
-/// The default triangle budget for a lightened piece.
-pub const DEFAULT_LIGHTER_BUDGET: usize = 500_000;
 
 /// A lightened piece: the level it was at, and that level's mesh's topology
 /// version and a hash of its triangles, to give the version back.
@@ -109,9 +108,7 @@ impl Editor {
         if tied {
             return None;
         }
-        let active = mr.active();
-        let target = (0..active).rev().find(|&l| mr.triangle_count(l) <= self.lighter_budget).unwrap_or(0);
-        (target < active).then_some(target)
+        (mr.active() > 0).then_some(0)
     }
 
     /// Show piece `id` at its lighter level (no undo step).
@@ -265,7 +262,7 @@ mod tests {
     }
 
     /// Two pieces with two subdivision levels each (quads: 6,720
-    /// triangles), a budget of 2,000: an inactive one drops to level 2.
+    /// triangles): an inactive one drops to level 1, its lowest.
     fn editor() -> Editor {
         let mut e = Editor::default();
         e.scene = Scene::new(Piece::new("A", ball(-1.2)));
@@ -281,7 +278,6 @@ mod tests {
         }
         let b = e.scene.bounds();
         e.camera.frame(b);
-        e.lighter_budget = 2_000;
         e
     }
 
@@ -289,9 +285,10 @@ mod tests {
         e.scene.pieces[i].mesh.triangle_count()
     }
 
-    /// Triangles at full detail (level 3) and lighter (level 2).
+    /// Triangles at full detail (level 3) and lighter (level 1, the lowest:
+    /// the original mesh).
     const FULL: usize = 6720;
-    const LIGHT: usize = 1680;
+    const LIGHT: usize = 320;
 
     fn pick(e: &mut Editor, i: usize) {
         e.scene.set_active(i);
@@ -367,7 +364,6 @@ mod tests {
         // its own level back.
         let mut back = Editor::default();
         back.lighter_inactive = true;
-        back.lighter_budget = 2_000;
         let scene = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
         back.replace_document(scene, None);
         back.scene.set_active(1);

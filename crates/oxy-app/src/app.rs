@@ -668,6 +668,13 @@ impl App {
         #[cfg(target_os = "macos")]
         let menu_action = match self.native_menu.as_mut() {
             Some(m) => {
+                // The in-app plugins load the first time a Plugins menu is
+                // drawn; the menu bar's isn't drawn by egui, so load them
+                // here, or its Plugins menu stays empty until Settings >
+                // Plugins is opened (#448).
+                if !self.editor.wasm_loaded {
+                    self.editor.load_wasm_plugins();
+                }
                 let a = m.run_chosen(&mut self.editor, &self.egui_ctx);
                 m.refresh(&self.editor);
                 a
@@ -1838,8 +1845,13 @@ impl ApplicationHandler for App {
             }
             WindowEvent::ModifiersChanged(m) => {
                 let s = m.state();
+                let alt_was = self.editor.modifiers.alt;
                 self.editor.modifiers =
                     Modifiers { shift: s.shift_key(), ctrl: s.control_key() || s.super_key(), alt: s.alt_key() };
+                // Alt taps add points to a curve selection being drawn (#446).
+                if self.editor.modifiers.alt != alt_was {
+                    self.editor.select_curve_alt(self.editor.modifiers.alt);
+                }
                 if self.editor.modifiers.ctrl {
                     self.editor.tab_held = false;
                 }

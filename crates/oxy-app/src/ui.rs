@@ -1476,22 +1476,8 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ui,
         &mut ed.lighter_inactive,
         "Lighter inactive pieces",
-        "On: a piece with subdivision levels that you aren't working on is shown at a lower level, under the triangle count below, to save memory. Picking it brings its own level back (a moment for very dense pieces). Export, Join, Merge, Booleans and undo always use the full level. Pieces tied to others (linked copies, surface instances, living strokes) stay as they are.",
+        "On: a piece with subdivision levels that you aren't working on is shown at its lowest level, to save memory and keep the view quick. Picking it brings its own level back (a moment for very dense pieces). Export, Join, Merge, Booleans and undo always use the full level. Pieces tied to others (linked copies, surface instances, living strokes) stay as they are.",
     );
-    ui.add_enabled_ui(ed.lighter_inactive, |ui| {
-        ui.horizontal(|ui| {
-            ui.label("Up to");
-            let mut k = (ed.lighter_budget / 1000) as u32;
-            if ui
-                .add(egui::DragValue::new(&mut k).range(10..=50_000).speed(10).suffix("k triangles"))
-                .on_hover_text("The most triangles a lighter piece shows: the highest level under this.")
-                .changed()
-            {
-                ed.lighter_budget = k as usize * 1000;
-            }
-            ui.label("each");
-        });
-    });
     tips::check_plain(
         ui,
         &mut ed.undo_per_piece,
@@ -3169,7 +3155,11 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
 
 /// Size/strength menu at the cursor (right click on the viewport, or hold Q).
 fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
-    let Some(q) = ed.quick_menu else { return };
+    let Some(q) = ed.quick_menu else {
+        ed.quick_menu_ring = false;
+        return;
+    };
+    let mut ring = false;
     let pos = egui::pos2(q.pos.x, q.pos.y) / ed.pixels_per_point;
     let r = egui::Area::new(egui::Id::unique("cursor_quick_menu"))
         .order(egui::Order::Foreground)
@@ -3210,10 +3200,11 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                         ui.spacing_mut().slider_width = 165.0;
 
                         ui.label(RichText::new("Size").weak().small());
-                        tips::hover(
+                        let size = tips::hover(
                             ui.add(crate::widgets::Bar(size_slider(ed).trailing_fill(true))),
                             Cmd::Radius.tip(),
                         );
+                        ring |= size.hovered() || size.dragged();
 
                         ui.add_space(2.0);
                         let strength_label = if shift_smooth { "Smooth Strength" } else { "Strength" };
@@ -3231,12 +3222,13 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
 
                         ui.add_space(2.0);
                         ui.label(RichText::new("Focal shift").weak().small());
-                        tips::hover(
+                        let focal = tips::hover(
                             ui.add(crate::widgets::Bar(
                                 egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2).trailing_fill(true),
                             )),
                             plain::FOCAL_SHIFT,
                         );
+                        ring |= focal.hovered() || focal.dragged();
 
                         if matches!(ed.brush_kind, BrushKind::Crease | BrushKind::SharpCrease) {
                             ui.add_space(2.0);
@@ -3274,6 +3266,7 @@ fn quick_menu(ctx: &egui::Context, ed: &mut Editor) {
                 });
         })
         .response;
+    ed.quick_menu_ring = ring;
     if !q.held {
         let (esc, clicked_outside) = ctx.input(|i| {
             let outside = i.pointer.interact_pos().is_some_and(|p| !r.rect.contains(p));
@@ -4429,7 +4422,7 @@ pub fn context_hint(ed: &Editor) -> String {
     let m = ed.brush_roles();
     let clear = ed.keymap.mask_empty == keymap::MaskEmpty::Clear;
     match (m.ctrl, m.shift, m.alt) {
-        (true, true, true) => "Drag on empty space: hide the selection".into(),
+        (true, true, true) => "Click a face group to hide it · drag on empty space: hide the selection".into(),
         (true, true, false) => "Click a face group to isolate it · drag on empty space: show only the selection".into(),
         (true, false, true) => {
             if clear {
@@ -4907,7 +4900,7 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     }
     ui.separator();
     ui.label(
-        RichText::new("Ctrl+Shift+drag: show only the selection\nCtrl+Shift+Alt+drag: hide the selection\nOn empty space: invert visibility\nHold Space: move the box or lasso")
+        RichText::new("Ctrl+Shift+drag: show only the selection\nCtrl+Shift+Alt+drag: hide the selection\nCtrl+Shift+click a group: show only it (Alt too: hide it)\nOn empty space: invert visibility\nHold Space: move the box or lasso")
             .weak()
             .small(),
     );
@@ -7951,18 +7944,29 @@ fn draw_select_curve(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     let Some(curve) = ed.select_curve.clone() else { return };
     let ppp = ed.pixels_per_point.max(0.1);
     let to_pt = |v: glam::Vec2| egui::pos2(v.x / ppp, v.y / ppp);
-    let mut pts: Vec<glam::Vec2> = curve.points.clone();
-    if let Some(p) = ed.pointer.filter(|_| ed.pointer_in_canvas()) {
-        pts.push(p);
+    // The clicked points and the pointer as the next one, along the curve
+    // (straight between corners, bending through smooth points).
+    let (mut points, mut smooth) = (curve.points.clone(), curve.smooth.clone());
+    if let Some(p) = ed.pointer.filter(|_| ed.pointer_in_canvas())
+        && points.last().is_none_or(|l| l.distance(p) > 1.0)
+    {
+        points.push(p);
+        smooth.push(false);
     }
+    let pts = crate::select_shapes::curve_path(&points, &smooth);
     let painter = ui.painter().with_clip_rect(canvas);
     let c = select_color(curve.action);
     let stroke = EStroke::new(1.5, c);
     for pair in pts.windows(2) {
         painter.line_segment([to_pt(pair[0]), to_pt(pair[1])], stroke);
     }
-    for &p in &curve.points {
-        painter.circle_filled(to_pt(p), 3.5, c);
+    for (&p, &s) in curve.points.iter().zip(&curve.smooth) {
+        if s {
+            // A smooth point: round and hollow; a corner: a filled dot.
+            painter.circle_stroke(to_pt(p), 4.0, EStroke::new(1.5, c));
+        } else {
+            painter.circle_filled(to_pt(p), 3.5, c);
+        }
     }
     if pts.len() >= 2 {
         let faint = EStroke::new(1.0, c.linear_multiply(0.5));
@@ -7975,7 +7979,9 @@ fn draw_select_curve(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         painter.line_segment([to_pt(z), to_pt(z + d * far)], faint);
         // Ticks toward the side it selects: the right as you draw (y down).
         let flip = if ed.modifiers.alt { -1.0 } else { 1.0 };
-        for pair in pts.windows(2) {
+        // A tick every few samples along the curve.
+        let step = (pts.len() / 8).max(1);
+        for pair in pts.windows(2).step_by(step) {
             let d = (pair[1] - pair[0]).normalize_or_zero();
             let n = glam::Vec2::new(-d.y, d.x) * flip;
             let mid = (pair[0] + pair[1]) * 0.5;
@@ -8179,24 +8185,31 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
 }
 
-/// While the S (size) or focal shift slider is open, the brush ring at
-/// the place it was opened from, over the slider, so you see the size you
-/// are setting (#418). (The ring is otherwise hidden while the pointer is
+/// While the S (size) or focal shift slider is open, or the quick menu's
+/// Size or Focal shift slider is in use (#433), the brush ring at the place
+/// it was opened from, over the slider, so you see the size you are
+/// setting (#418). (The ring is otherwise hidden while the pointer is
 /// over a panel, and the slider opens right under it.) RETURNS: whether
 /// it drew it.
 fn size_slider_ring(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) -> bool {
     use crate::editor::SliderKind;
-    let Some(ps) = ed.pointer_slider.filter(|s| matches!(s.kind, SliderKind::Size | SliderKind::FocalShift)) else {
-        return false;
+    let at = match ed.pointer_slider.filter(|s| matches!(s.kind, SliderKind::Size | SliderKind::FocalShift)) {
+        Some(ps) => ps.pos,
+        // The quick menu's Size or Focal shift slider (#433): at the place
+        // the menu was opened from, under it.
+        None => match ed.quick_menu.filter(|_| ed.quick_menu_ring) {
+            Some(q) => q.pos,
+            None => return false,
+        },
     };
-    let pos = egui::pos2(ps.pos.x, ps.pos.y) / ed.pixels_per_point;
+    let pos = egui::pos2(at.x, at.y) / ed.pixels_per_point;
     if !canvas.contains(pos) {
         return false;
     }
     let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::unique("size_slider_ring"));
     let painter = ui.ctx().layer_painter(layer).with_clip_rect(canvas);
     let color = ed.accent_color();
-    if !try_draw_surface_cursor(&painter, ed, ps.pos, ed.brush_radius_pt, color, true) {
+    if !try_draw_surface_cursor(&painter, ed, at, ed.brush_radius_pt, color, true) {
         paint_screen_cursor(&painter, pos, ed.brush_radius_pt, ed.focal_ring(), color);
     }
     true

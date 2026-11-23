@@ -844,6 +844,111 @@ impl Mesh {
         !changes.is_empty()
     }
 
+    /// Smooth the borders between face groups within `radius` of `center`
+    /// by moving points, as Deform's "Polish, keep group edges" does (#440):
+    /// a point on a border between two groups slides toward the middle of
+    /// its two neighbours along that border, which straightens a jagged
+    /// (stair-stepped) border, and the points around it even out. Points
+    /// move along the surface only (the change is taken off along the
+    /// normal), fading out toward the edge of the brush, by `strength`
+    /// (0 to 1) of the way per dab. `facing`: only faces turned toward
+    /// this direction's opposite count (Front faces only). `touch` is
+    /// called with each chunk before its points change (undo snapshots,
+    /// architecture invariant 2).
+    ///
+    /// RETURNS: whether any point moved.
+    pub fn smooth_group_borders(
+        &mut self,
+        center: Vec3,
+        radius: f32,
+        strength: f32,
+        facing: Option<Vec3>,
+        mut touch: impl FnMut(&Mesh, u32),
+    ) -> bool {
+        let r2 = radius * radius;
+        let visible = |m: &Mesh, t: u32| {
+            if m.hidden[t as usize] {
+                return false;
+            }
+            let Some(dir) = facing else { return true };
+            let [a, b, d] = m.triangles[t as usize].map(|v| m.positions[v as usize]);
+            (b - a).cross(d - a).dot(dir) < 0.0
+        };
+        // The points under the brush, and the groups of their visible faces.
+        let mut under: Vec<u32> = Vec::new();
+        for c in 0..self.chunks.len() {
+            let b = &self.chunks[c].aabb;
+            let reach = Aabb { min: center - Vec3::splat(radius), max: center + Vec3::splat(radius) };
+            if !(b.min.cmple(reach.max).all() && b.max.cmpge(reach.min).all()) {
+                continue;
+            }
+            let vs = self.chunks[c].vertices.clone();
+            under.extend(vs.filter(|&v| self.positions[v as usize].distance_squared(center) <= r2));
+        }
+        // Whether edge (a, b) is a border: its two visible faces are in
+        // different groups.
+        let border_edge = |m: &Mesh, a: u32, b: u32| {
+            let tb = m.vertex_triangles(b);
+            let mut gs = m
+                .vertex_triangles(a)
+                .iter()
+                .filter(|t| tb.contains(t) && visible(m, **t))
+                .map(|&t| m.groups[t as usize]);
+            match (gs.next(), gs.next()) {
+                (Some(x), Some(y)) => x != y,
+                _ => false,
+            }
+        };
+        let mut moves: Vec<(u32, Vec3)> = Vec::new();
+        for &v in &under {
+            let ts: Vec<u32> = self.vertex_triangles(v).iter().copied().filter(|&t| visible(self, t)).collect();
+            if ts.is_empty() {
+                continue;
+            }
+            let p = self.positions[v as usize];
+            let ns: Vec<u32> = self.neighbors(v).iter().copied().collect();
+            if ns.is_empty() {
+                continue;
+            }
+            let first = self.groups[ts[0] as usize];
+            let on_border = ts.iter().any(|&t| self.groups[t as usize] != first);
+            let target = if on_border {
+                // Along the border: only its two neighbours on it (a point
+                // where three groups meet, or a border that ends, stays).
+                let along: Vec<u32> = ns.iter().copied().filter(|&u| border_edge(self, v, u)).collect();
+                if along.len() != 2 {
+                    continue;
+                }
+                (self.positions[along[0] as usize] + self.positions[along[1] as usize]) * 0.5
+            } else {
+                ns.iter().map(|&u| self.positions[u as usize]).sum::<Vec3>() / ns.len() as f32
+            };
+            let n = self.normals[v as usize];
+            let mut d = target - p;
+            d -= n * d.dot(n);
+            let fall = 1.0 - p.distance(center) / radius;
+            let w = strength.clamp(0.0, 1.0) * fall * fall * (3.0 - 2.0 * fall);
+            if w > 0.0 && d.length_squared() > 0.0 {
+                moves.push((v, p + d * w));
+            }
+        }
+        if moves.is_empty() {
+            return false;
+        }
+        let mut chunks: Vec<u32> = moves.iter().map(|&(v, _)| self.vertex_chunk(v)).collect();
+        chunks.sort_unstable();
+        chunks.dedup();
+        for &c in &chunks {
+            touch(self, c);
+        }
+        let moved: Vec<u32> = moves.iter().map(|&(v, _)| v).collect();
+        for (v, q) in moves {
+            self.positions[v as usize] = q;
+        }
+        self.update_after_move(&moved);
+        true
+    }
+
     pub fn set_hidden(&mut self, hidden: Vec<bool>) {
         assert_eq!(hidden.len(), self.triangles.len());
         self.hidden = hidden;
@@ -2321,6 +2426,47 @@ mod tests {
         m.set_groups(g.clone());
         assert!(!m.relax_groups(Vec3::new(5.0, 0.0, 5.0), 0.5, None));
         assert_eq!(m.groups(), &g[..]);
+    }
+
+    #[test]
+    fn smoothing_group_borders_straightens_a_stair_stepped_border() {
+        // #440: a diagonal border on a grid follows the triangles' edges in
+        // steps; smoothing slides its points onto a straight line, along
+        // the surface (the plane stays flat), without changing any group.
+        let mut m = crate::primitives::plane(16, 2.0);
+        let centre = |m: &Mesh, t: usize| m.triangles[t].iter().map(|&v| m.positions[v as usize]).sum::<Vec3>() / 3.0;
+        let groups: Vec<u32> =
+            (0..m.triangle_count()).map(|t| u32::from(centre(&m, t).x > centre(&m, t).z + 0.05)).collect();
+        m.set_groups(groups.clone());
+        // How far the border's points are from the line x = z + 0.05,
+        // away from the plane's edges.
+        let wobble = |m: &Mesh| {
+            let border: Vec<u32> = (0..m.vertex_count() as u32)
+                .filter(|&v| {
+                    let p = m.positions[v as usize];
+                    let ts = m.vertex_triangles(v);
+                    p.x.abs() < 0.7
+                        && p.z.abs() < 0.7
+                        && ts.iter().any(|&t| m.groups()[t as usize] != m.groups()[ts[0] as usize])
+                })
+                .collect();
+            border.iter().map(|&v| (m.positions[v as usize].x - m.positions[v as usize].z - 0.05).abs()).sum::<f32>()
+                / border.len() as f32
+        };
+        let before = wobble(&m);
+        let mut touched = Vec::new();
+        for _ in 0..30 {
+            m.smooth_group_borders(Vec3::ZERO, 1.2, 0.5, None, |_, c| touched.push(c));
+        }
+        let after = wobble(&m);
+        assert!(after < before * 0.5, "{before} -> {after}");
+        assert!(!touched.is_empty(), "chunks are snapshotted before they change");
+        assert!(m.positions.iter().all(|p| p.y.abs() < 1e-5), "points stay on the surface");
+        assert_eq!(m.groups(), &groups[..], "groups are left alone");
+        // Out of reach: nothing moves.
+        let at = m.positions.clone();
+        assert!(!m.smooth_group_borders(Vec3::new(5.0, 0.0, 5.0), 0.5, 0.5, None, |_, _| {}));
+        assert_eq!(m.positions, at);
     }
 
     #[test]
