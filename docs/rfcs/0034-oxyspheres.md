@@ -129,6 +129,7 @@ mesh directly because the recipe is saved on the generated piece.
   topology, as described for sphere skeletons in Ji, Liu and Wang, *B-Mesh:
   A Fast Modeling System for Base Meshes of 3D Articulated Shapes*
   (Pacific Graphics 2010).
+  See [RFC 0038](0038-oxyspheres-quad-base-mesh.md) for the prototype proposal.
 - Rotating a branch around its parent (posing), scaling a branch.
 - Spheres that only shape the link they sit on, without adding a joint.
 - Snapping a new armature to the surface of another piece, and binding an
