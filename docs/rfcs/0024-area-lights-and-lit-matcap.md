@@ -79,7 +79,12 @@ problem): "hard edge where it falls off".
 
 ### Light the matcap
 
-A switch in the Lights window. The lights are summed for a white surface
+In Materials, **Lit surface** selects the matcap or a scene-wide custom
+color. This panel also holds roughness and specular. Selecting a matcap
+with viewport lights enabled switches to the matcap surface. Resetting
+the lights preserves the material settings.
+
+The lights are summed for a white surface
 (sky and ground, each light's diffuse and its shadows). The matcap color
 is multiplied by that, scaled so a surface facing the default key light
 comes out about as the matcap alone, with values above 1 eased rather than

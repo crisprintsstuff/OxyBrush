@@ -81,7 +81,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label("Output");
                 let output = if e.quad_skin { "Quad base mesh" } else { "Voxel skin" };
                 egui::ComboBox::from_id_salt("sphere_output").selected_text(output).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut e.quad_skin, false, "Voxel skin");
+                    if ui.selectable_value(&mut e.quad_skin, false, "Voxel skin").changed() {
+                        e.build_error = None;
+                    }
                     ui.selectable_value(&mut e.quad_skin, true, "Quad base mesh")
                         .on_hover_text("Experimental. Builds edge loops around a chain or one three-way junction.");
                 });
@@ -106,6 +108,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.add_space(2.0);
             ui.label(egui::RichText::new(HINT).small().weak());
             ui.add_space(4.0);
+            if let Some(error) = &e.build_error {
+                ui.colored_label(ui.visuals().warn_fg_color, error);
+            }
             ui.horizontal(|ui| {
                 accept |= ui
                     .button("Make mesh")
