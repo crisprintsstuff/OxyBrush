@@ -37,7 +37,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 - **Subdivision levels and dynamic detail:** sculpt broad shapes low and fine detail high, or build up a plain sphere as you go.
 - **Pieces:** many objects per scene, with voxel remesh, booleans, Join, Split, Symmetrize and decimation.
 - **Retopology:** draw a clean quad mesh over a sculpt and project the detail onto it.
-- **Poly Edit:** model a low-polygon piece by its faces, edges and points: extrude, inset, bevel, bridge, insert and slide edge loops, close holes, weld points, round picked geometry with **To Circle**, and cut new edges across faces with the **Knife**.
+- **Poly Edit:** model a low-polygon piece by its faces, edges and points: extrude, inset, bevel, bridge, insert and slide edge loops, close holes, weld points, round picked geometry with **To Circle**, and cut new edges across faces with the **Knife**. Close a Knife loop inside a face to create an inset surrounded by quads or larger polygons.
 - **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
 - **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
 - **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.

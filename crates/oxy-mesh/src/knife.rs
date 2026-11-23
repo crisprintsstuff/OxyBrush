@@ -13,7 +13,7 @@
 
 use crate::polyedit::face_normal;
 use crate::retopo::{Cage, Face, corners, edge_key};
-use glam::Vec3;
+use glam::{DVec2, Vec3};
 use std::collections::HashMap;
 
 /// Where a clicked point sits on the cage.
@@ -384,84 +384,168 @@ fn inner_loop(plan: &KnifePlan) -> Option<(usize, Vec<Vec3>)> {
     points.map(|p| (f, p))
 }
 
-/// Cut a new face out of face `f` along the closed loop `points` (inside
-/// it, in order). A polygon can't have a hole, so the part of `f` around
-/// the new face becomes a ring of faces: each loop point is joined to the
-/// corner of `f` nearest it in direction, seen from the loop's middle, and
-/// each piece between two loop points and their corners is a face (a
-/// triangle where both reach the same corner). A square loop in a quad
-/// makes the new quad and four quads around it, as an inset does.
-///
-/// PRECONDITION: the points lie on face `f`. RETURNS: how many faces were
-/// added, or why the loop can't be cut (it folds back on itself, as seen
-/// from its middle, or the corners can't be shared out in order).
+/// Intersections of planar boundary segments, including touches. Inputs
+/// are normalized to the size of the parent face.
+fn segments_meet(a: DVec2, b: DVec2, c: DVec2, d: DVec2) -> bool {
+    const TOL: f64 = 1e-10;
+    if a.min(b).cmpgt(c.max(d) + DVec2::splat(TOL)).any() || c.min(d).cmpgt(a.max(b) + DVec2::splat(TOL)).any() {
+        return false;
+    }
+    let side = |p: DVec2, q: DVec2, r: DVec2| (q - p).perp_dot(r - p);
+    let across = |x, y| (x <= TOL && y >= -TOL) || (y <= TOL && x >= -TOL);
+    across(side(a, b, c), side(a, b, d)) && across(side(c, d, a), side(c, d, b))
+}
+
+fn inside_polygon(p: DVec2, ring: &[DVec2]) -> bool {
+    let mut inside = false;
+    for (&a, &b) in ring.iter().zip(ring.iter().cycle().skip(1)) {
+        if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (b.x - a.x) * (p.y - a.y) / (b.y - a.y) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// A ring around a hole can be divided into simple polygons by joining
+/// corresponding corners of its two outlines. Give every corner of the
+/// smaller outline a distinct partner when possible. Extra corners stay
+/// along an existing side of a rim polygon instead of fanning into triangles.
+fn inset_spokes(outer: &[DVec2], inner: &[DVec2]) -> Option<Vec<(usize, usize)>> {
+    let m = outer.len();
+    let k = inner.len();
+    let clear = |(o, i): (usize, usize)| {
+        let (a, b) = (outer[o], inner[i]);
+        let crosses = |ring: &[DVec2], at: usize| {
+            (0..ring.len()).any(|j| {
+                let next = (j + 1) % ring.len();
+                j != at && next != at && segments_meet(a, b, ring[j], ring[next])
+            })
+        };
+        let mid = (a + b) * 0.5;
+        inside_polygon(mid, outer) && !inside_polygon(mid, inner) && !crosses(outer, o) && !crosses(inner, i)
+    };
+    let no_cross = |spokes: &[(usize, usize)]| {
+        spokes.iter().enumerate().all(|(i, &(o, k))| {
+            spokes[..i].iter().all(|&(p, l)| !segments_meet(outer[o], inner[k], outer[p], inner[l]))
+        })
+    };
+
+    // Try each cyclic alignment, favoring short joins. Increasing offsets
+    // preserve the outline order and pair the square-in-quad case one to one.
+    let n = m.min(k);
+    let larger = m.max(k);
+    let pairs = |offset: usize| {
+        (0..n).map(move |i| {
+            let j = (offset + i * larger / n) % larger;
+            if m >= k { (j, i) } else { (i, j) }
+        })
+    };
+    let mut offsets: Vec<_> = (0..larger)
+        .map(|offset| {
+            let distance: f64 = pairs(offset).map(|(o, i)| outer[o].distance_squared(inner[i])).sum();
+            (offset, distance)
+        })
+        .collect();
+    offsets.sort_by(|a, b| a.1.total_cmp(&b.1));
+    for (offset, _) in offsets {
+        let spokes: Vec<_> = pairs(offset).collect();
+        if spokes.iter().copied().all(clear) && no_cross(&spokes) {
+            return Some(spokes);
+        }
+    }
+
+    // Unevenly spaced or concave boundaries may need fewer joins. Use
+    // the nearest clear corner at each point, retaining only one spoke
+    // per outer corner, and only accept a single forward boundary walk.
+    let mut nearest = vec![None; m];
+    for (i, &p) in inner.iter().enumerate() {
+        let best = outer
+            .iter()
+            .enumerate()
+            .map(|(o, q)| (o, p.distance_squared(*q)))
+            .filter(|&(o, _)| clear((o, i)))
+            .min_by(|a, b| a.1.total_cmp(&b.1));
+        if let Some((o, d)) = best
+            && nearest[o].is_none_or(|(_, best)| d < best)
+        {
+            nearest[o] = Some((i, d));
+        }
+    }
+    let spokes: Vec<_> = nearest.into_iter().enumerate().filter_map(|(o, hit)| hit.map(|(i, _)| (o, i))).collect();
+    if spokes.len() < 2 {
+        return None;
+    }
+    let walked: usize =
+        spokes.iter().zip(spokes.iter().cycle().skip(1)).map(|(&(_, i), &(_, j))| (j + k - i) % k).sum();
+    (walked == k && no_cross(&spokes)).then_some(spokes)
+}
+
+/// Cut a closed loop inside one face, keeping the loop as a polygon and
+/// filling the rim with quads or larger polygons.
 fn cut_inner_loop(c: &mut Cage, f: usize, points: &[Vec3]) -> Result<usize, &'static str> {
-    let k = points.len();
-    if k < 3 {
+    if points.len() < 3 {
         return Err("click at least three points inside the face for a loop");
     }
     let normal = face_normal(c, f);
     if normal == Vec3::ZERO {
         return Err("the face is too thin to cut a loop in");
     }
-    let mid = points.iter().copied().sum::<Vec3>() / k as f32;
-    let u = normal.any_orthonormal_vector();
-    let w = normal.cross(u);
-    let angle = |p: Vec3| {
-        let d = p - mid;
-        d.dot(w).atan2(d.dot(u))
+    let outer = corners(&c.faces[f]).to_vec();
+    let mid = c.positions[outer[0] as usize];
+    let scale = outer.iter().map(|&v| c.positions[v as usize].distance(mid)).fold(0.0, f32::max);
+    let (u, w) = normal.any_orthonormal_pair();
+    let project = |p: Vec3| {
+        let d = (p - mid) / scale;
+        DVec2::new(d.dot(u) as f64, d.dot(w) as f64)
     };
-    // The loop turning the same way as the face.
-    let mut inner: Vec<Vec3> = points.to_vec();
+    let outer_2d: Vec<_> = outer.iter().map(|&i| project(c.positions[i as usize])).collect();
+    let mut inner = points.to_vec();
     if crate::retopo::polygon_normal(&inner).dot(normal) < 0.0 {
         inner.reverse();
     }
-    // Seen from its middle, the loop must go round once, always forward.
-    let tau = std::f32::consts::TAU;
-    let step = |a: f32, b: f32| (b - a).rem_euclid(tau);
-    let turn: f32 = (0..k).map(|i| step(angle(inner[i]), angle(inner[(i + 1) % k]))).sum();
-    if (turn - tau).abs() > 1e-3 {
-        return Err("draw the loop round its middle, without folding back");
+    let inner_2d: Vec<_> = inner.iter().copied().map(project).collect();
+    let area: f64 = inner_2d.iter().zip(inner_2d.iter().cycle().skip(1)).map(|(&a, &b)| a.perp_dot(b)).sum();
+    if area <= 1e-12 {
+        return Err("draw a simple loop with area");
     }
-    let outer: Vec<u32> = corners(&c.faces[f]).to_vec();
-    let m = outer.len();
-    let anchor: Vec<usize> = inner
-        .iter()
-        .map(|&p| {
-            let a = angle(p);
-            (0..m)
-                .min_by(|&x, &y| {
-                    let d = |o: usize| {
-                        let t = step(a, angle(c.positions[outer[o] as usize]));
-                        t.min(tau - t)
-                    };
-                    d(x).total_cmp(&d(y))
-                })
-                .expect("a face has corners")
-        })
-        .collect();
-    // Walking the loop once must walk the face's corners once, forward.
-    let walked: usize = (0..k).map(|i| (anchor[(i + 1) % k] + m - anchor[i]) % m).sum();
-    if walked != m {
-        return Err("the loop's shape is too far from the face's to join them");
-    }
-    let group = c.faces[f].group;
-    let v: Vec<u32> = inner.iter().map(|&p| c.add_vertex(p)).collect();
-    c.faces[f] = Face::with_group(v.clone(), group);
-    for i in 0..k {
-        let j = (i + 1) % k;
-        let mut ring = Vec::new();
-        let mut o = anchor[i];
-        ring.push(outer[o]);
-        while o != anchor[j] {
-            o = (o + 1) % m;
-            ring.push(outer[o]);
+    for (i, (&a, &b)) in inner_2d.iter().zip(inner_2d.iter().cycle().skip(1)).enumerate() {
+        if a.distance_squared(b) <= 1e-14
+            || !inside_polygon(a, &outer_2d)
+            || outer_2d.iter().zip(outer_2d.iter().cycle().skip(1)).any(|(&p, &q)| segments_meet(a, b, p, q))
+            || (0..i.saturating_sub(1))
+                .filter(|&j| i + 1 < inner.len() || j != 0)
+                .any(|j| segments_meet(a, b, inner_2d[j], inner_2d[j + 1]))
+        {
+            return Err("draw a simple loop entirely inside the face");
         }
-        ring.push(v[j]);
-        ring.push(v[i]);
-        c.faces.push(Face::with_group(ring, group));
     }
-    Ok(k)
+    let spokes =
+        inset_spokes(&outer_2d, &inner_2d).ok_or("couldn't join the loop to the face without crossing edges")?;
+    let group = c.faces[f].group;
+    let inner: Vec<_> = inner.into_iter().map(|p| c.add_vertex(p)).collect();
+    let arc = |ring: &[u32], from: usize, to: usize| {
+        let n = ring.len();
+        ring.iter().copied().cycle().skip(from).take((to + n - from) % n + 1).collect::<Vec<_>>()
+    };
+    let make_face = |mut corners: Vec<u32>| {
+        // The mesh splits quads along corners 0–2. For a concave quad,
+        // choose a starting corner that puts that split inside the face.
+        if let &[a, b, d, e] = corners.as_slice() {
+            let [first, second, third, fourth] = [a, b, d, e].map(|v| project(c.positions[v as usize]));
+            let diagonal = third - first;
+            if (second - first).perp_dot(diagonal) <= 0.0 || diagonal.perp_dot(fourth - first) <= 0.0 {
+                corners.rotate_left(1);
+            }
+        }
+        Face::with_group(corners, group)
+    };
+    for (&(a, i), &(b, j)) in spokes.iter().zip(spokes.iter().cycle().skip(1)) {
+        let mut face = arc(&outer, a, b);
+        face.extend(arc(&inner, i, j).into_iter().rev());
+        c.faces.push(make_face(face));
+    }
+    c.faces[f] = make_face(inner);
+    Ok(spokes.len())
 }
 
 /// Cut the cage along `plan`. RETURNS: how many faces the cut added.
@@ -809,6 +893,50 @@ mod tests {
         let plan = knife_plan(&c3, &tri, view()).unwrap();
         assert_eq!(knife_cut(&mut c3, &plan).unwrap(), 3);
         crate::polyedit::validate(&c3).unwrap();
+    }
+
+    #[test]
+    fn mismatched_knife_loops_keep_extra_corners_in_rim_polygons() {
+        let regular = |n: usize, radius: f32, offset: f32| {
+            (0..n)
+                .map(|i| {
+                    let a = std::f32::consts::TAU * i as f32 / n as f32 + offset;
+                    Vec3::new(a.cos() * radius, a.sin() * radius, 0.0)
+                })
+                .collect::<Vec<_>>()
+        };
+        let xy = |points: &[(f32, f32)]| points.iter().map(|&(x, y)| Vec3::new(x, y, 0.0)).collect::<Vec<_>>();
+        let offset_hexagon = (
+            xy(&[(0.0, 0.0), (502.0, 0.0), (502.0, 363.0), (0.0, 363.0)]),
+            xy(&[(162.0, 284.0), (64.0, 237.0), (64.0, 139.0), (162.0, 87.0), (260.0, 139.0), (260.0, 237.0)]),
+        );
+        let centered = [(4, 6), (6, 4), (4, 4)]
+            .map(|(m, k)| (regular(m, 2.0, std::f32::consts::FRAC_PI_4), regular(k, 0.65, 0.16)));
+        for (outer, inner) in centered.into_iter().chain([offset_hexagon]) {
+            let (m, k) = (outer.len(), inner.len());
+            let outer_area = crate::retopo::polygon_normal(&outer).z;
+            let mut c = Cage {
+                positions: outer,
+                faces: vec![Face::with_group((0..m as u32).collect(), 17)],
+                ..Default::default()
+            };
+            let mut clicks: Vec<_> = inner.iter().map(|&pos| KnifePoint { snap: KnifeSnap::Face(0), pos }).collect();
+            clicks.push(clicks[0]);
+            let plan = knife_plan(&c, &clicks, view()).unwrap();
+            assert_eq!(knife_cut(&mut c, &plan), Ok(m.min(k)));
+            crate::polyedit::validate(&c).unwrap();
+            assert_eq!(c.faces[0].len(), k, "the drawn loop stays intact");
+            assert!(c.faces.iter().all(|f| f.len() >= 4 && f.group == 17));
+            let (triangles, _) = c.triangulate();
+            let mut area = 0.0;
+            for triangle in triangles {
+                let [a, b, d] = triangle.map(|v| c.positions[v as usize]);
+                let twice_area = (b - a).cross(d - a).z;
+                assert!(twice_area > 0.0, "the rendered triangles keep the face winding");
+                area += twice_area;
+            }
+            assert!((area / outer_area - 1.0).abs() < 1e-5);
+        }
     }
 
     #[test]
