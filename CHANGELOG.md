@@ -4,6 +4,12 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **Lighter inactive pieces only while you edit** ([#451](https://github.com/crisprintsstuff/OxyBrush/issues/451)). With the option on, the other pieces with subdivision levels are drawn at their lowest level while you sculpt or edit a piece (a stroke, Paint Groups, a gizmo or Poly Edit drag), and in full again as soon as you stop. Only the drawing changes: a lowest-level copy is kept next to each piece, so nothing is rebuilt at the end of a stroke, and every piece keeps its levels for saving, export and undo. In 4.0.0-beta.24 the pieces dropped to their lowest level for as long as they weren't active. Projects saved with pieces shown lighter still open with their own levels.
+
+### Fixed
+
 - **Knife inset loops keep a polygon rim.** Closed cuts inside a face use distinct corner joins, so extra points follow the rim polygons instead of creating a fan of triangles.
 
 ## [4.0.0-beta.24] - 2026-11-23

@@ -50,6 +50,9 @@ pub struct Document {
     /// when that was last looked at.
     pub(crate) light: std::collections::HashMap<u64, crate::lighter::Light>,
     pub(crate) light_active: Option<u64>,
+    /// Lowest-level copies of pieces, drawn in their place while another
+    /// piece is being edited (Lighter inactive pieces), by piece id.
+    pub(crate) proxies: std::collections::HashMap<u64, crate::lighter::Proxy>,
 
     // Camera & View
     pub camera: Camera,
@@ -184,6 +187,7 @@ impl Document {
             link_seen: Default::default(),
             light: Default::default(),
             light_active: None,
+            proxies: Default::default(),
             camera,
             snap_orbit: None,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
