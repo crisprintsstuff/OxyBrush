@@ -78,7 +78,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     mirror = Some(on);
                 }
                 ui.end_row();
-                ui.label("Resolution").on_hover_text("Voxels along the longest side: more for finer detail");
+                ui.label("Resolution").on_hover_text("Voxels along the longest side: more for finer detail. Thin parts are always made finer, a few voxels across their thinnest sphere, so they come out round (the quick view while editing is coarser)");
                 ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.resolution, 32..=oxy_topo::MAX_RESOLUTION)));
                 ui.end_row();
                 ui.label("Blend").on_hover_text("How round the joins between links are");
@@ -96,7 +96,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 accept |= ui
                     .button("Make mesh")
                     .on_hover_text(
-                        "Make a new piece from the spheres (Enter). The spheres stay, to make another any time.",
+                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted, otherwise it adds a new piece. The spheres stay, to make another any time.",
                     )
                     .clicked();
                 done |= ui

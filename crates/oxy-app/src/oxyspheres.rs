@@ -132,7 +132,14 @@ impl SphereEdit {
             return;
         }
         let skin = self.show_skin.then(|| {
-            let opts = oxy_topo::SkinOptions { resolution: res, blend: self.blend_world(), smooth_passes: 1 };
+            // Sized by the figure alone, to stay quick while you edit (the
+            // mesh made follows the thinnest sphere too).
+            let opts = oxy_topo::SkinOptions {
+                resolution: res,
+                blend: self.blend_world(),
+                smooth_passes: 1,
+                voxels_per_radius: 0.0,
+            };
             oxy_topo::skin_armature(&self.armature, opts).ok()
         });
         self.preview = match skin.flatten() {
@@ -217,8 +224,12 @@ impl Editor {
     /// The OxySpheres piece the open spheres become: the edited one with
     /// its new spheres, or a new one. `visible`: shown afterwards.
     fn spheres_piece_of(&self, edit: &SphereEdit, visible: bool) -> Piece {
-        let recipe = ArmatureRecipe::spheres(edit.armature.clone(), edit.resolution, edit.blend);
+        let mut recipe = ArmatureRecipe::spheres(edit.armature.clone(), edit.resolution, edit.blend);
         let old = edit.replace.as_ref().and_then(|(id, _)| self.scene.index_of(*id)).map(|i| &self.scene.pieces[i]);
+        // Keep knowing which mesh they made last (see `finish_skin`).
+        if let Some(r) = old.and_then(|p| p.spheres.as_deref()) {
+            (recipe.triangles, recipe.fingerprint) = (r.triangles, r.fingerprint);
+        }
         let name = old.map_or_else(|| self.scene.unique_name("OxySpheres"), |p| p.name.clone());
         let mut piece = Piece::spheres_piece(name, recipe);
         if let Some(old) = old {
@@ -272,7 +283,12 @@ impl Editor {
         }
         let Some(edit) = self.spheres.take() else { return };
         self.restore_spheres_hidden(&edit);
-        let opts = oxy_topo::SkinOptions { resolution: edit.resolution, blend: edit.blend_world(), smooth_passes: 2 };
+        let opts = oxy_topo::SkinOptions {
+            resolution: edit.resolution,
+            blend: edit.blend_world(),
+            smooth_passes: 2,
+            ..Default::default()
+        };
         let replace = edit.replace.as_ref().map(|(id, _)| *id);
         let spheres = Box::new(self.spheres_piece_of(&edit, false));
         let armature = edit.armature;
@@ -285,11 +301,38 @@ impl Editor {
 
     /// Put a finished mesh in the scene as a new piece, with its spheres
     /// piece updated or added (one undo step).
-    pub(crate) fn finish_skin(&mut self, spheres: Piece, replace: Option<u64>, mesh: Mesh, secs: f32) -> String {
+    pub(crate) fn finish_skin(&mut self, mut spheres: Piece, replace: Option<u64>, mesh: Mesh, secs: f32) -> String {
         let tris = mesh.triangle_count();
         let spheres_name = spheres.name.clone();
         let symmetry_center = spheres.symmetry_center;
+        // The mesh these spheres made last time, if it hasn't been
+        // sculpted (or otherwise changed) since: Make mesh updates it
+        // instead of adding another. Once sculpted, a new piece keeps the
+        // sculpting.
+        let last = replace
+            .and_then(|id| self.scene.get(id))
+            .and_then(|p| p.spheres.as_deref())
+            .filter(|r| r.triangles > 0)
+            .cloned();
+        let target = last.and_then(|r| {
+            self.scene.pieces.iter().position(|p| !p.is_spheres() && p.multires.is_none() && r.matches(&p.mesh))
+        });
+        // Remember this mesh, to find it next time.
+        if let Some(r) = spheres.spheres.as_deref_mut() {
+            (r.triangles, r.fingerprint) = oxy_doc::group_fingerprint(&mesh, 0);
+        }
         let mut steps = self.place_spheres_piece(spheres, replace);
+        if let Some(i) = target {
+            let piece = &mut self.scene.pieces[i];
+            let name = piece.name.clone();
+            let previous = std::mem::replace(&mut piece.mesh, mesh);
+            steps.push(Step::Topology { piece: piece.id, previous, previous_multires: None });
+            self.scene.set_active(i);
+            self.history.record_compound(format!("OxySpheres: update {name}"), steps);
+            return format!(
+                "Updated {name}: {tris} triangles in {secs:.1} s. Sculpt it, and the next Make mesh adds a new piece"
+            );
+        }
         let name = self.scene.unique_name(&format!("{spheres_name} mesh"));
         let mut piece = Piece::new(name.clone(), mesh);
         piece.symmetry_center = symmetry_center;
