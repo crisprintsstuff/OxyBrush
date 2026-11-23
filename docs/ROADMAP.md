@@ -100,6 +100,9 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 
 ## Proposed next work
 
+- [Delete and dissolve edges in Poly Edit](rfcs/0040-poly-edit-delete-edge.md)
+  exposes separate actions for opening a hole and merging faces.
+
 - [Per-brush Accumulate](rfcs/0039-brush-accumulate.md) adds a buildup
   switch for Draw, Inflate, Clay, and Clay Strips.
 
