@@ -4,6 +4,7 @@
 
 pub mod decimate;
 pub mod print3d;
+pub mod quad_skin;
 pub mod remesh;
 pub mod skin;
 pub mod transfer;
@@ -15,6 +16,7 @@ pub use print3d::{
     DrainHole, HollowOptions, PrintDimensions, SplitAxis, SplitOptions, WallThicknessReport, analyze_wall_thickness,
     calculate_print_dimensions, check_watertight, hollow_mesh, split_with_keys,
 };
+pub use quad_skin::{QuadSkinError, quad_skin_armature};
 pub use remesh::{
     DEFAULT_BOOLEAN_BLEND, MAX_RESOLUTION, RemeshEngine, RemeshError, RemeshOptions, Shell, ShellSide,
     VdbRemeshOptions, boolean_difference, boolean_intersection, boolean_mesh, boolean_union, regular_grid_remesh,

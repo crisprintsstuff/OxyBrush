@@ -78,6 +78,19 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     mirror = Some(on);
                 }
                 ui.end_row();
+                ui.label("Output");
+                let output = if e.quad_skin { "Quad base mesh" } else { "Voxel skin" };
+                egui::ComboBox::from_id_salt("sphere_output").selected_text(output).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut e.quad_skin, false, "Voxel skin");
+                    ui.selectable_value(&mut e.quad_skin, true, "Quad base mesh")
+                        .on_hover_text("Experimental. Builds edge loops around a chain or one three-way junction.");
+                });
+                ui.end_row();
+                if e.quad_skin {
+                    ui.label("");
+                    ui.weak("Preview shows the spheres");
+                    ui.end_row();
+                } else {
                 ui.label("Resolution").on_hover_text("Voxels along the longest side: more for finer detail. Thin parts are always made finer, a few voxels across their thinnest sphere, so they come out round (the quick view while editing is coarser)");
                 ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.resolution, 32..=oxy_topo::MAX_RESOLUTION)));
                 ui.end_row();
@@ -88,6 +101,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.checkbox(&mut e.show_skin, "Show the mesh")
                     .on_hover_text("Show a quick, coarser version of the mesh instead of the spheres");
                 ui.end_row();
+                }
             });
             ui.add_space(2.0);
             ui.label(egui::RichText::new(HINT).small().weak());

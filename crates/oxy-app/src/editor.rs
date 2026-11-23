@@ -4,6 +4,7 @@
 pub use crate::document::Document;
 
 use crate::keymap::{self, CommandEffect, CommandId, NavAction, NavButton};
+use crate::oxyspheres::SphereEdit;
 use crate::pose::{self, GizmoMode, Handle};
 use glam::{Mat3, Vec2, Vec3};
 use oxy_doc::{Piece, Scene, autosave, format};
@@ -1044,7 +1045,11 @@ pub enum JobResult {
     Alpha(Alpha),
     /// A stroke re-sculpted with new settings (RFC 0025). `mesh` is the
     /// piece afterwards; the stroke `id` takes `change` as its stored change.
-    Resculpt { id: u64, mesh: Mesh, change: StoredChange },
+    Resculpt {
+        id: u64,
+        mesh: Mesh,
+        change: StoredChange,
+    },
     /// A WebAssembly plugin command finished (RFC 0011).
     Plugin(Box<crate::wasm_plugins::PluginJob>),
     /// A subdivision level change: the new active-level mesh, the stack,
@@ -1055,13 +1060,21 @@ pub enum JobResult {
         previous: Option<oxy_mesh::multires::Multires>,
     },
     /// A lightened piece shown at its own level again (no undo step).
-    Relevel { mesh: Mesh, multires: oxy_mesh::multires::Multires },
+    Relevel {
+        mesh: Mesh,
+        multires: oxy_mesh::multires::Multires,
+    },
     /// Files read for Import, applied on the UI thread as new pieces.
     Imported(ImportRead),
     /// An OxySpheres mesh (RFC 0034), to add as a new piece, with the
     /// OxySpheres piece `spheres` that made it, in place of the piece
     /// `replace` (or added).
-    Skin { spheres: Box<Piece>, replace: Option<u64>, mesh: Mesh },
+    Skin {
+        spheres: Box<Piece>,
+        replace: Option<u64>,
+        mesh: Mesh,
+    },
+    QuadSkinRetry(Box<SphereEdit>, String),
 }
 
 /// A change to the active piece's subdivision levels.
@@ -8189,6 +8202,13 @@ impl Editor {
                 self.active_document = prev_active;
                 st
             }
+            Ok(JobResult::QuadSkinRetry(edit, error)) => {
+                let prev_active = self.active_document;
+                self.active_document = doc_idx;
+                self.retry_quad_skin(*edit);
+                self.active_document = prev_active;
+                format!("{error}. Adjust the spheres or choose Voxel skin.")
+            }
             Ok(JobResult::Primitive(name, mesh)) => {
                 let doc = &mut self.documents[doc_idx];
                 let name = doc.scene.unique_name(&name);
@@ -11535,6 +11555,64 @@ mod tests {
         assert_eq!(e.scene.pieces.len(), 5);
         assert_ne!(e.scene.active().id, original_id);
         assert_eq!(e.scene.get(original_id).unwrap().mesh.color[0], Vec3::ZERO);
+    }
+
+    #[test]
+    fn oxyspheres_quad_mesh_round_trips_with_its_polygon_boundaries() {
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        edit.armature = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.3, None);
+        edit.armature.add_child(0, Vec3::Y * 2.0, 0.2);
+        e.accept_spheres();
+        wait_job(&mut e);
+
+        let output = e.scene.active().id;
+        let positions = e.scene.active().mesh.positions.clone();
+        assert_eq!(e.scene.active().mesh.known_polygons().unwrap().0.len(), 16);
+        e.undo();
+        assert!(e.scene.get(output).is_none());
+        e.redo();
+        assert_eq!(e.scene.active().mesh.positions, positions);
+
+        let bytes = oxy_doc::format::encode(&e.scene.to_data());
+        let data = oxy_doc::format::decode(&bytes).unwrap();
+        let scene = Scene::from_data(data).unwrap();
+        let mesh = &scene.active().mesh;
+        assert_eq!(mesh.known_polygons().unwrap().0.len(), 16);
+        let cage = oxy_mesh::polyedit::cage_from_mesh(mesh);
+        assert_eq!(cage.quad_count(), 16);
+        let mut obj = Vec::new();
+        oxy_io::write_obj(mesh, &mut obj).unwrap();
+        let obj = std::str::from_utf8(&obj).unwrap();
+        let faces: Vec<_> = obj.lines().filter(|l| l.starts_with("f ")).collect();
+        assert_eq!(faces.len(), 16);
+        assert!(faces.iter().all(|l| l.split_whitespace().count() == 5));
+
+        e.replace_document(scene, None);
+        e.frame_active();
+        e.start_poly_edit();
+        let [x, y, w, h] = e.canvas;
+        assert!(matches!(
+            e.poly_element_at(Vec2::new(x + w * 0.5, y + h * 0.5)),
+            Some(crate::polyedit::Element::Face(..))
+        ));
+    }
+
+    #[test]
+    fn invalid_quad_mesh_keeps_the_armature_open_and_preserves_the_scene() {
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        let armature = edit.armature.clone();
+        let pieces = e.scene.pieces.len();
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), pieces);
+        assert_eq!(e.spheres.as_ref().unwrap().armature, armature);
+        assert!(e.status.contains("choose Voxel skin"));
     }
 
     #[test]

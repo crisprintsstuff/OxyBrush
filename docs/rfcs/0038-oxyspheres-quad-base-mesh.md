@@ -72,6 +72,18 @@ first prototype.
 - Before exposing the mode in the editor, check one undo/redo cycle,
   project save/reopen, Poly Edit picks, and quad OBJ export.
 
+## Prototype results
+
+Run `cargo run -p oxy-topo --example quad_skin_fixtures -- OUTPUT_DIRECTORY`
+to export the base cages and level-two meshes as OBJ. The bent taper has
+24 quads. Each fork has 40 quads and 18 triangles, with triangles confined
+to the junction. After two levels, the taper has 384 quads and each fork
+has 856. The test fixtures pass orientation, mirror connectivity, and
+subdivision checks. An asymmetric, nonplanar fork with a bent side branch
+also passes at two levels. Surface validation rejects intersections between
+triangles that do not share a vertex. Inspect the sample junction profiles
+before expanding the supported armature types.
+
 ## Alternatives
 
 Retopologizing the voxel result could handle overlapping limbs more
