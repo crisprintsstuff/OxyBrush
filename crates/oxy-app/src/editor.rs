@@ -3409,9 +3409,9 @@ impl Editor {
     /// square. It is added to the alpha list and selected, so a stamp of it
     /// reproduces the shape seen.
     ///
-    /// A coarse pass finds the model here; the full image (up to 4096², 16.7
-    /// million rays) is cast on a worker thread over copies of the meshes, so
-    /// the interface stays responsive.
+    /// A coarse pass finds the model here. The worker rasterizes the full
+    /// image over copies of the meshes and refines its silhouette with
+    /// subpixel rays.
     pub fn capture_alpha(&mut self) {
         if self.job.is_some() {
             self.status = "Another operation is still running".into();
@@ -3445,13 +3445,8 @@ impl Editor {
         self.captures += 1;
         let name = format!("Capture {}", self.captures);
         self.start_job(format!("Capture alpha ({res}×{res})"), Vec::new(), move || {
-            let depth = capture_depth(&meshes, &camera, size, corner, tight, res);
-            let (near, far) = depth.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), &z| (lo.min(z), hi.max(z)));
-            if near > far {
-                return Err("Nothing to capture: no model in the middle of the view".into());
-            }
-            let range = (far - near).max(1e-6);
-            let data: Vec<f32> = depth.iter().map(|z| z.map_or(0.0, |z| 1.0 - 0.9 * (z - near) / range)).collect();
+            let data = capture_alpha_values(&meshes, &camera, size, corner, tight, res)
+                .ok_or("Nothing to capture: no model in the middle of the view")?;
             Ok(JobResult::Alpha(Alpha { name, size: res, data }))
         });
     }
@@ -9489,7 +9484,8 @@ fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, sid
                         if wa < 0.0 || wb < 0.0 || wc < 0.0 {
                             continue;
                         }
-                        let z = wa * za + wb * zb + wc * zc;
+                        // Preserve a constant depth exactly on flat faces.
+                        let z = za + wb * (zb - za) + wc * (zc - za);
                         let z = if ortho { z } else { 1.0 / z };
                         let d = &mut depth[((y - y0) * res + x) as usize];
                         if z < *d {
@@ -9502,6 +9498,65 @@ fn capture_depth(meshes: &[Mesh], camera: &Camera, size: Vec2, corner: Vec2, sid
         })
         .collect();
     bands.into_iter().flatten().map(|z| z.is_finite().then_some(z)).collect()
+}
+
+/// Resolve depth to height, supersampling only the projected silhouette.
+/// Four subpixel rays at a coverage transition soften the edge while keeping
+/// interior detail at full resolution and avoiding a larger depth buffer.
+fn capture_alpha_values(
+    meshes: &[Mesh],
+    camera: &Camera,
+    size: Vec2,
+    corner: Vec2,
+    side: f32,
+    res: u32,
+) -> Option<Vec<f32>> {
+    use rayon::prelude::*;
+
+    let depth = capture_depth(meshes, camera, size, corner, side, res);
+    let (near, far) = depth.iter().flatten().fold((f32::MAX, f32::MIN), |(lo, hi), &z| (lo.min(z), hi.max(z)));
+    if near > far {
+        return None;
+    }
+    let range = (far - near).max(1e-6);
+    let height = |z: f32| 1.0 - 0.9 * ((z - near) / range).clamp(0.0, 1.0);
+    let pixel = side / res as f32;
+    let row = res as usize;
+    let eye = camera.eye();
+    let forward = camera.forward();
+    Some(
+        depth
+            .par_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                let x = index % row;
+                let y = index / row;
+                let covered = value.is_some();
+                let edge = (x > 0 && depth[index - 1].is_some() != covered)
+                    || (x + 1 < row && depth[index + 1].is_some() != covered)
+                    || (y > 0 && depth[index - row].is_some() != covered)
+                    || (y + 1 < row && depth[index + row].is_some() != covered);
+                if !edge {
+                    return value.map_or(0.0, height);
+                }
+
+                let origin = corner + Vec2::new(x as f32, y as f32) * pixel;
+                [(0.25, 0.25), (0.25, 0.75), (0.75, 0.25), (0.75, 0.75)]
+                    .into_iter()
+                    .map(|(dx, dy)| {
+                        let (o, d) = camera.ray(origin + Vec2::new(dx, dy) * pixel, size);
+                        meshes
+                            .iter()
+                            .filter_map(|mesh| mesh.raycast(o, d))
+                            .map(|hit| (hit.point - eye).dot(forward))
+                            .min_by(f32::total_cmp)
+                            .map_or(0.0, height)
+                    })
+                    .sum::<f32>()
+                    * 0.25
+            })
+            .collect(),
+    )
 }
 
 /// Imports whose files add up to this many bytes or more are read off the
@@ -10479,6 +10534,24 @@ mod tests {
             assert!(covered > 500, "ortho {ortho}: the model is in view");
             assert!(agree * 100 >= covered * 97, "ortho {ortho}: {agree} of {covered} pixels agree");
         }
+    }
+
+    #[test]
+    fn captured_alpha_antialiases_silhouettes_without_blurring_the_interior() {
+        let camera = Camera { orthographic: true, ..Default::default() };
+        let mesh = Mesh::new(
+            vec![
+                Vec3::new(-0.73, -0.61, 0.0),
+                Vec3::new(0.66, -0.61, 0.0),
+                Vec3::new(0.66, 0.75, 0.0),
+                Vec3::new(-0.73, 0.75, 0.0),
+            ],
+            vec![[0, 1, 2], [0, 2, 3]],
+        );
+        let data = capture_alpha_values(&[mesh], &camera, Vec2::splat(64.0), Vec2::ZERO, 64.0, 64).unwrap();
+        assert_eq!(data[0], 0.0);
+        assert!(data[32 * 64 + 32] > 0.9);
+        assert!(data.iter().any(|&v| v > 0.1 && v < 0.9), "the silhouette has partial coverage");
     }
 
     #[test]

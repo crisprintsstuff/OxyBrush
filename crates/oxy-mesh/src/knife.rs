@@ -11,7 +11,7 @@
 //! [`knife_plan`] works the path out without changing anything (for the
 //! preview); [`knife_cut`] applies a plan.
 
-use crate::polyedit::face_normal;
+use crate::polyedit::{face_normal, mirror_point};
 use crate::retopo::{Cage, Face, corners, edge_key};
 use glam::{DVec2, Vec3};
 use std::collections::HashMap;
@@ -548,6 +548,72 @@ fn cut_inner_loop(c: &mut Cage, f: usize, points: &[Vec3]) -> Result<usize, &'st
     Ok(spokes.len())
 }
 
+/// Apply the same surface path to the reflected topology. Cut both open
+/// paths together so a point shared at the mirror plane splits its edge once.
+pub fn knife_cut_mirrored(c: &mut Cage, plan: &KnifePlan, cx: f32, tol: f32) -> Result<usize, &'static str> {
+    let Some(mirrored) = mirror_plan(c, plan, cx, tol) else { return knife_cut(c, plan) };
+    let path = plan.path(c);
+    let other = mirrored.path(c);
+    let same = |a: &Vec3, b: &Vec3| a.distance_squared(*b) <= tol * tol;
+    if path.iter().zip(&other).all(|(a, b)| same(a, b)) || path.iter().zip(other.iter().rev()).all(|(a, b)| same(a, b))
+    {
+        return knife_cut(c, plan);
+    }
+
+    let mut trial = c.clone();
+    let result = if let Some((face, _)) = inner_loop(plan) {
+        // Inner loops use a different cut routine. The matched face keeps
+        // its index after cutting the original, provided they are distinct.
+        if inner_loop(&mirrored).is_some_and(|(other, _)| other != face) {
+            knife_cut(&mut trial, plan).and_then(|n| knife_cut(&mut trial, &mirrored).map(|m| n + m))
+        } else {
+            return knife_cut(c, plan);
+        }
+    } else {
+        let mut both = plan.clone();
+        both.nodes.extend(mirrored.nodes);
+        knife_cut(&mut trial, &both)
+    };
+    match result {
+        Ok(made) => {
+            *c = trial;
+            Ok(made)
+        }
+        Err(_) => knife_cut(c, plan),
+    }
+}
+
+fn mirror_plan(c: &Cage, plan: &KnifePlan, cx: f32, tol: f32) -> Option<KnifePlan> {
+    let reflect = |p: Vec3| Vec3::new(2.0 * cx - p.x, p.y, p.z);
+    let mut vertices = HashMap::new();
+    let mut vertex = |v| *vertices.entry(v).or_insert_with(|| mirror_point(c, v, cx, tol));
+    let mut faces = HashMap::new();
+    let mut nodes = Vec::with_capacity(plan.nodes.len());
+    for &(node, crossed) in &plan.nodes {
+        let faces_to_map = [crossed, if let Node::Inside(f, _) = node { Some(f) } else { None }];
+        for f in faces_to_map.into_iter().flatten() {
+            if let std::collections::hash_map::Entry::Vacant(entry) = faces.entry(f) {
+                let mut keys = corners(&c.faces[f]).iter().map(|&v| vertex(v)).collect::<Option<Vec<_>>>()?;
+                keys.sort_unstable();
+                let other = c.faces.iter().position(|candidate| {
+                    candidate.len() == keys.len() && corners(candidate).iter().all(|v| keys.binary_search(v).is_ok())
+                })?;
+                entry.insert(other);
+            }
+        }
+        let node = match node {
+            Node::Point(v) => Node::Point(vertex(v)?),
+            Node::Edge([a, b], t) => {
+                let (a, b) = (vertex(a)?, vertex(b)?);
+                Node::Edge(edge_key(a, b), if a < b { t } else { 1.0 - t })
+            }
+            Node::Inside(f, p) => Node::Inside(faces[&f], reflect(p)),
+        };
+        nodes.push((node, crossed.map(|f| faces[&f])));
+    }
+    Some(KnifePlan { nodes, extended: plan.extended })
+}
+
 /// Cut the cage along `plan`. RETURNS: how many faces the cut added.
 pub fn knife_cut(c: &mut Cage, plan: &KnifePlan) -> Result<usize, &'static str> {
     // A closed loop clicked inside one face, touching none of its edges,
@@ -679,6 +745,20 @@ mod tests {
             }
         }
         c
+    }
+
+    #[test]
+    fn mirror_open_path_splits_matching_faces_and_keeps_the_same_cut_once() {
+        for ([a, b], added) in [
+            ([Vec3::new(0.3, 0.2, 0.0), Vec3::new(0.3, 1.8, 0.0)], 4),
+            ([Vec3::new(0.2, 0.4, 0.0), Vec3::new(2.8, 0.4, 0.0)], 3),
+        ] {
+            let mut cage = grid();
+            let clicks = [a, b].map(|pos| KnifePoint { snap: KnifeSnap::Face(face_at(&cage, pos)), pos });
+            let plan = knife_plan(&cage, &clicks, view()).unwrap();
+            assert_eq!(knife_cut_mirrored(&mut cage, &plan, 1.5, 1e-4).unwrap(), added);
+            assert_eq!(cage.faces.len(), 9 + added);
+        }
     }
 
     fn view() -> KnifeView {

@@ -4,6 +4,9 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Poly Edit Knife** mirrors cuts onto matching faces when Mirror across X is on (#468).
+- **Capture from view** softens the silhouette of captured alphas with subpixel sampling (#466).
+
 - Added a per-brush **Accumulate** switch for Draw, Inflate, Clay, and Clay Strips.
 
 ### Added

@@ -45,6 +45,9 @@ wanted. A knife draws the edge directly.
   and each piece between two loop points and their corners is a face, a
   triangle where both reach the same corner. A square loop in a quad
   gives an inset. A loop that folds back on itself is refused.
+- **Mirror across X** reflects the planned path onto matching vertices,
+  edges, and faces. A cut that reflects onto itself is applied once.
+  With no matching topology, the original cut can still be made.
 - **Controls.** Enter, **Cut**, or a click on the last point again (for
   a pen without a keyboard) applies, Backspace or **Undo point**
   takes the last point back, Esc clears the path and a second Esc turns
