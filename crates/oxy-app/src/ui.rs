@@ -852,6 +852,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 });
                 tips::menu(ui, "Material", "The viewport material (matcap), including ones you loaded", |ui| {
                     material_target(ui, ed);
+                    lit_material_controls(ui, ed);
                     for m in MatcapPreset::ALL {
                         let resp = tips::hover(ui.radio(ed.is_chosen_matcap(m), m.label()), tips::matcap_tip(m));
                         if resp.hovered() {
@@ -3447,7 +3448,13 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         }
         let size = CURRENT_TILE;
         let brush_tex = widgets::brush_texture(&ctx, ed.brush_kind);
-        let r = widgets::tile(ui, Some(&brush_tex), ed.brush_kind.label(), plain::BRUSH_TILE, size);
+        let r = widgets::tile(
+            ui,
+            widgets::TilePreview::Texture(&brush_tex),
+            ed.brush_kind.label(),
+            plain::BRUSH_TILE,
+            size,
+        );
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Brushes").strong());
             egui::Grid::new("brush_picker").spacing([6.0, 6.0]).show(ui, |ui| {
@@ -3467,7 +3474,13 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
         let alpha = ed.alpha.and_then(|i| ed.alphas.get(i)).cloned();
         let alpha_tex = alpha.as_ref().map(|a| alpha_texture(&ctx, a));
         let caption = alpha.as_ref().map_or("No alpha".to_string(), |a| a.name.clone());
-        let r = widgets::tile(ui, alpha_tex.as_ref(), &caption, plain::ALPHA_TILE, size);
+        let r = widgets::tile(
+            ui,
+            alpha_tex.as_ref().map_or(widgets::TilePreview::Empty, widgets::TilePreview::Texture),
+            &caption,
+            plain::ALPHA_TILE,
+            size,
+        );
         egui::Popup::from_toggle_button_response(&r).show(|ui| {
             ui.label(RichText::new("Alphas").strong());
             let height = (ui.ctx().content_rect().height() * 0.5).max(100.0);
@@ -3496,18 +3509,27 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
             capture_controls(ui, ed);
         });
 
-        let mat_tex = match ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i)) {
-            Some(m) => custom_matcap_texture(&ctx, m),
-            None => widgets::material_texture(&ctx, ed.matcap),
+        let custom_lit = ed.view.lighting.enabled && !ed.view.lighting.light_matcap;
+        let mat_tex;
+        let (preview, label) = if custom_lit {
+            let [r, g, b] = ed.view.lighting.surface;
+            let color = egui::Rgba::from_rgb(r, g, b).into();
+            (widgets::TilePreview::Color(color), "Custom".into())
+        } else {
+            mat_tex = match ed.custom_matcap.and_then(|i| ed.custom_matcaps.get(i)) {
+                Some(m) => custom_matcap_texture(&ctx, m),
+                None => widgets::material_texture(&ctx, ed.matcap),
+            };
+            (widgets::TilePreview::Texture(&mat_tex), ed.material_label())
         };
-        let label = ed.material_label();
-        let r = widgets::tile(ui, Some(&mat_tex), &label, plain::MATERIAL_TILE, size);
+        let r = widgets::tile(ui, preview, &label, plain::MATERIAL_TILE, size);
         egui::Popup::from_toggle_button_response(&r)
             // Stays open for the Whole scene / piece choice; click outside to close.
             .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
             .show(|ui| {
                 ui.label(RichText::new("Materials").strong());
                 material_target(ui, ed);
+                lit_material_controls(ui, ed);
                 ui.horizontal(|ui| {
                     for m in MatcapPreset::ALL {
                         let t = widgets::material_texture(&ctx, m);
@@ -3551,6 +3573,34 @@ fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
                 }
             });
     });
+}
+
+/// Scene-wide surface settings used by viewport lighting, regardless of the
+/// target chosen for assigning individual matcaps.
+fn lit_material_controls(ui: &mut Ui, ed: &mut Editor) {
+    let lighting = &mut ed.view.lighting;
+    if !lighting.enabled {
+        return;
+    }
+    ui.horizontal(|ui| {
+        ui.label("Lit surface");
+        ui.selectable_value(&mut lighting.light_matcap, true, "Matcap");
+        ui.selectable_value(&mut lighting.light_matcap, false, "Custom");
+    });
+    egui::Grid::new("lit_material").num_columns(2).show(ui, |ui| {
+        if !lighting.light_matcap {
+            ui.label("Color");
+            ui.color_edit_button_rgb(&mut lighting.surface);
+            ui.end_row();
+        }
+        ui.label("Roughness");
+        ui.add(widgets::Bar(egui::Slider::new(&mut lighting.roughness, 0.05..=1.0)));
+        ui.end_row();
+        ui.label("Specular");
+        ui.add(widgets::Bar(egui::Slider::new(&mut lighting.specular, 0.0..=1.0)));
+        ui.end_row();
+    });
+    ui.separator();
 }
 
 /// Whether the material pickers set the whole scene's material or just the

@@ -185,7 +185,7 @@ commands! {
     InactiveOff => "Inactive pieces: as they are", "", "Show every piece in its true material and colors, active or not.";
     ShowVertexColor => "Show vertex color on / off", "", "Show the model's vertex color (painted, or imported from OBJ, PLY or glTF) over the material, or hide it to judge the form in plain clay. Hiding only changes the view: the colors are kept, saved and exported. Painting shows them again.";
     DynDetail => "Dynamic detail on / off", "", "Sculpting brushes add triangles where they need more detail and remove ones that have become too small, so you can build a shape from a simple sphere without remeshing.";
-    LightViewport => "Light the viewport on / off", "", "Shade the model with lights (and shadows) instead of the material. Set them up in View > Shading > Lights.";
+    LightViewport => "Light the viewport on / off", "", "Shade the model with scene lights and shadows. Choose the lit surface in Materials and set up the lights in View > Shading > Lights.";
     LightsWindow => "Lights…", "", "Open the Lights window: add, move and color lights, and turn on shadows.";
     FloorGrid => "Floor grid on / off", "", "A grid on the floor under the model. It stays at the bottom of the model and its spacing follows the model's size.";
     Wireframe => "Wireframe on / off", "Shift+W", "Overlay polygon edges atop the shaded surface.";

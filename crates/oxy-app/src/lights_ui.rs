@@ -14,7 +14,6 @@ mod tip {
     pub const SIZE: &str =
         "How big the area light is, in model sizes. Bigger lights give softer light and wider soft shadows.";
     pub const AIM_AREA: &str = "Face the area light toward the middle of the scene.";
-    pub const LIGHT_MATCAP: &str = "Keep the matcap as the material and let the lights brighten it where they shine and their shadows darken it. Off: the plain lit surface below.";
     pub const FOLLOW: &str = "Keep this light where it is relative to the view, so the model turns under it as you orbit. Off: it stays put in the scene.";
     pub const INTENSITY: &str = "How bright this light is.";
     pub const COLOR: &str = "Light color.";
@@ -35,10 +34,7 @@ mod tip {
     pub const SKY: &str = "Color of the light from above.";
     pub const GROUND: &str = "Color of the light from below.";
     pub const RIM: &str = "Brighten edges that turn away from you, to separate the model from the background.";
-    pub const SURFACE: &str = "The model's color under the lights (painted color and face groups still show).";
-    pub const ROUGHNESS: &str = "Rough surfaces spread highlights wide; smooth ones keep them small and sharp.";
-    pub const SPECULAR: &str = "How strong highlights are.";
-    pub const RESET: &str = "Put every light and setting back to the defaults.";
+    pub const RESET: &str = "Reset the lights, ambient light, exposure and shadows.";
     pub const MARKERS: &str = "While this window is open, numbered dots show the lights in the viewport: drag one to move its light. A sun's dot sets its direction; a spot's diamond sets where it aims.";
 }
 
@@ -72,9 +68,6 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
 fn controls(ui: &mut Ui, ed: &mut Editor) {
     let l = &mut ed.view.lighting;
     tips::check(ui, &mut l.enabled, "Light the viewport", Cmd::LightViewport);
-    ui.add_enabled_ui(l.enabled, |ui| {
-        tips::hover(ui.checkbox(&mut l.light_matcap, "Light the matcap"), tip::LIGHT_MATCAP);
-    });
     ui.label(RichText::new(tip::MARKERS).weak().small());
     ui.add_space(4.0);
     egui::Grid::new("lights_global").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
@@ -90,17 +83,6 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
         ui.end_row();
         ui.label("Rim light");
         tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.rim, 0.0..=1.0))), tip::RIM);
-        ui.end_row();
-        ui.label("Surface");
-        // The matcap is the surface while it's lit.
-        let matcap = l.light_matcap;
-        ui.add_enabled_ui(!matcap, |ui| tips::hover(color_edit(ui, &mut l.surface), tip::SURFACE));
-        ui.end_row();
-        ui.label("Roughness");
-        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.roughness, 0.05..=1.0))), tip::ROUGHNESS);
-        ui.end_row();
-        ui.label("Specular");
-        tips::hover(ui.add(crate::widgets::Bar(egui::Slider::new(&mut l.specular, 0.0..=1.0))), tip::SPECULAR);
         ui.end_row();
         ui.label("Shadows");
         ui.horizontal(|ui| {
@@ -240,7 +222,14 @@ fn controls(ui: &mut Ui, ed: &mut Editor) {
     }
     ui.add_space(6.0);
     if tips::hover(ui.button("Reset lights"), tip::RESET).clicked() {
-        *l = Lighting { enabled: l.enabled, ..Lighting::default() };
+        *l = Lighting {
+            enabled: l.enabled,
+            light_matcap: l.light_matcap,
+            surface: l.surface,
+            roughness: l.roughness,
+            specular: l.specular,
+            ..Lighting::default()
+        };
     }
 }
 

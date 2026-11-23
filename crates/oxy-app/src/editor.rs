@@ -5701,6 +5701,9 @@ impl Editor {
     /// A picker chose a built-in matcap: for the scene, or for the active
     /// piece when the picker is set to it.
     pub fn choose_matcap(&mut self, m: MatcapPreset) {
+        if self.view.lighting.enabled {
+            self.view.lighting.light_matcap = true;
+        }
         if self.material_for_piece {
             self.set_piece_material(Some(Self::material_key_preset(m)));
         } else {
@@ -5711,10 +5714,12 @@ impl Editor {
 
     /// A picker chose loaded matcap `i` (see [`Self::choose_matcap`]).
     pub fn choose_custom_matcap(&mut self, i: usize) {
+        let Some(m) = self.custom_matcaps.get(i) else { return };
+        if self.view.lighting.enabled {
+            self.view.lighting.light_matcap = true;
+        }
         if self.material_for_piece {
-            if let Some(m) = self.custom_matcaps.get(i) {
-                self.set_piece_material(Some(Self::material_key_custom(&m.name.clone())));
-            }
+            self.set_piece_material(Some(Self::material_key_custom(&m.name)));
         } else {
             self.custom_matcap = Some(i);
         }
@@ -8202,7 +8207,7 @@ impl Editor {
             Ok(JobResult::QuadSkinRetry(edit, error)) => {
                 let prev_active = self.active_document;
                 self.active_document = doc_idx;
-                self.retry_quad_skin(*edit);
+                self.retry_quad_skin(*edit, error.clone());
                 self.active_document = prev_active;
                 format!("{error}. Adjust the spheres or choose Voxel skin.")
             }
@@ -11676,6 +11681,44 @@ mod tests {
     }
 
     #[test]
+    fn rebuilding_an_unedited_quad_skin_updates_the_same_piece() {
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        edit.armature = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.3, None);
+        edit.armature.add_child(0, Vec3::Y * 2.0, 0.2);
+        e.accept_spheres();
+        wait_job(&mut e);
+        let id = e.scene.active().id;
+        let positions = e.scene.active().mesh.positions.clone();
+        let piece_count = e.scene.pieces.len();
+        let source = e.scene.pieces.iter().position(Piece::is_spheres).unwrap();
+        e.scene.set_active(source);
+        e.edit_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        edit.armature.set_radius(1, 0.4);
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), piece_count);
+        assert_eq!(e.scene.active().id, id);
+        assert_ne!(e.scene.active().mesh.positions, positions);
+        e.undo();
+        assert_eq!(e.scene.get(id).unwrap().mesh.positions, positions);
+    }
+
+    #[test]
+    fn choosing_a_matcap_replaces_the_custom_lit_surface() {
+        let mut e = editor();
+        e.view.lighting.enabled = true;
+        e.view.lighting.light_matcap = false;
+        e.choose_matcap(MatcapPreset::Jade);
+        assert!(e.view.lighting.light_matcap);
+        assert_eq!(e.matcap, MatcapPreset::Jade);
+    }
+
+    #[test]
     fn invalid_quad_mesh_keeps_the_armature_open_and_preserves_the_scene() {
         let mut e = editor();
         e.start_spheres();
@@ -11688,6 +11731,7 @@ mod tests {
         assert_eq!(e.scene.pieces.len(), pieces);
         assert_eq!(e.spheres.as_ref().unwrap().armature, armature);
         assert!(e.status.contains("choose Voxel skin"));
+        assert!(e.spheres.as_ref().unwrap().build_error.as_deref().unwrap().contains("distinct joints"));
     }
 
     #[test]

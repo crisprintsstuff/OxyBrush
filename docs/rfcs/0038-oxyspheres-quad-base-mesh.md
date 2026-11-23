@@ -56,6 +56,21 @@ ring density are follow-up decisions. Intersecting limbs, coincident joints,
 and links too short to fit a junction are explicit rejection cases for the
 first prototype.
 
+### Follow-up controls (proposed)
+
+Expose a **Subdivision** level on the quad output so artists can choose
+a coarse cage or a smoother initial surface. Use the same level for every
+link and junction in an armature, with a face budget to bound the cost.
+This scales detail relative to the base cage, so a longer chain still has
+more total faces than a short one.
+
+Prototype a junction **Blend** control that redistributes the transitions
+where limbs meet. Keep the endpoints and limb radii stable. Compare acute,
+wide, and mirrored forks at both ends of the range and validate for
+intersections before replacing the generated piece. Compare mirrored
+shading with the same lighting and hard-edge settings on both sides,
+including before and after subdivision.
+
 ## Acceptance criteria
 
 - For a straight taper, a bent chain, a mirrored fork, and a wide and an

@@ -81,6 +81,8 @@ pub struct SphereEdit {
     pub show_skin: bool,
     /// Build the polygon cage when Make mesh is pressed.
     pub quad_skin: bool,
+    /// Last rejected quad build, shown next to Make mesh.
+    pub build_error: Option<String>,
     /// Editing this OxySpheres piece: its id and its hidden faces before
     /// they were all hidden for the edit. None: new spheres.
     pub replace: Option<(u64, Vec<bool>)>,
@@ -109,6 +111,7 @@ impl SphereEdit {
             blend,
             show_skin: true,
             quad_skin: false,
+            build_error: None,
             replace,
             preview: Mesh::new(Vec::new(), Vec::new()),
             built: None,
@@ -283,7 +286,11 @@ impl Editor {
     /// mesh's way), to make another mesh any time.
     pub fn accept_spheres(&mut self) {
         if self.documents.iter().any(|d| d.job.is_some()) {
-            self.status = "Wait for the running operation to finish".into();
+            let message = "Wait for the running operation to finish";
+            self.status = message.into();
+            if let Some(edit) = &mut self.spheres {
+                edit.build_error = Some(message.into());
+            }
             return;
         }
         let Some(edit) = self.spheres.take() else { return };
@@ -317,7 +324,8 @@ impl Editor {
     }
 
     /// Reopen the unsaved edit when a quad mesh cannot be built.
-    pub(crate) fn retry_quad_skin(&mut self, mut edit: SphereEdit) {
+    pub(crate) fn retry_quad_skin(&mut self, mut edit: SphereEdit, error: String) {
+        edit.build_error = Some(format!("{error}. Adjust the spheres or choose Voxel skin."));
         edit.replace = edit.replace.and_then(|(id, _)| {
             let piece = self.scene.get_mut(id).filter(|p| p.is_spheres())?;
             let before = piece.mesh.hidden().to_vec();
