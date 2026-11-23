@@ -4,14 +4,20 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-- **Accumulate defaults to off** for Draw, Clay, and Inflate. The Soft clay buildup preset still starts with Accumulate on.
+## [4.0.0-beta.24.4] - 2026-11-23
 
-- **Poly Edit edges** now have separate **Delete** and **Dissolve** actions (#472). Delete removes the faces touching an edge. Dissolve joins the adjacent faces.
+### Added
+
+- **Delete and Dissolve in Poly Edit.** **Delete** removes the faces touching the selected edges, opening a hole or trimming an existing border. **Dissolve** removes the edges and merges the adjacent faces. [#473](https://github.com/crisprintsstuff/OxyBrush/pull/473)
+
+### Changed
+
+- **Accumulate defaults.** Draw, Clay, and Inflate start with Accumulate off. The Soft clay buildup preset and Clay Strips start with it on. Saved brush settings, presets, and recorded strokes keep their behavior. [#474](https://github.com/crisprintsstuff/OxyBrush/pull/474)
 
 ### Fixed
 
-- **Poly Edit Knife** mirrors cuts onto matching faces when Mirror across X is on (#468).
-- **Capture from view** softens the silhouette of captured alphas with subpixel sampling (#466).
+- **Mirrored Knife cuts.** With Mirror across X enabled, the Knife also cuts matching faces on the other side. Mirrored cuts share a single undo step. [#471](https://github.com/crisprintsstuff/OxyBrush/pull/471)
+- **Smoother captured alphas.** Capture from view samples the silhouette at subpixel positions to reduce jagged outlines while preserving the interior depth detail. [#471](https://github.com/crisprintsstuff/OxyBrush/pull/471)
 
 ## [4.0.0-beta.24.3] - 2026-11-23
 
@@ -1145,7 +1151,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.4...HEAD
+[4.0.0-beta.24.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...v4.0.0-beta.24.4
 [4.0.0-beta.24.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...v4.0.0-beta.24.3
 [4.0.0-beta.24.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...v4.0.0-beta.24.2
 [4.0.0-beta.24]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...v4.0.0-beta.24

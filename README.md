@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.24.3](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.3) runs on Windows, Linux and macOS. Draw, Inflate, Clay and Clay Strips now have an Accumulate switch, and OxySpheres can make an experimental quad base mesh.
+> **Beta:** [v4.0.0-beta.24.4](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.4) runs on Windows, Linux and macOS. This beta updates Accumulate defaults, separates Delete and Dissolve in Poly Edit, fixes mirrored Knife cuts, and smooths captured alpha outlines.
 
 **Highlights**
 
