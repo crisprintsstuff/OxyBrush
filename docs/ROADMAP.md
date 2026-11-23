@@ -98,6 +98,15 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 | **Local AI agents** | ✅ Opt-in MCP server on `127.0.0.1` (and `oxybrush-cli mcp` over stdio) so an agent on this machine can sculpt alongside you ([RFC 0003](rfcs/0003-mcp.md)). Off by default; edits are ordinary undo steps labeled `Agent:`. ⏳ More tools (gizmo, alphas as brushes, subdivision levels) as those settle | — |
 | **Accessibility audit** | Review with disabled artists; fix findings (RFC-0001 §5) | 2 wk + fixes |
 
+## Proposed next work
+
+- [Poly Edit box and lasso selection](rfcs/0035-poly-edit-area-selection.md)
+  for visible faces, edges, and points.
+- [Rebuild one lower subdivision level](rfcs/0036-rebuild-lower-subdivision-level.md)
+  for compatible quad meshes with a single dense level.
+- [Geometry-only 3MF export](rfcs/0037-3mf-export.md) with physical
+  units and separate pieces.
+
 ## Phase 5 — Hardening & release polish 🚧
 
 - **Topology Diagnostics & Cleaning**: 2-manifold diagnostics in the UI (`Mesh > Topology diagnostics…`), edge boundary inspection, degenerate triangle cleanup (`clean_degenerate_triangles`) with full undo/redo history.
