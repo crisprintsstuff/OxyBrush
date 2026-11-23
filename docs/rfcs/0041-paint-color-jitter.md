@@ -15,17 +15,57 @@ Per-dab variation gives texture within a single stroke. See [issue #476](https:/
 
 ## Design
 
-Put Color Jitter in the Paint brush settings. Store three zero-default
-amounts and a sampling mode with the paint brush preset. Apply jitter to
-the selected paint color before blending it into vertices. Wrap hue and
-clamp saturation and value. When all amounts are zero, use the existing
-paint path.
+Put **Color Jitter** in the Paint brush settings. Hue, Saturation, and
+Value each default to zero. Hue sets the maximum shift in either direction
+in degrees (0–180°). Saturation and Value set maximum shifts in percentage
+points (0–100). Sample each offset independently and uniformly within its
+range. **Per Stroke** is the default sampling mode. **Per Dab** draws a new
+sample for each emitted dab, regardless of pointer event frequency.
 
-Derive the sample from a stroke seed and, in per-dab mode, the dab index.
-Reuse the same sample across symmetry copies of a dab. Keep the seed with
-editable strokes so replay uses the same sample sequence for the same
-stroke inputs. Review preset and editable-stroke serialization before
-adding the settings, and preserve existing preset defaults on load.
+Convert the selected sRGB paint color to HSV before applying the offsets.
+Wrap hue and clamp saturation and value. Use zero hue for an achromatic
+input, so hue jitter alone leaves grays neutral and saturation jitter can
+tint them. Value jitter can lift black or darken white. Convert the sampled
+color back to sRGB before the existing vertex blend. Zero amounts and
+the paint eraser use the existing paths.
+
+Give every new stroke a fresh seed. Derive color samples from that seed
+and, in Per Dab mode, the index of the emitted dab. Use a separate random
+sequence from spray and alpha rotation. Compute the sampled color before
+the symmetry loop, so all copies of a dab share the same color. Reopening
+or editing a stroke keeps its seed. Changes to spacing may change where
+samples land because they change where dabs are emitted. A Reseed control
+can be reconsidered after artist feedback.
+
+### Storage and replay
+
+Persist the amounts and sampling mode with the Paint brush preset. Record
+the settings and seed in the editable-stroke recipe so a stroke can be
+replayed on its own. The current recipe stores the base sRGB paint color.
+Extend its versioned encoding and decode older recipes with the amounts
+set to zero. Keep existing project sections and existing paint values.
+
+### Sampling experiment
+
+A headless model blended 28 dabs over white using a smoothstep radial
+falloff and strength 0.6. It used the same offsets at both spacings, a
+base sRGB color of (0.75, 0.22, 0.18), and maximum offsets of 25° hue
+and 18 percentage points each for saturation and value. Each offset was
+sampled with Python's `Random(0xC014 + 3 * dab + channel).uniform(-1, 1)`
+for this experiment only.
+
+| Distance between dab centers | Per Stroke | Per Dab |
+| --- | ---: | ---: |
+| 0.2 × brush radius | 0.0001 | 0.0367 |
+| 1.2 × brush radius | 0.0000 | 0.1317 |
+
+Values are the mean sRGB distance between consecutive interior dab centers
+after blending, excluding the first and last three dabs. Overlap softened
+the per-dab variation by about 72% at tight spacing. On middle gray, hue
+alone left all 28 samples neutral. With saturation jitter enabled, 9 of
+28 samples showed a tint. This supports starting with the two sampling
+modes. The experiment models color blending along a line. Check the feel
+on a sculpt mesh before deciding whether a distance-based mode is needed.
 
 ## Acceptance criteria
 
@@ -34,7 +74,9 @@ adding the settings, and preserve existing preset defaults on load.
 - Per-stroke mode uses one sample throughout the stroke. Per-dab mode
   varies along the stroke with matching colors across symmetry copies.
 - Repeat a stroke with the same seed and inputs and compare vertex colors.
-- Verify undo, redo, preset round-trips, and editable-stroke replay.
+- Verify undo, redo, old and new preset round-trips, and editable-stroke replay.
+- Compare densely spaced and widely spaced strokes on a mesh. Check gray,
+  black, white, and saturated colors with each slider enabled on its own.
 - Measure dab cost with jitter off and with jitter enabled.
 
 ## Alternatives
