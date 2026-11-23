@@ -421,6 +421,26 @@ pub fn delete_faces(c: &mut Cage, faces: &[usize]) {
     remove_unused_points(c);
 }
 
+/// Find every face that uses a selected edge, in cage order.
+pub fn faces_using_edges(c: &Cage, edges: &[[u32; 2]]) -> Vec<usize> {
+    let edges: HashSet<_> = edges.iter().map(|&[a, b]| edge_key(a, b)).collect();
+    if edges.is_empty() {
+        return Vec::new();
+    }
+    c.faces
+        .iter()
+        .enumerate()
+        .filter_map(|(i, f)| {
+            let corners = corners(f);
+            corners
+                .iter()
+                .zip(corners.iter().cycle().skip(1))
+                .any(|(&a, &b)| edges.contains(&edge_key(a, b)))
+                .then_some(i)
+        })
+        .collect()
+}
+
 /// Drop points no face uses, renumbering the rest (in order).
 pub fn remove_unused_points(c: &mut Cage) {
     let used = c.used();

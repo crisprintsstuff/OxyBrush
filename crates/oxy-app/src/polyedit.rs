@@ -90,6 +90,7 @@ pub enum EdgeAction {
     Bevel,
     Spin,
     Crease,
+    Dissolve,
     Delete,
     ExtrudeBorder,
     CloseHole,
@@ -97,12 +98,13 @@ pub enum EdgeAction {
 }
 
 impl EdgeAction {
-    pub const ALL: [EdgeAction; 9] = [
+    pub const ALL: [EdgeAction; 10] = [
         EdgeAction::InsertLoop,
         EdgeAction::Slide,
         EdgeAction::Bevel,
         EdgeAction::Spin,
         EdgeAction::Crease,
+        EdgeAction::Dissolve,
         EdgeAction::Delete,
         EdgeAction::ExtrudeBorder,
         EdgeAction::CloseHole,
@@ -116,6 +118,7 @@ impl EdgeAction {
             EdgeAction::Bevel => "Bevel",
             EdgeAction::Spin => "Spin",
             EdgeAction::Crease => "Crease",
+            EdgeAction::Dissolve => "Dissolve",
             EdgeAction::Delete => "Delete",
             EdgeAction::ExtrudeBorder => "Extrude border",
             EdgeAction::CloseHole => "Close hole",
@@ -138,8 +141,11 @@ impl EdgeAction {
             EdgeAction::Crease => {
                 "Click to crease the edges (or their loop or ring, with Reach) at the weight below, so smooth subdivision keeps them sharp; click a creased edge again to clear it."
             }
+            EdgeAction::Dissolve => {
+                "Click to merge the faces on each side of the edges into larger polygons. Reach Edge loop dissolves a whole loop. Border edges stay."
+            }
             EdgeAction::Delete => {
-                "Click to remove the edges, merging the faces on each side into one larger polygon. Reach Edge loop removes a whole loop. Border edges stay."
+                "Click to remove the faces touching the edges. This opens a hole or trims an existing border."
             }
             EdgeAction::ExtrudeBorder => {
                 "Drag a border edge (the edge of a hole or an open surface) outwards to pull new faces out of it. Reach Edge loop takes the whole border."
@@ -1067,11 +1073,20 @@ impl Editor {
             Some(Element::Face(f, e)) => {
                 Preview { faces: self.poly_faces(f, e), deletes: pe.action == FaceAction::Delete, ..Default::default() }
             }
-            Some(Element::Edge(a, b, _)) => Preview {
-                edges: self.poly_edges(a, b),
-                deletes: pe.edge_action == EdgeAction::Delete,
-                ..Default::default()
-            },
+            Some(Element::Edge(a, b, _)) => {
+                let edges = self.poly_edges(a, b);
+                let faces = if pe.edge_action == EdgeAction::Delete {
+                    self.poly_cage().map_or_else(Vec::new, |c| polyedit::faces_using_edges(c, &edges))
+                } else {
+                    Vec::new()
+                };
+                Preview {
+                    faces,
+                    edges,
+                    deletes: matches!(pe.edge_action, EdgeAction::Delete | EdgeAction::Dissolve),
+                    ..Default::default()
+                }
+            }
             Some(Element::Point(v)) => Preview {
                 points: self.poly_points(v).into_iter().map(|(v, _)| v).collect(),
                 deletes: pe.point_action == PointAction::Delete,
@@ -1466,14 +1481,24 @@ impl Editor {
                 self.poly_start_drag(p, what, slide, axis, scale, t.clamp(0.02, 0.98), true, before_mesh, before_cage);
                 self.poly_drag_meta(1, pair.then_some((0.02, 0.48)));
             }
-            EdgeAction::Delete => {
+            EdgeAction::Dissolve => {
                 let n = polyedit::dissolve_edges(&mut cage, &edges);
                 if n == 0 {
-                    self.status = "Delete edge: border edges stay (delete a face to open a hole instead)".into();
+                    self.status = "Dissolve edges: no interior edges could be dissolved".into();
                     return;
                 }
-                self.poly_commit("Poly Edit: delete edges", before_mesh, before_cage, cage);
-                self.status = format!("Removed {n} edge(s)");
+                self.poly_commit("Poly Edit: dissolve edges", before_mesh, before_cage, cage);
+                self.status = format!("Dissolved {n} edge(s)");
+            }
+            EdgeAction::Delete => {
+                let faces = polyedit::faces_using_edges(&cage, &edges);
+                if faces.is_empty() {
+                    return;
+                }
+                polyedit::delete_faces(&mut cage, &faces);
+                if self.poly_commit_order("Poly Edit: delete edges", before_mesh, before_cage, cage).is_some() {
+                    self.status = format!("Deleted {} face(s) along the selected edges", faces.len());
+                }
             }
             EdgeAction::ExtrudeBorder => {
                 if edges.is_empty() {
@@ -3181,13 +3206,36 @@ mod tests {
     }
 
     #[test]
-    fn deleting_an_edge_loop_merges_faces_back() {
+    fn delete_edge_opens_a_hole_and_undo_restores_it() {
+        let mut e = editor();
+        start(&mut e);
+        let (_, _, _, at) = front_corner_and_edge(&e);
+        e.poly_edit.as_mut().unwrap().edge_action = EdgeAction::Delete;
+        assert_eq!(e.poly_preview_at(at).faces.len(), 2);
+        click(&mut e, at);
+        assert_eq!(cage(&e).faces.len(), 4);
+        assert_eq!(cage(&e).border_edges().len(), 6);
+        let border = border_pixel(&e).expect("a border edge shows on screen");
+        assert_eq!(e.poly_preview_at(border).faces.len(), 1);
+        click(&mut e, border);
+        assert_eq!(cage(&e).faces.len(), 3);
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 4);
+        e.undo();
+        assert_eq!(cage(&e).faces.len(), 6);
+        assert!(cage(&e).border_edges().is_empty());
+        e.redo();
+        assert_eq!(cage(&e).faces.len(), 4);
+    }
+
+    #[test]
+    fn dissolving_an_edge_loop_merges_faces_back() {
         let mut e = editor();
         start(&mut e);
         let (_, _, _, at) = front_corner_and_edge(&e);
         click(&mut e, at);
         assert_eq!(cage(&e).faces.len(), 10);
-        // The new loop crosses the middle of the front face: delete it.
+        // The new loop crosses the middle of the front face: dissolve it.
         // The new points are the ones that aren't cube corners.
         let new_edge = {
             let c = cage(&e);
@@ -3196,7 +3244,7 @@ mod tests {
             c.edges().into_iter().find(|&[a, b]| !corner(a) && !corner(b)).unwrap()
         };
         let pe = e.poly_edit.as_mut().unwrap();
-        pe.edge_action = EdgeAction::Delete;
+        pe.edge_action = EdgeAction::Dissolve;
         pe.edge_reach = EdgeReach::Loop;
         let edges = e.poly_edges(new_edge[0], new_edge[1]);
         assert_eq!(edges.len(), 4, "the loop goes all the way round");

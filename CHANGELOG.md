@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Poly Edit edges** now have separate **Delete** and **Dissolve** actions (#472). Delete removes the faces touching an edge. Dissolve joins the adjacent faces.
+
 ### Fixed
 
 - **Poly Edit Knife** mirrors cuts onto matching faces when Mirror across X is on (#468).

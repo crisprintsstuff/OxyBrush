@@ -232,6 +232,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 if matches!(
                     pe.edge_action,
                     EdgeAction::Delete
+                        | EdgeAction::Dissolve
                         | EdgeAction::ExtrudeBorder
                         | EdgeAction::Slide
                         | EdgeAction::Bevel
