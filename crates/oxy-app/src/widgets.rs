@@ -1029,8 +1029,14 @@ pub fn material_texture(ctx: &egui::Context, m: oxy_render::MatcapPreset) -> egu
     cached_texture(ctx, ("material", m.label()), || material_image(m, 64))
 }
 
+pub enum TilePreview<'a> {
+    Texture(&'a egui::TextureHandle),
+    Color(Color32),
+    Empty,
+}
+
 /// A large preview tile (brush, alpha, material) with a caption; click to pick.
-pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, tooltip: &str, size: f32) -> Response {
+pub fn tile(ui: &mut Ui, preview: TilePreview<'_>, caption: &str, tooltip: &str, size: f32) -> Response {
     let (rect, response) = ui.allocate_exact_size(vec2(size, size + 16.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(Role::Button, true, tooltip));
     if ui.is_rect_visible(rect) {
@@ -1040,8 +1046,8 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
         let stroke =
             if response.hovered() { Stroke::new(1.0, accent) } else { Stroke::new(1.0, Color32::from_gray(52)) };
         ui.painter().rect(img, 6.0, Color32::from_gray(45), stroke, egui::StrokeKind::Inside);
-        match tex {
-            Some(t) => {
+        match preview {
+            TilePreview::Texture(t) => {
                 ui.painter().image(
                     t.id(),
                     img.shrink(4.0),
@@ -1049,7 +1055,10 @@ pub fn tile(ui: &mut Ui, tex: Option<&egui::TextureHandle>, caption: &str, toolt
                     Color32::WHITE,
                 );
             }
-            None => {
+            TilePreview::Color(color) => {
+                ui.painter().rect_filled(img.shrink(5.0), 4.0, color);
+            }
+            TilePreview::Empty => {
                 ui.painter().text(
                     img.center(),
                     egui::Align2::CENTER_CENTER,
