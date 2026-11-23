@@ -248,9 +248,24 @@ fn validate(cage: &Cage) -> Result<(), QuadSkinError> {
         let max = points[0].max(points[1]).max(points[2]);
         triangles.push((ids, points, min, max));
     }
-    triangles.sort_unstable_by(|a, b| a.2.x.total_cmp(&b.2.x));
+    // Sweep along the longest axis. A mostly vertical armature can have
+    // overlapping X bounds along its entire length.
+    let (low, high) = triangles
+        .iter()
+        .fold((Vec3::splat(f32::INFINITY), Vec3::splat(f32::NEG_INFINITY)), |(low, high), (_, _, min, max)| {
+            (low.min(*min), high.max(*max))
+        });
+    let span = high - low;
+    let axis = if span.x >= span.y && span.x >= span.z {
+        0
+    } else if span.y >= span.z {
+        1
+    } else {
+        2
+    };
+    triangles.sort_unstable_by(|a, b| a.2[axis].total_cmp(&b.2[axis]));
     for (i, (ids, a, min, max)) in triangles.iter().enumerate() {
-        for (other, b, other_min, other_max) in triangles.iter().skip(i + 1).take_while(|t| t.2.x <= max.x) {
+        for (other, b, other_min, other_max) in triangles.iter().skip(i + 1).take_while(|t| t.2[axis] <= max[axis]) {
             if min.cmple(*other_max).all()
                 && other_min.cmple(*max).all()
                 && !ids.iter().any(|id| other.contains(id))
@@ -354,6 +369,19 @@ mod tests {
     }
 
     #[test]
+    fn asymmetric_fork_with_a_bent_side_branch_subdivides() {
+        let mut arm = Armature::new(Vec3::new(0.1, -3.0, 0.4), 0.44, None);
+        let joint = arm.add_child(0, Vec3::ZERO, 0.33);
+        let side = arm.add_child(joint, Vec3::new(2.1, 1.0, 0.8), 0.19);
+        arm.add_child(side, Vec3::new(3.0, 2.3, 1.9), 0.08);
+        arm.add_child(joint, Vec3::new(-1.4, 2.1, -0.45), 0.1);
+        let cage = quad_skin_armature(&arm).unwrap();
+        assert_eq!(cage, quad_skin_armature(&arm).unwrap());
+        assert!(cage.quad_count() > cage.triangle_count());
+        assert_subdivides(&cage);
+    }
+
+    #[test]
     fn crowded_and_unsupported_inputs_fail() {
         let mut arm = fork(0.1, 0.4);
         assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::CrowdedLinks));
@@ -366,11 +394,29 @@ mod tests {
     }
 
     #[test]
+    fn long_vertical_chain_keeps_quad_strips() {
+        let links = 256;
+        let mut arm = Armature::new(Vec3::ZERO, 0.2, None);
+        for i in 1..=links {
+            arm.add_child(i - 1, Vec3::Y * i as f32, 0.2);
+        }
+        let cage = quad_skin_armature(&arm).unwrap();
+        assert_eq!(cage.quad_count(), (links + 1) * SIDES);
+        assert_eq!(cage.triangle_count(), 0);
+    }
+
+    #[test]
     fn crossing_links_fail_even_when_each_link_is_long() {
         let mut arm = Armature::new(Vec3::new(-2.0, -2.0, 0.0), 0.15, None);
         let first = arm.add_child(0, Vec3::new(2.0, 2.0, 0.0), 0.15);
         let second = arm.add_child(first, Vec3::new(-2.0, 2.0, 0.0), 0.15);
         arm.add_child(second, Vec3::new(2.0, -2.0, 0.0), 0.15);
-        assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::InvalidSurface));
+        for _ in 0..3 {
+            assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::InvalidSurface));
+            for sphere in &mut arm.spheres {
+                let p = sphere.center;
+                sphere.center = Vec3::new(p.z, p.x, p.y);
+            }
+        }
     }
 }
