@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.24.2] - 2026-11-23
+
 ### Changed
 
 - **Lighter inactive pieces only while you edit** ([#451](https://github.com/crisprintsstuff/OxyBrush/issues/451)). With the option on, the other pieces with subdivision levels are drawn at their lowest level while you sculpt or edit a piece (a stroke, Paint Groups, a gizmo or Poly Edit drag), and in full again as soon as you stop. Only the drawing changes: a lowest-level copy is kept next to each piece, so nothing is rebuilt at the end of a stroke, and every piece keeps its levels for saving, export and undo. In 4.0.0-beta.24 the pieces dropped to their lowest level for as long as they weren't active. Projects saved with pieces shown lighter still open with their own levels.
@@ -1121,7 +1123,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...HEAD
+[4.0.0-beta.24.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...v4.0.0-beta.24.2
 [4.0.0-beta.24]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...v4.0.0-beta.24
 [4.0.0-beta.23.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...v4.0.0-beta.23.3
 [4.0.0-beta.23.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...v4.0.0-beta.23.2

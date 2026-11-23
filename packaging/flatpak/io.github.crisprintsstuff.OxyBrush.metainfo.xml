@@ -53,6 +53,12 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.24.2" date="2026-11-23" type="development">
+      <description>
+        <p>Lighter inactive pieces lower the other pieces only while you edit,
+        and Knife loops inside a face keep a clean rim of polygons.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.24" date="2026-11-23" type="development">
       <description>
         <p>OxySpheres are a piece of their own that makes new meshes any time.
