@@ -36,7 +36,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let middle = bent.add_child(0, Vec3::Y * 2.0, 0.3);
     bent.add_child(middle, Vec3::new(1.2, 4.0, 0.0), 0.15);
 
-    for (name, armature) in [("bent", bent), ("acute", fork(0.8, 3.0)), ("wide", fork(2.5, 1.0))] {
+    let mut figure = Armature::new(Vec3::ZERO, 0.4, Some(0.0));
+    figure.add_child(0, Vec3::new(2.0, -0.8, 0.0), 0.18);
+    let spine = figure.add_child(0, Vec3::new(0.0, 1.5, 0.35), 0.36);
+    let shoulders = figure.add_child(spine, Vec3::Y * 3.0, 0.4);
+    figure.add_child(shoulders, Vec3::new(2.0, 3.8, 0.0), 0.18);
+
+    for (name, armature) in [("bent", bent), ("acute", fork(0.8, 3.0)), ("wide", fork(2.5, 1.0)), ("two-forks", figure)]
+    {
         let cage = quad_skin_armature(&armature)?;
         let smooth = subdivide_levels(&cage, 2);
         println!(
