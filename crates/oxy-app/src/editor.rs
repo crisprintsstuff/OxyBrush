@@ -1016,13 +1016,6 @@ pub struct Job {
     rx: mpsc::Receiver<Result<JobResult, String>>,
 }
 
-impl Job {
-    /// Whether the job works on piece `id`.
-    pub(crate) fn touches(&self, id: u64) -> bool {
-        self.target == id || self.consumed.contains(&id)
-    }
-}
-
 /// Meshes read from files, ready to add as pieces.
 struct LoadedImport {
     path: PathBuf,

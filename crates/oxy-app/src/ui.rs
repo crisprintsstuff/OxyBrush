@@ -1476,7 +1476,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
         ui,
         &mut ed.lighter_inactive,
         "Lighter inactive pieces",
-        "On: a piece with subdivision levels that you aren't working on is shown at its lowest level, to save memory and keep the view quick. Picking it brings its own level back (a moment for very dense pieces). Export, Join, Merge, Booleans and undo always use the full level. Pieces tied to others (linked copies, surface instances, living strokes) stay as they are.",
+        "On: while you sculpt or edit a piece, the other pieces with subdivision levels are drawn at their lowest level, so the view stays quick; when you stop, they are drawn in full again. Only what's drawn changes: every piece keeps its levels, and saving, export and undo always use them in full.",
     );
     tips::check_plain(
         ui,

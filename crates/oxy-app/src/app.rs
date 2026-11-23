@@ -774,6 +774,9 @@ impl App {
         // The Insert Primitive and mask extract previews are drawn like a
         // piece under a reserved id.
         const PREVIEW_ID: u64 = u64::MAX;
+        // Lowest-level copies of pieces (Lighter inactive pieces) are drawn
+        // under their piece's id with this bit set.
+        const PROXY_FLAG: u64 = 1 << 62;
         ed.update_extract_preview();
         ed.tick_hold(Instant::now());
         ed.update_curve();
@@ -796,7 +799,16 @@ impl App {
         // A curve stroke's preview is the whole piece with the stroke
         // applied: draw it in the piece's place, looking like the piece.
         let curve_piece = ed.preview_in_place();
-        g.viewport.retain(|id| ids.contains(&id) || sources.contains(&id) || (previewing && id == PREVIEW_ID));
+        // While another piece is edited, pieces with levels are drawn at
+        // their lowest level (Lighter inactive pieces), from a copy kept on
+        // the GPU under its own id next to the full mesh, so switching back
+        // at the end of a stroke costs nothing.
+        let proxied: Vec<u64> = ids.iter().copied().filter(|&id| ed.lighter_proxy_mut(id).is_some()).collect();
+        let proxy_id = |id: u64| id | PROXY_FLAG;
+        let kept_proxies: Vec<u64> = ed.documents[ed.active_document].proxies.keys().map(|&id| proxy_id(id)).collect();
+        g.viewport.retain(|id| {
+            ids.contains(&id) || sources.contains(&id) || (previewing && id == PREVIEW_ID) || kept_proxies.contains(&id)
+        });
         let active = ed.scene.try_active().map(|p| p.id).unwrap_or(0);
         // Pieces with their own material: give each distinct one a slot.
         let piece_key = |p: &oxy_doc::Piece| -> Option<String> {
@@ -862,14 +874,20 @@ impl App {
             g.viewport.sync(&g.device, &g.queue, p.id, &mut p.mesh, hard_edge_angle, piece_wire);
             if p.visible && Some(p.id) != curve_piece && Some(p.id) != retopo_piece {
                 let material = slot_of(p.id);
+                let shown = if proxied.contains(&p.id) { proxy_id(p.id) } else { p.id };
                 items.push(oxy_render::DrawItem {
-                    id: p.id,
+                    id: shown,
                     active: p.id == active,
                     preview: false,
                     material,
                     instances: None,
                     wireframe: Some(p.id) == poly_wire,
                 });
+            }
+        }
+        for &id in &proxied {
+            if let Some(mesh) = ed.lighter_proxy_mut(id) {
+                g.viewport.sync(&g.device, &g.queue, proxy_id(id), mesh, hard_edge_angle, false);
             }
         }
         // Surface instances: the source's mesh, drawn once per copy. The
