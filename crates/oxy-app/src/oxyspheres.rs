@@ -79,6 +79,8 @@ pub struct SphereEdit {
     pub blend: f32,
     /// Show the skin instead of the spheres (at a lower resolution).
     pub show_skin: bool,
+    /// Build the polygon cage when Make mesh is pressed.
+    pub quad_skin: bool,
     /// Editing this OxySpheres piece: its id and its hidden faces before
     /// they were all hidden for the edit. None: new spheres.
     pub replace: Option<(u64, Vec<bool>)>,
@@ -106,6 +108,7 @@ impl SphereEdit {
             resolution,
             blend,
             show_skin: true,
+            quad_skin: false,
             replace,
             preview: Mesh::new(Vec::new(), Vec::new()),
             built: None,
@@ -126,12 +129,13 @@ impl SphereEdit {
     /// `dragging`, finer again once the drag is over.
     fn update(&mut self, dragging: bool) {
         let res = self.resolution.min(if dragging { DRAG_RESOLUTION } else { PREVIEW_RESOLUTION });
-        let key = (self.armature.clone(), self.show_skin, self.blend, res);
+        let show_skin = self.show_skin && !self.quad_skin;
+        let key = (self.armature.clone(), show_skin, self.blend, res);
         if self.built.as_ref().is_some_and(|b| b.0 == key.0 && b.1 == key.1 && b.2 == key.2 && (dragging || b.3 == res))
         {
             return;
         }
-        let skin = self.show_skin.then(|| {
+        let skin = show_skin.then(|| {
             // Sized by the figure alone, to stay quick while you edit (the
             // mesh made follows the thinnest sphere too).
             let opts = oxy_topo::SkinOptions {
@@ -278,26 +282,49 @@ impl Editor {
     /// The spheres stay, as an OxySpheres piece (hidden, out of the
     /// mesh's way), to make another mesh any time.
     pub fn accept_spheres(&mut self) {
-        if self.job.is_some() {
+        if self.documents.iter().any(|d| d.job.is_some()) {
             self.status = "Wait for the running operation to finish".into();
             return;
         }
         let Some(edit) = self.spheres.take() else { return };
         self.restore_spheres_hidden(&edit);
+        let replace = edit.replace.as_ref().map(|(id, _)| *id);
+        let spheres = Box::new(self.spheres_piece_of(&edit, false));
+        if edit.quad_skin {
+            self.start_job("OxySpheres: quad base mesh".into(), Vec::new(), move || {
+                let mesh = oxy_topo::quad_skin_armature(&edit.armature)
+                    .map_err(|error| error.to_string())
+                    .and_then(|mut cage| cage.build_mesh().ok_or_else(|| "The quad skin has no faces".into()));
+                Ok(match mesh {
+                    Ok(mesh) => JobResult::Skin { spheres, replace, mesh },
+                    Err(error) => JobResult::QuadSkinRetry(Box::new(edit), error),
+                })
+            });
+            return;
+        }
         let opts = oxy_topo::SkinOptions {
             resolution: edit.resolution,
             blend: edit.blend_world(),
             smooth_passes: 2,
             ..Default::default()
         };
-        let replace = edit.replace.as_ref().map(|(id, _)| *id);
-        let spheres = Box::new(self.spheres_piece_of(&edit, false));
         let armature = edit.armature;
         let resolution = edit.resolution;
         self.start_job(format!("OxySpheres: make mesh ({resolution})"), Vec::new(), move || {
             let mesh = oxy_topo::skin_armature(&armature, opts).map_err(|e| e.to_string())?;
             Ok(JobResult::Skin { spheres, replace, mesh })
         });
+    }
+
+    /// Reopen the unsaved edit when a quad mesh cannot be built.
+    pub(crate) fn retry_quad_skin(&mut self, mut edit: SphereEdit) {
+        edit.replace = edit.replace.and_then(|(id, _)| {
+            let piece = self.scene.get_mut(id).filter(|p| p.is_spheres())?;
+            let before = piece.mesh.hidden().to_vec();
+            piece.mesh.set_hidden(vec![true; before.len()]);
+            Some((id, before))
+        });
+        self.spheres = Some(edit);
     }
 
     /// Put a finished mesh in the scene as a new piece, with its spheres
