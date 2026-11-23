@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Knife inset loops keep a polygon rim.** Closed cuts inside a face use distinct corner joins, so extra points follow the rim polygons instead of creating a fan of triangles.
+
 ## [4.0.0-beta.24] - 2026-11-23
 
 ### Added

@@ -68,3 +68,11 @@ Behaviour only, from the public manuals linked in #370 and logged in
 [CLEAN_ROOM.md](../CLEAN_ROOM.md): [Blender Knife](https://docs.blender.org/manual/en/2.81/modeling/meshes/editing/subdividing/knife.html)
 and [Cinema 4D Line Cut](https://help.maxon.net/c4d/en-us/Content/html/TOOLKNIFELINE.html).
 The tracing and splitting are written for OxyBrush's polygon cage.
+
+
+## Inset loops with unequal corner counts
+
+A closed cut inside one face keeps the drawn loop as its own polygon. The
+rim connects distinct corners of the inner and outer outlines in order.
+Additional corners stay on the sides of the rim polygons, yielding quads
+or larger polygons without introducing points on either boundary.
