@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.24] - 2026-11-23
+
 ### Added
 
 - **Knife: cut a face out of a face** ([#450](https://github.com/crisprintsstuff/OxyBrush/issues/450)). Click points inside one face, without touching its edges, then click the first point again: the loop becomes a new face, and the rest of the face becomes a ring of faces joining the loop to the face's corners (a square loop in a quad gives a quad with four quads round it, as an inset does). A loop that crosses itself is refused.
@@ -1111,7 +1113,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...HEAD
+[4.0.0-beta.24]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.3...v4.0.0-beta.24
 [4.0.0-beta.23.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23.2...v4.0.0-beta.23.3
 [4.0.0-beta.23.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.23...v4.0.0-beta.23.2
 [4.0.0-beta.23]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.22...v4.0.0-beta.23

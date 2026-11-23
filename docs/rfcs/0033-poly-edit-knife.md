@@ -1,6 +1,6 @@
 # RFC 0033: Knife in Poly Edit
 
-Status: Implemented (4.0.0-beta.23.2; ends inside a face fixed in 4.0.0-beta.23.3), the Knife part of issue #370 (To Circle is [RFC 0032](0032-poly-edit-to-circle.md))
+Status: Implemented (4.0.0-beta.23.2; ends inside a face fixed in 4.0.0-beta.23.3; loops inside a face and cuts over convex edges in 4.0.0-beta.24), the Knife part of issue #370 (To Circle is [RFC 0032](0032-poly-edit-to-circle.md))
 
 ## Summary
 
