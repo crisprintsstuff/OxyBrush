@@ -77,7 +77,7 @@ impl BrushPreset {
             pressure_radius: false,
             pressure_curves: [None; 2],
             front_faces_only: false,
-            accumulate: true,
+            accumulate: kind.default_accumulate(),
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -174,9 +174,8 @@ impl BrushPreset {
         if let Some(b) = flag("front_faces_only") {
             p.front_faces_only = b;
         }
-        if let Some(b) = flag("accumulate") {
-            p.accumulate = b;
-        }
+        // Older presets omitted the key when accumulation was on.
+        p.accumulate = flag("accumulate").unwrap_or(true);
         if let Some(x) = num("auto_smooth", 0.0..=1.0) {
             p.auto_smooth = x;
         }
@@ -369,6 +368,7 @@ fn base64url_decode(s: &str) -> Option<Vec<u8>> {
 /// A few original starter presets (shipped with the app).
 pub fn starter_presets() -> Vec<BrushPreset> {
     let mut soft_clay = BrushPreset::new("Soft clay buildup", BrushKind::Clay);
+    soft_clay.accumulate = true;
     soft_clay.strength = 0.25;
     soft_clay.auto_smooth = 0.3;
     let mut fine_crease = BrushPreset::new("Fine wrinkles", BrushKind::Crease);
@@ -409,6 +409,19 @@ mod tests {
         p.alpha_rotation_deg = -45.0;
         p.alpha_follow_stroke = true;
         p
+    }
+
+    #[test]
+    fn new_presets_use_brush_defaults_and_old_presets_keep_buildup() {
+        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate] {
+            let preset = BrushPreset::new("New", kind);
+            assert!(!preset.accumulate);
+            assert!(!BrushPreset::from_text(&preset.to_text()).unwrap().accumulate);
+            let old = format!("brush = {}", kind_key(kind));
+            assert!(BrushPreset::from_text(&old).unwrap().accumulate);
+        }
+        let buildup = &starter_presets()[0];
+        assert!(BrushPreset::from_text(&buildup.to_text()).unwrap().accumulate);
     }
 
     #[test]

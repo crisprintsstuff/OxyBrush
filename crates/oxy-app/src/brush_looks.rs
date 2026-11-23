@@ -47,7 +47,7 @@ impl Editor {
     }
 
     pub(crate) fn brush_accumulates(&self, kind: BrushKind) -> bool {
-        self.brush_looks.get(&kind).is_none_or(|look| look.accumulate)
+        self.brush_looks.get(&kind).map_or(kind.default_accumulate(), |look| look.accumulate)
     }
 
     pub(crate) fn set_brush_accumulate(&mut self, accumulate: bool) {
@@ -115,22 +115,38 @@ mod tests {
     use oxy_sculpt::{BrushKind, Falloff};
 
     #[test]
+    fn accumulate_defaults_match_the_brush_and_buildup_preset() {
+        let mut editor = Editor::default();
+        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate] {
+            assert!(!editor.brush_accumulates(kind));
+        }
+        assert!(editor.brush_accumulates(BrushKind::ClayStrips));
+        let buildup =
+            oxy_sculpt::preset::starter_presets().into_iter().find(|p| p.name == "Soft clay buildup").unwrap();
+        editor.apply_preset(&buildup);
+        assert!(editor.brush_accumulates(BrushKind::Clay));
+        assert!(!editor.brush_accumulates(BrushKind::Draw));
+    }
+
+    #[test]
     fn accumulate_is_per_brush_and_round_trips_when_settings_are_shared() {
         let mut editor = Editor::default();
         editor.remember_brushes = true;
         editor.settings_per_brush = false;
         editor.brush_kind = BrushKind::Draw;
+        editor.set_brush_accumulate(true);
+        editor.brush_kind = BrushKind::ClayStrips;
         editor.set_brush_accumulate(false);
         editor.brush_kind = BrushKind::Clay;
         editor.sync_brush_look();
-        assert!(editor.brush_accumulates(BrushKind::Clay));
         let settings = crate::settings::Settings::from_text(&editor.settings().to_text());
         let mut loaded = Editor::default();
         loaded.apply_settings(&settings);
-        assert!(!loaded.brush_accumulates(BrushKind::Draw));
-        assert!(loaded.brush_accumulates(BrushKind::Clay));
-        loaded.apply_preset(&oxy_sculpt::BrushPreset::from_text("brush = draw").unwrap());
         assert!(loaded.brush_accumulates(BrushKind::Draw));
+        assert!(!loaded.brush_accumulates(BrushKind::ClayStrips));
+        assert!(!loaded.brush_accumulates(BrushKind::Clay));
+        loaded.apply_preset(&oxy_sculpt::BrushPreset::from_text("brush = clay").unwrap());
+        assert!(loaded.brush_accumulates(BrushKind::Clay));
     }
 
     #[test]

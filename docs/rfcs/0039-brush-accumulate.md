@@ -5,7 +5,8 @@
 ## Summary
 
 Add **Accumulate** next to the dab controls for Draw, Inflate, Clay, and
-Clay Strips. Default to on to preserve existing brush behavior.
+Clay Strips. Default to off for Draw, Inflate, and Clay, and to on for
+Clay Strips and the Soft clay buildup preset.
 
 ## Motivation
 
