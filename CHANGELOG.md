@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Accumulate defaults to off** for Draw, Clay, and Inflate. The Soft clay buildup preset still starts with Accumulate on.
+
 - **Poly Edit edges** now have separate **Delete** and **Dissolve** actions (#472). Delete removes the faces touching an edge. Dissolve joins the adjacent faces.
 
 ### Fixed

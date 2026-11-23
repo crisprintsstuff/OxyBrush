@@ -230,6 +230,11 @@ impl BrushKind {
         matches!(self, Self::Draw | Self::Inflate | Self::Clay | Self::ClayStrips)
     }
 
+    /// Initial buildup setting for a brush in the editor and new presets.
+    pub fn default_accumulate(self) -> bool {
+        !matches!(self, Self::Draw | Self::Clay | Self::Inflate)
+    }
+
     /// Brushes that move a captured region with the pointer instead of dabbing.
     pub fn is_grab_like(self) -> bool {
         matches!(
