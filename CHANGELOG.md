@@ -6,7 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
-- **Experimental OxySpheres quad base mesh.** Choose it under Output to generate limb loops for a chain or a single three-way junction. Voxel skin remains the default.
+- **Experimental OxySpheres quad base mesh.** Choose it under Output to generate limb loops for chains and connected three-way junctions. Voxel skin remains the default.
 
 ### Fixed
 

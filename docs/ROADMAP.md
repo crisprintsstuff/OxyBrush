@@ -101,8 +101,8 @@ The fundamentals that most separate OxyBrush from mature sculpting tools, plus t
 ## Proposed next work
 
 - [OxySpheres quad base mesh](rfcs/0038-oxyspheres-quad-base-mesh.md)
-  has an experimental implementation for a chain or a single three-way
-  junction. Artist feedback on the junction and subdivided profile is next.
+  has an experimental implementation for chains and connected three-way
+  junctions. Artist feedback on the junction and subdivided profile is next.
 
 - [Poly Edit box and lasso selection](rfcs/0035-poly-edit-area-selection.md)
   for visible faces, edges, and points.

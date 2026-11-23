@@ -84,6 +84,12 @@ also passes at two levels. Surface validation rejects intersections between
 triangles that do not share a vertex. Inspect the sample junction profiles
 before expanding the supported armature types.
 
+The connected-junction follow-up sweeps one quad strip between the facing
+collars, including through intermediate bends. Separate hull patches keep
+triangles local to each junction. An armature with two forks subdivides
+twice while staying closed. If the collars consume the shared link, the
+worker rejects that arrangement and the existing edit remains available.
+
 ## Alternatives
 
 Retopologizing the voxel result could handle overlapping limbs more

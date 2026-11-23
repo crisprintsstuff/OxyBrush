@@ -83,7 +83,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 egui::ComboBox::from_id_salt("sphere_output").selected_text(output).show_ui(ui, |ui| {
                     ui.selectable_value(&mut e.quad_skin, false, "Voxel skin");
                     ui.selectable_value(&mut e.quad_skin, true, "Quad base mesh")
-                        .on_hover_text("Experimental. Builds edge loops around a chain or one three-way junction.");
+                        .on_hover_text("Experimental. Builds edge loops along chains and connected three-way junctions.");
                 });
                 ui.end_row();
                 if e.quad_skin {
