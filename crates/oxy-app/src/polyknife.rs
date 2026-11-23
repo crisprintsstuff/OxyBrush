@@ -162,8 +162,13 @@ impl Editor {
         let Some(path) = self.poly_edit.as_ref().and_then(|pe| pe.knife.clone()) else { return };
         let Some((_, before_mesh, before_cage)) = self.poly_before() else { return };
         let Some(mut cage) = before_cage.clone() else { return };
-        let result =
-            knife::knife_plan(&cage, &path, self.knife_view()).and_then(|plan| knife::knife_cut(&mut cage, &plan));
+        let result = knife::knife_plan(&cage, &path, self.knife_view()).and_then(|plan| {
+            if let Some((center, tolerance)) = self.poly_mirror() {
+                knife::knife_cut_mirrored(&mut cage, &plan, center, tolerance)
+            } else {
+                knife::knife_cut(&mut cage, &plan)
+            }
+        });
         match result {
             Ok(made) => {
                 self.poly_commit("Poly Edit: knife", before_mesh, before_cage, cage);
@@ -224,6 +229,25 @@ mod tests {
 
     fn at(e: &Editor, p: Vec3) -> Vec2 {
         e.camera.project(p, e.canvas_size()).unwrap()
+    }
+
+    #[test]
+    fn knife_mirrors_an_inset_loop_in_one_undo_step() {
+        let mut e = editor();
+        e.poly_edit.as_mut().unwrap().mirror = true;
+        let faces = e.poly_cage().unwrap().faces.len();
+        let face = e.poly_hit(at(&e, Vec3::new(0.33, 0.0, 0.5))).unwrap().0;
+        let mut path: Vec<_> = [(0.28, -0.05), (0.38, -0.05), (0.38, 0.05), (0.28, 0.05)]
+            .into_iter()
+            .map(|(x, y)| knife::KnifePoint { snap: KnifeSnap::Face(face), pos: Vec3::new(x, y, 0.5) })
+            .collect();
+        let first = path[0];
+        path.push(first);
+        e.poly_edit.as_mut().unwrap().knife = Some(path);
+        e.poly_knife_apply();
+        assert_eq!(e.poly_cage().unwrap().faces.len(), faces + 8, "{}", e.status);
+        e.undo();
+        assert_eq!(e.poly_cage().unwrap().faces.len(), faces);
     }
 
     #[test]

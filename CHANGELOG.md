@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Fixed
+
+- **Poly Edit Knife** mirrors cuts onto matching faces when Mirror across X is on (#468).
+- **Capture from view** softens the silhouette of captured alphas with subpixel sampling (#466).
+
 ## [4.0.0-beta.24.3] - 2026-11-23
 
 ### Added

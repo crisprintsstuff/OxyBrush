@@ -600,7 +600,7 @@ impl Editor {
     }
 
     /// The mirror plane `(x, tolerance)`, while mirroring is on.
-    fn poly_mirror(&self) -> Option<(f32, f32)> {
+    pub(crate) fn poly_mirror(&self) -> Option<(f32, f32)> {
         let pe = self.poly_edit.as_ref()?;
         if !pe.mirror {
             return None;
