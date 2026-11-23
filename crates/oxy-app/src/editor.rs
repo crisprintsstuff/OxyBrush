@@ -11436,6 +11436,56 @@ mod tests {
     }
 
     #[test]
+    fn make_mesh_again_updates_the_last_mesh_while_it_is_unsculpted() {
+        let mut e = editor();
+        e.start_spheres();
+        {
+            let s = e.spheres.as_mut().unwrap();
+            s.resolution = 40;
+            let r = s.armature.spheres[0].radius;
+            let c = s.armature.spheres[0].center;
+            s.armature.add_child(0, c + Vec3::X * r * 3.0, r * 0.6);
+        }
+        e.accept_spheres();
+        wait_job(&mut e);
+        let mesh = e.scene.pieces.iter().position(|p| p.name == "OxySpheres mesh").unwrap();
+        let spheres = e.scene.pieces.iter().position(|p| p.is_spheres()).unwrap();
+        let first = e.scene.pieces[mesh].mesh.clone();
+        // Edit the spheres (and close them with Done once: it keeps the
+        // link), then Make mesh: the same piece gets the new mesh.
+        e.scene.set_active(spheres);
+        e.edit_spheres();
+        e.finish_spheres();
+        e.scene.set_active(spheres);
+        e.edit_spheres();
+        e.spheres.as_mut().unwrap().armature.set_radius(1, 0.5);
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(
+            e.scene.pieces.len(),
+            3,
+            "no new piece: {:?}",
+            e.scene.pieces.iter().map(|p| &p.name).collect::<Vec<_>>()
+        );
+        assert_eq!(e.scene.active().name, "OxySpheres mesh");
+        assert_ne!(e.scene.pieces[mesh].mesh.positions, first.positions, "updated");
+        assert!(e.history.undo_labels().last().is_some_and(|l| l.contains("update")));
+        // Undo brings the first mesh back.
+        e.undo();
+        assert_eq!(e.scene.pieces[mesh].mesh.positions, first.positions);
+        e.redo();
+        // Once sculpted, Make mesh adds a new piece instead.
+        let n = e.scene.pieces[mesh].mesh.vertex_count();
+        e.scene.pieces[mesh].mesh.positions[n / 2] += Vec3::splat(0.05);
+        e.scene.set_active(spheres);
+        e.edit_spheres();
+        e.spheres.as_mut().unwrap().armature.set_radius(1, 0.4);
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert_eq!(e.scene.pieces.len(), 4, "the sculpted mesh stays");
+    }
+
+    #[test]
     fn new_oxyspheres_start_on_the_symmetry_plane_wherever_the_view_is() {
         // #449: with the view moved, the first sphere (and so the mirror
         // plane) followed the orbit point off centre.
