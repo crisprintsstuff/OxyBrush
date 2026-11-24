@@ -1,6 +1,6 @@
 # RFC 0041 — Paint color jitter
 
-**Status:** Draft
+**Status:** Implemented
 
 ## Summary
 

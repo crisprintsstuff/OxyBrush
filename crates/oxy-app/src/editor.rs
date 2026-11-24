@@ -140,6 +140,7 @@ pub struct HoldWatch {
     pub path: Vec<Vec2>,
     pub still_at: Vec2,
     pub still_since: std::time::Instant,
+    paint_seed: u64,
     /// What was drawn, kept when the stroke is paused to ask whether to
     /// edit it as a curve, so answering "no" still records a recipe.
     recipe: Option<StrokeRecipe>,
@@ -159,6 +160,7 @@ pub struct LastStroke {
     pub path: Vec<Vec2>,
     pub size: Vec2,
     pub camera: Camera,
+    paint_seed: u64,
 }
 
 /// What to turn the last stroke into (Edit > Last stroke).
@@ -226,6 +228,7 @@ pub struct CurveEdit {
     binding: Option<(MoveBindKey, oxy_sculpt::wire::Binding, Vec<oxy_sculpt::wire::WireCurve>)>,
     /// Living strokes: stroke id if this curve is editing the path of an existing stroke.
     pub living_stroke: Option<u64>,
+    paint_seed: u64,
 }
 
 /// What a Curve Move binding depends on.
@@ -318,6 +321,7 @@ impl CurveEdit {
 struct CurveKey {
     shape: CurveShape,
     settings: BrushSettings,
+    paint: Option<(Vec3, oxy_sculpt::PaintJitter)>,
 }
 
 /// Catmull-Rom through `points` (positions and normals), sampled about
@@ -2867,6 +2871,7 @@ impl Editor {
                 path: vec![p],
                 still_at: p,
                 still_since: std::time::Instant::now(),
+                paint_seed: stroke.paint_seed(),
                 recipe: None,
             })
         });
@@ -3012,6 +3017,7 @@ impl Editor {
             path: h.path.iter().map(|&p| self.canvas_local(p)).collect(),
             size: self.canvas_size(),
             camera: self.camera,
+            paint_seed: h.paint_seed,
         });
     }
 
@@ -3183,6 +3189,17 @@ impl Editor {
     }
 
     fn new_stroke(&self, kind: BrushKind, invert: bool, radius: f32, extra_rotation: f32) -> Stroke {
+        self.new_stroke_seeded(kind, invert, radius, extra_rotation, None)
+    }
+
+    fn new_stroke_seeded(
+        &self,
+        kind: BrushKind,
+        invert: bool,
+        radius: f32,
+        extra_rotation: f32,
+        paint_seed: Option<u64>,
+    ) -> Stroke {
         let settings = BrushSettings {
             kind,
             radius,
@@ -3218,6 +3235,12 @@ impl Editor {
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
             .with_budget(self.dab_budget_ms);
+        let jitter = self.paint_jitter(kind);
+        let stroke = if jitter.enabled() {
+            stroke.with_paint_jitter(jitter, paint_seed.unwrap_or_else(oxy_sculpt::PaintJitter::fresh_seed))
+        } else {
+            stroke
+        };
         // Living strokes keep what was drawn too, to edit it later (RFC 0025).
         if self.living.enabled { stroke.with_recording() } else { stroke }
     }
@@ -3284,6 +3307,7 @@ impl Editor {
             pressure_curves: self.brush_pressure_overrides(k),
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(k),
+            paint_jitter: self.paint_jitter(k),
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(k),
             spray: self.spray,
@@ -4042,7 +4066,7 @@ impl Editor {
                     self.finish_deferred(mode, kind, invert, start, end);
                 }
             }
-            Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points),
+            Drag::CurveDraw { kind, invert, points } => self.begin_curve(kind, invert, &points, None),
             Drag::CurveHandle { .. } => {
                 if let Some(c) = &self.curve
                     && let Some(id) = c.living_stroke
@@ -5292,6 +5316,7 @@ impl Editor {
             samples: Vec::new(),
             binding: None,
             living_stroke: None,
+            paint_seed: 0,
         });
         self.status = "The Curve Move curve that was open is back: drag its points, or Enter to apply it".into();
     }
@@ -6141,10 +6166,10 @@ impl Editor {
 
     /// Turn a drawn path (physical px) into an editable curve stroke on the
     /// active piece.
-    fn begin_curve(&mut self, kind: BrushKind, invert: bool, path: &[Vec2]) {
+    fn begin_curve(&mut self, kind: BrushKind, invert: bool, path: &[Vec2], paint_seed: Option<u64>) {
         let local: Vec<Vec2> = path.iter().map(|&p| self.canvas_local(p)).collect();
         let Some(points) = self.curve_points(&self.camera.clone(), self.canvas_size(), &local, kind) else { return };
-        self.begin_curve_points(kind, invert, points);
+        self.begin_curve_points(kind, invert, points, paint_seed);
     }
 
     /// Control points on the active piece for a path drawn in canvas pixels
@@ -6233,7 +6258,7 @@ impl Editor {
                     self.brush_kind = BrushKind::CurveMove;
                 }
                 let invert = what == LastStrokeAs::Curve && last.invert;
-                self.begin_curve_points(kind, invert, points);
+                self.begin_curve_points(kind, invert, points, Some(last.paint_seed));
                 if what == LastStrokeAs::Curve {
                     self.status = format!(
                         "{} stroke reopened as a curve: drag its points, then Enter applies it",
@@ -6258,7 +6283,13 @@ impl Editor {
     }
 
     /// Open an editable curve stroke through `points` on the active piece.
-    fn begin_curve_points(&mut self, kind: BrushKind, invert: bool, points: Vec<(Vec3, Vec3)>) {
+    fn begin_curve_points(
+        &mut self,
+        kind: BrushKind,
+        invert: bool,
+        points: Vec<(Vec3, Vec3)>,
+        paint_seed: Option<u64>,
+    ) {
         let moving = kind == BrushKind::CurveMove;
         let rest = if moving { points.clone() } else { Vec::new() };
         let piece = self.scene.active();
@@ -6295,6 +6326,11 @@ impl Editor {
             samples: Vec::new(),
             binding: None,
             living_stroke: None,
+            paint_seed: if kind == BrushKind::Paint {
+                paint_seed.unwrap_or_else(oxy_sculpt::PaintJitter::fresh_seed)
+            } else {
+                0
+            },
         });
         self.status = if moving {
             "Drag the points to move the model with the curve, click it to add one, Alt+click to remove one; Enter applies it".into()
@@ -6345,6 +6381,7 @@ impl Editor {
             samples: Vec::new(),
             binding: None,
             living_stroke: Some(id),
+            paint_seed: 0,
         });
         self.status =
             "Drag points to reshape the stroke, click curve to add one, Alt+click to remove. Esc cancels.".into();
@@ -6493,7 +6530,7 @@ impl Editor {
         }
         let doc = &mut self.documents[self.active_document];
         doc.history.revert_pending(&mut doc.scene);
-        self.begin_curve(h.kind, h.invert, &h.path);
+        self.begin_curve(h.kind, h.invert, &h.path, Some(h.paint_seed));
         if let Some(c) = &self.curve {
             self.drag = Drag::CurveHandle { index: c.points.len() - 1 };
             self.status = "Curve: keep moving to extend it, release, then drag its points; Enter applies it".into();
@@ -6511,7 +6548,7 @@ impl Editor {
         let Some(h) = doc.hold_offer.take() else { return };
         if yes {
             doc.history.revert_pending(&mut doc.scene);
-            self.begin_curve(h.kind, h.invert, &h.path);
+            self.begin_curve(h.kind, h.invert, &h.path, Some(h.paint_seed));
         } else {
             let kind = h.kind;
             self.commit_living_stroke(kind, h.recipe);
@@ -6538,12 +6575,14 @@ impl Editor {
                 return;
             }
         }
-        let (c_piece, c_kind, c_invert, c_world_per_pt) = {
+        let (c_piece, c_kind, c_invert, c_world_per_pt, paint_seed) = {
             let c = self.documents[self.active_document].curve.as_ref().unwrap();
-            (c.piece, c.kind, c.invert, c.world_per_pt)
+            (c.piece, c.kind, c.invert, c.world_per_pt, c.paint_seed)
         };
         let radius = self.brush_radius_pt * c_world_per_pt;
-        let settings = *self.new_stroke(c_kind, c_invert, radius, 0.0).settings();
+        let mut stroke = self.new_stroke_seeded(c_kind, c_invert, radius, 0.0, Some(paint_seed));
+        let settings = *stroke.settings();
+        let paint = (c_kind == BrushKind::Paint).then(|| (self.paint_color, self.paint_jitter(c_kind)));
         let dragging = matches!(self.drag, Drag::CurveHandle { .. });
         let doc = &mut self.documents[self.active_document];
         let c = doc.curve.as_mut().expect("checked");
@@ -6555,7 +6594,7 @@ impl Editor {
         }
         let piece = doc.scene.pieces.iter().find(|p| p.id == c_piece).expect("checked");
         if let Some(id) = c.living_stroke {
-            let key = CurveKey { shape, settings };
+            let key = CurveKey { shape, settings, paint };
             if c.built.as_ref() == Some(&key) {
                 return;
             }
@@ -6584,7 +6623,7 @@ impl Editor {
             self.update_curve_move();
             return;
         }
-        let key = CurveKey { shape, settings };
+        let key = CurveKey { shape, settings, paint };
         if c.built.as_ref() == Some(&key) {
             return;
         }
@@ -6618,11 +6657,7 @@ impl Editor {
         }
         let restored = std::mem::take(&mut c.touched);
         c.preview.update_chunks(&restored);
-        let kind = c.kind;
-        let invert = c.invert;
-        let mut stroke = self.new_stroke(kind, invert, radius, 0.0);
-        let doc = &mut self.documents[self.active_document];
-        let c = doc.curve.as_mut().expect("checked");
+
         let mut touched = vec![false; c.preview.chunks.len()];
         for &(s, size, strength) in &c.samples {
             stroke.set_modulation(size, strength);
@@ -6680,6 +6715,7 @@ impl Editor {
         }
         let built = CurveKey {
             shape: c.shape(),
+            paint: None,
             settings: BrushSettings {
                 kind: BrushKind::CurveMove,
                 radius,
@@ -6741,7 +6777,7 @@ impl Editor {
         }
         let Some(c) = self.curve.take() else { return };
         let radius = self.brush_radius_pt * c.world_per_pt;
-        let mut stroke = self.new_stroke(c.kind, c.invert, radius, 0.0);
+        let mut stroke = self.new_stroke_seeded(c.kind, c.invert, radius, 0.0, Some(c.paint_seed));
         if c.kind == BrushKind::Paint {
             self.reveal_vertex_color();
         }
@@ -17287,6 +17323,60 @@ mod tests {
         e.answer_hold_offer(false);
         assert_eq!(e.living.strokes.len(), 1);
         replay_matches(&e, &base);
+    }
+
+    #[test]
+    fn paint_jitter_settings_and_stroke_colors_survive_undo_redo_and_replay() {
+        let mut e = with_living();
+        e.brush_kind = BrushKind::Paint;
+        e.remember_brushes = true;
+        e.settings_per_brush = false;
+        e.paint_color = Vec3::new(0.75, 0.22, 0.18);
+        let jitter = oxy_sculpt::PaintJitter { hue: 35.0, saturation: 25.0, value: 30.0, per_dab: true };
+        e.set_paint_jitter(jitter);
+        let preset = oxy_sculpt::BrushPreset::from_text(&e.capture_preset("Jitter").to_text()).unwrap();
+        assert_eq!(preset.paint_jitter, jitter);
+        assert_eq!(oxy_sculpt::BrushPreset::from_text("brush = paint").unwrap().paint_jitter, Default::default());
+        let draft = crate::settings::Settings::from_text(&e.settings().to_text());
+        let mut reopened = editor();
+        reopened.apply_settings(&draft);
+        assert_eq!(reopened.paint_jitter(BrushKind::Paint), jitter);
+        assert_eq!(reopened.paint_jitter(BrushKind::Draw), Default::default());
+
+        let base = e.scene.active().mesh.clone();
+        let start = Vec2::new(360.0, 300.0);
+        let end = Vec2::new(450.0, 310.0);
+        e.sync_brush_look();
+        e.spacing = 0.2;
+        e.pressure = 0.55;
+        e.pressure_strength = true;
+        e.pressure_radius = true;
+        drag(&mut e, start, end);
+        let colors = e.scene.active().mesh.color.clone();
+        assert_ne!(colors, base.color);
+        let recipe = e.living.strokes[0].recipe.as_ref().unwrap().clone();
+        assert_eq!(recipe.paint_jitter, jitter);
+        assert_eq!(recipe.settings.spacing, 0.2);
+        assert!(recipe.events.iter().any(|ev| matches!(ev, oxy_sculpt::RecipeEvent::Sample { sample, .. }
+            if sample.pressure > 0.0 && sample.pressure < 1.0)));
+        replay_matches(&e, &base);
+        e.undo();
+        assert!(e.scene.active().mesh.color == base.color);
+        e.redo();
+        assert!(e.scene.active().mesh.color == colors);
+        drag(&mut e, start, end);
+        assert_ne!(e.living.strokes.last().unwrap().recipe.as_ref().unwrap().paint_seed, recipe.paint_seed);
+        e.undo();
+        let id = e.living.strokes[0].id;
+        e.living_open_edit(id).unwrap();
+        assert_eq!(e.living_edit_recipe().unwrap().paint_seed, recipe.paint_seed);
+        e.living_edit_setting(crate::living::StrokeSetting::Spacing(0.6), false);
+        wait_job(&mut e);
+        e.living_close_edit();
+        assert_eq!(e.living.strokes[0].recipe.as_ref().unwrap().paint_seed, recipe.paint_seed);
+        assert_ne!(e.scene.active().mesh.color, colors);
+        e.undo();
+        assert!(e.scene.active().mesh.color == colors);
     }
 
     #[test]

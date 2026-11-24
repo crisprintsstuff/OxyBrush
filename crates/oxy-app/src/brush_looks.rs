@@ -12,7 +12,7 @@
 //! before a stroke, rather than at each of them.
 
 use crate::editor::{Editor, StrokeMode};
-use oxy_sculpt::{BrushKind, BrushPreset};
+use oxy_sculpt::{BrushKind, BrushPreset, PaintJitter};
 
 impl Editor {
     /// Put away the previous brush's settings and bring back the current
@@ -41,6 +41,7 @@ impl Editor {
             let mut look = self.capture_preset(kind.label());
             look.kind = kind;
             look.accumulate = self.brush_accumulates(kind);
+            look.paint_jitter = self.paint_jitter(kind);
             look.pressure_curves = self.brush_pressure_overrides(kind);
             self.brush_looks.insert(kind, look);
         }
@@ -54,6 +55,19 @@ impl Editor {
         let kind = self.brush_kind;
         let current = self.capture_preset(kind.label());
         self.brush_looks.entry(kind).or_insert(current).accumulate = accumulate;
+    }
+
+    pub(crate) fn paint_jitter(&self, kind: BrushKind) -> PaintJitter {
+        if kind == BrushKind::Paint {
+            self.brush_looks.get(&kind).map_or_else(PaintJitter::default, |look| look.paint_jitter)
+        } else {
+            PaintJitter::default()
+        }
+    }
+
+    pub(crate) fn set_paint_jitter(&mut self, jitter: PaintJitter) {
+        let current = self.capture_preset(BrushKind::Paint.label());
+        self.brush_looks.entry(BrushKind::Paint).or_insert(current).paint_jitter = jitter;
     }
 
     pub(crate) fn brush_pressure_overrides(&self, kind: BrushKind) -> [Option<[f32; 4]>; 2] {

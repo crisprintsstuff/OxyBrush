@@ -618,6 +618,8 @@ mod tests {
             view: Vec3::Z,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: None,
             events: vec![event(0.0, 0.0), event(2.0, 0.0), event(4.0, 0.0), event(4.0, 1.5)],
         };
@@ -717,6 +719,8 @@ mod tests {
             view: Vec3::Z,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: None,
             events: vec![RecipeEvent::Sample {
                 sample: StrokeSample { position: Vec3::new(1.0, 2.0, 3.0), normal: Vec3::Y, pressure: 0.8 },
@@ -750,6 +754,8 @@ mod tests {
             view: Vec3::Z,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: None,
             events: vec![RecipeEvent::Sample { sample, spacing: 0.1, strength: 1.0, max_dabs: 0 }],
         };

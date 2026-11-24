@@ -41,6 +41,8 @@ pub struct StrokeRecipe {
     pub grab_through: bool,
     /// Paint brush color (sRGB).
     pub paint: Vec3,
+    pub paint_jitter: crate::PaintJitter,
+    pub paint_seed: u64,
     pub alpha: Option<AlphaStamp>,
     pub events: Vec<RecipeEvent>,
 }
@@ -77,8 +79,8 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// 1 named an alpha by name plus a sample of raw bits. 2 names it by a
 /// hash of every pixel as stored (16-bit), and does not use the name. 3
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
-/// flag bit 6 to disable buildup.
-const VERSION: u8 = 5;
+/// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
+const VERSION: u8 = 6;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -89,6 +91,7 @@ impl StrokeRecipe {
             .with_view(self.view)
             .with_grab_through(self.grab_through)
             .with_paint_color(self.paint)
+            .with_paint_jitter(self.paint_jitter, self.paint_seed)
             .with_alpha(self.alpha.clone())
             .with_symmetry_center(self.center)
     }
@@ -126,6 +129,7 @@ impl StrokeRecipe {
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
+    /// [version 6+: hue:f32 saturation:f32 value:f32 per_dab:u8 seed:u64]
     /// [alpha: name:text size:u32 id:u64 rotation:f32 follow:u8 up:f32*3]
     /// events:u32 then per event  tag:u8
     ///   0 sample:   position:f32*3 normal:f32*3 pressure:f32 spacing:f32 strength:f32 max_dabs:u32
@@ -138,7 +142,14 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        self.encode(if self.settings.accumulate { 4 } else { VERSION })
+        let version = if self.paint_jitter != crate::PaintJitter::default() || self.paint_seed != 0 {
+            VERSION
+        } else if self.settings.accumulate {
+            4
+        } else {
+            5
+        };
+        self.encode(version)
     }
 
     /// Tests use earlier versions to verify compatibility.
@@ -187,6 +198,13 @@ impl StrokeRecipe {
             for x in self.settings.pressure_curves.iter().flatten() {
                 put_f32(&mut b, *x);
             }
+        }
+        if version >= 6 {
+            for amount in [self.paint_jitter.hue, self.paint_jitter.saturation, self.paint_jitter.value] {
+                put_f32(&mut b, amount);
+            }
+            b.push(u8::from(self.paint_jitter.per_dab));
+            b.extend_from_slice(&self.paint_seed.to_le_bytes());
         }
         if let Some(a) = &self.alpha {
             put_text(&mut b, &a.alpha.name);
@@ -295,6 +313,17 @@ impl StrokeRecipe {
                 }
             }
         }
+        let (paint_jitter, paint_seed) = if version >= 6 {
+            let jitter = crate::PaintJitter {
+                hue: r.f32()?.clamp(0.0, 180.0),
+                saturation: r.f32()?.clamp(0.0, 100.0),
+                value: r.f32()?.clamp(0.0, 100.0),
+                per_dab: r.u8()? != 0,
+            };
+            (jitter, r.u64()?)
+        } else {
+            (crate::PaintJitter::default(), 0)
+        };
         let alpha = if flags & 32 != 0 {
             let name = r.text()?;
             let size = r.u32()?;
@@ -346,6 +375,8 @@ impl StrokeRecipe {
             view,
             grab_through: flags & 16 != 0,
             paint,
+            paint_jitter,
+            paint_seed,
             alpha,
             events,
         })
@@ -767,6 +798,8 @@ mod tests {
             view: Vec3::ZERO,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: None,
             events: vec![RecipeEvent::Modulation { size: 1.0, strength: 1.0 }],
         };
@@ -851,6 +884,38 @@ mod tests {
         let mut third = base.clone();
         loaded.replay(&mut third, &mut |_, _| {});
         assert_eq!(third.positions, wide_mesh.positions);
+    }
+
+    #[test]
+    fn jittered_paint_recipe_preserves_the_seed_and_replays_vertex_colors() {
+        let jitter = crate::PaintJitter { hue: 25.0, saturation: 18.0, value: 18.0, per_dab: true };
+        let base = primitives::icosphere(4, 1.0);
+        let mut live = base.clone();
+        let mut stroke = Stroke::new(
+            BrushSettings { kind: BrushKind::Paint, radius: 0.3, strength: 1.0, ..Default::default() },
+            Symmetry { x: true, ..Default::default() },
+            false,
+        )
+        .with_paint_color(Vec3::new(0.75, 0.22, 0.18))
+        .with_paint_jitter(jitter, 12345)
+        .with_recording();
+        sculpt(&mut stroke, &mut live, &path(12));
+        let recipe = stroke.take_recipe().unwrap();
+        assert_eq!(recipe.paint_seed, 12345);
+        assert_eq!(recipe.paint_jitter, jitter);
+        let decoded = StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_| None).unwrap();
+        assert_eq!(decoded, recipe);
+        let mut replayed = base.clone();
+        decoded.replay(&mut replayed, &mut |_, _| {});
+        assert_eq!(replayed.color, live.color);
+        assert_eq!(live.positions, base.positions);
+
+        let old = StrokeRecipe::from_bytes(&recipe.encode(5), &|_| None).unwrap();
+        assert_eq!(old.paint_jitter, crate::PaintJitter::default());
+        assert_eq!(old.paint_seed, 0);
+        let mut flat = base;
+        old.replay(&mut flat, &mut |_, _| {});
+        assert_ne!(flat.color, live.color);
     }
 
     #[test]
@@ -1032,6 +1097,8 @@ mod tests {
             view: Vec3::ZERO,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: Some(AlphaStamp {
                 alpha: Arc::new(original.clone()),
                 rotation: 0.2,

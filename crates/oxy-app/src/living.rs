@@ -2348,7 +2348,13 @@ fn surface_of(stroke: &LivingStroke) -> SurfaceChange {
 }
 
 fn recipe_same(a: &StrokeRecipe, b: &StrokeRecipe) -> bool {
-    a.settings == b.settings && a.invert == b.invert && alpha_same(&a.alpha, &b.alpha) && a.events == b.events
+    a.settings == b.settings
+        && a.invert == b.invert
+        && a.paint == b.paint
+        && a.paint_jitter == b.paint_jitter
+        && a.paint_seed == b.paint_seed
+        && alpha_same(&a.alpha, &b.alpha)
+        && a.events == b.events
 }
 
 fn alpha_same(a: &Option<AlphaStamp>, b: &Option<AlphaStamp>) -> bool {
