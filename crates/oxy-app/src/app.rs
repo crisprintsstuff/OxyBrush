@@ -859,7 +859,7 @@ impl App {
         let hard_edge_angle = ed.view.hard_edge_angle;
         let mut items = Vec::new();
         // The retopology tool draws its piece as an overlay, on top of the surface.
-        let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece);
+        let retopo_piece = ed.retopo.as_ref().and_then(|r| r.cage_piece.filter(|&id| id != r.surface));
         // Poly Edit shows the piece's polygon edges as a depth-tested
         // wireframe, so the surface in front hides the edges behind it.
         let poly_wire = ed.poly_wire_piece();

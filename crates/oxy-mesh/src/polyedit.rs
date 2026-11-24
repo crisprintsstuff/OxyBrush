@@ -1044,6 +1044,11 @@ pub fn cage_from_mesh(mesh: &crate::Mesh) -> Cage {
     Cage { positions: mesh.positions.clone(), faces, linked: Some(mesh.topology_version()), ..Default::default() }
 }
 
+/// Recover the mesh's polygon cage, including authored n-gon boundaries.
+pub fn recover_polygon_cage(mesh: &crate::Mesh) -> Cage {
+    if mesh.ngon_edges().is_empty() { cage_from_mesh(mesh) } else { crate::multires::cage_from_polygon_metadata(mesh) }
+}
+
 /// Check the cage's INVARIANT (see the module docs). Returns what's wrong.
 pub fn validate(c: &Cage) -> Result<(), String> {
     let n = c.positions.len();

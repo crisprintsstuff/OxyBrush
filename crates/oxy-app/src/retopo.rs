@@ -31,6 +31,7 @@ pub const PICK_PT: f32 = 9.0;
 pub const FACE_REACH_PT: f32 = 160.0;
 /// A press that moves less than this (logical points) is a click.
 const CLICK_PT: f32 = 4.0;
+const MAX_EDIT_FACES: usize = 100_000;
 
 /// The tool's state while its window is open.
 pub struct Retopo {
@@ -38,6 +39,8 @@ pub struct Retopo {
     pub surface: u64,
     /// The piece holding the cage, once it has a face.
     pub cage_piece: Option<u64>,
+    /// Original snapping surface when the cage and surface are the same piece.
+    edit_surface: Option<Box<Mesh>>,
     /// Loose points placed before the first face.
     pub draft: Cage,
     /// Relax brush: how much each move relaxes (0..=1), and its radius (points).
@@ -158,6 +161,30 @@ fn face_key(c: &[u32]) -> Vec<u32> {
     k
 }
 
+/// Reuse a linked cage, or recover one from the current polygon mesh.
+fn ensure_editable_cage(piece: &mut Piece) -> bool {
+    let tris = piece.mesh.triangle_count();
+    if piece.is_spheres() || piece.link.is_some() || tris == 0 {
+        return false;
+    }
+    if let Some(cage) = piece.cage.as_mut().filter(|c| c.is_linked_to(&piece.mesh)) {
+        return cage.faces.len() <= MAX_EDIT_FACES && cage.sync_from(&piece.mesh);
+    }
+    let min_faces = piece
+        .mesh
+        .known_polygons()
+        .map_or(tris.div_ceil(2), |(quads, ngons)| tris.saturating_sub(quads.len() + ngons.len()));
+    if min_faces > MAX_EDIT_FACES {
+        return false;
+    }
+    let cage = oxy_mesh::polyedit::recover_polygon_cage(&piece.mesh);
+    if cage.faces.len() > MAX_EDIT_FACES {
+        return false;
+    }
+    piece.cage = Some(cage);
+    true
+}
+
 impl Editor {
     /// The mirror plane, while mirroring is on.
     pub fn retopo_mirror(&self) -> Option<Mirror> {
@@ -184,34 +211,51 @@ impl Editor {
         }
         self.gizmo = None;
         let active = self.scene.active();
-        let (surface, cage_piece) = if active.cage.as_ref().is_some_and(|c| c.is_linked_to(&active.mesh)) {
-            let cage_id = active.id;
-            let remembered = self.retopo_last.filter(|&(s, c)| c == cage_id && self.scene.index_of(s).is_some());
-            let surface = remembered.map(|(s, _)| s).or_else(|| {
-                self.scene
-                    .pieces
-                    .iter()
-                    .filter(|p| p.id != cage_id && p.visible && p.cage.is_none())
-                    .max_by_key(|p| p.mesh.triangle_count())
-                    .map(|p| p.id)
-            });
-            match surface {
-                Some(s) => (s, Some(cage_id)),
-                None => {
-                    self.status = "Retopology: show the sculpt to draw on, then try again".into();
-                    return;
-                }
-            }
+        let active_id = active.id;
+        let remembered = self.retopo_last.filter(|&(surface, cage)| {
+            (surface == active_id || cage == active_id)
+                && self.scene.index_of(surface).is_some()
+                && self.scene.index_of(cage).is_some()
+        });
+        let (surface, cage_piece) = if let Some((surface, cage)) = remembered {
+            (surface, Some(cage))
+        } else if active.cage.is_some() {
+            let surface = self
+                .scene
+                .pieces
+                .iter()
+                .filter(|p| p.id != active_id && p.visible && p.cage.is_none())
+                .max_by_key(|p| p.mesh.triangle_count())
+                .map_or(active_id, |p| p.id);
+            (surface, Some(active_id))
         } else {
-            let surface = active.id;
-            // Continue the cage last drawn over this piece, if it is still there.
-            let cage = self
-                .retopo_last
-                .filter(|&(s, c)| s == surface && self.scene.index_of(c).is_some())
-                .map(|(_, c)| c)
-                .filter(|&c| self.scene.pieces.iter().any(|p| p.id == c && p.cage.is_some()));
-            (surface, cage)
+            (active_id, None)
         };
+        self.open_retopo(surface, cage_piece);
+    }
+
+    /// Edit the selected mesh in place, using its current surface for snapping.
+    pub fn retopo_edit_active(&mut self) {
+        if self.job.is_some() {
+            self.status = "Wait for the running operation to finish".into();
+            return;
+        }
+        if self.retopo.as_ref().is_some_and(|r| !r.draft.is_empty()) {
+            self.status = "Finish the loose retopology points or close the tool before switching meshes".into();
+            return;
+        }
+        let Some(id) = self.scene.try_active().map(|p| p.id) else { return };
+        self.pointer_up();
+        self.open_retopo(id, Some(id));
+    }
+
+    fn open_retopo(&mut self, surface: u64, cage_piece: Option<u64>) {
+        if let Some(id) = cage_piece
+            && !self.scene.get_mut(id).is_some_and(ensure_editable_cage)
+        {
+            self.status = format!("Retopology needs an independent mesh with faces (up to {MAX_EDIT_FACES} polygons)");
+            return;
+        }
         if self.scene.index_of(surface).is_none_or(|i| self.scene.pieces[i].mesh.triangle_count() == 0) {
             self.status = "Retopology needs a piece to draw on".into();
             return;
@@ -219,6 +263,8 @@ impl Editor {
         self.retopo = Some(Retopo {
             surface,
             cage_piece,
+            edit_surface: (cage_piece == Some(surface))
+                .then(|| Box::new(self.scene.get(surface).unwrap().mesh.clone())),
             draft: Cage::default(),
             relax_strength: 0.5,
             relax_radius_pt: 40.0,
@@ -232,7 +278,11 @@ impl Editor {
         });
         self.retopo_sync();
         let name = self.scene.index_of(surface).map(|i| self.scene.pieces[i].name.clone()).unwrap_or_default();
-        self.status = format!("Retopology on {name}: click to place points, Shift+click between them to make a quad");
+        self.status = if cage_piece == Some(surface) {
+            format!("Retopology: editing {name}")
+        } else {
+            format!("Retopology on {name}: click to place points, Shift+click between them to make a quad")
+        };
     }
 
     /// Close the tool. The retopology piece stays in the scene.
@@ -241,11 +291,13 @@ impl Editor {
             self.retopo_pointer_up();
         }
         if let Some(r) = self.retopo.take() {
-            if let Some(c) = r.cage_piece {
+            if let Some(c) = r.cage_piece.filter(|c| *c != r.surface) {
                 self.retopo_last = Some((r.surface, c));
             }
             let dots = r.draft.positions.len();
-            self.status = if r.cage_piece.is_some() {
+            self.status = if r.cage_piece == Some(r.surface) {
+                "Retopology done: edits kept on the piece".into()
+            } else if r.cage_piece.is_some() {
                 "Retopology done: the new mesh is the Retopo piece".into()
             } else if dots > 0 {
                 format!("Retopology closed; {dots} loose point(s) without faces were dropped")
@@ -291,17 +343,15 @@ impl Editor {
         let Some(id) = r.cage_piece else { return };
         match doc.scene.pieces.iter_mut().find(|p| p.id == id) {
             Some(p) => {
-                let synced = match p.cage.as_mut() {
-                    Some(c) => c.sync_from(&p.mesh),
-                    None => false,
-                };
+                let linked = p.cage.as_ref().is_some_and(|c| c.is_linked_to(&p.mesh));
+                let synced = ensure_editable_cage(p);
+                if !linked {
+                    r.view_key = None;
+                }
                 if !synced {
-                    let doc = &mut self.documents[self.active_document];
-                    if let Some(r) = doc.retopo.as_mut() {
-                        r.cage_piece = None;
-                        r.view_key = None;
-                    }
-                    self.status = "The retopology piece was changed by another tool; starting a new one".into();
+                    self.retopo = None;
+                    self.status = format!("Retopology closed: the mesh is empty or exceeds {MAX_EDIT_FACES} polygons");
+                    return;
                 }
             }
             None => {
@@ -329,19 +379,23 @@ impl Editor {
         }
     }
 
+    fn snapping_surface(&self) -> Option<&Mesh> {
+        self.retopo.as_ref()?.edit_surface.as_deref().or_else(|| self.surface_piece().map(|p| &p.mesh))
+    }
+
     /// The live surface under window pixel `p`: point and normal.
     pub fn retopo_surface_at(&self, p: Vec2) -> Option<(Vec3, Vec3)> {
-        let s = self.surface_piece()?;
+        let s = self.snapping_surface()?;
         let (o, d) = self.camera.ray(self.canvas_local(p), self.canvas_size());
-        s.mesh.raycast(o, d).map(|h| (h.point, h.normal))
+        s.raycast(o, d).map(|h| (h.point, h.normal))
     }
 
     /// The nearest point of the live surface along `n` (either way) from `p`.
     fn snap_along(&self, p: Vec3, n: Vec3) -> Vec3 {
-        let Some(s) = self.surface_piece() else { return p };
+        let Some(s) = self.snapping_surface() else { return p };
         let n = n.normalize_or(Vec3::Y);
-        let a = s.mesh.raycast(p, n).map(|h| (h.t, h.point));
-        let b = s.mesh.raycast(p, -n).map(|h| (h.t, h.point));
+        let a = s.raycast(p, n).map(|h| (h.t, h.point));
+        let b = s.raycast(p, -n).map(|h| (h.t, h.point));
         match (a, b) {
             (Some(a), Some(b)) => {
                 if a.0 <= b.0 {
@@ -527,7 +581,7 @@ impl Editor {
 
     /// Put `cage` in place as one undo step named `label`, given the state
     /// before the change. Rebuilds the piece's mesh when faces changed.
-    fn commit_cage(&mut self, label: &str, before: Snapshot, mut cage: Cage) {
+    fn commit_cage(&mut self, label: &str, before: Snapshot, mut cage: Cage) -> bool {
         self.bump_generation();
         let doc = &mut self.documents[self.active_document];
         let cage_piece = doc.retopo.as_ref().and_then(|r| r.cage_piece);
@@ -536,6 +590,32 @@ impl Editor {
             Some(i) => {
                 let id = self.scene.pieces[i].id;
                 let faces_same = before.cage.faces == cage.faces && cage.is_linked_to(&self.scene.pieces[i].mesh);
+                if !faces_same {
+                    let piece = &self.scene.pieces[i];
+                    let message = if piece.multires.is_some() {
+                        Some("Use Keep this level only to change topology on a piece with subdivision levels")
+                    } else if piece.mesh.has_uvs() || piece.mesh.hidden().iter().any(|&hidden| hidden) {
+                        Some(
+                            "Retopology can move points on this mesh. Topology changes require a mesh without UVs or hidden faces",
+                        )
+                    } else if cage.faces.is_empty() && self.retopo.as_ref().is_some_and(|r| r.surface == id) {
+                        Some("Retopology cannot delete the last face of the edited mesh")
+                    } else if cage.faces.len() > MAX_EDIT_FACES {
+                        Some("Retopology would exceed the polygon limit")
+                    } else {
+                        None
+                    };
+                    if let Some(message) = message {
+                        if let Some(mesh) = before.mesh {
+                            let piece = &mut self.scene.pieces[i];
+                            piece.mesh = mesh;
+                            piece.mesh.mark_all_dirty();
+                            piece.cage = Some(before.cage);
+                        }
+                        self.status = message.into();
+                        return false;
+                    }
+                }
                 if faces_same {
                     // Only points moved (or loose points changed): move the
                     // mesh's vertices, same topology.
@@ -548,8 +628,14 @@ impl Editor {
                     p.cage = Some(cage);
                     let prev = before.mesh.unwrap_or_else(|| p.mesh.clone());
                     self.history.record_cage(label, id, prev, Some(before.cage));
-                } else if let Some(mesh) = cage.build_mesh() {
+                } else if let Some(mut mesh) = cage.build_mesh() {
                     let p = &mut self.scene.pieces[i];
+                    let source = before.mesh.as_ref().unwrap_or(&p.mesh);
+                    if source.is_painted() || source.mask.iter().any(|&m| m != 0.0) {
+                        let groups = mesh.groups().to_vec();
+                        oxy_topo::transfer_attributes(&[source], &mut mesh);
+                        mesh.set_groups(groups);
+                    }
                     let prev = std::mem::replace(&mut p.mesh, mesh);
                     p.cage = Some(cage);
                     self.history.record_cage(label, id, before.mesh.unwrap_or(prev), Some(before.cage));
@@ -569,9 +655,9 @@ impl Editor {
                     if let Some(r) = doc.retopo.as_mut() {
                         r.draft = cage;
                     }
-                    return;
+                    return true;
                 }
-                let Some(mesh) = cage.build_mesh() else { return };
+                let Some(mesh) = cage.build_mesh() else { return false };
                 let name = self.scene.unique_name("Retopo");
                 let mut piece = Piece::new(name, mesh);
                 piece.cage = Some(cage);
@@ -585,6 +671,7 @@ impl Editor {
                 self.retopo_last = Some((r.surface, id));
             }
         }
+        true
     }
 
     /// Change the cage with `f` as one undo step. False if `f` changed nothing.
@@ -595,8 +682,7 @@ impl Editor {
         if !f(self, &mut cage) {
             return false;
         }
-        self.commit_cage(label, before, cage);
-        true
+        self.commit_cage(label, before, cage)
     }
 
     /// Make the face Shift previews at `p`.
@@ -947,6 +1033,15 @@ impl Editor {
         Some((self.retopo_surface_at(pa)?.0, self.retopo_surface_at(pb)?.0))
     }
 
+    /// Flatten the displayed level explicitly before changing its topology.
+    pub fn retopo_keep_level(&mut self) {
+        if let Some(index) = self.retopo.as_ref().and_then(|r| r.cage_piece).and_then(|id| self.scene.index_of(id)) {
+            self.scene.set_active(index);
+            self.keep_level_only();
+            self.retopo_sync();
+        }
+    }
+
     /// Give the retopology piece `levels` subdivision levels, each projected
     /// onto the surface, in the background: level 1 stays the drawn quad
     /// mesh, the top level carries the sculpt's detail. One undo step.
@@ -957,6 +1052,10 @@ impl Editor {
             self.status = "Draw some quads first, then project the detail onto them".into();
             return;
         };
+        if cage_id == surface_id {
+            self.status = "Subdivide and project needs a separate reference surface".into();
+            return;
+        }
         let (Some(ci), Some(si)) = (self.scene.index_of(cage_id), self.scene.index_of(surface_id)) else { return };
         if self.scene.pieces[ci].multires.is_some() {
             self.status =
@@ -1502,12 +1601,73 @@ mod tests {
         let moved = e.scene.pieces[1].mesh.positions[0];
         e.start_retopo();
         assert_eq!(cage(&e).positions[0], moved);
-        // A remesh of the Retopo piece drops its link: a new cage starts.
+        // Rebuild a stale cage from the edited mesh on the same piece.
         e.finish_retopo();
         e.scene.pieces[1].mesh = oxy_mesh::primitives::cube(1, 0.2);
         e.scene.set_active(0);
         e.start_retopo();
+        assert_eq!(e.retopo.as_ref().unwrap().cage_piece, Some(e.scene.pieces[1].id));
+        assert!(cage(&e).is_linked_to(&e.scene.pieces[1].mesh));
+    }
+
+    #[test]
+    fn retopo_edits_a_plain_quad_mesh_in_place() {
+        let mut e = editor();
+        e.scene.active_mut().mesh = oxy_mesh::primitives::cube(1, 1.0);
+        let id = e.scene.active().id;
+        let positions = e.scene.active().mesh.positions.clone();
+        let tris = e.scene.active().mesh.triangle_count();
+        e.start_retopo();
         assert!(e.retopo.as_ref().unwrap().cage_piece.is_none());
+        e.retopo_edit_active();
+        assert_eq!(e.retopo.as_ref().unwrap().cage_piece, Some(id));
+        assert_eq!(e.retopo.as_ref().unwrap().surface, id);
+        assert_eq!(cage(&e).quad_count(), 6);
+        assert!(e.retopo_edit("Move point", |_, c| {
+            c.positions[0].x += 0.01;
+            true
+        }));
+        assert_eq!(e.scene.pieces.len(), 1);
+        assert_eq!(e.scene.active().id, id);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris);
+        assert_ne!(e.scene.active().mesh.positions, positions);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, positions);
+    }
+
+    #[test]
+    fn retopo_reopens_the_same_piece_after_poly_edit() {
+        let mut e = editor();
+        first_quad(&mut e);
+        let id = e.retopo.as_ref().unwrap().cage_piece.unwrap();
+        e.finish_retopo();
+        let index = e.scene.index_of(id).unwrap();
+        e.scene.set_active(index);
+        e.start_poly_edit();
+        let (_, before, old_cage) = e.poly_before().unwrap();
+        let subdivided = oxy_mesh::catmull_clark::subdivide(e.poly_cage().unwrap());
+        e.poly_commit("Test Poly Edit topology change", before, old_cage, subdivided);
+        e.finish_poly_edit();
+        e.start_retopo();
+        assert_eq!(e.retopo.as_ref().unwrap().cage_piece, Some(id));
+        assert_eq!(cage(&e).quad_count(), 4);
+        assert_eq!(e.scene.pieces.len(), 2);
+    }
+
+    #[test]
+    fn retopo_recovers_a_stored_ngon_boundary() {
+        let mut e = editor();
+        let mut pentagon = Cage::default();
+        for i in 0..5 {
+            let angle = i as f32 * std::f32::consts::TAU / 5.0;
+            pentagon.positions.push(Vec3::new(angle.cos(), angle.sin(), 0.0));
+        }
+        pentagon.faces.push(oxy_mesh::retopo::Face::new(vec![0, 1, 2, 3, 4]));
+        e.scene.active_mut().mesh = pentagon.build_mesh().unwrap();
+        assert!(e.scene.active().cage.is_none());
+        e.retopo_edit_active();
+        assert_eq!(cage(&e).faces.len(), 1);
+        assert_eq!(corners(&cage(&e).faces[0]).len(), 5);
     }
 
     #[test]
@@ -1628,6 +1788,16 @@ mod tests {
         let mr = p.multires.as_ref().expect("levels");
         assert_eq!(mr.level_count(), 3);
         assert_eq!(p.mesh.triangle_count(), 4 * 16, "two levels of a 4-triangle mesh");
+        e.retopo_sync();
+        assert_eq!(e.retopo.as_ref().unwrap().cage_piece, Some(id));
+        assert_eq!(cage(&e).quad_count(), 32);
+        assert!(!e.retopo_edit("Delete face", |_, c| {
+            c.faces.pop();
+            true
+        }));
+        assert!(e.scene.get(id).unwrap().multires.is_some());
+        let p = e.scene.get(id).unwrap();
+        let mr = p.multires.as_ref().unwrap();
         // The top level lies on the sphere, not on the flat quads under it.
         for v in &p.mesh.positions {
             assert!((v.length() - 1.0).abs() < 0.01, "{}", v.length());
@@ -1638,6 +1808,15 @@ mod tests {
         base.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
         want.sort_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)));
         assert_eq!(base, want);
+        e.retopo_keep_level();
+        assert!(e.scene.get(id).unwrap().multires.is_none());
+        assert!(e.retopo_edit("Delete face", |_, c| c.faces.pop().is_some()));
+        assert_eq!(cage(&e).quad_count(), 31);
+        e.undo();
+        e.undo();
+        e.retopo_sync();
+        assert_eq!(cage(&e).quad_count(), 32);
+        assert!(e.scene.get(id).unwrap().multires.is_some());
         // Stepping down to level 1 shows the drawn quads.
         let idx = e.scene.index_of(id).unwrap();
         e.scene.set_active(idx);

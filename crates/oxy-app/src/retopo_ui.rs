@@ -28,6 +28,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
     let surface = ed.retopo.as_ref().map(|r| r.surface);
     let surface_name =
         surface.and_then(|s| ed.scene.index_of(s)).map(|i| ed.scene.pieces[i].name.clone()).unwrap_or_default();
+    let in_place = ed.retopo.as_ref().is_some_and(|r| r.cage_piece == Some(r.surface));
+    let has_levels = ed
+        .retopo
+        .as_ref()
+        .and_then(|r| r.cage_piece)
+        .and_then(|id| ed.scene.get(id))
+        .is_some_and(|p| p.multires.is_some());
     let counts = ed.retopo_cage().map(|c| (c.quad_count(), c.triangle_count(), c.dot_count()));
     let pinned = ed.retopo_cage().map_or(0, |c| c.pinned_count());
     let screen = ctx.content_rect();
@@ -39,7 +46,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         .default_open(true)
         .show(ctx, |ui| {
             ui.set_max_width(340.0);
-            ui.label(RichText::new(format!("Drawing on {surface_name}")).strong());
+            let action = if in_place { "Editing" } else { "Drawing on" };
+            ui.label(RichText::new(format!("{action} {surface_name}")).strong());
+            if !in_place && ui.button("Edit active mesh").on_hover_text("Work directly on the selected piece, up to 100,000 polygons").clicked() {
+                ed.retopo_edit_active();
+            }
             if let Some((q, t, d)) = counts {
                 ui.label(RichText::new(format!("{q} quads, {t} triangles, {d} loose points")).weak().small());
             }
@@ -82,8 +93,17 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
             ui.add_space(4.0);
             ui.separator();
             ui.label(RichText::new("Detail").strong());
+            if has_levels {
+                ui.label("Move or relax points at this level. Keep this level only to change topology.");
+                if ui.add_enabled(ed.job.is_none(), egui::Button::new("Keep this level only"))
+                    .on_hover_text("Remove the other subdivision levels in one undo step.")
+                    .clicked()
+                {
+                    ed.retopo_keep_level();
+                }
+            }
             ui.horizontal(|ui| {
-                let can = counts.is_some_and(|c| c.0 + c.1 > 0) && ed.job.is_none();
+                let can = !in_place && !has_levels && counts.is_some_and(|c| c.0 + c.1 > 0) && ed.job.is_none();
                 let mut levels = ed.retopo.as_ref().map_or(3, |r| r.project_levels);
                 ui.add(crate::widgets::Bar(egui::Slider::new(&mut levels, 1..=5).text("levels")));
                 if let Some(r) = ed.retopo.as_mut() {
@@ -143,9 +163,10 @@ pub fn overlay(ui: &egui::Ui, ed: &mut Editor, canvas: egui::Rect) {
         }
     }
     let open = cage.open_vertices();
+    let used = cage.used();
     for v in 0..cage.positions.len() as u32 {
         if let Some(p) = at(v) {
-            let loose = !cage.faces.iter().any(|f| corners(f).contains(&v));
+            let loose = !used[v as usize];
             let radius = if loose { 4.5 } else { 3.0 };
             if cage.is_pinned(v) {
                 // Pinned: a square in the accent colour, so it stands out from points relax can move.
