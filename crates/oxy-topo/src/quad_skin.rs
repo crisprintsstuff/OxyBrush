@@ -3,9 +3,12 @@
 use glam::{Quat, Vec3};
 use oxy_mesh::armature::{Armature, Sphere};
 use oxy_mesh::retopo::{Cage, Face, edge_key};
+use oxy_mesh::{Mesh, catmull_clark};
 use std::collections::{BTreeSet, HashMap};
 
 const SIDES: usize = 8;
+pub const MAX_QUAD_SUBDIVISION: u8 = 2;
+const MAX_SUBDIVIDED_FACES: usize = 16_384;
 type Ring = [u32; SIDES];
 
 struct Section {
@@ -20,6 +23,7 @@ pub enum QuadSkinError {
     UnsupportedBranching,
     CrowdedLinks,
     InvalidSurface,
+    SubdivisionBudget,
 }
 
 impl std::fmt::Display for QuadSkinError {
@@ -29,6 +33,9 @@ impl std::fmt::Display for QuadSkinError {
             Self::UnsupportedBranching => "Quad skin supports a chain or one three-way junction",
             Self::CrowdedLinks => "The links are too short or close together for the quad skin",
             Self::InvalidSurface => "The quad skin would overlap or produce invalid faces",
+            Self::SubdivisionBudget => {
+                "The quad skin exceeds the subdivision face limit. Lower Subdivision and try again"
+            }
         })
     }
 }
@@ -104,6 +111,24 @@ pub fn quad_skin_armature(armature: &Armature) -> Result<Cage, QuadSkinError> {
     }
     validate(&cage)?;
     Ok(cage)
+}
+
+/// Build the polygon mesh at the requested detail, preserving the cage's faces.
+pub fn quad_skin_mesh(armature: &Armature, levels: u8) -> Result<Mesh, QuadSkinError> {
+    if levels > MAX_QUAD_SUBDIVISION {
+        return Err(QuadSkinError::SubdivisionBudget);
+    }
+    let mut cage = quad_skin_armature(armature)?;
+    if levels > 0 {
+        if catmull_clark::face_count(&cage, u32::from(levels)) > MAX_SUBDIVIDED_FACES {
+            return Err(QuadSkinError::SubdivisionBudget);
+        }
+        for _ in 0..levels {
+            cage = catmull_clark::subdivide(&cage);
+        }
+        validate(&cage)?;
+    }
+    cage.build_mesh().ok_or(QuadSkinError::InvalidSurface)
 }
 
 fn add_ring(cage: &mut Cage, center: Vec3, radius: f32, direction: Vec3, axis: Vec3) -> Section {
@@ -319,6 +344,31 @@ mod tests {
         let mesh = smooth.build_mesh().unwrap();
         assert!(crate::check_watertight(&mesh));
         assert!(mesh.known_polygons().is_some());
+    }
+
+    #[test]
+    fn subdivided_quad_skin_keeps_polygon_faces_and_bounds_the_work() {
+        let arm = fork(2.5, 1.0);
+        let cage = quad_skin_armature(&arm).unwrap();
+        for level in 0..=MAX_QUAD_SUBDIVISION {
+            let mesh = quad_skin_mesh(&arm, level).unwrap();
+            assert!(crate::check_watertight(&mesh));
+            let output = oxy_mesh::polyedit::cage_from_mesh(&mesh);
+            assert_eq!(output.faces.len(), catmull_clark::face_count(&cage, u32::from(level)));
+            if level > 0 {
+                assert_eq!(output.faces.len(), output.quad_count());
+                for &p in &output.positions {
+                    let reflected = Vec3::new(-p.x, p.y, p.z);
+                    assert!(output.positions.iter().any(|q| q.distance(reflected) < 2e-5));
+                }
+            }
+        }
+        let mut long_chain = Armature::new(Vec3::ZERO, 0.3, None);
+        let mut end = 0;
+        for i in 1..=128 {
+            end = long_chain.add_child(end, Vec3::Y * (i as f32 * 2.0), 0.3);
+        }
+        assert!(matches!(quad_skin_mesh(&long_chain, 2), Err(QuadSkinError::SubdivisionBudget)));
     }
 
     #[test]
