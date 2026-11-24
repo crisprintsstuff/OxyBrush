@@ -6597,6 +6597,20 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
         }
     });
     ui.label(RichText::new("Alt erases paint. Use the Pearl or Grey Clay material to see true colors.").weak().small());
+    egui::CollapsingHeader::new("Color Jitter").show(ui, |ui| {
+        let mut jitter = ed.paint_jitter(BrushKind::Paint);
+        let before = jitter;
+        ui.horizontal_wrapped(|ui| {
+            ui.selectable_value(&mut jitter.per_dab, false, "Per Stroke");
+            ui.selectable_value(&mut jitter.per_dab, true, "Per Dab");
+        });
+        ui.add(widgets::Bar(egui::Slider::new(&mut jitter.hue, 0.0..=180.0).text("Hue").suffix("°")));
+        ui.add(widgets::Bar(egui::Slider::new(&mut jitter.saturation, 0.0..=100.0).text("Saturation").suffix(" pp")));
+        ui.add(widgets::Bar(egui::Slider::new(&mut jitter.value, 0.0..=100.0).text("Value").suffix(" pp")));
+        if jitter != before {
+            ed.set_paint_jitter(jitter);
+        }
+    });
     color_actions(ui, ed);
 }
 

@@ -697,6 +697,8 @@ impl Editor {
         recipe.invert = new.invert;
         recipe.alpha = new.alpha.clone();
         recipe.paint = new.paint;
+        recipe.paint_jitter = new.paint_jitter;
+        recipe.paint_seed = new.paint_seed;
         Some((twin, recipe))
     }
 
@@ -888,6 +890,8 @@ mod tests {
             view: Vec3::ZERO,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: Default::default(),
+            paint_seed: 0,
             alpha: None,
             events,
         };

@@ -14,7 +14,7 @@
 //! resolves only if an image of that name is loaded, otherwise the preset
 //! applies without an alpha.
 
-use crate::{BrushKind, Falloff};
+use crate::{BrushKind, Falloff, PaintJitter};
 
 /// Prefix of a brush code (bump the digit if the encoding ever changes).
 pub const CODE_PREFIX: &str = "oxyb1:";
@@ -40,6 +40,7 @@ pub struct BrushPreset {
     pub pressure_curves: [Option<[f32; 4]>; 2],
     pub front_faces_only: bool,
     pub accumulate: bool,
+    pub paint_jitter: PaintJitter,
     pub auto_smooth: f32,
     /// Gravity, 0..=1 (see `BrushSettings::gravity`).
     pub gravity: f32,
@@ -78,6 +79,7 @@ impl BrushPreset {
             pressure_curves: [None; 2],
             front_faces_only: false,
             accumulate: kind.default_accumulate(),
+            paint_jitter: PaintJitter::default(),
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -114,6 +116,12 @@ impl BrushPreset {
             }
         }
         kv("front_faces_only", self.front_faces_only.to_string());
+        if self.kind == BrushKind::Paint && self.paint_jitter != PaintJitter::default() {
+            kv("jitter_hue", self.paint_jitter.hue.to_string());
+            kv("jitter_saturation", self.paint_jitter.saturation.to_string());
+            kv("jitter_value", self.paint_jitter.value.to_string());
+            kv("jitter_per_dab", self.paint_jitter.per_dab.to_string());
+        }
         if !self.accumulate {
             kv("accumulate", "false".into());
         }
@@ -176,6 +184,14 @@ impl BrushPreset {
         }
         // Older presets omitted the key when accumulation was on.
         p.accumulate = flag("accumulate").unwrap_or(true);
+        if kind == BrushKind::Paint {
+            p.paint_jitter = PaintJitter {
+                hue: num("jitter_hue", 0.0..=180.0).unwrap_or_default(),
+                saturation: num("jitter_saturation", 0.0..=100.0).unwrap_or_default(),
+                value: num("jitter_value", 0.0..=100.0).unwrap_or_default(),
+                per_dab: flag("jitter_per_dab").unwrap_or_default(),
+            };
+        }
         if let Some(x) = num("auto_smooth", 0.0..=1.0) {
             p.auto_smooth = x;
         }

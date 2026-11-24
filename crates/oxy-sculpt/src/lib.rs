@@ -9,6 +9,7 @@
 pub mod alpha;
 pub mod detail;
 mod falloff;
+mod paint_jitter;
 pub mod preset;
 pub mod recipe;
 pub mod wire;
@@ -16,6 +17,7 @@ pub mod wire;
 pub use alpha::{Alpha, BuiltinAlpha};
 pub use detail::{PartDetail, PartFrame};
 pub use falloff::{Falloff, shift_exponent};
+pub use paint_jitter::PaintJitter;
 pub use preset::BrushPreset;
 pub use recipe::{RecipeEvent, StoredChange, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 
@@ -800,6 +802,8 @@ pub struct Stroke {
     grab_through: bool,
     /// Paint brush color (sRGB).
     paint: Vec3,
+    paint_jitter: PaintJitter,
+    paint_seed: u64,
     rng: u64,
     /// Point that symmetry mirrors and rotates about (world origin unless
     /// set with [`Stroke::set_symmetry_center`]).
@@ -837,6 +841,8 @@ impl Stroke {
             view: Vec3::ZERO,
             grab_through: false,
             paint: Vec3::ONE,
+            paint_jitter: PaintJitter::default(),
+            paint_seed: 0,
             rng: 0x9e37_79b9_7f4a_7c15,
             sym_center: Vec3::ZERO,
             modulation: (1.0, 1.0),
@@ -911,6 +917,8 @@ impl Stroke {
             view: self.view,
             grab_through: self.grab_through,
             paint: self.paint,
+            paint_jitter: self.paint_jitter,
+            paint_seed: self.paint_seed,
             alpha: self.alpha.clone(),
             events,
         })
@@ -936,6 +944,17 @@ impl Stroke {
     pub fn with_paint_color(mut self, color: Vec3) -> Self {
         self.paint = color;
         self
+    }
+
+    /// Set the color variation and seed for this Paint stroke.
+    pub fn with_paint_jitter(mut self, jitter: PaintJitter, seed: u64) -> Self {
+        self.paint_jitter = jitter;
+        self.paint_seed = seed;
+        self
+    }
+
+    pub fn paint_seed(&self) -> u64 {
+        self.paint_seed
     }
 
     /// Shape every dab with an alpha.
@@ -1213,18 +1232,14 @@ impl Stroke {
                 touch,
             );
         } else {
+            let paint = if kind == BrushKind::Paint && !self.invert && self.paint_jitter.enabled() {
+                self.paint_jitter.sample(self.paint, self.paint_seed, self.dab_count - 1)
+            } else {
+                self.paint
+            };
             for &m in &copies {
                 let dab = base.transformed(m, self.sym_center);
-                apply_kernel(
-                    mesh,
-                    &self.settings,
-                    self.invert,
-                    &dab,
-                    alpha.as_ref(),
-                    self.paint,
-                    &mut self.layer,
-                    touch,
-                );
+                apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_ref(), paint, &mut self.layer, touch);
                 self.auto_smooth_dab(mesh, &dab, touch);
                 self.layer_gravity(mesh, &dab, touch);
             }
