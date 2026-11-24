@@ -4,6 +4,20 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0-beta.24.5] - 2026-11-24
+
+### Added
+
+- **Paint Color Jitter.** Vary hue, saturation, and value per stroke or per dab. Symmetry copies share a color sample. Presets save the settings, and editable strokes keep their seed for replay. [#482](https://github.com/crisprintsstuff/OxyBrush/pull/482)
+
+### Changed
+
+- **Lit surface controls in Materials.** Choose Matcap or Custom, and adjust the surface color, roughness, and specular from Materials. Picking a matcap activates it under viewport lights. [#479](https://github.com/crisprintsstuff/OxyBrush/pull/479)
+
+### Fixed
+
+- **OxySpheres quad build feedback.** Make mesh shows rejected quad builds beside the button and keeps the armature open for adjustments or a switch to Voxel skin. [#479](https://github.com/crisprintsstuff/OxyBrush/pull/479)
+
 ## [4.0.0-beta.24.4] - 2026-11-23
 
 ### Added
@@ -1151,7 +1165,8 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.4...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.5...HEAD
+[4.0.0-beta.24.5]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.4...v4.0.0-beta.24.5
 [4.0.0-beta.24.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...v4.0.0-beta.24.4
 [4.0.0-beta.24.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...v4.0.0-beta.24.3
 [4.0.0-beta.24.2]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24...v4.0.0-beta.24.2

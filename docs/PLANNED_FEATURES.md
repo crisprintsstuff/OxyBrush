@@ -2,7 +2,7 @@
 
 A look ahead for testers. Nothing here is promised or dated: plans change as
 we learn from you. The newest release is
-[4.0.0-beta.24.4](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.4);
+[4.0.0-beta.24.5](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.5);
 the detailed engineering plan is in the [roadmap](ROADMAP.md).
 
 Tell us what you think, and what you'd want first, on
@@ -108,6 +108,9 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 - **More from the Blender bridge**, and more tools for local AI agents.
 
 ## Recently shipped (for context)
+
+- **4.0.0-beta.24.5:** Paint Color Jitter, lit surface controls in Materials,
+  and inline errors for rejected OxySpheres quad builds.
 
 - **4.0.0-beta.24.4:** updated Accumulate defaults, separate Delete and
   Dissolve edge actions, mirrored Knife cuts, and smoother captured alpha
