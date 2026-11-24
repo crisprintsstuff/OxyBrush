@@ -89,7 +89,7 @@ impl Editor {
         if self.size_per_brush {
             self.brush_radius_pt = p.radius_pt;
         }
-        *self.strength_mut(k) = p.strength;
+        // The per-brush strengths array already holds the live value.
         *self.gravity_mut(k) = p.gravity;
         self.falloff = p.falloff;
         self.focal_shift = p.focal_shift;
@@ -127,6 +127,31 @@ impl Editor {
 mod tests {
     use crate::editor::{Editor, StrokeMode};
     use oxy_sculpt::{BrushKind, Falloff};
+
+    #[test]
+    fn brush_switches_do_not_restore_stale_strengths() {
+        let mut ed = Editor::default();
+        ed.remember_brushes = true;
+        ed.settings_per_brush = true;
+        // Store both initial looks, then edit their independently stored strengths.
+        for kind in [BrushKind::Draw, BrushKind::Clay] {
+            ed.brush_kind = kind;
+            ed.sync_brush_look();
+            ed.put_away_look(kind);
+            *ed.strength_mut(kind) = 1.0;
+        }
+
+        let settings = crate::settings::Settings::from_text(&ed.settings().to_text());
+        let mut reopened = Editor::default();
+        reopened.apply_settings(&settings);
+        for editor in [&mut ed, &mut reopened] {
+            for kind in [BrushKind::Draw, BrushKind::Clay].into_iter().cycle().take(12) {
+                editor.brush_kind = kind;
+                editor.sync_brush_look();
+                assert_eq!(editor.strength(kind), 1.0);
+            }
+        }
+    }
 
     #[test]
     fn accumulate_defaults_match_the_brush_and_buildup_preset() {
