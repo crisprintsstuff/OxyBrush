@@ -1,6 +1,6 @@
 # RFC 0042 — Reference image planes
 
-**Status:** Draft
+**Status:** Draft. Phase 1 (viewport X-ray) implemented.
 
 ## Summary
 

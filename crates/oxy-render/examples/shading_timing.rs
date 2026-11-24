@@ -69,21 +69,28 @@ fn main() {
     };
     let bounds = mesh.bounds();
     let scene_bounds = Some((bounds.min.to_array(), bounds.max.to_array()));
-    for (label, ao, cavity, lighting) in [
-        ("plain", 0.0, 0.0, oxy_render::lighting::Lighting::default()),
-        ("cavity only", 0.0, 0.6, oxy_render::lighting::Lighting::default()),
-        ("ambient occlusion + cavity", 0.7, 0.6, oxy_render::lighting::Lighting::default()),
-        ("lights (no shadows) + AO + cavity", 0.7, 0.6, lit(false)),
-        ("lights + 1 shadow map + AO + cavity", 0.7, 0.6, lit(true)),
+    let xray_only = std::env::args().any(|arg| arg == "--xray");
+    for (label, ao, cavity, lighting, xray) in [
+        ("plain", 0.0, 0.0, oxy_render::lighting::Lighting::default(), false),
+        ("plain with X-ray", 0.0, 0.0, oxy_render::lighting::Lighting::default(), true),
+        ("cavity only", 0.0, 0.6, oxy_render::lighting::Lighting::default(), false),
+        ("ambient occlusion + cavity", 0.7, 0.6, oxy_render::lighting::Lighting::default(), false),
+        ("lights (no shadows) + AO + cavity", 0.7, 0.6, lit(false), false),
+        ("lights + 1 shadow map + AO + cavity", 0.7, 0.6, lit(true), false),
         (
             "matcap lit by lights + 1 shadow map + AO + cavity",
             0.7,
             0.6,
             oxy_render::lighting::Lighting { light_matcap: true, ..lit(true) },
+            false,
         ),
-        ("area light, soft shadows (instead of the key) + AO + cavity", 0.7, 0.6, area()),
+        ("area light, soft shadows (instead of the key) + AO + cavity", 0.7, 0.6, area(), false),
     ] {
-        let settings = ViewSettings { ambient_occlusion: ao, cavity, lighting, scene_bounds, ..Default::default() };
+        if xray_only && label != "plain" && !xray {
+            continue;
+        }
+        let settings =
+            ViewSettings { ambient_occlusion: ao, cavity, lighting, scene_bounds, xray, ..Default::default() };
         let mut run = |n: usize| {
             let t = Instant::now();
             for _ in 0..n {

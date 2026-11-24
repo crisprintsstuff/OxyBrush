@@ -158,3 +158,13 @@ fn fs_composite(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
     let shaded = color * ao_factor * (1.0 - 0.75 * k * valley) + (color * 0.5 + vec3<f32>(0.04)) * 0.6 * k * ridge;
     return vec4<f32>(shaded, 1.0);
 }
+
+// Ghost color is already depth resolved. Blend it into the scene once.
+@fragment
+fn fs_xray(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
+    let color = texel(color_tex, frag.xy);
+    if (color.a == 0.0) {
+        discard;
+    }
+    return color;
+}

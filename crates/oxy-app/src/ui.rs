@@ -3783,6 +3783,23 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
 /// View > Shading: ambient occlusion, cavity, hard edges and the viewport
 /// toggles.
 fn shading_controls(ui: &mut Ui, ed: &mut Editor) {
+    ui.checkbox(&mut ed.view.xray, "X-ray")
+        .on_hover_text("Fade meshes in the viewport while preserving normal tool picking");
+    if ed.view.xray {
+        use oxy_render::XrayScope;
+        ui.horizontal_wrapped(|ui| {
+            for scope in [XrayScope::AllVisible, XrayScope::Inactive] {
+                ui.selectable_value(&mut ed.view.xray_scope, scope, scope.label());
+            }
+        });
+        ui.add(widgets::Bar(
+            egui::Slider::new(&mut ed.view.xray_opacity, 0.0..=1.0)
+                .text("Mesh opacity")
+                .custom_formatter(|value, _| format!("{:.0}%", value * 100.0))
+                .custom_parser(|text| text.trim_end_matches('%').parse::<f64>().ok().map(|value| value / 100.0)),
+        ));
+        ui.separator();
+    }
     tips::hover(
         ui.add(crate::widgets::Bar(
             egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"),
