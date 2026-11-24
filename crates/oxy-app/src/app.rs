@@ -131,6 +131,7 @@ enum DialogReply {
     Save { path: Option<PathBuf>, and_continue: bool },
     SaveAs(Option<PathBuf>),
     LoadMatcap(Option<PathBuf>),
+    LoadReference { doc_id: u64, imported: Option<Result<oxy_doc::ReferenceImage, String>> },
     LoadAlpha { doc_id: u64, imported: Option<Result<crate::alpha_library::Imported, String>> },
     ExportAlpha(Option<PathBuf>),
     ImportBrush(Option<PathBuf>),
@@ -951,6 +952,11 @@ impl App {
             egui_wgpu::ScreenDescriptor { size_in_pixels: [g.config.width, g.config.height], pixels_per_point: ppp };
 
         let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
+        g.viewport.set_reference_planes(
+            &g.device,
+            &g.queue,
+            crate::references::planes(&ed.scene.references, &ed.camera, ed.canvas),
+        );
         g.viewport.render(
             &g.device,
             &g.queue,
@@ -1233,6 +1239,21 @@ impl App {
                 }
                 self.spawn_dialog(dialog.pick_file(), DialogReply::LoadMatcap);
             }
+            UiAction::LoadReference => {
+                if self.dialog_active {
+                    return;
+                }
+                let mut dialog = rfd::AsyncFileDialog::new()
+                    .add_filter("Reference image", &["png", "jpg", "jpeg", "PNG", "JPG", "JPEG"]);
+                if let Some(g) = &self.gfx {
+                    dialog = dialog.set_parent(&g.window);
+                }
+                let doc_id = self.editor.documents[self.editor.active_document].id;
+                self.spawn_dialog(dialog.pick_file(), move |path| DialogReply::LoadReference {
+                    doc_id,
+                    imported: path.map(|path| crate::references::load(&path)),
+                });
+            }
             UiAction::LoadAlpha => {
                 if self.dialog_active {
                     return;
@@ -1411,6 +1432,10 @@ impl App {
                     }
                 }
                 DialogReply::ExportAlpha(Some(p)) => self.editor.export_alpha(&p),
+                DialogReply::LoadReference { doc_id, imported: Some(result) } => match result {
+                    Ok(image) => crate::references::insert(&mut self.editor, doc_id, image),
+                    Err(err) => self.editor.status = err,
+                },
                 DialogReply::LoadAlpha { doc_id, imported: Some(result) } => match result {
                     Ok(imported) => self.editor.finish_alpha_import(doc_id, imported),
                     Err(err) => self.editor.status = err,

@@ -673,6 +673,67 @@ impl SavedStrokes {
     }
 }
 
+pub const MAX_REFERENCE_SIDE: u32 = 4096;
+pub const MAX_REFERENCE_BYTES: usize = 64 << 20;
+pub const MAX_REFERENCE_IMAGES: usize = 16;
+
+/// Axis-aligned planes used by viewport references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceAxis {
+    Front,
+    Side,
+    Top,
+}
+
+impl ReferenceAxis {
+    pub const ALL: [Self; 3] = [Self::Front, Self::Side, Self::Top];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Front => "Front",
+            Self::Side => "Side",
+            Self::Top => "Top",
+        }
+    }
+
+    /// The plane's right, up and normal in its canonical view.
+    pub fn basis(self) -> (Vec3, Vec3, Vec3) {
+        match self {
+            Self::Front => (Vec3::X, Vec3::Y, Vec3::Z),
+            Self::Side => (-Vec3::Z, Vec3::Y, Vec3::X),
+            Self::Top => (Vec3::X, -Vec3::Z, Vec3::Y),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferencePlacement {
+    pub name: String,
+    pub axis: ReferenceAxis,
+    pub center: Vec3,
+    /// Width in world units. Height follows the source aspect ratio.
+    pub width: f32,
+    pub opacity: f32,
+    pub visible: bool,
+    pub all_views: bool,
+    pub overlay: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReferenceImage {
+    pub placement: ReferencePlacement,
+    pub size: [u32; 2],
+    /// Straight-alpha sRGB RGBA8, top row first. Shared by undo and saves.
+    pub pixels: std::sync::Arc<[u8]>,
+}
+
+impl ReferenceImage {
+    pub fn pixel_bytes([width, height]: [u32; 2]) -> Option<usize> {
+        (width > 0 && height > 0 && width <= MAX_REFERENCE_SIDE && height <= MAX_REFERENCE_SIDE)
+            .then(|| width as usize * height as usize * 4)
+    }
+}
+
 /// Plain copy of a scene for saving.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct SceneData {
@@ -681,6 +742,7 @@ pub struct SceneData {
     /// Brush alphas kept with the project (captured from view or loaded
     /// from an image), in the order they appear in the alpha list.
     pub alphas: Vec<AlphaData>,
+    pub references: Vec<ReferenceImage>,
 }
 
 /// A brush alpha saved in a project: `size`² values, row-major, row 0 at
@@ -694,18 +756,19 @@ pub struct AlphaData {
 
 pub struct Scene {
     pub pieces: Vec<Piece>,
+    pub references: Vec<ReferenceImage>,
     active: usize,
 }
 
 impl Scene {
     pub fn new(first: Piece) -> Self {
-        Self { pieces: vec![first], active: 0 }
+        Self { pieces: vec![first], active: 0, references: Vec::new() }
     }
 
     /// A scene with no pieces. File > New > Empty scene starts here, and a
     /// saved empty project opens as one.
     pub fn empty() -> Self {
-        Self { pieces: Vec::new(), active: 0 }
+        Self { pieces: Vec::new(), active: 0, references: Vec::new() }
     }
 
     pub fn active_index(&self) -> usize {
@@ -851,13 +914,13 @@ impl Scene {
                 })
                 .collect();
         }
-        SceneData { pieces, active: self.active_index(), alphas: Vec::new() }
+        SceneData { pieces, active: self.active_index(), alphas: Vec::new(), references: self.references.clone() }
     }
 
     /// An empty piece list is an empty scene (File > New > Empty scene).
     pub fn from_data(mut data: SceneData) -> Option<Self> {
         if data.pieces.is_empty() {
-            return Some(Self::empty());
+            return Some(Self { references: data.references, ..Self::empty() });
         }
         let saved_instancers: Vec<Vec<SavedInstancer>> =
             data.pieces.iter_mut().map(|p| std::mem::take(&mut p.instancers)).collect();
@@ -926,7 +989,7 @@ impl Scene {
             }
         }
         // Break any cycles that might exist from corrupt files:
-        let temp_scene = Scene { pieces, active: 0 };
+        let temp_scene = Scene { pieces, active: 0, references: Vec::new() };
         let mut safe_parents = Vec::new();
         for p in &temp_scene.pieces {
             let mut ok_parent = p.parent;
@@ -943,7 +1006,7 @@ impl Scene {
             p.parent = parent;
         }
         let active = data.active.min(pieces.len() - 1);
-        Some(Self { pieces, active })
+        Some(Self { pieces, active, references: data.references })
     }
 }
 

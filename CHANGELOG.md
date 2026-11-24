@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **References.** Import and place project-embedded PNG and JPEG image planes from View > References. Use X-ray to see them through the sculpt or draw a plane as an overlay.
+- **Selection shapes.** Hold Ctrl or Ctrl+Shift for direct shape selection beside the brush shelf.
+- **Kelvin brushes.** Grab has a wider elastic falloff. Twist uses horizontal drag and Scale uses vertical drag. Alt reverses Twist and Scale, and keeps Grab elastic when pulling along the surface normal.
+
 ## [4.0.0-beta.24.5] - 2026-11-24
 
 ### Added

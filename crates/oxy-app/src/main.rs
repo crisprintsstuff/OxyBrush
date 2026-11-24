@@ -40,6 +40,7 @@ mod polyknife;
 mod pose;
 mod presets;
 mod primitive_ui;
+mod references;
 mod retopo;
 mod retopo_ui;
 mod select_shapes;

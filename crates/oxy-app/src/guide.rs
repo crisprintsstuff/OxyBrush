@@ -78,7 +78,7 @@ That direction is an average of the surface around the pointer, eased as you mov
 Each brush keeps its own settings: falloff, focal shift, spacing, stroke mode, stabilizer, auto smooth, spray, the pressure switches and its alpha come back when you pick it again (strength and gravity too). Size stays one for all brushes unless Preferences > General > Size per brush is on; Settings per brush (same place) turns the whole thing off. Remember brush settings between sessions keeps them all for next time.\n\n\
 Drag brushes in the shelf to put the ones you use most first; the number keys follow the new order. To give a brush a key of its own, right-click it in the shelf and choose Set hotkey, then press the key (with Ctrl, Shift or Alt if you like); Remove hotkey takes it away, and Preferences > Keymap lists them under Brush keys. Hover any control for a short explanation and its shortcut. On a touch screen, press and hold the control: the same text stays up after you lift your finger, and the control does not activate.\n\n\
 - Grab, Topological Move and Snake Hook: hold Alt to move the surface along its normal.\n\
-- Kelvin Grab, Kelvin Twist and Kelvin Scale: elastodynamic Kelvinlet brushes (de Goes & James, 2017) for volume-preserving elastic deformation, twisting, and radial expansion/pinch.\n\
+- Kelvin Grab pulls the surrounding surface elastically. Drag sideways with Kelvin Twist to rotate around the surface normal. Drag up or down with Kelvin Scale to expand or contract. Alt pulls Grab along the normal and reverses Twist and Scale.\n\
 - Grab through (Grab settings) moves everything under the brush circle, front to back.\n\
 - Middle-drag over a panel scrolls it, handy with a pen side button.",
     },

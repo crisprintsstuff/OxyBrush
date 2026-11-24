@@ -33,10 +33,14 @@ pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    decode_bytes_limited(bytes, MAX_SIDE)
+}
+
+pub(crate) fn decode_bytes_limited(bytes: &[u8], max_side: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let (w, h, rgba) = if bytes.starts_with(b"\x89PNG") {
-        decode_png(bytes)?
+        decode_png_limited(bytes, max_side)?
     } else if bytes.starts_with(&[0xFF, 0xD8]) {
-        decode_jpeg(bytes)?
+        decode_jpeg(bytes, max_side)?
     } else {
         return Err("not a PNG or JPEG image".into());
     };
@@ -47,11 +51,15 @@ pub fn decode_bytes(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
 }
 
 pub(crate) fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+    decode_png_limited(bytes, MAX_SIDE)
+}
+
+fn decode_png_limited(bytes: &[u8], max_side: u32) -> Result<(u32, u32, Vec<u8>), String> {
     let mut d = png::Decoder::new_with_limits(std::io::Cursor::new(bytes), png::Limits { bytes: 256 << 20 });
     d.set_transformations(png::Transformations::normalize_to_color8());
     let mut r = d.read_info().map_err(|e| e.to_string())?;
     let (w, h) = (r.info().width, r.info().height);
-    if w > MAX_SIDE || h > MAX_SIDE {
+    if w > max_side || h > max_side {
         return Err(format!("image is too large ({w}×{h})"));
     }
     let mut buf = vec![0; r.output_buffer_size().ok_or("image too large")?];
@@ -67,12 +75,12 @@ pub(crate) fn decode_png(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
     Ok((w, h, rgba))
 }
 
-fn decode_jpeg(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), String> {
+fn decode_jpeg(bytes: &[u8], max_side: u32) -> Result<(u32, u32, Vec<u8>), String> {
     use zune_jpeg::zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     let opts = DecoderOptions::default()
         .jpeg_set_out_colorspace(ColorSpace::RGB)
-        .set_max_width(MAX_SIDE as usize)
-        .set_max_height(MAX_SIDE as usize);
+        .set_max_width(max_side as usize)
+        .set_max_height(max_side as usize);
     let mut d = zune_jpeg::JpegDecoder::new_with_options(ZCursor::new(bytes), opts);
     let rgb = d.decode().map_err(|e| format!("{e:?}"))?;
     let info = d.info().ok_or("no image information")?;

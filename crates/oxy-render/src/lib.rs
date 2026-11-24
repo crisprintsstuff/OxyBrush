@@ -9,6 +9,8 @@
 mod camera;
 mod hard_edges;
 pub mod lighting;
+mod reference;
+pub use reference::ReferencePlane;
 pub mod matcap;
 
 pub use camera::{
@@ -449,6 +451,7 @@ pub struct ViewportRenderer {
     post_layout: wgpu::BindGroupLayout,
     ao_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
+    references: reference::ReferencePass,
     xray_pipeline: wgpu::RenderPipeline,
     /// 1x1 stand-in bound as the obscurance input while the obscurance pass
     /// itself renders (a texture can't be read and written in one pass).
@@ -1058,6 +1061,7 @@ impl ViewportRenderer {
             ao_pipeline,
             composite_pipeline,
             xray_pipeline,
+            references: reference::ReferencePass::new(device, color_format),
             dummy_ao,
             targets: None,
             uniforms,
@@ -1776,8 +1780,15 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_pipeline(&self.background_pipeline);
             pass.draw(0..3, 0..1);
+            let behind = self.references.visible(false);
+            if behind && settings.floor.is_some() {
+                pass.set_pipeline(&self.floor_pipeline);
+                pass.draw(0..6, 0..1);
+            }
+            self.references.draw(&mut pass, false);
+            pass.set_bind_group(0, &self.bind_group, &[]);
             self.draw_meshes(&mut pass, opaque());
-            if settings.floor.is_some() {
+            if !behind && settings.floor.is_some() {
                 // After the pieces, so the model hides the grid behind it.
                 pass.set_pipeline(&self.floor_pipeline);
                 pass.draw(0..6, 0..1);
@@ -1814,21 +1825,64 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &t.composite_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        if !draw_xray {
-            return;
-        }
-        // The opaque pass has finished reading the scratch textures. Reuse them
-        // for the nearest ghost surface and continue the opaque depth test.
-        {
+        if draw_xray {
+            // The opaque pass has finished reading the scratch textures. Reuse them
+            // for the nearest ghost surface and continue the opaque depth test.
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("oxy X-ray surfaces"),
+                    color_attachments: &[
+                        attachment(&t.color, wgpu::Color::TRANSPARENT),
+                        attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
+                    ],
+                    depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                        view: depth,
+                        depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                        stencil_ops: None,
+                    }),
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+                pass.set_bind_group(0, &self.bind_group, &[]);
+                self.draw_meshes(&mut pass, items.iter().filter(|item| ghosted(item)));
+                self.draw_wires(&mut pass, items.iter().filter(|item| ghosted(item)), all_wires);
+            }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("oxy X-ray surfaces"),
+                label: Some("oxy X-ray composite"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: target,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_pipeline(&self.xray_pipeline);
+            pass.set_bind_group(0, &t.composite_group, &[]);
+            pass.set_blend_constant(wgpu::Color { r: opacity, g: opacity, b: opacity, a: opacity });
+            pass.draw(0..3, 0..1);
+        }
+        if self.references.visible(true) {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("reference overlays"),
                 color_attachments: &[
-                    attachment(&t.color, wgpu::Color::TRANSPARENT),
+                    Some(wgpu::RenderPassColorAttachment {
+                        view: target,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                    }),
                     attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -1836,28 +1890,8 @@ impl ViewportRenderer {
                 multiview_mask: None,
             });
             pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
-            pass.set_bind_group(0, &self.bind_group, &[]);
-            self.draw_meshes(&mut pass, items.iter().filter(|item| ghosted(item)));
-            self.draw_wires(&mut pass, items.iter().filter(|item| ghosted(item)), all_wires);
+            self.references.draw(&mut pass, true);
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("oxy X-ray composite"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: target,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-            })],
-            depth_stencil_attachment: None,
-            timestamp_writes: None,
-            occlusion_query_set: None,
-            multiview_mask: None,
-        });
-        pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
-        pass.set_pipeline(&self.xray_pipeline);
-        pass.set_bind_group(0, &t.composite_group, &[]);
-        pass.set_blend_constant(wgpu::Color { r: opacity, g: opacity, b: opacity, a: opacity });
-        pass.draw(0..3, 0..1);
     }
 }
 
@@ -1993,6 +2027,7 @@ mod tests {
         validate("shading.wgsl", include_str!("shading.wgsl"));
         validate("wireframe.wgsl", include_str!("wireframe.wgsl"));
         validate("shadow.wgsl", include_str!("shadow.wgsl"));
+        validate("reference.wgsl", include_str!("reference.wgsl"));
     }
 
     #[test]

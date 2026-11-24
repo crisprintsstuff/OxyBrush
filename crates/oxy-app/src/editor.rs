@@ -1295,6 +1295,7 @@ pub struct Editor {
     /// inactive pieces look, for the macOS menu bar, which can't hold
     /// sliders (RFC 0028).
     pub show_shading: bool,
+    pub show_references: bool,
     /// Whether the Recipe Box drawer is currently slid open.
     pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
@@ -1645,6 +1646,7 @@ impl Default for Editor {
             parts_dir: None,
             show_parts_bin: true,
             show_shading: false,
+            show_references: false,
             parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,
