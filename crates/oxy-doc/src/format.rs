@@ -89,6 +89,8 @@
 //!   quads are guessed from its shape. Older readers skip it and guess the
 //!   quads, so quads that aren't flat open as two triangles.
 //! - `REFI` (optional): reference image planes with embedded RGBA8 and placement.
+//!   Placement flag bits 3–4 hold clockwise quarter-turns and bits 5–6
+//!   hold horizontal and vertical flips. Earlier readers ignore these bits.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -428,7 +430,14 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         let mut raw = Vec::new();
         raw.push(1);
         raw.push(crate::ReferenceAxis::ALL.iter().position(|&a| a == p.axis).unwrap_or(0) as u8);
-        raw.push(u8::from(p.visible) | u8::from(p.all_views) << 1 | u8::from(p.overlay) << 2);
+        raw.push(
+            u8::from(p.visible)
+                | u8::from(p.all_views) << 1
+                | u8::from(p.overlay) << 2
+                | (p.quarter_turns & 3) << 3
+                | u8::from(p.flip_horizontal) << 5
+                | u8::from(p.flip_vertical) << 6,
+        );
         raw.extend_from_slice(&(name.len() as u32).to_le_bytes());
         raw.extend_from_slice(name.as_bytes());
         for dim in reference.size {
@@ -1302,6 +1311,9 @@ fn decode_reference(raw: &[u8]) -> Result<crate::ReferenceImage> {
             visible: flags & 1 != 0,
             all_views: flags & 2 != 0,
             overlay: flags & 4 != 0,
+            quarter_turns: (flags >> 3) & 3,
+            flip_horizontal: flags & 32 != 0,
+            flip_vertical: flags & 64 != 0,
         },
     })
 }
@@ -2130,6 +2142,9 @@ mod tests {
                 visible: true,
                 all_views: true,
                 overlay: true,
+                quarter_turns: 3,
+                flip_horizontal: true,
+                flip_vertical: true,
             },
             size: [2, 1],
             pixels: [255, 0, 0, 0, 0, 255, 0, 200].into(),
