@@ -34,6 +34,28 @@ control. Evaluate these as follow-ups once the default gestures and falloff
 are verified. Time-dependent waves from Dynamic Kelvinlets belong to a
 different workflow.
 
+## Bi-scale Grab prototype
+
+The prototype evaluates the paper's normalized two-radius field (equation
+9), with regularization radii of 1 and 1.1 times the brush radius. The
+comparison uses the same capture taper and long-drag damping for both
+kernels. It runs both through the stroke engine on a synthetic horn blended
+into a sphere, at full strength with a brush radius of 0.65 mesh units.
+
+| Drag distance | Peak torso movement, current / Bi-scale | Sharpest horn-root angle, current / Bi-scale | Sharpest angle anywhere, current / Bi-scale |
+|---|---|---|---|
+| 0.32 | 0.0899 / 0.0358 | 9.6° / 10.5° | 15.0° / 17.4° |
+| 0.65 | 0.1802 / 0.0688 | 11.9° / 15.4° | 17.3° / 24.8° |
+| 1.20 | 0.3221 / 0.1099 | 10.3° / 20.8° | 23.7° / 39.9° |
+| 2.00 | 0.5136 / 0.1451 | 11.8° / 23.5° | 36.1° / 61.2° |
+
+Both kernels reach the same tip displacement. Bi-scale reduces peak torso
+movement by 60–72% and produces a sharper transition as distance increases.
+Keep Bi-scale in the test harness while evaluating a blend toward the broader
+field on long pulls and checking production meshes, mirror overlaps, and
+tablet feel. The test runs with
+`cargo test -p oxy-sculpt kelvin_biscale_horn_comparison -- --nocapture`.
+
 ## Verification
 
 - Compare light and long grabs on a sphere, a narrow horn, and a closed
@@ -44,6 +66,8 @@ different workflow.
   when the brush radius spans a large part of a dense mesh.
 
 ## Sources
+
+- [Pixar demo, multi-scale extrapolation](https://vimeo.com/216753419)
 
 - [de Goes and James, Regularized Kelvinlets, SIGGRAPH 2017](https://research.pixar.com/docs/2017.SiggraphPapers.GJ.pdf)
 - [de Goes and James, Dynamic Kelvinlets, SIGGRAPH 2018](https://research.pixar.com/docs/2018.SiggraphPapers.GJ.pdf)

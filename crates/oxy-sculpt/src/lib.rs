@@ -1312,6 +1312,16 @@ impl Stroke {
     }
 
     fn grab_sample(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
+        self.grab_sample_with_kernel(mesh, s, touch, kelvin_grab_tensor);
+    }
+
+    fn grab_sample_with_kernel(
+        &mut self,
+        mesh: &mut Mesh,
+        s: StrokeSample,
+        touch: &mut dyn FnMut(&Mesh, u32),
+        kernel: impl Fn(Vec3, f32) -> (Mat3, Mat3),
+    ) {
         let Some(grab) = &self.grab else {
             // First sample: capture the vertices under each transformed brush.
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
@@ -1378,6 +1388,7 @@ impl Stroke {
                 &centers,
                 alpha.is_some(),
                 through.then_some(self.view.normalize_or_zero()),
+                &kernel,
             );
             let mut acc: HashMap<u32, Acc> = HashMap::new();
             for ((m, center, hits), n) in captured.iter().zip(&normals) {
@@ -1402,7 +1413,7 @@ impl Stroke {
                     } else {
                         let weight = self.settings.strength * w;
                         if kind == BrushKind::KelvinGrab {
-                            let (carry, elastic) = kelvin_grab_tensor(offset, dab.radius);
+                            let (carry, elastic) = kernel(offset, dab.radius);
                             e.sum_m += carry * *m * weight;
                             e.sum_e += elastic * *m * weight;
                         } else {
@@ -1520,7 +1531,14 @@ fn falloff_profile(settings: &BrushSettings, radius: f32, d2: f32, alpha: bool) 
 /// reach each other; 1 for two copies on top of each other). The copies are
 /// images of one another, so every copy sees the same sum. `view`, for a
 /// grab-through capture, measures distances across the view only.
-fn copies_overlap(settings: &BrushSettings, radius: f32, centers: &[Vec3], alpha: bool, view: Option<Vec3>) -> f32 {
+fn copies_overlap(
+    settings: &BrushSettings,
+    radius: f32,
+    centers: &[Vec3],
+    alpha: bool,
+    view: Option<Vec3>,
+    kernel: impl Fn(Vec3, f32) -> (Mat3, Mat3),
+) -> f32 {
     let Some(&c0) = centers.first() else { return 0.0 };
     centers[1..]
         .iter()
@@ -1533,7 +1551,7 @@ fn copies_overlap(settings: &BrushSettings, radius: f32, centers: &[Vec3], alpha
             if settings.kind == BrushKind::KelvinGrab {
                 // The capture taper only bounds work. Use the translational
                 // kernel's carried response to judge overlap at the contact.
-                weight * kelvin_grab_tensor(off, radius).0.x_axis.x
+                weight * kernel(off, radius).0.x_axis.x
             } else {
                 weight
             }
@@ -1883,7 +1901,7 @@ fn blend_snake_hook(
     let mut acc: HashMap<u32, (Vec3, f32, f32)> = HashMap::new();
     let mut chunks = Vec::new();
     let centers: Vec<Vec3> = copies.iter().map(|&m| base.transformed(m, origin).center).collect();
-    let overlap = copies_overlap(settings, base.radius, &centers, alpha.is_some(), None);
+    let overlap = copies_overlap(settings, base.radius, &centers, alpha.is_some(), None, kelvin_grab_tensor);
     for &m in copies {
         let dab = base.transformed(m, origin);
         let (ch, affected) = gather_affected(mesh, settings, &dab, alpha);
@@ -3673,6 +3691,10 @@ mod tests {
 
     /// The sharpest angle (degrees) between neighbouring triangles.
     fn sharpest_fold(m: &Mesh) -> f32 {
+        sharpest_fold_where(m, |_, _| true)
+    }
+
+    fn sharpest_fold_where(m: &Mesh, edge_in_region: impl Fn(u32, u32) -> bool) -> f32 {
         let n = |t: &[u32; 3]| {
             let [a, b, c] = t.map(|v| m.positions[v as usize]);
             (b - a).cross(c - a).normalize_or_zero()
@@ -3682,6 +3704,9 @@ mod tests {
         for (i, t) in m.triangles.iter().enumerate() {
             for k in 0..3 {
                 let (a, b) = (t[k], t[(k + 1) % 3]);
+                if !edge_in_region(a, b) {
+                    continue;
+                }
                 if let Some(&j) = by_edge.get(&(b, a)) {
                     worst = worst.max(n(t).dot(n(&m.triangles[j])).clamp(-1.0, 1.0).acos().to_degrees());
                 }
@@ -3704,6 +3729,74 @@ mod tests {
             stroke.add_sample(&mut mesh, sample(contact + d * (k as f32 / 20.0)), &mut |_, _| {});
         }
         mesh
+    }
+
+    /// Equation 9 from de Goes and James (2017). The single-scale tensors
+    /// are already normalized at contact, so divide each by its radius to
+    /// recover the relative kernel amplitudes before subtracting them.
+    fn biscale_grab_tensor(offset: Vec3, radius: f32) -> (Mat3, Mat3) {
+        let scale = 1.1;
+        let (core, elastic_core) = kelvin_grab_tensor(offset, radius);
+        let (wide, elastic_wide) = kelvin_grab_tensor(offset, radius * scale);
+        ((core * scale - wide) / (scale - 1.0), (elastic_core * scale - elastic_wide) / (scale - 1.0))
+    }
+
+    #[test]
+    fn kelvin_biscale_horn_comparison() {
+        let direction = Vec3::new(1.0, 1.0, 0.0).normalize();
+        let base = primitives::icosphere(5, 1.0);
+        let mut data = base.to_data();
+        // A smooth horn blended into a closed torso. Keep its root inside
+        // the support of both brushes so the same pull tests the transition.
+        for position in &mut data.positions {
+            let cap = ((position.dot(direction) - 0.86) / 0.14).max(0.0);
+            *position += direction * (0.42 * cap.powi(3));
+        }
+        let original = Mesh::from_data(data);
+        let tip = original
+            .positions
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.dot(direction).total_cmp(&b.dot(direction)))
+            .unwrap()
+            .0;
+        let contact = original.positions[tip];
+        let radius = 0.65;
+        let run = |kernel, delta: Vec3| {
+            let settings = BrushSettings { kind: BrushKind::KelvinGrab, radius, strength: 1.0, ..Default::default() };
+            let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_view(Vec3::Z);
+            let mut mesh = original.clone();
+            for step in 0..=20 {
+                let position = contact + delta * (step as f32 / 20.0);
+                let sample = StrokeSample { position, normal: direction, pressure: 1.0 };
+                stroke.grab_sample_with_kernel(&mut mesh, sample, &mut |_, _| {}, kernel);
+            }
+            assert!(mesh.positions[tip].distance(contact + delta) < 1e-5);
+            let torso = original
+                .positions
+                .iter()
+                .zip(&mesh.positions)
+                .filter(|(before, _)| before.dot(direction) < 0.88)
+                .map(|(before, after)| before.distance(*after))
+                .fold(0.0f32, f32::max);
+            let root_fold = sharpest_fold_where(&mesh, |a, b| {
+                let midpoint = (original.positions[a as usize] + original.positions[b as usize]) * 0.5;
+                (0.84..0.99).contains(&midpoint.dot(direction))
+            });
+            (torso, root_fold, sharpest_fold(&mesh))
+        };
+        let drag = Vec3::new(-0.35, 0.55, 0.4).normalize();
+        for distance in [0.32, 0.65, 1.2, 2.0] {
+            let delta = drag * distance;
+            let (single_torso, single_root, single_fold) =
+                run(kelvin_grab_tensor as fn(Vec3, f32) -> (Mat3, Mat3), delta);
+            let (bi_torso, bi_root, bi_fold) = run(biscale_grab_tensor, delta);
+            eprintln!(
+                "drag {distance:.2}: torso {single_torso:.4} -> {bi_torso:.4}, root fold {single_root:.1}° -> {bi_root:.1}°, max fold {single_fold:.1}° -> {bi_fold:.1}°"
+            );
+            assert!(bi_torso < 0.75 * single_torso);
+            assert!(bi_fold < 90.0, "fold-over at drag {distance}");
+        }
     }
 
     #[test]
