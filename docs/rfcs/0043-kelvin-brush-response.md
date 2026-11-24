@@ -1,6 +1,6 @@
 # RFC 0043 — Kelvin brush response
 
-**Status:** First pass implemented. Pending hands-on sculpting across model scales and input devices.
+**Status:** Grab blending and the Twist and Scale gesture changes are implemented. Pending hands-on sculpting across model scales and input devices.
 
 ## Brush behavior
 
@@ -30,8 +30,7 @@ a single twist or reversing a scale through zero.
 The published bi-scale and tri-scale Grab fields give tighter response
 through cancellation of the distant terms. Blender's user manual exposes
 these as separate locality choices, along with a volume preservation
-control. Evaluate these as follow-ups once the default gestures and falloff
-are verified. Time-dependent waves from Dynamic Kelvinlets belong to a
+control. The tuned Grab uses the Bi-scale field for short drags. Tri-scale and a separate volume control remain follow-ups. Time-dependent waves from Dynamic Kelvinlets belong to a
 different workflow.
 
 ## Bi-scale Grab prototype
@@ -51,9 +50,14 @@ into a sphere, at full strength with a brush radius of 0.65 mesh units.
 
 Both kernels reach the same tip displacement. Bi-scale reduces peak torso
 movement by 60–72% and produces a sharper transition as distance increases.
-Keep Bi-scale in the test harness while evaluating a blend toward the broader
-field on long pulls and checking production meshes, mirror overlaps, and
-tablet feel. The test runs with
+The tuned Grab blends in 55% of the Bi-scale field on drags up to half a
+brush radius and smoothly returns to the single-scale field by one and a
+half radii. These thresholds were tuned on the synthetic horn. The half-
+radius pull reduced torso motion by 34% and increased the root angle from
+9.6° to 10.1°. The one-radius pull reduced torso motion by 18% and increased
+the root angle from 11.9° to 12.5°. Both longer benchmark pulls matched
+the single-scale field. Production meshes and tablet feel remain to be
+checked. The test runs with
 `cargo test -p oxy-sculpt kelvin_biscale_horn_comparison -- --nocapture`.
 
 ## Verification
