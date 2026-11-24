@@ -89,6 +89,11 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 });
                 ui.end_row();
                 if e.quad_skin {
+                    ui.label("Subdivision").on_hover_text("0 keeps the coarse cage. Higher levels smooth the mesh when you click Make mesh.");
+                    if ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.quad_subdivision, 0..=oxy_topo::MAX_QUAD_SUBDIVISION))).changed() {
+                        e.build_error = None;
+                    }
+                    ui.end_row();
                     ui.label("");
                     ui.weak("Preview shows the spheres");
                     ui.end_row();

@@ -11679,6 +11679,7 @@ mod tests {
         e.start_spheres();
         let edit = e.spheres.as_mut().unwrap();
         edit.quad_skin = true;
+        edit.quad_subdivision = 1;
         edit.armature = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.3, None);
         edit.armature.add_child(0, Vec3::Y * 2.0, 0.2);
         e.accept_spheres();
@@ -11686,7 +11687,7 @@ mod tests {
 
         let output = e.scene.active().id;
         let positions = e.scene.active().mesh.positions.clone();
-        assert_eq!(e.scene.active().mesh.known_polygons().unwrap().0.len(), 16);
+        assert_eq!(e.scene.active().mesh.known_polygons().unwrap().0.len(), 64);
         e.undo();
         assert!(e.scene.get(output).is_none());
         e.redo();
@@ -11696,17 +11697,28 @@ mod tests {
         let data = oxy_doc::format::decode(&bytes).unwrap();
         let scene = Scene::from_data(data).unwrap();
         let mesh = &scene.active().mesh;
-        assert_eq!(mesh.known_polygons().unwrap().0.len(), 16);
+        assert_eq!(mesh.known_polygons().unwrap().0.len(), 64);
         let cage = oxy_mesh::polyedit::cage_from_mesh(mesh);
-        assert_eq!(cage.quad_count(), 16);
+        assert_eq!(cage.quad_count(), 64);
         let mut obj = Vec::new();
         oxy_io::write_obj(mesh, &mut obj).unwrap();
         let obj = std::str::from_utf8(&obj).unwrap();
         let faces: Vec<_> = obj.lines().filter(|l| l.starts_with("f ")).collect();
-        assert_eq!(faces.len(), 16);
+        assert_eq!(faces.len(), 64);
         assert!(faces.iter().all(|l| l.split_whitespace().count() == 5));
 
+        let generated = scene.active().id;
+        let source = scene.pieces.iter().position(Piece::is_spheres).unwrap();
+        assert_eq!(scene.pieces[source].spheres.as_ref().unwrap().quad_subdivision, Some(1));
         e.replace_document(scene, None);
+        e.scene.set_active(source);
+        e.edit_spheres();
+        let edit = e.spheres.as_ref().unwrap();
+        assert!(edit.quad_skin);
+        assert_eq!(edit.quad_subdivision, 1);
+        e.cancel_spheres();
+        let mesh = e.scene.index_of(generated).unwrap();
+        e.scene.set_active(mesh);
         e.frame_active();
         e.start_poly_edit();
         let [x, y, w, h] = e.canvas;
@@ -11733,13 +11745,15 @@ mod tests {
         e.scene.set_active(source);
         e.edit_spheres();
         let edit = e.spheres.as_mut().unwrap();
-        edit.quad_skin = true;
-        edit.armature.set_radius(1, 0.4);
+        assert!(edit.quad_skin);
+        assert_eq!(edit.quad_subdivision, 0);
+        edit.quad_subdivision = 2;
         e.accept_spheres();
         wait_job(&mut e);
         assert_eq!(e.scene.pieces.len(), piece_count);
         assert_eq!(e.scene.active().id, id);
         assert_ne!(e.scene.active().mesh.positions, positions);
+        assert_eq!(e.scene.active().mesh.known_polygons().unwrap().0.len(), 256);
         e.undo();
         assert_eq!(e.scene.get(id).unwrap().mesh.positions, positions);
     }

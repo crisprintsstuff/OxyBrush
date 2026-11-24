@@ -65,6 +65,7 @@
 //!   The app shows that level again. Older readers skip it and open the
 //!   piece at the saved level, with every level still there.
 //! - `ARMS` (optional, since 4.0.0-beta.23.3): OxySpheres (RFC 0034).
+//! - `ARQD` (optional): u8 subdivision level for quad OxySpheres output.
 //! - `ARML` (optional): u64 index of the mesh last made by the preceding `ARMS` recipe.
 //!   `version:u32 resolution:u32 blend:f32 triangles:u32 fingerprint:f32*3
 //!   mirrored:u8 mirror_x:f32 count:u32`, then per sphere `center:f32*3
@@ -366,6 +367,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         if let Some(a) = &p.spheres {
             sections.push((*b"ARMS", encode_armature(a, 2)));
+            if let Some(level) = a.quad_subdivision {
+                sections.push((*b"ARQD", vec![level]));
+            }
             if let Some(index) = a.generated_mesh {
                 sections.push((*b"ARML", index.to_le_bytes().to_vec()));
             }
@@ -565,7 +569,15 @@ fn decode_armature(raw: &[u8]) -> Result<Option<(u32, crate::ArmatureRecipe)>> {
     }
     Ok(Some((
         version,
-        crate::ArmatureRecipe { armature, resolution, blend, triangles, fingerprint, generated_mesh: None },
+        crate::ArmatureRecipe {
+            armature,
+            resolution,
+            blend,
+            triangles,
+            fingerprint,
+            generated_mesh: None,
+            quad_subdivision: None,
+        },
     )))
 }
 
@@ -875,6 +887,13 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Ok(Some((_, a))) => piece.skin_of = Some(Box::new(a)),
                     Ok(None) => log::warn!("ignoring an OxySpheres armature of a newer version on {:?}", piece.name),
                     Err(e) => log::warn!("ignoring a damaged OxySpheres armature on piece {:?}: {e}", piece.name),
+                }
+            }
+            b"ARQD" => {
+                if let [level] = raw.as_slice()
+                    && let Some(recipe) = scene.pieces.last_mut().and_then(|p| p.spheres.as_deref_mut())
+                {
+                    recipe.quad_subdivision = Some(*level);
                 }
             }
             b"ARML" => {
@@ -3220,6 +3239,21 @@ mod tests {
         let at = skipped.windows(4).position(|w| w == b"LITE").unwrap();
         skipped[at..at + 4].copy_from_slice(b"NOPE");
         assert_eq!(decode(&skipped).unwrap().pieces[1].own_level, None);
+    }
+
+    #[test]
+    fn quad_subdivision_is_optional_and_skippable() {
+        let arm = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.5, None);
+        let mut recipe = crate::ArmatureRecipe::spheres(arm, 120, 0.3);
+        recipe.quad_subdivision = Some(2);
+        let mut scene = crate::Scene::from_data(sample()).unwrap();
+        scene.pieces.push(crate::Piece::spheres_piece("OxySpheres", recipe.clone()));
+        let mut bytes = encode(&scene.to_data());
+        assert_eq!(decode(&bytes).unwrap().pieces[2].spheres.as_deref(), Some(&recipe));
+        let at = bytes.windows(4).position(|w| w == b"ARQD").unwrap();
+        bytes[at..at + 4].copy_from_slice(b"NOPE");
+        recipe.quad_subdivision = None;
+        assert_eq!(decode(&bytes).unwrap().pieces[2].spheres.as_deref(), Some(&recipe));
     }
 
     #[test]

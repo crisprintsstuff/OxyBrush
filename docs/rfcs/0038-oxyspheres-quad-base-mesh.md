@@ -56,11 +56,14 @@ ring density are follow-up decisions. Intersecting limbs, coincident joints,
 and links too short to fit a junction are explicit rejection cases for the
 first prototype.
 
-### Follow-up controls (proposed)
+### Follow-up controls
 
-Expose a **Subdivision** level on the quad output so artists can choose
-a coarse cage or a smoother initial surface. Use the same level for every
-link and junction in an armature, with a face budget to bound the cost.
+Quad output exposes **Subdivision**, from 0 for the base cage to 2 for
+a smoother initial surface. Catmull–Clark runs on the worker, with a
+16,384-face budget for subdivided output. The result is validated before
+replacing a mesh. The optional `ARQD` project section remembers both quad
+output and subdivision level. Older readers can skip it and still load
+the armature and mesh.
 This scales detail relative to the base cage, so a longer chain still has
 more total faces than a short one.
 

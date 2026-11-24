@@ -246,18 +246,36 @@ pub struct ArmatureRecipe {
     pub fingerprint: Vec3,
     /// Generated piece ID in a scene, or its zero-based piece index in SceneData.
     pub generated_mesh: Option<u64>,
+    /// Quad output subdivision level, or None for voxel output.
+    pub quad_subdivision: Option<u8>,
 }
 
 impl ArmatureRecipe {
     /// A recipe for `armature` skinned as `mesh`.
     pub fn new(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32, mesh: &Mesh) -> Self {
         let (triangles, fingerprint) = group_fingerprint(mesh, 0);
-        ArmatureRecipe { armature, resolution, blend, triangles, fingerprint, generated_mesh: None }
+        ArmatureRecipe {
+            armature,
+            resolution,
+            blend,
+            triangles,
+            fingerprint,
+            generated_mesh: None,
+            quad_subdivision: None,
+        }
     }
 
     /// The settings for an OxySpheres piece (no mesh to match).
     pub fn spheres(armature: oxy_mesh::armature::Armature, resolution: u32, blend: f32) -> Self {
-        ArmatureRecipe { armature, resolution, blend, triangles: 0, fingerprint: Vec3::ZERO, generated_mesh: None }
+        ArmatureRecipe {
+            armature,
+            resolution,
+            blend,
+            triangles: 0,
+            fingerprint: Vec3::ZERO,
+            generated_mesh: None,
+            quad_subdivision: None,
+        }
     }
 
     /// Whether `mesh` is still the skin this recipe made.

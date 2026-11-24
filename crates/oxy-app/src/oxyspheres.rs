@@ -81,6 +81,7 @@ pub struct SphereEdit {
     pub show_skin: bool,
     /// Build the polygon cage when Make mesh is pressed.
     pub quad_skin: bool,
+    pub quad_subdivision: u8,
     /// Last rejected quad build, shown next to Make mesh.
     pub build_error: Option<String>,
     /// Editing this OxySpheres piece: its id and its hidden faces before
@@ -101,7 +102,13 @@ struct SphereHistory {
 }
 
 impl SphereEdit {
-    fn new(armature: Armature, resolution: u32, blend: f32, replace: Option<(u64, Vec<bool>)>) -> Self {
+    fn new(
+        armature: Armature,
+        resolution: u32,
+        blend: f32,
+        quad_subdivision: Option<u8>,
+        replace: Option<(u64, Vec<bool>)>,
+    ) -> Self {
         let mut e = SphereEdit {
             armature,
             selected: None,
@@ -110,7 +117,8 @@ impl SphereEdit {
             resolution,
             blend,
             show_skin: true,
-            quad_skin: false,
+            quad_skin: quad_subdivision.is_some(),
+            quad_subdivision: quad_subdivision.unwrap_or(0).min(oxy_topo::MAX_QUAD_SUBDIVISION),
             build_error: None,
             replace,
             preview: Mesh::new(Vec::new(), Vec::new()),
@@ -177,7 +185,7 @@ impl Editor {
             center.x = x;
         }
         let armature = Armature::new(center, radius, mirror);
-        let mut edit = SphereEdit::new(armature, 160, 0.3, None);
+        let mut edit = SphereEdit::new(armature, 160, 0.3, None, None);
         edit.selected = Some(0);
         self.spheres = Some(edit);
         self.status = "OxySpheres: drag from the sphere to add one; Enter makes a mesh".into();
@@ -214,7 +222,7 @@ impl Editor {
         let (id, before) = (piece.id, piece.mesh.hidden().to_vec());
         let n = before.len();
         self.scene.active_mut().mesh.set_hidden(vec![true; n]);
-        self.spheres = Some(SphereEdit::new(r.armature, r.resolution, r.blend, Some((id, before))));
+        self.spheres = Some(SphereEdit::new(r.armature, r.resolution, r.blend, r.quad_subdivision, Some((id, before))));
         self.status = "Editing OxySpheres: Enter makes a new mesh from them, Done keeps them, Esc as they were".into();
     }
 
@@ -232,6 +240,7 @@ impl Editor {
     /// its new spheres, or a new one. `visible`: shown afterwards.
     fn spheres_piece_of(&self, edit: &SphereEdit, visible: bool) -> Piece {
         let mut recipe = ArmatureRecipe::spheres(edit.armature.clone(), edit.resolution, edit.blend);
+        recipe.quad_subdivision = edit.quad_skin.then_some(edit.quad_subdivision);
         let old = edit.replace.as_ref().and_then(|(id, _)| self.scene.index_of(*id)).map(|i| &self.scene.pieces[i]);
         // Keep knowing which mesh they made last (see `finish_skin`).
         if let Some(r) = old.and_then(|p| p.spheres.as_deref()) {
@@ -299,9 +308,8 @@ impl Editor {
         let spheres = Box::new(self.spheres_piece_of(&edit, false));
         if edit.quad_skin {
             self.start_job("OxySpheres: quad base mesh".into(), Vec::new(), move || {
-                let mesh = oxy_topo::quad_skin_armature(&edit.armature)
-                    .map_err(|error| error.to_string())
-                    .and_then(|mut cage| cage.build_mesh().ok_or_else(|| "The quad skin has no faces".into()));
+                let mesh =
+                    oxy_topo::quad_skin_mesh(&edit.armature, edit.quad_subdivision).map_err(|error| error.to_string());
                 Ok(match mesh {
                     Ok(mesh) => JobResult::Skin { spheres, replace, mesh },
                     Err(error) => JobResult::QuadSkinRetry(Box::new(edit), error),
