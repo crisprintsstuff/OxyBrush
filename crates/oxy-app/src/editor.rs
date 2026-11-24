@@ -2423,6 +2423,14 @@ impl Editor {
             self.status = status;
             self.pressure_gamma = gamma;
         }
+        // Fall back to stored looks when an older or partial preferences file
+        // lacks the separate strength for a brush. Explicit strengths win below.
+        if s.settings_per_brush {
+            let current = self.brush_kind;
+            for look in s.brush_looks.iter().filter(|look| look.kind != current) {
+                *self.strength_mut(look.kind) = look.strength;
+            }
+        }
         for &(k, v) in &s.brush_strengths {
             *self.strength_mut(k) = v;
         }
