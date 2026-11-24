@@ -690,6 +690,7 @@ struct BlendedGrab {
 struct GrabState {
     origin: Vec3,
     verts: Vec<BlendedGrab>,
+    localized: Vec<(Mat3, Mat3)>,
     /// Average normal of the primary (unmirrored) capture. Alt uses it to
     /// turn the screen drag into a signed distance.
     primary_normal: Vec3,
@@ -1312,7 +1313,7 @@ impl Stroke {
     }
 
     fn grab_sample(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
-        self.grab_sample_with_kernel(mesh, s, touch, kelvin_grab_tensor);
+        self.grab_sample_with_kernel(mesh, s, touch, kelvin_grab_tensor, true);
     }
 
     fn grab_sample_with_kernel(
@@ -1321,6 +1322,7 @@ impl Stroke {
         s: StrokeSample,
         touch: &mut dyn FnMut(&Mesh, u32),
         kernel: impl Fn(Vec3, f32) -> (Mat3, Mat3),
+        tuned: bool,
     ) {
         let Some(grab) = &self.grab else {
             // First sample: capture the vertices under each transformed brush.
@@ -1328,6 +1330,7 @@ impl Stroke {
             let alpha = self.alpha.clone();
             let kind = self.settings.kind;
             let affine = matches!(kind, BrushKind::KelvinTwist | BrushKind::KelvinScale);
+            let tune_grab = tuned && kind == BrushKind::KelvinGrab;
             let topological = self.settings.kind == BrushKind::TopoMove;
             let through = self.grab_through && self.view != Vec3::ZERO && !topological;
             let captured: Vec<(Mat3, Vec3, Vec<GrabHit>)> = self
@@ -1390,6 +1393,19 @@ impl Stroke {
                 through.then_some(self.view.normalize_or_zero()),
                 &kernel,
             );
+            let local_overlap = if tune_grab {
+                copies_overlap(
+                    &self.settings,
+                    dab.radius,
+                    &centers,
+                    alpha.is_some(),
+                    through.then_some(self.view.normalize_or_zero()),
+                    biscale_grab_tensor,
+                )
+            } else {
+                0.0
+            };
+            let mut local = HashMap::<u32, (Mat3, Mat3)>::new();
             let mut acc: HashMap<u32, Acc> = HashMap::new();
             for ((m, center, hits), n) in captured.iter().zip(&normals) {
                 for &(index, w, orig) in hits {
@@ -1416,6 +1432,12 @@ impl Stroke {
                             let (carry, elastic) = kernel(offset, dab.radius);
                             e.sum_m += carry * *m * weight;
                             e.sum_e += elastic * *m * weight;
+                            if tune_grab {
+                                let (carry, elastic) = biscale_grab_tensor(offset, dab.radius);
+                                let sum = local.entry(index).or_insert((Mat3::ZERO, Mat3::ZERO));
+                                sum.0 += carry * *m * weight;
+                                sum.1 += elastic * *m * weight;
+                            }
                         } else {
                             e.sum_m += *m * weight;
                             e.sum_n += *n * weight;
@@ -1425,11 +1447,17 @@ impl Stroke {
                     e.max_w = e.max_w.max(w);
                 }
             }
+            let mut localized = Vec::with_capacity(local.len());
             let verts = acc
                 .into_iter()
                 .map(|(index, mut e)| {
                     // One copy: scale 1, so the move is exactly that copy's.
                     let scale = if e.sum_w > 1e-8 { 1.0 / overlap_divisor(e.sum_w, e.max_w, overlap) } else { 0.0 };
+                    if tune_grab {
+                        let (carry, elastic) = local[&index];
+                        let scale = 1.0 / overlap_divisor(e.sum_w, e.max_w, local_overlap);
+                        localized.push((carry * scale, elastic * scale));
+                    }
                     for affine in &mut e.affine {
                         affine.influence *= scale;
                     }
@@ -1444,7 +1472,7 @@ impl Stroke {
                 })
                 .collect();
             let primary_normal = normals.first().copied().unwrap_or(dab.normal);
-            self.grab = Some(GrabState { origin: s.position, verts, primary_normal, radius: dab.radius });
+            self.grab = Some(GrabState { origin: s.position, verts, localized, primary_normal, radius: dab.radius });
             self.last = Some(s);
             return;
         };
@@ -1469,16 +1497,26 @@ impl Stroke {
         for c in chunks {
             touch(mesh, c);
         }
-        let fade = elastic_fade(delta.length() / grab.radius.max(1e-6));
+        let drag_in_radii = delta.length() / grab.radius.max(1e-6);
+        let fade = elastic_fade(drag_in_radii);
+        let mix = biscale_mix(drag_in_radii);
         let mut moved = Vec::with_capacity(grab.verts.len());
-        for v in &grab.verts {
+        for (i, v) in grab.verts.iter().enumerate() {
             let d = if affine {
                 v.affine.iter().map(|copy| copy.displacement(kind, gesture)).sum()
             } else if let Some(normal_drag) = normal_drag.filter(|_| kind != BrushKind::KelvinGrab) {
                 v.along * normal_drag.dot(grab.primary_normal)
             } else {
                 let drag = normal_drag.unwrap_or(delta);
-                v.blend * drag + v.elastic * (drag * fade)
+                let elastic_drag = drag * fade;
+                let broad = v.blend * drag + v.elastic * elastic_drag;
+                if mix > 0.0
+                    && let Some((carry, elastic)) = grab.localized.get(i)
+                {
+                    broad.lerp(*carry * drag + *elastic * elastic_drag, mix)
+                } else {
+                    broad
+                }
             };
             mesh.positions[v.index as usize] = v.orig + d;
             moved.push(v.index);
@@ -1502,6 +1540,23 @@ fn kelvin_grab_tensor(offset: Vec3, radius: f32) -> (Mat3, Mat3) {
     let norm = 1.0 / (1.5 - b);
     let outer = Mat3::from_cols(r * r.x, r * r.y, r * r.z);
     (Mat3::IDENTITY * (norm * ((1.0 - b) / s + 0.5 / s3)), outer * (norm * b / s3))
+}
+
+/// Equation 9 from de Goes and James (2017). The single-scale tensors
+/// are already normalized at contact, so divide each by its radius to
+/// recover the relative kernel amplitudes before subtracting them.
+fn biscale_grab_tensor(offset: Vec3, radius: f32) -> (Mat3, Mat3) {
+    let scale = 1.1;
+    let (core, elastic_core) = kelvin_grab_tensor(offset, radius);
+    let (wide, elastic_wide) = kelvin_grab_tensor(offset, radius * scale);
+    ((core * scale - wide) / (scale - 1.0), (elastic_core * scale - elastic_wide) / (scale - 1.0))
+}
+
+/// Use the localized field on nudges, and recover the broader support as
+/// the drag grows to avoid concentrating strain at a horn's root.
+fn biscale_mix(drag_in_radii: f32) -> f32 {
+    let t = (drag_in_radii - 0.5).clamp(0.0, 1.0);
+    0.55 * (1.0 - t * t * (3.0 - 2.0 * t))
 }
 
 const KELVIN_REACH: f32 = 2.0;
@@ -1551,7 +1606,7 @@ fn copies_overlap(
             if settings.kind == BrushKind::KelvinGrab {
                 // The capture taper only bounds work. Use the translational
                 // kernel's carried response to judge overlap at the contact.
-                weight * kernel(off, radius).0.x_axis.x
+                weight * kernel(off, radius).0.x_axis.x.max(0.0)
             } else {
                 weight
             }
@@ -3731,16 +3786,6 @@ mod tests {
         mesh
     }
 
-    /// Equation 9 from de Goes and James (2017). The single-scale tensors
-    /// are already normalized at contact, so divide each by its radius to
-    /// recover the relative kernel amplitudes before subtracting them.
-    fn biscale_grab_tensor(offset: Vec3, radius: f32) -> (Mat3, Mat3) {
-        let scale = 1.1;
-        let (core, elastic_core) = kelvin_grab_tensor(offset, radius);
-        let (wide, elastic_wide) = kelvin_grab_tensor(offset, radius * scale);
-        ((core * scale - wide) / (scale - 1.0), (elastic_core * scale - elastic_wide) / (scale - 1.0))
-    }
-
     #[test]
     fn kelvin_biscale_horn_comparison() {
         let direction = Vec3::new(1.0, 1.0, 0.0).normalize();
@@ -3762,14 +3807,14 @@ mod tests {
             .0;
         let contact = original.positions[tip];
         let radius = 0.65;
-        let run = |kernel, delta: Vec3| {
+        let run = |kernel, delta: Vec3, tuned| {
             let settings = BrushSettings { kind: BrushKind::KelvinGrab, radius, strength: 1.0, ..Default::default() };
             let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_view(Vec3::Z);
             let mut mesh = original.clone();
             for step in 0..=20 {
                 let position = contact + delta * (step as f32 / 20.0);
                 let sample = StrokeSample { position, normal: direction, pressure: 1.0 };
-                stroke.grab_sample_with_kernel(&mut mesh, sample, &mut |_, _| {}, kernel);
+                stroke.grab_sample_with_kernel(&mut mesh, sample, &mut |_, _| {}, kernel, tuned);
             }
             assert!(mesh.positions[tip].distance(contact + delta) < 1e-5);
             let torso = original
@@ -3789,8 +3834,14 @@ mod tests {
         for distance in [0.32, 0.65, 1.2, 2.0] {
             let delta = drag * distance;
             let (single_torso, single_root, single_fold) =
-                run(kelvin_grab_tensor as fn(Vec3, f32) -> (Mat3, Mat3), delta);
-            let (bi_torso, bi_root, bi_fold) = run(biscale_grab_tensor, delta);
+                run(kelvin_grab_tensor as fn(Vec3, f32) -> (Mat3, Mat3), delta, false);
+            let (bi_torso, bi_root, bi_fold) = run(biscale_grab_tensor, delta, false);
+            let (torso, root, fold) = run(kelvin_grab_tensor, delta, true);
+            eprintln!("tuned {distance:.2}: torso {torso:.4}, root {root:.1}°, max {fold:.1}°");
+            assert!(root <= single_root + 5.0 && fold <= single_fold + 5.0);
+            if distance <= radius {
+                assert!(torso < 0.9 * single_torso);
+            }
             eprintln!(
                 "drag {distance:.2}: torso {single_torso:.4} -> {bi_torso:.4}, root fold {single_root:.1}° -> {bi_root:.1}°, max fold {single_fold:.1}° -> {bi_fold:.1}°"
             );

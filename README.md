@@ -111,7 +111,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 - **19 sculpting brushes, plus 8 tools in the same shelf:**
   - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Sharp Crease (a crisp V along the stroke, for hard folds and panel lines), Layer, Polish, Planar Trim, Noise.
-  - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the elastic brushes Kelvin Grab, Kelvin Twist (drag sideways), and Kelvin Scale (drag vertically). Alt constrains Kelvin Grab to the surface normal and reverses Kelvin Twist or Kelvin Scale.
+  - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the elastic brushes Kelvin Grab, Kelvin Twist (drag sideways), and Kelvin Scale (drag vertically). Kelvin Grab localizes short pulls and broadens the response as the drag grows. Alt constrains Kelvin Grab to the surface normal and reverses Kelvin Twist or Kelvin Scale.
   - **Tools:** Mask, Paint (vertex color), Paint Groups (face groups), Insert Primitives (sphere, quad sphere, UV sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
 
   Each sculpting brush has falloff curves, spacing, auto-smooth and pen-pressure options. **Shift** smooths, and holding it while dragging changes the smoothing strength on the fly.

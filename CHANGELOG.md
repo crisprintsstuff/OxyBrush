@@ -4,9 +4,23 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-- **References.** Import and place project-embedded PNG and JPEG image planes from View > References. Use X-ray to see them through the sculpt or draw a plane as an overlay.
-- **Selection shapes.** Hold Ctrl or Ctrl+Shift for direct shape selection beside the brush shelf.
-- **Kelvin brushes.** Grab has a wider elastic falloff. Twist uses horizontal drag and Scale uses vertical drag. Alt reverses Twist and Scale, and keeps Grab elastic when pulling along the surface normal.
+## [4.0.0-beta.24.6] - 2026-11-24
+
+### Added
+
+- **References and viewport X-ray.** Embed front, side, and top PNG or JPEG references in a project. Fade all visible meshes or just inactive pieces, or draw the image as an overlay. [#493](https://github.com/crisprintsstuff/OxyBrush/pull/493), [#495](https://github.com/crisprintsstuff/OxyBrush/pull/495)
+- **Selection shapes.** Hold Ctrl or Ctrl+Shift to choose rectangle, lasso, circle, ellipse, or curve beside the brush shelf. [#495](https://github.com/crisprintsstuff/OxyBrush/pull/495)
+
+### Changed
+
+- **Kelvin brushes.** Grab localizes small pulls and blends into a broader elastic response for longer drags. Alt pulls along the normal. Twist uses sideways drag and Scale uses vertical drag. Alt reverses Twist and Scale. [#495](https://github.com/crisprintsstuff/OxyBrush/pull/495), [#496](https://github.com/crisprintsstuff/OxyBrush/pull/496)
+- **Retopology.** Open and edit existing low-poly meshes in Retopology. [#490](https://github.com/crisprintsstuff/OxyBrush/pull/490)
+- **OxySpheres.** Subdivide the Quad base mesh output. [#485](https://github.com/crisprintsstuff/OxyBrush/pull/485)
+
+### Fixed
+
+- **Brush strength.** Switching brushes preserves their current strength values. [#486](https://github.com/crisprintsstuff/OxyBrush/pull/486)
+- **Custom material color.** The color picker opens inside the Materials panel. [#484](https://github.com/crisprintsstuff/OxyBrush/pull/484)
 
 ## [4.0.0-beta.24.5] - 2026-11-24
 
