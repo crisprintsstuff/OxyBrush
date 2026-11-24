@@ -69,16 +69,37 @@ pub fn insert(ed: &mut Editor, doc_id: u64, mut image: ReferenceImage) {
     refs.push(image);
 }
 
-pub fn planes<'a>(
-    refs: &'a [ReferenceImage],
-    camera: &Camera,
-    canvas: [f32; 4],
-) -> impl ExactSizeIterator<Item = ReferencePlane> + 'a {
+#[derive(Clone)]
+struct PlacementDraft {
+    original: ReferencePlacement,
+    edited: ReferencePlacement,
+}
+
+fn draft_id(doc_id: u64, index: usize, image: &ReferenceImage) -> egui::Id {
+    egui::Id::unique((doc_id, index, image.pixels.as_ptr(), "reference placement"))
+}
+
+fn placement(ctx: &egui::Context, id: egui::Id, image: &ReferenceImage) -> ReferencePlacement {
+    ctx.data(|data| data.get_temp::<PlacementDraft>(id))
+        .filter(|draft| draft.original == image.placement)
+        .map_or_else(|| image.placement.clone(), |draft| draft.edited)
+}
+
+pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeIterator<Item = ReferencePlane> + 'a {
+    let document = &ed.documents[ed.active_document];
+    let camera = &document.camera;
+    let canvas = ed.canvas;
     let vp = camera.view_projection((canvas[2] / canvas[3].max(1.0)).max(0.001));
     let forward = camera.forward();
     let orthographic = camera.orthographic;
-    refs.iter().map(move |image| {
-        let p = &image.placement;
+    document.scene.references.iter().enumerate().map(move |(index, image)| {
+        let draft;
+        let p = if ed.show_references {
+            draft = placement(ctx, draft_id(document.id, index, image), image);
+            &draft
+        } else {
+            &image.placement
+        };
         let (right, up, normal) = p.axis.basis();
         let right = right * (p.width * 0.5);
         let up = up * (p.width * 0.5 * image.size[1] as f32 / image.size[0] as f32);
@@ -116,12 +137,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
         crate::ui::xray_controls(ui, ed);
         egui::ScrollArea::vertical().show(ui, |ui| {
             for (index, image) in ed.scene.references.iter().enumerate() {
-                let id = egui::Id::unique((doc_id, index, image.pixels.as_ptr(), "reference placement"));
+                let id = draft_id(doc_id, index, image);
                 let original = &image.placement;
-                let mut draft = ui
-                    .data(|d| d.get_temp::<(ReferencePlacement, ReferencePlacement)>(id))
-                    .filter(|(source, _)| source == original)
-                    .map_or_else(|| original.clone(), |(_, draft)| draft);
+                let mut draft = placement(ctx, id, image);
                 egui::CollapsingHeader::new(&original.name).id_salt(id).default_open(true).show(ui, |ui| {
                     ui.add(egui::TextEdit::singleline(&mut draft.name).char_limit(64).hint_text("Name"));
                     egui::ComboBox::from_id_salt(id).selected_text(draft.axis.label()).show_ui(ui, |ui| {
@@ -139,6 +157,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
                     ui.checkbox(&mut draft.visible, "Visible");
                     ui.checkbox(&mut draft.all_views, "Show beyond the matching orthographic view");
                     ui.checkbox(&mut draft.overlay, "Draw over mesh");
+                    if ui.button("View plane").clicked() {
+                        snap = Some(draft.axis);
+                    }
                     ui.horizontal(|ui| {
                         let edited = draft != *original;
                         if ui.add_enabled(edited, egui::Button::new("Apply")).clicked() {
@@ -152,7 +173,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
                         }
                     });
                 });
-                ui.data_mut(|d| d.insert_temp(id, (original.clone(), draft)));
+                ctx.data_mut(|data| {
+                    if draft == *original {
+                        data.remove::<PlacementDraft>(id);
+                    } else {
+                        data.insert_temp(id, PlacementDraft { original: original.clone(), edited: draft });
+                    }
+                });
             }
         });
     });
@@ -161,6 +188,18 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
     }
     if let Some((index, placement)) = change {
         let previous = ed.scene.references.clone();
+        ctx.data_mut(|data| {
+            data.remove::<PlacementDraft>(draft_id(doc_id, index, &previous[index]));
+            if placement.is_none() {
+                for (i, image) in previous.iter().enumerate().skip(index + 1) {
+                    let old_id = draft_id(doc_id, i, image);
+                    if let Some(draft) = data.get_temp::<PlacementDraft>(old_id) {
+                        data.remove::<PlacementDraft>(old_id);
+                        data.insert_temp(draft_id(doc_id, i - 1, image), draft);
+                    }
+                }
+            }
+        });
         if let Some(placement) = placement {
             ed.scene.references[index].placement = placement;
             ed.history.record("Place reference", Step::References { previous });
@@ -168,6 +207,13 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
             ed.scene.references.remove(index);
             ed.history.record("Remove reference", Step::References { previous });
         }
+    }
+    if !open {
+        ctx.data_mut(|data| {
+            for (index, image) in ed.scene.references.iter().enumerate() {
+                data.remove::<PlacementDraft>(draft_id(doc_id, index, image));
+            }
+        });
     }
     ed.show_references = open;
     load
@@ -199,11 +245,29 @@ mod tests {
                 pixels: [255, 0, 0, 255].into(),
             },
         );
-        let canvas = [0.0, 0.0, 800.0, 600.0];
-        let mut camera = Camera { orthographic: true, ..Default::default() };
-        assert_eq!(planes(&editor.scene.references, &camera, canvas).next().unwrap().opacity, 0.5);
-        camera.yaw = std::f32::consts::FRAC_PI_2;
-        assert_eq!(planes(&editor.scene.references, &camera, canvas).next().unwrap().opacity, 0.0);
+        let ctx = egui::Context::default();
+        editor.canvas = [0.0, 0.0, 800.0, 600.0];
+        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.5);
+
+        let image = &editor.scene.references[0];
+        let draft = PlacementDraft {
+            original: image.placement.clone(),
+            edited: ReferencePlacement { opacity: 0.2, center: Vec3::X, ..image.placement.clone() },
+        };
+        let before = planes(&ctx, &editor).next().unwrap().corners;
+        let revision = editor.history.revision();
+        ctx.data_mut(|data| data.insert_temp(draft_id(id, 0, image), draft));
+        editor.show_references = true;
+        let preview = planes(&ctx, &editor).next().unwrap();
+        assert_eq!(preview.opacity, 0.2);
+        assert_ne!(preview.corners, before);
+        assert_eq!(editor.scene.references[0].placement.opacity, 0.5);
+        assert_eq!(editor.history.revision(), revision);
+
+        editor.show_references = false;
+        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.5);
+        editor.camera.yaw = std::f32::consts::FRAC_PI_2;
+        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.0);
         let doc = &mut editor.documents[editor.active_document];
         doc.history.undo(&mut doc.scene);
         assert!(doc.scene.references.is_empty());
