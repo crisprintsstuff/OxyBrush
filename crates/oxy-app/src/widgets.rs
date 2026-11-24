@@ -304,6 +304,7 @@ pub enum Icon {
     ModeEdges,
     ModePoints,
     ModeAuto,
+    Selection(crate::editor::SelectShape),
     /// Drag handle grip (two vertical columns of dots).
     Grip,
     ChevronDown,
@@ -460,6 +461,46 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
         Icon::Help => {
             p.circle_stroke(ctr, r * 0.75, s);
             p.text(ctr, egui::Align2::CENTER_CENTER, "?", egui::FontId::proportional(r * 1.1), c);
+        }
+        Icon::Selection(shape) => {
+            use crate::editor::SelectShape::*;
+            let polygon = |points: &[(f32, f32)]| points.iter().map(|&(x, y)| ctr + vec2(x, y) * r).collect::<Vec<_>>();
+            match shape {
+                Rectangle => {
+                    p.rect_stroke(Rect::from_center_size(ctr, vec2(1.45, 1.05) * r), 0.0, s, egui::StrokeKind::Middle);
+                }
+                Circle => {
+                    p.circle_stroke(ctr, r * 0.63, s);
+                }
+                Ellipse => {
+                    p.add(Shape::ellipse_stroke(ctr, vec2(0.77, 0.44) * r, s));
+                }
+                Lasso => {
+                    p.add(Shape::closed_line(
+                        polygon(&[
+                            (-0.75, 0.3),
+                            (-0.46, -0.55),
+                            (0.2, -0.65),
+                            (0.74, -0.2),
+                            (0.55, 0.57),
+                            (-0.15, 0.48),
+                        ]),
+                        s,
+                    ));
+                }
+                Curve => {
+                    let pts = polygon(&[(-0.75, 0.5), (-0.25, -0.5), (0.29, 0.2), (0.72, -0.38)]);
+                    p.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                        [pts[0], pts[1], pts[2], pts[3]],
+                        false,
+                        Color32::TRANSPARENT,
+                        s,
+                    ));
+                    for i in [0, 3] {
+                        p.circle_filled(pts[i], 1.6, c);
+                    }
+                }
+            }
         }
         Icon::Sphere => {
             // Shaded clay ball: concentric circles from dark rim to a lit spot.

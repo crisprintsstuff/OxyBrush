@@ -267,6 +267,7 @@ mod tests {
             }],
             active: 0,
             alphas: Vec::new(),
+            references: Vec::new(),
         };
         a.start(scene.clone());
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -316,6 +317,7 @@ mod tests {
             }],
             active: 0,
             alphas: Vec::new(),
+            references: Vec::new(),
         };
 
         let p1 = a.path_for(1).unwrap();
@@ -380,6 +382,7 @@ mod tests {
             }],
             active: 0,
             alphas: Vec::new(),
+            references: Vec::new(),
         };
         let origin = PathBuf::from("/tmp/project_one.oxb");
         a.start_for(7, scene.clone(), Some(origin.clone()));

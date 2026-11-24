@@ -321,7 +321,12 @@ fn save(pieces: &[Piece], out: &Path, input: &Path, opts: oxy_io::ExportOptions)
     let ext = out.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
     let tris: usize = pieces.iter().map(|p| p.mesh.triangle_count()).sum();
     if ext == format::EXTENSION {
-        let scene = SceneData { pieces: pieces.iter().map(Piece::to_data).collect(), active: 0, alphas: Vec::new() };
+        let scene = SceneData {
+            pieces: pieces.iter().map(Piece::to_data).collect(),
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+        };
         format::save(&scene, out).map_err(|e| format!("{}: {e}", out.display()))?;
     } else {
         let list: Vec<ExportPiece> = pieces.iter().map(|p| ExportPiece::new(&p.name, &p.mesh)).collect();
@@ -359,6 +364,7 @@ mod tests {
             ],
             active: 0,
             alphas: Vec::new(),
+            references: Vec::new(),
         };
         format::save(&scene, &dir.join("in.oxb")).unwrap();
 

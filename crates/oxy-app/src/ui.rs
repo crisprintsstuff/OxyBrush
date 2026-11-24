@@ -26,6 +26,7 @@ pub enum UiAction {
     SaveThenContinue,
     /// Load a grayscale image as a brush alpha.
     LoadAlpha,
+    LoadReference,
     /// Save the selected alpha as a PNG.
     ExportAlpha,
     /// Load a PNG/JPEG image as a custom matcap.
@@ -841,6 +842,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
+                if ui.button("References…").clicked() {
+                    ed.show_references = true;
+                    ui.close();
+                }
                 tips::menu(ui, "Shading", "Ambient occlusion, cavity, flat shading, hard edges, vertex color, lights, wireframe and face group colors", |ui| {
                     shading_controls(ui, ed);
                 });
@@ -930,6 +935,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         if ed.poly_edit.is_some() {
                             ui.vertical(|ui| poly_mode_buttons(ui, ed));
                         }
+                        selection_shape_buttons(ui, ed);
                         if ed.layout == UiLayout::Touch {
                             ui.vertical(|ui| touch_modifier_buttons(ui, ed, 92.0));
                         }
@@ -954,6 +960,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ui.add_space(6.0);
                     current_tiles(ui, ed);
                     poly_mode_buttons(ui, ed);
+                    selection_shape_buttons(ui, ed);
                     ui.add_space(4.0);
                     if ed.layout == UiLayout::Touch {
                         // Always visible: there are no modifier keys on a tablet.
@@ -1035,6 +1042,9 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     shading_window(ui.ctx(), ed);
+    if crate::references::window(ui.ctx(), ed) {
+        action = Some(UiAction::LoadReference);
+    }
     keymap::window(ui.ctx(), ed);
     if let Some(a) = crate::palette::window(ui.ctx(), ed) {
         action = Some(a);
@@ -3432,6 +3442,37 @@ fn poly_mode_buttons(ui: &mut Ui, ed: &mut Editor) {
     }
 }
 
+fn selection_shapes() -> [(crate::editor::SelectShape, &'static str); 5] {
+    use crate::editor::SelectShape;
+    [
+        (SelectShape::Rectangle, plain::SELECTION_RECT),
+        (SelectShape::Lasso, plain::SELECTION_LASSO),
+        (SelectShape::Circle, plain::SELECTION_CIRCLE),
+        (SelectShape::Ellipse, plain::SELECTION_ELLIPSE),
+        (SelectShape::Curve, plain::SELECTION_CURVE),
+    ]
+}
+
+fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
+    if !ed.brush_roles().ctrl || ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() {
+        return;
+    }
+    let mut buttons = |ui: &mut Ui| {
+        for (shape, description) in selection_shapes() {
+            let tip = format!("{}: {description}", shape.label());
+            if widgets::icon_button(ui, Icon::Selection(shape), ed.selection_shape == shape, true, &tip).clicked() {
+                ed.selection_shape = shape;
+                ed.select_curve = None;
+            }
+        }
+    };
+    if ed.narrow_shelf && ed.shelf != ShelfPosition::Bottom {
+        ui.vertical_centered(buttons);
+    } else {
+        ui.horizontal_wrapped(|ui| buttons(ui));
+    }
+}
+
 fn current_tiles(ui: &mut Ui, ed: &mut Editor) {
     let ctx = ui.ctx().clone();
     // Side by side, or stacked in the narrow shelf.
@@ -3782,7 +3823,7 @@ fn focal_length_controls(ui: &mut Ui, ed: &mut Editor) {
 
 /// View > Shading: ambient occlusion, cavity, hard edges and the viewport
 /// toggles.
-fn shading_controls(ui: &mut Ui, ed: &mut Editor) {
+pub(crate) fn xray_controls(ui: &mut Ui, ed: &mut Editor) {
     ui.checkbox(&mut ed.view.xray, "X-ray")
         .on_hover_text("Fade meshes in the viewport while preserving normal tool picking");
     if ed.view.xray {
@@ -3800,6 +3841,10 @@ fn shading_controls(ui: &mut Ui, ed: &mut Editor) {
         ));
         ui.separator();
     }
+}
+
+fn shading_controls(ui: &mut Ui, ed: &mut Editor) {
+    xray_controls(ui, ed);
     tips::hover(
         ui.add(crate::widgets::Bar(
             egui::Slider::new(&mut ed.view.ambient_occlusion, 0.0..=1.0).text("Ambient occlusion"),
@@ -7032,14 +7077,7 @@ fn groups_section(ui: &mut Ui, ed: &mut Editor) {
     tips::check_km(ui, &ed.keymap, &mut ed.view.show_mask, "Show mask", Cmd::ShowMask);
     ui.horizontal_wrapped(|ui| {
         ui.label("Selection");
-        use crate::editor::SelectShape;
-        for (shape, tip) in [
-            (SelectShape::Rectangle, plain::SELECTION_RECT),
-            (SelectShape::Lasso, plain::SELECTION_LASSO),
-            (SelectShape::Circle, plain::SELECTION_CIRCLE),
-            (SelectShape::Ellipse, plain::SELECTION_ELLIPSE),
-            (SelectShape::Curve, plain::SELECTION_CURVE),
-        ] {
+        for (shape, tip) in selection_shapes() {
             if tips::hover(ui.selectable_label(ed.selection_shape == shape, shape.label()), tip).clicked() {
                 ed.selection_shape = shape;
                 ed.select_curve = None;
@@ -8747,6 +8785,24 @@ mod tests {
                 egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))
             })
             .collect()
+    }
+
+    #[test]
+    fn mask_modifier_exposes_direct_selection_shapes() {
+        use crate::editor::SelectShape;
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        let ctx = egui::Context::default();
+        let lasso = format!("{}: {}", SelectShape::Lasso.label(), plain::SELECTION_LASSO);
+        assert!(widgets_labelled(&mut ed, &ctx, &lasso).is_empty());
+        for shift in [false, true] {
+            ed.touch_modifiers.ctrl = true;
+            ed.touch_modifiers.shift = shift;
+            ed.selection_shape = SelectShape::Rectangle;
+            let lasso_button = widgets_labelled(&mut ed, &ctx, &lasso)[0].center();
+            click_at(&mut ed, &ctx, lasso_button);
+            assert_eq!(ed.selection_shape, SelectShape::Lasso);
+        }
     }
 
     #[test]

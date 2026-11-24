@@ -30,6 +30,7 @@ pub(crate) struct ChunkSnapshot {
 }
 
 enum Change {
+    References(Vec<oxy_doc::ReferenceImage>),
     /// Points edited in place. `topology` is the mesh's topology version
     /// when they were recorded: the snapshots only fit that mesh.
     Chunks {
@@ -101,6 +102,8 @@ enum Change {
 
 /// Building blocks for compound operations (e.g. merging pieces).
 pub enum Step {
+    /// The previous project reference list. Pixel buffers are shared.
+    References { previous: Vec<oxy_doc::ReferenceImage> },
     /// The piece's mesh was replaced; `previous` is the old mesh.
     Topology { piece: u64, previous: Mesh, previous_multires: Option<Multires> },
     /// A piece was inserted at `index`.
@@ -124,6 +127,7 @@ pub enum Step {
 impl From<Step> for Change {
     fn from(s: Step) -> Self {
         match s {
+            Step::References { previous } => Change::References(previous),
             Step::Topology { piece, previous, previous_multires } => {
                 Change::Topology { piece, mesh: Box::new(previous), multires: previous_multires.map(Box::new) }
             }
@@ -207,7 +211,7 @@ impl Change {
             | Change::Parent { piece, .. }
             | Change::Link { piece, .. }
             | Change::Cage { piece, .. } => Some(*piece),
-            Change::Piece { .. } | Change::Reorder { .. } => None,
+            Change::Piece { .. } | Change::Reorder { .. } | Change::References(_) => None,
             Change::Compound(c) => {
                 let first = c.first()?.single_piece()?;
                 c.iter().all(|x| x.single_piece() == Some(first)).then_some(first)
@@ -232,6 +236,7 @@ impl Change {
             | Change::Cage { piece, .. } => *piece == id,
             Change::Piece { piece, .. } => piece.as_ref().is_some_and(|p| p.id == id),
             Change::Reorder { .. } => true,
+            Change::References(_) => false,
             Change::Compound(c) => c.iter().any(|x| x.touches(id)),
         }
     }
@@ -255,6 +260,7 @@ impl Change {
             Change::Cage { mesh, cage, .. } => {
                 mesh_bytes(mesh) + cage.as_ref().map_or(0, |c| c.positions.len() * 12 + c.faces.len() * 16)
             }
+            Change::References(refs) => refs.iter().map(|r| r.pixels.len() + 128).sum::<usize>() + 32,
             Change::Compound(c) => c.iter().map(Change::bytes).sum(),
         }
     }
@@ -263,6 +269,10 @@ impl Change {
     fn swap(&mut self, scene: &mut Scene) -> Option<u64> {
         self.ensure_uncompressed();
         match self {
+            Change::References(previous) => {
+                std::mem::swap(previous, &mut scene.references);
+                None
+            }
             Change::Chunks { piece, topology, snaps } => {
                 let mesh = &mut scene.get_mut(*piece)?.mesh;
                 // Recorded on another mesh (one rebuilt outside history):

@@ -1,5 +1,5 @@
 use glam::{Mat4, Vec3};
-use oxy_render::{Camera, DrawItem, RenderTarget, ViewSettings, ViewportRenderer, XrayScope};
+use oxy_render::{Camera, DrawItem, ReferencePlane, RenderTarget, ViewSettings, ViewportRenderer, XrayScope};
 
 #[test]
 #[ignore = "requires a wgpu adapter"]
@@ -44,7 +44,8 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     let item = DrawItem { id: 1, active: true, preview: false, material: 0, instances: None, wireframe: false };
     let rear = DrawItem { id: 2, active: false, ..item };
     let settings = ViewSettings { ambient_occlusion: 0.0, cavity: 0.0, ..Default::default() };
-    let mut render = |settings: &ViewSettings, items: &[DrawItem]| -> Vec<u8> {
+    let mut render = |settings: &ViewSettings, items: &[DrawItem], plane: Option<ReferencePlane>| -> Vec<u8> {
+        viewport.set_reference_planes(&device, &queue, plane.into_iter());
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: u64::from(SIDE * SIDE * 4),
@@ -73,10 +74,10 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         let offset = ((y * SIDE + x) * 4) as usize;
         &frame[offset..offset + 4]
     }
-    let bg = render(&settings, &[]);
-    let solid = render(&settings, &[item]);
+    let bg = render(&settings, &[], None);
+    let solid = render(&settings, &[item], None);
     let mut xray = ViewSettings { xray: true, ..settings };
-    let ghost = render(&xray, &[item]);
+    let ghost = render(&xray, &[item], None);
     let center = |frame: &[u8]| sample(frame, SIDE / 2, SIDE / 2).to_vec();
     assert_ne!(center(&solid), center(&ghost));
     assert_ne!(center(&bg), center(&ghost));
@@ -89,25 +90,47 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         assert!((srgb_to_linear(center(&ghost)[channel]) - expected).abs() < 0.01);
     }
     assert_eq!(sample(&bg, 1, 1), sample(&ghost, 1, 1));
-    let overlap = render(&xray, &[DrawItem { instances: Some(1), ..rear }, item]);
+    let overlap = render(&xray, &[DrawItem { instances: Some(1), ..rear }, item], None);
     assert_eq!(center(&overlap), center(&ghost));
 
     xray.xray_scope = XrayScope::Inactive;
-    let behind_active = render(&xray, &[item, DrawItem { id: 3, wireframe: true, ..rear }]);
+    let behind_active = render(&xray, &[item, DrawItem { id: 3, wireframe: true, ..rear }], None);
     assert_eq!(center(&behind_active), center(&solid));
     assert_eq!(
-        center(&render(&xray, &[rear])),
-        center(&render(&ViewSettings { xray_scope: XrayScope::AllVisible, ..xray }, &[rear]))
+        center(&render(&xray, &[rear], None)),
+        center(&render(&ViewSettings { xray_scope: XrayScope::AllVisible, ..xray }, &[rear], None))
     );
     xray.xray_scope = XrayScope::AllVisible;
     xray.xray_opacity = 0.0;
-    assert_eq!(render(&xray, &[item]), bg);
+    assert_eq!(render(&xray, &[item], None), bg);
 
     xray.xray_opacity = 0.35;
     xray.ambient_occlusion = 0.7;
     xray.cavity = 0.6;
     xray.wireframe = true;
     xray.lighting.enabled = true;
-    let combined = render(&xray, &[item, rear]);
+    let combined = render(&xray, &[item, rear], None);
     assert_ne!(center(&combined), center(&bg));
+    let reference = |overlay| ReferencePlane {
+        pixels: [255, 0, 0, 255].into(),
+        size: [1, 1],
+        corners: [[-1.0, 1.0, 0.5, 1.0], [1.0, 1.0, 0.5, 1.0], [-1.0, -1.0, 0.5, 1.0], [1.0, -1.0, 0.5, 1.0]],
+        opacity: 1.0,
+        overlay,
+    };
+    assert_eq!(center(&render(&settings, &[item], Some(reference(false)))), center(&solid));
+    let image_only = render(&settings, &[], Some(reference(false)));
+    assert_eq!(center(&image_only), [255, 0, 0, 255]);
+    let faded = ViewSettings { xray: true, ..settings };
+    let through_mesh = render(&faded, &[item], Some(reference(false)));
+    assert!(center(&through_mesh)[0] > center(&ghost)[0]);
+    assert_eq!(center(&render(&settings, &[item], Some(reference(true)))), center(&image_only));
+    let transparent = ReferencePlane { pixels: [255, 0, 0, 128].into(), opacity: 0.5, ..reference(true) };
+    let alpha = 0.5 * 128.0 / 255.0;
+    let over_mesh = center(&render(&settings, &[item], Some(transparent)));
+    for channel in 0..3 {
+        let source = if channel == 0 { alpha } else { 0.0 };
+        let expected = srgb_to_linear(center(&solid)[channel]) * (1.0 - alpha) + source;
+        assert!((srgb_to_linear(over_mesh[channel]) - expected).abs() < 0.01);
+    }
 }

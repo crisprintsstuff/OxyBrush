@@ -48,6 +48,7 @@ pub enum MenuId {
     CustomMatcap(usize),
     /// The Shading window: the sliders of View > Shading and Inactive pieces.
     ShadingWindow,
+    ReferencesWindow,
     RecipeBox,
     /// Run command `.1` of in-app plugin `.0`.
     Plugin(usize, usize),
@@ -469,6 +470,7 @@ fn view_menu(ed: &Editor) -> Vec<Node> {
                 cmd(Cmd::FocalLengthWindow, "Focal length…"),
             ],
         ),
+        item(MenuId::ReferencesWindow, "References…"),
         sub(
             "Shading",
             vec![
@@ -603,6 +605,7 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
                 ed.choose_custom_matcap(i);
             }
         }
+        MenuId::ReferencesWindow => ed.show_references = true,
         MenuId::ShadingWindow => ed.show_shading = true,
         MenuId::RecipeBox => ed.show_parts_bin = !ed.show_parts_bin,
         MenuId::Plugin(i, k) => ed.run_wasm_plugin(i, k),
