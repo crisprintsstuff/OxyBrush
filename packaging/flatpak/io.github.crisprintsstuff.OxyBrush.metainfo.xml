@@ -53,6 +53,13 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.0-beta.24.5" date="2026-11-24" type="development">
+      <description>
+        <p>Paint can vary hue, saturation, and value per stroke or per dab.
+        Materials contains the lit surface controls. OxySpheres displays
+        rejected quad builds beside Make mesh.</p>
+      </description>
+    </release>
     <release version="4.0.0-beta.24.4" date="2026-11-23" type="development">
       <description>
         <p>Draw, Clay, and Inflate start with Accumulate off. Poly Edit
