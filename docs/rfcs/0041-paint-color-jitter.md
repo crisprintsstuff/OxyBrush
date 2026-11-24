@@ -64,8 +64,32 @@ after blending, excluding the first and last three dabs. Overlap softened
 the per-dab variation by about 72% at tight spacing. On middle gray, hue
 alone left all 28 samples neutral. With saturation jitter enabled, 9 of
 28 samples showed a tint. This supports starting with the two sampling
-modes. The experiment models color blending along a line. Check the feel
-on a sculpt mesh before deciding whether a distance-based mode is needed.
+modes. The experiment models color blending along a line. The mesh probe below checks whether the effect persists through the Paint kernel.
+
+### Paint kernel on a sculpt mesh
+
+Run `cargo run -p oxy-sculpt --example paint_jitter_probe`. The probe
+places 22 single dabs along an arc on a 40,962-vertex icosphere. It uses
+the production Paint stamp and vertex blend, a brush radius of 0.10 on
+a unit sphere, strength 0.6, fixed pressure, and the same jitter amounts
+as the line experiment. It averages the colors of vertices within
+0.2 brush radii of each interior dab center.
+
+| Spacing | Jitter off | Per Stroke | Per Dab | Gray patches tinted with hue only | Gray patches tinted with hue and saturation |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0.2 × brush radius | 0.0009 | 0.0009 | 0.0330 | 0/16 | 16/16 |
+| 1.2 × brush radius | 0.0042 | 0.0041 | 0.1047 | 0/16 | 11/16 |
+
+The three variation columns report mean sRGB distance between adjacent
+center patches. Per Stroke varied about as much as the jitter-off
+control. Per Dab retained measurable variation at both spacings, with
+about 68% less at tight spacing. Overlap can also spread a tint from one
+dab into neighboring gray patches. Start with Per Stroke and Per Dab,
+and revisit distance-based sampling if artist testing shows a need.
+
+The probe supplies colors to the existing stamp path. Interactive
+pressure, viewport appearance, pointer-driven spacing, and editable
+stroke replay still need testing with the integrated feature.
 
 ## Acceptance criteria
 
