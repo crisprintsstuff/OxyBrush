@@ -6,7 +6,8 @@
 
 Add a **References** panel for loading local images into the sculpting
 viewport. Start with axis-aligned image planes for matching a sculpt to
-front, side, and top references.
+front, side, and top references. Add viewport X-ray so artists can see
+those images through the sculpt.
 
 ## Motivation
 
@@ -36,10 +37,47 @@ machine.
   dimensions and total image memory. Upload textures on import, restore,
   or replacement and reuse them on subsequent frames.
 
+### Viewport X-ray
+
+Add an **X-ray** toggle and **Mesh opacity** control in View > Shading,
+with the same controls accessible from References. Start with X-ray off
+and 35% mesh opacity. Expose two scopes:
+
+- **All visible pieces** fades the active sculpt as well as the surrounding
+  pieces, so a reference behind the sculpt is visible while drawing or
+  sculpting.
+- **Inactive pieces** keeps the active piece opaque and fades other
+  visible pieces. This also covers [issue #454](https://github.com/crisprintsstuff/OxyBrush/issues/454).
+
+X-ray affects display. The active tool keeps its normal raycast, selection,
+mask, symmetry, and visibility behavior. The mesh opacity control is
+independent of each image's opacity. Hiding a piece still removes it from
+the view. The default background order is the floor and background,
+then behind-model references, then meshes. A reference marked Overlay
+is composited above meshes, with tool cursors and guides on top.
+
+Build the shared viewport X-ray pass first and validate it on ordinary
+meshes before wiring in the reference image pass. Keep opaque pieces in
+the existing shading path. For the initial X-ray pass, depth-test against
+opaque pieces and resolve only the nearest translucent surface at each
+pixel into a separate color layer. Composite that layer at the selected
+opacity. This keeps overlapping and closed meshes from accumulating
+opacity on each backface or internal surface. Test AO, cavity, shadows,
+wireframe, and instances to verify that ghosted geometry does not
+reintroduce an opaque silhouette through an auxiliary pass. The design
+does not require a through-selection mode or full layered transparency.
+
 ## Acceptance criteria
 
 - Align front and side images to the same model. Verify pan, zoom,
   orbit, view snapping, opacity, and the overlay option.
+- With a reference behind an opaque sculpt, toggle X-ray and verify the
+  image shows through at a useful opacity. Check opaque active pieces in
+  Inactive pieces scope, depth against opaque foreground geometry, and
+  that overlapping ghosted pieces do not accumulate opacity.
+- Paint the same view with X-ray on and off and verify the same piece is
+  hit. Repeat with hidden pieces, retopology snapping, and a reference
+  overlay.
 - Place multiple images, change their settings, and undo and redo
   transformations, visibility changes, and removal.
 - Save and reopen the project after moving the image files. Check a
@@ -49,7 +87,8 @@ machine.
   export.
 - Try oversized, corrupt, and transparent images. Verify bounded
   resource use, legible errors, and correct alpha blending.
-- Measure viewport frame time with references hidden and visible.
+- Measure viewport frame time with X-ray off and on and with references
+  hidden and visible.
 
 ## Alternatives
 
