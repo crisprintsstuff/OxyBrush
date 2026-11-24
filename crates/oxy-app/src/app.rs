@@ -952,11 +952,7 @@ impl App {
             egui_wgpu::ScreenDescriptor { size_in_pixels: [g.config.width, g.config.height], pixels_per_point: ppp };
 
         let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        g.viewport.set_reference_planes(
-            &g.device,
-            &g.queue,
-            crate::references::planes(&ed.scene.references, &ed.camera, ed.canvas),
-        );
+        g.viewport.set_reference_planes(&g.device, &g.queue, crate::references::planes(&self.egui_ctx, ed));
         g.viewport.render(
             &g.device,
             &g.queue,

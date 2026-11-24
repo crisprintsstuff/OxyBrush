@@ -21,7 +21,9 @@ machine.
 - **View > References** opens a list of the project's images. Add a PNG
   or JPEG, assign a Front, Side, or Top orientation, and adjust its
   position, scale, and opacity. Preserve the image's aspect ratio.
-  Each image can be renamed, hidden, or removed. Edits are undoable.
+  Each image can be renamed, hidden, or removed. Placement edits preview
+  in the viewport as the controls change. Apply records a single undoable
+  edit. Revert or close the panel to discard the current project’s preview.
 - Show an image by default when the orthographic view matches its
   orientation. Offer a per-image option to show the plane in perspective
   and other views for artists who orbit while working. Place the plane
