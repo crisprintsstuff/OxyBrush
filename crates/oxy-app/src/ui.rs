@@ -842,6 +842,10 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         focal_length_controls(ui, ed);
                     });
                 });
+                tips::menu(ui, "X-ray", "Fade meshes to see geometry behind them", |ui| {
+                    ui.set_min_width(320.0);
+                    xray_controls(ui, ed);
+                });
                 if ui.button("References…").clicked() {
                     ed.show_references = true;
                     ui.close();
@@ -3829,7 +3833,7 @@ pub(crate) fn xray_controls(ui: &mut Ui, ed: &mut Editor) {
     if ed.view.xray {
         use oxy_render::XrayScope;
         ui.horizontal_wrapped(|ui| {
-            for scope in [XrayScope::AllVisible, XrayScope::Inactive] {
+            for scope in XrayScope::ALL {
                 ui.selectable_value(&mut ed.view.xray_scope, scope, scope.label());
             }
         });
@@ -3978,6 +3982,21 @@ fn view_strip(ui: &mut Ui, ed: &mut Editor) {
             if widgets::icon_button(ui, Icon::Shading, shading, true, &Cmd::Shading.tip()).clicked() {
                 ed.toggle_shading();
             }
+            let xray = widgets::icon_button(
+                ui,
+                Icon::Xray,
+                ed.view.xray,
+                true,
+                "X-ray · Fade meshes to see geometry behind them
+Right-click for X-ray settings",
+            );
+            if xray.clicked() {
+                ed.view.xray = !ed.view.xray;
+            }
+            xray.context_menu(|ui| {
+                ui.set_min_width(320.0);
+                xray_controls(ui, ed);
+            });
             let wireframe = ed.view.wireframe;
             let tip = format!("{}\nRight-click for wireframe settings", Cmd::Wireframe.tip_in(&ed.keymap));
             let btn = widgets::icon_button(ui, Icon::Wireframe, wireframe, true, &tip);
