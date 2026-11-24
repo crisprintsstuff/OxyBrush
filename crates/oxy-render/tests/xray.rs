@@ -128,9 +128,9 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     let transparent = ReferencePlane { pixels: [255, 0, 0, 128].into(), opacity: 0.5, ..reference(true) };
     let alpha = 0.5 * 128.0 / 255.0;
     let over_mesh = center(&render(&settings, &[item], Some(transparent)));
-    for channel in 0..3 {
+    for (channel, (out, original)) in over_mesh.into_iter().zip(center(&solid)).take(3).enumerate() {
         let source = if channel == 0 { alpha } else { 0.0 };
-        let expected = srgb_to_linear(center(&solid)[channel]) * (1.0 - alpha) + source;
-        assert!((srgb_to_linear(over_mesh[channel]) - expected).abs() < 0.01);
+        let expected = srgb_to_linear(original) * (1.0 - alpha) + source;
+        assert!((srgb_to_linear(out) - expected).abs() < 0.01);
     }
 }
