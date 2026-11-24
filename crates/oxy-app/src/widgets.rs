@@ -45,9 +45,13 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::SharpCrease => {
             "Cuts a crisp V-shaped crease along the stroke, for hard folds, seams and panel lines. Alt raises a sharp ridge."
         }
-        BrushKind::KelvinGrab => "Deforms like real elastic rubber with volume preservation. Alt moves along normal.",
-        BrushKind::KelvinTwist => "Twists the surface elastically around the contact normal. Alt reverses spin.",
-        BrushKind::KelvinScale => "Scales or pinches the volume radially with elastodynamic decay. Alt inverts.",
+        BrushKind::KelvinGrab => {
+            "Pulls the surface and its surroundings elastically. Alt pulls along the surface normal."
+        }
+        BrushKind::KelvinTwist => "Drag sideways to twist around the contact normal. Alt reverses the twist.",
+        BrushKind::KelvinScale => {
+            "Drag up to expand or down to contract around the contact. Alt reverses the response."
+        }
         BrushKind::CurveMove => {
             "Draw a curve along a part (an arm, a tail), then drag its points: the mesh around it bends and stretches to follow. Masked areas stay put."
         }

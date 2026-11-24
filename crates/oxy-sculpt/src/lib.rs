@@ -651,6 +651,25 @@ impl Dab {
 /// (vertex, weight, original position) inside one symmetry copy.
 type GrabHit = (u32, f32, Vec3);
 
+/// A symmetry copy of an affine Kelvinlet, evaluated from the stroke-start
+/// position. A reflected rotation uses an axial vector (det(M) M n).
+struct KelvinAffine {
+    offset: Vec3,
+    axis: Vec3,
+    influence: f32,
+}
+
+impl KelvinAffine {
+    fn displacement(&self, kind: BrushKind, gesture: f32) -> Vec3 {
+        let amount = self.influence * gesture;
+        if kind == BrushKind::KelvinTwist {
+            (glam::Quat::from_axis_angle(self.axis, amount) * self.offset) - self.offset
+        } else {
+            self.offset * amount.exp_m1()
+        }
+    }
+}
+
 /// One vertex after every symmetry copy that captured it has been merged.
 struct BlendedGrab {
     index: u32,
@@ -665,6 +684,7 @@ struct BlendedGrab {
     elastic: Mat3,
     /// Alt (move along the normal): the move is `along * t`.
     along: Vec3,
+    affine: Vec<KelvinAffine>,
 }
 
 struct GrabState {
@@ -1296,6 +1316,8 @@ impl Stroke {
             // First sample: capture the vertices under each transformed brush.
             let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
             let alpha = self.alpha.clone();
+            let kind = self.settings.kind;
+            let affine = matches!(kind, BrushKind::KelvinTwist | BrushKind::KelvinScale);
             let topological = self.settings.kind == BrushKind::TopoMove;
             let through = self.grab_through && self.view != Vec3::ZERO && !topological;
             let captured: Vec<(Mat3, Vec3, Vec<GrabHit>)> = self
@@ -1347,6 +1369,7 @@ impl Stroke {
                 sum_n: Vec3,
                 sum_w: f32,
                 max_w: f32,
+                affine: Vec<KelvinAffine>,
             }
             let centers: Vec<Vec3> = captured.iter().map(|c| c.1).collect();
             let overlap = copies_overlap(
@@ -1366,32 +1389,46 @@ impl Stroke {
                         sum_n: Vec3::ZERO,
                         sum_w: 0.0,
                         max_w: 0.0,
+                        affine: Vec::new(),
                     });
-                    let (local_m, local_e) = if self.settings.kind.is_kelvin() {
-                        let (k, elastic) =
-                            kelvin_tensor(self.settings.kind, orig - *center, *n, dab.radius, self.view, self.invert);
-                        (k * (*m) * self.settings.strength, elastic * (*m) * self.settings.strength)
+                    let offset = orig - *center;
+                    if affine {
+                        // de Goes and James (2017), equations 15 and 16.
+                        // Normalize the affine field to unit gradient at contact.
+                        let inverse_r2 = 1.0 / (1.0 + (offset / dab.radius.max(1e-6)).length_squared());
+                        let kernel = inverse_r2 * inverse_r2.sqrt() * (0.4 + 0.6 * inverse_r2);
+                        let influence = w * self.settings.strength * kernel;
+                        e.affine.push(KelvinAffine { offset, axis: *n * m.determinant().signum(), influence });
                     } else {
-                        (*m * self.settings.strength, Mat3::ZERO)
-                    };
-                    e.sum_m += local_m * w;
-                    e.sum_e += local_e * w;
-                    e.sum_n += *n * (self.settings.strength * w);
+                        let weight = self.settings.strength * w;
+                        if kind == BrushKind::KelvinGrab {
+                            let (carry, elastic) = kelvin_grab_tensor(offset, dab.radius);
+                            e.sum_m += carry * *m * weight;
+                            e.sum_e += elastic * *m * weight;
+                        } else {
+                            e.sum_m += *m * weight;
+                            e.sum_n += *n * weight;
+                        }
+                    }
                     e.sum_w += w;
                     e.max_w = e.max_w.max(w);
                 }
             }
             let verts = acc
                 .into_iter()
-                .map(|(index, e)| {
+                .map(|(index, mut e)| {
                     // One copy: scale 1, so the move is exactly that copy's.
                     let scale = if e.sum_w > 1e-8 { 1.0 / overlap_divisor(e.sum_w, e.max_w, overlap) } else { 0.0 };
+                    for affine in &mut e.affine {
+                        affine.influence *= scale;
+                    }
                     BlendedGrab {
                         index,
                         orig: e.orig,
                         blend: e.sum_m * scale,
                         elastic: e.sum_e * scale,
                         along: e.sum_n * scale,
+                        affine: e.affine,
                     }
                 })
                 .collect();
@@ -1401,8 +1438,20 @@ impl Stroke {
             return;
         };
         let delta = s.position - grab.origin;
-        // Alt (invert): move along the surface normal instead, by the drag's length.
-        let along = self.invert.then(|| along_normal(delta, grab.primary_normal, self.view).dot(grab.primary_normal));
+        let kind = self.settings.kind;
+        let affine = matches!(kind, BrushKind::KelvinTwist | BrushKind::KelvinScale);
+        // Alt constrains translation to the normal and reverses affine gestures.
+        let normal_drag = (self.invert && !affine).then(|| along_normal(delta, grab.primary_normal, self.view));
+        let gesture = if affine {
+            let view = self.view.normalize_or(-Vec3::Z);
+            let right = view.cross(Vec3::Y).normalize_or(Vec3::X);
+            let up = right.cross(view);
+            let axis = if kind == BrushKind::KelvinTwist { right } else { up };
+            let sign = if self.invert { -1.0 } else { 1.0 };
+            (delta.dot(axis) / grab.radius.max(1e-6) * sign).clamp(-2.0, 2.0)
+        } else {
+            0.0
+        };
         let mut chunks: Vec<u32> = grab.verts.iter().map(|v| mesh.vertex_chunk(v.index)).collect();
         chunks.sort_unstable();
         chunks.dedup();
@@ -1412,9 +1461,13 @@ impl Stroke {
         let fade = elastic_fade(delta.length() / grab.radius.max(1e-6));
         let mut moved = Vec::with_capacity(grab.verts.len());
         for v in &grab.verts {
-            let d = match along {
-                Some(t) => v.along * t,
-                None => v.blend * delta + v.elastic * (delta * fade),
+            let d = if affine {
+                v.affine.iter().map(|copy| copy.displacement(kind, gesture)).sum()
+            } else if let Some(normal_drag) = normal_drag.filter(|_| kind != BrushKind::KelvinGrab) {
+                v.along * normal_drag.dot(grab.primary_normal)
+            } else {
+                let drag = normal_drag.unwrap_or(delta);
+                v.blend * drag + v.elastic * (drag * fade)
             };
             mesh.positions[v.index as usize] = v.orig + d;
             moved.push(v.index);
@@ -1425,68 +1478,22 @@ impl Stroke {
     }
 }
 
-/// Evaluates the regularized Kelvinlet deformation tensor (de Goes & James,
-/// "Regularized Kelvinlets", SIGGRAPH 2017), split in two: the part that
-/// carries the surface with the brush, and (Kelvin Grab) the elastic part,
-/// `b / r_eps^3 * r r^T`, that bulges the sides and pinches behind, which
-/// the grab fades on long drags ([`elastic_fade`]).
-///
-/// For Kelvin Grab the regularization width ε is the brush radius, the
-/// paper's scale. It was 0.35 of it, which gave the carried part a narrow peak: the middle of
-/// the brush moved much more than its surroundings, and a long pull drew
-/// that peak out into a sharp ridge.
-fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: Vec3, invert: bool) -> (Mat3, Mat3) {
-    let r = r_vec.length();
-    if radius <= 1e-6 {
-        return (Mat3::ZERO, Mat3::ZERO);
-    }
-    // Twist and Scale keep their narrower width (they don't pull shapes out).
-    let epsilon = if kind == BrushKind::KelvinGrab { radius } else { 0.35 * radius };
-    let eps2 = epsilon * epsilon;
-    let r_eps = (r * r + eps2).sqrt();
-    let r_eps3 = r_eps * r_eps * r_eps;
-
-    match kind {
-        BrushKind::KelvinGrab => {
-            // Translational Kelvin state with Poisson's ratio nu = 0.45.
-            // As nu -> 0.5, deformation is strictly volume-preserving (incompressible).
-            let nu = 0.45f32;
-            // Paper's grab: u = [(a-b)/r_e + a e^2/(2 r_e^3)] I f + b/r_e^3 r r^T f,
-            // with a = 1 and b = a / (4 (1 - nu)), scaled so the centre moves
-            // exactly by the drag (value at r = 0 is (1.5a - b) / e).
-            let b = 1.0 / (4.0 * (1.0 - nu));
-            let norm = epsilon / (1.5 - b);
-            let c_diag = norm * ((1.0 - b) / r_eps + eps2 / (2.0 * r_eps3));
-            let c_outer = norm * b / r_eps3;
-            let outer = Mat3::from_cols(r_vec * r_vec.x, r_vec * r_vec.y, r_vec * r_vec.z);
-            (Mat3::IDENTITY * c_diag, outer * c_outer)
-        }
-        BrushKind::KelvinTwist => {
-            // Torsional Kelvin state (infinitesimal moment around surface normal).
-            // Pure divergence-free (strictly incompressible) rotational deformation.
-            let c = (3.0 * 3.0f32.sqrt() * 0.5) * (eps2 / r_eps3) * (1.0 / radius);
-            let sign = if invert { -1.0 } else { 1.0 };
-            let spin = normal.cross(r_vec) * (c * sign);
-            let mut tangent = if view != Vec3::ZERO { view.cross(normal) } else { normal.any_orthonormal_vector() };
-            if tangent.length_squared() < 1e-6 {
-                tangent = normal.any_orthonormal_vector();
-            }
-            let tangent = tangent.normalize();
-            (Mat3::from_cols(spin * tangent.x, spin * tangent.y, spin * tangent.z), Mat3::ZERO)
-        }
-        BrushKind::KelvinScale => {
-            // Dilatational / compressive elastodynamic dipole.
-            let c = (2.0 / radius) * (eps2 / r_eps3);
-            let sign = if invert { -1.0 } else { 1.0 };
-            let radial = r_vec * (c * sign);
-            let side = view.cross(normal);
-            let up = normal.cross(side).normalize_or(normal);
-            let driver = (up + normal).normalize();
-            (Mat3::from_cols(radial * driver.x, radial * driver.y, radial * driver.z), Mat3::ZERO)
-        }
-        _ => (Mat3::IDENTITY, Mat3::ZERO),
-    }
+/// Translational state of the regularized Kelvinlet (de Goes and James,
+/// "Regularized Kelvinlets", SIGGRAPH 2017, DOI 10.1145/3072959.3073595).
+/// Normalize at the contact and measure offsets in units of epsilon. Keep
+/// the isotropic and anisotropic terms separate for the long-drag limiter.
+fn kelvin_grab_tensor(offset: Vec3, radius: f32) -> (Mat3, Mat3) {
+    let r = offset / radius.max(1e-6);
+    let s = (1.0 + r.length_squared()).sqrt();
+    let s3 = s * s * s;
+    let poisson = 0.45;
+    let b = 1.0 / (4.0 * (1.0 - poisson));
+    let norm = 1.0 / (1.5 - b);
+    let outer = Mat3::from_cols(r * r.x, r * r.y, r * r.z);
+    (Mat3::IDENTITY * (norm * ((1.0 - b) / s + 0.5 / s3)), outer * (norm * b / s3))
 }
+
+const KELVIN_REACH: f32 = 2.0;
 
 /// A brush's falloff at squared distance `d2` from its centre, without the
 /// alpha image, the mask or front-face fading: the shape `vertex_weight`
@@ -1494,10 +1501,12 @@ fn kelvin_tensor(kind: BrushKind, r_vec: Vec3, normal: Vec3, radius: f32, view: 
 #[inline]
 fn falloff_profile(settings: &BrushSettings, radius: f32, d2: f32, alpha: bool) -> f32 {
     if settings.kind.is_kelvin() {
-        // Kelvin Grab squared, not cubed: with the Kelvinlet's own fall-off
-        // on top, the cube gave too narrow a peak (see `kelvin_tensor`).
-        let t = 1.0 - (d2 / (radius * radius)).min(1.0);
-        if settings.kind == BrushKind::KelvinGrab { t * t } else { t * t * t }
+        // Smooth finite support for interactive chunk capture. The Kelvinlet
+        // itself supplies the core falloff, including the response outside
+        // the drawn brush radius.
+        let t = (d2.sqrt() / (radius * KELVIN_REACH).max(1e-6)).min(1.0);
+        let edge = 1.0 - t * t;
+        edge * edge
     } else if alpha {
         // With an alpha the image defines the footprint; falloff still softens it.
         settings.falloff.eval_shifted((d2.sqrt() / (radius * std::f32::consts::SQRT_2)).min(1.0), settings.focal_shift)
@@ -1520,7 +1529,14 @@ fn copies_overlap(settings: &BrushSettings, radius: f32, centers: &[Vec3], alpha
             if let Some(v) = view {
                 off -= v * off.dot(v);
             }
-            falloff_profile(settings, radius, off.length_squared(), alpha).max(0.0)
+            let weight = falloff_profile(settings, radius, off.length_squared(), alpha).max(0.0);
+            if settings.kind == BrushKind::KelvinGrab {
+                // The capture taper only bounds work. Use the translational
+                // kernel's carried response to judge overlap at the contact.
+                weight * kelvin_grab_tensor(off, radius).0.x_axis.x
+            } else {
+                weight
+            }
         })
         .sum()
 }
@@ -1568,7 +1584,7 @@ fn overlap_divisor(sum_w: f32, max_w: f32, overlap: f32) -> f32 {
 /// line through the dab centre along the view direction is within the
 /// radius, front to back, with the brush falloff and the mask applied.
 fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<GrabHit> {
-    let r = dab.radius;
+    let r = reach(settings.kind, dab, false);
     let axis = dab.view;
     (0..mesh.vertex_count() as u32)
         .filter(|&v| !mesh.is_vertex_hidden(v))
@@ -1579,7 +1595,7 @@ fn capture_cylinder(mesh: &Mesh, settings: &BrushSettings, dab: &Dab) -> Vec<Gra
             if radial > r {
                 return None;
             }
-            let w = settings.falloff.eval_shifted(radial / r, settings.focal_shift) * (1.0 - mesh.mask[v as usize]);
+            let w = falloff_profile(settings, dab.radius, radial * radial, false) * (1.0 - mesh.mask[v as usize]);
             (w > 0.0).then_some((v, w, p))
         })
         .collect()
@@ -1610,7 +1626,13 @@ fn connected_to_nearest(mesh: &Mesh, center: Vec3, verts: Vec<GrabHit>) -> Vec<G
 /// Query radius for a dab: square footprints (Clay Strips, alphas) reach
 /// into their corners.
 fn reach(kind: BrushKind, dab: &Dab, has_alpha: bool) -> f32 {
-    if kind == BrushKind::ClayStrips || has_alpha { dab.radius * std::f32::consts::SQRT_2 } else { dab.radius }
+    if kind.is_kelvin() && !has_alpha {
+        dab.radius * KELVIN_REACH
+    } else if kind == BrushKind::ClayStrips || has_alpha {
+        dab.radius * std::f32::consts::SQRT_2
+    } else {
+        dab.radius
+    }
 }
 
 /// Falloff weight × alpha × (1 − mask) for a vertex, or None if outside the brush.
@@ -1634,9 +1656,7 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
     } else {
         1.0
     };
-    let f = if settings.kind.is_kelvin() {
-        falloff_profile(settings, dab.radius, d2, alpha.is_some())
-    } else if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
+    let f = if settings.kind == BrushKind::ClayStrips && dab.direction != Vec3::ZERO {
         // Square footprint aligned with the stroke: soft only across it.
         let side = dab.normal.cross(dab.direction);
         let along = offset.dot(dab.direction).abs() / dab.radius;
@@ -3712,16 +3732,67 @@ mod tests {
         // A nudge sideways: the point behind the brush (opposite the drag)
         // is pulled along more than one beside it at the same distance,
         // which a plain falloff wouldn't do (the Kelvinlet's r r^T term).
-        let (_, elastic) =
-            kelvin_tensor(BrushKind::KelvinGrab, Vec3::new(-0.2, 0.0, 0.0), Vec3::Y, 0.5, Vec3::Z, false);
-        let (_, beside) = kelvin_tensor(BrushKind::KelvinGrab, Vec3::new(0.0, 0.0, 0.2), Vec3::Y, 0.5, Vec3::Z, false);
+        let (_, elastic) = kelvin_grab_tensor(Vec3::new(-0.2, 0.0, 0.0), 0.5);
+        let (_, beside) = kelvin_grab_tensor(Vec3::new(0.0, 0.0, 0.2), 0.5);
         let drag = Vec3::X * 0.05;
         assert!((elastic * drag).x > 0.0);
         assert!((elastic * drag).x > (beside * drag).x + 1e-4);
     }
 
     #[test]
-    fn kelvin_brushes_deform_with_elastodynamics() {
+    fn kelvin_affine_drags_work_head_on_reverse_and_return_to_start() {
+        let mut original = primitives::icosphere(3, 1.0);
+        let contact = Vec3::Z;
+        let nearest = original
+            .positions
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| (0.15..0.4).contains(&p.distance(contact)))
+            .max_by(|(_, a), (_, b)| a.x.total_cmp(&b.x))
+            .unwrap()
+            .0;
+        let masked = original
+            .positions
+            .iter()
+            .enumerate()
+            .filter(|(i, p)| *i != nearest && (0.15..0.4).contains(&p.distance(contact)))
+            .max_by(|(_, a), (_, b)| a.y.total_cmp(&b.y))
+            .unwrap()
+            .0;
+        original.mask[masked] = 1.0;
+        let offset = original.positions[nearest] - contact;
+        for (kind, drag) in [(BrushKind::KelvinTwist, Vec3::X), (BrushKind::KelvinScale, Vec3::Y)] {
+            for invert in [false, true] {
+                let mut mesh = original.clone();
+                let settings = BrushSettings { kind, radius: 0.5, strength: 1.0, ..Default::default() };
+                let mut stroke = Stroke::new(settings, Symmetry::default(), invert).with_view(-Vec3::Z);
+                let mut sample = |mesh: &mut Mesh, direction| {
+                    stroke.add_sample(
+                        mesh,
+                        StrokeSample { position: contact + direction, normal: Vec3::Z, pressure: 1.0 },
+                        &mut |_, _| {},
+                    )
+                };
+                sample(&mut mesh, Vec3::ZERO);
+                sample(&mut mesh, drag * 0.25);
+                let moved = mesh.positions[nearest] - contact;
+                let sign = if invert { -1.0 } else { 1.0 };
+                match kind {
+                    BrushKind::KelvinTwist => {
+                        assert!((moved.length() - offset.length()).abs() < 1e-6);
+                        assert!(offset.cross(moved).z * sign > 0.005);
+                    }
+                    _ => assert!((moved.length() - offset.length()) * sign > 0.01),
+                }
+                assert_eq!(mesh.positions[masked], original.positions[masked]);
+                sample(&mut mesh, Vec3::ZERO);
+                assert_eq!(mesh.positions, original.positions);
+            }
+        }
+    }
+
+    #[test]
+    fn kelvin_brushes_deform_from_stroke_start() {
         let mut mesh = primitives::icosphere(3, 1.0);
         let contact = mesh.positions[0];
         let normal = mesh.normals[0];
@@ -3781,7 +3852,7 @@ mod tests {
         );
         stroke_scale.add_sample(
             &mut scale_mesh,
-            StrokeSample { position: contact + normal * 0.2, normal, pressure: 1.0 },
+            StrokeSample { position: contact + Vec3::Y * 0.2, normal, pressure: 1.0 },
             &mut |_, _| {},
         );
         let scaled_count = scale_mesh
