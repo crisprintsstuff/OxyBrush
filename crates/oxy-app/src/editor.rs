@@ -9931,6 +9931,25 @@ mod tests {
     }
 
     #[test]
+    fn viewport_xray_preserves_sculpt_and_retopology_hits() {
+        let mut ed = editor();
+        let pixel = Vec2::new(400.0, 300.0);
+        let (origin, direction) = ed.camera.ray(pixel, ed.canvas_size());
+        let (piece, hit) = ed.pick_piece(origin, direction).unwrap();
+        let sculpt_hit = ed.surface_hit_at(pixel).unwrap().point;
+        ed.start_retopo();
+        let retopo_hit = ed.retopo_surface_at(pixel).unwrap();
+        ed.view.xray = true;
+        ed.view.xray_opacity = 0.0;
+        let (shown_piece, shown_hit) = ed.pick_piece(origin, direction).unwrap();
+        assert_eq!((shown_piece, shown_hit.point), (piece, hit.point));
+        assert_eq!(ed.surface_hit_at(pixel).unwrap().point, sculpt_hit);
+        assert_eq!(ed.retopo_surface_at(pixel), Some(retopo_hit));
+        ed.scene.active_mut().visible = false;
+        assert!(ed.pick_piece(origin, direction).is_none());
+    }
+
+    #[test]
     fn plugin_preview_shows_the_result_and_accept_applies_it_once() {
         let (mut e, slot, dir) = with_bundled_plugins("preview", "Group by Height");
         let before = e.scene.active().mesh.clone();

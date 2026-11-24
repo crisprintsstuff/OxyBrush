@@ -190,6 +190,9 @@ pub struct ViewSettings {
     pub inactive_look: InactiveLook,
     pub inactive_strength: f32,
     pub inactive_color: [f32; 3],
+    pub xray: bool,
+    pub xray_scope: XrayScope,
+    pub xray_opacity: f32,
     /// How the viewport backdrop is drawn.
     pub background_style: BackgroundStyle,
     /// Background color at the viewport edges, or the only color when
@@ -280,6 +283,9 @@ impl Default for ViewSettings {
             inactive_look: InactiveLook::GreyOut,
             inactive_strength: 1.0,
             inactive_color: [0.25, 0.35, 0.6],
+            xray: false,
+            xray_scope: XrayScope::default(),
+            xray_opacity: 0.35,
             background_style: BackgroundStyle::Gradient,
             // Neutral linear gray. The previous defaults raised blue
             // (0.010, 0.011, 0.013 and 0.062, 0.064, 0.070); after the sRGB
@@ -309,6 +315,27 @@ pub struct RenderTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub size: (u32, u32),
     pub viewport: [f32; 4],
+}
+
+/// Which meshes are composited translucently when viewport X-ray is enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum XrayScope {
+    #[default]
+    AllVisible,
+    Inactive,
+}
+
+impl XrayScope {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::AllVisible => "All visible pieces",
+            Self::Inactive => "Inactive pieces",
+        }
+    }
+
+    fn includes(self, item: &DrawItem) -> bool {
+        !item.preview && (self == Self::AllVisible || !item.active)
+    }
 }
 
 /// One piece to draw this frame.
@@ -422,6 +449,7 @@ pub struct ViewportRenderer {
     post_layout: wgpu::BindGroupLayout,
     ao_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
+    xray_pipeline: wgpu::RenderPipeline,
     /// 1x1 stand-in bound as the obscurance input while the obscurance pass
     /// itself renders (a texture can't be read and written in one pass).
     dummy_ao: wgpu::TextureView,
@@ -871,7 +899,7 @@ impl ViewportRenderer {
             bind_group_layouts: &[Some(&post_layout)],
             immediate_size: 0,
         });
-        let post_pipeline = |label, entry, format| {
+        let post_pipeline = |label, entry, format, blend| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some(label),
                 layout: Some(&post_pipeline_layout),
@@ -888,18 +916,31 @@ impl ViewportRenderer {
                     module: &post_shader,
                     entry_point: Some(entry),
                     compilation_options: Default::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format,
-                        blend: None,
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
+                    targets: &[Some(wgpu::ColorTargetState { format, blend, write_mask: wgpu::ColorWrites::ALL })],
                 }),
                 multiview_mask: None,
                 cache: None,
             })
         };
-        let ao_pipeline = post_pipeline("oxy ambient occlusion", "fs_ao", AO_FORMAT);
-        let composite_pipeline = post_pipeline("oxy composite", "fs_composite", color_format);
+        let ao_pipeline = post_pipeline("oxy ambient occlusion", "fs_ao", AO_FORMAT, None);
+        let composite_pipeline = post_pipeline("oxy composite", "fs_composite", color_format, None);
+        let xray_pipeline = post_pipeline(
+            "oxy X-ray composite",
+            "fs_xray",
+            color_format,
+            Some(wgpu::BlendState {
+                color: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Constant,
+                    dst_factor: wgpu::BlendFactor::OneMinusConstant,
+                    operation: wgpu::BlendOperation::Add,
+                },
+                alpha: wgpu::BlendComponent {
+                    src_factor: wgpu::BlendFactor::Zero,
+                    dst_factor: wgpu::BlendFactor::One,
+                    operation: wgpu::BlendOperation::Add,
+                },
+            }),
+        );
         let dummy_ao = device
             .create_texture(&wgpu::TextureDescriptor {
                 label: Some("oxy dummy ao"),
@@ -1016,6 +1057,7 @@ impl ViewportRenderer {
             post_layout,
             ao_pipeline,
             composite_pipeline,
+            xray_pipeline,
             dummy_ao,
             targets: None,
             uniforms,
@@ -1481,6 +1523,56 @@ impl ViewportRenderer {
             Some(ShadingTargets { size: (width, height), color, normal_depth, ao, ao_group, composite_group });
     }
 
+    fn draw_meshes<'p>(&'p self, pass: &mut wgpu::RenderPass<'p>, items: impl Iterator<Item = &'p DrawItem>) {
+        let mut instanced = None;
+        for item in items {
+            let Some(gpu) = self.meshes.get(&item.id) else { continue };
+            if gpu.total_index_count == 0 {
+                continue;
+            }
+            let Some(count) =
+                self.bind_instances(pass, item, &mut instanced, [&self.pipeline, &self.pipeline_instanced])
+            else {
+                continue;
+            };
+            pass.set_vertex_buffer(0, gpu.vertices.slice(..));
+            for part in &gpu.partitions {
+                if part.index_count > 0 {
+                    pass.set_bind_group(1, &part.bind_group, &[]);
+                    pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
+                    pass.draw_indexed(0..part.index_count, 0, 0..count);
+                }
+            }
+        }
+    }
+
+    fn draw_wires<'p>(
+        &'p self,
+        pass: &mut wgpu::RenderPass<'p>,
+        items: impl Iterator<Item = &'p DrawItem>,
+        all_wires: bool,
+    ) {
+        let mut instanced = None;
+        for item in items.filter(|i| all_wires || i.wireframe) {
+            let Some(gpu) = self.meshes.get(&item.id) else { continue };
+            if gpu.line_index_count == 0 {
+                continue;
+            }
+            let Some(count) = self.bind_instances(
+                pass,
+                item,
+                &mut instanced,
+                [&self.wireframe_pipeline, &self.wireframe_pipeline_instanced],
+            ) else {
+                continue;
+            };
+            pass.set_bind_group(1, &gpu.wire_bind_group, &[]);
+            pass.set_vertex_buffer(0, gpu.vertices.slice(..));
+            pass.set_index_buffer(gpu.line_indices.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..gpu.line_index_count, 0, 0..count);
+        }
+    }
+
     /// Clear the target and draw the given pieces into its viewport rectangle.
     #[allow(clippy::too_many_arguments)]
     pub fn render(
@@ -1613,7 +1705,12 @@ impl ViewportRenderer {
                 ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
             })
         };
-        // 0. Shadow maps: the visible pieces, depth only, from each light.
+        let ghosted = |item: &DrawItem| settings.xray && settings.xray_scope.includes(item);
+        let opaque = || items.iter().filter(|item| !ghosted(item));
+        let opacity = f64::from(settings.xray_opacity.clamp(0.0, 1.0));
+        let draw_xray = opacity > 0.0 && items.iter().any(ghosted);
+        let all_wires = settings.wireframe && settings.wireframe_opacity > 0.001;
+        // 0. Shadow maps: the opaque pieces, depth only, from each light.
         for (i, _) in shadows.iter().enumerate() {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy shadow pass"),
@@ -1629,7 +1726,7 @@ impl ViewportRenderer {
             });
             pass.set_bind_group(0, &self.shadow_group, &[(i as u64 * SHADOW_STRIDE) as u32]);
             let mut instanced = None;
-            for item in items {
+            for item in opaque() {
                 let Some(gpu) = self.meshes.get(&item.id) else { continue };
                 if gpu.total_index_count == 0 || item.preview {
                     continue;
@@ -1665,7 +1762,10 @@ impl ViewportRenderer {
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
-                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Discard }),
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: if draw_xray { wgpu::StoreOp::Store } else { wgpu::StoreOp::Discard },
+                    }),
                     stencil_ops: None,
                 }),
                 timestamp_writes: None,
@@ -1676,53 +1776,13 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &self.bind_group, &[]);
             pass.set_pipeline(&self.background_pipeline);
             pass.draw(0..3, 0..1);
-            let mut instanced = None;
-            for item in items {
-                let Some(gpu) = self.meshes.get(&item.id) else { continue };
-                if gpu.total_index_count == 0 {
-                    continue;
-                }
-                let Some(count) =
-                    self.bind_instances(&mut pass, item, &mut instanced, [&self.pipeline, &self.pipeline_instanced])
-                else {
-                    continue;
-                };
-                pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-                for part in &gpu.partitions {
-                    if part.index_count > 0 {
-                        pass.set_bind_group(1, &part.bind_group, &[]);
-                        pass.set_index_buffer(part.indices.slice(..), wgpu::IndexFormat::Uint32);
-                        pass.draw_indexed(0..part.index_count, 0, 0..count);
-                    }
-                }
-            }
+            self.draw_meshes(&mut pass, opaque());
             if settings.floor.is_some() {
                 // After the pieces, so the model hides the grid behind it.
                 pass.set_pipeline(&self.floor_pipeline);
                 pass.draw(0..6, 0..1);
             }
-            let all_wires = settings.wireframe && settings.wireframe_opacity > 0.001;
-            if all_wires || items.iter().any(|i| i.wireframe) {
-                let mut instanced = None;
-                for item in items.iter().filter(|i| all_wires || i.wireframe) {
-                    let Some(gpu) = self.meshes.get(&item.id) else { continue };
-                    if gpu.line_index_count == 0 {
-                        continue;
-                    }
-                    let Some(count) = self.bind_instances(
-                        &mut pass,
-                        item,
-                        &mut instanced,
-                        [&self.wireframe_pipeline, &self.wireframe_pipeline_instanced],
-                    ) else {
-                        continue;
-                    };
-                    pass.set_bind_group(1, &gpu.wire_bind_group, &[]);
-                    pass.set_vertex_buffer(0, gpu.vertices.slice(..));
-                    pass.set_index_buffer(gpu.line_indices.slice(..), wgpu::IndexFormat::Uint32);
-                    pass.draw_indexed(0..gpu.line_index_count, 0, 0..count);
-                }
-            }
+            self.draw_wires(&mut pass, opaque(), all_wires);
         }
         if shading[0] > 0.0 {
             // 2. Ambient obscurance (skipped when switched off).
@@ -1739,21 +1799,64 @@ impl ViewportRenderer {
             pass.set_bind_group(0, &t.ao_group, &[]);
             pass.draw(0..3, 0..1);
         }
-        if !shaded {
+        if shaded {
+            // 3. Blur + cavity + composite into the window.
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxy composite pass"),
+                color_attachments: &[attachment(target, bg)],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_pipeline(&self.composite_pipeline);
+            pass.set_bind_group(0, &t.composite_group, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        if !draw_xray {
             return;
         }
-        // 3. Blur + cavity + composite into the window.
+        // The opaque pass has finished reading the scratch textures. Reuse them
+        // for the nearest ghost surface and continue the opaque depth test.
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("oxy X-ray surfaces"),
+                color_attachments: &[
+                    attachment(&t.color, wgpu::Color::TRANSPARENT),
+                    attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
+                ],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
+                    stencil_ops: None,
+                }),
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
+            pass.set_bind_group(0, &self.bind_group, &[]);
+            self.draw_meshes(&mut pass, items.iter().filter(|item| ghosted(item)));
+            self.draw_wires(&mut pass, items.iter().filter(|item| ghosted(item)), all_wires);
+        }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("oxy composite pass"),
-            color_attachments: &[attachment(target, bg)],
+            label: Some("oxy X-ray composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: target,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+            })],
             depth_stencil_attachment: None,
             timestamp_writes: None,
             occlusion_query_set: None,
             multiview_mask: None,
         });
         pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
-        pass.set_pipeline(&self.composite_pipeline);
+        pass.set_pipeline(&self.xray_pipeline);
         pass.set_bind_group(0, &t.composite_group, &[]);
+        pass.set_blend_constant(wgpu::Color { r: opacity, g: opacity, b: opacity, a: opacity });
         pass.draw(0..3, 0..1);
     }
 }
