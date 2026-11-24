@@ -104,7 +104,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     xray.xray_scope = XrayScope::Active;
     assert_eq!(render(&xray, &[rear], None), opaque_rear);
     assert_eq!(center(&render(&xray, &[item], None)), center(&ghost));
-    let invisible_active = ViewSettings { xray_opacity: 0.0, ..xray };
+    let invisible_active = ViewSettings { xray_opacity: 0.0, inactive_strength: 0.0, ..xray };
     assert_eq!(render(&invisible_active, &[item, rear], None), opaque_rear);
 
     xray.xray_scope = XrayScope::AllVisible;
