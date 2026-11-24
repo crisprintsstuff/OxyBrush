@@ -324,19 +324,28 @@ pub struct RenderTarget<'a> {
 pub enum XrayScope {
     #[default]
     AllVisible,
+    Active,
     Inactive,
 }
 
 impl XrayScope {
+    pub const ALL: [Self; 3] = [Self::AllVisible, Self::Active, Self::Inactive];
+
     pub fn label(self) -> &'static str {
         match self {
             Self::AllVisible => "All visible pieces",
+            Self::Active => "Active piece",
             Self::Inactive => "Inactive pieces",
         }
     }
 
     fn includes(self, item: &DrawItem) -> bool {
-        !item.preview && (self == Self::AllVisible || !item.active)
+        !item.preview
+            && match self {
+                Self::AllVisible => true,
+                Self::Active => item.active,
+                Self::Inactive => !item.active,
+            }
     }
 }
 

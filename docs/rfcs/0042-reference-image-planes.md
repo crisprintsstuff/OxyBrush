@@ -53,13 +53,15 @@ machine.
 
 ### Viewport X-ray
 
-Add an **X-ray** toggle and **Mesh opacity** control in View > Shading,
-with the same controls accessible from References. Start with X-ray off
-and 35% mesh opacity. Expose two scopes:
+Expose **X-ray** directly in the viewport toolbar and View menu. Right-click
+the toolbar button for **Mesh opacity** and scope. The same settings are
+available in References and Shading. Start with X-ray off and 35% mesh
+opacity. Expose three scopes:
 
 - **All visible pieces** fades the active sculpt as well as the surrounding
   pieces, so a reference behind the sculpt is visible while drawing or
   sculpting.
+- **Active piece** fades the active mesh so geometry behind it stays opaque.
 - **Inactive pieces** keeps the active piece opaque and fades other
   visible pieces. This also covers [issue #454](https://github.com/crisprintsstuff/OxyBrush/issues/454).
 

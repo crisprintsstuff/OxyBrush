@@ -49,6 +49,8 @@ pub enum MenuId {
     /// The Shading window: the sliders of View > Shading and Inactive pieces.
     ShadingWindow,
     ReferencesWindow,
+    Xray,
+    XrayScope(oxy_render::XrayScope),
     RecipeBox,
     /// Run command `.1` of in-app plugin `.0`.
     Plugin(usize, usize),
@@ -470,6 +472,14 @@ fn view_menu(ed: &Editor) -> Vec<Node> {
                 cmd(Cmd::FocalLengthWindow, "Focal length…"),
             ],
         ),
+        sub("X-ray", {
+            let mut nodes = vec![check(MenuId::Xray, "Enable X-ray", ed.view.xray), Node::Separator];
+            nodes.extend(
+                oxy_render::XrayScope::ALL
+                    .map(|scope| check(MenuId::XrayScope(scope), scope.label(), ed.view.xray_scope == scope)),
+            );
+            nodes
+        }),
         item(MenuId::ReferencesWindow, "References…"),
         sub(
             "Shading",
@@ -605,6 +615,8 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
                 ed.choose_custom_matcap(i);
             }
         }
+        MenuId::Xray => ed.view.xray = !ed.view.xray,
+        MenuId::XrayScope(scope) => ed.view.xray_scope = scope,
         MenuId::ReferencesWindow => ed.show_references = true,
         MenuId::ShadingWindow => ed.show_shading = true,
         MenuId::RecipeBox => ed.show_parts_bin = !ed.show_parts_bin,
@@ -742,6 +754,13 @@ mod tests {
         assert_eq!(activate(&mut ed, &ctx, wire.id), None);
         assert!(ed.view.wireframe);
         assert_eq!(find(&ed, "Wireframe").checked, Some(true));
+
+        let xray = find(&ed, "Enable X-ray");
+        assert_eq!(xray.checked, Some(false));
+        activate(&mut ed, &ctx, xray.id);
+        activate(&mut ed, &ctx, MenuId::XrayScope(oxy_render::XrayScope::Active));
+        assert_eq!(find(&ed, "Enable X-ray").checked, Some(true));
+        assert_eq!(ed.view.xray_scope, oxy_render::XrayScope::Active);
 
         // Undo is off until there's something to undo.
         assert!(!find(&ed, "Undo").enabled);

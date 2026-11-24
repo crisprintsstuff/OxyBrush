@@ -287,6 +287,7 @@ pub enum Icon {
     Zoom,
     Solo,
     Shading,
+    Xray,
     Wireframe,
     Transform,
     /// Perspective lens (focal length).
@@ -586,6 +587,14 @@ pub fn paint_icon(p: &Painter, rect: Rect, icon: Icon, c: Color32) {
                 [lens + vec2(r * 0.36, r * 0.36), ctr + vec2(r * 0.8, r * 0.8)],
                 Stroke::new(s.width * 1.6, c),
             );
+        }
+        Icon::Xray => {
+            let size = Vec2::splat(r * 1.05);
+            let back = Rect::from_center_size(ctr + vec2(r * 0.29, -r * 0.29), size);
+            let front = Rect::from_center_size(ctr + vec2(-r * 0.29, r * 0.29), size);
+            p.rect_stroke(back, 1.0, s, egui::StrokeKind::Inside);
+            p.rect_filled(front, 1.0, c.gamma_multiply(0.18));
+            p.rect_stroke(front, 1.0, s, egui::StrokeKind::Inside);
         }
         Icon::Shading => {
             // A ball with a shaded hollow: ambient occlusion and cavity.
