@@ -1276,6 +1276,21 @@ fn child_sharpness(r: &CcRefinement, a: u32, b: u32) -> f32 {
     if s.is_infinite() { SHARP } else { (s - 1.0).max(0.0) }
 }
 
+/// Recover stored n-gon boundaries for editing, with the mesh's vertex order.
+pub(crate) fn cage_from_polygon_metadata(mesh: &Mesh) -> Cage {
+    let (polys, _) = base_polygons(mesh, None);
+    let mut cage = Cage::default();
+    cage.positions.clone_from(&mesh.positions);
+    cage.faces = (0..polys.len())
+        .map(|f| {
+            let tri = polys.tris(f)[0] as usize;
+            crate::retopo::Face::with_group(polys.corners(f).to_vec(), mesh.groups()[tri])
+        })
+        .collect();
+    cage.linked = Some(mesh.topology_version());
+    cage
+}
+
 /// The polygons of `mesh` for Catmull–Clark levels: triangles joined
 /// across the edges that aren't polygon edges, which are the edges missing
 /// from `cage` (when given) or else the mesh's quad diagonals and n-gon

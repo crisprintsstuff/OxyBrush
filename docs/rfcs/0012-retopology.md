@@ -62,8 +62,11 @@ quads.
   Brushes, undo or anything else that moves the mesh's vertices without
   changing its topology are copied back into the cage
   (`Cage::sync_from`, checked with `Mesh::topology_version`). If another
-  tool changes the piece's topology (remesh, subdivide), the cage no longer
-  matches and the tool starts a new one.
+  tool changes the piece’s topology, Retopology rebuilds the cage from the
+  displayed mesh up to 100,000 editable faces. **Edit active mesh** opens an
+  independent low-poly piece directly and uses its starting surface for
+  snapping. Projected subdivision levels allow point edits. **Keep this
+  level only** is an explicit, undoable step before changing connectivity.
 - **Undo:** each action is one step that swaps the piece's mesh and cage
   together (`History::record_cage`, a new `Cage` change). Moves and relaxes
   are recorded once, on release. Before the first face, loose points live
