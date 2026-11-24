@@ -3587,10 +3587,32 @@ fn lit_material_controls(ui: &mut Ui, ed: &mut Editor) {
         ui.selectable_value(&mut lighting.light_matcap, true, "Matcap");
         ui.selectable_value(&mut lighting.light_matcap, false, "Custom");
     });
+    let mut color_picker = None;
     egui::Grid::new("lit_material").num_columns(2).show(ui, |ui| {
         if !lighting.light_matcap {
             ui.label("Color");
-            ui.color_edit_button_rgb(&mut lighting.surface);
+            let color = egui::Color32::from(egui::Rgba::from_rgb(
+                lighting.surface[0],
+                lighting.surface[1],
+                lighting.surface[2],
+            ));
+            let id = ui.make_persistent_id("surface_color_picker");
+            let mut picker = ui.data(|data| data.get_temp::<([f32; 3], egui::ecolor::Hsva)>(id));
+            let label = if picker.is_some() { "Close surface color picker" } else { "Edit surface color" };
+            let swatch = ui.add(egui::Button::new("").fill(color).min_size(egui::vec2(28.0, 0.0)));
+            swatch.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+            // A separate color menu would replace the Materials popup.
+            if swatch.on_hover_text(label).clicked() {
+                if picker.take().is_none() {
+                    picker = Some((lighting.surface, egui::ecolor::Hsva::from_rgb(lighting.surface)));
+                } else {
+                    ui.data_mut(|data| data.remove::<([f32; 3], egui::ecolor::Hsva)>(id));
+                }
+            }
+            if let Some((rgb, hsva)) = picker {
+                let hsva = if rgb == lighting.surface { hsva } else { egui::ecolor::Hsva::from_rgb(lighting.surface) };
+                color_picker = Some((id, hsva));
+            }
             ui.end_row();
         }
         ui.label("Roughness");
@@ -3600,6 +3622,22 @@ fn lit_material_controls(ui: &mut Ui, ed: &mut Editor) {
         ui.add(widgets::Bar(egui::Slider::new(&mut lighting.specular, 0.0..=1.0)));
         ui.end_row();
     });
+    if let Some((id, mut hsva)) = color_picker {
+        ui.scope(|ui| {
+            ui.spacing_mut().slider_width = 210.0;
+            egui::widgets::color_picker::color_picker_hsva_2d(
+                ui,
+                &mut hsva,
+                egui::widgets::color_picker::Alpha::Opaque,
+            );
+            let edited = hsva.to_rgb();
+            // The picker's HSV conversion has small rounding differences even without an edit.
+            if edited.iter().zip(lighting.surface).any(|(new, old)| (new - old).abs() > 1e-6) {
+                lighting.surface = edited;
+            }
+        });
+        ui.data_mut(|data| data.insert_temp(id, (lighting.surface, hsva)));
+    }
     ui.separator();
 }
 
@@ -8692,6 +8730,26 @@ mod tests {
                 egui::Rect::from_min_max(egui::pos2(b.x0 as f32, b.y0 as f32), egui::pos2(b.x1 as f32, b.y1 as f32))
             })
             .collect()
+    }
+
+    #[test]
+    fn custom_material_color_picker_opens_inside_the_materials_popup() {
+        let mut ed = Editor::default();
+        ed.show_welcome = false;
+        ed.view.lighting.enabled = true;
+        ed.view.lighting.light_matcap = true;
+        let ctx = egui::Context::default();
+        let tile = widgets_labelled(&mut ed, &ctx, plain::MATERIAL_TILE)[0].center();
+        click_at(&mut ed, &ctx, tile);
+        let custom = widgets_labelled(&mut ed, &ctx, "Custom")[0].center();
+        click_at(&mut ed, &ctx, custom);
+        let swatch = widgets_labelled(&mut ed, &ctx, "Edit surface color")[0].center();
+        let before = ed.view.lighting.surface;
+        click_at(&mut ed, &ctx, swatch);
+        let open_swatch = widgets_labelled(&mut ed, &ctx, "Close surface color picker")[0].center();
+        assert_eq!(ed.view.lighting.surface, before);
+        click_at(&mut ed, &ctx, open_swatch);
+        assert!(!widgets_labelled(&mut ed, &ctx, "Edit surface color").is_empty());
     }
 
     /// Press and release at `at` with `modifiers`, `clicks` times in quick
