@@ -717,6 +717,11 @@ pub struct ReferencePlacement {
     pub visible: bool,
     pub all_views: bool,
     pub overlay: bool,
+    /// Clockwise quarter-turns, modulo four.
+    pub quarter_turns: u8,
+    /// Reflect about the plane axes after rotation.
+    pub flip_horizontal: bool,
+    pub flip_vertical: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

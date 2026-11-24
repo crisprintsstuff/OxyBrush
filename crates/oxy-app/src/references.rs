@@ -30,6 +30,9 @@ pub fn load(path: &Path) -> Result<ReferenceImage, String> {
             visible: true,
             all_views: false,
             overlay: false,
+            quarter_turns: 0,
+            flip_horizontal: false,
+            flip_vertical: false,
         },
     })
 }
@@ -85,6 +88,25 @@ fn placement(ctx: &egui::Context, id: egui::Id, image: &ReferenceImage) -> Refer
         .map_or_else(|| image.placement.clone(), |draft| draft.edited)
 }
 
+fn image_corners(p: &ReferencePlacement, [width, height]: [u32; 2]) -> [Vec3; 4] {
+    let (mut right, mut up, _) = p.axis.basis();
+    if p.flip_horizontal {
+        right = -right;
+    }
+    if p.flip_vertical {
+        up = -up;
+    }
+    let (right, up) = match p.quarter_turns & 3 {
+        1 => (-up, right),
+        2 => (-right, -up),
+        3 => (up, -right),
+        _ => (right, up),
+    };
+    let right = right * (p.width * 0.5);
+    let up = up * (p.width * 0.5 * height as f32 / width as f32);
+    [-right + up, right + up, -right - up, right - up].map(|offset| p.center + offset)
+}
+
 pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeIterator<Item = ReferencePlane> + 'a {
     let document = &ed.documents[ed.active_document];
     let camera = &document.camera;
@@ -100,15 +122,12 @@ pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeItera
         } else {
             &image.placement
         };
-        let (right, up, normal) = p.axis.basis();
-        let right = right * (p.width * 0.5);
-        let up = up * (p.width * 0.5 * image.size[1] as f32 / image.size[0] as f32);
+        let (_, _, normal) = p.axis.basis();
         let visible = p.visible && (p.all_views || orthographic && forward.dot(-normal) > 0.999);
         ReferencePlane {
             pixels: Arc::clone(&image.pixels),
             size: image.size,
-            corners: [-right + up, right + up, -right - up, right - up]
-                .map(|offset| (vp * (p.center + offset).extend(1.0)).to_array()),
+            corners: image_corners(p, image.size).map(|corner| (vp * corner.extend(1.0)).to_array()),
             opacity: if visible { p.opacity } else { 0.0 },
             overlay: p.overlay,
         }
@@ -154,6 +173,24 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
                     });
                     ui.add(egui::DragValue::new(&mut draft.width).speed(0.01).range(0.001..=1.0e6).prefix("Width "));
                     ui.add(egui::Slider::new(&mut draft.opacity, 0.0..=1.0).text("Opacity"));
+                    ui.horizontal(|ui| {
+                        ui.label("Rotation");
+                        egui::ComboBox::from_id_salt(id.with("rotation"))
+                            .selected_text(format!("{}°", u16::from(draft.quarter_turns) * 90))
+                            .show_ui(ui, |ui| {
+                                for turns in 0..4 {
+                                    ui.selectable_value(
+                                        &mut draft.quarter_turns,
+                                        turns,
+                                        format!("{}°", u16::from(turns) * 90),
+                                    );
+                                }
+                            });
+                    });
+                    ui.horizontal_wrapped(|ui| {
+                        ui.checkbox(&mut draft.flip_horizontal, "Flip horizontal");
+                        ui.checkbox(&mut draft.flip_vertical, "Flip vertical");
+                    });
                     ui.checkbox(&mut draft.visible, "Visible");
                     ui.checkbox(&mut draft.all_views, "Show beyond the matching orthographic view");
                     ui.checkbox(&mut draft.overlay, "Draw over mesh");
@@ -224,6 +261,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn orientation_preserves_center_and_aspect_ratio() {
+        let mut p = ReferencePlacement {
+            name: "Reference".into(),
+            axis: ReferenceAxis::Front,
+            center: Vec3::Z,
+            width: 4.0,
+            opacity: 1.0,
+            visible: true,
+            all_views: false,
+            overlay: false,
+            quarter_turns: 1,
+            flip_horizontal: false,
+            flip_vertical: false,
+        };
+        let [tl, tr, bl, br] = image_corners(&p, [4, 2]);
+        assert_eq!(tl, Vec3::new(1.0, 2.0, 1.0));
+        assert_eq!(tr - tl, -Vec3::Y * 4.0);
+        assert_eq!(bl - tl, -Vec3::X * 2.0);
+        assert_eq!((tl + br) * 0.5, p.center);
+        p.flip_horizontal = true;
+        p.flip_vertical = true;
+        assert_eq!(image_corners(&p, [4, 2]), [br, bl, tr, tl]);
+    }
+
+    #[test]
     fn imported_reference_has_project_history_and_matches_its_axis() {
         let mut editor = Editor::default();
         let id = editor.documents[editor.active_document].id;
@@ -240,6 +302,9 @@ mod tests {
                     visible: true,
                     all_views: false,
                     overlay: false,
+                    quarter_turns: 0,
+                    flip_horizontal: false,
+                    flip_vertical: false,
                 },
                 size: [1, 1],
                 pixels: [255, 0, 0, 255].into(),

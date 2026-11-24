@@ -1,6 +1,6 @@
 # RFC 0042 — Reference image planes
 
-**Status:** Phase 1 (viewport X-ray) and Phase 2 (reference planes) implemented.
+**Status:** Phases 1–3 implemented (viewport X-ray, reference planes, and live image alignment).
 
 ## Summary
 
@@ -38,6 +38,18 @@ machine.
   the sculpt. Decode imports off the UI thread, with limits on decoded
   dimensions and total image memory. Upload textures on import, restore,
   or replacement and reuse them on subsequent frames.
+
+### Image alignment
+
+- Rotate an image in 90° steps about its center and flip it across either
+  axis of the plane. A quarter-turn preserves the image scale and aspect
+  ratio. Flips use the plane axes after rotation.
+- Preview these changes with the placement controls. Apply records the
+  complete placement as one scene undo entry.
+- Save the transforms in unused placement flags in the existing `REFI`
+  section. Older readers still display the embedded image with its
+  original orientation. Existing projects start with zero rotation and
+  both flips off.
 
 ### Viewport X-ray
 
