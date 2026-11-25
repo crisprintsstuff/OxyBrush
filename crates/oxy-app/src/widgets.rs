@@ -33,6 +33,8 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Flatten => "Pushes the surface toward a flat plane.",
         BrushKind::Amplify => {
             "Exaggerates existing bumps and recesses. Alt reduces that contrast without smoothing the form away."
+        BrushKind::SceneProject => {
+            "Projects the surface onto other visible pieces in the scene. Alt projects along the surface normal instead of the view."
         }
         BrushKind::Pinch => "Pulls the surface together to sharpen edges and ridges.",
         BrushKind::Crease => "Cuts a sharp groove, for wrinkles and folds. Alt raises a ridge.",
@@ -94,6 +96,8 @@ pub fn brush_profile(k: BrushKind, x: f32) -> f32 {
         BrushKind::Flatten | BrushKind::PlanarTrim => (0.6 * bump(x, 0.5)).min(0.28),
         // A taller, sharper bump than Flatten's ghost: detail pushed further out.
         BrushKind::Amplify => 0.85 * bump(x, 0.38),
+        // A soft mound pulled down onto a flat target underneath.
+        BrushKind::SceneProject => 0.22 * bump(x, 0.55) + 0.12 * smoothstep(0.7, 0.35, a),
         BrushKind::Pinch => 0.6 * (-a / 0.13).exp(),
         BrushKind::Crease => -0.45 * (1.0 - a / 0.3).max(0.0) + 0.1 * bump(a - 0.42, 0.16),
         // A narrow V with straight walls and a crisp shoulder.
@@ -140,6 +144,7 @@ fn brush_ghost(k: BrushKind, x: f32) -> Option<f32> {
         BrushKind::Smooth => Some(0.26 * (x * 9.0).sin() * bump(x, 0.7)),
         BrushKind::Flatten | BrushKind::PlanarTrim => Some(0.6 * bump(x, 0.5)),
         BrushKind::Amplify => Some(0.45 * bump(x, 0.45)),
+        BrushKind::SceneProject => Some(0.55 * bump(x, 0.5)),
         BrushKind::Pinch => Some(0.38 * bump(x, 0.42)),
         BrushKind::Grab => Some(0.55 * bump(x + 0.3, 0.38)),
         BrushKind::KelvinGrab => Some(0.48 * bump(x + 0.25, 0.35)),

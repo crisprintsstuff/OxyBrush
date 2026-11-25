@@ -485,7 +485,7 @@ pub fn tool_defs() -> Vec<Value> {
         ),
         tool(
             "select_brush",
-            "Select a brush by name or key (draw, clay, clay_strips, smooth, inflate, flatten, amplify, pinch, crease, layer, grab, snake_hook, topological_move, polish, planar_trim, noise, mask, paint).",
+            "Select a brush by name or key (draw, clay, clay_strips, smooth, inflate, flatten, amplify, scene_project, pinch, crease, layer, grab, snake_hook, topological_move, polish, planar_trim, noise, mask, paint).",
             &json!({"name": {"type": "string"}}),
             &["name"],
         ),

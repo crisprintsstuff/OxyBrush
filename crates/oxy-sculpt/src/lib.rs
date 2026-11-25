@@ -38,6 +38,10 @@ pub enum BrushKind {
     /// Exaggerates existing relief: peaks rise and recesses deepen relative
     /// to the dab's mean plane. Alt reduces that contrast (toward Flatten).
     Amplify,
+    /// Projects the surface under the brush onto other visible pieces in
+    /// the scene (shrinkwrap during a stroke). The app supplies those
+    /// pieces via [`Stroke::with_scene_targets`].
+    SceneProject,
     Pinch,
     Crease,
     Layer,
@@ -178,7 +182,7 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 29] = [
+    pub const ALL: [BrushKind; 30] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
@@ -186,6 +190,7 @@ impl BrushKind {
         BrushKind::Inflate,
         BrushKind::Flatten,
         BrushKind::Amplify,
+        BrushKind::SceneProject,
         BrushKind::Pinch,
         BrushKind::Crease,
         BrushKind::Layer,
@@ -228,6 +233,7 @@ impl BrushKind {
                     | BrushKind::CurveMove
                     | BrushKind::InsertPrimitive
                     | BrushKind::Tube
+                    | BrushKind::SceneProject
             ))
     }
 
@@ -271,6 +277,7 @@ impl BrushKind {
             BrushKind::Inflate => "Inflate",
             BrushKind::Flatten => "Flatten",
             BrushKind::Amplify => "Amplify",
+            BrushKind::SceneProject => "Scene Project",
             BrushKind::Grab => "Grab",
             BrushKind::KelvinGrab => "Kelvin Grab",
             BrushKind::KelvinTwist => "Kelvin Twist",
@@ -311,7 +318,8 @@ impl BrushKind {
             | BrushKind::CurveMove
             | BrushKind::Pinch
             | BrushKind::Polish
-            | BrushKind::PlanarTrim => 0.5,
+            | BrushKind::PlanarTrim
+            | BrushKind::SceneProject => 0.5,
             BrushKind::Noise => 0.3,
             BrushKind::Mask => 0.8,
             BrushKind::Paint => 0.6,
@@ -853,6 +861,8 @@ pub struct Stroke {
     /// The stroke's inputs so far, when it is being recorded
     /// ([`Stroke::with_recording`]).
     log: Option<Vec<RecipeEvent>>,
+    /// Other visible pieces for [`BrushKind::SceneProject`] (set by the app).
+    scene_targets: Vec<Mesh>,
 }
 
 impl Stroke {
@@ -881,7 +891,16 @@ impl Stroke {
             modulation: (1.0, 1.0),
             budget: None,
             strength_scale: 1.0,
+            scene_targets: Vec::new(),
         }
+    }
+
+    /// Meshes to project onto for [`BrushKind::SceneProject`] (other visible
+    /// pieces). Empty means the brush has nowhere to land and leaves the
+    /// surface alone.
+    pub fn with_scene_targets(mut self, targets: Vec<Mesh>) -> Self {
+        self.scene_targets = targets;
+        self
     }
 
     /// Bound each `add_sample` call to approximately `ms` milliseconds by
@@ -1278,7 +1297,28 @@ impl Stroke {
             };
             for &m in &copies {
                 let dab = base.transformed(m, self.sym_center);
-                apply_kernel(mesh, &self.settings, self.invert, &dab, alpha.as_ref(), paint, &mut self.layer, touch);
+                if kind == BrushKind::SceneProject {
+                    apply_scene_project(
+                        mesh,
+                        &self.settings,
+                        self.invert,
+                        &dab,
+                        &self.scene_targets,
+                        alpha.as_ref(),
+                        touch,
+                    );
+                } else {
+                    apply_kernel(
+                        mesh,
+                        &self.settings,
+                        self.invert,
+                        &dab,
+                        alpha.as_ref(),
+                        paint,
+                        &mut self.layer,
+                        touch,
+                    );
+                }
                 self.auto_smooth_dab(mesh, &dab, touch);
                 self.layer_gravity(mesh, &dab, touch);
             }
@@ -1954,7 +1994,8 @@ fn target_positions(
                 | BrushKind::Tube
                 | BrushKind::PlaneClip
                 | BrushKind::LineSplit
-                | BrushKind::CutAway => p,
+                | BrushKind::CutAway
+                | BrushKind::SceneProject => p,
             };
             (v, np + dab.sag * w)
         })
@@ -2075,6 +2116,73 @@ fn blend_symmetry_copies(
         mesh.positions[*v as usize] += blend_weighted_deltas(*weighted, *sum_w, *max_w) + *groove;
     }
     mesh.update_after_move(&moved);
+}
+
+/// Project affected vertices onto `targets` along the view (or, with Alt,
+/// along the surface normal). Bidirectional: the closer hit in either
+/// direction wins. Strength blends toward the hit; a tiny stand-off keeps
+/// the surfaces from intersecting.
+fn apply_scene_project(
+    mesh: &mut Mesh,
+    settings: &BrushSettings,
+    invert: bool,
+    dab: &Dab,
+    targets: &[Mesh],
+    alpha: Option<&AlphaStamp>,
+    touch: &mut dyn FnMut(&Mesh, u32),
+) {
+    if targets.is_empty() {
+        return;
+    }
+    let (chunks, affected) = gather_affected(mesh, settings, dab, alpha);
+    if affected.is_empty() {
+        return;
+    }
+    for &c in &chunks {
+        touch(mesh, c);
+    }
+    let dir = if invert {
+        area_normal_of(mesh, &affected, dab.normal)
+    } else if dab.view != Vec3::ZERO {
+        dab.view
+    } else {
+        dab.normal
+    };
+    let dir = dir.normalize_or_zero();
+    if dir == Vec3::ZERO {
+        return;
+    }
+    // Stand-off: a hundredth of the brush radius, so projected verts sit
+    // just clear of the target instead of z-fighting through it.
+    let stand_off = dab.radius * 0.01;
+    let mut moved = Vec::new();
+    for &(v, w) in &affected {
+        let p = mesh.positions[v as usize];
+        let blend = (w * dab.strength).min(1.0);
+        if blend <= 0.0 {
+            continue;
+        }
+        let mut best: Option<(f32, Vec3, Vec3)> = None;
+        for target in targets {
+            for &ray_dir in &[dir, -dir] {
+                let Some(hit) = target.raycast(p, ray_dir) else { continue };
+                let t = hit.t.abs();
+                if best.is_some_and(|(bt, _, _)| t >= bt) {
+                    continue;
+                }
+                let n = hit.normal.normalize_or_zero();
+                // Push off along the hit normal, away from the ray origin.
+                let outward = if (hit.point - p).dot(n) >= 0.0 { n } else { -n };
+                best = Some((t, hit.point + outward * stand_off, n));
+            }
+        }
+        let Some((_, dest, _)) = best else { continue };
+        mesh.positions[v as usize] = p.lerp(dest, blend);
+        moved.push(v);
+    }
+    if !moved.is_empty() {
+        mesh.update_after_move(&moved);
+    }
 }
 
 /// Apply one dab. `settings.kind` selects the kernel (callers override it
@@ -2461,6 +2569,25 @@ mod tests {
         assert!(reduced.bounds().max.y < bump_y - 0.002, "Alt Amplify reduces contrast");
         // Half-strength Alt still leaves some of the bump (unlike a full Flatten).
         assert!(reduced.bounds().max.y > 1.0 + 0.01, "Alt Amplify keeps underlying form");
+    }
+
+    #[test]
+    fn scene_project_pulls_toward_another_mesh() {
+        // A plane above a sphere: project the sphere top onto the plane.
+        let mut sphere = primitives::icosphere(4, 1.0);
+        let before_y = sphere.bounds().max.y;
+        let mut plane = primitives::plane(4, 4.0);
+        for p in &mut plane.positions {
+            p.y = 0.7;
+        }
+        plane.refresh_all();
+        let settings =
+            BrushSettings { kind: BrushKind::SceneProject, radius: 0.5, strength: 1.0, ..Default::default() };
+        let mut stroke =
+            Stroke::new(settings, Symmetry::default(), false).with_view(Vec3::Y).with_scene_targets(vec![plane]);
+        stroke.add_sample(&mut sphere, top_sample(), &mut |_, _| {});
+        assert!(sphere.bounds().max.y < before_y - 0.05, "top should project down onto the plane");
+        assert!(sphere.bounds().max.y > 0.65, "stand-off keeps it just above the plane");
     }
 
     #[test]
