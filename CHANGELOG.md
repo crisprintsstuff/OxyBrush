@@ -11,6 +11,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **3MF export.** File > Export type offers 3MF: visible pieces as separate mesh objects in millimetres, using the scene unit size (Preferences > Units / 3D print). [#308](https://github.com/crisprintsstuff/OxyBrush/issues/308)
 - **Reference view planes.** Assign Back, Left, and Bottom orientations in addition to Front, Right (formerly Side), and Top. [#514](https://github.com/crisprintsstuff/OxyBrush/issues/514)
 
+### Changed
+
+- **Focal shift in the toolbar.** The Size / Strength bar (toolbar or floating over the view) also has Focal shift, same as the quick menu and brush settings.
+
 ### Fixed
 
 - **Paint strength.** Strength sets how opaque a stroke is, without overlapping dabs stacking past that value. Half strength looks about half painted. [#513](https://github.com/crisprintsstuff/OxyBrush/issues/513)
