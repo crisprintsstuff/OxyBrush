@@ -89,8 +89,11 @@
 //!   quads are guessed from its shape. Older readers skip it and guess the
 //!   quads, so quads that aren't flat open as two triangles.
 //! - `REFI` (optional): reference image planes with embedded RGBA8 and placement.
-//!   Placement flag bits 3–4 hold clockwise quarter-turns and bits 5–6
-//!   hold horizontal and vertical flips. Earlier readers ignore these bits.
+//!   The axis byte indexes `ReferenceAxis::ALL` (0 Front, 1 Right, 2 Top,
+//!   3 Back, 4 Left, 5 Bottom). Older readers that only know 0–2 skip images
+//!   with a newer axis. Placement flag bits 3–4 hold clockwise quarter-turns
+//!   and bits 5–6 hold horizontal and vertical flips. Earlier readers ignore
+//!   those bits.
 //! - `RROT` (optional): f32 fine rotation in radians for the immediately preceding REFI.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
@@ -2170,6 +2173,67 @@ mod tests {
         let decoded = decode(&encode(&scene)).unwrap();
         assert_eq!(decoded, scene);
         assert_eq!(crate::Scene::from_data(decoded).unwrap().references, scene.references);
+    }
+
+    #[test]
+    fn every_reference_axis_round_trips_and_keeps_legacy_side_index() {
+        use crate::{ReferenceAxis, ReferenceImage, ReferencePlacement};
+        assert_eq!(ReferenceAxis::ALL[0], ReferenceAxis::Front);
+        assert_eq!(ReferenceAxis::ALL[1], ReferenceAxis::Right);
+        assert_eq!(ReferenceAxis::ALL[2], ReferenceAxis::Top);
+        assert_eq!(ReferenceAxis::ALL[3], ReferenceAxis::Back);
+        assert_eq!(ReferenceAxis::ALL[4], ReferenceAxis::Left);
+        assert_eq!(ReferenceAxis::ALL[5], ReferenceAxis::Bottom);
+
+        let references: Vec<_> = ReferenceAxis::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(i, axis)| ReferenceImage {
+                placement: ReferencePlacement {
+                    name: axis.label().into(),
+                    axis,
+                    center: Vec3::ZERO,
+                    width: 1.0 + i as f32,
+                    opacity: 0.5,
+                    visible: true,
+                    all_views: false,
+                    overlay: false,
+                    quarter_turns: 0,
+                    fine_rotation: 0.0,
+                    flip_horizontal: false,
+                    flip_vertical: false,
+                },
+                size: [1, 1],
+                pixels: [255, 0, 0, 255].into(),
+            })
+            .collect();
+        let scene = SceneData { references: references.clone(), ..Default::default() };
+        assert_eq!(decode(&encode(&scene)).unwrap().references, references);
+
+        // Index 1 stays the right/side plane so older "Side" projects keep their axis.
+        let right_only = SceneData {
+            references: vec![ReferenceImage {
+                placement: ReferencePlacement {
+                    name: "Side".into(),
+                    axis: ReferenceAxis::Right,
+                    center: Vec3::ZERO,
+                    width: 1.0,
+                    opacity: 1.0,
+                    visible: true,
+                    all_views: false,
+                    overlay: false,
+                    quarter_turns: 0,
+                    fine_rotation: 0.0,
+                    flip_horizontal: false,
+                    flip_vertical: false,
+                },
+                size: [1, 1],
+                pixels: [0, 255, 0, 255].into(),
+            }],
+            ..Default::default()
+        };
+        assert_eq!(decode(&encode(&right_only)).unwrap().references[0].placement.axis, ReferenceAxis::Right);
+        assert_eq!(ReferenceAxis::ALL.iter().position(|&a| a == ReferenceAxis::Right), Some(1));
     }
 
     #[test]

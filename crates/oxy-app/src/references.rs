@@ -39,10 +39,14 @@ pub fn load(path: &Path) -> Result<ReferenceImage, String> {
 }
 
 fn snap_view(camera: &mut Camera, axis: ReferenceAxis) {
+    // Match View > Front/Back/Left/Right/Top/Bottom.
     let (yaw, pitch) = match axis {
         ReferenceAxis::Front => (0.0, 0.0),
-        ReferenceAxis::Side => (std::f32::consts::FRAC_PI_2, 0.0),
+        ReferenceAxis::Back => (std::f32::consts::PI, 0.0),
+        ReferenceAxis::Left => (-std::f32::consts::FRAC_PI_2, 0.0),
+        ReferenceAxis::Right => (std::f32::consts::FRAC_PI_2, 0.0),
         ReferenceAxis::Top => (0.0, 1.55),
+        ReferenceAxis::Bottom => (0.0, -1.55),
     };
     camera.snap(yaw, pitch);
     camera.orthographic = true;
@@ -330,9 +334,9 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
             return;
         }
         load = ui.button("Import image…").clicked();
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             ui.label("View");
-            for axis in ReferenceAxis::ALL {
+            for axis in ReferenceAxis::CHOICES {
                 if ui.button(axis.label()).clicked() {
                     snap = Some(axis);
                 }
@@ -347,7 +351,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
                 egui::CollapsingHeader::new(&original.name).id_salt(id).default_open(true).show(ui, |ui| {
                     ui.add(egui::TextEdit::singleline(&mut draft.name).char_limit(64).hint_text("Name"));
                     egui::ComboBox::from_id_salt(id).selected_text(draft.axis.label()).show_ui(ui, |ui| {
-                        for axis in ReferenceAxis::ALL {
+                        for axis in ReferenceAxis::CHOICES {
                             ui.selectable_value(&mut draft.axis, axis, axis.label());
                         }
                     });
@@ -591,6 +595,17 @@ mod tests {
         assert!((fitted.fine_rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
         assert_eq!(ed.scene.references[0], image);
         assert_eq!(ed.history.revision(), revision);
+    }
+
+    #[test]
+    fn every_axis_faces_its_matching_orthographic_view() {
+        for axis in ReferenceAxis::ALL {
+            let mut camera = Camera::default();
+            snap_view(&mut camera, axis);
+            let (_, _, normal) = axis.basis();
+            assert!(camera.forward().dot(-normal) > 0.999, "{} plane should face its snapped view", axis.label());
+            assert!(camera.orthographic);
+        }
     }
 
     #[test]

@@ -6,8 +6,8 @@
 
 Add a **References** panel for loading local images into the sculpting
 viewport. Start with axis-aligned image planes for matching a sculpt to
-front, side, and top references. Add viewport X-ray so artists can see
-those images through the sculpt.
+front, back, right, left, top, and bottom references. Add viewport X-ray so
+artists can see those images through the sculpt.
 
 ## Motivation
 
@@ -19,8 +19,9 @@ machine.
 ## Design
 
 - **View > References** opens a list of the project's images. Add a PNG
-  or JPEG, assign a Front, Side, or Top orientation, and adjust its
-  position, scale, and opacity. Preserve the image's aspect ratio.
+  or JPEG, assign a Front, Back, Right, Left, Top, or Bottom orientation,
+  and adjust its position, scale, and opacity. Preserve the image's aspect
+  ratio. Right keeps the earlier Side wire index so older projects load.
   Each image can be renamed, hidden, or removed. Placement edits preview
   in the viewport as the controls change. Apply records a single undoable
   edit. Revert or close the panel to discard the current project’s preview.
