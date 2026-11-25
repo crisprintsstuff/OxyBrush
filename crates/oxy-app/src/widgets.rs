@@ -33,6 +33,7 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Flatten => "Pushes the surface toward a flat plane.",
         BrushKind::Amplify => {
             "Exaggerates existing bumps and recesses. Alt reduces that contrast without smoothing the form away."
+        }
         BrushKind::SceneProject => {
             "Projects the surface onto other visible pieces in the scene. Alt projects along the surface normal instead of the view."
         }
