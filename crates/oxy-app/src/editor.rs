@@ -147,20 +147,28 @@ pub struct HoldWatch {
 }
 
 /// The last freehand stroke, so it can be reopened as a curve, a Curve Move
-/// curve or a tube path (Edit > Last stroke): its path in canvas pixels and
-/// the camera it was drawn with, and the undo step it made.
+/// curve or a tube path, or replayed in place (Edit > Last stroke): its path
+/// in canvas pixels, the camera it was drawn with, the undo step it made,
+/// and what was drawn (for Replay).
 #[derive(Debug, Clone)]
 pub struct LastStroke {
     pub piece: u64,
     /// The history revision right after the stroke: reopening it is only
     /// offered while nothing has changed since.
     pub revision: u64,
+    /// Topology when the stroke was made: Replay is refused after a remesh
+    /// or other rebuild that would make the stored samples miss.
+    pub topology: u64,
     pub kind: BrushKind,
     pub invert: bool,
     pub path: Vec<Vec2>,
     pub size: Vec2,
     pub camera: Camera,
     paint_seed: u64,
+    /// What was drawn, so Replay can stamp the same stroke again without
+    /// undoing it. Absent when the stroke couldn't be recorded (for
+    /// example dynamic detail was on).
+    recipe: Option<StrokeRecipe>,
 }
 
 /// What to turn the last stroke into (Edit > Last stroke).
@@ -3014,6 +3022,9 @@ impl Editor {
         recipe: Option<oxy_sculpt::StrokeRecipe>,
     ) {
         let before = self.history.revision();
+        // Keep a copy for Edit > Last stroke > Replay; living_record takes
+        // ownership of the other.
+        let for_last = hold.is_some().then(|| recipe.clone()).flatten();
         match dyn_topo {
             Some(d) if d.changed => self.history.record_topology(d.label, d.piece, d.before, None),
             _ => {
@@ -3027,16 +3038,19 @@ impl Editor {
         if self.history.revision() != before && end.is_some() {
             self.orbit_pivot = end;
         }
-        // Remember the stroke's path, so Edit > Last stroke can reopen it.
+        // Remember the stroke's path and recipe, so Edit > Last stroke can
+        // reopen or replay it.
         self.last_stroke = hold.filter(|_| self.history.revision() != before).map(|h| LastStroke {
             piece: self.scene.active().id,
             revision: self.history.revision(),
+            topology: self.scene.active().mesh.topology_version(),
             kind: h.kind,
             invert: h.invert,
             path: h.path.iter().map(|&p| self.canvas_local(p)).collect(),
             size: self.canvas_size(),
             camera: self.camera,
             paint_seed: h.paint_seed,
+            recipe: for_last,
         });
     }
 
@@ -3261,8 +3275,9 @@ impl Editor {
         } else {
             stroke
         };
-        // Living strokes keep what was drawn too, to edit it later (RFC 0025).
-        if self.living.enabled { stroke.with_recording() } else { stroke }
+        // Record what was drawn for living-stroke edits (RFC 0025) and for
+        // Edit > Last stroke > Replay (even when Living strokes is off).
+        stroke.with_recording()
     }
 
     /// Where the active piece's mirror planes and radial axis cross: its own
@@ -6254,6 +6269,54 @@ impl Editor {
         })
     }
 
+    /// Whether Edit > Last stroke > Replay can stamp the last freehand
+    /// stroke again: we still have its recipe on the active piece, and the
+    /// triangles haven't been rebuilt since.
+    pub fn can_replay_last_stroke(&self) -> bool {
+        self.last_stroke.as_ref().is_some_and(|l| {
+            l.recipe.is_some()
+                && self.scene.try_active().is_some_and(|p| l.piece == p.id && p.mesh.topology_version() == l.topology)
+                && self.job.is_none()
+                && !self.is_stroking()
+        })
+    }
+
+    /// Stamp the last freehand stroke again on the active piece, without
+    /// undoing it (Edit > Last stroke > Replay). One undo step; Living
+    /// strokes records it when enabled. The stored stroke stays available
+    /// for further Replays until a remesh or a new freehand stroke replaces it.
+    pub fn replay_last_stroke(&mut self) {
+        if !self.can_replay_last_stroke() {
+            self.status = if self.last_stroke.is_none() {
+                "No freehand stroke to replay yet".into()
+            } else {
+                "Only a recorded freehand stroke on this piece can be replayed (not after remesh or dynamic detail)"
+                    .into()
+            };
+            return;
+        }
+        let Some(last) = self.last_stroke.clone() else { return };
+        let Some(recipe) = last.recipe.clone() else { return };
+        let kind = last.kind;
+        if kind == BrushKind::Paint {
+            self.reveal_vertex_color();
+        }
+        let doc = &mut self.documents[self.active_document];
+        let Some(piece) = doc.scene.pieces.iter_mut().find(|p| p.id == last.piece) else { return };
+        if piece.mesh.topology_version() != last.topology {
+            self.status = "The piece changed; that stroke can't be replayed".into();
+            return;
+        }
+        let paint = kind == BrushKind::Paint || piece.mesh.is_painted();
+        doc.history.begin_with(format!("Replay {}", kind.label()), piece.id, &piece.mesh, paint);
+        let history = &mut doc.history;
+        recipe.replay(&mut piece.mesh, &mut |m, chunk| history.touch(m, chunk));
+        self.commit_living_stroke(kind, Some(recipe));
+        // Keep the stored stroke for another Replay; reopen stays off once
+        // something (including this Replay) has landed after the original.
+        self.status = format!("Replayed {} stroke", kind.label());
+    }
+
     /// Take the last stroke back and reopen its path as an editable curve
     /// with the same brush, a Curve Move curve, or a tube (Edit > Last
     /// stroke). The path is projected with the camera it was drawn with, so
@@ -9123,6 +9186,10 @@ impl Editor {
             }
             C::LastStrokeAsCurve => {
                 self.reopen_last_stroke(LastStrokeAs::Curve);
+                E::None
+            }
+            C::ReplayLastStroke => {
+                self.replay_last_stroke();
                 E::None
             }
             C::RedoPiece => {
@@ -13689,6 +13756,33 @@ mod tests {
         assert_ne!(e.scene.active().mesh.positions, before, "the stroke sculpted");
         e.camera.yaw += 0.7;
         before
+    }
+
+    #[test]
+    fn the_last_stroke_replays_without_undoing_and_can_stack() {
+        let mut e = editor();
+        e.hold_to_curve = false;
+        let before = stroke_then_turn(&mut e);
+        assert!(e.can_replay_last_stroke(), "a freehand stroke keeps a recipe for Replay");
+        assert!(e.can_reopen_last_stroke());
+        let after_first = e.scene.active().mesh.positions.clone();
+        e.replay_last_stroke();
+        assert_ne!(e.scene.active().mesh.positions, after_first, "Replay stamps again");
+        assert!(!e.can_reopen_last_stroke(), "Replay advances history, so reopen is off");
+        assert!(e.can_replay_last_stroke(), "the stored stroke stays for another Replay");
+        e.replay_last_stroke();
+        e.undo();
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, after_first, "two undos remove both Replays");
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before, "a third undo removes the original");
+        // Dynamic detail / remesh would clear the topology match; a new stroke replaces it.
+        e.camera.yaw = 0.0;
+        stroke_then_turn(&mut e);
+        assert!(e.can_replay_last_stroke());
+        e.invert_mask();
+        assert!(e.can_replay_last_stroke(), "unrelated edits still allow Replay");
+        assert!(!e.can_reopen_last_stroke());
     }
 
     #[test]

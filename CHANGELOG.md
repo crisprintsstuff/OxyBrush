@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Replay last stroke.** Edit > Last stroke > Replay stamps the Freehand stroke you just made again, without undoing it. One undo step; available until remesh or a new freehand stroke. Edit as curve still reshapes the path instead.
 - **Reference view planes.** Assign Back, Left, and Bottom orientations in addition to Front, Right (formerly Side), and Top. [#514](https://github.com/crisprintsstuff/OxyBrush/issues/514)
 
 ### Fixed
