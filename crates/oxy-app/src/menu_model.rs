@@ -392,6 +392,7 @@ fn tools_menu(ed: &Editor, busy: bool) -> Vec<Node> {
             "Vertex color",
             vec![
                 cmd(Cmd::PaintBrush, "Paint brush"),
+                cmd(Cmd::ColorFilterWindow, "Color Filter…"),
                 cmd_check(Cmd::ShowVertexColor, "Show vertex color", ed.view.show_vertex_color),
             ],
         ),

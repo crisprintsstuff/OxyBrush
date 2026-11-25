@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Color Filter.** Tools > Vertex color > Color Filter… (also the command palette) opens a window of whole-piece vertex color adjustments: Fill, Hue, Saturation, Value, Brightness, Contrast, Smooth and Red/Green/Blue. Drag a bar to preview; let go to apply as one undo step. Masked parts stay put unless Use mask is off. Fill uses the current Paint color. [#489](https://github.com/crisprintsstuff/OxyBrush/issues/489)
 - **Rebuild lower level.** Mesh > Rebuild lower level recovers one Catmull–Clark coarse level under an all-quad mesh with no subdivision stack (RFC 0036, #366, #455).
 - **Replay last stroke.** Edit > Last stroke > Replay stamps the Freehand stroke you just made again, without undoing it. One undo step; available until remesh or a new freehand stroke. Edit as curve still reshapes the path instead.
 - **3MF export.** File > Export type offers 3MF: visible pieces as separate mesh objects in millimetres, using the scene unit size (Preferences > Units / 3D print). [#308](https://github.com/crisprintsstuff/OxyBrush/issues/308)

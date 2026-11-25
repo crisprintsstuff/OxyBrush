@@ -214,6 +214,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             "deformation bend twist taper skew inflate polish relax noise spherize squeeze flatten sag",
             |e| e.show_deform = true,
         ),
+        cmd(
+            ed,
+            Cmd::ColorFilterWindow,
+            "vertex color filter hue saturation value brightness contrast smooth fill rgb paint",
+            |e| e.show_color_filter = true,
+        ),
         cmd(ed, Cmd::DeformFit, "unify normalize size centre center scale", Editor::deform_fit_standard_size),
         cmd(ed, Cmd::Decimate, "topology reduce polygons triangles", Editor::decimate_active),
         cmd(ed, Cmd::DeleteHidden, "topology visibility", Editor::delete_hidden),
