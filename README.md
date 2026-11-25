@@ -29,7 +29,9 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** [v4.0.0-beta.24.5](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.5) runs on Windows, Linux and macOS. This beta adds Paint Color Jitter, puts lit surface controls in Materials, and explains rejected OxySpheres quad builds in the editor.
+> **Beta:** OxyBrush 4.0.0-beta.24.7 runs on Windows, Linux, and macOS. This beta adds live reference placement, rotation and flips, two-point landmark alignment, a viewport X-ray toggle with active-piece scope, and grids in snapped orthographic views. It also improves Pieces navigation and isolation, Shift-to-smooth Paint, and mirrored OxySpheres quad rebuilds. [Beta.24.7 release notes](docs/releases/v4.0.0-beta.24.7.md)
+>
+> Beta.24.6 introduced project-embedded reference images, selection shape buttons, tuned Kelvin brushes, quad subdivision for OxySpheres, and editing existing low-poly meshes in Retopology. It also fixed brush strength when switching brushes and the custom color picker in Materials. [Beta.24.6 release notes](docs/releases/v4.0.0-beta.24.6.md)
 
 **Highlights**
 
@@ -45,7 +47,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 ## Download and install
 
-Get the latest build from **[Releases](https://github.com/crisprintsstuff/OxyBrush/releases/latest)**.
+Get **[OxyBrush v4.0.0-beta.24.7](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.7)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
 
 | Platform | File | How |
 |---|---|---|
