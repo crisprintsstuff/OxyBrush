@@ -719,6 +719,8 @@ pub struct ReferencePlacement {
     pub overlay: bool,
     /// Clockwise quarter-turns, modulo four.
     pub quarter_turns: u8,
+    /// Additional counterclockwise in-plane rotation in radians.
+    pub fine_rotation: f32,
     /// Reflect about the plane axes after rotation.
     pub flip_horizontal: bool,
     pub flip_vertical: bool,

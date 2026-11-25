@@ -1074,6 +1074,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     if !ed.show_welcome {
         transform_gizmo(ui.ctx(), ed, canvas);
     }
+    crate::references::alignment_overlay(ui, ed, canvas);
     draw_curve(ui, ed, canvas);
     draw_symmetry_planes(ui, ed, canvas);
     draw_brush_cursor(ui, ed, canvas);

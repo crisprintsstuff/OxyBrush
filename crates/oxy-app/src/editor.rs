@@ -1296,6 +1296,8 @@ pub struct Editor {
     /// sliders (RFC 0028).
     pub show_shading: bool,
     pub show_references: bool,
+    pub reference_alignment: Option<crate::references::Alignment>,
+    reference_pick_pressed: bool,
     /// Whether the Recipe Box drawer is currently slid open.
     pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
@@ -1647,6 +1649,8 @@ impl Default for Editor {
             show_parts_bin: true,
             show_shading: false,
             show_references: false,
+            reference_alignment: None,
+            reference_pick_pressed: false,
             parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,
@@ -2574,6 +2578,10 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        self.reference_pick_pressed = button == PointerButton::Primary && crate::references::pick_alignment(self, p);
+        if self.reference_pick_pressed {
+            return;
+        }
         self.sync_brush_look();
         self.orbit_picked = false;
         // The size on the model, measured where this press lands.
@@ -3978,6 +3986,9 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self) {
+        if std::mem::take(&mut self.reference_pick_pressed) {
+            return;
+        }
         if self.select_curve_release() {
             return;
         }
