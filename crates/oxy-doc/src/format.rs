@@ -91,6 +91,7 @@
 //! - `REFI` (optional): reference image planes with embedded RGBA8 and placement.
 //!   Placement flag bits 3–4 hold clockwise quarter-turns and bits 5–6
 //!   hold horizontal and vertical flips. Earlier readers ignore these bits.
+//! - `RROT` (optional): f32 fine rotation in radians for the immediately preceding REFI.
 //! - `ALPH` (optional, since 4.0.0-beta.1): a brush alpha kept with the project,
 //!   one section each, after the pieces: `name_len:u32 name:utf8 size:u32
 //!   value:u16*size²` (row-major, row 0 at the top, 65535 = full strength).
@@ -448,6 +449,9 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         }
         raw.extend_from_slice(&reference.pixels);
         sections.push((*b"REFI", raw));
+        if p.fine_rotation.is_finite() && p.fine_rotation != 0.0 {
+            sections.push((*b"RROT", p.fine_rotation.to_le_bytes().to_vec()));
+        }
     }
 
     let mut out = Vec::new();
@@ -627,8 +631,10 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
     let count = r.u32()?;
     let mut scene = SceneData::default();
     let mut reference_bytes = 0;
+    let mut rotation_target = None;
     for _ in 0..count {
         let tag: [u8; 4] = r.take(4)?.try_into().expect("4 bytes");
+        let target = rotation_target.take();
         let raw_len = r.u64()?;
         let packed_len = r.u64()?;
         let crc = r.u32()?;
@@ -995,11 +1001,20 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
             b"REFI" => match decode_reference(&raw) {
                 Ok(reference) if reference.pixels.len() <= crate::MAX_REFERENCE_BYTES - reference_bytes => {
                     reference_bytes += reference.pixels.len();
+                    rotation_target = Some(scene.references.len());
                     scene.references.push(reference);
                 }
                 Ok(_) => log::warn!("skipping reference image beyond the project image budget"),
                 Err(e) => log::warn!("skipping reference image: {e}"),
             },
+            b"RROT" => {
+                if let (Some(index), Ok(bytes)) = (target, <[u8; 4]>::try_from(raw.as_slice())) {
+                    let angle = f32::from_le_bytes(bytes);
+                    if angle.is_finite() && angle.abs() <= std::f32::consts::PI {
+                        scene.references[index].placement.fine_rotation = angle;
+                    }
+                }
+            }
             b"ALPH" => match decode_alpha(&raw) {
                 Ok(a) => scene.alphas.push(a),
                 Err(e) => log::warn!("ignoring a damaged brush alpha: {e}"),
@@ -1312,6 +1327,7 @@ fn decode_reference(raw: &[u8]) -> Result<crate::ReferenceImage> {
             all_views: flags & 2 != 0,
             overlay: flags & 4 != 0,
             quarter_turns: (flags >> 3) & 3,
+            fine_rotation: 0.0,
             flip_horizontal: flags & 32 != 0,
             flip_vertical: flags & 64 != 0,
         },
@@ -2143,6 +2159,7 @@ mod tests {
                 all_views: true,
                 overlay: true,
                 quarter_turns: 3,
+                fine_rotation: 0.35,
                 flip_horizontal: true,
                 flip_vertical: true,
             },

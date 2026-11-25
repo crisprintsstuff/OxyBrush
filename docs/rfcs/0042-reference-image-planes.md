@@ -51,6 +51,21 @@ machine.
   original orientation. Existing projects start with zero rotation and
   both flips off.
 
+### Landmark alignment
+
+From an image's placement controls, start **Align to landmarks**. Pick
+two points on the image, then the corresponding two points on the sculpt
+in the matching orthographic view. Project all four points onto the
+reference plane so placement depth stays fixed. Translate, rotate, and
+uniformly scale the image to match the points, then preview the result
+before Apply. Cancel returns to the prior preview. Pick clicks are reserved
+for alignment until the fourth point or cancellation.
+
+The picker temporarily draws the selected image over the sculpt for the
+first two clicks and hides reference images for the next two. A fine
+rotation is persisted in an optional `RROT` section. Earlier readers
+still load the embedded image with its placement and quarter-turns.
+
 ### Viewport X-ray
 
 Expose **X-ray** directly in the viewport toolbar and View menu. Right-click
