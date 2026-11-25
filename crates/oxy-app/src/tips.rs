@@ -217,7 +217,7 @@ commands! {
     Carve => "Carve", "", "Brushes remove clay. Hold Alt to raise for one stroke.";
     Lasso => "Selection shape", "L", "Switch the selection shape: rectangle, lasso, circle, ellipse, curve.";
     MaskGroup => "Mask face group", "Ctrl+M", "Mask the face group under the pointer.";
-    QuickMenu => "Quick menu", "Q", "Hold Q, or right-click the view, for size, strength and Raise or Carve next to the cursor.";
+    QuickMenu => "Quick menu", "Q", "Hold Q, or right-click the view, for size, strength, focal shift and Raise or Carve next to the cursor.";
     ClearGroups => "Clear groups", "", "Put every face back in the same group.";
     GrowVisible => "Grow visible", "", "Show one more ring of faces around what is already visible.";
     ShrinkVisible => "Shrink visible", "", "Hide one ring of faces around the edge of what is visible.";
@@ -555,9 +555,9 @@ pub fn panel_tip(p: PanelSide) -> &'static str {
 
 pub fn quick_bar_tip(q: QuickBar) -> &'static str {
     match q {
-        QuickBar::ViewportTop => "Float size, strength and Raise/Carve at the top of the view.",
-        QuickBar::ViewportBottom => "Float size, strength and Raise/Carve at the bottom of the view.",
-        QuickBar::Toolbar => "Put size, strength and Raise/Carve in the toolbar.",
+        QuickBar::ViewportTop => "Float size, strength, focal shift and Raise/Carve at the top of the view.",
+        QuickBar::ViewportBottom => "Float size, strength, focal shift and Raise/Carve at the bottom of the view.",
+        QuickBar::Toolbar => "Put size, strength, focal shift and Raise/Carve in the toolbar.",
     }
 }
 
