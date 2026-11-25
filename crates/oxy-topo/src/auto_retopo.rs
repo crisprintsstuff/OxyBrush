@@ -1,9 +1,13 @@
-//! OxyRemesh: field-aligned automatic retopology (Phase 1 of RFC 0044).
+//! OxyRemesh: field-aligned automatic retopology (RFC 0044).
 //!
 //! Implements the local orientation- and position-field pipeline from
 //! Jakob et al., *Instant Field-Aligned Meshes* (SIGGRAPH Asia 2015),
 //! from the published paper only. Pure Rust; no Instant Meshes / Geogram /
 //! Autoremesher C++ source was used.
+//!
+//! Phase 2 adds a Catmull–Clark-topology pure-quad post-pass (no
+//! smoothing), attribute projection from the source mesh, and stronger
+//! crease alignment during field smoothing.
 
 use glam::Vec3;
 use oxy_mesh::{Mesh, MeshData, WHITE};
@@ -13,8 +17,10 @@ use std::collections::{HashMap, HashSet};
 const SO: usize = 4;
 /// Position translations use `sp/2` axes; for quads `sp = so = 4`.
 const SP_AXES: usize = SO / 2;
+/// Extra weight on crease edges during orientation / position GS.
+const CREASE_WEIGHT: f32 = 8.0;
 
-/// Options for [`auto_retopo`].
+/// Options for [`auto_retopo`] (OxyRemesh).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AutoRetopoOptions {
     /// Approximate number of faces in the result (sets the lattice spacing).
@@ -26,11 +32,26 @@ pub struct AutoRetopoOptions {
     pub extrinsic: bool,
     /// Gauss–Seidel passes per hierarchy level.
     pub iterations_per_level: u32,
+    /// Split every extracted polygon into quads (face + edge midpoints).
+    /// Default on (Phase 2).
+    pub pure_quad: bool,
+    /// Carry vertex color, mask and face groups from the source (like remesh).
+    pub transfer_attributes: bool,
+    /// Snap result vertices onto the source surface after extraction.
+    pub snap_to_surface: bool,
 }
 
 impl Default for AutoRetopoOptions {
     fn default() -> Self {
-        Self { target_faces: 5_000, sharp_angle_deg: 45.0, extrinsic: true, iterations_per_level: 6 }
+        Self {
+            target_faces: 5_000,
+            sharp_angle_deg: 45.0,
+            extrinsic: true,
+            iterations_per_level: 6,
+            pure_quad: true,
+            transfer_attributes: true,
+            snap_to_surface: true,
+        }
     }
 }
 
@@ -52,7 +73,11 @@ impl std::fmt::Display for AutoRetopoError {
     }
 }
 
-/// Rebuild `mesh` as a field-aligned, quad-dominant surface.
+/// Rebuild `mesh` as a field-aligned surface (OxyRemesh).
+///
+/// With default options the result is pure-quad (each extracted polygon
+/// becomes quads via face and edge midpoints), attributes are projected
+/// from `mesh`, and vertices are snapped onto its surface.
 pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRetopoError> {
     if mesh.triangle_count() == 0 {
         return Err(AutoRetopoError::Empty);
@@ -65,7 +90,9 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     let area = surface_area(mesh).max(1e-8);
     let target = opts.target_faces.max(4) as f32;
     // ρ ≈ mean edge length of a regular quad mesh covering `area`.
-    let rho = (area / target).sqrt().max(1e-6);
+    // Pure-quad post-pass roughly quadruples face count, so aim ρ a bit larger.
+    let face_budget = if opts.pure_quad { (target / 4.0).max(4.0) } else { target };
+    let rho = (area / face_budget).sqrt().max(1e-6);
 
     let hierarchy = build_hierarchy(&graph);
     let mut o = random_tangents(&graph);
@@ -74,7 +101,6 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     for level in (0..hierarchy.len()).rev() {
         let g = &hierarchy[level];
         if level + 1 < hierarchy.len() {
-            // Prolong from coarser: copy parent field onto children via parent index.
             let parent = &hierarchy[level + 1];
             o = prolong_orientation(g, parent, &o);
             p = prolong_positions(g, parent, &p);
@@ -91,17 +117,49 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
         }
     }
 
-    // Final fine-level passes on the original graph.
     for _ in 0..opts.iterations_per_level.max(1) {
         smooth_orientation(&graph, &mut o, opts.extrinsic);
         smooth_position(&graph, &o, &mut p, rho, opts.extrinsic);
     }
 
-    let data = extract_mesh(&graph, &o, &p, rho)?;
+    let extracted = extract_faces(&graph, &o, &p, rho)?;
+    if extracted.faces.is_empty() {
+        return Err(AutoRetopoError::Degenerate);
+    }
+    let (data, diagonals) =
+        if opts.pure_quad { polygons_to_pure_quads(&extracted)? } else { polygons_to_quad_dominant(&extracted)? };
     if data.triangles.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
-    Ok(Mesh::from_data(data))
+    let mut out = Mesh::from_data(data);
+    if !diagonals.is_empty() {
+        // Mesh::from_data renumbers verts into chunk order; map diagonals.
+        let src = out.source_vertices();
+        let max_old = src.iter().copied().max().unwrap_or(0) as usize;
+        let mut old_to_new = vec![u32::MAX; max_old + 1];
+        for (new, &old) in src.iter().enumerate() {
+            old_to_new[old as usize] = new as u32;
+        }
+        let remapped = diagonals
+            .into_iter()
+            .filter_map(|[a, b]| {
+                let na = *old_to_new.get(a as usize)?;
+                let nb = *old_to_new.get(b as usize)?;
+                if na == u32::MAX || nb == u32::MAX {
+                    return None;
+                }
+                Some([na.min(nb), na.max(nb)])
+            })
+            .collect();
+        out.set_quad_diagonals(remapped);
+    }
+    if opts.snap_to_surface {
+        crate::SurfaceProjector::new(&[mesh]).project(&mut out);
+    }
+    if opts.transfer_attributes {
+        crate::transfer_attributes(&[mesh], &mut out);
+    }
+    Ok(out)
 }
 
 #[derive(Clone)]
@@ -114,6 +172,10 @@ struct Graph {
     area: Vec<f32>,
     /// For each vertex, index of its parent on the next coarser level (`None` at coarsest).
     parent: Vec<Option<u32>>,
+    /// Vertices incident to a sharp crease edge.
+    crease: Vec<bool>,
+    /// Sharp crease edges as `[low, high]`.
+    crease_edges: HashSet<[u32; 2]>,
 }
 
 impl Graph {
@@ -147,10 +209,18 @@ impl Graph {
             }
         }
         let mut crease_vert = vec![false; n];
+        let mut crease_edges: HashSet<[u32; 2]> = HashSet::new();
         for (key, faces) in &edge_faces {
-            if faces.len() == 2 && faces[0].dot(faces[1]) < cos_sharp {
+            // Interior sharp dihedral, or boundary edge (one face).
+            let sharp = match faces.len() {
+                1 => true,
+                2 => faces[0].dot(faces[1]) < cos_sharp,
+                _ => false,
+            };
+            if sharp {
                 crease_vert[key[0] as usize] = true;
                 crease_vert[key[1] as usize] = true;
+                crease_edges.insert(*key);
             }
         }
 
@@ -179,7 +249,15 @@ impl Graph {
         }
 
         let neighbors: Vec<Vec<u32>> = neighbors.into_iter().map(|s| s.into_iter().collect()).collect();
-        Self { positions: mesh.positions.clone(), normals, neighbors, area: vec![1.0; n], parent: vec![None; n] }
+        Self {
+            positions: mesh.positions.clone(),
+            normals,
+            neighbors,
+            area: vec![1.0; n],
+            parent: vec![None; n],
+            crease: crease_vert,
+            crease_edges,
+        }
     }
 
     fn len(&self) -> usize {
@@ -251,7 +329,8 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
         for &j in &g.neighbors[i] {
             let j = j as usize;
             let nj = g.normals[j];
-            let w = 1.0f32;
+            let edge = [i.min(j) as u32, i.max(j) as u32];
+            let w = if g.crease_edges.contains(&edge) { CREASE_WEIGHT } else { 1.0 };
             if extrinsic {
                 // Search (k,l) minimizing angle between rotated reps.
                 let mut best = (f32::MAX, 0usize, 0usize);
@@ -283,6 +362,21 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
                 acc += rosy(oj_i, ni, best_k) * w;
             }
             wsum += w;
+        }
+        // Crease verts also pull toward the crease edge direction in the tangent plane.
+        if g.crease[i] {
+            for &j in &g.neighbors[i] {
+                let j = j as usize;
+                let edge = [i.min(j) as u32, i.max(j) as u32];
+                if !g.crease_edges.contains(&edge) {
+                    continue;
+                }
+                let dir = project_tangent(g.positions[j] - g.positions[i], ni);
+                if dir != Vec3::ZERO {
+                    acc += dir * CREASE_WEIGHT;
+                    wsum += CREASE_WEIGHT;
+                }
+            }
         }
         if wsum > 0.0 && acc.length_squared() > 1e-12 {
             o[i] = project_tangent(acc / wsum, ni);
@@ -340,7 +434,8 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
             let j = j as usize;
             let nj = g.normals[j];
             let oj = o[j];
-            let w = 1.0f32;
+            let edge = [i.min(j) as u32, i.max(j) as u32];
+            let w = if g.crease_edges.contains(&edge) { CREASE_WEIGHT } else { 1.0 };
             // Midpoint between tangent planes (approx q_ij).
             let q = {
                 let mid = (g.positions[i] + g.positions[j]) * 0.5;
@@ -412,11 +507,17 @@ fn coarsen(g: &Graph) -> Graph {
     let mut new_positions = Vec::new();
     let mut new_normals = Vec::new();
     let mut new_area = Vec::new();
+    let mut new_crease = Vec::new();
     let mut fine_to_coarse = vec![u32::MAX; n];
 
     for &(_, i, j) in &scores {
         let (i, j) = (i as usize, j as usize);
         if used[i] || used[j] {
+            continue;
+        }
+        // Prefer not to collapse across a crease edge.
+        let edge = [i.min(j) as u32, i.max(j) as u32];
+        if g.crease_edges.contains(&edge) {
             continue;
         }
         used[i] = true;
@@ -430,6 +531,7 @@ fn coarsen(g: &Graph) -> Graph {
         new_positions.push(pos);
         new_normals.push(if nml == Vec3::ZERO { g.normals[i] } else { nml });
         new_area.push(a);
+        new_crease.push(g.crease[i] || g.crease[j]);
         fine_to_coarse[i] = idx;
         fine_to_coarse[j] = idx;
         parent_of[i] = Some(idx);
@@ -441,6 +543,7 @@ fn coarsen(g: &Graph) -> Graph {
             new_positions.push(g.positions[i]);
             new_normals.push(g.normals[i]);
             new_area.push(g.area[i]);
+            new_crease.push(g.crease[i]);
             fine_to_coarse[i] = idx;
             parent_of[i] = Some(idx);
         }
@@ -448,12 +551,18 @@ fn coarsen(g: &Graph) -> Graph {
 
     let cn = new_positions.len();
     let mut neighbors: Vec<HashSet<u32>> = vec![HashSet::new(); cn];
+    let mut crease_edges: HashSet<[u32; 2]> = HashSet::new();
     for i in 0..n {
         let ci = fine_to_coarse[i];
         for &j in &g.neighbors[i] {
             let cj = fine_to_coarse[j as usize];
             if ci != cj {
                 neighbors[ci as usize].insert(cj);
+                let fine_e = [i.min(j as usize) as u32, i.max(j as usize) as u32];
+                if g.crease_edges.contains(&fine_e) {
+                    let ce = [ci.min(cj), ci.max(cj)];
+                    crease_edges.insert(ce);
+                }
             }
         }
     }
@@ -463,6 +572,8 @@ fn coarsen(g: &Graph) -> Graph {
         neighbors: neighbors.into_iter().map(|s| s.into_iter().collect()).collect(),
         area: new_area,
         parent: vec![None; cn],
+        crease: new_crease,
+        crease_edges,
     }
 }
 
@@ -566,7 +677,13 @@ fn is_zero_jump(t: [i32; SP_AXES]) -> bool {
     t[0] == 0 && t[1] == 0
 }
 
-fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData, AutoRetopoError> {
+struct Extracted {
+    positions: Vec<Vec3>,
+    /// Oriented polygon loops (3–6 corners) in output vertex indices.
+    faces: Vec<Vec<u32>>,
+}
+
+fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracted, AutoRetopoError> {
     let n = g.len();
     // Union-find over input verts: merge on zero jumps (short distance first).
     let mut parent: Vec<u32> = (0..n as u32).collect();
@@ -600,7 +717,6 @@ fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData,
         }
     }
     zero_edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
-    // Collapse zero-jump clusters unless already linked by a unit edge (paper heuristic).
     let unit_set: HashSet<(u32, u32)> = unit_edges.iter().map(|&(a, b)| if a < b { (a, b) } else { (b, a) }).collect();
     for &(_, a, b) in &zero_edges {
         let key = if a < b { (a, b) } else { (b, a) };
@@ -610,7 +726,6 @@ fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData,
         unite(&mut parent, a, b);
     }
 
-    // Cluster → output vertex.
     let mut cluster_members: HashMap<u32, Vec<u32>> = HashMap::new();
     for i in 0..n as u32 {
         let r = find(&mut parent, i);
@@ -652,7 +767,6 @@ fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData,
         return Err(AutoRetopoError::Degenerate);
     }
 
-    // Output edges from unit jumps between different clusters.
     let mut out_adj: Vec<HashSet<u32>> = vec![HashSet::new(); out_pos.len()];
     for &(a, b) in &unit_edges {
         let ra = find(&mut parent, a);
@@ -670,7 +784,7 @@ fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData,
     }
 
     // Face walk: for each oriented edge, take the sharpest left turn in the tangent plane.
-    let mut triangles = Vec::new();
+    let mut faces = Vec::new();
     let mut used_oriented: HashSet<(u32, u32)> = HashSet::new();
     for start in 0..out_pos.len() as u32 {
         let neighbors: Vec<u32> = out_adj[start as usize].iter().copied().collect();
@@ -712,28 +826,103 @@ fn extract_mesh(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<MeshData,
                 used_oriented.insert((prev, cur));
             }
             if cur == start && face.len() >= 3 && face.len() <= 6 {
-                for k in 1..face.len() - 1 {
-                    triangles.push([face[0], face[k], face[k + 1]]);
-                }
+                faces.push(face);
             }
         }
     }
 
-    if triangles.is_empty() {
+    if faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
+    Ok(Extracted { positions: out_pos, faces })
+}
 
-    let nv = out_pos.len();
+fn mesh_data_from(positions: Vec<Vec3>, triangles: Vec<[u32; 3]>) -> MeshData {
+    let nv = positions.len();
     let nt = triangles.len();
-    Ok(MeshData {
-        positions: out_pos,
+    MeshData {
+        positions,
         triangles,
         mask: vec![0.0; nv],
         color: vec![WHITE; nv],
         groups: vec![0; nt],
         hidden: vec![false; nt],
         uv: Vec::new(),
-    })
+    }
+}
+
+fn push_quad(triangles: &mut Vec<[u32; 3]>, diagonals: &mut HashSet<[u32; 2]>, a: u32, b: u32, c: u32, d: u32) {
+    // Quad a-b-c-d → triangles a-b-c and a-c-d; diagonal a-c.
+    triangles.push([a, b, c]);
+    triangles.push([a, c, d]);
+    diagonals.insert([a.min(c), a.max(c)]);
+}
+
+/// Catmull–Clark topology without smoothing: every n-gon becomes n quads
+/// via a face point and edge midpoints.
+fn polygons_to_pure_quads(ex: &Extracted) -> Result<(MeshData, HashSet<[u32; 2]>), AutoRetopoError> {
+    let mut positions = ex.positions.clone();
+    let mut edge_mid: HashMap<[u32; 2], u32> = HashMap::new();
+    let mut mid_of = |positions: &mut Vec<Vec3>, a: u32, b: u32| -> u32 {
+        let key = [a.min(b), a.max(b)];
+        if let Some(&m) = edge_mid.get(&key) {
+            return m;
+        }
+        let mid = (positions[a as usize] + positions[b as usize]) * 0.5;
+        let idx = positions.len() as u32;
+        positions.push(mid);
+        edge_mid.insert(key, idx);
+        idx
+    };
+
+    let mut triangles = Vec::new();
+    let mut diagonals = HashSet::new();
+    for face in &ex.faces {
+        let n = face.len();
+        if n < 3 {
+            continue;
+        }
+        let mut centroid = Vec3::ZERO;
+        for &v in face {
+            centroid += positions[v as usize];
+        }
+        centroid /= n as f32;
+        let face_pt = positions.len() as u32;
+        positions.push(centroid);
+
+        for i in 0..n {
+            let a = face[i];
+            let b = face[(i + 1) % n];
+            let mid = mid_of(&mut positions, a, b);
+            let prev_mid = mid_of(&mut positions, face[(i + n - 1) % n], a);
+            push_quad(&mut triangles, &mut diagonals, a, mid, face_pt, prev_mid);
+        }
+    }
+    if triangles.is_empty() {
+        return Err(AutoRetopoError::Degenerate);
+    }
+    Ok((mesh_data_from(positions, triangles), diagonals))
+}
+
+/// Keep quads as two triangles + diagonal; fan-triangulate other polygons.
+fn polygons_to_quad_dominant(ex: &Extracted) -> Result<(MeshData, HashSet<[u32; 2]>), AutoRetopoError> {
+    let mut triangles = Vec::new();
+    let mut diagonals = HashSet::new();
+    for face in &ex.faces {
+        match face.len() {
+            4 => push_quad(&mut triangles, &mut diagonals, face[0], face[1], face[2], face[3]),
+            n if n >= 3 => {
+                for k in 1..n - 1 {
+                    triangles.push([face[0], face[k], face[k + 1]]);
+                }
+            }
+            _ => {}
+        }
+    }
+    if triangles.is_empty() {
+        return Err(AutoRetopoError::Degenerate);
+    }
+    Ok((mesh_data_from(ex.positions.clone(), triangles), diagonals))
 }
 
 #[cfg(test)]
@@ -744,12 +933,77 @@ mod tests {
     #[test]
     fn auto_retopo_sphere_produces_mesh() {
         let mesh = primitives::icosphere(3, 1.0);
-        let out =
-            auto_retopo(&mesh, AutoRetopoOptions { target_faces: 400, iterations_per_level: 4, ..Default::default() })
-                .expect("retopo sphere");
+        let out = auto_retopo(
+            &mesh,
+            AutoRetopoOptions {
+                target_faces: 400,
+                iterations_per_level: 4,
+                snap_to_surface: false,
+                transfer_attributes: false,
+                ..Default::default()
+            },
+        )
+        .expect("retopo sphere");
         assert!(out.triangle_count() > 10, "got {} tris", out.triangle_count());
         assert!(out.vertex_count() > 10);
-        assert!(out.triangle_count() < mesh.triangle_count());
+        assert!(out.triangle_count() < mesh.triangle_count() * 2);
+    }
+
+    #[test]
+    fn auto_retopo_pure_quad_has_no_lone_triangles() {
+        let mesh = primitives::icosphere(3, 1.0);
+        let out = auto_retopo(
+            &mesh,
+            AutoRetopoOptions {
+                target_faces: 300,
+                iterations_per_level: 3,
+                pure_quad: true,
+                snap_to_surface: false,
+                transfer_attributes: false,
+                ..Default::default()
+            },
+        )
+        .expect("pure quad");
+        assert!(out.triangle_count() >= 2);
+        assert_eq!(out.triangle_count() % 2, 0, "pure-quad emit is triangle pairs");
+        let diags = out.quad_diagonals();
+        assert!(!diags.is_empty(), "expected recorded quad diagonals");
+        // Every triangle should include at least one recorded diagonal edge
+        // (Mesh::from_data renumbers verts; a few diagonals may hash-collide).
+        for t in &out.triangles {
+            let hit = [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]].iter().any(|&e| {
+                let key = [e[0].min(e[1]), e[0].max(e[1])];
+                diags.contains(&key)
+            });
+            assert!(hit, "triangle {t:?} has no recorded diagonal");
+        }
+    }
+
+    #[test]
+    fn auto_retopo_transfers_paint_and_mask() {
+        let mut mesh = primitives::icosphere(3, 1.0);
+        for v in 0..mesh.vertex_count() {
+            if mesh.positions[v].y > 0.0 {
+                mesh.color[v] = Vec3::new(1.0, 0.0, 0.0);
+                mesh.mask[v] = 1.0;
+            }
+        }
+        let out = auto_retopo(
+            &mesh,
+            AutoRetopoOptions {
+                target_faces: 250,
+                iterations_per_level: 3,
+                pure_quad: true,
+                snap_to_surface: true,
+                transfer_attributes: true,
+                ..Default::default()
+            },
+        )
+        .expect("transfer");
+        let painted = out.color.iter().any(|c| c.x > 0.5 && c.y < 0.5);
+        let masked = out.mask.iter().any(|&m| m > 0.25);
+        assert!(painted, "expected some red from the upper hemisphere");
+        assert!(masked, "expected some mask from the upper hemisphere");
     }
 
     #[test]

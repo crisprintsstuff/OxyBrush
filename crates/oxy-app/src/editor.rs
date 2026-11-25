@@ -8069,7 +8069,8 @@ impl Editor {
     }
 
     /// OxyRemesh (RFC 0044): field-aligned remesh of the active piece into
-    /// a lighter, mostly-quad mesh. Background job; one undo step.
+    /// a lighter pure-quad mesh (with paint/mask/groups). Background job;
+    /// one undo step.
     pub fn oxyremesh_active(&mut self) {
         if !self.need_piece() {
             return;
