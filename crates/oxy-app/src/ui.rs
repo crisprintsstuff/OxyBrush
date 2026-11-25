@@ -4930,6 +4930,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, levels.is_some(), "Keep this level only", Cmd::KeepLevel).clicked() {
         ed.keep_level_only();
     }
+    if tips::button_on(ui, ed.can_rebuild_lower_level(), "Rebuild lower level", Cmd::RebuildLowerLevel).clicked() {
+        ed.rebuild_lower_level();
+    }
     ui.separator();
     if tips::button(ui, "Subdivide masked", Cmd::SubdivideMasked).clicked() {
         ed.subdivide_masked();
@@ -7042,6 +7045,9 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.add_level();
         }
     });
+    if tips::button_on(ui, ed.can_rebuild_lower_level(), "Rebuild lower level", Cmd::RebuildLowerLevel).clicked() {
+        ed.rebuild_lower_level();
+    }
     subdivision_kind(ui, ed);
     ui.add_space(4.0);
     ui.label(RichText::new("Rebuild").small().weak());

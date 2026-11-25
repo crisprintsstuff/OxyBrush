@@ -184,6 +184,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             "multires apply flatten freeze collapse levels dynamic detail",
             Editor::keep_level_only,
         ),
+        cmd(
+            ed,
+            Cmd::RebuildLowerLevel,
+            "multires unsubdivide recover coarse lower level catmull clark rebuild",
+            Editor::rebuild_lower_level,
+        ),
         cmd(ed, Cmd::PrintTools, "3d print printing scale volume hollow drain wall thickness split pins", |e| {
             e.show_print_dialog = true;
             e.update_print_dimensions();

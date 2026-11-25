@@ -16,6 +16,7 @@ pub mod dyntopo;
 pub mod instances;
 pub mod knife;
 pub mod multires;
+pub mod unsubdivide;
 
 pub mod polyedit;
 pub mod polyshape;

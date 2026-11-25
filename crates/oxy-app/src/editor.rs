@@ -7501,6 +7501,69 @@ impl Editor {
         }
     }
 
+    /// Whether Rebuild lower level can run on the active piece (RFC 0036).
+    pub fn can_rebuild_lower_level(&self) -> bool {
+        let Some(piece) = self.scene.try_active() else {
+            return false;
+        };
+        if piece.multires.as_ref().is_some_and(|m| m.is_bound_to(&piece.mesh)) {
+            return false;
+        }
+        if !piece.mesh.uvs().is_empty() || piece.mesh.is_painted() {
+            return false;
+        }
+        let (q, t) = piece.mesh.quad_and_triangle_counts();
+        t == 0 && q > 0
+    }
+
+    /// Recover one Catmull–Clark coarse level under the active piece
+    /// ([RFC 0036](../../../docs/rfcs/0036-rebuild-lower-subdivision-level.md)).
+    pub fn rebuild_lower_level(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
+        if self.job.is_some() {
+            self.status = "Another operation is still running".into();
+            return;
+        }
+        {
+            let piece = self.scene.active();
+            if piece.multires.as_ref().is_some_and(|m| m.is_bound_to(&piece.mesh)) {
+                self.status = oxy_mesh::unsubdivide::RebuildError::HasLevels.message().into();
+                return;
+            }
+        }
+        self.pointer_up();
+        let mesh = self.scene.active().mesh.clone();
+        let tris = mesh.triangle_count();
+        let background = tris > self.level_job_triangles;
+        let label = "Rebuild lower level".to_string();
+        if background {
+            self.start_job(label, Vec::new(), move || {
+                let (out, mr) =
+                    oxy_mesh::unsubdivide::rebuild_lower_level(&mesh).map_err(|e| e.message().to_string())?;
+                Ok(JobResult::Levels { mesh: out, multires: Some(mr), previous: None })
+            });
+            if let Some(job) = &mut self.job {
+                job.holds_levels = true;
+            }
+            return;
+        }
+        match oxy_mesh::unsubdivide::rebuild_lower_level(&mesh) {
+            Ok((out, mr)) => {
+                let piece = self.scene.active_mut();
+                let id = piece.id;
+                let prev = std::mem::replace(&mut piece.mesh, out);
+                let prev_levels = piece.multires.take();
+                piece.multires = Some(mr);
+                self.history.record_topology(&label, id, prev, prev_levels);
+                let (a, c) = self.multires_level().unwrap_or((0, 0));
+                self.status = format!("{label}: level {} of {c}, {} triangles", a + 1, tris);
+            }
+            Err(e) => self.status = e.message().into(),
+        }
+    }
+
     /// Subdivide the active piece once, as a plain mesh (no levels), with
     /// the chosen kind (quads or triangles): `smooth` rounds it with the
     /// smoothing rules, otherwise faces are split in place and the shape
@@ -14614,6 +14677,43 @@ mod tests {
         assert_eq!(e.multires_level(), None, "a single remaining level means no stack");
         e.undo();
         assert_eq!(e.multires_level(), Some((1, 2)));
+    }
+
+    #[test]
+    fn rebuild_lower_level_under_a_kept_quad_level() {
+        use oxy_mesh::retopo::{Cage, Face};
+        let p = |x: f32, y: f32, z: f32| Vec3::new(x, y, z);
+        let positions = vec![
+            p(-0.5, -0.5, -0.5),
+            p(0.5, -0.5, -0.5),
+            p(0.5, 0.5, -0.5),
+            p(-0.5, 0.5, -0.5),
+            p(-0.5, -0.5, 0.5),
+            p(0.5, -0.5, 0.5),
+            p(0.5, 0.5, 0.5),
+            p(-0.5, 0.5, 0.5),
+        ];
+        let faces = [[0, 3, 2, 1], [4, 5, 6, 7], [0, 1, 5, 4], [2, 3, 7, 6], [1, 2, 6, 5], [0, 4, 7, 3]]
+            .into_iter()
+            .map(|k| Face::new(k.to_vec()))
+            .collect();
+        let mut cage = Cage { positions, faces, ..Default::default() };
+        let mesh = cage.build_mesh().unwrap();
+        let mut e = editor();
+        e.scene = Scene::new(Piece::new("Box", mesh));
+        e.subdivision_scheme = oxy_mesh::multires::Scheme::CatmullClark;
+        e.add_level();
+        wait_job(&mut e);
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        e.keep_level_only();
+        wait_job(&mut e);
+        assert!(e.multires_level().is_none());
+        assert!(e.can_rebuild_lower_level());
+        e.rebuild_lower_level();
+        wait_job(&mut e);
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        e.undo();
+        assert!(e.multires_level().is_none());
     }
 
     #[test]

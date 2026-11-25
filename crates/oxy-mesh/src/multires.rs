@@ -1235,6 +1235,43 @@ impl Multires {
     pub fn active_triangles(&self) -> &[[u32; 3]] {
         &self.levels[self.active].triangles
     }
+
+    /// Catmull–Clark refinement that made `level` from the one below, when
+    /// this is a CC stack and `level > 0`: previous vertex count and each
+    /// edge's endpoints in the level below.
+    pub fn cc_edge_endpoints(&self, level: usize) -> Option<(usize, Vec<(u32, u32)>)> {
+        let Refinement::Cc(r) = self.levels.get(level)?.refinement.as_ref()? else {
+            return None;
+        };
+        Some((r.n_prev, r.edges.iter().map(|e| (e.a, e.b)).collect()))
+    }
+
+    /// Replace the active level's positions and store detail against the
+    /// smooth (or linear) positions that Catmull–Clark produced. Used when
+    /// rebuilding a lower level under an imported dense mesh (RFC 0036).
+    pub fn install_active_positions(&mut self, positions: Vec<Vec3>) {
+        let lvl = &mut self.levels[self.active];
+        assert_eq!(positions.len(), lvl.positions.len());
+        let details: Vec<Vec3> = positions.iter().zip(&lvl.positions).map(|(p, s)| *p - *s).collect();
+        if details.iter().all(|d| d.length_squared() < 1e-20) {
+            lvl.details.clear();
+        } else {
+            lvl.details = details;
+        }
+        lvl.positions = positions;
+    }
+
+    /// Active level as [`MeshData`] with empty attributes (mask/groups cleared).
+    pub fn active_mesh_data(&self) -> MeshData {
+        let n = self.levels[self.active].positions.len();
+        let nt = self.levels[self.active].triangles.len();
+        self.level_data(Attributes {
+            mask: vec![0.0; n],
+            color: Vec::new(),
+            groups: vec![0; nt],
+            hidden: vec![false; nt],
+        })
+    }
 }
 
 /// Saved base polygons of a Catmull–Clark stack (see
