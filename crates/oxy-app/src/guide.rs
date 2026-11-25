@@ -509,8 +509,8 @@ mod tests {
         lasso.sort_unstable();
         assert_eq!(
             lasso,
-            ["Face groups and hiding", "Masking", "Symmetry"],
-            "masking, visibility lassos, and symmetry for mirrored mask lassos"
+            ["Face groups and hiding", "Masking", "Poly Edit (model polygons)", "Symmetry"],
+            "masking, visibility lassos, Poly Edit area pick, and symmetry for mirrored mask lassos"
         );
         assert!(search("stl export").iter().any(|&i| TOPICS[i].title == "Importing and exporting"));
         assert!(search("cursor").iter().any(|&i| TOPICS[i].title == "Brush cursor"));

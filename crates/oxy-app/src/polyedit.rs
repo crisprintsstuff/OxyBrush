@@ -2023,7 +2023,11 @@ impl Editor {
             self.drag = Drag::None;
             return true;
         }
-        if let Drag::PolyAreaSelect { shape, points, add, subtract } = std::mem::replace(&mut self.drag, Drag::None) {
+        if matches!(self.drag, Drag::PolyAreaSelect { .. }) {
+            let Drag::PolyAreaSelect { shape, points, add, subtract } = std::mem::replace(&mut self.drag, Drag::None)
+            else {
+                unreachable!()
+            };
             self.poly_apply_area(shape, points, add, subtract);
             return true;
         }
