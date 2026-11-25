@@ -15,6 +15,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 
+- **X-ray scope remembered.** The X-ray piece scope (all visible / active / inactive) is saved in settings and restored on launch. New installs default to inactive pieces. [#521](https://github.com/crisprintsstuff/OxyBrush/issues/521)
 - **Banner and app icon.** The README banner uses the new Oxytocin Labs artwork (cyan/magenta circuit-brush mark with the dragon sculpt). Window, taskbar and installer icons match that mark (`packaging/icons`, regenerated with `make_icons.py`).
 - **Focal shift in the toolbar.** The Size / Strength bar (toolbar or floating over the view) also has Focal shift, same as the quick menu and brush settings.
 

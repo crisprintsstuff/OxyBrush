@@ -353,6 +353,9 @@ pub struct Settings {
     pub inactive_look: oxy_render::InactiveLook,
     pub inactive_strength: f32,
     pub inactive_color: [f32; 3],
+    /// View > X-ray scope when X-ray is turned on (#521). X-ray itself stays
+    /// off at launch; only which pieces ghost is remembered.
+    pub xray_scope: oxy_render::XrayScope,
     /// Overlay polygon edges atop shaded surfaces.
     pub wireframe: bool,
     /// Wireframe line opacity (0.0 to 1.0).
@@ -1132,6 +1135,7 @@ impl Default for Settings {
             inactive_look: oxy_render::InactiveLook::GreyOut,
             inactive_strength: 1.0,
             inactive_color: [0.25, 0.35, 0.6],
+            xray_scope: oxy_render::XrayScope::default(),
             wireframe: false,
             wireframe_opacity: 0.7,
             wireframe_color: view.wireframe_color,
@@ -1361,12 +1365,13 @@ impl Settings {
             + &format!("units = {}\nscene_unit_mm = {}\n", self.units.key(), self.scene_unit_mm)
             + &format!("show_vertex_color = {}\n", self.show_vertex_color)
             + &format!(
-                "inactive_look = {}\ninactive_strength = {}\ninactive_color = {}, {}, {}\n",
+                "inactive_look = {}\ninactive_strength = {}\ninactive_color = {}, {}, {}\nxray_scope = {}\n",
                 self.inactive_look.key(),
                 self.inactive_strength,
                 self.inactive_color[0],
                 self.inactive_color[1],
-                self.inactive_color[2]
+                self.inactive_color[2],
+                self.xray_scope.key()
             )
             + &format!("subdivision = {}\n", if self.subdivision_quads { "quads" } else { "triangles" })
             + &format!("subdivision_smooth = {}\n", self.subdivision_smooth)
@@ -1522,6 +1527,7 @@ impl Settings {
                 }
                 "show_vertex_color" => s.show_vertex_color = v.parse().unwrap_or(s.show_vertex_color),
                 "inactive_look" => s.inactive_look = oxy_render::InactiveLook::from_key(v).unwrap_or(s.inactive_look),
+                "xray_scope" => s.xray_scope = oxy_render::XrayScope::from_key(v).unwrap_or(s.xray_scope),
                 "inactive_strength" => {
                     s.inactive_strength = v
                         .parse::<f32>()
@@ -1924,6 +1930,18 @@ mod tests {
     }
 
     #[test]
+    fn xray_scope_defaults_to_inactive_and_is_remembered() {
+        assert_eq!(Settings::default().xray_scope, oxy_render::XrayScope::Inactive);
+        let all = Settings::from_text("xray_scope = all\n");
+        assert_eq!(all.xray_scope, oxy_render::XrayScope::AllVisible);
+        assert_eq!(Settings::from_text(&all.to_text()).xray_scope, oxy_render::XrayScope::AllVisible);
+        let active = Settings::from_text("xray_scope = active\n");
+        assert_eq!(active.xray_scope, oxy_render::XrayScope::Active);
+        let bad = Settings::from_text("xray_scope = nope\n");
+        assert_eq!(bad.xray_scope, oxy_render::XrayScope::Inactive);
+    }
+
+    #[test]
     fn pen_pressure_settings_are_remembered_and_validated() {
         let s = Settings::from_text("pressure_gamma = 1.6\npressure_min = 0.1\npressure_full = 0.8\n");
         assert_eq!((s.pressure_gamma, s.pressure_min, s.pressure_full), (1.6, 0.1, 0.8));
@@ -1993,6 +2011,7 @@ mod tests {
             inactive_look: oxy_render::InactiveLook::Darken,
             inactive_strength: 0.5,
             inactive_color: [0.1, 0.2, 0.3],
+            xray_scope: oxy_render::XrayScope::AllVisible,
             wireframe: true,
             wireframe_opacity: 0.85,
             wireframe_color: [0.15, 0.2, 0.25],
