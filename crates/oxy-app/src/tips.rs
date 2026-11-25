@@ -73,6 +73,7 @@ commands! {
     NewEmpty => "New empty scene", "", "Start over with no pieces, and build the scene up with Insert Primitive, import and the rest. You are asked before unsaved work is discarded.";
     Undo => "Undo", "Ctrl+Z", "Undo the last change.";
     Redo => "Redo", "Ctrl+Shift+Z", "Put back the last change you undid.";
+    ReplayLastStroke => "Replay last stroke", "", "Stamp the Freehand stroke you just made again, without undoing it. One undo step. Works while that stroke's recipe is still available on the active piece (not after remesh or dynamic detail). Edit as curve reshapes it instead.";
     LastStrokeAsCurve => "Edit last stroke as curve", "", "Take back the stroke you just made and reopen its path as an editable curve with the same brush: drag its points, change size and strength along it, then Enter applies it. Works on Freehand strokes, right after you make them.";
     LastStrokeAsCurveMove => "Use last stroke as Curve Move curve", "", "Take back the stroke you just made and use its path as a Curve Move curve, to bend and move the part along it.";
     LastStrokeAsTube => "Use last stroke as tube path", "", "Take back the stroke you just made and draw a tube along its path, added to the same piece. Shape it, then Enter adds it.";
@@ -276,6 +277,7 @@ impl Cmd {
             Cmd::Undo => CommandId::Undo,
             Cmd::Redo => CommandId::Redo,
             Cmd::UndoPiece => CommandId::UndoPiece,
+            Cmd::ReplayLastStroke => CommandId::ReplayLastStroke,
             Cmd::LastStrokeAsCurve => CommandId::LastStrokeAsCurve,
             Cmd::RedoPiece => CommandId::RedoPiece,
             Cmd::CopyPiece => CommandId::CopyPiece,
