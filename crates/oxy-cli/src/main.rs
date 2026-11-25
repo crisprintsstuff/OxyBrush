@@ -4,7 +4,7 @@
 //! any other address.
 //!
 //! Inputs: `.oxb` projects (visible pieces), glTF (`.glb`/`.gltf`), OBJ, STL, PLY. Outputs: `.oxb`,
-//! glTF (`.glb`/`.gltf`), OBJ, STL, PLY. Output files are written
+//! glTF (`.glb`/`.gltf`), OBJ, STL, PLY, 3MF. Output files are written
 //! atomically; an input file is never overwritten in place.
 
 use oxy_doc::{Piece, PieceData, SceneData, format};
@@ -29,11 +29,12 @@ USAGE:
   oxybrush-cli addon    inspect <file.oxyaddon>
 
 Inputs:  .oxb project (visible pieces), .glb, .gltf, .obj, .stl, .ply, .fbx
-Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply (by extension; EXT defaults to glb)
+Outputs: .oxb, .glb, .gltf, .obj, .stl, .ply, .3mf (by extension; EXT defaults to glb)
 Any command writing .glb/.gltf takes --compress meshopt|quantize|none:
   quantize  16-bit positions, 8-bit normals (KHR_mesh_quantization), about half
   meshopt   quantized + EXT_meshopt_compression, usually a fifth or less
 Readers must support the extension (three.js, Babylon.js, Blender do).
+.3mf takes --mm-per-unit N (millimetres per scene unit, default 10).
 
 `mcp` writes the protocol to stdout. Do not mix it with other commands.
 It refuses to attach to anything but 127.0.0.1 or localhost. See docs/mcp.md.
@@ -41,6 +42,7 @@ It refuses to attach to anything but 127.0.0.1 or localhost. See docs/mcp.md.
 Examples:
   oxybrush-cli convert head.oxb head.glb
   oxybrush-cli convert head.oxb head-small.glb --compress meshopt
+  oxybrush-cli convert head.oxb head.3mf --mm-per-unit 10
   oxybrush-cli decimate scan.stl scan-light.obj --keep 10
   oxybrush-cli lod hero.oxb out/hero --levels 4        writes out/hero_LOD0.glb ... out/hero_LOD4.glb
 ";
@@ -308,7 +310,15 @@ fn export_options(args: &[String]) -> Result<oxy_io::ExportOptions, String> {
     if args.iter().any(|a| a == "--compress") && flag_str(args, "--compress").is_none() {
         return Err("--compress needs `meshopt`, `quantize` or `none`".into());
     }
-    Ok(oxy_io::ExportOptions { gltf })
+    let mm_per_unit = match flag_str(args, "--mm-per-unit") {
+        None => 10.0,
+        Some(v) => v
+            .parse::<f32>()
+            .ok()
+            .filter(|x| x.is_finite() && *x > 0.0)
+            .ok_or_else(|| format!("--mm-per-unit needs a positive number, not `{v}`"))?,
+    };
+    Ok(oxy_io::ExportOptions { gltf, mm_per_unit })
 }
 
 fn save(pieces: &[Piece], out: &Path, input: &Path, opts: oxy_io::ExportOptions) -> Result<String, String> {

@@ -43,7 +43,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 - **3D printing:** real-world size, volume and weight estimates, a wall-thickness check, hollowing with drain holes, and split-with-pins.
 - **Vertex color and posing:** paint with masks and symmetry; pose with a mask and the transform gizmo or the Curve Move brush.
 - **Your way of working:** four layouts, themes, a full keymap editor, tablet and touch support, and plugins in WebAssembly or Python.
-- **Open files:** projects in `.oxb`; import glTF/GLB, OBJ, STL, PLY, FBX and ZBrush `.ztl`/`.zpr` (OBJ, PLY and glTF/GLB with their vertex colors, shown in the viewport over the material; View > Shading > **Show vertex color** hides them); export glTF/GLB (optionally compressed, quantized or meshopt, down to about a quarter of the size: File > glTF compression), OBJ, STL and PLY. UVs from OBJ and glTF/GLB are kept through subdivision levels and exported with the active level.
+- **Open files:** projects in `.oxb`; import glTF/GLB, OBJ, STL, PLY, FBX and ZBrush `.ztl`/`.zpr` (OBJ, PLY and glTF/GLB with their vertex colors, shown in the viewport over the material; View > Shading > **Show vertex color** hides them); export glTF/GLB (optionally compressed, quantized or meshopt, down to about a quarter of the size: File > glTF compression), OBJ, STL, PLY and 3MF (separate pieces in millimetres for slicers). UVs from OBJ and glTF/GLB are kept through subdivision levels and exported with the active level.
 
 ## Download and install
 
@@ -68,7 +68,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 1. **Orbit** by dragging on empty space, **zoom** with the wheel, **pan** with the right mouse button. **F** frames the model. Orbiting turns around the point of the model under the pointer where you start it (from empty space, the nearest part of the model), which stays put on screen, so you can turn around any spot you point at. Preferences > **Orbit around** can make it the last stroke or the centre of the view instead.
 2. **Sculpt** by dragging on the model. Pick brushes with **1–9, 0** or the brush shelf; hold **Shift** to smooth, **Ctrl** to mask, **Alt** to invert; **[** / **]** resize the brush.
 3. **Need more detail?** **Ctrl+D** adds a subdivision level (quads, keeping your edge loops), and **D** / **Shift+D** step between levels, keeping your detail. **Ctrl+R** remeshes to even triangles.
-4. **Save** with **Ctrl+S** (an `.oxb` project). **Ctrl+E** exports glTF/GLB, OBJ, STL or PLY for game engines, other 3D apps or 3D printing.
+4. **Save** with **Ctrl+S** (an `.oxb` project). **Ctrl+E** exports glTF/GLB, OBJ, STL, PLY or 3MF for game engines, other 3D apps or 3D printing.
 5. **Find anything:** **Ctrl+K** finds any command by typing part of its name, **Space** finds a brush, **F1** lists every shortcut and **F2** opens the built-in guide (searchable, works offline). **Ctrl+,** opens Preferences.
 
 ### Make it yours
@@ -186,7 +186,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 - **Projects & tabs:** work across multiple open `.oxb` projects in **tabs** (session restore on launch can be toggled in **Preferences > General**), with **Copy piece / Paste piece** (`Ctrl+C` / `Ctrl+V`) across tabs including living strokes. `.oxb` files are versioned, checksummed, compressed and saved safely (a crash mid-save never damages the old file). Open one by double-clicking it or dropping it on the window. **Per-tab autosave** every 2 minutes (adjustable) and **multi-tab crash recovery** on the next launch.
 - **UVs** from OBJ and glTF files are kept per face corner through sculpting, saving and export (OBJ, glTF/GLB), so a model can go on to texturing or baking; rebuilding the triangles (remesh, dynamic detail, subdivision levels for now) drops them, with a note.
 - **Import:** glTF (`.glb`, `.gltf`; each mesh in the scene becomes a piece where the scene places it, including meshopt- and quantization-compressed files; not Draco), OBJ, STL, PLY and Autodesk FBX (`.fbx`; both 7.x binary/ASCII and legacy 5.8/6.x ASCII/binary, with transforms, UVs and material face groups preserved; each mesh becomes its own piece; broken material files don't stop an import). The Import dialog and a drop onto the window can take several files at once (Shift-click or Ctrl/Cmd-click): each file's objects become pieces, in one undo step, in name order, and a file that can't be read is skipped and named. Vertex colors come in too: OBJ colors after each vertex (`v x y z r g b`, 0–1 or 0–255) or in `#MRGB` comment blocks, and PLY `red green blue`; and ZBrush `.ztl` and `.zpr` files (each object becomes a piece, its groups become face groups). An import far larger or smaller than the scene, such as one in millimetres, is scaled to fit; several files imported together share that one factor so their relative sizes stay. One Undo keeps the original size.
-- **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL or binary PLY, one object per piece.
+- **Export:** all visible pieces to glTF 2.0 (`.glb`/`.gltf`), OBJ, binary STL, binary PLY or 3MF (`.3mf`, millimetres from the scene unit size), one object per piece.
 - **Pipeline helpers:** make an LOD chain (1/2, 1/4 and 1/8 of the triangles), and the `oxybrush-cli` command-line tool for batch conversion, remeshing, decimation, LODs and splitting.
 
 ### Interface
@@ -310,7 +310,7 @@ crates/
   oxy-doc      scenes of pieces, .oxb project format, autosave/recovery           (no GPU)
   oxy-sculpt   stroke engine, brush kernels, symmetry, falloff                     (no GPU)
   oxy-history  scene-wide undo/redo (chunk snapshots, topology, pieces)           (no GPU)
-  oxy-io       glTF/GLB, OBJ, STL, PLY and ZBrush import; glTF/GLB, OBJ, STL, PLY export (no GPU)
+  oxy-io       glTF/GLB, OBJ, STL, PLY and ZBrush import; glTF/GLB, OBJ, STL, PLY, 3MF export (no GPU)
   oxy-ztl      clean-room ZBrush (.ztl/.zpr) file reader                          (no GPU)
   oxy-cli      headless command-line tool (binary: `oxybrush-cli`)                (no GPU)
   oxy-mcp      local MCP server for an on-machine AI agent                        (no GPU)

@@ -33,10 +33,12 @@ pub enum ExportFormat {
     Obj,
     Stl,
     Ply,
+    /// 3MF Core: separate pieces in millimetres for slicers.
+    Threemf,
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 5] = [Self::Glb, Self::Gltf, Self::Obj, Self::Stl, Self::Ply];
+    pub const ALL: [ExportFormat; 6] = [Self::Glb, Self::Gltf, Self::Obj, Self::Stl, Self::Ply, Self::Threemf];
 
     pub fn extension(self) -> &'static str {
         match self {
@@ -45,6 +47,7 @@ impl ExportFormat {
             Self::Obj => "obj",
             Self::Stl => "stl",
             Self::Ply => "ply",
+            Self::Threemf => "3mf",
         }
     }
 
@@ -55,6 +58,7 @@ impl ExportFormat {
             Self::Obj => "Wavefront OBJ",
             Self::Stl => "STL (3D printing)",
             Self::Ply => "PLY",
+            Self::Threemf => "3MF (slicers, millimetres)",
         }
     }
 
@@ -5985,14 +5989,22 @@ impl Editor {
                 None => oxy_io::ExportPiece::new(&p.name, &p.mesh),
             })
             .collect();
-        let options = oxy_io::ExportOptions { gltf: self.gltf_compression };
+        let options = oxy_io::ExportOptions { gltf: self.gltf_compression, mm_per_unit: self.print_scale_mm_per_unit };
         let compressed = gltf && self.gltf_compression != oxy_io::GltfCompression::None;
+        let threemf = path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("3mf"));
         self.status = match oxy_io::export_pieces_with(&pieces, path, options) {
             Ok(s) if keys > 0 => format!(
                 "Exported {} ({} pieces, {} triangles, {keys} stroke group(s) as shape keys)",
                 path.display(),
                 s.pieces,
                 s.triangles
+            ),
+            Ok(s) if threemf => format!(
+                "Exported {} ({} pieces, {} triangles, {} mm per unit)",
+                path.display(),
+                s.pieces,
+                s.triangles,
+                self.print_scale_mm_per_unit
             ),
             Ok(s) => format!("Exported {} ({} pieces, {} triangles)", path.display(), s.pieces, s.triangles),
             Err(e) => format!("Export failed: {e}"),
@@ -9992,6 +10004,7 @@ mod tests {
     fn export_without_an_extension_takes_the_chosen_type() {
         let p = Path::new("/tmp/robot");
         assert_eq!(ExportFormat::Stl.with_default_extension(p), Path::new("/tmp/robot.stl"));
+        assert_eq!(ExportFormat::Threemf.with_default_extension(p), Path::new("/tmp/robot.3mf"));
         let typed = Path::new("/tmp/robot.obj");
         assert_eq!(ExportFormat::Stl.with_default_extension(typed), typed, "a typed extension wins");
     }

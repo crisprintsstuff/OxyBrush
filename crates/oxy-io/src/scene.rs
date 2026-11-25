@@ -2,8 +2,9 @@
 //!
 //! glTF/GLB keep every piece as its own named mesh and node, so game
 //! engines and DCC tools see separate objects. OBJ keeps them as separate
-//! `o` objects. STL and PLY have no notion of objects, so the pieces are
-//! merged. Hidden faces are never exported.
+//! `o` objects. 3MF keeps them as separate mesh objects in millimetres.
+//! STL and PLY have no notion of objects, so the pieces are merged.
+//! Hidden faces are never exported.
 //!
 //! All writes are atomic: the file is written to `<name>.tmp` next to the
 //! target and renamed over it only when complete.
@@ -137,18 +138,26 @@ pub struct ExportStats {
 }
 
 /// Export options beyond the file format.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ExportOptions {
     /// How glTF/GLB files store their data (other formats ignore it).
     pub gltf: crate::gltf::GltfCompression,
+    /// Millimetres in one scene unit. Used by 3MF (and ignored elsewhere).
+    pub mm_per_unit: f32,
 }
 
-/// Export pieces by file extension: `glb`, `gltf`, `obj`, `stl`, `ply`.
+impl Default for ExportOptions {
+    fn default() -> Self {
+        Self { gltf: crate::gltf::GltfCompression::default(), mm_per_unit: 10.0 }
+    }
+}
+
+/// Export pieces by file extension: `glb`, `gltf`, `obj`, `stl`, `ply`, `3mf`.
 pub fn export_pieces(pieces: &[ExportPiece], path: &Path) -> Result<ExportStats> {
     export_pieces_with(pieces, path, ExportOptions::default())
 }
 
-/// [`export_pieces`] with options (glTF compression).
+/// [`export_pieces`] with options (glTF compression, 3MF millimetre scale).
 pub fn export_pieces_with(pieces: &[ExportPiece], path: &Path, options: ExportOptions) -> Result<ExportStats> {
     let mut geoms: Vec<Geometry> = pieces.iter().map(visible_geometry).filter(|g| !g.triangles.is_empty()).collect();
     let ext = crate::extension(path);
@@ -167,6 +176,7 @@ pub fn export_pieces_with(pieces: &[ExportPiece], path: &Path, options: ExportOp
             write_obj_objects(&geoms, &mut out)?;
             out
         }
+        "3mf" => crate::threemf::write_3mf(&geoms, options.mm_per_unit),
         "stl" | "ply" => {
             let merged = merge(&geoms);
             let mut out = Vec::new();
@@ -329,7 +339,7 @@ mod tests {
         cube.set_hidden(hidden);
         let pieces = [ExportPiece::new("Sphere", &sphere), ExportPiece::new("Cube", &cube)];
         let total = sphere.triangle_count() + cube.triangle_count() - 1;
-        for ext in ["glb", "gltf", "obj", "stl", "ply"] {
+        for ext in ["glb", "gltf", "obj", "stl", "ply", "3mf"] {
             let path = dir.join(format!("scene.{ext}"));
             let stats = export_pieces(&pieces, &path).unwrap();
             assert_eq!(stats, ExportStats { pieces: 2, triangles: total }, "{ext}");

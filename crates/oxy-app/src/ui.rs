@@ -720,6 +720,13 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     for f in crate::editor::ExportFormat::ALL {
                         ui.radio_value(&mut ed.export_format, f, f.label());
                     }
+                    if ed.export_format == crate::editor::ExportFormat::Threemf {
+                        ui.separator();
+                        ui.label(format!(
+                            "3MF uses {} mm per unit (Preferences > Units / 3D print).",
+                            ed.print_scale_mm_per_unit
+                        ));
+                    }
                 })
                 .response
                 .on_hover_text("The file type Export proposes. A different extension typed in the dialog wins.");
