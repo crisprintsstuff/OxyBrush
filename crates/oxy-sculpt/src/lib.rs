@@ -738,12 +738,16 @@ fn blend_weighted_deltas(weighted: Vec3, sum_w: f32, max_w: f32) -> Vec3 {
     weighted * (max_w / sum_w)
 }
 
-/// Per-vertex state for Layer and the optional buildup limit.
+/// Per-vertex state for Layer, Paint, and the optional buildup limit.
 #[derive(Default)]
 struct LayerState {
     /// Original position, original normal, and highest weight for Layer.
     vertices: HashMap<u32, (Vec3, Vec3, f32)>,
     buildup: HashMap<u32, f32>,
+    /// Paint: color when the stroke first touched the vertex, and the highest
+    /// blend toward the target so far. Overlapping dabs raise the blend up to
+    /// the strength slider instead of compounding lerps (which saturates early).
+    paint: HashMap<u32, (Vec3, f32)>,
 }
 
 /// Adaptive time budget for dabs along a stroke.
@@ -1049,6 +1053,8 @@ impl Stroke {
             std::mem::take(&mut self.layer.vertices).into_iter().filter_map(|(v, s)| Some((map(v)?, s))).collect();
         self.layer.buildup =
             std::mem::take(&mut self.layer.buildup).into_iter().filter_map(|(v, d)| Some((map(v)?, d))).collect();
+        self.layer.paint =
+            std::mem::take(&mut self.layer.paint).into_iter().filter_map(|(v, s)| Some((map(v)?, s))).collect();
         if let Some(g) = &mut self.grab {
             g.verts.retain_mut(|b| match map(b.index) {
                 Some(n) => {
@@ -2088,6 +2094,7 @@ fn apply_kernel(
         if settings.smooth_paint {
             // Read all neighboring colors before writing so the average
             // does not depend on the order of vertices in the mesh.
+            // Blur keeps compounding per dab: repeated passes soften further.
             let colors: Vec<_> = affected
                 .iter()
                 .map(|&(v, w)| {
@@ -2107,11 +2114,21 @@ fn apply_kernel(
                 mesh.color[v as usize] = color;
             }
         } else {
-            // Alt (invert) erases paint back to white.
+            // Alt (invert) erases paint back to white. Cap the blend at the
+            // highest weight×strength this stroke has reached on the vertex,
+            // measured from the color at first contact, so Strength 0.25 stays
+            // about a quarter opaque after many overlapping dabs.
             let target = if invert { Vec3::ONE } else { paint };
             for &(v, w) in &affected {
-                let c = &mut mesh.color[v as usize];
-                *c = c.lerp(target, (w * dab.strength).clamp(0.0, 1.0));
+                let blend = (w * dab.strength).clamp(0.0, 1.0);
+                let entry = layer.paint.entry(v).or_insert((mesh.color[v as usize], 0.0));
+                // Raise or match the stroke's peak blend from the first-touch
+                // color. Equal blends refresh the target so Color Jitter can
+                // update along a constant-strength stroke.
+                if blend >= entry.1 {
+                    entry.1 = blend;
+                    mesh.color[v as usize] = entry.0.lerp(target, blend);
+                }
             }
         }
         for c in chunks {
@@ -2188,6 +2205,55 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn paint_strength_scales_linearly_across_overlapping_dabs() {
+        // Overlapping dabs used to compound lerps, so strength 0.1 already looked
+        // mostly opaque. Cap the blend per stroke so the slider matches opacity.
+        let paint = Vec3::X;
+        let settings = BrushSettings {
+            kind: BrushKind::Paint,
+            radius: 0.5,
+            strength: 1.0,
+            falloff: Falloff::Constant,
+            pressure_strength: false,
+            spacing: 0.05,
+            ..Default::default()
+        };
+        let sample = |mesh: &Mesh| {
+            let i = mesh.positions.iter().position(|p| (p.y - 1.0).abs() < 1e-3).unwrap();
+            (i, StrokeSample { position: mesh.positions[i], normal: mesh.normals[i], pressure: 1.0 })
+        };
+        let opacity = |mesh: &Mesh, i: usize| 1.0 - mesh.color[i].y; // red on white → green/blue fall together
+        for strength in [1.0_f32, 0.5, 0.25, 0.1] {
+            let mut mesh = primitives::icosphere(4, 1.0);
+            let (i, sample) = sample(&mesh);
+            let mut stroke =
+                Stroke::new(BrushSettings { strength, ..settings }, Symmetry::default(), false).with_paint_color(paint);
+            let mut touch = |_: &Mesh, _: u32| {};
+            for _ in 0..12 {
+                stroke.apply_dab(&mut mesh, sample, &mut touch);
+            }
+            let got = opacity(&mesh, i);
+            assert!((got - strength).abs() < 0.02, "strength {strength}: opacity {got} should stay near the slider");
+        }
+
+        // A second stroke can still stack beyond the first stroke's peak.
+        let mut mesh = primitives::icosphere(4, 1.0);
+        let (i, sample) = sample(&mesh);
+        let half = BrushSettings { strength: 0.4, ..settings };
+        let mut first = Stroke::new(half, Symmetry::default(), false).with_paint_color(paint);
+        let mut touch = |_: &Mesh, _: u32| {};
+        for _ in 0..8 {
+            first.apply_dab(&mut mesh, sample, &mut touch);
+        }
+        let after_first = opacity(&mesh, i);
+        let mut second = Stroke::new(half, Symmetry::default(), false).with_paint_color(paint);
+        for _ in 0..8 {
+            second.apply_dab(&mut mesh, sample, &mut touch);
+        }
+        assert!(opacity(&mesh, i) > after_first + 0.15);
+    }
 
     #[test]
     fn smooth_paint_blends_colors_without_moving_vertices() {
