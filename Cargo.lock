@@ -2683,6 +2683,7 @@ dependencies = [
 name = "oxy-io"
 version = "4.0.0-beta.24.7"
 dependencies = [
+ "crc32fast",
  "fbx-reader",
  "fbx-rs",
  "glam",

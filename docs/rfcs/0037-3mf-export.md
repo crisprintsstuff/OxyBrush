@@ -1,6 +1,6 @@
 # RFC 0037 — Geometry-only 3MF export
 
-**Status:** Draft ([#308](https://github.com/crisprintsstuff/OxyBrush/issues/308))
+**Status:** Implemented ([#308](https://github.com/crisprintsstuff/OxyBrush/issues/308))
 
 ## Summary
 

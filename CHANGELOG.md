@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **3MF export.** File > Export type offers 3MF: visible pieces as separate mesh objects in millimetres, using the scene unit size (Preferences > Units / 3D print). [#308](https://github.com/crisprintsstuff/OxyBrush/issues/308)
 - **Reference view planes.** Assign Back, Left, and Bottom orientations in addition to Front, Right (formerly Side), and Top. [#514](https://github.com/crisprintsstuff/OxyBrush/issues/514)
 
 ### Fixed

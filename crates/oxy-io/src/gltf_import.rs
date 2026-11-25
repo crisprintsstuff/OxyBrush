@@ -560,7 +560,12 @@ mod tests {
                 let mut pa = ExportPiece::new("Head", &a);
                 pa.shapes =
                     vec![ExportShape { name: "K".into(), vertices: vec![0], deltas: vec![Vec3::X], weight: 0.0 }];
-                export_pieces_with(&[pa, ExportPiece::new("Box", &b)], &p, ExportOptions { gltf: c }).unwrap();
+                export_pieces_with(
+                    &[pa, ExportPiece::new("Box", &b)],
+                    &p,
+                    ExportOptions { gltf: c, ..Default::default() },
+                )
+                .unwrap();
                 let back = crate::import_pieces(&p).unwrap();
                 assert_eq!(back.iter().map(|x| x.0.as_str()).collect::<Vec<_>>(), ["Head", "Box"], "{c:?} {ext}");
                 for ((_, got), want) in back.iter().zip([&a, &b]) {
@@ -742,7 +747,11 @@ mod tests {
         let mut outs = vec![(d.join("out.obj"), ExportOptions::default(), 1e-5)];
         for c in GltfCompression::ALL {
             for ext in ["glb", "gltf"] {
-                outs.push((d.join(format!("out-{}.{ext}", c.key())), ExportOptions { gltf: c }, 1e-4));
+                outs.push((
+                    d.join(format!("out-{}.{ext}", c.key())),
+                    ExportOptions { gltf: c, ..Default::default() },
+                    1e-4,
+                ));
             }
         }
         for (path, opts, tol) in outs {
