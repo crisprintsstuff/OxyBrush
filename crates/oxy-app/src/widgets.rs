@@ -70,9 +70,15 @@ pub fn brush_description(k: BrushKind) -> &'static str {
         BrushKind::Tube => {
             "Drag a path to add a tube along it to this piece (horns, tentacles, cables). Drag its points to reshape it, Shift+drag for thickness, then Accept."
         }
-        BrushKind::PlaneClip => "Clamps geometry to a screen-drawn plane, preserving topology and multires.",
-        BrushKind::LineSplit => "Slices the mesh along a screen-drawn plane and creates a distinct polygroup.",
-        BrushKind::CutAway => "Trims away geometry on one side of a screen-drawn plane and caps the cut watertight.",
+        BrushKind::PlaneClip => {
+            "Flattens geometry to a screen-drawn plane (Curve) or flattens inside a rectangle, lasso, circle or ellipse. Alt flips the side or region."
+        }
+        BrushKind::LineSplit => {
+            "Slices along a screen-drawn plane (Curve) into a new polygroup, or assigns a new polygroup to faces inside a closed shape. Alt flips the side or region."
+        }
+        BrushKind::CutAway => {
+            "Trims away one side of a screen-drawn plane and caps it (Curve), or removes faces inside a closed shape and closes the holes. Alt flips the side or region."
+        }
     }
 }
 

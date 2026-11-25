@@ -932,12 +932,25 @@ pub enum Drag {
         shape: oxy_sculpt::InsertShape,
     },
     /// Screen curve cutting gesture (PlaneClip, LineSplit, CutAway).
+    /// Used when the selection shape is Curve: a two-point line that
+    /// defines a view-aligned cutting plane.
     CurveCut {
         kind: BrushKind,
         start: Vec2,
         current: Vec2,
         offset: Vec2,
         pan_origin: Option<(Vec2, Vec2)>,
+    },
+    /// Closed cutter shape (rectangle, lasso, circle, ellipse) for the
+    /// same three cut brushes (#492). `points` are physical px (rect /
+    /// circle / ellipse use first and last; lasso accumulates).
+    ShapeCut {
+        kind: BrushKind,
+        shape: SelectShape,
+        points: Vec<Vec2>,
+        /// Where the pointer was while Space is held: the shape moves
+        /// with the pointer instead of growing (#329).
+        pan_from: Option<Vec2>,
     },
 }
 
@@ -1203,6 +1216,10 @@ pub struct Editor {
     pub pressure_shape_size: [f32; 4],
     /// The shape masking and visibility selections draw.
     pub selection_shape: SelectShape,
+    /// Cutter shape for Plane Clip / Line Split / Cut Away (#492). Defaults
+    /// to Curve (the two-point cutting line); closed shapes flatten, group
+    /// or trim the region they enclose.
+    pub cut_shape: SelectShape,
     /// A curve selection being clicked out (`SelectShape::Curve`).
     pub select_curve: Option<SelectCurve>,
     /// Set by the UI to ask the platform layer for an alpha file dialog.
@@ -1618,6 +1635,7 @@ impl Default for Editor {
             pressure_shape: LINEAR_PRESSURE_SHAPE,
             pressure_shape_size: LINEAR_PRESSURE_SHAPE,
             selection_shape: SelectShape::Rectangle,
+            cut_shape: SelectShape::Curve,
             select_curve: None,
             request_load_alpha: false,
             request_export_alpha: false,
@@ -1926,13 +1944,17 @@ impl Editor {
     /// A box or lasso (or cut line) is being drawn, which Space moves:
     /// the key's own command waits.
     pub fn space_moves_drag(&self) -> bool {
-        matches!(self.drag, Drag::Select { .. } | Drag::CurveCut { .. })
+        matches!(self.drag, Drag::Select { .. } | Drag::CurveCut { .. } | Drag::ShapeCut { .. })
     }
 
     pub fn is_stroking(&self) -> bool {
         matches!(
             self.drag,
-            Drag::Stroke { .. } | Drag::InsertPrimitive { .. } | Drag::CurveCut { .. } | Drag::GroupPaint { .. }
+            Drag::Stroke { .. }
+                | Drag::InsertPrimitive { .. }
+                | Drag::CurveCut { .. }
+                | Drag::ShapeCut { .. }
+                | Drag::GroupPaint { .. }
         )
     }
 
@@ -1944,6 +1966,7 @@ impl Editor {
             Drag::Stroke { .. }
                 | Drag::InsertPrimitive { .. }
                 | Drag::CurveCut { .. }
+                | Drag::ShapeCut { .. }
                 | Drag::GroupPaint { .. }
                 | Drag::Gizmo(_)
                 | Drag::Deferred { .. }
@@ -2682,7 +2705,7 @@ impl Editor {
                 if let Some(action) = self.keymap.nav_action(NavButton::Left, self.active_modifiers()) {
                     self.drag = self.drag_for_nav(Some(action), PointerButton::Primary);
                 } else {
-                    self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+                    self.start_cut_gesture(kind, p);
                 }
                 return;
             }
@@ -2830,7 +2853,7 @@ impl Editor {
         }
         let (kind, invert) = self.effective_brush();
         if kind.is_curve_cut() {
-            self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+            self.start_cut_gesture(kind, p);
             return;
         }
         // Shift with Paint Groups smooths group borders (Shift otherwise
@@ -3747,6 +3770,25 @@ impl Editor {
                 }
                 true
             }
+            Drag::ShapeCut { points, pan_from, .. } if self.space_held => {
+                let from = pan_from.or(prev).unwrap_or(pos);
+                points.iter_mut().for_each(|p| *p += pos - from);
+                *pan_from = Some(pos);
+                true
+            }
+            Drag::ShapeCut { points, shape, pan_from, .. } => {
+                *pan_from = None;
+                if *shape == SelectShape::Lasso {
+                    if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
+                        points.push(pos);
+                    }
+                } else if points.len() < 2 {
+                    points.push(pos);
+                } else {
+                    points[1] = pos;
+                }
+                true
+            }
             Drag::Deferred { mode: StrokeMode::Stamp, .. } => {
                 self.stamp_queued = true;
                 true
@@ -4188,6 +4230,13 @@ impl Editor {
                     self.finish_curve_cut(kind, p0, p1);
                 }
             }
+            Drag::ShapeCut { kind, shape, points, .. } => {
+                let min = 3.0 * self.pixels_per_point.max(0.1);
+                let dragged = points.len() >= 2 && points.iter().any(|p| p.distance(points[0]) >= min);
+                if dragged {
+                    self.finish_shape_cut(kind, shape, points);
+                }
+            }
             _ => {}
         }
         // Strokes only grow chunk bounds per dab; tighten them once at the end.
@@ -4248,7 +4297,7 @@ impl Editor {
                     self.status = "Transform cancelled".into();
                 }
             }
-            Drag::CurveCut { .. } => self.status = "Cut cancelled".into(),
+            Drag::CurveCut { .. } | Drag::ShapeCut { .. } => self.status = "Cut cancelled".into(),
             Drag::Deferred { .. } => {
                 // A stamp shown while dragging goes back.
                 let doc = &mut self.documents[self.active_document];
@@ -4256,6 +4305,161 @@ impl Editor {
                 self.status = "Cancelled".into();
             }
             _ => self.status = "Cancelled".into(),
+        }
+    }
+
+    /// Begin a Plane Clip / Line Split / Cut Away gesture. Curve keeps the
+    /// two-point cutting line; other cutter shapes draw a closed region
+    /// (#492).
+    fn start_cut_gesture(&mut self, kind: BrushKind, p: Vec2) {
+        if self.cut_shape == SelectShape::Curve {
+            self.drag = Drag::CurveCut { kind, start: p, current: p, offset: Vec2::ZERO, pan_origin: None };
+        } else {
+            self.drag = Drag::ShapeCut { kind, shape: self.cut_shape, points: vec![p], pan_from: None };
+        }
+    }
+
+    /// Apply a closed cutter shape to the active piece (#492).
+    ///
+    /// - Plane Clip: flattens vertices inside the shape onto a view-facing
+    ///   plane through the piece centre (Alt: outside).
+    /// - Line Split: assigns a new face group to faces whose centroids fall
+    ///   inside the shape (Alt: outside), without changing topology.
+    /// - Cut Away: removes faces inside the shape and closes the openings
+    ///   (Alt: outside).
+    fn finish_shape_cut(&mut self, kind: BrushKind, shape: SelectShape, points: Vec<Vec2>) {
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let local: Vec<Vec2> = points.iter().map(|p| *p - origin).collect();
+        let poly = crate::select_shapes::select_outline(shape, &local);
+        if poly.len() < 3 {
+            self.status = "Shape too small".into();
+            return;
+        }
+        let outside = self.modifiers.alt;
+        let camera = self.camera;
+        let size = self.canvas_size();
+        let center = self.symmetry_center();
+        let transforms = self.symmetry.transforms();
+        let in_poly = move |p: Vec3| {
+            let hit = transforms.iter().any(|t| {
+                let q = center + *t * (p - center);
+                camera.project(q, size).is_some_and(|s| point_in_polygon(s, &poly))
+            });
+            hit != outside
+        };
+
+        match kind {
+            BrushKind::PlaneClip => {
+                let bounds = self.scene.active().mesh.bounds();
+                if bounds.is_empty() {
+                    return;
+                }
+                let plane_point = bounds.center();
+                let plane_normal = -self.camera.forward();
+                let doc = &mut self.documents[self.active_document];
+                let piece = doc.scene.active_mut();
+                doc.history.begin(kind.label(), piece.id, &piece.mesh);
+                for c in 0..piece.mesh.chunks.len() as u32 {
+                    doc.history.touch(&piece.mesh, c);
+                }
+                let mut moved = Vec::new();
+                let n = plane_normal.normalize_or_zero();
+                if n.length_squared() < 1e-4 {
+                    doc.history.cancel();
+                    return;
+                }
+                for i in 0..piece.mesh.vertex_count() {
+                    if piece.mesh.is_vertex_hidden(i as u32) {
+                        continue;
+                    }
+                    let p = piece.mesh.positions[i];
+                    if !in_poly(p) {
+                        continue;
+                    }
+                    let mask = piece.mesh.mask.get(i).copied().unwrap_or(0.0);
+                    let w = (1.0 - mask).clamp(0.0, 1.0);
+                    if w <= 1e-4 {
+                        continue;
+                    }
+                    let signed = (p - plane_point).dot(n);
+                    piece.mesh.positions[i] = p - n * (signed * w);
+                    moved.push(i as u32);
+                }
+                if moved.is_empty() {
+                    doc.history.cancel();
+                    self.status = "No vertices in that shape".into();
+                } else {
+                    piece.mesh.update_after_move(&moved);
+                    doc.history.commit();
+                    let side = if outside { "outside" } else { "inside" };
+                    self.status = format!("Clipped {} vertices {side} the shape", moved.len());
+                }
+            }
+            BrushKind::LineSplit => {
+                let mesh = &self.scene.active().mesh;
+                let new_group = mesh.next_free_group();
+                let mut any = false;
+                let groups: Vec<u32> = mesh
+                    .triangles
+                    .iter()
+                    .enumerate()
+                    .map(|(ti, t)| {
+                        if mesh.hidden().get(ti).copied().unwrap_or(false) {
+                            return mesh.groups()[ti];
+                        }
+                        let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
+                        if in_poly(c) {
+                            any = true;
+                            new_group
+                        } else {
+                            mesh.groups()[ti]
+                        }
+                    })
+                    .collect();
+                if !any {
+                    self.status = "No faces in that shape".into();
+                    return;
+                }
+                self.edit_faces(kind.label(), |m| m.set_groups(groups));
+                let side = if outside { "outside" } else { "inside" };
+                self.status = format!("New polygroup for faces {side} the shape");
+            }
+            BrushKind::CutAway => {
+                let mesh = &self.scene.active().mesh;
+                let keep = |ti: usize| {
+                    if mesh.hidden().get(ti).copied().unwrap_or(false) {
+                        return false;
+                    }
+                    let t = &mesh.triangles[ti];
+                    let c = t.iter().map(|&i| mesh.positions[i as usize]).sum::<Vec3>() / 3.0;
+                    // Keep faces that are NOT in the cut-away region.
+                    !in_poly(c)
+                };
+                let any_cut = (0..mesh.triangle_count()).any(|ti| !keep(ti) && !mesh.hidden()[ti]);
+                if !any_cut {
+                    self.status = "No faces in that shape".into();
+                    return;
+                }
+                let mut data = mesh.extract(keep);
+                if data.triangles.is_empty() {
+                    self.status =
+                        "That cut would remove the whole piece; nothing was trimmed (Alt flips the side)".into();
+                    return;
+                }
+                let closed = oxy_mesh::topo::close_holes(&mut data);
+                let tri_count = data.triangles.len();
+                self.replace_active_mesh(kind.label(), Mesh::from_data(data));
+                let side = if outside { "outside" } else { "inside" };
+                self.status = if closed > 0 {
+                    format!(
+                        "Trimmed faces {side} the shape ({tri_count} faces, closed {closed} hole{})",
+                        if closed == 1 { "" } else { "s" }
+                    )
+                } else {
+                    format!("Trimmed faces {side} the shape ({tri_count} faces)")
+                };
+            }
+            _ => {}
         }
     }
 
@@ -9401,9 +9605,14 @@ impl Editor {
                 E::None
             }
             C::SelectionLasso => {
-                self.selection_shape = self.selection_shape.next();
-                self.select_curve = None;
-                self.status = format!("Selection: {}", self.selection_shape.label().to_lowercase());
+                if self.brush_kind.is_curve_cut() {
+                    self.cut_shape = self.cut_shape.next();
+                    self.status = format!("Cutter: {}", self.cut_shape.label().to_lowercase());
+                } else {
+                    self.selection_shape = self.selection_shape.next();
+                    self.select_curve = None;
+                    self.status = format!("Selection: {}", self.selection_shape.label().to_lowercase());
+                }
                 E::None
             }
             C::GizmoCycle => {
@@ -16909,6 +17118,77 @@ mod tests {
         // Redo re-inserts the shape
         e.redo();
         assert!(e.scene.active().mesh.vertex_count() > orig_vcount);
+    }
+
+    #[test]
+    fn shape_cut_rect_plane_clip_flattens_inside() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::PlaneClip;
+        e.cut_shape = SelectShape::Rectangle;
+        let before = e.scene.active().mesh.positions.clone();
+
+        e.pointer = Some(Vec2::new(250.0, 200.0));
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::ShapeCut { shape: SelectShape::Rectangle, .. }));
+        e.pointer_moved(Vec2::new(550.0, 400.0));
+        e.pointer_up();
+        assert!(matches!(e.drag, Drag::None));
+        assert_ne!(e.scene.active().mesh.positions, before, "vertices inside the rect flatten");
+        assert_eq!(e.scene.active().mesh.vertex_count(), before.len());
+
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before);
+    }
+
+    #[test]
+    fn shape_cut_circle_line_split_new_polygroup() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::LineSplit;
+        e.cut_shape = SelectShape::Circle;
+        let orig_tcount = e.scene.active().mesh.triangle_count();
+        let orig_groups = e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>();
+        assert_eq!(orig_groups.len(), 1);
+
+        // Circle centred on the sphere, large enough to catch some faces.
+        e.pointer = Some(Vec2::new(400.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::ShapeCut { shape: SelectShape::Circle, .. }));
+        e.pointer_moved(Vec2::new(520.0, 300.0));
+        e.pointer_up();
+
+        assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount, "Line Split shape keeps topology");
+        let groups: std::collections::HashSet<u32> = e.scene.active().mesh.groups().iter().copied().collect();
+        assert!(groups.len() >= 2, "faces inside the circle get a new polygroup");
+
+        e.undo();
+        assert_eq!(e.scene.active().mesh.groups().iter().copied().collect::<std::collections::HashSet<_>>().len(), 1);
+    }
+
+    #[test]
+    fn shape_cut_rect_cut_away_removes_faces() {
+        let mut e = editor();
+        e.canvas = [0.0, 0.0, 800.0, 600.0];
+        e.brush_kind = BrushKind::CutAway;
+        e.cut_shape = SelectShape::Rectangle;
+        let orig_tcount = e.scene.active().mesh.triangle_count();
+        let orig_positions = e.scene.active().mesh.positions.clone();
+
+        // Small rect over the centre: remove some faces, keep the rest.
+        e.pointer = Some(Vec2::new(350.0, 250.0));
+        e.pointer_down(PointerButton::Primary);
+        assert!(matches!(e.drag, Drag::ShapeCut { shape: SelectShape::Rectangle, .. }));
+        e.pointer_moved(Vec2::new(450.0, 350.0));
+        e.pointer_up();
+
+        assert!(e.scene.active().mesh.triangle_count() > 0);
+        assert_ne!(e.scene.active().mesh.positions, orig_positions, "Cut Away changes the mesh");
+        assert!(e.status.to_lowercase().contains("trimmed"), "status={}", e.status);
+
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), orig_tcount);
+        assert_eq!(e.scene.active().mesh.positions, orig_positions);
     }
 
     #[test]
