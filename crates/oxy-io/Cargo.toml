@@ -1,6 +1,6 @@
 [package]
 name = "oxy-io"
-description = "Mesh import/export (OBJ, STL) for OxyBrush"
+description = "Mesh import/export (OBJ, STL, PLY, glTF, 3MF) for OxyBrush"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,6 +15,7 @@ tobj.workspace = true
 serde_json.workspace = true
 fbx-reader.workspace = true
 fbx-rs.workspace = true
+crc32fast.workspace = true
 
 [lints]
 workspace = true

@@ -2,12 +2,12 @@
 //!
 //! Supported: OBJ import/export, binary/ASCII STL import, binary STL export,
 //! PLY import/export, glTF 2.0 import (`.glb`, `.gltf`; see
-//! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`), and
-//! Autodesk FBX import (`.fbx`, binary and ASCII; see [`fbx_import`]). Several
-//! pieces at once go through [`export_pieces`].
-//! Imported geometry is split into triangles (remembering which triangles
-//! make each polygon, see [`keep_polygons`]) and welded so it can be
-//! sculpted as one continuous surface.
+//! [`gltf_import`]) and export (`.glb` and self-contained `.gltf`), 3MF
+//! geometry export (`.3mf`; see [`threemf`]), and Autodesk FBX import
+//! (`.fbx`, binary and ASCII; see [`fbx_import`]). Several pieces at once go
+//! through [`export_pieces`]. Imported geometry is split into triangles
+//! (remembering which triangles make each polygon, see [`keep_polygons`])
+//! and welded so it can be sculpted as one continuous surface.
 
 use glam::Vec3;
 use oxy_mesh::{Mesh, MeshData, Vec2, primitives::weld_with_map};
@@ -22,6 +22,7 @@ mod gltf_import;
 mod meshopt;
 mod ply;
 mod scene;
+mod threemf;
 
 pub use gltf::GltfCompression;
 pub use ply::{read_ply, write_ply};
@@ -306,7 +307,7 @@ pub fn export(mesh: &Mesh, path: &Path) -> Result<()> {
 }
 
 /// File extensions `export`/`export_pieces` can write.
-pub const EXPORT_EXTENSIONS: [&str; 5] = ["glb", "gltf", "obj", "stl", "ply"];
+pub const EXPORT_EXTENSIONS: [&str; 6] = ["glb", "gltf", "obj", "stl", "ply", "3mf"];
 
 fn extension(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
