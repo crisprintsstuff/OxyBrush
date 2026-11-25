@@ -4,7 +4,7 @@ use oxy_render::{Camera, DrawItem, ReferencePlane, RenderTarget, ViewSettings, V
 #[test]
 #[ignore = "requires a wgpu adapter"]
 fn xray_composites_once_and_preserves_opaque_depth() {
-    let instance = wgpu::Instance::default();
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
     let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())).unwrap();
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
         required_limits: adapter.limits(),
@@ -27,7 +27,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [0.0, 0.0, SIDE as f32, SIDE as f32] };
+    let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [4.0, 4.0, 56.0, 56.0] };
     let mut viewport = ViewportRenderer::new(&device, &queue, format);
     let mut front = oxy_mesh::primitives::icosphere(3, 0.85);
     let mut back = front.to_data();
@@ -132,6 +132,21 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     let through_mesh = render(&faded, &[item], Some(reference(false)));
     assert!(center(&through_mesh)[0] > center(&ghost)[0]);
     assert_eq!(center(&render(&settings, &[item], Some(reference(true)))), center(&image_only));
+    for (ambient_occlusion, cavity) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
+        let shaded = ViewSettings { ambient_occlusion, cavity, ..settings };
+        let shaded_ghost = ViewSettings { xray: true, ..shaded };
+        let through = render(&shaded_ghost, &[item], Some(reference(false)));
+        assert_eq!(center(&through), center(&through_mesh));
+        assert_eq!(sample(&through, 5, 5), sample(&through_mesh, 5, 5));
+
+        // Ghosts behind an opaque piece must not change its shading or depth.
+        let shaded_solid = render(&shaded, &[item], None);
+        let inactive = ViewSettings { xray: true, xray_scope: XrayScope::Inactive, ..shaded };
+        let mixed = render(&inactive, &[item, rear], None);
+        assert_eq!(center(&mixed), center(&shaded_solid));
+        assert!(center(&mixed)[..3].iter().any(|&channel| channel > 0));
+        assert_eq!(sample(&mixed, 5, 5), sample(&bg, 5, 5));
+    }
     let transparent = ReferencePlane { pixels: [255, 0, 0, 128].into(), opacity: 0.5, ..reference(true) };
     let alpha = 0.5 * 128.0 / 255.0;
     let over_mesh = center(&render(&settings, &[item], Some(transparent)));

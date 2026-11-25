@@ -1790,7 +1790,10 @@ impl ViewportRenderer {
         }
         // With shading off, the matcap pass draws straight into the window
         // (no offscreen copy), so turning shading off costs nothing.
-        let shaded = shading[0] > 0.0 || shading[1] > 0.0;
+        // Only opaque surfaces contribute to screen-space shading.
+        let has_opaque = opaque().next().is_some();
+        let draw_ao = has_opaque && shading[0] > 0.0;
+        let shaded = draw_ao || (has_opaque && shading[1] > 0.0);
         let scene_color = if shaded { &t.color } else { target };
         {
             // 1. Matcap shading into the color + normal/depth targets.
@@ -1831,7 +1834,7 @@ impl ViewportRenderer {
             }
             self.draw_wires(&mut pass, opaque(), all_wires);
         }
-        if shading[0] > 0.0 {
+        if draw_ao {
             // 2. Ambient obscurance (skipped when switched off).
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy ambient occlusion pass"),
@@ -1858,7 +1861,7 @@ impl ViewportRenderer {
             });
             pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
             pass.set_pipeline(&self.composite_pipeline);
-            pass.set_bind_group(0, &t.composite_group, &[]);
+            pass.set_bind_group(0, if draw_ao { &t.composite_group } else { &t.ao_group }, &[]);
             pass.draw(0..3, 0..1);
         }
         if draw_xray {
@@ -1900,7 +1903,7 @@ impl ViewportRenderer {
             });
             pass.set_viewport(x, y, vw, vh, 0.0, 1.0);
             pass.set_pipeline(&self.xray_pipeline);
-            pass.set_bind_group(0, &t.composite_group, &[]);
+            pass.set_bind_group(0, &t.ao_group, &[]);
             pass.set_blend_constant(wgpu::Color { r: opacity, g: opacity, b: opacity, a: opacity });
             pass.draw(0..3, 0..1);
         }
