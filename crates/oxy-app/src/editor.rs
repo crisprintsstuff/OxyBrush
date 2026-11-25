@@ -11779,6 +11779,7 @@ mod tests {
         e.accept_spheres();
         wait_job(&mut e);
         let id = e.scene.active().id;
+        e.scene.get_mut(id).unwrap().visible = false;
         let positions = e.scene.active().mesh.positions.clone();
         let piece_count = e.scene.pieces.len();
         let source = e.scene.pieces.iter().position(Piece::is_spheres).unwrap();
@@ -11792,10 +11793,12 @@ mod tests {
         wait_job(&mut e);
         assert_eq!(e.scene.pieces.len(), piece_count);
         assert_eq!(e.scene.active().id, id);
+        assert!(e.scene.active().visible);
         assert_ne!(e.scene.active().mesh.positions, positions);
         assert_eq!(e.scene.active().mesh.known_polygons().unwrap().0.len(), 256);
         e.undo();
         assert_eq!(e.scene.get(id).unwrap().mesh.positions, positions);
+        assert!(!e.scene.get(id).unwrap().visible);
     }
 
     #[test]

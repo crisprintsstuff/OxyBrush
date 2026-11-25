@@ -124,7 +124,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     )
                     .clicked();
                 done |= ui
-                    .button("Done")
+                    .button("Keep spheres")
                     .on_hover_text("Keep the spheres as they are now, as a piece of their own, without making a mesh")
                     .clicked();
                 let keep = if e.replace.is_some() {
