@@ -4,10 +4,24 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
-- **Paint smoothing.** Hold Shift with Paint to blend vertex colors while preserving geometry.
-- **Orthographic grids.** The grid faces the camera in snapped orthographic views.
+## [4.0.0-beta.24.7] - 2026-11-24
 
-- **Pieces and visibility.** Show Only follows the active piece. Use Up and Down after focusing a Pieces row. Grow Visible and Shrink Visible can be assigned in the Keymap editor.
+### Added
+
+- **Reference placement.** See position, width, and opacity update in the viewport as you adjust them. Rotate images in 90° steps or flip them horizontally and vertically. Apply records one undoable edit. [#498](https://github.com/crisprintsstuff/OxyBrush/pull/498), [#499](https://github.com/crisprintsstuff/OxyBrush/pull/499)
+- **Reference landmark alignment.** Match two image landmarks to two points on the sculpt. Preview the position, rotation, and scale. Review or repick individual landmarks before applying the fit. [#506](https://github.com/crisprintsstuff/OxyBrush/pull/506), [#507](https://github.com/crisprintsstuff/OxyBrush/pull/507)
+- **Viewport X-ray.** Toggle X-ray from the viewport toolbar or View menu. Fade just the active piece to inspect the opaque meshes behind it. Right-click the toolbar button for opacity and scope. [#501](https://github.com/crisprintsstuff/OxyBrush/pull/501)
+- **Orthographic grids.** The viewport grid faces the camera in snapped front, side, and top orthographic views. [#510](https://github.com/crisprintsstuff/OxyBrush/pull/510)
+
+### Changed
+
+- **Paint smoothing.** Hold Shift with Paint to blend vertex colors while preserving geometry. [#510](https://github.com/crisprintsstuff/OxyBrush/pull/510)
+- **Visibility shortcuts.** Assign Grow Visible and Shrink Visible in the Keymap editor. [#510](https://github.com/crisprintsstuff/OxyBrush/pull/510)
+
+### Fixed
+
+- **Piece isolation and navigation.** Show Only follows the active piece and restores prior visibility when switched off. Use Up and Down after focusing a Pieces row. [#510](https://github.com/crisprintsstuff/OxyBrush/pull/510)
+- **OxySpheres quad rebuilds.** Rebuilding a hidden generated mesh reveals it. Mirrored limbs use matching triangulation diagonals for more consistent shading. Keep spheres saves the armature on its own. [#509](https://github.com/crisprintsstuff/OxyBrush/pull/509)
 
 ## [4.0.0-beta.24.6] - 2026-11-24
 
