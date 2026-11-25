@@ -1,7 +1,8 @@
 //! Topology operations that rebuild a mesh: voxel remeshing (including
-//! unions of several meshes) and quadric decimation. Pure Rust, no C/C++
-//! toolchain required.
+//! unions of several meshes), field-aligned auto-retopology, and quadric
+//! decimation. Pure Rust, no C/C++ toolchain required.
 
+pub mod auto_retopo;
 pub mod decimate;
 pub mod print3d;
 pub mod quad_skin;
@@ -10,6 +11,7 @@ pub mod skin;
 pub mod transfer;
 pub mod winding;
 
+pub use auto_retopo::{AutoRetopoError, AutoRetopoOptions, auto_retopo};
 pub use decimate::decimate;
 pub use oxy_vdb::BooleanOp;
 pub use print3d::{

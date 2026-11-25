@@ -320,7 +320,12 @@ fn mesh_menu(ed: &Editor, busy: bool) -> Vec<Node> {
         i.enabled = !fixed
     }));
     v.push(check(MenuId::SubdivisionSmooth, "Smooth", ed.subdivision_smooth));
-    v.extend([Node::Separator, cmd_on(Cmd::Remesh, "Voxel remesh", !busy), cmd_on(Cmd::Decimate, "Decimate", !busy)]);
+    v.extend([
+        Node::Separator,
+        cmd_on(Cmd::Remesh, "Voxel remesh", !busy),
+        cmd_on(Cmd::AutoRetopo, "Auto-retopology", !busy),
+        cmd_on(Cmd::Decimate, "Decimate", !busy),
+    ]);
     let active = ed.scene.try_active().map(|p| p.id);
     let others: Vec<Node> = ed
         .scene

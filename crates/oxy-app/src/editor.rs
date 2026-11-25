@@ -8068,6 +8068,24 @@ impl Editor {
         });
     }
 
+    /// Field-aligned auto-retopology (RFC 0044): replace the active piece
+    /// with a lighter, mostly-quad mesh. Background job; one undo step.
+    pub fn auto_retopo_active(&mut self) {
+        if !self.need_piece() {
+            return;
+        }
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let mesh = self.scene.active().mesh.clone();
+        let target = self.auto_retopo_target_faces.clamp(64, 200_000);
+        let opts = oxy_topo::AutoRetopoOptions { target_faces: target, ..Default::default() };
+        self.start_job(format!("Auto-retopology (~{target} faces)"), Vec::new(), move || {
+            oxy_topo::auto_retopo(&mesh, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
+        });
+    }
+
     /// Remesh all visible pieces into one, replacing the active piece.
     pub fn merge_visible(&mut self) {
         if !self.need_piece() {
@@ -17118,6 +17136,21 @@ mod tests {
         // Redo re-inserts the shape
         e.redo();
         assert!(e.scene.active().mesh.vertex_count() > orig_vcount);
+    }
+
+    #[test]
+    fn auto_retopo_runs_in_background_and_undo() {
+        let mut e = editor();
+        e.auto_retopo_target_faces = 300;
+        let before = e.scene.active().mesh.triangle_count();
+        e.auto_retopo_active();
+        assert!(e.job.is_some(), "auto-retopo starts a background job");
+        wait_job(&mut e);
+        let after = e.scene.active().mesh.triangle_count();
+        assert!(after > 0, "status={}", e.status);
+        assert_ne!(after, before, "mesh should change; status={}", e.status);
+        e.undo();
+        assert_eq!(e.scene.active().mesh.triangle_count(), before);
     }
 
     #[test]
