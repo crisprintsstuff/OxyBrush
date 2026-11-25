@@ -763,8 +763,12 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.paste_pieces();
                 }
                 let reopen = ed.can_reopen_last_stroke();
+                let replay = ed.can_replay_last_stroke();
                 tips::menu(ui, "Last stroke", plain::LAST_STROKE, |ui| {
                     use crate::editor::LastStrokeAs as As;
+                    if tips::button_on_km(ui, &ed.keymap, replay, "Replay", Cmd::ReplayLastStroke).clicked() {
+                        ed.replay_last_stroke();
+                    }
                     if tips::button_on_km(ui, &ed.keymap, reopen, "Edit as curve", Cmd::LastStrokeAsCurve).clicked() {
                         ed.reopen_last_stroke(As::Curve);
                     }

@@ -208,6 +208,7 @@ fn file_menu(ed: &Editor) -> Vec<Node> {
 fn edit_menu(ed: &Editor) -> Vec<Node> {
     let (undo, redo) = (ed.history.can_undo(), ed.history.can_redo());
     let reopen = ed.can_reopen_last_stroke();
+    let replay = ed.can_replay_last_stroke();
     let mut v = vec![
         cmd_on(Cmd::Undo, "Undo", undo),
         cmd_on(Cmd::Redo, "Redo", redo),
@@ -217,6 +218,7 @@ fn edit_menu(ed: &Editor) -> Vec<Node> {
         sub(
             "Last stroke",
             vec![
+                cmd_on(Cmd::ReplayLastStroke, "Replay", replay),
                 cmd_on(Cmd::LastStrokeAsCurve, "Edit as curve", reopen),
                 cmd_on(Cmd::LastStrokeAsCurveMove, "Use as Curve Move curve", reopen),
                 cmd_on(Cmd::LastStrokeAsTube, "Use as tube path", reopen),

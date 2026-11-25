@@ -103,6 +103,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::NewEmpty, "file document start empty blank nothing", |e| e.request(Pending::New("empty"))),
         cmd(ed, Cmd::Undo, "edit", Editor::undo),
         cmd(ed, Cmd::Redo, "edit", Editor::redo),
+        cmd(ed, Cmd::ReplayLastStroke, "stroke replay repeat again last stamp", |e| {
+            e.replay_last_stroke();
+        }),
         cmd(ed, Cmd::LastStrokeAsCurve, "stroke curve edit reshape fix last convert", |e| {
             e.reopen_last_stroke(crate::editor::LastStrokeAs::Curve)
         }),
