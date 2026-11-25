@@ -4955,8 +4955,8 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on_km(ui, &ed.keymap, !busy, "Voxel remesh", Cmd::Remesh).clicked() {
         ed.remesh_active();
     }
-    if tips::button_on(ui, !busy, "Auto-retopology", Cmd::AutoRetopo).clicked() {
-        ed.auto_retopo_active();
+    if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
+        ed.oxyremesh_active();
     }
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
@@ -7167,14 +7167,14 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         }
     });
     ui.horizontal(|ui| {
-        ui.label("Auto-retopo faces");
+        ui.label("OxyRemesh faces");
         tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_retopo_target_faces, 256..=50_000))),
-            "Target face count for Auto-retopology (field-aligned quads).",
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=50_000))),
+            "Target face count for OxyRemesh (field-aligned quads).",
         );
     });
-    if tips::button_on(ui, !busy, "Auto-retopology", Cmd::AutoRetopo).clicked() {
-        ed.auto_retopo_active();
+    if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
+        ed.oxyremesh_active();
     }
     ui.horizontal_wrapped(|ui| {
         ui.label("Keep");

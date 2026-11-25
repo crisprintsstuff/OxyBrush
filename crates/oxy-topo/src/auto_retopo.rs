@@ -1,4 +1,4 @@
-//! Field-aligned automatic retopology (Phase 1 of RFC 0044).
+//! OxyRemesh: field-aligned automatic retopology (Phase 1 of RFC 0044).
 //!
 //! Implements the local orientation- and position-field pipeline from
 //! Jakob et al., *Instant Field-Aligned Meshes* (SIGGRAPH Asia 2015),

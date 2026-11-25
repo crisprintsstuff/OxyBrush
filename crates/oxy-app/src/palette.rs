@@ -200,9 +200,9 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         cmd(ed, Cmd::Remesh, "topology rebuild even", Editor::remesh_active),
         cmd(
             ed,
-            Cmd::AutoRetopo,
-            "auto retopology remesh quads field aligned instant meshes clean topology",
-            Editor::auto_retopo_active,
+            Cmd::OxyRemesh,
+            "oxyremesh oxy remesh auto retopology remesh quads field aligned instant meshes clean topology",
+            Editor::oxyremesh_active,
         ),
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
         cmd(

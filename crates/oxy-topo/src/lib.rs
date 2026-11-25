@@ -1,5 +1,5 @@
 //! Topology operations that rebuild a mesh: voxel remeshing (including
-//! unions of several meshes), field-aligned auto-retopology, and quadric
+//! unions of several meshes), OxyRemesh (field-aligned auto-retopology), and quadric
 //! decimation. Pure Rust, no C/C++ toolchain required.
 
 pub mod auto_retopo;

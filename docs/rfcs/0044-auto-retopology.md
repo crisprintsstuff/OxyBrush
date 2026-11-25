@@ -1,8 +1,8 @@
-# RFC 0044 — Automatic quad retopology (field-aligned)
+# RFC 0044 — OxyRemesh (field-aligned automatic retopology)
 
 - **Status:** Phase 1 implemented (further phases open)
 - **Issue:** [#529](https://github.com/crisprintsstuff/OxyBrush/issues/529) (Autoremesher request)
-- **Name in UI:** **Auto-retopology** (generic; not a third-party product name)
+- **Name in UI:** **OxyRemesh** (OxyBrush product name for field-aligned remesh)
 
 ## Problem
 
@@ -22,7 +22,7 @@ copyleft; we use published papers only — see
 
 ## Decision
 
-Add **Mesh > Auto-retopology…** (command palette too): a background job that
+Add **Mesh > OxyRemesh** (command palette too): a background job that
 replaces the active piece with a field-aligned remesh, one undo step.
 
 ### Algorithm (Phase 1)
@@ -54,15 +54,15 @@ Controls (Phase 1):
 
 - Algorithm in **`oxy-topo`** (`auto_retopo` module): GPU-free, pure Rust,
   same crate as voxel remesh / decimate.
-- App: `Editor::auto_retopo_active` via `start_job`, like remesh.
+- App: `Editor::oxyremesh_active` via `start_job`, like remesh.
 - Do **not** link Autoremesher, Geogram, libigl, Instant Meshes binaries, or
   any GPL solver.
 
 ### Naming
 
-UI, docs and code say **auto-retopology** / `auto_retopo`. Autoremesher may
-be named only when identifying the issue request or comparing features
-(same rule as ZBrush format mentions).
+UI and docs say **OxyRemesh**. The algorithm module is `oxy_topo::auto_retopo`
+(Instant Meshes paper). Autoremesher may be named only when identifying the
+issue request or comparing features (same rule as ZBrush format mentions).
 
 ## Non-goals (Phase 1)
 

@@ -111,8 +111,8 @@ pub struct Document {
     pub remesh_shell_thickness: f32,
     pub remesh_shell_side: oxy_topo::ShellSide,
     pub remesh_engine: oxy_topo::RemeshEngine,
-    /// Target face count for Mesh > Auto-retopology (RFC 0044).
-    pub auto_retopo_target_faces: u32,
+    /// Target face count for Mesh > OxyRemesh (RFC 0044).
+    pub oxyremesh_target_faces: u32,
     pub subdivision_scheme: oxy_mesh::multires::Scheme,
     pub subdivision_smooth: bool,
 
@@ -242,7 +242,7 @@ impl Document {
             remesh_shell_thickness: 0.05,
             remesh_shell_side: oxy_topo::ShellSide::default(),
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
-            auto_retopo_target_faces: 5_000,
+            oxyremesh_target_faces: 5_000,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: true,
             poly_edit: None,
