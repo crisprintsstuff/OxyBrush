@@ -10,6 +10,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Paint strength.** Strength sets how opaque a stroke is, without overlapping dabs stacking past that value. Half strength looks about half painted. [#513](https://github.com/crisprintsstuff/OxyBrush/issues/513)
 - **Viewport shading.** Guard against invalid ambient occlusion values when cavity is enabled on its own. Skip screen-space shading when X-ray fades every visible piece.
 
 ## [4.0.0-beta.24.7] - 2026-11-24
