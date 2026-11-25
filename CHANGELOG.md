@@ -11,6 +11,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Poly Edit window.** The window is resizable and scrolls when the content is taller than the window, so every control stays reachable on a short display (same idea as Deform).
 - **Paint strength.** Strength sets how opaque a stroke is, without overlapping dabs stacking past that value. Half strength looks about half painted. [#513](https://github.com/crisprintsstuff/OxyBrush/issues/513)
 - **Viewport shading.** Guard against invalid ambient occlusion values when cavity is enabled on its own. Skip screen-space shading when X-ray fades every visible piece.
 
