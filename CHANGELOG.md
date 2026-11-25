@@ -12,6 +12,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 
+- **Banner and app icon.** The README banner uses the new Oxytocin Labs artwork (cyan/magenta circuit-brush mark with the dragon sculpt). Window, taskbar and installer icons match that mark (`packaging/icons`, regenerated with `make_icons.py`).
 - **Focal shift in the toolbar.** The Size / Strength bar (toolbar or floating over the view) also has Focal shift, same as the quick menu and brush settings.
 
 ### Fixed
