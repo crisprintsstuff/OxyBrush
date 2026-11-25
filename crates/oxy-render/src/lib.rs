@@ -347,11 +347,15 @@ pub struct RenderTarget<'a> {
 }
 
 /// Which meshes are composited translucently when viewport X-ray is enabled.
+///
+/// The factory default is inactive pieces (ghost everything but the piece
+/// you are editing), matching the usual default in other sculpt apps (#521).
+/// The user's last choice is remembered in settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum XrayScope {
-    #[default]
     AllVisible,
     Active,
+    #[default]
     Inactive,
 }
 
@@ -364,6 +368,18 @@ impl XrayScope {
             Self::Active => "Active piece",
             Self::Inactive => "Inactive pieces",
         }
+    }
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::AllVisible => "all",
+            Self::Active => "active",
+            Self::Inactive => "inactive",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|s| s.key() == key)
     }
 
     fn includes(self, item: &DrawItem) -> bool {

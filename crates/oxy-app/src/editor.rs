@@ -2043,6 +2043,7 @@ impl Editor {
             inactive_look: self.view.inactive_look,
             inactive_strength: self.view.inactive_strength,
             inactive_color: self.view.inactive_color,
+            xray_scope: self.view.xray_scope,
             wireframe: self.view.wireframe,
             wireframe_opacity: self.view.wireframe_opacity,
             wireframe_color: self.view.wireframe_color,
@@ -2363,6 +2364,7 @@ impl Editor {
         self.view.inactive_look = s.inactive_look;
         self.view.inactive_strength = s.inactive_strength;
         self.view.inactive_color = s.inactive_color;
+        self.view.xray_scope = s.xray_scope;
         self.view.wireframe = s.wireframe;
         self.view.wireframe_opacity = s.wireframe_opacity;
         self.view.wireframe_color = s.wireframe_color;
@@ -15320,6 +15322,7 @@ mod tests {
             inactive_look: oxy_render::InactiveLook::Tint,
             inactive_strength: 0.3,
             inactive_color: [0.8, 0.1, 0.1],
+            xray_scope: oxy_render::XrayScope::Active,
             wireframe: true,
             wireframe_opacity: 0.8,
             wireframe_color: [0.2, 0.22, 0.25],
