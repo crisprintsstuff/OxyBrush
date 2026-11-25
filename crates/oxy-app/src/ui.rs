@@ -1042,6 +1042,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     dialogs(ui, ed, &mut action);
     crate::deform_ui::deform_window(ui.ctx(), ed);
+    crate::color_filter_ui::color_filter_window(ui.ctx(), ed);
     crate::living_ui::window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
     crate::lights_ui::window(ui.ctx(), ed);
@@ -5053,6 +5054,9 @@ fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     tips::menu(ui, "Vertex color", plain::VERTEX_COLOR, |ui| {
         if tips::button(ui, "Paint brush", Cmd::PaintBrush).clicked() {
             ed.brush_kind = BrushKind::Paint;
+        }
+        if tips::button(ui, "Color Filter…", Cmd::ColorFilterWindow).clicked() {
+            ed.show_color_filter = true;
         }
         tips::check(ui, &mut ed.view.show_vertex_color, "Show vertex color", Cmd::ShowVertexColor);
         color_actions(ui, ed);

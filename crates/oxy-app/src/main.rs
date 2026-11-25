@@ -8,6 +8,7 @@ mod alpha_library;
 mod app;
 mod bridge;
 mod brush_looks;
+mod color_filter_ui;
 mod deform_ui;
 mod document;
 mod editor;
