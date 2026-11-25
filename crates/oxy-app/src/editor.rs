@@ -3283,13 +3283,26 @@ impl Editor {
                 invert: self.alpha_invert,
                 up: self.camera.up(),
             });
+        let scene_targets = if kind == BrushKind::SceneProject {
+            let active = self.scene.active_index();
+            self.scene
+                .pieces
+                .iter()
+                .enumerate()
+                .filter(|(i, p)| *i != active && p.visible && p.mesh.triangle_count() > 0)
+                .map(|(_, p)| p.mesh.clone())
+                .collect()
+        } else {
+            Vec::new()
+        };
         let stroke = Stroke::new(settings, self.symmetry, invert)
             .with_symmetry_center(self.symmetry_center())
             .with_alpha(stamp)
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
-            .with_budget(self.dab_budget_ms);
+            .with_budget(self.dab_budget_ms)
+            .with_scene_targets(scene_targets);
         let jitter = self.paint_jitter(kind);
         let stroke = if jitter.enabled() {
             stroke.with_paint_jitter(jitter, paint_seed.unwrap_or_else(oxy_sculpt::PaintJitter::fresh_seed))
