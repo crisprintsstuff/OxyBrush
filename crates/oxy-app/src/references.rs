@@ -117,6 +117,7 @@ pub struct Alignment {
     start: ReferencePlacement,
     points: Vec<Vec3>,
     error: Option<&'static str>,
+    replace: Option<usize>,
 }
 
 impl Alignment {
@@ -128,12 +129,22 @@ impl Alignment {
             })
     }
 
+    fn next_pick(&self) -> usize {
+        self.replace.unwrap_or(self.points.len())
+    }
+
+    fn fit(&self) -> Option<ReferencePlacement> {
+        fit_landmarks(&self.start, self.points.as_slice().try_into().ok()?)
+    }
+
     fn prompt(&self) -> &'static str {
-        self.error.unwrap_or(match self.points.len() {
+        self.error.unwrap_or(match self.next_pick() {
             0 => "Click the first landmark on the image.",
             1 => "Click the second landmark on the image.",
             2 => "Click the matching first landmark on the sculpt.",
-            _ => "Click the matching second landmark on the sculpt.",
+            3 => "Click the matching second landmark on the sculpt.",
+            _ if self.fit().is_some() => "Review the fit or choose a point to pick again.",
+            _ => "These points give an invalid fit. Pick a different landmark.",
         })
     }
 }
@@ -166,7 +177,8 @@ pub fn pick_alignment(ed: &mut Editor, pointer: Vec2) -> bool {
         ed.reference_alignment = None;
         return false;
     }
-    if alignment.points.len() == 4 {
+    let index = alignment.next_pick();
+    if index == 4 {
         return true;
     }
     let [x, y, w, h] = ed.canvas;
@@ -179,7 +191,7 @@ pub fn pick_alignment(ed: &mut Editor, pointer: Vec2) -> bool {
         return true;
     }
     let point = origin + direction * ((alignment.start.center - origin).dot(normal) / direction.dot(normal));
-    if alignment.points.len() < 2 {
+    if index < 2 {
         let [tl, tr, bl, _] = image_corners(&alignment.start, alignment.image.size);
         let inside = |edge: Vec3| (0.0..=1.0).contains(&((point - tl).dot(edge) / edge.length_squared()));
         if !inside(tr - tl) || !inside(bl - tl) {
@@ -187,14 +199,18 @@ pub fn pick_alignment(ed: &mut Editor, pointer: Vec2) -> bool {
             return true;
         }
     }
-    if alignment.points.len() & 1 == 1
-        && alignment.points.last().is_some_and(|last| last.distance(point) <= alignment.start.width * 1.0e-4)
+    if let Some(other) = alignment.points.get(index ^ 1)
+        && other.distance(point) <= alignment.start.width * 1.0e-4
     {
-        alignment.error = Some("Pick a second landmark farther from the first.");
+        alignment.error = Some("Pick a landmark farther from its paired point.");
         return true;
     }
     alignment.error = None;
-    alignment.points.push(point);
+    if let Some(index) = alignment.replace.take() {
+        alignment.points[index] = point;
+    } else {
+        alignment.points.push(point);
+    }
     true
 }
 
@@ -203,11 +219,12 @@ pub fn alignment_overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
     let painter = ui.painter().with_clip_rect(canvas);
     let size = Vec2::new(ed.canvas[2], ed.canvas[3]);
     let ppp = ui.ctx().pixels_per_point();
-    let first = if alignment.points.len() < 2 { 0 } else { 2 };
-    for (i, point) in alignment.points.iter().enumerate().skip(first) {
+    let first = if alignment.next_pick() < 2 { 0 } else { 2 };
+    for (i, point) in alignment.points.iter().enumerate().skip(first).take(2) {
         if let Some(pos) = ed.camera.project(*point, size) {
             let pos = canvas.min + egui::vec2(pos.x / ppp, pos.y / ppp);
-            painter.circle_filled(pos, 9.0, egui::Color32::BLACK);
+            let fill = if alignment.replace == Some(i) { ui.visuals().selection.bg_fill } else { egui::Color32::BLACK };
+            painter.circle_filled(pos, 9.0, fill);
             painter.text(
                 pos,
                 egui::Align2::CENTER_CENTER,
@@ -226,19 +243,25 @@ pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeItera
     let vp = camera.view_projection((canvas[2] / canvas[3].max(1.0)).max(0.001));
     let forward = camera.forward();
     let orthographic = camera.orthographic;
+    let aligning = ed.reference_alignment.as_ref().filter(|a| a.matches(ed));
+    let fitted = aligning.filter(|a| a.next_pick() == 4).and_then(Alignment::fit);
     document.scene.references.iter().enumerate().map(move |(index, image)| {
         let draft;
-        let p = if ed.show_references {
+        let p = if let Some(a) = aligning
+            && a.index == index
+            && let Some(p) = fitted.as_ref()
+        {
+            p
+        } else if ed.show_references {
             draft = placement(ctx, draft_id(document.id, index, image), image);
             &draft
         } else {
             &image.placement
         };
         let (_, _, normal) = p.axis.basis();
-        let aligning = ed.reference_alignment.as_ref().filter(|a| a.matches(ed));
         let visible = p.visible && (p.all_views || orthographic && forward.dot(-normal) > 0.999);
-        let (opacity, overlay) = if let Some(aligning) = aligning {
-            if aligning.index == index && aligning.points.len() < 2 { (1.0, true) } else { (0.0, p.overlay) }
+        let (opacity, overlay) = if let Some(aligning) = aligning.filter(|a| a.next_pick() < 4) {
+            if aligning.index == index && aligning.next_pick() < 2 { (1.0, true) } else { (0.0, p.overlay) }
         } else {
             (if visible { p.opacity } else { 0.0 }, p.overlay)
         };
@@ -252,6 +275,17 @@ pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeItera
     })
 }
 
+fn use_fit(ctx: &egui::Context, ed: &mut Editor) {
+    if let Some(alignment) = ed.reference_alignment.as_ref()
+        && let Some(edited) = alignment.fit()
+    {
+        let id = draft_id(alignment.doc_id, alignment.index, &alignment.image);
+        let original = alignment.image.placement.clone();
+        ctx.data_mut(|data| data.insert_temp(id, PlacementDraft { original, edited }));
+        ed.reference_alignment = None;
+    }
+}
+
 pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
     if !ed.show_references {
         return false;
@@ -259,29 +293,34 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
     if ed.reference_alignment.as_ref().is_some_and(|a| !a.matches(ed)) {
         ed.reference_alignment = None;
     }
-    if let Some(alignment) = ed.reference_alignment.as_ref()
-        && let Ok(points) = alignment.points.as_slice().try_into()
-    {
-        if let Some(edited) = fit_landmarks(&alignment.start, points) {
-            let id = draft_id(alignment.doc_id, alignment.index, &alignment.image);
-            let original = alignment.image.placement.clone();
-            ctx.data_mut(|data| data.insert_temp(id, PlacementDraft { original, edited }));
-            ed.reference_alignment = None;
-        } else if let Some(alignment) = ed.reference_alignment.as_mut() {
-            alignment.points.truncate(2);
-            alignment.error = Some("Those points give an invalid scale. Pick the two sculpt landmarks again.");
-        }
-    }
     let mut open = true;
     let mut load = false;
     let mut change = None;
     let mut snap = None;
     let mut start_alignment = None;
     let mut cancel_alignment = false;
+    let mut accept_fit = false;
     let doc_id = ed.documents[ed.active_document].id;
     egui::Window::new("References").open(&mut open).default_width(300.0).show(ctx, |ui| {
-        if let Some(alignment) = &ed.reference_alignment {
+        if let Some(alignment) = &mut ed.reference_alignment {
             ui.label(alignment.prompt());
+            if alignment.points.len() == 4 {
+                ui.horizontal_wrapped(|ui| {
+                    for (index, label) in ["Image 1", "Image 2", "Sculpt 1", "Sculpt 2"].into_iter().enumerate() {
+                        let selected = alignment.replace == Some(index);
+                        if ui.selectable_label(selected, label).clicked() {
+                            alignment.replace = (!selected).then_some(index);
+                            alignment.error = None;
+                        }
+                    }
+                });
+                accept_fit = ui
+                    .add_enabled(alignment.replace.is_none() && alignment.fit().is_some(), egui::Button::new("Use fit"))
+                    .clicked();
+            } else if ui.add_enabled(!alignment.points.is_empty(), egui::Button::new("Undo last pick")).clicked() {
+                alignment.points.pop();
+                alignment.error = None;
+            }
             ui.horizontal(|ui| {
                 if ui.button("View plane").clicked() {
                     snap = Some(alignment.start.axis);
@@ -353,6 +392,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
                                 start: draft.clone(),
                                 points: Vec::with_capacity(4),
                                 error: None,
+                                replace: None,
                             });
                         }
                     });
@@ -384,6 +424,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) -> bool {
     });
     if cancel_alignment || !open {
         ed.reference_alignment = None;
+    } else if accept_fit {
+        use_fit(ctx, ed);
     } else if let Some(alignment) = start_alignment {
         ed.reference_alignment = Some(alignment);
     }
@@ -516,6 +558,7 @@ mod tests {
             start: image.placement.clone(),
             points: Vec::new(),
             error: None,
+            replace: None,
         });
         assert_eq!(planes(&ctx, &ed).next().unwrap().opacity, 1.0);
         let click = |ed: &mut Editor, at: Vec3| {
@@ -530,14 +573,21 @@ mod tests {
         click(&mut ed, -0.25 * Vec3::Y);
         click(&mut ed, 0.25 * Vec3::Y);
         let revision = ed.history.revision();
-        ctx.run_ui(egui::RawInput::default(), |_| {
-            window(&ctx, &mut ed);
-        })
-        .textures_delta
-        .clear();
+        let review = ed.reference_alignment.as_ref().unwrap().fit().unwrap();
+        assert!((review.width - 1.0).abs() < 1e-5);
+        let unchanged = ed.reference_alignment.as_ref().unwrap().points[..3].to_vec();
+        ed.reference_alignment.as_mut().unwrap().replace = Some(3);
+        click(&mut ed, -0.25 * Vec3::Y);
+        assert_eq!(ed.reference_alignment.as_ref().unwrap().replace, Some(3));
+        click(&mut ed, 0.5 * Vec3::Y);
+        let corrected = ed.reference_alignment.as_ref().unwrap();
+        assert_eq!(corrected.points.len(), 4);
+        assert_eq!(corrected.points[..3], unchanged);
+        assert!(corrected.replace.is_none());
+        use_fit(&ctx, &mut ed);
         assert!(ed.reference_alignment.is_none());
         let fitted = placement(&ctx, draft_id(doc_id, 0, &image), &image);
-        assert!((fitted.width - 1.0).abs() < 1e-5);
+        assert!((fitted.width - 1.5).abs() < 1e-5);
         assert!((fitted.fine_rotation - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
         assert_eq!(ed.scene.references[0], image);
         assert_eq!(ed.history.revision(), revision);
