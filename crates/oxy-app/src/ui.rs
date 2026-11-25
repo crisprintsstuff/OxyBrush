@@ -4019,7 +4019,7 @@ Right-click for X-ray settings",
                     ed.toggle_gizmo(GizmoMode::Move);
                 }
             }
-            let solo = ed.scene.pieces.iter().filter(|p| p.visible).count() == 1 && ed.scene.pieces.len() > 1;
+            let solo = ed.scene.is_solo();
             if widgets::icon_button(ui, Icon::Solo, solo, ed.scene.pieces.len() > 1, &Cmd::Solo.tip_in(&ed.keymap))
                 .clicked()
             {
@@ -5062,10 +5062,10 @@ fn group_actions(ui: &mut Ui, ed: &mut Editor) {
     if tips::button(ui, "Invert visibility", Cmd::InvertVisibility).clicked() {
         ed.edit_faces("Invert visibility", Mesh::invert_visibility);
     }
-    if tips::button(ui, "Grow visible", Cmd::GrowVisible).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Grow visible", Cmd::GrowVisible).clicked() {
         ed.edit_faces("Grow visible", |m| m.grow_visible(true));
     }
-    if tips::button(ui, "Shrink visible", Cmd::ShrinkVisible).clicked() {
+    if tips::button_km(ui, &ed.keymap, "Shrink visible", Cmd::ShrinkVisible).clicked() {
         ed.edit_faces("Shrink visible", |m| m.grow_visible(false));
     }
     ui.separator();
@@ -5705,6 +5705,7 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         let vis_tip = if all_vis { "Hide all pieces" } else { "Show all pieces" };
         if widgets::small_icon_button(ui, vis_icon, vis_tip).clicked() {
             let target_vis = !all_vis;
+            ed.scene.end_solo();
             for p in &mut ed.scene.pieces {
                 p.visible = target_vis;
             }
@@ -5712,6 +5713,35 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     });
 
     let tree_rows = build_tree_rows(&ed.scene, &ed.folded_pieces, &ed.piece_filter);
+    let nav_id = ui.scope_id().with(("piece row focus", ed.documents[ed.active_document].id));
+    let focus = ui.data(|data| data.get_temp::<egui::Id>(nav_id));
+    let keyboard_select = if let Some(id) = focus
+        && ui.memory(|m| m.has_focus(id))
+    {
+        ui.memory_mut(|m| {
+            m.set_focus_lock_filter(id, egui::EventFilter { vertical_arrows: true, ..Default::default() })
+        });
+        let step = ui.input_mut(|input| {
+            if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                -1
+            } else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                1
+            } else {
+                0
+            }
+        });
+        tree_rows
+            .iter()
+            .position(|row| row.index == active)
+            .and_then(|at| at.checked_add_signed(step))
+            .filter(|_| step != 0)
+            .and_then(|at| tree_rows.get(at))
+            .map(|row| row.index)
+    } else {
+        None
+    };
+    select = select.or(keyboard_select);
+
     let total_triangles: usize = ed.scene.pieces.iter().map(|p| p.mesh.triangle_count()).sum();
     let filter_active = !ed.piece_filter.trim().is_empty();
     let count_text = if filter_active {
@@ -5929,6 +5959,15 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                                             .truncate(),
                                         );
                                         let btn = tips::hover(btn, plain::PIECE_ACTIVATE);
+                                        if keyboard_select == Some(i) {
+                                            btn.request_focus();
+                                            btn.scroll_to_me(None);
+                                            ui.data_mut(|data| data.insert_temp(nav_id, btn.id));
+                                        } else if btn.clicked() && !shift && !command {
+                                            btn.request_focus();
+                                            ui.data_mut(|data| data.insert_temp(nav_id, btn.id));
+                                        }
+
                                         if btn.dragged() && !shift && !command {
                                             btn.dnd_set_drag_payload(PieceDrag(i));
                                             row_dragged = true;
@@ -6013,7 +6052,9 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                     .response;
 
                 if toggle_vis {
-                    ed.scene.pieces[i].visible = !ed.scene.pieces[i].visible;
+                    let visible = !ed.scene.pieces[i].visible;
+                    ed.scene.end_solo();
+                    ed.scene.pieces[i].visible = visible;
                 }
                 if let Some(new_name) = commit_rename {
                     ed.scene.pieces[i].name = new_name;
@@ -6026,6 +6067,8 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                         pick = Some(i);
                     } else {
                         select = Some(i);
+                        frame_resp.request_focus();
+                        ui.data_mut(|data| data.insert_temp(nav_id, frame_resp.id));
                     }
                 }
 
@@ -6262,18 +6305,22 @@ fn pieces_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     }
-    if let Some(p) = action_toggle_vis.and_then(|i| ed.scene.pieces.get_mut(i)) {
-        p.visible = !p.visible;
+    if let Some(i) = action_toggle_vis {
+        let visible = !ed.scene.pieces[i].visible;
+        ed.scene.end_solo();
+        ed.scene.pieces[i].visible = visible;
     }
     if let Some(i) = action_isolate.or(isolate) {
         ed.isolate_piece(i);
     }
     if let Some(i) = action_hide_others {
+        ed.scene.end_solo();
         for (idx, p) in ed.scene.pieces.iter_mut().enumerate() {
             p.visible = idx == i;
         }
     }
     if action_show_all {
+        ed.scene.end_solo();
         for p in &mut ed.scene.pieces {
             p.visible = true;
         }
@@ -9039,6 +9086,16 @@ mod tests {
         let at = names.first().expect("the name button").center();
         click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 1);
         assert_eq!(ed.scene.active_index(), 1, "clicking the name selects the piece");
+        let key = egui::Event::Key {
+            key: egui::Key::ArrowUp,
+            physical_key: None,
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frames_with(&mut ed, &ctx, vec![vec![key]]);
+        assert_eq!(ed.scene.active_index(), 0, "Up immediately after clicking selects the previous row");
+
         // Double-click it: rename starts.
         click_with(&mut ed, &ctx, at, egui::Modifiers::NONE, 2);
         let id = ed.scene.pieces[1].id;

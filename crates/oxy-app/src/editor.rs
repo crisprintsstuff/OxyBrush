@@ -2493,7 +2493,7 @@ impl Editor {
         if m.ctrl {
             (BrushKind::Mask, m.alt)
         } else if m.shift {
-            (BrushKind::Smooth, false)
+            if self.brush_kind == BrushKind::Paint { (BrushKind::Paint, false) } else { (BrushKind::Smooth, false) }
         } else {
             (self.brush_kind, m.alt != self.carve)
         }
@@ -2830,6 +2830,7 @@ impl Editor {
         } else if kind.is_grab_like()
             || kind == BrushKind::SnakeHook
             || kind == BrushKind::Smooth
+            || (kind == BrushKind::Paint && self.brush_roles().shift)
             || self.brush_roles().ctrl
         {
             // Moving brushes, and the Shift/Ctrl stand-ins, always work freehand.
@@ -3229,6 +3230,7 @@ impl Editor {
             pressure_radius: self.pressure_radius,
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(kind),
+            smooth_paint: kind == BrushKind::Paint && self.brush_roles().shift,
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(kind),
             spray: self.spray,
@@ -7139,14 +7141,18 @@ impl Editor {
     }
 
     pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
-        let b = self.scene.bounds();
-        if b.is_empty() {
-            // An empty scene still gets a floor (when it's switched on),
-            // sized to the view and sitting at the origin.
+        let bounds = self.scene.bounds();
+        let (min, max) = if bounds.is_empty() {
             let h = self.camera.distance.max(1e-3) * 0.25;
-            return oxy_render::FloorGrid::fit([-h, 0.0, -h], [h, 0.0, h]);
+            ([-h, 0.0, -h], [h, 0.0, h])
+        } else {
+            (bounds.min.to_array(), bounds.max.to_array())
+        };
+        if self.camera.orthographic {
+            oxy_render::FloorGrid::orthographic(min, max, self.camera.forward())
+        } else {
+            oxy_render::FloorGrid::fit(min, max)
         }
-        oxy_render::FloorGrid::fit(b.min.to_array(), b.max.to_array())
     }
 
     pub fn delete_active(&mut self) {
@@ -7187,12 +7193,12 @@ impl Editor {
         self.history.record_compound("Delete piece", steps);
     }
 
-    /// Show only the active piece; if already solo, show all pieces.
+    /// Temporarily isolate the active piece and follow selection changes.
     pub fn solo_active(&mut self) {
-        let active = self.scene.active_index();
-        let solo = self.scene.pieces.iter().enumerate().all(|(i, p)| p.visible == (i == active));
-        for (i, p) in self.scene.pieces.iter_mut().enumerate() {
-            p.visible = solo || i == active;
+        if self.scene.is_solo() {
+            self.scene.end_solo();
+        } else {
+            self.scene.start_solo();
         }
     }
 
@@ -9365,6 +9371,14 @@ impl Editor {
             }
             C::Remesh => {
                 self.remesh_active();
+                E::None
+            }
+            C::GrowVisible => {
+                self.edit_faces("Grow visible", |m| m.grow_visible(true));
+                E::None
+            }
+            C::ShrinkVisible => {
+                self.edit_faces("Shrink visible", |m| m.grow_visible(false));
                 E::None
             }
             C::GroupVisible => {
@@ -12301,6 +12315,21 @@ mod tests {
         assert_eq!(e.scene.pieces[0].name, "Piece 0");
         assert_eq!(e.scene.pieces[1].name, "Piece 1");
         assert_eq!(e.scene.pieces[2].name, "Piece 2");
+    }
+
+    #[test]
+    fn show_only_follows_the_active_piece_and_restores_hidden_pieces() {
+        let mut e = editor();
+        e.duplicate_active(None);
+        e.duplicate_active(None);
+        e.scene.pieces[2].visible = false;
+        e.scene.set_active(0);
+        e.solo_active();
+        assert_eq!(e.scene.pieces.iter().map(|p| p.visible).collect::<Vec<_>>(), [true, false, false]);
+        e.scene.set_active(2);
+        assert_eq!(e.scene.pieces.iter().map(|p| p.visible).collect::<Vec<_>>(), [false, false, true]);
+        e.solo_active();
+        assert_eq!(e.scene.pieces.iter().map(|p| p.visible).collect::<Vec<_>>(), [true, true, false]);
     }
 
     #[test]

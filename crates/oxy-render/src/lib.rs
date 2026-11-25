@@ -242,6 +242,8 @@ pub struct FloorGrid {
     pub center: [f32; 2],
     pub cell: f32,
     pub radius: f32,
+    /// Shader plane code: XZ (1), XY (2), or ZY (3).
+    plane: f32,
 }
 
 impl FloorGrid {
@@ -262,7 +264,32 @@ impl FloorGrid {
         let major = cell * 10.0;
         let snap = |v: f32| (v / major).round() * major;
         let center = [snap((min[0] + max[0]) * 0.5), snap((min[2] + max[2]) * 0.5)];
-        Some(FloorGrid { height: min[1] - size * 0.002, center, cell, radius: (size * 2.5).max(cell * 12.0) })
+        Some(FloorGrid {
+            height: min[1] - size * 0.002,
+            center,
+            cell,
+            radius: (size * 2.5).max(cell * 12.0),
+            plane: 1.0,
+        })
+    }
+    /// For snapped orthographic views, face the grid toward the camera and
+    /// place it beyond the far side of the visible model.
+    pub fn orthographic(min: [f32; 3], max: [f32; 3], forward: glam::Vec3) -> Option<Self> {
+        let (axes, depth, plane) = if forward.z.abs() > 0.999 {
+            ([0, 2, 1], forward.z, 2.0)
+        } else if forward.x.abs() > 0.999 {
+            ([2, 0, 1], forward.x, 3.0)
+        } else if forward.y.abs() > 0.999 {
+            ([0, 1, 2], forward.y, 1.0)
+        } else {
+            return Self::fit(min, max);
+        };
+        let mut grid = Self::fit(axes.map(|i| min[i]), axes.map(|i| max[i]))?;
+        if depth > 0.0 {
+            grid.height = max[axes[1]] + (min[axes[1]] - grid.height);
+        }
+        grid.plane = plane;
+        Some(grid)
     }
 }
 
@@ -1642,7 +1669,7 @@ impl ViewportRenderer {
             bg_center: rgba(settings.background_center),
             bg_edge: rgba(settings.background),
             wireframe_color: rgba(settings.wireframe_color),
-            floor: settings.floor.map_or([0.0; 4], |f| [f.height, f.cell, f.radius, 1.0]),
+            floor: settings.floor.map_or([0.0; 4], |f| [f.height, f.cell, f.radius, f.plane]),
             floor_center: {
                 let [x, z] = settings.floor.map_or([0.0; 2], |f| f.center);
                 [x, z, if settings.show_vertex_color { 1.0 } else { 0.0 }, 0.0]
@@ -1992,6 +2019,21 @@ mod tests {
         naga::valid::Validator::new(naga::valid::ValidationFlags::all(), naga::valid::Capabilities::all())
             .validate(&module)
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
+    }
+
+    #[test]
+    fn snapped_orthographic_grids_sit_behind_the_bounds() {
+        let min = [-2.0, -3.0, -4.0];
+        let max = [3.0, 4.0, 5.0];
+        for (axis, plane) in [(0, 3.0), (1, 1.0), (2, 2.0)] {
+            let mut forward = glam::Vec3::ZERO;
+            forward[axis] = 1.0;
+            let far = FloorGrid::orthographic(min, max, forward).unwrap();
+            let near = FloorGrid::orthographic(min, max, -forward).unwrap();
+            assert_eq!(far.plane, plane);
+            assert!(far.height > max[axis]);
+            assert!(near.height < min[axis]);
+        }
     }
 
     #[test]

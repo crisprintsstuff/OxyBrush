@@ -56,7 +56,7 @@ pub fn brush_description(k: BrushKind) -> &'static str {
             "Draw a curve along a part (an arm, a tail), then drag its points: the mesh around it bends and stretches to follow. Masked areas stay put."
         }
         BrushKind::Mask => "Paints a mask that protects areas from other brushes. Alt unmasks.",
-        BrushKind::Paint => "Paints color onto the surface without changing its shape. Alt erases paint.",
+        BrushKind::Paint => "Paints color onto the surface. Hold Shift to smooth colors or Alt to erase paint.",
         BrushKind::PaintGroups => {
             "Paints face groups: each stroke makes a new group. Alt grows the group where the stroke starts."
         }

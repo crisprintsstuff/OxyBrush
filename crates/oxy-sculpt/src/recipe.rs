@@ -80,7 +80,7 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// hash of every pixel as stored (16-bit), and does not use the name. 3
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
 /// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
-const VERSION: u8 = 6;
+const VERSION: u8 = 7;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -125,7 +125,7 @@ impl StrokeRecipe {
     /// radius strength focal_shift spacing auto_smooth gravity spray
     ///   noise_scale crease_pinch : f32 each
     /// flags:u8      1 pressure_strength, 2 pressure_radius, 4 front_faces_only,
-    ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5)
+    ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5), 128 smooth paint (version 7)
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
@@ -142,8 +142,10 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let version = if self.paint_jitter != crate::PaintJitter::default() || self.paint_seed != 0 {
+        let version = if self.settings.smooth_paint {
             VERSION
+        } else if self.paint_jitter != crate::PaintJitter::default() || self.paint_seed != 0 {
+            6
         } else if self.settings.accumulate {
             4
         } else {
@@ -181,7 +183,8 @@ impl StrokeRecipe {
                 | u8::from(self.invert) << 3
                 | u8::from(self.grab_through) << 4
                 | u8::from(self.alpha.is_some()) << 5
-                | u8::from(version >= 5 && !s.accumulate) << 6,
+                | u8::from(version >= 5 && !s.accumulate) << 6
+                | u8::from(version >= 7 && s.smooth_paint) << 7,
         );
         let y = &self.symmetry;
         b.push(u8::from(y.x) | u8::from(y.y) << 1 | u8::from(y.z) << 2);
@@ -286,6 +289,7 @@ impl StrokeRecipe {
             pressure_radius: flags & 2 != 0,
             front_faces_only: flags & 4 != 0,
             accumulate: version < 5 || flags & 64 == 0,
+            smooth_paint: version >= 7 && flags & 128 != 0,
             auto_smooth,
             gravity,
             spray,

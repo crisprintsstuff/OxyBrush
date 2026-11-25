@@ -475,6 +475,8 @@ pub enum CommandId {
     LevelDown,
     Remesh,
     GroupVisible,
+    GrowVisible,
+    ShrinkVisible,
     GroupFromMask,
     Guide,
     Preferences,
@@ -647,6 +649,8 @@ const COMMANDS: &[CommandMeta] = &[
         defaults: &["shift+d"],
     },
     CommandMeta { id: CommandId::Remesh, name: "Voxel remesh", group: "Mask and mesh", defaults: &["ctrl+r"] },
+    CommandMeta { id: CommandId::GrowVisible, name: "Grow visible", group: "Mask and mesh", defaults: &[] },
+    CommandMeta { id: CommandId::ShrinkVisible, name: "Shrink visible", group: "Mask and mesh", defaults: &[] },
     CommandMeta { id: CommandId::GroupVisible, name: "Group visible", group: "Mask and mesh", defaults: &[] },
     // As in other sculpting apps: the masked faces, or everything visible without a mask.
     CommandMeta {
@@ -1658,6 +1662,8 @@ fn command_key(id: CommandId) -> &'static str {
         CommandId::LevelUp => "level_up",
         CommandId::LevelDown => "level_down",
         CommandId::Remesh => "remesh",
+        CommandId::GrowVisible => "grow_visible",
+        CommandId::ShrinkVisible => "shrink_visible",
         CommandId::GroupVisible => "group_visible",
         CommandId::GroupFromMask => "group_from_mask",
         CommandId::Guide => "guide",

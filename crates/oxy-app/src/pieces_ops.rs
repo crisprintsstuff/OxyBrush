@@ -428,6 +428,7 @@ impl Editor {
         if idx >= self.scene.pieces.len() {
             return;
         }
+        self.scene.end_solo();
         let solo = self.scene.pieces.iter().enumerate().all(|(i, p)| p.visible == (i == idx));
         for (i, p) in self.scene.pieces.iter_mut().enumerate() {
             p.visible = solo || i == idx;

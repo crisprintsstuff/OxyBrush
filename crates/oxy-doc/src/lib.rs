@@ -765,17 +765,18 @@ pub struct Scene {
     pub pieces: Vec<Piece>,
     pub references: Vec<ReferenceImage>,
     active: usize,
+    solo_visibility: Option<std::collections::HashMap<u64, bool>>,
 }
 
 impl Scene {
     pub fn new(first: Piece) -> Self {
-        Self { pieces: vec![first], active: 0, references: Vec::new() }
+        Self { pieces: vec![first], active: 0, references: Vec::new(), solo_visibility: None }
     }
 
     /// A scene with no pieces. File > New > Empty scene starts here, and a
     /// saved empty project opens as one.
     pub fn empty() -> Self {
-        Self { pieces: Vec::new(), active: 0, references: Vec::new() }
+        Self { pieces: Vec::new(), active: 0, references: Vec::new(), solo_visibility: None }
     }
 
     pub fn active_index(&self) -> usize {
@@ -785,6 +786,32 @@ impl Scene {
     pub fn set_active(&mut self, index: usize) {
         if index < self.pieces.len() {
             self.active = index;
+            if self.is_solo() {
+                for (i, piece) in self.pieces.iter_mut().enumerate() {
+                    piece.visible = i == index;
+                }
+            }
+        }
+    }
+
+    pub fn is_solo(&self) -> bool {
+        self.solo_visibility.is_some()
+    }
+
+    pub fn start_solo(&mut self) {
+        if !self.pieces.is_empty() && !self.is_solo() {
+            self.solo_visibility = Some(self.pieces.iter().map(|p| (p.id, p.visible)).collect());
+            self.set_active(self.active_index());
+        }
+    }
+
+    pub fn end_solo(&mut self) {
+        if let Some(previous) = self.solo_visibility.take() {
+            for (id, visible) in previous {
+                if let Some(piece) = self.get_mut(id) {
+                    piece.visible = visible;
+                }
+            }
         }
     }
 
@@ -907,6 +934,9 @@ impl Scene {
     pub fn to_data(&self) -> SceneData {
         let mut pieces: Vec<PieceData> = self.pieces.iter().map(Piece::to_data).collect();
         for (data, p) in pieces.iter_mut().zip(&self.pieces) {
+            if let Some(visible) = self.solo_visibility.as_ref().and_then(|state| state.get(&p.id).copied()) {
+                data.visible = visible;
+            }
             if let (Some(saved), Some(recipe)) = (data.spheres.as_deref_mut(), p.spheres.as_deref()) {
                 saved.generated_mesh = recipe.generated_mesh.and_then(|id| self.index_of(id)).map(|i| i as u64);
             }
@@ -996,7 +1026,7 @@ impl Scene {
             }
         }
         // Break any cycles that might exist from corrupt files:
-        let temp_scene = Scene { pieces, active: 0, references: Vec::new() };
+        let temp_scene = Scene { pieces, active: 0, references: Vec::new(), solo_visibility: None };
         let mut safe_parents = Vec::new();
         for p in &temp_scene.pieces {
             let mut ok_parent = p.parent;
@@ -1013,7 +1043,7 @@ impl Scene {
             p.parent = parent;
         }
         let active = data.active.min(pieces.len() - 1);
-        Some(Self { pieces, active, references: data.references })
+        Some(Self { pieces, active, references: data.references, solo_visibility: None })
     }
 }
 
