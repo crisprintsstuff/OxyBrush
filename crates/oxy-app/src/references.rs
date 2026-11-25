@@ -530,9 +530,11 @@ mod tests {
         click(&mut ed, -0.25 * Vec3::Y);
         click(&mut ed, 0.25 * Vec3::Y);
         let revision = ed.history.revision();
-        let _ = ctx.run_ui(egui::RawInput::default(), |_| {
+        ctx.run_ui(egui::RawInput::default(), |_| {
             window(&ctx, &mut ed);
-        });
+        })
+        .textures_delta
+        .clear();
         assert!(ed.reference_alignment.is_none());
         let fitted = placement(&ctx, draft_id(doc_id, 0, &image), &image);
         assert!((fitted.width - 1.0).abs() < 1e-5);
