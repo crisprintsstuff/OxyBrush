@@ -144,7 +144,10 @@ fn fs_composite(@builtin(position) frag: vec4<f32>) -> @location(0) vec4<f32> {
             w_sum = w_sum + w;
         }
     }
-    let ao = select(1.0, ao_sum / w_sum, w_sum > 1e-4);
+    var ao = 1.0;
+    if (w_sum > 1e-4) {
+        ao = ao_sum / w_sum;
+    }
     let ao_factor = mix(1.0, ao, post.params.x);
 
     // Two scales: fine pores and broader creases.
