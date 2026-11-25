@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Reference view planes.** Assign Back, Left, and Bottom orientations in addition to Front, Right (formerly Side), and Top. [#514](https://github.com/crisprintsstuff/OxyBrush/issues/514)
+
 ### Fixed
 
 - **Viewport shading.** Guard against invalid ambient occlusion values when cavity is enabled on its own. Skip screen-space shading when X-ray fades every visible piece.

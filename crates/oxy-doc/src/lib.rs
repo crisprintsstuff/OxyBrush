@@ -678,21 +678,37 @@ pub const MAX_REFERENCE_BYTES: usize = 64 << 20;
 pub const MAX_REFERENCE_IMAGES: usize = 16;
 
 /// Axis-aligned planes used by viewport references.
+///
+/// Wire indices in `REFI` are the positions in [`Self::ALL`]. Front, Right
+/// (formerly labelled Side) and Top keep indices 0–2 so older projects load
+/// unchanged. Back, Left and Bottom append as 3–5.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceAxis {
     Front,
-    Side,
+    /// Right orthographic view. Stored as index 1 for compatibility with the
+    /// earlier "Side" label.
+    Right,
     Top,
+    Back,
+    Left,
+    Bottom,
 }
 
 impl ReferenceAxis {
-    pub const ALL: [Self; 3] = [Self::Front, Self::Side, Self::Top];
+    /// Serialization order. Do not reorder: `.oxb` stores these as a byte index.
+    pub const ALL: [Self; 6] = [Self::Front, Self::Right, Self::Top, Self::Back, Self::Left, Self::Bottom];
+
+    /// Display order in the References panel (opposing pairs).
+    pub const CHOICES: [Self; 6] = [Self::Front, Self::Back, Self::Right, Self::Left, Self::Top, Self::Bottom];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Front => "Front",
-            Self::Side => "Side",
+            Self::Right => "Right",
             Self::Top => "Top",
+            Self::Back => "Back",
+            Self::Left => "Left",
+            Self::Bottom => "Bottom",
         }
     }
 
@@ -700,9 +716,42 @@ impl ReferenceAxis {
     pub fn basis(self) -> (Vec3, Vec3, Vec3) {
         match self {
             Self::Front => (Vec3::X, Vec3::Y, Vec3::Z),
-            Self::Side => (-Vec3::Z, Vec3::Y, Vec3::X),
+            Self::Right => (-Vec3::Z, Vec3::Y, Vec3::X),
             Self::Top => (Vec3::X, -Vec3::Z, Vec3::Y),
+            Self::Back => (-Vec3::X, Vec3::Y, -Vec3::Z),
+            Self::Left => (Vec3::Z, Vec3::Y, -Vec3::X),
+            Self::Bottom => (Vec3::X, Vec3::Z, -Vec3::Y),
         }
+    }
+}
+
+#[cfg(test)]
+mod reference_axis_tests {
+    use super::ReferenceAxis;
+
+    #[test]
+    fn opposing_axes_have_opposite_normals_and_orthonormal_bases() {
+        let pairs = [
+            (ReferenceAxis::Front, ReferenceAxis::Back),
+            (ReferenceAxis::Right, ReferenceAxis::Left),
+            (ReferenceAxis::Top, ReferenceAxis::Bottom),
+        ];
+        for (a, b) in pairs {
+            let (ar, au, an) = a.basis();
+            let (br, bu, bn) = b.basis();
+            assert!((an + bn).length() < 1e-5, "{} vs {}", a.label(), b.label());
+            for (right, up, normal) in [(ar, au, an), (br, bu, bn)] {
+                assert!((right.length() - 1.0).abs() < 1e-5);
+                assert!((up.length() - 1.0).abs() < 1e-5);
+                assert!((normal.length() - 1.0).abs() < 1e-5);
+                assert!(right.dot(up).abs() < 1e-5);
+                assert!(right.dot(normal).abs() < 1e-5);
+                assert!(up.dot(normal).abs() < 1e-5);
+                assert!((right.cross(up) - normal).length() < 1e-5);
+            }
+        }
+        assert_eq!(ReferenceAxis::ALL.len(), 6);
+        assert_eq!(ReferenceAxis::CHOICES.len(), 6);
     }
 }
 
