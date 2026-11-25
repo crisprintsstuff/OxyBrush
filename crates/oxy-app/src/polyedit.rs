@@ -218,6 +218,11 @@ impl ElementMode {
         }
     }
 
+    /// Whether Box/Lasso area pick is offered (RFC 0035 leaves Auto for later).
+    pub fn area_pick(self) -> bool {
+        matches!(self, ElementMode::Faces | ElementMode::Edges | ElementMode::Points)
+    }
+
     /// The number key that picks it (the first four brush keys).
     pub fn key(self) -> u32 {
         match self {
@@ -245,6 +250,46 @@ impl ElementMode {
     }
 }
 
+/// Box or Lasso area pick in the Poly Edit window (RFC 0035). Off while
+/// click/paint pick is used; Auto mode leaves this off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PolyAreaTool {
+    #[default]
+    Off,
+    Box,
+    Lasso,
+}
+
+impl PolyAreaTool {
+    pub fn label(self) -> &'static str {
+        match self {
+            PolyAreaTool::Off => "Click",
+            PolyAreaTool::Box => "Box",
+            PolyAreaTool::Lasso => "Lasso",
+        }
+    }
+
+    pub fn help(self) -> &'static str {
+        match self {
+            PolyAreaTool::Off => "Click or Ctrl/Cmd+drag to pick faces, edges or points one at a time.",
+            PolyAreaTool::Box => {
+                "Drag a rectangle to pick. Plain drag replaces the pick; Ctrl/Cmd adds; Alt subtracts."
+            }
+            PolyAreaTool::Lasso => {
+                "Drag a freehand outline to pick. Plain drag replaces the pick; Ctrl/Cmd adds; Alt subtracts."
+            }
+        }
+    }
+
+    pub fn shape(self) -> Option<crate::editor::SelectShape> {
+        match self {
+            PolyAreaTool::Off => None,
+            PolyAreaTool::Box => Some(crate::editor::SelectShape::Rectangle),
+            PolyAreaTool::Lasso => Some(crate::editor::SelectShape::Lasso),
+        }
+    }
+}
+
 /// The tool's state while its window is open.
 pub struct PolyEdit {
     /// The piece being modeled.
@@ -254,6 +299,8 @@ pub struct PolyEdit {
     pub edge_action: EdgeAction,
     pub edge_reach: EdgeReach,
     pub point_action: PointAction,
+    /// Box or Lasso area pick (RFC 0035); Off uses click/paint pick.
+    pub area_tool: PolyAreaTool,
     /// Extrude and inset each face on its own instead of as one region.
     pub each: bool,
     /// Blend toward a fitted circle when running To Circle.
@@ -501,6 +548,7 @@ impl Editor {
             edge_action: EdgeAction::InsertLoop,
             edge_reach: EdgeReach::One,
             point_action: PointAction::Move,
+            area_tool: PolyAreaTool::Off,
             each: false,
             circle_amount: 1.0,
             mirror: self.symmetry.x,
@@ -543,8 +591,25 @@ impl Editor {
             return;
         }
         pe.mode = mode;
+        if !mode.area_pick() {
+            pe.area_tool = PolyAreaTool::Off;
+        }
         self.poly_convert_pick(mode);
         self.status = format!("Poly Edit: {} ({})", mode.label(), mode.help());
+    }
+
+    /// Choose Box or Lasso area pick, or Off for click/paint (RFC 0035).
+    pub fn set_poly_area_tool(&mut self, tool: PolyAreaTool) {
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        if tool != PolyAreaTool::Off && !pe.mode.area_pick() {
+            self.status = "Box and Lasso pick need Faces, Edges or Points mode".into();
+            return;
+        }
+        if tool != PolyAreaTool::Off {
+            pe.knife = None;
+        }
+        pe.area_tool = tool;
+        self.status = format!("Poly Edit: {} — {}", tool.label(), tool.help());
     }
 
     /// Close the tool.
@@ -658,6 +723,70 @@ impl Editor {
     pub(crate) fn poly_screen(&self, c: &Cage, v: u32) -> Option<Vec2> {
         let s = self.camera.project(c.positions[v as usize], self.canvas_size())?;
         Some(s + Vec2::new(self.canvas[0], self.canvas[1]))
+    }
+
+    /// Closest cage face under canvas-local pixel `local`, and distance along the ray.
+    fn poly_raycast_local(&self, local: Vec2) -> Option<(usize, f32)> {
+        let c = self.poly_cage()?;
+        let (o, d) = self.camera.ray(local, self.canvas_size());
+        let mut best: Option<(f32, usize)> = None;
+        for (fi, f) in c.faces.iter().enumerate() {
+            let k = corners(f);
+            let tris: Vec<[u32; 3]> = if k.len() <= 4 {
+                (1..k.len() - 1).map(|j| [k[0], k[j], k[j + 1]]).collect()
+            } else {
+                ear_clip(&c.positions, k)
+            };
+            for t in tris {
+                let [a, b, cc] = t.map(|v| c.positions[v as usize]);
+                if let Some(dist) = ray_triangle(o, d, a, b, cc)
+                    && best.is_none_or(|(bd, _)| dist < bd)
+                {
+                    best = Some((dist, fi));
+                }
+            }
+        }
+        best.map(|(dist, face)| (face, dist))
+    }
+
+    /// Screen-space pick point for face `f`: face centre, or for an n-gon the
+    /// centroid of its largest triangulation triangle (RFC 0035).
+    fn poly_face_pick_point(c: &Cage, f: usize) -> Vec3 {
+        let k = corners(&c.faces[f]);
+        if k.len() <= 4 {
+            return polyedit::face_center(c, f);
+        }
+        let tris = ear_clip(&c.positions, k);
+        let mut best: Option<(f32, Vec3)> = None;
+        for t in tris {
+            let [a, b, cc] = t.map(|v| c.positions[v as usize]);
+            let area = (b - a).cross(cc - a).length();
+            let mid = (a + b + cc) / 3.0;
+            if best.is_none_or(|(ba, _)| area > ba) {
+                best = Some((area, mid));
+            }
+        }
+        best.map(|(_, p)| p).unwrap_or_else(|| polyedit::face_center(c, f))
+    }
+
+    /// Whether world point `at` is visible on the cage: nothing closer along
+    /// the view ray, or the hit is on a face that owns `owner` (a point on an
+    /// exposed silhouette stays selectable — RFC 0035).
+    fn poly_point_visible(&self, at: Vec3, owner: impl Fn(usize) -> bool) -> bool {
+        let size = self.canvas_size();
+        let Some(local) = self.camera.project(at, size) else {
+            return false;
+        };
+        let (o, d) = self.camera.ray(local, size);
+        let dir = d.normalize_or_zero();
+        if dir == Vec3::ZERO {
+            return false;
+        }
+        let depth = (at - o).dot(dir);
+        match self.poly_raycast_local(local) {
+            None => true,
+            Some((face, dist)) => dist >= depth - 1e-3 || owner(face),
+        }
     }
 
     /// The point, edge or face under window pixel `p`: a corner or edge of
@@ -1106,6 +1235,16 @@ impl Editor {
         if self.poly_knife_down(p) {
             return true;
         }
+        // Box / Lasso area pick (RFC 0035): drag draws the outline.
+        if let Some(shape) = self.poly_edit.as_ref().and_then(|pe| pe.area_tool.shape()) {
+            self.drag = Drag::PolyAreaSelect {
+                shape,
+                points: vec![p],
+                add: self.modifiers.ctrl,
+                subtract: self.modifiers.alt && !self.modifiers.ctrl,
+            };
+            return true;
+        }
         let element = self.poly_element_at(p);
         // Ctrl/Cmd+click picks faces to act on together (empty space
         // clears); a double-click picks the loop through an edge or face.
@@ -1134,6 +1273,137 @@ impl Editor {
             Element::Point(v) => self.poly_point_down(p, v),
         }
         true
+    }
+
+    /// Apply a finished Box/Lasso area pick (RFC 0035). No undo step.
+    fn poly_apply_area(&mut self, shape: crate::editor::SelectShape, points: Vec<Vec2>, add: bool, subtract: bool) {
+        let is_click = points.len() < 2 || points.iter().all(|q| q.distance(points[0]) < 4.0);
+        if is_click {
+            self.status = "Poly Edit: drag a box or lasso to pick".into();
+            return;
+        }
+        let mode = self.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
+        if !mode.area_pick() {
+            return;
+        }
+        let Some(c) = self.poly_cage().cloned() else { return };
+        let origin = Vec2::new(self.canvas[0], self.canvas[1]);
+        let local: Vec<Vec2> = points.iter().map(|q| *q - origin).collect();
+        let outline = crate::select_shapes::select_outline(shape, &local);
+        let size = self.canvas_size();
+        let camera = self.camera;
+        let in_area =
+            |world: Vec3| camera.project(world, size).is_some_and(|s| crate::editor::point_in_polygon(s, &outline));
+
+        let mut faces = Vec::new();
+        let mut edges = Vec::new();
+        let mut points_picked = Vec::new();
+        match mode {
+            ElementMode::Faces => {
+                for f in 0..c.faces.len() {
+                    let at = Self::poly_face_pick_point(&c, f);
+                    if !in_area(at) {
+                        continue;
+                    }
+                    let Some(local) = camera.project(at, size) else { continue };
+                    // Visible: the ray through the pick point hits this face.
+                    if self.poly_raycast_local(local).is_some_and(|(hit, _)| hit == f) {
+                        faces.push(f);
+                    }
+                }
+            }
+            ElementMode::Edges => {
+                let mut seen = std::collections::HashSet::new();
+                for f in &c.faces {
+                    let k = corners(f);
+                    for j in 0..k.len() {
+                        let key = edge_key(k[j], k[(j + 1) % k.len()]);
+                        if !seen.insert(key) {
+                            continue;
+                        }
+                        let mid = (c.positions[key[0] as usize] + c.positions[key[1] as usize]) * 0.5;
+                        if !in_area(mid) {
+                            continue;
+                        }
+                        let owns = |face: usize| {
+                            let kk = corners(&c.faces[face]);
+                            (0..kk.len()).any(|i| edge_key(kk[i], kk[(i + 1) % kk.len()]) == key)
+                        };
+                        if self.poly_point_visible(mid, owns) {
+                            edges.push(key);
+                        }
+                    }
+                }
+            }
+            ElementMode::Points => {
+                for v in 0..c.positions.len() as u32 {
+                    if !c.used()[v as usize] {
+                        continue;
+                    }
+                    let at = c.positions[v as usize];
+                    if !in_area(at) {
+                        continue;
+                    }
+                    let owns = |face: usize| corners(&c.faces[face]).contains(&v);
+                    if self.poly_point_visible(at, owns) {
+                        points_picked.push(v);
+                    }
+                }
+            }
+            ElementMode::Auto => return,
+        }
+
+        self.poly_pick_begin();
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        if !add && !subtract {
+            pe.selected.clear();
+            pe.picked_edges.clear();
+            pe.picked_points.clear();
+        }
+        match mode {
+            ElementMode::Faces => {
+                pe.picked_edges.clear();
+                pe.picked_points.clear();
+                if subtract {
+                    pe.selected.retain(|f| !faces.contains(f));
+                } else {
+                    for f in faces {
+                        if !pe.selected.contains(&f) {
+                            pe.selected.push(f);
+                        }
+                    }
+                }
+            }
+            ElementMode::Edges => {
+                pe.selected.clear();
+                pe.picked_points.clear();
+                if subtract {
+                    pe.picked_edges.retain(|e| !edges.contains(e));
+                } else {
+                    for e in edges {
+                        if !pe.picked_edges.contains(&e) {
+                            pe.picked_edges.push(e);
+                        }
+                    }
+                }
+            }
+            ElementMode::Points => {
+                pe.selected.clear();
+                pe.picked_edges.clear();
+                if subtract {
+                    pe.picked_points.retain(|v| !points_picked.contains(v));
+                } else {
+                    for v in points_picked {
+                        if !pe.picked_points.contains(&v) {
+                            pe.picked_points.push(v);
+                        }
+                    }
+                }
+            }
+            ElementMode::Auto => {}
+        }
+        let (n, kind) = self.poly_pick_count();
+        self.status = if n == 0 { "Nothing picked".into() } else { format!("{n} {kind} picked") };
     }
 
     /// The piece's mesh and polygons now, for an undo step.
@@ -1753,6 +2023,14 @@ impl Editor {
             self.drag = Drag::None;
             return true;
         }
+        if matches!(self.drag, Drag::PolyAreaSelect { .. }) {
+            let Drag::PolyAreaSelect { shape, points, add, subtract } = std::mem::replace(&mut self.drag, Drag::None)
+            else {
+                unreachable!()
+            };
+            self.poly_apply_area(shape, points, add, subtract);
+            return true;
+        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             self.poly_gizmo_up();
             return true;
@@ -1830,6 +2108,11 @@ impl Editor {
 
     /// Escape during a drag: put everything back.
     pub(crate) fn poly_cancel_drag(&mut self) {
+        if matches!(self.drag, Drag::PolyAreaSelect { .. }) {
+            self.drag = Drag::None;
+            self.status = "Poly Edit: area pick cancelled".into();
+            return;
+        }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
             let Drag::PolyGizmo(g) = std::mem::replace(&mut self.drag, Drag::None) else { unreachable!() };
             if let Some(i) = self.poly_piece_index() {
@@ -3794,5 +4077,102 @@ mod tests {
         e.modifiers.ctrl = true;
         click(&mut e, Vec2::new(5.0, 5.0));
         assert_eq!(e.poly_pick_count().0, 0);
+    }
+
+    #[test]
+    fn box_area_picks_the_front_face_and_respects_occlusion() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.set_poly_mode(ElementMode::Faces);
+        e.set_poly_area_tool(PolyAreaTool::Box);
+        // A box covering the middle of the view: the front face only.
+        drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
+        assert_eq!(e.poly_pick_count(), (1, "faces"), "{}", e.status);
+        let front = face_towards(&e, Vec3::Z);
+        assert_eq!(e.poly_selection(), &[front]);
+        // Esc clears; a tiny click does nothing.
+        e.poly_toggle_pick(None);
+        drag(&mut e, centre(), centre() + Vec2::splat(2.0));
+        assert_eq!(e.poly_pick_count().0, 0);
+        // Back face stays out: from the default view it is occluded.
+        let back = face_towards(&e, -Vec3::Z);
+        drag(&mut e, centre() - Vec2::splat(200.0), centre() + Vec2::splat(200.0));
+        assert!(!e.poly_selection().contains(&back), "occluded back face not picked: {:?}", e.poly_selection());
+        assert!(e.poly_selection().contains(&front));
+    }
+
+    #[test]
+    fn area_pick_add_and_subtract_and_escape_cancel() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.set_poly_mode(ElementMode::Faces);
+        e.set_poly_area_tool(PolyAreaTool::Box);
+        drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
+        let n = e.poly_pick_count().0;
+        assert!(n >= 1);
+        // Ctrl adds (same region keeps the count).
+        e.modifiers.ctrl = true;
+        drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
+        e.modifiers.ctrl = false;
+        assert_eq!(e.poly_pick_count().0, n);
+        // Alt subtracts the front face away.
+        e.modifiers.alt = true;
+        drag(&mut e, centre() - Vec2::splat(40.0), centre() + Vec2::splat(40.0));
+        e.modifiers.alt = false;
+        assert_eq!(e.poly_pick_count().0, 0, "{}", e.status);
+        // Escape cancels an unfinished drag.
+        e.pointer = Some(centre());
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(centre() + Vec2::splat(80.0));
+        assert!(matches!(e.drag, Drag::PolyAreaSelect { .. }));
+        e.cancel_drag();
+        assert!(matches!(e.drag, Drag::None));
+        assert_eq!(e.poly_pick_count().0, 0);
+    }
+
+    #[test]
+    fn box_and_lasso_pick_front_corners_in_points_mode() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.set_poly_mode(ElementMode::Points);
+        let front = face_towards(&e, Vec3::Z);
+        let corners: Vec<u32> = oxy_mesh::retopo::corners(&cage(&e).faces[front]).to_vec();
+        let s = |e: &Editor, v: u32| {
+            e.camera.project(cage(e).positions[v as usize], e.canvas_size()).unwrap()
+                + Vec2::new(e.canvas[0], e.canvas[1])
+        };
+        let mut min = s(&e, corners[0]);
+        let mut max = min;
+        for &v in &corners[1..] {
+            let p = s(&e, v);
+            min = min.min(p);
+            max = max.max(p);
+        }
+        e.set_poly_area_tool(PolyAreaTool::Box);
+        drag(&mut e, min - Vec2::splat(8.0), max + Vec2::splat(8.0));
+        let picked = e.poly_picked_points().to_vec();
+        assert!(
+            corners.iter().all(|v| picked.contains(v)),
+            "box: front corners {corners:?} in pick {picked:?}; {}",
+            e.status
+        );
+        e.poly_toggle_pick(None);
+        // Lasso: walk a rectangle outline the same way SelectShape::Lasso stores points.
+        e.set_poly_area_tool(PolyAreaTool::Lasso);
+        let a = min - Vec2::splat(8.0);
+        let b = max + Vec2::splat(8.0);
+        let path = [a, Vec2::new(b.x, a.y), b, Vec2::new(a.x, b.y), a];
+        e.pointer = Some(path[0]);
+        e.pointer_down(PointerButton::Primary);
+        for &p in &path[1..] {
+            e.pointer_moved(p);
+        }
+        e.pointer_up();
+        let picked = e.poly_picked_points().to_vec();
+        assert!(
+            corners.iter().all(|v| picked.contains(v)),
+            "lasso: front corners {corners:?} in pick {picked:?}; {}",
+            e.status
+        );
     }
 }

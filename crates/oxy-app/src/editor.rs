@@ -870,6 +870,15 @@ pub enum Drag {
     PolyPaintPick {
         adding: bool,
     },
+    /// Box or lasso area pick in Poly Edit (RFC 0035). `points` are
+    /// physical px (rect uses first and last); `add` / `subtract` come
+    /// from Ctrl/Cmd and Alt at press time.
+    PolyAreaSelect {
+        shape: SelectShape,
+        points: Vec<Vec2>,
+        add: bool,
+        subtract: bool,
+    },
     /// The transform gizmo on Poly Edit's picked faces, edges or points.
     PolyGizmo(Box<crate::polyedit::PolyGizmoDrag>),
     /// The transform gizmo over several picked pieces (#274).
@@ -1793,7 +1802,7 @@ fn kind_index(k: BrushKind) -> usize {
 }
 
 /// Even-odd point-in-polygon test.
-fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
+pub(crate) fn point_in_polygon(p: Vec2, poly: &[Vec2]) -> bool {
     let mut inside = false;
     let mut j = poly.len().wrapping_sub(1);
     for i in 0..poly.len() {
@@ -3795,6 +3804,18 @@ impl Editor {
                 }
                 true
             }
+            Drag::PolyAreaSelect { points, shape, .. } => {
+                if *shape == SelectShape::Lasso {
+                    if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
+                        points.push(pos);
+                    }
+                } else if points.len() < 2 {
+                    points.push(pos);
+                } else {
+                    points[1] = pos;
+                }
+                true
+            }
             Drag::Stroke { queued, .. } if self.coalesce_strokes => {
                 *queued = Some(pos);
                 true
@@ -4179,7 +4200,7 @@ impl Editor {
             self.retopo_cancel_drag();
             return;
         }
-        if matches!(self.drag, Drag::PolyEdit(_) | Drag::PolyGizmo(_)) {
+        if matches!(self.drag, Drag::PolyEdit(_) | Drag::PolyGizmo(_) | Drag::PolyAreaSelect { .. }) {
             self.poly_cancel_drag();
             return;
         }

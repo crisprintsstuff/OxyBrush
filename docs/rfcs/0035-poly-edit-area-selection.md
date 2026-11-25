@@ -1,6 +1,6 @@
 # RFC 0035 — Poly Edit area selection
 
-**Status:** Draft ([#299](https://github.com/crisprintsstuff/OxyBrush/issues/299))
+**Status:** Implemented ([#299](https://github.com/crisprintsstuff/OxyBrush/issues/299))
 
 ## Summary
 
