@@ -108,3 +108,6 @@ Retopologizing the voxel result could handle overlapping limbs more
 naturally, but adds a separate topology pass and makes it harder to
 guarantee loops that follow the original armature. Keep it as a candidate
 for more complex armatures after evaluating direct ring construction.
+
+Mirrored limb quads use matching triangulation diagonals for viewport shading.
+A successful rebuild reveals the updated output, and undo restores its prior visibility.

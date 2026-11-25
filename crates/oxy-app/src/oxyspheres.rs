@@ -372,6 +372,10 @@ impl Editor {
             let mut steps = self.place_spheres_piece(spheres, replace);
             let piece = &mut self.scene.pieces[i];
             let name = piece.name.clone();
+            if !piece.visible {
+                steps.push(Step::Visible { piece: piece.id, previous: false });
+                piece.visible = true;
+            }
             let previous = std::mem::replace(&mut piece.mesh, mesh);
             steps.push(Step::Topology { piece: piece.id, previous, previous_multires: None });
             self.scene.set_active(i);

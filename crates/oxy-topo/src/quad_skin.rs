@@ -128,6 +128,23 @@ pub fn quad_skin_mesh(armature: &Armature, levels: u8) -> Result<Mesh, QuadSkinE
         }
         validate(&cage)?;
     }
+    if let Some(mirror_x) = armature.mirror {
+        // The cage triangulates opposite corners 0 and 2. Reflected
+        // faces may start at different corners, so choose the start in
+        // reflected coordinates to keep their shading diagonals paired.
+        let positions = &cage.positions;
+        for face in &mut cage.faces {
+            if face.corners.len() != 4 {
+                continue;
+            }
+            let key = |i: usize| {
+                let p = positions[face.corners[i] as usize];
+                [p.y, p.z, (p.x - mirror_x).abs()].map(|x| (x as f64 * 1.0e5).round() as i64)
+            };
+            let first = (0..4).min_by_key(|&i| key(i)).unwrap();
+            face.corners.rotate_left(first);
+        }
+    }
     cage.build_mesh().ok_or(QuadSkinError::InvalidSurface)
 }
 
@@ -415,6 +432,36 @@ mod tests {
                 assert!(face_keys.contains(&reflected));
             }
             assert_subdivides(&cage);
+        }
+    }
+
+    #[test]
+    fn reflected_limb_triangles_use_the_same_diagonals() {
+        for level in [0, 1, 2] {
+            let mesh = quad_skin_mesh(&fork(0.8, 3.0), level).unwrap();
+            let triangles: BTreeSet<_> = mesh
+                .triangles
+                .iter()
+                .map(|t| {
+                    let mut key = *t;
+                    key.sort_unstable();
+                    key
+                })
+                .collect();
+            let mut checked = 0;
+            for t in &mesh.triangles {
+                if t.iter().all(|&i| mesh.positions[i as usize].x > 1e-5) {
+                    let mut reflected = t.map(|i| {
+                        let p = mesh.positions[i as usize];
+                        let reflected = Vec3::new(-p.x, p.y, p.z);
+                        mesh.positions.iter().position(|q| q.distance(reflected) < 2e-5).unwrap() as u32
+                    });
+                    reflected.sort_unstable();
+                    assert!(triangles.contains(&reflected), "missing reflected triangle at subdivision {level}");
+                    checked += 1;
+                }
+            }
+            assert!(checked > 0);
         }
     }
 
