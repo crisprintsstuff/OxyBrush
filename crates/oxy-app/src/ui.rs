@@ -3152,7 +3152,7 @@ fn apply_arrangement(ctx: &egui::Context, ed: &mut Editor) {
     }
 }
 
-/// Raise / Carve, size and strength: the controls used most while sculpting.
+/// Raise / Carve, size, strength and focal shift: the controls used most while sculpting.
 fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
     let (raise_text, carve_text) = ("Raise", "Carve");
     let raise =
@@ -3177,6 +3177,13 @@ fn quick_controls(ui: &mut Ui, ed: &mut Editor) {
             egui::Slider::new(ed.strength_mut(k), 0.01..=1.0).max_decimals(2).trailing_fill(true),
         )),
         if shift_smooth { "Smoothing intensity when holding Shift".to_string() } else { Cmd::Strength.tip() },
+    );
+    ui.label(RichText::new("Focal shift").weak());
+    tips::hover(
+        ui.add(crate::widgets::Bar(
+            egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2).trailing_fill(true),
+        )),
+        plain::FOCAL_SHIFT,
     );
 }
 

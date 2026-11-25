@@ -84,7 +84,7 @@ The first time OxyBrush starts, a welcome window helps you pick a starting shape
 
 ![The touch-friendly layout: brush tiles, on-screen Smooth / Mask / Invert, and larger controls](docs/images/layout-touch.png)
 
-- **Arrange the panels** (Preferences > General, or right-click the brush shelf or the size/strength bar): put the brush shelf left, bottom or right; the settings panel left or right; and size, strength and Raise/Carve floating at the top or bottom of the viewport, or in the toolbar. **Drag brushes** in the shelf to reorder them; the number keys follow your order. **Right-click a brush > Set hotkey** gives it a key of its own.
+- **Arrange the panels** (Preferences > General, or right-click the brush shelf or the size/strength bar): put the brush shelf left, bottom or right; the settings panel left or right; and size, strength, focal shift and Raise/Carve floating at the top or bottom of the viewport, or in the toolbar. **Drag brushes** in the shelf to reorder them; the number keys follow your order. **Right-click a brush > Set hotkey** gives it a key of its own.
 - **Fit more in the shelf:** turn off **Show brush names** (Preferences > Interface) for an icon grid, or use **Narrow brush shelf** for a single column.
 - **Change the look** in **Preferences > Appearance**: themes (including Sculptor and Midnight), a **Mix** that takes the colors, the controls (sliders and tiles) and the shadows each from any theme, accent and button colors, brush icon colors, UI tint hue and intensity, chrome brightness, the viewport background, interface scale, corners and slider thickness.
 
