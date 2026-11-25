@@ -58,8 +58,11 @@ two points on the image, then the corresponding two points on the sculpt
 in the matching orthographic view. Project all four points onto the
 reference plane so placement depth stays fixed. Translate, rotate, and
 uniformly scale the image to match the points, then preview the result
-before Apply. Cancel returns to the prior preview. Pick clicks are reserved
-for alignment until the fourth point or cancellation.
+before Apply. Undo the last pick while collecting points. After four picks,
+select any numbered image or sculpt landmark to replace it independently.
+Use fit returns the result to the placement controls for Apply. Cancel
+returns to the prior preview. Viewport clicks are reserved for alignment
+while the picker or fit review is open.
 
 The picker temporarily draws the selected image over the sculpt for the
 first two clicks and hides reference images for the next two. A fine
