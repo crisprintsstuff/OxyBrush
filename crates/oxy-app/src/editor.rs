@@ -1264,6 +1264,10 @@ pub struct Editor {
     /// dragged and the last one applied (for Repeat).
     pub show_deform: bool,
     pub deform: crate::deform_ui::DeformSettings,
+    /// The Color Filter window: whole-piece vertex color adjustments.
+    pub show_color_filter: bool,
+    /// When true, Color Filter leaves masked vertices alone.
+    pub color_filter_use_mask: bool,
     /// Pieces with more points than this are previewed in the background
     /// while a deformer is dragged (lowered in tests).
     pub deform_background_above: usize,
@@ -1638,6 +1642,8 @@ impl Default for Editor {
             show_theme: false,
             show_deform: false,
             deform: Default::default(),
+            show_color_filter: false,
+            color_filter_use_mask: true,
             deform_background_above: crate::deform_ui::BACKGROUND_ABOVE,
             theme_tab: ThemeTab::Themes,
             show_wireframe: false,
@@ -4165,6 +4171,10 @@ impl Editor {
             self.deform_cancel();
             return;
         }
+        if self.color_filter_drag.is_some() {
+            self.color_filter_cancel();
+            return;
+        }
         if matches!(self.drag, Drag::Retopo(_)) {
             self.retopo_cancel_drag();
             return;
@@ -4882,6 +4892,7 @@ impl Editor {
             && doc.extract_preview.is_none()
             && doc.insert_preview.is_none()
             && doc.deform_drag.is_none()
+            && doc.color_filter_drag.is_none()
             && doc.hold_offer.is_none()
     }
 
@@ -4901,6 +4912,7 @@ impl Editor {
                 self.primitive_edit = None;
                 self.insert_preview = None;
                 self.show_deform = false;
+                self.show_color_filter = false;
                 self.status = "New document (empty scene)".into();
                 self.replace_document(Scene::empty(), None);
             } else {
@@ -8995,7 +9007,7 @@ impl Editor {
 
     /// Painting with vertex color hidden would show nothing: show it again,
     /// and say so.
-    fn reveal_vertex_color(&mut self) {
+    pub(crate) fn reveal_vertex_color(&mut self) {
         if !self.view.show_vertex_color {
             self.view.show_vertex_color = true;
             self.status = format!("{} (vertex color shown again)", self.status);

@@ -90,6 +90,7 @@ commands! {
     AddDisc => "Add disc piece", "", "Add a flat disc as a new piece: a round plate of quads, a ring with a hole, or a slice of one. A good start for hard-surface parts in Poly Edit.";
     LivingStrokes => "Strokes…", "", "Open the Strokes panel (Living strokes): the strokes made on this piece, to fade, delete or solo any of them without undoing what came after. Turn Living strokes on in Preferences > General.";
     DeformWindow => "Deform…", "", "Open the Deform window: bend, twist, taper, inflate, polish and more for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
+    ColorFilterWindow => "Color Filter…", "", "Open the Color Filter window: fill, hue, saturation, value, brightness, contrast, smooth and RGB adjustments for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
     DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";
     DeformRepeat => "Repeat on this piece", "", "Apply the last deformer again, with the same amount and axes.";
     DeformRepeatOthers => "Repeat on other pieces", "", "Apply the last deformer to every other visible piece, each around its own middle. One undo step.";
@@ -706,7 +707,7 @@ pub mod plain {
     pub const ADD: &str = "Add a sphere, cube or plane as another piece.";
     pub const OPEN_RECENT: &str = "Files you opened, imported or saved recently.";
     pub const CLEAR_RECENT: &str = "Forget the recent-file list. The files themselves stay where they are.";
-    pub const VERTEX_COLOR: &str = "Paint and fill vertex color. Masked areas are left alone.";
+    pub const VERTEX_COLOR: &str = "Paint, fill and Color Filter vertex color. Masked areas are left alone.";
     pub const BUTTON_COLOR: &str = "Give buttons and other controls a color of your own instead of the theme's. Hovered buttons get a little lighter.";
     pub const BRUSH_ICON_COLOR: &str =
         "The color of the clay in the brush icons: the original terracotta, your accent color, or one of your own.";
