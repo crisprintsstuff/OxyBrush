@@ -1,6 +1,6 @@
 # RFC 0036 — Rebuild one lower subdivision level
 
-**Status:** Draft ([#366](https://github.com/crisprintsstuff/OxyBrush/issues/366), [#455](https://github.com/crisprintsstuff/OxyBrush/issues/455))
+**Status:** Implemented ([#366](https://github.com/crisprintsstuff/OxyBrush/issues/366), [#455](https://github.com/crisprintsstuff/OxyBrush/issues/455))
 
 ## Summary
 

@@ -305,6 +305,7 @@ fn mesh_menu(ed: &Editor, busy: bool) -> Vec<Node> {
         cmd_on(Cmd::DeleteHigher, "Delete higher levels", levels.is_some_and(|(a, c)| a + 1 < c)),
         cmd_on(Cmd::DeleteLower, "Delete lower levels", levels.is_some_and(|(a, _)| a > 0)),
         cmd_on(Cmd::KeepLevel, "Keep this level only", levels.is_some()),
+        cmd_on(Cmd::RebuildLowerLevel, "Rebuild lower level", ed.can_rebuild_lower_level()),
         Node::Separator,
         cmd(Cmd::SubdivideMasked, "Subdivide masked"),
         cmd(Cmd::SubdivideOnce, "Subdivide (single mesh)"),

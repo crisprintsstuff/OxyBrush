@@ -126,6 +126,7 @@ commands! {
     DeleteHigher => "Delete higher levels", "", "Remove subdivision levels finer than the current one.";
     DeleteLower => "Delete lower levels", "", "Remove subdivision levels coarser than the current one.";
     KeepLevel => "Keep this level only", "", "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail can work on it.";
+    RebuildLowerLevel => "Rebuild lower level", "", "Recover one Catmull–Clark coarse level under an all-quad mesh that has no subdivision stack (for example after Keep this level only, or an import with recorded quads). The dense surface stays as the high level.";
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
