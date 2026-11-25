@@ -1,7 +1,7 @@
 //! The Poly Edit window and the polygons drawn over the viewport (RFC 0018).
 
 use crate::editor::{Drag, Editor};
-use crate::polyedit::{EdgeAction, ElementMode, FaceAction, Pending, PointAction, outline_edges};
+use crate::polyedit::{EdgeAction, ElementMode, FaceAction, Pending, PointAction, PolyAreaTool, outline_edges};
 use egui::{Color32, RichText, Stroke};
 use glam::{Vec2, Vec3};
 use oxy_mesh::polyedit::{EdgeReach, Reach, face_normal};
@@ -28,7 +28,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
         }
     }
     let esc = ctx.input(|i| i.key_pressed(egui::Key::Escape));
-    let mut done = esc && !matches!(ed.drag, Drag::PolyEdit(_)) && !ctx.egui_wants_keyboard_input();
+    let mut done =
+        esc && !matches!(ed.drag, Drag::PolyEdit(_) | Drag::PolyAreaSelect { .. }) && !ctx.egui_wants_keyboard_input();
     // Esc first drops a half-done two-click action, then the pick (#298).
     if done && ed.poly_escape() {
         done = false;
@@ -85,6 +86,22 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
 
 /// Actions, options and tips inside the Poly Edit scroll area.
 fn poly_edit_body(ui: &mut egui::Ui, ed: &mut Editor, subdivide: &mut Option<(u32, bool)>, repeat_key: &str) {
+    // Box / Lasso area pick (RFC 0035), then the Knife (#370).
+    let mode = ed.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
+    let area = ed.poly_edit.as_ref().map_or(PolyAreaTool::Off, |pe| pe.area_tool);
+    if mode.area_pick() {
+        ui.horizontal_wrapped(|ui| {
+            ui.label("Pick").on_hover_text(
+                "How to pick several faces, edges or points: click one at a time, or drag a box or lasso.",
+            );
+            for tool in [PolyAreaTool::Off, PolyAreaTool::Box, PolyAreaTool::Lasso] {
+                let r = ui.selectable_label(area == tool, tool.label()).on_hover_text(tool.help());
+                if r.clicked() {
+                    ed.set_poly_area_tool(tool);
+                }
+            }
+        });
+    }
     // The Knife (#370): draw a cut across the faces.
     let knife = ed.poly_knife_on();
     ui.horizontal_wrapped(|ui| {

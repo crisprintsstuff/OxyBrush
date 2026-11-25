@@ -21,6 +21,7 @@ impl Editor {
         if pe.knife.take().is_none() {
             pe.knife = Some(Vec::new());
             pe.pending = None;
+            pe.area_tool = crate::polyedit::PolyAreaTool::Off;
             self.status = "Knife: click points on the model to draw the cut; Enter (or a click on the last point) cuts, Backspace takes the last point back, Esc cancels".into();
         } else {
             self.status = "Knife off".into();

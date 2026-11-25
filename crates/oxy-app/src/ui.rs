@@ -8291,6 +8291,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     // `ed.drag` holds a borrow that the surface cursor cannot share.
     enum Mark {
         Select { points: Vec<Vec2>, shape: crate::editor::SelectShape, action: crate::editor::SelectAction },
+        PolyArea { points: Vec<Vec2>, shape: crate::editor::SelectShape },
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
         InsertPrimitive { start_pixel: Vec2 },
@@ -8303,6 +8304,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Drag::Select { points, shape, action, .. } => {
             Mark::Select { points: points.clone(), shape: *shape, action: *action }
         }
+        Drag::PolyAreaSelect { points, shape, .. } => Mark::PolyArea { points: points.clone(), shape: *shape },
         Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
         Drag::MaskGesture { start } => Mark::MaskGesture { start: *start },
         Drag::InsertPrimitive { start_pixel, .. } => Mark::InsertPrimitive { start_pixel: *start_pixel },
@@ -8323,6 +8325,18 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                     crate::select_shapes::select_outline(shape, &ends).into_iter().map(to_pt).collect();
                 painter.add(egui::Shape::convex_polygon(ring, c.linear_multiply(0.08), stroke));
             } else if shape == crate::editor::SelectShape::Lasso {
+                let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
+                pts.push(pos);
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            } else {
+                let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
+                painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
+            }
+        }
+        Mark::PolyArea { points, shape } => {
+            let c = Color32::from_rgb(80, 180, 255);
+            let stroke = EStroke::new(1.5, c);
+            if shape == crate::editor::SelectShape::Lasso {
                 let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
                 pts.push(pos);
                 painter.add(egui::Shape::closed_line(pts, stroke));

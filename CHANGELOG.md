@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Poly Edit Box and Lasso pick.** In Faces, Edges or Points mode, Pick offers Click, Box and Lasso. Drag a rectangle or freehand outline to pick visible elements; plain drag replaces the pick, Ctrl/Cmd adds, Alt subtracts, Escape cancels. [#299](https://github.com/crisprintsstuff/OxyBrush/issues/299), [RFC 0035](docs/rfcs/0035-poly-edit-area-selection.md)
 - **Rebuild lower level.** Mesh > Rebuild lower level recovers one Catmull–Clark coarse level under an all-quad mesh with no subdivision stack (RFC 0036, #366, #455).
 - **Replay last stroke.** Edit > Last stroke > Replay stamps the Freehand stroke you just made again, without undoing it. One undo step; available until remesh or a new freehand stroke. Edit as curve still reshapes the path instead.
 - **3MF export.** File > Export type offers 3MF: visible pieces as separate mesh objects in millimetres, using the scene unit size (Preferences > Units / 3D print). [#308](https://github.com/crisprintsstuff/OxyBrush/issues/308)
