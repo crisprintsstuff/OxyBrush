@@ -35,6 +35,9 @@ pub enum BrushKind {
     Smooth,
     Inflate,
     Flatten,
+    /// Exaggerates existing relief: peaks rise and recesses deepen relative
+    /// to the dab's mean plane. Alt reduces that contrast (toward Flatten).
+    Amplify,
     Pinch,
     Crease,
     Layer,
@@ -175,13 +178,14 @@ impl InsertShape {
 
 impl BrushKind {
     /// Shelf order; the first ten get number-key shortcuts (1–9, 0).
-    pub const ALL: [BrushKind; 28] = [
+    pub const ALL: [BrushKind; 29] = [
         BrushKind::Draw,
         BrushKind::Clay,
         BrushKind::ClayStrips,
         BrushKind::Smooth,
         BrushKind::Inflate,
         BrushKind::Flatten,
+        BrushKind::Amplify,
         BrushKind::Pinch,
         BrushKind::Crease,
         BrushKind::Layer,
@@ -266,6 +270,7 @@ impl BrushKind {
             BrushKind::Smooth => "Smooth",
             BrushKind::Inflate => "Inflate",
             BrushKind::Flatten => "Flatten",
+            BrushKind::Amplify => "Amplify",
             BrushKind::Grab => "Grab",
             BrushKind::KelvinGrab => "Kelvin Grab",
             BrushKind::KelvinTwist => "Kelvin Twist",
@@ -1871,6 +1876,12 @@ fn target_positions(
                     let d = (plane - p).dot(area_normal);
                     if one_sided && d * sign < 0.0 { p } else { p + area_normal * (d * (w * dab.strength).min(1.0)) }
                 }
+                // Amplify: height above the mean plane, pushed further out
+                // (or, with Alt, back toward the plane to reduce contrast).
+                BrushKind::Amplify => {
+                    let d = (p - area_center).dot(area_normal);
+                    p + area_normal * (d * (w * dab.strength).min(1.0) * sign)
+                }
                 BrushKind::Pinch => p + pinch(p) * sign,
                 // Crease carves a groove and pulls its walls together;
                 // inverted it raises a sharp ridge.
@@ -2432,6 +2443,24 @@ mod tests {
         assert!(!touched.is_empty());
         let (b, a, _) = run(BrushKind::Draw, true, Symmetry::default());
         assert!(a.bounds().max.y < b.bounds().max.y - 0.01);
+    }
+
+    #[test]
+    fn amplify_exaggerates_and_alt_reduces() {
+        // Draw a bump first so there is relief to amplify.
+        let (_, bumped, _) = run(BrushKind::Draw, false, Symmetry::default());
+        let bump_y = bumped.bounds().max.y;
+
+        let settings = BrushSettings { kind: BrushKind::Amplify, radius: 0.3, strength: 0.5, ..Default::default() };
+        let mut raised = bumped.clone();
+        Stroke::new(settings, Symmetry::default(), false).add_sample(&mut raised, top_sample(), &mut |_, _| {});
+        assert!(raised.bounds().max.y > bump_y + 0.002, "Amplify pushes peaks further out");
+
+        let mut reduced = bumped.clone();
+        Stroke::new(settings, Symmetry::default(), true).add_sample(&mut reduced, top_sample(), &mut |_, _| {});
+        assert!(reduced.bounds().max.y < bump_y - 0.002, "Alt Amplify reduces contrast");
+        // Half-strength Alt still leaves some of the bump (unlike a full Flatten).
+        assert!(reduced.bounds().max.y > 1.0 + 0.01, "Alt Amplify keeps underlying form");
     }
 
     #[test]

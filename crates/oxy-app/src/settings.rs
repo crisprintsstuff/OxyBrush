@@ -273,6 +273,7 @@ pub fn brush_key(k: BrushKind) -> &'static str {
         BrushKind::Smooth => "smooth",
         BrushKind::Inflate => "inflate",
         BrushKind::Flatten => "flatten",
+        BrushKind::Amplify => "amplify",
         BrushKind::Pinch => "pinch",
         BrushKind::Crease => "crease",
         BrushKind::SharpCrease => "sharp_crease",
