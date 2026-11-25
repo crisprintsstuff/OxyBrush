@@ -3478,15 +3478,23 @@ fn selection_shapes() -> [(crate::editor::SelectShape, &'static str); 5] {
 }
 
 fn selection_shape_buttons(ui: &mut Ui, ed: &mut Editor) {
-    if !ed.brush_roles().ctrl || ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() {
+    // Shown while masking (Ctrl) or while a cut brush is active so the
+    // same shapes can act as cutters (#492). L also cycles them.
+    let cut_brush = ed.brush_kind.is_curve_cut();
+    if (!ed.brush_roles().ctrl && !cut_brush) || ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() {
         return;
     }
     let mut buttons = |ui: &mut Ui| {
         for (shape, description) in selection_shapes() {
             let tip = format!("{}: {description}", shape.label());
-            if widgets::icon_button(ui, Icon::Selection(shape), ed.selection_shape == shape, true, &tip).clicked() {
-                ed.selection_shape = shape;
-                ed.select_curve = None;
+            let selected = if cut_brush { ed.cut_shape == shape } else { ed.selection_shape == shape };
+            if widgets::icon_button(ui, Icon::Selection(shape), selected, true, &tip).clicked() {
+                if cut_brush {
+                    ed.cut_shape = shape;
+                } else {
+                    ed.selection_shape = shape;
+                    ed.select_curve = None;
+                }
             }
         }
     };
@@ -8300,6 +8308,7 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         MaskGesture { start: Vec2 },
         InsertPrimitive { start_pixel: Vec2 },
         CurveCut { kind: BrushKind, start: Vec2, current: Vec2, offset: Vec2 },
+        ShapeCut { kind: BrushKind, points: Vec<Vec2>, shape: crate::editor::SelectShape },
         Lazy(Vec2),
         Brush { kind: BrushKind, invert: bool },
     }
@@ -8314,6 +8323,9 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Drag::InsertPrimitive { start_pixel, .. } => Mark::InsertPrimitive { start_pixel: *start_pixel },
         Drag::CurveCut { kind, start, current, offset, .. } => {
             Mark::CurveCut { kind: *kind, start: *start, current: *current, offset: *offset }
+        }
+        Drag::ShapeCut { kind, shape, points, .. } => {
+            Mark::ShapeCut { kind: *kind, points: points.clone(), shape: *shape }
         }
         Drag::Stroke { lazy: Some(b), .. } => Mark::Lazy(*b),
         Drag::Stroke { stroke, .. } => Mark::Brush { kind: stroke.settings().kind, invert: false },
@@ -8356,6 +8368,31 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
             // The primitive itself is drawn solid by the renderer
             // (`Editor::insert_preview`); here only the drag line from the anchor.
             painter.line_segment([to_pt(start_pixel), pos], EStroke::new(1.5, ed.accent_color()));
+        }
+        Mark::ShapeCut { kind, points, shape } => {
+            let line_color = match kind {
+                BrushKind::PlaneClip => Color32::from_rgb(255, 170, 40),
+                BrushKind::LineSplit => Color32::from_rgb(80, 220, 120),
+                BrushKind::CutAway => Color32::from_rgb(255, 80, 80),
+                _ => Color32::WHITE,
+            };
+            let stroke = EStroke::new(2.0, line_color);
+            let fill = line_color.linear_multiply(0.12);
+            if matches!(shape, crate::editor::SelectShape::Circle | crate::editor::SelectShape::Ellipse)
+                && !points.is_empty()
+            {
+                let ends = [points[0], glam::Vec2::new(pos.x, pos.y) * ed.pixels_per_point];
+                let ring: Vec<egui::Pos2> =
+                    crate::select_shapes::select_outline(shape, &ends).into_iter().map(to_pt).collect();
+                painter.add(egui::Shape::convex_polygon(ring, fill, stroke));
+            } else if shape == crate::editor::SelectShape::Lasso {
+                let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
+                pts.push(pos);
+                painter.add(egui::Shape::closed_line(pts, stroke));
+            } else if !points.is_empty() {
+                let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
+                painter.rect(rect, 0.0, fill, stroke, egui::StrokeKind::Middle);
+            }
         }
         Mark::CurveCut { kind, start, current, offset } => {
             let p0 = start + offset;
