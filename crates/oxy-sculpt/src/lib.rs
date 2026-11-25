@@ -345,6 +345,8 @@ pub struct BrushSettings {
     pub front_faces_only: bool,
     /// Allow successive dabs to build on each other within one stroke.
     pub accumulate: bool,
+    /// Average neighboring vertex colors for the Paint brush.
+    pub smooth_paint: bool,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
     /// Gravity: the surface under the brush also sags downward (world -Y)
@@ -404,6 +406,7 @@ impl Default for BrushSettings {
             pressure_radius: false,
             front_faces_only: false,
             accumulate: true,
+            smooth_paint: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -1253,7 +1256,11 @@ impl Stroke {
                 touch,
             );
         } else {
-            let paint = if kind == BrushKind::Paint && !self.invert && self.paint_jitter.enabled() {
+            let paint = if kind == BrushKind::Paint
+                && !self.settings.smooth_paint
+                && !self.invert
+                && self.paint_jitter.enabled()
+            {
                 self.paint_jitter.sample(self.paint, self.paint_seed, self.dab_count - 1)
             } else {
                 self.paint
@@ -2078,11 +2085,34 @@ fn apply_kernel(
     }
 
     if kind == BrushKind::Paint {
-        // Alt (invert) erases paint back to white.
-        let target = if invert { Vec3::ONE } else { paint };
-        for &(v, w) in &affected {
-            let c = &mut mesh.color[v as usize];
-            *c = c.lerp(target, (w * dab.strength).clamp(0.0, 1.0));
+        if settings.smooth_paint {
+            // Read all neighboring colors before writing so the average
+            // does not depend on the order of vertices in the mesh.
+            let colors: Vec<_> = affected
+                .iter()
+                .map(|&(v, w)| {
+                    let mut sum = Vec3::ZERO;
+                    let mut count = 0;
+                    for &n in &mesh.neighbors(v) {
+                        if !mesh.is_vertex_hidden(n) {
+                            sum += mesh.color[n as usize];
+                            count += 1;
+                        }
+                    }
+                    let color = mesh.color[v as usize];
+                    if count == 0 { color } else { color.lerp(sum / count as f32, (w * dab.strength).clamp(0.0, 1.0)) }
+                })
+                .collect();
+            for (&(v, _), color) in affected.iter().zip(colors) {
+                mesh.color[v as usize] = color;
+            }
+        } else {
+            // Alt (invert) erases paint back to white.
+            let target = if invert { Vec3::ONE } else { paint };
+            for &(v, w) in &affected {
+                let c = &mut mesh.color[v as usize];
+                *c = c.lerp(target, (w * dab.strength).clamp(0.0, 1.0));
+            }
         }
         for c in chunks {
             mesh.mark_dirty(c);
@@ -2158,6 +2188,27 @@ fn apply_kernel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smooth_paint_blends_colors_without_moving_vertices() {
+        let mut mesh = primitives::icosphere(2, 1.0);
+        mesh.color[0] = Vec3::X;
+        let sample = StrokeSample { position: mesh.positions[0], normal: mesh.normals[0], pressure: 1.0 };
+        let positions = mesh.positions.clone();
+        let settings = BrushSettings {
+            kind: BrushKind::Paint,
+            smooth_paint: true,
+            radius: 0.5,
+            strength: 1.0,
+            ..Default::default()
+        };
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_recording();
+        stroke.add_sample(&mut mesh, sample, &mut |_, _| {});
+        assert_eq!(mesh.positions, positions);
+        assert!(mesh.color[0].y > 0.5);
+        let recipe = stroke.take_recipe().unwrap();
+        assert!(StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_| None).unwrap().settings.smooth_paint);
+    }
 
     #[test]
     fn accumulate_limits_overlap_and_resets_between_strokes() {

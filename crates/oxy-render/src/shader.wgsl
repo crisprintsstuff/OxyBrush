@@ -588,7 +588,13 @@ fn vs_floor(@builtin(vertex_index) i: u32) -> FloorOut {
     );
     let xz = u.floor_center.xy + corners[i] * u.floor.z;
     var o: FloorOut;
-    o.clip = u.view_proj * vec4<f32>(xz.x, u.floor.x, xz.y, 1.0);
+    var world = vec3<f32>(xz.x, u.floor.x, xz.y);
+    if u.floor.w == 2.0 {
+        world = vec3<f32>(xz.x, xz.y, u.floor.x);
+    } else if u.floor.w == 3.0 {
+        world = vec3<f32>(u.floor.x, xz.y, xz.x);
+    }
+    o.clip = u.view_proj * vec4<f32>(world, 1.0);
     o.world = xz;
     return o;
 }
@@ -610,7 +616,7 @@ fn fs_floor(i: FloorOut) -> FsOut {
     let r = length(i.world - u.floor_center.xy) / u.floor.z;
     let edge = 1.0 - smoothstep(0.45, 1.0, r);
     let density = 1.0 - smoothstep(0.15, 0.45, max(fwidth(i.world.x), fwidth(i.world.y)) / cell);
-    let a = max(minor * 0.10 * density, major * 0.22) * edge * u.floor.w;
+    let a = max(minor * 0.10 * density, major * 0.22) * edge;
     // Light lines on dark backgrounds, dark lines on light ones.
     let bg = dot(u.bg_center.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
     let line = select(vec3<f32>(0.5), vec3<f32>(0.1), bg > 0.3);

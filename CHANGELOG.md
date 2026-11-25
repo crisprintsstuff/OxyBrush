@@ -4,6 +4,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+- **Paint smoothing.** Hold Shift with Paint to blend vertex colors while preserving geometry.
+- **Orthographic grids.** The grid faces the camera in snapped orthographic views.
+
+- **Pieces and visibility.** Show Only follows the active piece. Use Up and Down after focusing a Pieces row. Grow Visible and Shrink Visible can be assigned in the Keymap editor.
+
 ## [4.0.0-beta.24.6] - 2026-11-24
 
 ### Added

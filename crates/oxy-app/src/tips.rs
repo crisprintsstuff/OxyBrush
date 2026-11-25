@@ -317,6 +317,8 @@ impl Cmd {
             Cmd::LevelUp => CommandId::LevelUp,
             Cmd::LevelDown => CommandId::LevelDown,
             Cmd::Remesh => CommandId::Remesh,
+            Cmd::GrowVisible => CommandId::GrowVisible,
+            Cmd::ShrinkVisible => CommandId::ShrinkVisible,
             Cmd::GroupVisible => CommandId::GroupVisible,
             Cmd::GroupFromMask => CommandId::GroupFromMask,
             Cmd::Guide => CommandId::Guide,
