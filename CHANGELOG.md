@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Amplify brush.** Exaggerates existing bumps and recesses relative to the dab's mean plane. Alt reduces that contrast without smoothing the form away. [#519](https://github.com/crisprintsstuff/OxyBrush/issues/519)
 - **Poly Edit Box and Lasso pick.** In Faces, Edges or Points mode, Pick offers Click, Box and Lasso. Drag a rectangle or freehand outline to pick visible elements; plain drag replaces the pick, Ctrl/Cmd adds, Alt subtracts, Escape cancels. [#299](https://github.com/crisprintsstuff/OxyBrush/issues/299), [RFC 0035](docs/rfcs/0035-poly-edit-area-selection.md)
 - **Color Filter.** Tools > Vertex color > Color Filter… (also the command palette) opens a window of whole-piece vertex color adjustments: Fill, Hue, Saturation, Value, Brightness, Contrast, Smooth and Red/Green/Blue. Drag a bar to preview; let go to apply as one undo step. Masked parts stay put unless Use mask is off. Fill uses the current Paint color. [#489](https://github.com/crisprintsstuff/OxyBrush/issues/489)
 - **Rebuild lower level.** Mesh > Rebuild lower level recovers one Catmull–Clark coarse level under an all-quad mesh with no subdivision stack (RFC 0036, #366, #455).

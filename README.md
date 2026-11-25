@@ -35,7 +35,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 **Highlights**
 
-- **19 sculpting brushes** plus masking, painting, cutting and primitive tools, with stroke stabilizer, editable curve strokes, alphas and pen pressure.
+- **21 sculpting brushes** plus masking, painting, cutting and primitive tools, with stroke stabilizer, editable curve strokes, alphas and pen pressure.
 - **Subdivision levels and dynamic detail:** sculpt broad shapes low and fine detail high, or build up a plain sphere as you go.
 - **Pieces:** many objects per scene, with voxel remesh, booleans, Join, Split, Symmetrize and decimation.
 - **Retopology:** draw a clean quad mesh over a sculpt and project the detail onto it, or use **Edit active mesh** on an existing piece with up to 100,000 editable faces. After subdivision, move points at the displayed level or choose **Keep this level only** before changing connectivity.
@@ -111,8 +111,8 @@ Testers are the most useful contribution right now, especially with **pen tablet
 
 ### Sculpting
 
-- **19 sculpting brushes, plus 8 tools in the same shelf:**
-  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Pinch, Crease (with a Pinch setting for how tight the groove is), Sharp Crease (a crisp V along the stroke, for hard folds and panel lines), Layer, Polish, Planar Trim, Noise.
+- **21 sculpting brushes, plus 8 tools in the same shelf:**
+  - **Shape:** Draw, Clay, Clay Strips, Smooth, Inflate, Flatten, Amplify (exaggerates existing bumps and recesses; Alt reduces that contrast), Pinch, Crease (with a Pinch setting for how tight the groove is), Sharp Crease (a crisp V along the stroke, for hard folds and panel lines), Layer, Polish, Planar Trim, Noise.
   - **Move:** Grab, Snake Hook, Topological Move, Curve Move, and the elastic brushes Kelvin Grab, Kelvin Twist (drag sideways), and Kelvin Scale (drag vertically). Kelvin Grab localizes short pulls and broadens the response as the drag grows. Alt constrains Kelvin Grab to the surface normal and reverses Kelvin Twist or Kelvin Scale.
   - **Tools:** Mask, Paint (vertex color), Paint Groups (face groups), Insert Primitives (sphere, quad sphere, UV sphere, cube, cylinder, cone, torus or plane that grows as you drag), Tube, and the screen-line cutting tools Plane Clip, Line Split and Cut Away, which follow symmetry.
 
