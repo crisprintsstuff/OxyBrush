@@ -40,6 +40,15 @@ impl Default for View {
     }
 }
 
+/// Wrap an angle into (−π, π] (matches `oxy_render::wrap_signed_pi`).
+pub fn wrap_signed_pi(a: f32) -> f32 {
+    use std::f32::consts::PI;
+    if !a.is_finite() {
+        return 0.0;
+    }
+    (a + PI).rem_euclid(2.0 * PI) - PI
+}
+
 impl View {
     pub fn forward(&self) -> Vec3 {
         let (sy, cy) = self.yaw.sin_cos();
@@ -52,8 +61,16 @@ impl View {
     }
 
     pub fn up(&self) -> Vec3 {
-        let right = self.forward().cross(Vec3::Y).normalize_or(Vec3::X);
-        right.cross(self.forward()).normalize()
+        let f = self.forward();
+        let world_up = if self.pitch.cos() >= 0.0 { Vec3::Y } else { Vec3::NEG_Y };
+        let right = f.cross(world_up);
+        let right = if right.length_squared() < 1e-8 {
+            let (sy, cy) = self.yaw.sin_cos();
+            Vec3::new(cy, 0.0, -sy)
+        } else {
+            right.normalize()
+        };
+        right.cross(f).normalize()
     }
 
     pub fn view_matrix(&self) -> Mat4 {

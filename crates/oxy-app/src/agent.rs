@@ -859,7 +859,7 @@ fn set_camera(ed: &mut Editor, camera: CameraSet) -> ToolResult {
         ed.camera.yaw = yaw.to_radians();
     }
     if let Some(pitch) = camera.pitch_deg {
-        ed.camera.pitch = pitch.clamp(-89.0, 89.0).to_radians();
+        ed.camera.pitch = oxy_render::wrap_signed_pi(pitch.to_radians());
     }
     if let Some(distance) = camera.distance {
         ed.camera.distance = distance.clamp(1e-3, 1e5);

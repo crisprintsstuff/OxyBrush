@@ -56,6 +56,15 @@ pub fn fov_y_from_focal_mm(mm: f32) -> f32 {
     }
 }
 
+/// Wrap an angle into (−π, π] so yaw/pitch stay finite while orbiting freely.
+pub fn wrap_signed_pi(a: f32) -> f32 {
+    use std::f32::consts::PI;
+    if !a.is_finite() {
+        return 0.0;
+    }
+    (a + PI).rem_euclid(2.0 * PI) - PI
+}
+
 /// Orbit camera around a target point.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Camera {
@@ -89,8 +98,19 @@ impl Camera {
     }
 
     pub fn up(&self) -> Vec3 {
-        let right = self.forward().cross(Vec3::Y).normalize_or(Vec3::X);
-        right.cross(self.forward()).normalize()
+        // When pitch passes ±90°, the view is upside down: use −Y so orbit
+        // can keep tumbling instead of locking at the poles.
+        let f = self.forward();
+        let world_up = if self.pitch.cos() >= 0.0 { Vec3::Y } else { Vec3::NEG_Y };
+        let right = f.cross(world_up);
+        let right = if right.length_squared() < 1e-8 {
+            // Looking nearly straight up or down: yaw alone gives a stable right.
+            let (sy, cy) = self.yaw.sin_cos();
+            Vec3::new(cy, 0.0, -sy)
+        } else {
+            right.normalize()
+        };
+        right.cross(f).normalize()
     }
 
     pub fn view(&self) -> Mat4 {
@@ -182,7 +202,7 @@ impl Camera {
 
     pub fn orbit(&mut self, delta_pixels: Vec2) {
         self.yaw -= delta_pixels.x * 0.008;
-        self.pitch = (self.pitch + delta_pixels.y * 0.008).clamp(-1.55, 1.55);
+        self.pitch = wrap_signed_pi(self.pitch + delta_pixels.y * 0.008);
     }
 
     /// Turn the view with `turn` (which changes yaw and pitch, as [`orbit`]
@@ -211,10 +231,9 @@ impl Camera {
     /// slow drags still reach the next step.
     pub fn orbit_snapped(&mut self, free: &mut (f32, f32), delta_pixels: Vec2, step: f32) {
         free.0 -= delta_pixels.x * 0.008;
-        free.1 = (free.1 + delta_pixels.y * 0.008).clamp(-1.55, 1.55);
+        free.1 = wrap_signed_pi(free.1 + delta_pixels.y * 0.008);
         self.yaw = (free.0 / step).round() * step;
-        // Straight down/up is just short of ±90° (the camera keeps an up vector).
-        self.pitch = ((free.1 / step).round() * step).clamp(-1.55, 1.55);
+        self.pitch = wrap_signed_pi((free.1 / step).round() * step);
     }
 
     pub fn pan(&mut self, delta_pixels: Vec2, viewport_height: f32) {
@@ -311,7 +330,24 @@ mod tests {
         }
         assert!((c.yaw - step).abs() < 1e-6, "{}", c.yaw);
         c.orbit_snapped(&mut free, Vec2::new(0.0, 1000.0), step);
-        assert!((c.pitch - 1.55).abs() < 1e-6, "pitch stops just short of straight down");
+        // Can reach straight down (±90°) and keep stepping past the old ±1.55 stop.
+        assert!(c.pitch.abs() + 1e-3 >= std::f32::consts::FRAC_PI_2, "pitch {}", c.pitch);
+        let at_pole = c.pitch;
+        c.orbit_snapped(&mut free, Vec2::new(0.0, 200.0), step);
+        assert!((c.pitch - at_pole).abs() > 1e-3, "snapped pitch kept moving: {at_pole} -> {}", c.pitch);
+    }
+
+    #[test]
+    fn orbit_tumbles_past_straight_down() {
+        let mut c = Camera::default();
+        // Reach the old clamp height, then drag further — pitch must keep changing.
+        c.orbit(Vec2::new(0.0, 1.55 / 0.008));
+        let at_old_stop = c.pitch;
+        assert!((at_old_stop - 1.55).abs() < 0.02, "pitch {at_old_stop}");
+        c.orbit(Vec2::new(0.0, 100.0));
+        assert!((c.pitch - at_old_stop).abs() > 0.1, "kept moving: {at_old_stop} -> {}", c.pitch);
+        assert!(c.up().is_finite() && c.up().length() > 0.9);
+        assert!(c.eye().is_finite());
     }
 
     #[test]
