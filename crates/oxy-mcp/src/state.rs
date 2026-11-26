@@ -1,7 +1,8 @@
 //! Structured read access for plugins and agents (RFC 0007, phase 1 of the
 //! plugin API): the document, pieces and camera as JSON, a log of changes a
 //! client can follow with a cursor, and piece geometry as a compact binary
-//! file.
+//! file. [`set_geometry`](crate::Action::SetGeometry) writes positions,
+//! colors and mask back from the same `OXYG` format (RFC 0053 / #555).
 //!
 //! Everything here is plain data built from the document, so the desktop
 //! app and `oxybrush-cli mcp` give the same answers.
@@ -599,6 +600,161 @@ pub fn geometry_json(path: &Path, piece: &Piece, layout: Value) -> Value {
     })
 }
 
+/// Writable arrays from an `OXYG` file for [`Action::SetGeometry`](crate::Action::SetGeometry).
+/// Topology fields (indices, groups, hidden) and normals are ignored: this
+/// call only displaces, paints or masks the existing piece.
+#[derive(Debug, Clone, Default)]
+pub struct GeometryWrite {
+    pub positions: Option<Vec<Vec3>>,
+    pub colors: Option<Vec<Vec3>>,
+    pub mask: Option<Vec<f32>>,
+}
+
+impl GeometryWrite {
+    pub fn is_empty(&self) -> bool {
+        self.positions.is_none() && self.colors.is_none() && self.mask.is_none()
+    }
+
+    pub fn summary(&self) -> String {
+        let mut parts = Vec::new();
+        if self.positions.is_some() {
+            parts.push("positions");
+        }
+        if self.colors.is_some() {
+            parts.push("colors");
+        }
+        if self.mask.is_some() {
+            parts.push("mask");
+        }
+        parts.join("+")
+    }
+}
+
+/// Decode an `OXYG` file into writable vertex arrays. `vertex_count` and
+/// `triangle_count` in the header must match `want_v` / `want_t` (the live
+/// piece). Normals, indices, groups and hidden sections are skipped.
+pub fn decode_geometry_write(bytes: &[u8], want_v: usize, want_t: usize) -> Result<GeometryWrite, String> {
+    if bytes.len() < GEOMETRY_HEADER {
+        return Err("OXYG file is too short".into());
+    }
+    if &bytes[0..4] != GEOMETRY_MAGIC {
+        return Err("not an OXYG geometry file".into());
+    }
+    let word = |o: usize| u32::from_le_bytes(bytes[o..o + 4].try_into().unwrap());
+    let version = word(4);
+    if version != 1 {
+        return Err(format!("unsupported OXYG format version {version}"));
+    }
+    let v = word(8) as usize;
+    let t = word(12) as usize;
+    if v != want_v {
+        return Err(format!("OXYG has {v} vertices; the piece has {want_v} (topology must match)"));
+    }
+    if t != want_t {
+        return Err(format!("OXYG has {t} triangles; the piece has {want_t} (topology must match)"));
+    }
+    let present_bits = word(16);
+    let mut offset = GEOMETRY_HEADER;
+    let mut out = GeometryWrite::default();
+    for field in Field::ALL {
+        if present_bits & field.bit() == 0 {
+            continue;
+        }
+        let (ty, n, per) = field.layout();
+        let count = if per == "vertex" { v } else { t };
+        let elem = if ty == "u8" { 1 } else { 4 };
+        let raw = count * n as usize * elem;
+        let padded = raw.next_multiple_of(4);
+        if offset + padded > bytes.len() {
+            return Err(format!("OXYG truncated in `{}` section", field.name()));
+        }
+        let section = &bytes[offset..offset + raw];
+        match field {
+            Field::Positions => {
+                out.positions = Some(read_vec3s(section, v)?);
+            }
+            Field::Colors => {
+                let colors = read_vec3s(section, v)?;
+                out.colors = Some(colors.into_iter().map(|c| c.clamp(Vec3::ZERO, Vec3::ONE)).collect());
+            }
+            Field::Mask => {
+                let mask = read_f32s(section, v)?;
+                if mask.iter().any(|x| !x.is_finite()) {
+                    return Err("mask values must be finite".into());
+                }
+                out.mask = Some(mask.into_iter().map(|x| x.clamp(0.0, 1.0)).collect());
+            }
+            Field::Normals | Field::Indices | Field::Groups | Field::Hidden => {
+                // Topology and derived normals stay with the piece.
+            }
+        }
+        offset += padded;
+    }
+    if out.is_empty() {
+        return Err(
+            "OXYG has no writable sections (need positions, colors and/or mask; normals/indices/groups/hidden are ignored)"
+                .into(),
+        );
+    }
+    Ok(out)
+}
+
+fn read_f32s(bytes: &[u8], n: usize) -> Result<Vec<f32>, String> {
+    if bytes.len() < n * 4 {
+        return Err("OXYG section is truncated".into());
+    }
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        out.push(f32::from_le_bytes(bytes[i * 4..i * 4 + 4].try_into().unwrap()));
+    }
+    Ok(out)
+}
+
+fn read_vec3s(bytes: &[u8], n: usize) -> Result<Vec<Vec3>, String> {
+    let f = read_f32s(bytes, n * 3)?;
+    if f.iter().any(|x| !x.is_finite()) {
+        return Err("geometry values must be finite".into());
+    }
+    Ok(f.as_chunks::<3>().0.iter().map(|c| Vec3::new(c[0], c[1], c[2])).collect())
+}
+
+/// Apply a decoded write to `mesh`. Caller owns undo (`begin`/`touch`/`commit`).
+/// Returns a short summary of what changed.
+pub fn apply_geometry_write(mesh: &mut Mesh, write: GeometryWrite) -> Result<&'static str, String> {
+    let n = mesh.vertex_count();
+    if write.positions.as_ref().is_some_and(|p| p.len() != n)
+        || write.colors.as_ref().is_some_and(|c| c.len() != n)
+        || write.mask.as_ref().is_some_and(|m| m.len() != n)
+    {
+        return Err("writable arrays do not match the piece's vertex count".into());
+    }
+    let moved = write.positions.is_some();
+    let painted = write.colors.is_some();
+    let masked = write.mask.is_some();
+    if let Some(p) = write.positions {
+        mesh.positions = p;
+    }
+    if let Some(c) = write.colors {
+        mesh.color = c;
+    }
+    if let Some(m) = write.mask {
+        mesh.mask = m;
+    }
+    let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
+    mesh.update_chunks(&chunks);
+    mesh.tighten_bounds();
+    Ok(match (moved, painted, masked) {
+        (true, true, true) => "positions, colors and mask",
+        (true, true, false) => "positions and colors",
+        (true, false, true) => "positions and mask",
+        (true, false, false) => "positions",
+        (false, true, true) => "colors and mask",
+        (false, true, false) => "colors",
+        (false, false, true) => "mask",
+        (false, false, false) => "nothing",
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -761,5 +917,26 @@ mod tests {
             .filter(|e| e.path().extension().is_some_and(|x| x == "oxyg"))
             .count();
         assert!(kept <= 4, "{kept} files kept");
+    }
+
+    #[test]
+    fn set_geometry_round_trips_positions_colors_and_mask() {
+        let mut mesh = primitives::icosphere(1, 1.0);
+        mesh.color[2] = Vec3::new(0.2, 0.4, 0.8);
+        mesh.mask[2] = 0.75;
+        mesh.positions[2] += Vec3::Y * 0.1;
+        let (bytes, _) = encode_geometry(&mesh, &[Field::Positions, Field::Colors, Field::Mask, Field::Normals]);
+        let write = decode_geometry_write(&bytes, mesh.vertex_count(), mesh.triangle_count()).unwrap();
+        assert!(write.positions.is_some() && write.colors.is_some() && write.mask.is_some());
+        let mut other = primitives::icosphere(1, 1.0);
+        apply_geometry_write(&mut other, write).unwrap();
+        assert!((other.positions[2] - mesh.positions[2]).length() < 1e-6);
+        assert!((other.color[2] - mesh.color[2]).length() < 1e-6);
+        assert!((other.mask[2] - 0.75).abs() < 1e-6);
+        // Wrong counts refuse.
+        assert!(decode_geometry_write(&bytes, mesh.vertex_count() + 1, mesh.triangle_count()).is_err());
+        // Normals-only file has nothing writable.
+        let (normals_only, _) = encode_geometry(&mesh, &[Field::Normals]);
+        assert!(decode_geometry_write(&normals_only, mesh.vertex_count(), mesh.triangle_count()).is_err());
     }
 }

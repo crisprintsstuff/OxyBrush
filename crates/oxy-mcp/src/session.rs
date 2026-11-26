@@ -154,6 +154,9 @@ impl HeadlessSession {
                 ToolResult::ok(crate::state::changes_json(events, cursor, truncated).to_string())
             }
             Action::GetGeometry { id, index, name, fields } => self.get_geometry(id, index, name, fields),
+            Action::SetGeometry { path, id, index, name, topology_version } => {
+                self.set_geometry(&path, id, index, name, topology_version)
+            }
             Action::ListStrokes | Action::EditStrokes(_) => ToolResult::error(
                 "living strokes are kept by the desktop app: attach to OxyBrush (oxybrush-cli mcp --attach) to use them",
             ),
@@ -263,6 +266,59 @@ impl HeadlessSession {
         match crate::state::write_geometry_file(&bytes, piece.id) {
             Ok(path) => ToolResult::ok(crate::state::geometry_json(&path, piece, layout).to_string()),
             Err(e) => ToolResult::error(e),
+        }
+    }
+
+    fn set_geometry(
+        &mut self,
+        path: &Path,
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+        topology_version: Option<u64>,
+    ) -> ToolResult {
+        let i = match self.find_piece(id, index, name.as_deref()) {
+            Ok(i) => i,
+            Err(e) => return ToolResult::error(e),
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(e) => return ToolResult::error(format!("{}: {e}", path.display())),
+        };
+        let piece = &self.scene.pieces[i];
+        if let Some(want) = topology_version
+            && want != piece.mesh.topology_version()
+        {
+            return ToolResult::error(format!(
+                "topology_version {want} does not match the piece ({})",
+                piece.mesh.topology_version()
+            ));
+        }
+        let write =
+            match crate::state::decode_geometry_write(&bytes, piece.mesh.vertex_count(), piece.mesh.triangle_count()) {
+                Ok(w) => w,
+                Err(e) => return ToolResult::error(e),
+            };
+        let paint = write.colors.is_some() || piece.mesh.is_painted();
+        let summary = write.summary();
+        let piece_id = piece.id;
+        let piece_name = piece.name.clone();
+        let label = format!("{AGENT_LABEL}set geometry ({summary})");
+        let piece = &mut self.scene.pieces[i];
+        self.history.begin_with(&label, piece_id, &piece.mesh, paint);
+        let chunks: Vec<u32> = (0..piece.mesh.chunks.len() as u32).collect();
+        for &c in &chunks {
+            self.history.touch(&piece.mesh, c);
+        }
+        match crate::state::apply_geometry_write(&mut piece.mesh, write) {
+            Ok(what) => {
+                self.history.commit();
+                ToolResult::ok(format!("{label} on {piece_name}: wrote {what}"))
+            }
+            Err(e) => {
+                self.history.cancel();
+                ToolResult::error(e)
+            }
         }
     }
 
@@ -710,6 +766,34 @@ mod tests {
         // Bad requests fail before anything is written.
         assert!(session.call_tool("get_geometry", &serde_json::json!({"fields": ["uvs"]})).is_error);
         assert!(session.call_tool("get_geometry", &serde_json::json!({"id": 999_999})).is_error);
+
+        // set_geometry paints and displaces from the same OXYG file.
+        let g = json(&mut session, "get_geometry", serde_json::json!({"fields": ["positions", "colors", "mask"]}));
+        let path = g["path"].as_str().unwrap();
+        let topo = g["topology_version"].as_u64().unwrap();
+        let mut bytes = std::fs::read(path).unwrap();
+        let c_off = g["layout"]["sections"]["colors"]["offset"].as_u64().unwrap() as usize;
+        bytes[c_off..c_off + 4].copy_from_slice(&0.1f32.to_le_bytes());
+        bytes[c_off + 4..c_off + 8].copy_from_slice(&0.2f32.to_le_bytes());
+        bytes[c_off + 8..c_off + 12].copy_from_slice(&0.3f32.to_le_bytes());
+        let p_off = g["layout"]["sections"]["positions"]["offset"].as_u64().unwrap() as usize;
+        let y = f32::from_le_bytes(bytes[p_off + 4..p_off + 8].try_into().unwrap()) + 0.25;
+        bytes[p_off + 4..p_off + 8].copy_from_slice(&y.to_le_bytes());
+        let edited = path.to_owned() + ".edit.oxyg";
+        std::fs::write(&edited, &bytes).unwrap();
+        let before_y = session.scene.active().mesh.positions[0].y;
+        let set = session.call_tool("set_geometry", &serde_json::json!({"path": edited, "topology_version": topo}));
+        assert!(!set.is_error, "{}", set.text);
+        assert!(set.text.contains("Agent: set geometry"), "{}", set.text);
+        assert!((session.scene.active().mesh.color[0] - glam::Vec3::new(0.1, 0.2, 0.3)).length() < 1e-5);
+        assert!((session.scene.active().mesh.positions[0].y - (before_y + 0.25)).abs() < 1e-5);
+        session.call_tool("undo", &serde_json::json!({}));
+        assert!((session.scene.active().mesh.positions[0].y - before_y).abs() < 1e-5);
+        assert!(
+            session
+                .call_tool("set_geometry", &serde_json::json!({"path": edited, "topology_version": topo + 1}))
+                .is_error
+        );
     }
 
     #[test]

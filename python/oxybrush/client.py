@@ -444,6 +444,105 @@ class Session:
         reply["arrays"] = arrays
         return reply
 
+    def set_geometry(
+        self,
+        path: Optional[str] = None,
+        *,
+        arrays: Optional[Dict[str, Any]] = None,
+        id: Optional[int] = None,
+        index: Optional[int] = None,
+        name: Optional[str] = None,
+        topology_version: Optional[int] = None,
+        fields: Optional[List[str]] = None,
+    ) -> str:
+        """Write positions, colors and/or mask onto a piece (one undo step).
+
+        Pass either ``path`` to an existing OXYG file, or ``arrays`` (from
+        :meth:`get_geometry` or built by hand) with optional ``fields``
+        (default: every key in ``arrays`` among positions, colors, mask).
+        ``topology_version`` refuses a write when the piece's triangles
+        changed since you read them.
+        """
+        import array
+        import struct
+        import tempfile
+
+        write_path = path
+        tmp: Optional[str] = None
+        topo = topology_version
+        if arrays is not None:
+            if path is not None:
+                raise OxyBrushError("pass path or arrays, not both")
+            chosen = fields or [k for k in ("positions", "colors", "mask") if k in arrays]
+            if not chosen:
+                raise OxyBrushError("arrays needs positions, colors and/or mask")
+
+            def count_for(field: str, data) -> int:
+                n = len(data)
+                return n // 3 if field in ("positions", "colors") else n
+
+            counts = [count_for(f, arrays[f]) for f in chosen if f in arrays]
+            if not counts or len(set(counts)) != 1:
+                raise OxyBrushError("writable arrays must share one vertex count")
+            vcount = counts[0]
+            # Header needs the live triangle count; reuse get_geometry for it.
+            base = self.get_geometry(id=id, index=index, name=name, fields=["positions"])
+            if base["layout"]["vertex_count"] != vcount:
+                raise OxyBrushError(
+                    f"arrays have {vcount} vertices; piece has {base['layout']['vertex_count']}"
+                )
+            tcount = int(base["layout"]["triangle_count"])
+            if topo is None:
+                topo = base.get("topology_version")
+            bits = {
+                "positions": 1 << 0,
+                "normals": 1 << 1,
+                "indices": 1 << 2,
+                "colors": 1 << 3,
+                "mask": 1 << 4,
+                "groups": 1 << 5,
+                "hidden": 1 << 6,
+            }
+            present = 0
+            sections: List[bytes] = []
+            for field in ("positions", "normals", "indices", "colors", "mask", "groups", "hidden"):
+                if field not in chosen:
+                    continue
+                data = arrays[field]
+                if isinstance(data, array.array):
+                    payload = data.tobytes()
+                else:
+                    payload = array.array("f", data).tobytes()
+                present |= bits[field]
+                sections.append(payload)
+            body = bytearray()
+            body.extend(b"OXYG")
+            body.extend(struct.pack("<IIIII", 1, vcount, tcount, present, 0))
+            for payload in sections:
+                body.extend(payload)
+                while len(body) % 4:
+                    body.append(0)
+            fd, tmp = tempfile.mkstemp(suffix=".oxyg")
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(body)
+            write_path = tmp
+        if not write_path:
+            raise OxyBrushError("set_geometry needs path or arrays")
+        args: Dict[str, Any] = {"path": write_path}
+        for key, value in (("id", id), ("index", index), ("name", name), ("topology_version", topo)):
+            if value is not None:
+                args[key] = value
+        try:
+            res = self.call_tool("set_geometry", **args)
+            return res["content"][0]["text"]
+        finally:
+            if tmp:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+
 
 def connect(endpoint: Optional[str] = None, token: Optional[str] = None) -> Session:
     """Connect to a running OxyBrush instance."""
