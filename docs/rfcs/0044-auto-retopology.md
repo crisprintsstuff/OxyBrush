@@ -88,7 +88,8 @@ issue request or comparing features (same rule as ZBrush format mentions).
 |---|---|
 | **1** | Background OxyRemesh job; field pipeline; quad-dominant extraction; unit tests; CLEAN_ROOM + ROADMAP |
 | **2** | Pure-quad post-pass; attribute projection + surface snap; crease-weighted GS; `oxyremesh_timing` example |
-| **3** | Orientation stroke constraints (guide from last stroke); singularity attractor (mask centroid); adaptivity / anisotropy knobs in Rebuild |
+| **3** | Orientation stroke constraints (guide from last stroke); singularity attractor (mask centroid); adaptivity / anisotropy knobs under Topology > OxyRemesh |
+| **3b** | Extraction hardening (#551): face-walk edge commit, paper §3.8 low-support filter, keep-largest floater strip |
 
 ## Verification
 

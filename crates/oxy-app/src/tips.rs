@@ -131,7 +131,7 @@ commands! {
     KeepLevel => "Keep this level only", "", "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail can work on it.";
     RebuildLowerLevel => "Rebuild lower level", "", "Recover one Catmull–Clark coarse level under an all-quad mesh that has no subdivision stack (for example after Keep this level only, or an import with recorded quads). The dense surface stays as the high level.";
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
-    OxyRemesh => "OxyRemesh", "", "Rebuild the active piece as a lighter pure-quad mesh aligned to its shape (field-aligned remesh). Keeps paint, mask and face groups. Adaptivity, anisotropy, last-stroke guide and mask pole attractor are in the Rebuild panel. Removes subdivision levels. Runs in the background.";
+    OxyRemesh => "OxyRemesh", "", "Rebuild the active piece as a lighter pure-quad mesh aligned to its shape (field-aligned remesh). Keeps paint, mask and face groups. Adaptivity, anisotropy, last-stroke guide and mask pole attractor are under Topology > OxyRemesh options. Removes subdivision levels. Runs in the background.";
     ProjectDetail => "Project detail", "", "Move every vertex of the active piece onto the closest point of the other visible pieces, so a clean remesh or retopo cage picks up the sculpt's surface. Topology stays the same; subdivision levels are removed. Runs in the background; one undo step. For one source, use Mesh > Project onto…";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";

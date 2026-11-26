@@ -17597,10 +17597,10 @@ mod tests {
         assert!(e.job.is_some(), "OxyRemesh starts a background job");
         wait_job(&mut e);
         let after = e.scene.active().mesh.triangle_count();
-        // Extraction may refuse a fragmented result (#551); the piece must
-        // stay intact when that happens.
-        if e.status.contains("disconnected") {
-            assert_eq!(after, before, "shattered result must not replace the mesh; status={}", e.status);
+        // Extraction may refuse a fragmented or degenerate result (#551);
+        // the piece must stay intact when that happens.
+        if e.status.contains("failed") {
+            assert_eq!(after, before, "failed OxyRemesh must not replace the mesh; status={}", e.status);
         } else {
             assert!(after > 0, "status={}", e.status);
             assert_ne!(after, before, "mesh should change; status={}", e.status);
