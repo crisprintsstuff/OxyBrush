@@ -1,6 +1,6 @@
 # RFC 0044 — OxyRemesh (field-aligned automatic retopology)
 
-- **Status:** Phase 1 implemented (further phases open)
+- **Status:** Phase 2 implemented (Phase 3 open)
 - **Issue:** [#529](https://github.com/crisprintsstuff/OxyBrush/issues/529) (Autoremesher request)
 - **Name in UI:** **OxyRemesh** (OxyBrush product name for field-aligned remesh)
 
@@ -39,16 +39,22 @@ Implement the **Instant Field-Aligned Meshes** pipeline
 4. **Multiresolution hierarchy** by area-weighted vertex clustering
    (paper §3.5) so GS escapes poor local minima.
 5. **Extraction**: collapse zero-jump clusters, keep unit-jump edges as the
-   output graph, walk faces (paper §3.8). Quad-dominant; optional one
-   Catmull–Clark-style split later for pure quads (Phase 2).
+   output graph, walk faces (paper §3.8).
+6. **Phase 2 post-pass**: Catmull–Clark *topology* (face + edge midpoints,
+   no smoothing) so every polygon becomes quads; snap vertices onto the
+   source; `transfer_attributes` for color / mask / groups; crease edges
+   get higher weight and orientation pull during GS.
 
-Controls (Phase 1):
+Controls:
 
 | Control | Meaning |
 |---|---|
-| Target faces | Approximate face count (sets ρ from surface area) |
+| Target faces | Approximate face count (sets ρ from surface area; accounts for pure-quad split) |
 | Sharp angle | Dihedral threshold for crease normals (degrees) |
 | Extrinsic | Prefer embedding-space smoothness (default on) |
+| Pure quad | Split every extracted polygon into quads (default on) |
+| Transfer attributes | Carry paint, mask and face groups (default on) |
+| Snap to surface | Project result onto the source mesh (default on) |
 
 ### Placement
 
@@ -64,21 +70,19 @@ UI and docs say **OxyRemesh**. The algorithm module is `oxy_topo::auto_retopo`
 (Instant Meshes paper). Autoremesher may be named only when identifying the
 issue request or comparing features (same rule as ZBrush format mentions).
 
-## Non-goals (Phase 1)
+## Non-goals (through Phase 2)
 
 - Interactive orientation / position brushes and singularity editing (§3.7)
 - Point-cloud input
 - Matching Autoremesher’s CLI flag set 1:1
-- Pure-quad guarantee without a subdivision post-pass
-- Attribute transfer beyond what remesh already does (mask / groups /
-  vertex color: follow remesh policy; Phase 1 may drop paint like early remesh)
+- Full Catmull–Clark *smoothing* (Phase 2 only uses CC connectivity)
 
 ## Phases
 
 | Phase | Ships |
 |---|---|
-| **1** | Background auto-retopo job; options above; quad-dominant output; unit tests on closed primitives; CLEAN_ROOM + ROADMAP |
-| **2** | Pure-quad post-pass; attribute projection onto the new mesh; better sharp-feature handling; timing example |
+| **1** | Background OxyRemesh job; field pipeline; quad-dominant extraction; unit tests; CLEAN_ROOM + ROADMAP |
+| **2** | Pure-quad post-pass; attribute projection + surface snap; crease-weighted GS; `oxyremesh_timing` example |
 | **3** | Optional orientation stroke constraints; singularity attractor; adaptivity / anisotropy knobs |
 
 ## Verification

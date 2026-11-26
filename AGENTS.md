@@ -56,6 +56,7 @@ cargo run -p oxy-app -- --demo --screenshot out.png        # headless screenshot
 cargo run --release -p oxy-sculpt --example dab_timing     # brush performance
 cargo run --release -p oxy-sculpt --example wire_timing    # Curve Move bind/deform performance
 cargo run --release -p oxy-topo --example topo_timing      # remesh/decimate performance
+cargo run --release -p oxy-topo --example oxyremesh_timing # OxyRemesh (field-aligned) performance
 cargo run --release -p oxy-mesh --example multires_timing  # mesh build / subdivision level performance
 cargo run --release -p oxy-mesh --example deform_timing    # Deform window drag update cost on a large plane
 cargo run --release -p oxy-mesh --example dyntopo_timing   # dynamic detail refine cost by mesh size
