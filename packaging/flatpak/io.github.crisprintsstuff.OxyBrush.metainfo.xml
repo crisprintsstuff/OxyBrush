@@ -23,7 +23,6 @@
       <li>Face groups, masking and hiding</li>
       <li>Project files with autosave and crash recovery; OBJ and STL import/export</li>
     </ul>
-    <p>This is an early alpha release: expect rough edges.</p>
   </description>
   <launchable type="desktop-id">io.github.crisprintsstuff.OxyBrush.desktop</launchable>
   <url type="homepage">https://github.com/crisprintsstuff/OxyBrush</url>
@@ -58,39 +57,39 @@
         <p>First stable release. Surface Noise, OxyRemesh, Amplify and Scene Project brushes, cutter shapes, Color Filter, 3MF export, and the beta.24 workflow features.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.7" date="2026-11-24" type="development">
+    <release version="4.0.0~beta.24.7" date="2026-11-24" type="development">
       <description>
         <p>Adds live reference alignment, direct viewport X-ray, and orthographic grids.</p>
         <p>Improves Pieces navigation, vertex color smoothing, and mirrored OxySpheres quad rebuilds.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.6" date="2026-11-24" type="development">
+    <release version="4.0.0~beta.24.6" date="2026-11-24" type="development">
       <description>
         <p>Adds reference image planes, viewport X-ray, quick selection shape controls, and tuned Kelvin brushes.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.5" date="2026-11-24" type="development">
+    <release version="4.0.0~beta.24.5" date="2026-11-24" type="development">
       <description>
         <p>Paint can vary hue, saturation, and value per stroke or per dab.
         Materials contains the lit surface controls. OxySpheres displays
         rejected quad builds beside Make mesh.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.4" date="2026-11-23" type="development">
+    <release version="4.0.0~beta.24.4" date="2026-11-23" type="development">
       <description>
         <p>Draw, Clay, and Inflate start with Accumulate off. Poly Edit
         separates edge Delete from Dissolve and mirrors Knife cuts.
         Captured alphas have smoother outlines.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.3" date="2026-11-23" type="development">
+    <release version="4.0.0~beta.24.3" date="2026-11-23" type="development">
       <description>
         <p>Draw, Inflate, Clay and Clay Strips have a per-brush Accumulate
         switch. OxySpheres can generate an experimental quad base mesh and
         track generated pieces across duplication and reopening projects.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24.2" date="2026-11-23" type="development">
+    <release version="4.0.0~beta.24.2" date="2026-11-23" type="development">
       <description>
         <p>OxySpheres make round thin limbs and update the last mesh they made
         while it is unsculpted. Lighter inactive pieces lower the other pieces
@@ -98,7 +97,7 @@
         polygons.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.24" date="2026-11-23" type="development">
+    <release version="4.0.0~beta.24" date="2026-11-23" type="development">
       <description>
         <p>OxySpheres are a piece of their own that makes new meshes any time.
         The Knife cuts a face out of a face and follows cuts over edges, curve
@@ -107,7 +106,7 @@
         show their lowest level when lighter.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.23.3" date="2026-11-22" type="development">
+    <release version="4.0.0~beta.23.3" date="2026-11-22" type="development">
       <description>
         <p>Block out a figure or creature with OxySpheres, a tree of spheres
         turned into one smooth mesh to sculpt. In Poly Edit, edge Bridge joins
@@ -115,7 +114,7 @@
         start or end inside a face now cut.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.23.2" date="2026-11-22" type="development">
+    <release version="4.0.0~beta.23.2" date="2026-11-22" type="development">
       <description>
         <p>Cut new edges with the Poly Edit Knife and round outlines with To
         Circle. Mask or show with circle, ellipse and curve selections. Give
@@ -124,7 +123,7 @@
         inactive pieces lighter to save memory.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.23" date="2026-11-22" type="development">
+    <release version="4.0.0~beta.23" date="2026-11-22" type="development">
       <description>
         <p>Make linked and mirrored copies of a piece that follow it as you
         sculpt. Each brush keeps its own settings and alpha, with separate
@@ -134,7 +133,7 @@
         levels.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.22" date="2026-11-21" type="development">
+    <release version="4.0.0~beta.22" date="2026-11-21" type="development">
       <description>
         <p>Mix theme colors, controls and shadows. Use the unified title bar
         on Windows and Linux and the native menu bar on macOS. Organize the
@@ -143,7 +142,7 @@
         upright and reuses the running window.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.21.4" date="2026-11-21" type="development">
+    <release version="4.0.0~beta.21.4" date="2026-11-21" type="development">
       <description>
         <p>Move placed recipes on the surface, edit linked mirrored pairs,
         and save recipe changes back to the Recipe Box. New tabs inherit
@@ -151,7 +150,7 @@
         pulls near the mirror plane, and Pieces list controls work again.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.21.2" date="2026-11-21" type="development">
+    <release version="4.0.0~beta.21.2" date="2026-11-21" type="development">
       <description>
         <p>Fix tab close button hit-testing, ensure new-tab actions always
         open a fresh tab, let File &gt; New open alongside modified tabs, pin
@@ -160,7 +159,7 @@
         shelf edge.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.21" date="2026-11-20" type="development">
+    <release version="4.0.0~beta.21" date="2026-11-20" type="development">
       <description>
         <p>Complete multi-tab project support with tab bar, keyboard shortcuts,
         startup session restore, multi-tab crash recovery, cross-tab Copy/Paste
@@ -172,7 +171,7 @@
         Appearance.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.20.2" date="2026-11-20" type="development">
+    <release version="4.0.0~beta.20.2" date="2026-11-20" type="development">
       <description>
         <p>Fix inspector panel runaway width expansion in Standard and Touch
         friendly layout presets by enforcing panel max_size bounds. Replace
@@ -182,7 +181,7 @@
         reordering across scene hierarchies.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.20" date="2026-11-20" type="development">
+    <release version="4.0.0~beta.20" date="2026-11-20" type="development">
       <description>
         <p>Import Autodesk FBX files spanning modern 7.x binary, ASCII,
         and legacy 5.8/6.x formats. Experience the Sculptor theme with dark
@@ -192,7 +191,7 @@
         Customize UI color hue, tint intensity, and brightness.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.19.2" date="2026-11-20" type="development">
+    <release version="4.0.0~beta.19.2" date="2026-11-20" type="development">
       <description>
         <p>Hierarchical tree-view scene outliner for pieces with folding,
         drag-and-drop parenting, and transform propagation. Import 4K alphas
@@ -202,7 +201,7 @@
         Deform window title bar dragging and update project branding.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.19" date="2026-11-19" type="development">
+    <release version="4.0.0~beta.19" date="2026-11-19" type="development">
       <description>
         <p>Sculpt dense meshes up to 200M+ triangles with partitioned GPU
         rendering, bounded draw calls, and compressed undo history. Multires
@@ -212,7 +211,7 @@
         types.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.18" date="2026-11-18" type="development">
+    <release version="4.0.0~beta.18" date="2026-11-18" type="development">
       <description>
         <p>Blur or sharpen the mask with Ctrl+click, hide the masked faces,
         mask everything outside a box or lasso by pressing Alt before letting
@@ -220,7 +219,7 @@
         slider and the floor grid now work.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.17" date="2026-11-18" type="development">
+    <release version="4.0.0~beta.17" date="2026-11-18" type="development">
       <description>
         <p>Start from an empty scene, import several files together, extrude
         Poly Edit faces along the gizmo, group the masked area, and choose an
@@ -229,7 +228,7 @@
         Poly Edit picks and grouping visible islands.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.16" date="2026-11-16" type="development">
+    <release version="4.0.0~beta.16" date="2026-11-16" type="development">
       <description>
         <p>Living strokes remember what was drawn, including curves, stamps,
         lines and a captured alpha, and Edit… sculpts a stroke again with a
@@ -239,7 +238,7 @@
         shade flat (40° by default; 180° is Off).</p>
       </description>
     </release>
-    <release version="4.0.0-beta.15" date="2026-11-16" type="development">
+    <release version="4.0.0~beta.15" date="2026-11-16" type="development">
       <description>
         <p>One transform gizmo moves, turns and scales at once, and works in
         Poly Edit too, where Shift+drag extrudes what's picked. Poly Edit has
@@ -248,7 +247,7 @@
         smooth corners.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.14" date="2026-11-15" type="development">
+    <release version="4.0.0~beta.14" date="2026-11-15" type="development">
       <description>
         <p>Area lights with soft shadows, and an option to keep the matcap
         under the lights. Tubes can have any cross-section and sharp corners.
@@ -257,7 +256,7 @@
         Shift+Tab hides just the settings panel.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.13" date="2026-11-15" type="development">
+    <release version="4.0.0~beta.13" date="2026-11-15" type="development">
       <description>
         <p>The transform gizmo follows Mirror X, Y and Z. Gravity is much
         stronger. Stamp strokes are as strong as freehand ones and show while
@@ -265,7 +264,7 @@
         several faces and cut centred or paired edge loops.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.12" date="2026-11-15" type="development">
+    <release version="4.0.0~beta.12" date="2026-11-15" type="development">
       <description>
         <p>Copy one piece onto the faces of another as live copies that
         follow the surface (surface instances), paint face groups with a
@@ -275,7 +274,7 @@
         Poly Edit no longer shows edges through the model.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.11" date="2026-11-14" type="development">
+    <release version="4.0.0~beta.11" date="2026-11-14" type="development">
       <description>
         <p>Orbiting turns around the point of the model under the cursor (or
         the last stroke). Tubes can be twisted, coiled like a spring or
@@ -285,7 +284,7 @@
         follows a hovering pen on Windows.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.10" date="2026-11-14" type="development">
+    <release version="4.0.0~beta.10" date="2026-11-14" type="development">
       <description>
         <p>Each piece can have its own material (matcap). Living strokes can be
         copied to the mirrored side, split into one stroke per side, and
@@ -294,7 +293,7 @@
         rigged models whole and handles meshes with flipped normals.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.9" date="2026-11-13" type="development">
+    <release version="4.0.0~beta.9" date="2026-11-13" type="development">
       <description>
         <p>Subdivision levels now make quads (Catmull-Clark) that keep the
         edge loops of a quad model, with Poly Edit creases kept sharp, and a
@@ -304,7 +303,7 @@
         and a voxel remesh that keeps close fingers and toes apart.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.8" date="2026-11-13" type="development">
+    <release version="4.0.0~beta.8" date="2026-11-13" type="development">
       <description>
         <p>Living strokes: an option to keep strokes editable, so any stroke
         can be faded, deleted or seen on its own later. Poly Edit gains
@@ -314,7 +313,7 @@
         and overlapping parts solid, with an optional Shell.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.7" date="2026-11-13" type="development">
+    <release version="4.0.0~beta.7" date="2026-11-13" type="development">
       <description>
         <p>Poly Edit, a new tool for modeling low-polygon pieces by their faces,
         edges and points: extrude, inset, insert edge loops, close holes and
@@ -324,14 +323,14 @@
         exact values. Ctrl+plus and Ctrl+minus zoom the view.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.6" date="2026-11-13" type="development">
+    <release version="4.0.0~beta.6" date="2026-11-13" type="development">
       <description>
         <p>Undo on the active piece only (Ctrl+Alt+Z, or the default for
         Ctrl+Z in Preferences). Reopen the last stroke as an editable curve,
         or use its path as a Curve Move curve or a tube path.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.5" date="2026-11-12" type="development">
+    <release version="4.0.0~beta.5" date="2026-11-12" type="development">
       <description>
         <p>A Deform window with 25 whole-piece deformers (bend, twist, taper,
         inflate, polish and more) that respect the mask. Mask border and Mask
@@ -339,7 +338,7 @@
         dark themes, and larger Mirror X, Y and Z buttons.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.4" date="2026-11-12" type="development">
+    <release version="4.0.0~beta.4" date="2026-11-12" type="development">
       <description>
         <p>Mesh, Symmetrize mirrors one half of a piece onto the other and
         welds the seam. Split masked moves the masked part of a piece into a
@@ -349,7 +348,7 @@
         colors of their own.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.3" date="2026-11-11" type="development">
+    <release version="4.0.0~beta.3" date="2026-11-11" type="development">
       <description>
         <p>One Theme window holds themes, colors, interface size, corners and
         a new slider thickness option. With a pen, dragging a panel scrolls
@@ -357,7 +356,7 @@
         navigation preset uses the pen's side buttons.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.2" date="2026-11-11" type="development">
+    <release version="4.0.0~beta.2" date="2026-11-11" type="development">
       <description>
         <p>Points in the retopology tool can be pinned so relaxing leaves
         them in place. Dragging the axis gizmo orbits the view. Opening a
@@ -365,7 +364,7 @@
         OxyBrush icon.</p>
       </description>
     </release>
-    <release version="4.0.0-beta.1" date="2026-11-11" type="development">
+    <release version="4.0.0~beta.1" date="2026-11-11" type="development">
       <description>
         <p>Alphas captured from view can be up to 4096 pixels with smooth
         edges, are saved with the project, and can be exported as 16-bit
