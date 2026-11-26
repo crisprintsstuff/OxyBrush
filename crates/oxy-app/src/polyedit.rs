@@ -337,6 +337,11 @@ pub struct PolyEdit {
     /// Points mode (RFC 0023); only one kind is picked at a time.
     pub picked_edges: Vec<[u32; 2]>,
     pub picked_points: Vec<u32>,
+    /// Pick as it was before each Poly Edit cage undo step, so Undo can
+    /// put the selection back when the mesh topology returns. Redo uses
+    /// the matching after-edit snaps.
+    pick_undo: Vec<PickSnap>,
+    pick_redo: Vec<PickSnap>,
     /// Insert loop makes two loops, the same distance in from each end.
     pub loop_pair: bool,
     /// The mesh's face version the polygons last took face groups from.
@@ -373,6 +378,33 @@ pub fn soft_weight(d: f32, radius: f32, falloff: f32) -> f32 {
     }
     let t = 1.0 - d / radius;
     (t * t * (3.0 - 2.0 * t)).powf(1.0 + 3.0 * falloff.clamp(0.0, 1.0))
+}
+
+/// A Poly Edit pick tied to one mesh topology version (for undo/redo).
+#[derive(Debug, Clone, Default, PartialEq)]
+struct PickSnap {
+    topology: u64,
+    selected: Vec<usize>,
+    edges: Vec<[u32; 2]>,
+    points: Vec<u32>,
+}
+
+impl PolyEdit {
+    fn pick_snap(&self) -> PickSnap {
+        PickSnap {
+            topology: self.selected_topology,
+            selected: self.selected.clone(),
+            edges: self.picked_edges.clone(),
+            points: self.picked_points.clone(),
+        }
+    }
+
+    fn restore_pick(&mut self, snap: PickSnap) {
+        self.selected_topology = snap.topology;
+        self.selected = snap.selected;
+        self.picked_edges = snap.edges;
+        self.picked_points = snap.points;
+    }
 }
 
 /// The first pick of a two-click action.
@@ -572,6 +604,8 @@ impl Editor {
             selected_topology: 0,
             picked_edges: Vec::new(),
             picked_points: Vec::new(),
+            pick_undo: Vec::new(),
+            pick_redo: Vec::new(),
             loop_pair: false,
             groups_seen: 0,
             last_pick: None,
@@ -2085,6 +2119,7 @@ impl Editor {
         {
             pe.last[d.kind] = Some(d.amount);
         }
+        self.poly_remember_pick_before_edit();
         let piece = &mut self.scene.pieces[i];
         piece.mesh.tighten_bounds();
         let id = piece.id;
@@ -2161,6 +2196,7 @@ impl Editor {
             return;
         }
         let Some((i, before_mesh, before_cage)) = self.poly_before() else { return };
+        self.poly_remember_pick_before_edit();
         self.poly_set_points(&moves);
         let id = self.scene.pieces[i].id;
         self.history.record_cage("Poly Edit: To Circle", id, before_mesh, before_cage);
@@ -2616,6 +2652,32 @@ impl Editor {
         self.poly_commit_order(label, before_mesh, before_cage, cage);
     }
 
+    /// Remember the current pick before a Poly Edit cage undo step so Undo
+    /// can restore it when the pre-edit topology comes back.
+    fn poly_remember_pick_before_edit(&mut self) {
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        pe.pick_undo.push(pe.pick_snap());
+        pe.pick_redo.clear();
+    }
+
+    /// After Undo/Redo of a Poly Edit cage step: put the pick back that
+    /// matches the restored mesh topology.
+    pub(crate) fn poly_after_history(&mut self, undone: bool, label: &str) {
+        if !label.starts_with("Poly Edit") {
+            return;
+        }
+        let Some(pe) = self.poly_edit.as_mut() else { return };
+        if undone {
+            let Some(snap) = pe.pick_undo.pop() else { return };
+            pe.pick_redo.push(pe.pick_snap());
+            pe.restore_pick(snap);
+        } else {
+            let Some(snap) = pe.pick_redo.pop() else { return };
+            pe.pick_undo.push(pe.pick_snap());
+            pe.restore_pick(snap);
+        }
+    }
+
     /// [`Self::poly_commit`], returning how the points were renumbered:
     /// the mesh keeps its vertices in its own (chunk) order and the cage
     /// follows it, so old point `v` is `order[v]` afterwards.
@@ -2631,6 +2693,7 @@ impl Editor {
             self.status = "Poly Edit can't delete every face of a piece; delete the piece instead".into();
             return None;
         };
+        self.poly_remember_pick_before_edit();
         let piece = &mut self.scene.pieces[i];
         piece.mesh = mesh;
         piece.cage = Some(cage);
@@ -3122,6 +3185,13 @@ mod tests {
         assert!((e.gizmo_layout().unwrap().pivot - top).length() < 1e-4);
         e.undo();
         assert_eq!(cage(&e).faces.len(), 6);
+        // Undo restores the pre-extrude pick (same face on the restored topology).
+        assert_eq!(e.poly_selection(), &[front], "undo restores the Poly Edit pick");
+        e.redo();
+        assert_eq!(cage(&e).faces.len(), 10);
+        assert_eq!(e.poly_selection().len(), 1, "redo restores the post-extrude pick");
+        e.undo();
+        assert_eq!(e.poly_selection(), &[front]);
 
         // Shift+drag the even-scale circle: inset.
         let mut e = editor();

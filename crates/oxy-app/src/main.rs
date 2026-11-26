@@ -44,6 +44,7 @@ mod primitive_ui;
 mod references;
 mod retopo;
 mod retopo_ui;
+mod scale_cover_ui;
 mod select_shapes;
 mod settings;
 mod snapshot;
