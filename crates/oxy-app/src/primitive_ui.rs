@@ -199,7 +199,7 @@ impl Editor {
         let params = PrimitiveParams::new(Shape::from_key(which));
         let (preview, cage) = params.build();
         self.primitive_edit = Some(PrimitiveEdit { built: Some(params.clone()), params, preview, cage });
-        self.status = "Set the shape, then Accept (Enter) to add it".into();
+        self.status = "Set the shape (wireframe shows divisions), then Accept (Enter) to add it".into();
     }
 
     pub fn update_primitive(&mut self) {
