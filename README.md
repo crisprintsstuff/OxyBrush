@@ -15,7 +15,7 @@
 
 
 <p align="center">
-  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.1"><b>Download</b></a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.2"><b>Download</b></a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
   <a href="https://discord.gg/Vfm7Km7xvG"><b>Discord</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Stable:** OxyBrush **4.1.1** — inspector declutter (Focus layout, mode-aware panels), Topology section headers, and OxyRemesh extraction that keeps a majority surface instead of failing on floaters. Builds on [4.1.0](docs/releases/v4.1.0.md). [4.1.1 release notes](docs/releases/v4.1.1.md)
+> **Stable:** OxyBrush **4.1.2** — OxyRemesh no longer ships Swiss-cheese meshes on closed characters ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551)). Builds on [4.1.1](docs/releases/v4.1.1.md). [4.1.2 release notes](docs/releases/v4.1.2.md)
 
 **Highlights**
 
@@ -45,7 +45,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 ## Download and install
 
-Get **[OxyBrush v4.1.1](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.1)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
+Get **[OxyBrush v4.1.2](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.1.2)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
 
 | Platform | File | How |
 |---|---|---|
