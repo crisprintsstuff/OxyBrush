@@ -65,12 +65,69 @@ pub fn extract_isoline_mesh(
         return None;
     }
     let corner_uvs: Vec<_> = triangles.iter().map(|t| t.map(|v| vertex_uvs[v as usize])).collect();
-    extract_corner_isolines(positions, triangles, &corner_uvs, rho)
+    extract_chart_graph(positions, triangles, &corner_uvs, rho)
 }
 
 /// Extract using one UV per triangle corner. Neighboring triangles may use
-/// different integer grid frames at a seam.
+/// different integer grid frames at a seam. Reject charts that do not
+/// align along a shared edge before attempting to weld their isolines.
 pub fn extract_corner_isolines(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    corner_uvs: &[[Vec2; 3]],
+    rho: f32,
+) -> Option<IsolineMesh> {
+    if !charts_share_integer_grid(triangles, corner_uvs) {
+        return None;
+    }
+    extract_chart_graph(positions, triangles, corner_uvs, rho)
+}
+
+fn charts_share_integer_grid(triangles: &[[u32; 3]], corner_uvs: &[[Vec2; 3]]) -> bool {
+    if triangles.len() != corner_uvs.len() {
+        return false;
+    }
+    let mut edge_charts = HashMap::with_capacity(triangles.len());
+    for (tri, uv) in triangles.iter().zip(corner_uvs) {
+        if uv.iter().any(|p| !p.is_finite()) {
+            return false;
+        }
+        for i in 0..3 {
+            let j = (i + 1) % 3;
+            // Order both copies by mesh vertex ID to compare the same endpoints.
+            let (edge, chart) =
+                if tri[i] < tri[j] { ([tri[i], tri[j]], [uv[i], uv[j]]) } else { ([tri[j], tri[i]], [uv[j], uv[i]]) };
+            match edge_charts.entry(edge) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(chart);
+                }
+                std::collections::hash_map::Entry::Occupied(entry) => {
+                    if !edge_charts_align(*entry.get(), chart) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+fn edge_charts_align([a, b]: [Vec2; 2], mut other: [Vec2; 2]) -> bool {
+    const UV_EPS: f32 = 1e-4;
+    for _ in 0..4 {
+        let translation = a - other[0];
+        let integer = translation.round();
+        if (translation - integer).abs().max_element() <= UV_EPS
+            && (b - other[1] - integer).abs().max_element() <= UV_EPS
+        {
+            return true;
+        }
+        other = other.map(|p| Vec2::new(-p.y, p.x));
+    }
+    false
+}
+
+fn extract_chart_graph(
     positions: &[Vec3],
     triangles: &[[u32; 3]],
     corner_uvs: &[[Vec2; 3]],
@@ -640,6 +697,43 @@ mod tests {
                         .all(|&corner| face.iter().any(|&v| out.positions[v as usize].distance_squared(corner) < 1e-10))
             }));
         }
+    }
+
+    #[test]
+    fn folded_strip_accepts_integer_seams_and_rejects_chart_drift() {
+        let positions = [Vec3::ZERO, Vec3::X, Vec3::X + Vec3::Z, Vec3::Y, Vec3::X + Vec3::Y, Vec3::ONE];
+        let triangles = [[0, 1, 3], [1, 4, 3], [1, 2, 4], [2, 5, 4]];
+        let uv = [Vec2::ZERO, Vec2::X, Vec2::X * 2.0, Vec2::Y, Vec2::ONE, Vec2::new(2.0, 1.0)];
+        let mut charts = triangles.map(|tri| tri.map(|i| uv[i as usize]));
+        for chart in &mut charts[2..] {
+            *chart = chart.map(|p| Vec2::new(-p.y, p.x) + Vec2::new(5.0, -3.0));
+        }
+        let out = extract_corner_isolines(&positions, &triangles, &charts, 1.0).expect("connected strip");
+        assert!(out.faces.iter().any(|face| face.iter().any(|&i| out.positions[i as usize].x < 0.5)));
+        assert!(out.faces.iter().any(|face| face.iter().any(|&i| out.positions[i as usize].z > 0.5)));
+
+        for chart in &mut charts[2..] {
+            *chart = chart.map(|p| p + Vec2::new(0.25, 0.0));
+        }
+        assert!(extract_corner_isolines(&positions, &triangles, &charts, 1.0).is_none());
+    }
+
+    #[test]
+    fn closed_cube_grid_agrees_across_each_face_seam() {
+        let faces = [[0, 3, 2, 1], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7], [4, 5, 6, 7]];
+        let mut triangles = Vec::new();
+        let mut charts = Vec::new();
+        let uv = [Vec2::ZERO, Vec2::X, Vec2::ONE, Vec2::Y];
+        for (i, face) in faces.into_iter().enumerate() {
+            let chart = uv.map(|p| p + Vec2::new(i as f32 * 3.0, i as f32));
+            triangles.extend([[face[0], face[1], face[2]], [face[0], face[2], face[3]]]);
+            charts.extend([[chart[0], chart[1], chart[2]], [chart[0], chart[2], chart[3]]]);
+        }
+        assert!(charts_share_integer_grid(&triangles, &charts));
+        // An integer translation at one endpoint is insufficient when the
+        // other endpoint disagrees under that same transform.
+        charts[11][2] += Vec2::X;
+        assert!(!charts_share_integer_grid(&triangles, &charts));
     }
 
     #[test]
