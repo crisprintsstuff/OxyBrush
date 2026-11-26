@@ -78,7 +78,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     }
     let bg = render(&settings, &[], None);
     let solid = render(&settings, &[item], None);
-    let mut xray = ViewSettings { xray: true, ..settings };
+    let mut xray = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..settings };
     let ghost = render(&xray, &[item], None);
     let center = |frame: &[u8]| sample(frame, SIDE / 2, SIDE / 2).to_vec();
     assert_ne!(center(&solid), center(&ghost));
@@ -130,13 +130,13 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     assert_eq!(center(&render(&settings, &[item], Some(reference(false)))), center(&solid));
     let image_only = render(&settings, &[], Some(reference(false)));
     assert_eq!(center(&image_only), [255, 0, 0, 255]);
-    let faded = ViewSettings { xray: true, ..settings };
+    let faded = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..settings };
     let through_mesh = render(&faded, &[item], Some(reference(false)));
     assert!(center(&through_mesh)[0] > center(&ghost)[0]);
     assert_eq!(center(&render(&settings, &[item], Some(reference(true)))), center(&image_only));
     for (ambient_occlusion, cavity) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
         let shaded = ViewSettings { ambient_occlusion, cavity, ..settings };
-        let shaded_ghost = ViewSettings { xray: true, ..shaded };
+        let shaded_ghost = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..shaded };
         let through = render(&shaded_ghost, &[item], Some(reference(false)));
         assert_eq!(center(&through), center(&through_mesh));
         assert_eq!(sample(&through, 5, 5), sample(&through_mesh, 5, 5));
