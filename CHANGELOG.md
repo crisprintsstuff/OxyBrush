@@ -6,7 +6,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 
-- **Topology panel layout** ([#575](https://github.com/crisprintsstuff/OxyBrush/issues/575)). Voxel remesh, OxyRemesh, Project detail and Decimate each have their own section header; Shell/engine and OxyRemesh advanced knobs sit in collapsed option rows so the panel is easier to scan.
+- **Inspector declutter.** Mode-aware settings panel (hides Brush/Stroke/Alpha during Poly Edit, Retopo, OxySpheres and Tube); Brush options and Alpha options collapse by default; Topology starts collapsed while sculpting; Project detail and Decimate live under Mesh (Keep % sits next to Decimate there). New **Focus** layout (Pieces + Brush only). Settings panel width is remembered. Builds on the Topology section headers from [#575](https://github.com/crisprintsstuff/OxyBrush/issues/575).
+- **Topology panel layout** ([#575](https://github.com/crisprintsstuff/OxyBrush/issues/575)). Voxel remesh and OxyRemesh each have their own section header; Shell/engine and OxyRemesh advanced knobs sit in collapsed option rows.
 
 ### Fixed
 
