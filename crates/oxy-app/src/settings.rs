@@ -410,6 +410,10 @@ pub struct Settings {
     pub hide_cursor_during_stroke: bool,
     /// Local MCP agent listener (off unless the user turns it on). The token is not stored.
     pub agent_mcp: bool,
+    /// Split view layout key (`off`, `left_right`, `top_bottom`); [RFC 0054](../../docs/rfcs/0054-split-view.md).
+    pub split_view: String,
+    /// Fraction of the split axis for pane 0 (0.15..=0.85).
+    pub split_ratio: f32,
     /// Name of the custom matcap in use ("" for a built-in material).
     pub custom_matcap: String,
     /// Viewport backdrop: gradient (center and edge) or one flat color.
@@ -1175,6 +1179,8 @@ impl Default for Settings {
             floor_grid: true,
             hide_cursor_during_stroke: true,
             agent_mcp: false,
+            split_view: "off".into(),
+            split_ratio: 0.5,
             custom_matcap: String::new(),
             background_style: view.background_style,
             background: view.background,
@@ -1294,13 +1300,14 @@ impl Settings {
     /// Serialize as `key = value` lines.
     pub fn to_text(&self) -> String {
         let focal_mm = format!("{:.4}", oxy_render::quantize_focal_mm(self.focal_mm));
+        let split_ratio = format!("{:.3}", self.split_ratio.clamp(0.15, 0.85));
         let background = format_rgb(self.background);
         let background_center = format_rgb(self.background_center);
         let wireframe_color = format_rgb(self.wireframe_color);
         format!(
             "# OxyBrush settings. Safe to delete: defaults are used for anything missing.\n\
              layout = {}\nui_scale = {}\nhigh_contrast = {}\nwelcome_at_startup = {}\n\
-             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nhard_edge_angle = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nbutton_color = {}\nbrush_icon_color = {}\nbrush_icon_custom = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
+             autosave_minutes = {}\nmaterial = {}\nshelf = {}\npanels = {}\nquick_bar = {}\nbrush_order = {}\nambient_occlusion = {}\ncavity = {}\nupdates = {}\nupdate_last_check = {}\nupdate_skip = {}\nflat_shading = {}\nhard_edge_angle = {}\nwireframe = {}\nwireframe_opacity = {}\nwireframe_color = {}\nstroke_from_empty = {}\nsurface_cursor = {}\nhide_cursor_during_stroke = {}\nagent_mcp = {}\nsplit_view = {}\nsplit_ratio = {}\ncustom_matcap = {}\nbackground_style = {}\nbackground = {}\nbackground_center = {}\nfocal_mm = {}\ntheme = {}\naccent = {}\ncustom_accent = {}, {}, {}\ncorner_style = {}\nslider_size = {}\nbutton_color = {}\nbrush_icon_color = {}\nbrush_icon_custom = {}\nmax_triangles = {}\nextract_thickness = {}\nextract_smooth = {}\nremesh_engine = {}\n",
             self.layout.key(),
             self.ui_scale,
             self.high_contrast,
@@ -1325,6 +1332,8 @@ impl Settings {
             self.surface_cursor,
             self.hide_cursor_during_stroke,
             self.agent_mcp,
+            self.split_view,
+            split_ratio,
             self.custom_matcap,
             self.background_style.key(),
             background,
@@ -1610,6 +1619,18 @@ impl Settings {
                     s.hide_cursor_during_stroke = v.parse().unwrap_or(s.hide_cursor_during_stroke)
                 }
                 "agent_mcp" => s.agent_mcp = v.parse().unwrap_or(s.agent_mcp),
+                "split_view" => {
+                    if crate::split_view::SplitLayout::parse(v).is_some() {
+                        s.split_view = v.trim().to_ascii_lowercase();
+                    }
+                }
+                "split_ratio" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && x.is_finite()
+                    {
+                        s.split_ratio = x.clamp(0.15, 0.85);
+                    }
+                }
                 "custom_matcap" => s.custom_matcap = v.to_owned(),
                 "background_style" => s.background_style = BackgroundStyle::from_key(v).unwrap_or(s.background_style),
                 "background" => s.background = parse_rgb(v).unwrap_or(s.background),
@@ -2076,6 +2097,8 @@ mod tests {
             floor_grid: false,
             hide_cursor_during_stroke: false,
             agent_mcp: false,
+            split_view: "off".into(),
+            split_ratio: 0.5,
             custom_matcap: "Crimson Wax".into(),
             background_style: BackgroundStyle::Flat,
             background: [0.2, 0.25, 0.3],

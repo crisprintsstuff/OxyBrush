@@ -735,7 +735,8 @@ impl App {
         g.egui_state.handle_platform_output(&g.window, out.platform_output);
         let ppp = out.pixels_per_point;
         ed.pixels_per_point = ppp;
-        ed.canvas = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
+        ed.canvas_full = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
+        ed.apply_pane_canvas();
 
         let (active_matcap, active_custom) = ed.preview_matcap.unwrap_or((ed.matcap, ed.custom_matcap));
         let custom = active_custom.and_then(|i| ed.custom_matcaps.get(i));
@@ -953,22 +954,36 @@ impl App {
 
         let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
         g.viewport.set_reference_planes(&g.device, &g.queue, crate::references::planes(&self.egui_ctx, ed));
-        g.viewport.render(
-            &g.device,
-            &g.queue,
-            &mut encoder,
-            &oxy_render::RenderTarget { view: &view, size: (g.config.width, g.config.height), viewport: ed.canvas },
-            &ed.camera,
-            &oxy_render::ViewSettings {
-                floor: ed.floor_grid.then(|| ed.floor()).flatten(),
-                scene_bounds: {
-                    let b = ed.scene.bounds();
-                    (!b.is_empty()).then(|| (b.min.to_array(), b.max.to_array()))
-                },
-                ..ed.view
+        let view_settings = oxy_render::ViewSettings {
+            floor: ed.floor_grid.then(|| ed.floor()).flatten(),
+            scene_bounds: {
+                let b = ed.scene.bounds();
+                (!b.is_empty()).then(|| (b.min.to_array(), b.max.to_array()))
             },
-            &items,
-        );
+            ..ed.view
+        };
+        let pane_cams = ed.pane_cameras();
+        let pane_rects = if ed.split.is_split() {
+            crate::split_view::pane_rects(ed.split, ed.canvas_full, ed.split_ratio).to_vec()
+        } else {
+            vec![ed.canvas]
+        };
+        for (i, rect) in pane_rects.iter().enumerate() {
+            g.viewport.render(
+                &g.device,
+                &g.queue,
+                &mut encoder,
+                &oxy_render::RenderTarget {
+                    view: &view,
+                    size: (g.config.width, g.config.height),
+                    viewport: *rect,
+                    clear: i == 0,
+                },
+                pane_cams[i],
+                &view_settings,
+                &items,
+            );
+        }
         // The agent's screenshot is the viewport without the panels, so copy
         // before egui draws. Reading the pixels back submits this encoder;
         // the UI is recorded into a fresh one afterwards.
@@ -977,7 +992,8 @@ impl App {
             match copied {
                 Some(pending) => {
                     g.queue.submit([encoder.finish()]);
-                    let canvas = ed.canvas;
+                    // Screenshot the full sculpt canvas (both panes when split).
+                    let canvas = ed.canvas_full;
                     let crop = (
                         canvas[0].round().max(0.0) as u32,
                         canvas[1].round().max(0.0) as u32,

@@ -826,6 +826,14 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_km(ui, &ed.keymap, "Zoom out", Cmd::ZoomOut).clicked() {
                     ed.zoom_view(-1.0);
                 }
+                tips::menu(ui, "Split view", "Show two viewports with their own cameras (RFC 0054)", |ui| {
+                    for layout in crate::split_view::SplitLayout::ALL {
+                        if ui.selectable_label(ed.split == layout, layout.label()).clicked() {
+                            ed.set_split(layout);
+                            ui.close();
+                        }
+                    }
+                });
                 // Long groups live in submenus so the menu fits on small screens.
                 tips::menu(ui, "Camera", "Snap to a side view, orthographic view and focal length", |ui| {
                     if tips::button_km(ui, &ed.keymap, "Front", Cmd::Front).clicked() {
@@ -1069,6 +1077,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
 
     let canvas = ui.available_rect_before_wrap();
+    split_view_overlay(ui, ed, canvas);
     // Overlays: keep them out of the way of the welcome window.
     if !ed.show_welcome {
         if ed.show_panels {
@@ -1104,6 +1113,41 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     remesh_density_overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
+}
+
+/// Accent rim on the active pane and a drag strip on the divider.
+fn split_view_overlay(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+    if !ed.split.is_split() {
+        return;
+    }
+    let ppp = ed.pixels_per_point.max(1e-3);
+    let full = [canvas.min.x * ppp, canvas.min.y * ppp, canvas.width() * ppp, canvas.height() * ppp];
+    let panes = crate::split_view::pane_rects(ed.split, full, ed.split_ratio);
+    let active = panes[ed.active_pane as usize];
+    let to_points =
+        |r: [f32; 4]| egui::Rect::from_min_size(egui::pos2(r[0] / ppp, r[1] / ppp), egui::vec2(r[2] / ppp, r[3] / ppp));
+    let accent = ui.visuals().selection.bg_fill;
+    ui.painter().rect_stroke(
+        to_points(active).shrink(1.0),
+        0.0,
+        egui::Stroke::new(2.0, accent),
+        egui::StrokeKind::Inside,
+    );
+    // Divider line.
+    let a = to_points(panes[0]);
+    let b = to_points(panes[1]);
+    let (p0, p1) = match ed.split {
+        crate::split_view::SplitLayout::LeftRight => {
+            let x = (a.max.x + b.min.x) * 0.5;
+            (egui::pos2(x, a.min.y), egui::pos2(x, a.max.y))
+        }
+        crate::split_view::SplitLayout::TopBottom => {
+            let y = (a.max.y + b.min.y) * 0.5;
+            (egui::pos2(a.min.x, y), egui::pos2(a.max.x, y))
+        }
+        crate::split_view::SplitLayout::Off => return,
+    };
+    ui.painter().line_segment([p0, p1], egui::Stroke::new(1.0, accent.gamma_multiply(0.6)));
 }
 
 fn settings_window(ctx: &egui::Context, ed: &mut Editor) {
