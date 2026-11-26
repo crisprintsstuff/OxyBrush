@@ -111,8 +111,10 @@ edges and pairs the resulting UV endpoints by source vertex. This gives the
 next solver separate variables on either side of a cut without changing the
 sculpt mesh. The preparation stage seeds these cuts from residual quarter turns on
 interior edges after combing. A spanning forest of the remaining face adjacencies keeps each chart a
-disk. This can add more cuts than a shortest-cut method. The UV fit still
-needs to enforce the integer transitions across those cuts.
+disk. This can add more cuts than a shortest-cut method. A seam fit now enforces supplied integer translations and quarter turns
+on the cut vertices. It projects an initial UV estimate onto the shared
+constraints and rejects inconsistent cycles. Computing the transitions
+and integrating this fit with the orientation-field solve remain open.
 
 ## Verification
 

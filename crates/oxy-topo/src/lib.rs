@@ -11,6 +11,7 @@ pub mod remesh;
 pub mod skin;
 pub mod transfer;
 pub mod uv_cut;
+pub mod uv_seams;
 pub mod winding;
 
 pub use auto_retopo::{AutoRetopoError, AutoRetopoOptions, OrientationConstraint, auto_retopo};
