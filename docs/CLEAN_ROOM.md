@@ -70,6 +70,7 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-26 | [libigl public tutorial on cutting and Poisson parameterization](https://libigl.github.io/tutorial/#poisson-parametrization) | Cut mesh connectivity along seams before solving for continuous coordinates on each side | RFC 0044 Phase 4: original Rust corner-fan splitting with paired source-edge endpoints |
 | 2026-11-26 | [libigl public tutorial on combing and cutting](https://libigl.github.io/tutorial/#combing-and-cutting) | Discontinuities in combed representatives seed cuts | Connect OxyRemesh residual interior edges to its corner topology builder |
 | 2026-11-26 | [libigl public tutorial on combing and cutting](https://libigl.github.io/tutorial/#combing-and-cutting) | Cut the surface into disks before parameterization | OxyRemesh keeps a spanning forest in the face adjacency graph after removing the required seams |
+| 2026-11-26 | [libigl public tutorial on seamless integer-grid parameterization](https://libigl.github.io/tutorial/#poisson-parametrization), citing Bommes et al. | Seam constraints align grid coordinates under integer transforms | OxyRemesh projects cut vertices onto supplied affine constraints, using exact quarter turns and closing cycles before extraction |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can
