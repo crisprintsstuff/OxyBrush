@@ -315,11 +315,29 @@ fn boundary_edge_count(m: &Mesh) -> usize {
 }
 
 /// Lattice UVs for isoline extract: BFS accumulating Instant Meshes integer jumps.
-/// Fit UV differences to the combed orientation field on each connected
-/// component. Shared vertex coordinates keep the relaxed charts continuous;
-/// integer rebasing leaves the grid unchanged. Return None when a residual
-/// quarter turn requires a seam that this continuous fit cannot represent.
-fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Option<Vec<[Vec2; 3]>> {
+struct CombedField {
+    normals: Vec<Vec3>,
+    frames: Vec<Vec3>,
+    neighbors: Vec<Vec<u32>>,
+    /// Parents precede children. Each component root has no parent.
+    traversal: Vec<(usize, Option<usize>)>,
+}
+
+impl CombedField {
+    fn residual_edges(&self) -> impl Iterator<Item = [u32; 2]> + '_ {
+        self.neighbors.iter().enumerate().flat_map(move |(i, row)| {
+            row.iter().map(|&j| j as usize).filter(move |&j| i < j).filter_map(move |j| {
+                let transported = Quat::from_rotation_arc(self.normals[i], self.normals[j]) * self.frames[i];
+                let current = transported.dot(self.frames[j]);
+                let perpendicular = transported.dot(self.normals[j].cross(self.frames[j]));
+                // At a tie either representative is valid.
+                (current.abs().max(perpendicular.abs()) > current + 1e-5).then_some([i as u32, j as u32])
+            })
+        })
+    }
+}
+
+fn comb_field(g: &Graph, orientations: &[Vec3]) -> CombedField {
     let normals: Vec<_> = g.normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
     let mut frames: Vec<_> = normals
         .iter()
@@ -328,23 +346,15 @@ fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rh
         .collect();
     let mut neighbors = g.neighbors.clone();
     neighbors.iter_mut().for_each(|row| row.sort_unstable());
-    let edge_step = |i: usize, j: usize, frames: &[Vec3]| {
-        let edge = (g.positions[j] - g.positions[i]) / rho;
-        let along = (frames[i] + frames[j]) * 0.5;
-        let across = (normals[i].cross(frames[i]) + normals[j].cross(frames[j])) * 0.5;
-        Vec2::new(edge.dot(along), edge.dot(across))
-    };
-
-    let mut coordinates = vec![Vec2::ZERO; g.len()];
     let mut seen = vec![false; g.len()];
-    let mut anchored = vec![false; g.len()];
+    let mut traversal = Vec::with_capacity(g.len());
     let mut queue = std::collections::VecDeque::new();
     for root in 0..g.len() {
         if seen[root] {
             continue;
         }
         seen[root] = true;
-        anchored[root] = true;
+        traversal.push((root, None));
         queue.push_back(root);
         while let Some(i) = queue.pop_front() {
             for &j in &neighbors[i] {
@@ -354,34 +364,71 @@ fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rh
                 }
                 let transported = Quat::from_rotation_arc(normals[i], normals[j]) * frames[i];
                 frames[j] = best_rosy_match(frames[j], normals[j], transported);
-                coordinates[j] = coordinates[i] + edge_step(i, j, &frames);
+                traversal.push((j, Some(i)));
                 seen[j] = true;
                 queue.push_back(j);
             }
         }
     }
 
-    // The spanning tree fixes representatives locally. An edge outside
-    // the tree can still prefer another quarter turn when it closes a loop.
-    if neighbors.iter().enumerate().any(|(i, row)| {
-        row.iter().map(|&j| j as usize).filter(|&j| i < j).any(|j| {
-            let transported = Quat::from_rotation_arc(normals[i], normals[j]) * frames[i];
-            let current = transported.dot(frames[j]);
-            let perpendicular = transported.dot(normals[j].cross(frames[j]));
-            // At a tie either frame is valid. Allow for transport rounding.
-            current.abs().max(perpendicular.abs()) > current + 1e-5
-        })
-    }) {
+    CombedField { normals, frames, neighbors, traversal }
+}
+
+/// Prepare solver topology from a per-vertex orientation field. Residual
+/// quarter turns on interior edges seed the cuts. Boundary edges already
+/// have only one chart side, so they need no seam pair.
+pub fn prepare_uv_cuts(
+    mesh: &Mesh,
+    orientations: &[Vec3],
+    sharp_angle_deg: f32,
+) -> Option<crate::uv_cut::UvCutTopology> {
+    if orientations.len() != mesh.vertex_count() || orientations.iter().any(|v| !v.is_finite()) {
         return None;
+    }
+    let graph = Graph::from_mesh(mesh, sharp_angle_deg);
+    let field = comb_field(&graph, orientations);
+    let residual: HashSet<_> = field.residual_edges().collect();
+    let mut seen = HashSet::with_capacity(residual.len());
+    let mut seams = Vec::with_capacity(residual.len());
+    for &[a, b, c] in &mesh.triangles {
+        for [a, b] in [[a, b], [b, c], [c, a]] {
+            let edge = [a.min(b), a.max(b)];
+            if residual.contains(&edge) && !seen.insert(edge) {
+                seams.push(edge);
+            }
+        }
+    }
+    crate::uv_cut::UvCutTopology::from_seams(&mesh.triangles, &seams)
+}
+
+/// Fit UV differences on each connected component. Residual quarter turns
+/// require a seam that this continuous fit cannot represent.
+fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Option<Vec<[Vec2; 3]>> {
+    let field = comb_field(g, orientations);
+    if field.residual_edges().next().is_some() {
+        return None;
+    }
+    let CombedField { normals, frames, neighbors, traversal } = field;
+    let edge_step = |i: usize, j: usize| {
+        let edge = (g.positions[j] - g.positions[i]) / rho;
+        let along = (frames[i] + frames[j]) * 0.5;
+        let across = (normals[i].cross(frames[i]) + normals[j].cross(frames[j])) * 0.5;
+        Vec2::new(edge.dot(along), edge.dot(across))
+    };
+    let mut coordinates = vec![Vec2::ZERO; g.len()];
+    let mut anchored = vec![false; g.len()];
+    for (i, parent) in traversal {
+        if let Some(j) = parent {
+            coordinates[i] = coordinates[j] + edge_step(j, i);
+        } else {
+            anchored[i] = true;
+        }
     }
 
     // The normal equation for each free vertex is the average of its
     // neighbors minus the field's desired outgoing edge differences.
-    let bias: Vec<Vec2> = neighbors
-        .iter()
-        .enumerate()
-        .map(|(i, row)| row.iter().map(|&j| edge_step(i, j as usize, &frames)).sum())
-        .collect();
+    let bias: Vec<Vec2> =
+        neighbors.iter().enumerate().map(|(i, row)| row.iter().map(|&j| edge_step(i, j as usize)).sum()).collect();
     for _ in 0..24 {
         for (i, row) in neighbors.iter().enumerate() {
             if anchored[i] {
@@ -1808,6 +1855,26 @@ mod tests {
         let orientations: Vec<_> =
             (0..3).map(|i| rot_about(Vec3::Z, i as f32 * std::f32::consts::FRAC_PI_6, Vec3::X)).collect();
         assert!(fit_field_charts(&graph, &orientations, &mesh.triangles, 1.0).is_none());
+    }
+
+    #[test]
+    fn orientation_discontinuity_splits_the_shared_diagonal() {
+        let mesh = Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y, Vec3::X + Vec3::Y], vec![[0, 1, 2], [2, 1, 3]]);
+        let orientations: Vec<_> = mesh
+            .positions
+            .iter()
+            .map(|p| rot_about(Vec3::Z, (p.x - p.y) * std::f32::consts::FRAC_PI_6, Vec3::X))
+            .collect();
+        let cut = prepare_uv_cuts(&mesh, &orientations, 40.0).unwrap();
+        assert_eq!(cut.seams.len(), 1);
+        assert_eq!(cut.source_vertices.len(), 6);
+        let [first, second] = cut.seams[0];
+        assert_ne!(first, second);
+        assert_eq!(first.map(|i| cut.source_vertices[i]), second.map(|i| cut.source_vertices[i]));
+        assert_eq!(
+            first.map(|i| mesh.positions[cut.source_vertices[i] as usize]).into_iter().sum::<Vec3>(),
+            Vec3::X + Vec3::Y
+        );
     }
 
     #[test]

@@ -68,6 +68,7 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-26 | [libigl public tutorial on combing and Poisson parameterization](https://libigl.github.io/tutorial/#global-seamless-integer-grid-parametrization) | Choose consistent representatives of a cross field and fit UV gradients to them | RFC 0044 Phase 4: Rust vertex-graph combing and bounded least-squares relaxation of edge differences |
 | 2026-11-26 | [libigl public tutorial on combing and cutting](https://libigl.github.io/tutorial/#combing-and-cutting) | Residual discontinuities after combing mark edges that need a cut | RFC 0044 Phase 4: detect residual quarter turns on mesh edges before fitting continuous UVs |
 | 2026-11-26 | [libigl public tutorial on cutting and Poisson parameterization](https://libigl.github.io/tutorial/#poisson-parametrization) | Cut mesh connectivity along seams before solving for continuous coordinates on each side | RFC 0044 Phase 4: original Rust corner-fan splitting with paired source-edge endpoints |
+| 2026-11-26 | [libigl public tutorial on combing and cutting](https://libigl.github.io/tutorial/#combing-and-cutting) | Discontinuities in combed representatives seed cuts | Connect OxyRemesh residual interior edges to its corner topology builder |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can

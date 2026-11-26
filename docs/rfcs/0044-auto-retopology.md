@@ -109,8 +109,9 @@ coverage on curved sculpts remain open.
 The cut-topology builder splits triangle corner fans at designated interior
 edges and pairs the resulting UV endpoints by source vertex. This gives the
 next solver separate variables on either side of a cut without changing the
-sculpt mesh. Selecting the complete cut graph and enforcing integer
-transitions during the fit remain open.
+sculpt mesh. The preparation stage seeds these cuts from residual quarter turns on
+interior edges after combing. Completing the cut graph and enforcing
+integer transitions during fitting remain open.
 
 ## Verification
 
