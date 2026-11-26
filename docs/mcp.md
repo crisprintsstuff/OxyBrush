@@ -167,6 +167,7 @@ server-sent-events stream; use `--attach` for clients that require one.
 | `scene_state` | The document as JSON for programs: pieces with bounds and `topology_version` / `edit_version` / `face_version`, visible bounds, and the camera as data (eye, target, up, field of view, column-major view and projection matrices) |
 | `changes` | Events since a cursor (`piece_added`, `geometry_changed`, `camera_changed`, …). Call without `since` to get a cursor; `timeout_ms` (≤ 10000) waits for the next change |
 | `get_geometry` | Writes a piece's arrays (positions, normals, indices, and on request colors, mask, groups, hidden) to a binary `OXYG` file in a temporary folder and returns its path and layout |
+| `set_geometry` | Applies positions, vertex colors and/or mask from an `OXYG` file onto a piece (one undo step). Counts must match; optional `topology_version` refuses a stale write. Normals/indices/groups/hidden in the file are ignored |
 | `list_strokes` | The active piece's living strokes and stroke groups (ids, brush, strength, group), or `enabled: false` while Living strokes is off. Desktop app only |
 | `edit_strokes` | One Strokes window action by `op`: `set_strength`, `delete`, `solo`, `show_all`, `keep_unmasked`, `group`, `add_to_group`, `remove_from_group`, `group_strength`, `group_visible`, `rename_group`, `merge_groups`, `ungroup`, `delete_group`, `bake`, `mirror`, `split_by_side`, `sculpt_into`. Same JSON as the plugin API's [`stroke_command`](plugins/api-reference.md#living-strokes-read_scene-edit_strokes-4). Desktop app only |
 
@@ -199,9 +200,10 @@ own copy of the scene, such as an external renderer ([RFC 0007](rfcs/0007-plugin
 - In `oxybrush-cli mcp` only your own calls change the document, so
   `changes` never waits there.
 
-The Python SDK wraps all three: `scene_state()`, `changes()`,
-`follow_changes()` (a generator of events) and `get_geometry()` (which reads
-the file into `array` values).
+The Python SDK wraps these: `scene_state()`, `changes()`,
+`follow_changes()` (a generator of events), `get_geometry()` (which reads
+the file into `array` values) and `set_geometry(path=…)` /
+`set_geometry(arrays={…})` to write positions, colors or mask back.
 
 ## What the agent cannot do
 

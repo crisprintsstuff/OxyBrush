@@ -384,6 +384,9 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
                 Err(e) => ToolResult::error(e),
             }))
         }
+        Action::SetGeometry { path, id, index, name, topology_version } => {
+            Apply::Done(set_geometry(ed, &path, id, index, name.as_deref(), topology_version))
+        }
     }
 }
 
@@ -773,6 +776,76 @@ fn mask(ed: &mut Editor, op: MaskOp) -> ToolResult {
     ed.edit_mesh_mask(label, move |mesh| op.apply(mesh));
     tag(ed, before);
     ToolResult::ok(ed.status.clone())
+}
+
+fn set_geometry(
+    ed: &mut Editor,
+    path: &std::path::Path,
+    id: Option<u64>,
+    index: Option<usize>,
+    name: Option<&str>,
+    topology_version: Option<u64>,
+) -> ToolResult {
+    if let Some(err) = blocked(ed) {
+        return err;
+    }
+    let i = match oxy_mcp::state::find_piece(&ed.scene, id, index, name) {
+        Ok(i) => i,
+        Err(e) => return ToolResult::error(e),
+    };
+    let bytes = match std::fs::read(path) {
+        Ok(b) => b,
+        Err(e) => return ToolResult::error(format!("{}: {e}", path.display())),
+    };
+    let piece = &ed.scene.pieces[i];
+    if let Some(want) = topology_version
+        && want != piece.mesh.topology_version()
+    {
+        return ToolResult::error(format!(
+            "topology_version {want} does not match the piece ({})",
+            piece.mesh.topology_version()
+        ));
+    }
+    let write =
+        match oxy_mcp::state::decode_geometry_write(&bytes, piece.mesh.vertex_count(), piece.mesh.triangle_count()) {
+            Ok(w) => w,
+            Err(e) => return ToolResult::error(e),
+        };
+    let paint = write.colors.is_some() || piece.mesh.is_painted();
+    let summary = write.summary();
+    let piece_id = piece.id;
+    let piece_name = piece.name.clone();
+    let label = format!("{}set geometry ({summary})", ed.agent_label);
+    let applied = {
+        let doc = &mut ed.documents[ed.active_document];
+        let mesh = &mut doc.scene.pieces[i].mesh;
+        doc.history.begin_with(&label, piece_id, mesh, paint);
+        let chunks: Vec<u32> = (0..mesh.chunks.len() as u32).collect();
+        for &c in &chunks {
+            doc.history.touch(mesh, c);
+        }
+        match oxy_mcp::state::apply_geometry_write(mesh, write) {
+            Ok(what) => {
+                doc.history.commit();
+                Ok(what)
+            }
+            Err(e) => {
+                doc.history.cancel();
+                Err(e)
+            }
+        }
+    };
+    match applied {
+        Ok(what) => {
+            if paint {
+                ed.view.show_vertex_color = true;
+            }
+            let text = format!("{label} on {piece_name}: wrote {what}");
+            ed.status = text.clone();
+            ToolResult::ok(text)
+        }
+        Err(e) => ToolResult::error(e),
+    }
 }
 
 fn set_camera(ed: &mut Editor, camera: CameraSet) -> ToolResult {

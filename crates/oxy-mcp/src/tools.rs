@@ -128,6 +128,15 @@ pub enum Action {
         name: Option<String>,
         fields: Option<Vec<crate::state::Field>>,
     },
+    /// Apply positions, colors and/or mask from an `OXYG` file onto a piece.
+    SetGeometry {
+        path: std::path::PathBuf,
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+        /// When set, must match the piece's current topology version.
+        topology_version: Option<u64>,
+    },
 }
 
 /// Camera fields a `set_camera` call may change. Omitted JSON fields stay `None`.
@@ -267,6 +276,13 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
                 fields,
             })
         }
+        "set_geometry" => Ok(Action::SetGeometry {
+            path: required_path(args, "path")?,
+            id: opt_u64(args, "id")?,
+            index: opt_usize(args, "index")?,
+            name: opt_string(args, "name")?,
+            topology_version: opt_u64(args, "topology_version")?,
+        }),
         other => Err(format!("unknown tool `{other}`")),
     }
 }
@@ -567,6 +583,12 @@ pub fn tool_defs() -> Vec<Value> {
             "Write a piece's arrays to a binary OXYG file in a temporary folder and return its path and layout (offsets, types, counts). fields: positions, normals, indices (default) plus colors when painted; also mask, groups, hidden. Omit id/index/name for the active piece. The folder keeps only the newest few files: read it right away. Read-only.",
             &json!({"id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "fields": {"type": "array", "items": {"type": "string"}}}),
             &[],
+        ),
+        tool(
+            "set_geometry",
+            "Apply positions, vertex colors and/or mask from an OXYG file onto a piece (same format as get_geometry). One undo step. Vertex and triangle counts must match; normals, indices, groups and hidden in the file are ignored. Pass topology_version from get_geometry/scene_state to refuse a stale write. Omit id/index/name for the active piece.",
+            &json!({"path": {"type": "string"}, "id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "topology_version": {"type": "integer"}}),
+            &["path"],
         ),
     ]
 }
