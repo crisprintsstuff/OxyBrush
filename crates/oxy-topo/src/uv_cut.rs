@@ -16,18 +16,22 @@ impl UvCutTopology {
     /// Split corner fans at the given interior mesh edges. Return `None`
     /// for degenerate triangles, non-manifold edges or missing seam sides.
     pub fn from_seams(triangles: &[[u32; 3]], seams: &[[u32; 2]]) -> Option<Self> {
-        fn root(parent: &mut [usize], mut corner: usize) -> usize {
-            while parent[corner] != corner {
-                parent[corner] = parent[parent[corner]];
-                corner = parent[corner];
-            }
-            corner
-        }
+        Self::build(triangles, seams, false)
+    }
 
+    /// Preserve the required seams and cut every remaining edge outside a
+    /// spanning forest of face adjacencies. Each component unfolds as a disk.
+    pub(crate) fn complete(triangles: &[[u32; 3]], required: &[[u32; 2]]) -> Option<Self> {
+        Self::build(triangles, required, true)
+    }
+
+    fn build(triangles: &[[u32; 3]], seams: &[[u32; 2]], complete: bool) -> Option<Self> {
         let cuts: HashSet<_> = seams.iter().map(|&[a, b]| [a.min(b), a.max(b)]).collect();
         let mut edges = HashMap::with_capacity(triangles.len());
         let mut parent: Vec<_> = (0..triangles.len().checked_mul(3)?).collect();
         let mut pairs = Vec::with_capacity(cuts.len());
+        let mut remaining = cuts.len();
+        let mut face_forest: Option<Vec<_>> = complete.then(|| (0..triangles.len()).collect());
         for (face, tri) in triangles.iter().enumerate() {
             for i in 0..3 {
                 let j = (i + 1) % 3;
@@ -44,20 +48,22 @@ impl UvCutTopology {
                     }
                     Entry::Occupied(mut entry) => {
                         let other = entry.get_mut().take()?;
-                        if cuts.contains(&edge) {
+                        let required = cuts.contains(&edge);
+                        remaining -= usize::from(required);
+                        // Joining a new face along one edge preserves a disk.
+                        // A cycle would identify two edges already in that disk.
+                        if required || face_forest.as_mut().is_some_and(|f| !join(f, other[0] / 3, face)) {
                             pairs.push((edge, [other, corners]));
                         } else {
                             for k in 0..2 {
-                                let a = root(&mut parent, other[k]);
-                                let b = root(&mut parent, corners[k]);
-                                parent[a.max(b)] = a.min(b);
+                                join(&mut parent, other[k], corners[k]);
                             }
                         }
                     }
                 }
             }
         }
-        if pairs.len() != cuts.len() {
+        if remaining != 0 {
             return None;
         }
         let mut source_vertices = Vec::new();
@@ -83,9 +89,42 @@ impl UvCutTopology {
     }
 }
 
+fn root(parent: &mut [usize], mut node: usize) -> usize {
+    while parent[node] != node {
+        parent[node] = parent[parent[node]];
+        node = parent[node];
+    }
+    node
+}
+
+fn join(parent: &mut [usize], a: usize, b: usize) -> bool {
+    let a = root(parent, a);
+    let b = root(parent, b);
+    parent[a.max(b)] = a.min(b);
+    a != b
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn completion_opens_a_closed_shell_and_preserves_the_required_seam() {
+        let source = [[0, 2, 1], [0, 1, 3], [1, 2, 3], [2, 0, 3]];
+        let cut = UvCutTopology::complete(&source, &[[0, 1]]).unwrap();
+        assert_eq!(cut.source_vertices.len(), source.len() + 2);
+        assert_eq!(cut.seams.len(), 3);
+        assert!(cut.seams.iter().any(|&[side, _]| side.map(|i| cut.source_vertices[i]) == [0, 1]));
+    }
+
+    #[test]
+    fn completion_opens_an_annulus_with_one_cut() {
+        let source = [[0, 1, 4], [4, 1, 5], [1, 2, 5], [5, 2, 6], [2, 3, 6], [6, 3, 7], [3, 0, 7], [7, 0, 4]];
+        let cut = UvCutTopology::complete(&source, &[]).unwrap();
+        assert_eq!(cut.source_vertices.len(), source.len() + 2);
+        assert_eq!(cut.seams.len(), 1);
+        assert!(UvCutTopology::complete(&source, &[[0, 1]]).is_none());
+    }
 
     #[test]
     fn cut_closed_shell_retains_source_and_pairs_the_cut_edges() {

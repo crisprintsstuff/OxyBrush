@@ -110,8 +110,9 @@ The cut-topology builder splits triangle corner fans at designated interior
 edges and pairs the resulting UV endpoints by source vertex. This gives the
 next solver separate variables on either side of a cut without changing the
 sculpt mesh. The preparation stage seeds these cuts from residual quarter turns on
-interior edges after combing. Completing the cut graph and enforcing
-integer transitions during fitting remain open.
+interior edges after combing. A spanning forest of the remaining face adjacencies keeps each chart a
+disk. This can add more cuts than a shortest-cut method. The UV fit still
+needs to enforce the integer transitions across those cuts.
 
 ## Verification
 

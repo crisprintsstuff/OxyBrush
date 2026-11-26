@@ -375,8 +375,8 @@ fn comb_field(g: &Graph, orientations: &[Vec3]) -> CombedField {
 }
 
 /// Prepare solver topology from a per-vertex orientation field. Residual
-/// quarter turns on interior edges seed the cuts. Boundary edges already
-/// have only one chart side, so they need no seam pair.
+/// quarter turns on interior edges seed the cuts. A spanning forest of the
+/// remaining face adjacencies joins the triangles into disk charts.
 pub fn prepare_uv_cuts(
     mesh: &Mesh,
     orientations: &[Vec3],
@@ -398,7 +398,7 @@ pub fn prepare_uv_cuts(
             }
         }
     }
-    crate::uv_cut::UvCutTopology::from_seams(&mesh.triangles, &seams)
+    crate::uv_cut::UvCutTopology::complete(&mesh.triangles, &seams)
 }
 
 /// Fit UV differences on each connected component. Residual quarter turns
