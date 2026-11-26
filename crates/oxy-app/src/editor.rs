@@ -1297,6 +1297,9 @@ pub struct Editor {
     /// The Surface Noise window (RFC 0045): whole-piece procedural displace.
     pub show_surface_noise: bool,
     pub surface_noise: crate::surface_noise_ui::SurfaceNoiseSettings,
+    /// Scale cover window (RFC 0046 / “Dino mode”).
+    pub show_scale_cover: bool,
+    pub scale_cover: crate::scale_cover_ui::ScaleCoverSettings,
     /// Pieces with more points than this are previewed in the background
     /// while a deformer is dragged (lowered in tests).
     pub deform_background_above: usize,
@@ -1676,6 +1679,8 @@ impl Default for Editor {
             color_filter_use_mask: true,
             show_surface_noise: false,
             surface_noise: Default::default(),
+            show_scale_cover: false,
+            scale_cover: Default::default(),
             deform_background_above: crate::deform_ui::BACKGROUND_ABOVE,
             theme_tab: ThemeTab::Themes,
             show_wireframe: false,
@@ -4892,8 +4897,9 @@ impl Editor {
         let name = self.scene.active().name.clone();
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.undo_piece(&mut doc.scene, id);
-        if matches!(result, Ok(Some(_))) {
+        if let Ok(Some(l)) = &result {
             self.living_after_undo_redo();
+            self.poly_after_history(true, l);
         }
         self.status = match result {
             Ok(Some(l)) => format!("Undid {l} on {name}"),
@@ -4921,8 +4927,9 @@ impl Editor {
         let name = self.scene.active().name.clone();
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.redo_piece(&mut doc.scene, id);
-        if matches!(result, Ok(Some(_))) {
+        if let Ok(Some(l)) = &result {
             self.living_after_undo_redo();
+            self.poly_after_history(false, l);
         }
         self.status = match result {
             Ok(Some(l)) => format!("Redid {l} on {name}"),
@@ -4987,8 +4994,9 @@ impl Editor {
         self.restore_light_for_history(false, None);
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.undo(&mut doc.scene);
-        if result.is_some() {
+        if let Some(l) = &result {
             self.living_after_undo_redo();
+            self.poly_after_history(true, l);
         }
         self.status = match result {
             Some(l) => format!("Undid {l}"),
@@ -5016,8 +5024,9 @@ impl Editor {
         self.restore_light_for_history(true, None);
         let doc = &mut self.documents[self.active_document];
         let result = doc.history.redo(&mut doc.scene);
-        if result.is_some() {
+        if let Some(l) = &result {
             self.living_after_undo_redo();
+            self.poly_after_history(false, l);
         }
         self.status = match result {
             Some(l) => format!("Redid {l}"),
@@ -5164,6 +5173,7 @@ impl Editor {
                 self.show_deform = false;
                 self.show_color_filter = false;
                 self.show_surface_noise = false;
+                self.show_scale_cover = false;
                 self.status = "New document (empty scene)".into();
                 self.replace_document(Scene::empty(), None);
             } else {

@@ -1043,6 +1043,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     dialogs(ui, ed, &mut action);
     crate::deform_ui::deform_window(ui.ctx(), ed);
     crate::surface_noise_ui::surface_noise_window(ui.ctx(), ed);
+    crate::scale_cover_ui::scale_cover_window(ui.ctx(), ed);
     crate::color_filter_ui::color_filter_window(ui.ctx(), ed);
     crate::living_ui::window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
@@ -5021,6 +5022,9 @@ fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     }
     if tips::button(ui, "Surface Noise…", Cmd::SurfaceNoiseWindow).clicked() {
         ed.surface_noise_open();
+    }
+    if tips::button(ui, "Scale cover…", Cmd::ScaleCoverWindow).clicked() {
+        ed.scale_cover_open();
     }
     tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
         for m in GizmoMode::ALL {
