@@ -9,7 +9,7 @@
 //! Rust; Instant Meshes reference C++ was not opened (GPL). See `CLEAN_ROOM.md`.
 
 use glam::{Vec2, Vec3};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// Oriented polygon loops in output vertex indices.
 pub struct IsolineMesh {
@@ -61,14 +61,24 @@ pub fn extract_isoline_mesh(
     vertex_uvs: &[Vec2],
     rho: f32,
 ) -> Option<IsolineMesh> {
-    if positions.len() < 4 || triangles.is_empty() || vertex_uvs.len() != positions.len() || rho <= 1e-8 {
+    if vertex_uvs.len() != positions.len() {
         return None;
     }
+    let corner_uvs: Vec<_> = triangles.iter().map(|t| t.map(|v| vertex_uvs[v as usize])).collect();
+    extract_corner_isolines(positions, triangles, &corner_uvs, rho)
+}
 
-    let corner_uvs: Vec<[Vec2; 3]> = triangles
-        .iter()
-        .map(|t| [vertex_uvs[t[0] as usize], vertex_uvs[t[1] as usize], vertex_uvs[t[2] as usize]])
-        .collect();
+/// Extract using one UV per triangle corner. Neighboring triangles may use
+/// different integer grid frames at a seam.
+pub fn extract_corner_isolines(
+    positions: &[Vec3],
+    triangles: &[[u32; 3]],
+    corner_uvs: &[[Vec2; 3]],
+    rho: f32,
+) -> Option<IsolineMesh> {
+    if positions.len() < 3 || triangles.is_empty() || corner_uvs.len() != triangles.len() || rho <= 1e-8 {
+        return None;
+    }
 
     let mut cross_points: Vec<Vec3> = Vec::new();
     let mut cross_src: Vec<usize> = Vec::new();
@@ -165,8 +175,15 @@ fn extract_triangle_connections(
     add_point: &mut impl FnMut(Vec3, usize) -> u32,
     connections: &mut HashSet<(u32, u32)>,
 ) {
+    // A distorted or non-finite chart must not create an unbounded number
+    // of connections before the caller can reject the extract.
+    let min = uvs[0].min(uvs[1]).min(uvs[2]);
+    let max = uvs[0].max(uvs[1]).max(uvs[2]);
+    if uvs.iter().any(|uv| !uv.is_finite()) || (max - min).max_element() > 64.0 {
+        return;
+    }
     for coord in 0..2 {
-        let mut hits: HashMap<i32, Vec<(Vec3, Vec2)>> = HashMap::new();
+        let mut hits: BTreeMap<i32, Vec<(Vec3, Vec2)>> = BTreeMap::new();
         for e in 0..3 {
             let j = (e + 1) % 3;
             let (ua, ub) = (uv_comp(uvs[e], coord), uv_comp(uvs[j], coord));
@@ -180,9 +197,7 @@ fn extract_triangle_connections(
             }
             let lo = ua.min(ub);
             let hi = ua.max(ub);
-            let mut k = lo.ceil() as i32;
-            let k_end = hi.floor() as i32;
-            while k <= k_end {
+            for k in lo.ceil() as i32..=hi.floor() as i32 {
                 let denom = ub - ua;
                 if denom.abs() < 1e-8 {
                     break;
@@ -194,26 +209,37 @@ fn extract_triangle_connections(
                     let uv = uva.lerp(uvb, t);
                     hits.entry(k).or_default().push((p, uv));
                 }
-                k += 1;
             }
         }
-        for (_integer, pts) in hits {
-            if pts.len() < 2 {
+        for mut points in hits.into_values() {
+            if points.len() < 2 {
                 continue;
             }
-            let mut pts = pts;
             let other = 1 - coord;
-            pts.sort_by(|a, b| {
-                uv_comp(a.1, other).partial_cmp(&uv_comp(b.1, other)).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for w in pts.windows(2) {
-                let a = add_point(w[0].0, tri);
-                let b = add_point(w[1].0, tri);
-                if a != b {
-                    let e = if a < b { (a, b) } else { (b, a) };
-                    connections.insert(e);
+            points.sort_by(|a, b| uv_comp(a.1, other).total_cmp(&uv_comp(b.1, other)));
+            let (start, start_uv) = points[0];
+            let (end, end_uv) = points[points.len() - 1];
+            let lo = uv_comp(start_uv, other);
+            let hi = uv_comp(end_uv, other);
+            let mut prev = add_point(start, tri);
+            let mut connect = |position| {
+                let next = add_point(position, tri);
+                if prev != next {
+                    connections.insert((prev.min(next), prev.max(next)));
+                }
+                prev = next;
+            };
+            // In a triangle the UV-to-surface map is affine. Interpolate at
+            // every crossing of the perpendicular integer grid before welding.
+            if hi - lo > 1e-6 {
+                for k in lo.ceil() as i32..=hi.floor() as i32 {
+                    let t = (k as f32 - lo) / (hi - lo);
+                    if t > 0.0 && t < 1.0 {
+                        connect(start.lerp(end, t));
+                    }
                 }
             }
+            connect(end);
         }
     }
 }
@@ -574,6 +600,46 @@ mod tests {
         let repaired = repair_polygon_mesh(&positions, faces);
         assert_eq!(repaired.len(), 6, "hole fill should add the missing +Z face");
         assert!(repaired.iter().all(|f| f.len() == 4));
+    }
+
+    #[test]
+    fn isolines_share_an_interior_integer_crossing() {
+        let uv = [Vec2::new(0.2, 0.2), Vec2::new(3.2, 0.2), Vec2::new(0.2, 3.2)];
+        let mut nodes = Vec::<Vec3>::new();
+        let mut edges = HashSet::new();
+        let mut weld = |point: Vec3, _| {
+            if let Some(index) = nodes.iter().position(|p| p.distance_squared(point) < 1e-10) {
+                index as u32
+            } else {
+                nodes.push(point);
+                (nodes.len() - 1) as u32
+            }
+        };
+        extract_triangle_connections(uv.map(|p| p.extend(0.0)), uv, 0, &mut weld, &mut edges);
+        let center = nodes.iter().position(|p| p.distance_squared(Vec3::new(1.0, 1.0, 0.0)) < 1e-10).unwrap() as u32;
+        assert_eq!(edges.iter().filter(|&&(a, b)| a == center || b == center).count(), 4);
+    }
+
+    #[test]
+    fn extracts_a_quad_wholly_inside_a_triangle() {
+        let chart = [Vec2::new(0.2, 0.2), Vec2::new(4.2, 0.2), Vec2::new(0.2, 4.2)];
+        let positions = chart.map(|p| p.extend(0.0));
+        // A quarter turn and integer offset preserve the same surface lattice.
+        for uv in [chart, chart.map(|p| Vec2::new(-p.y, p.x) + Vec2::new(7.0, -3.0))] {
+            let out = extract_corner_isolines(&positions, &[[0, 1, 2]], &[uv], 1.0).expect("interior cells");
+            let corners = [
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(2.0, 1.0, 0.0),
+                Vec3::new(2.0, 2.0, 0.0),
+                Vec3::new(1.0, 2.0, 0.0),
+            ];
+            assert!(out.faces.iter().any(|face| {
+                face.len() == 4
+                    && corners
+                        .iter()
+                        .all(|&corner| face.iter().any(|&v| out.positions[v as usize].distance_squared(corner) < 1e-10))
+            }));
+        }
     }
 
     #[test]

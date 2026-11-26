@@ -92,6 +92,11 @@ issue request or comparing features (same rule as ZBrush format mentions).
 | **3b** | Extraction hardening (#551): face-walk edge commit, paper §3.8 low-support filter, keep-largest floater strip |
 | **4** | Autoremesher-standard path (MIT): isotropic resample (default on), dual-extract hole fill / non-manifold / short-edge cleanup + seal fallback, isoline quad extract (gated until coverage is good), global UV/frame parameterization (pure-Rust MIQP, no Eigen — still open). Refuse open surfaces on closed inputs when seal cannot close. |
 
+The isoline extractor accepts per-corner UVs and splits each isoline at
+interior integer crossings before welding the graph. The current field still
+supplies shared vertex UVs. A seam-consistent global parameterization and
+coverage on curved sculpts remain open.
+
 ## Verification
 
 - `cargo test -p oxy-topo auto_retopo`
