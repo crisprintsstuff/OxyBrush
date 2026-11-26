@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **Topology panel layout** ([#575](https://github.com/crisprintsstuff/OxyBrush/issues/575)). Voxel remesh, OxyRemesh, Project detail and Decimate each have their own section header; Shell/engine and OxyRemesh advanced knobs sit in collapsed option rows so the panel is easier to scan.
+
+### Fixed
+
+- **OxyRemesh extraction** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551)). Face walks no longer burn dual edges on failed cycles (which left empty Degenerate results). Collapse classification follows Instant Meshes §3.8 more closely; low-support dual vertices are filtered again; when a clear majority surface exists, floating islands are stripped instead of failing the whole job.
+
 ## [4.1.0] - 2026-11-26
 
 ### Added

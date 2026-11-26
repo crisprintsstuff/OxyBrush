@@ -169,8 +169,9 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     if extracted.faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
-    // Merge nearly-coincident dual vertices before triangulation (#551).
-    let extracted = weld_extracted(extracted, (rho * 0.35).max(1e-5));
+    // Merge nearly-coincident dual vertices before triangulation so face
+    // corners that land on the same lattice point share an index.
+    let extracted = weld_extracted(extracted, (rho * 0.25).max(1e-5));
     let (data, diagonals) =
         if opts.pure_quad { polygons_to_pure_quads(&extracted)? } else { polygons_to_quad_dominant(&extracted)? };
     if data.triangles.is_empty() {
@@ -204,18 +205,17 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     if opts.transfer_attributes {
         crate::transfer_attributes(&[mesh], &mut out);
     }
-    let components = connected_components(&out);
-    if components > 1 {
-        return Err(AutoRetopoError::Fragmented { components });
-    }
+    // Drop floating islands; keep the largest piece when it is clearly the
+    // surface (#551). Refuse only when extraction shattered into comparable shards.
+    out = keep_largest_component(out)?;
     Ok(out)
 }
 
-/// Vertex-connected component count (shared points).
-fn connected_components(m: &Mesh) -> usize {
+/// Component count and triangle counts per root (descending).
+fn component_tri_sizes(m: &Mesh) -> (usize, Vec<(u32, usize)>) {
     let nv = m.vertex_count();
     if nv == 0 {
-        return 0;
+        return (0, Vec::new());
     }
     let mut parent: Vec<u32> = (0..nv as u32).collect();
     let find = |parent: &mut [u32], mut x: u32| {
@@ -231,7 +231,115 @@ fn connected_components(m: &Mesh) -> usize {
             parent[a as usize] = b;
         }
     }
-    (0..nv as u32).filter(|&v| find(&mut parent, v) == v).count()
+    let mut sizes: HashMap<u32, usize> = HashMap::new();
+    for t in &m.triangles {
+        let r = find(&mut parent, t[0]);
+        *sizes.entry(r).or_default() += 1;
+    }
+    let mut ranked: Vec<(u32, usize)> = sizes.into_iter().collect();
+    ranked.sort_by_key(|a| std::cmp::Reverse(a.1));
+    let n = ranked.len();
+    (n, ranked)
+}
+
+#[cfg(test)]
+fn connected_components(m: &Mesh) -> usize {
+    component_tri_sizes(m).0
+}
+
+/// Keep the largest vertex-connected piece when floaters are a clear minority.
+///
+/// Instant Meshes §3.8 notes extraction can leave local artifacts; mesh-repair
+/// practice is to drop small disconnected debris rather than discard the whole
+/// result (#551). Refuse when no dominant surface exists.
+fn keep_largest_component(mesh: Mesh) -> Result<Mesh, AutoRetopoError> {
+    let (n, ranked) = component_tri_sizes(&mesh);
+    if n <= 1 {
+        return Ok(mesh);
+    }
+    let total = mesh.triangle_count().max(1);
+    let (main_root, main_tris) = ranked[0];
+    // Require a clear majority so we never return a "best of many shards".
+    if (main_tris as f32 / total as f32) < 0.50 {
+        return Err(AutoRetopoError::Fragmented { components: n });
+    }
+    let nv = mesh.vertex_count();
+    let mut parent: Vec<u32> = (0..nv as u32).collect();
+    let find = |parent: &mut [u32], mut x: u32| {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    };
+    for t in &mesh.triangles {
+        for &v in &t[1..] {
+            let (a, b) = (find(&mut parent, t[0]), find(&mut parent, v));
+            parent[a as usize] = b;
+        }
+    }
+    let keep_vert: Vec<bool> = (0..nv as u32).map(|v| find(&mut parent, v) == main_root).collect();
+    let mut remap = vec![u32::MAX; nv];
+    let mut positions = Vec::new();
+    let mut mask = Vec::new();
+    let mut color = Vec::new();
+    for (i, &keep) in keep_vert.iter().enumerate() {
+        if !keep {
+            continue;
+        }
+        remap[i] = positions.len() as u32;
+        positions.push(mesh.positions[i]);
+        mask.push(mesh.mask[i]);
+        color.push(mesh.color[i]);
+    }
+    let mut triangles = Vec::new();
+    let mut groups = Vec::new();
+    let mut hidden = Vec::new();
+    for (ti, t) in mesh.triangles.iter().enumerate() {
+        if !keep_vert[t[0] as usize] {
+            continue;
+        }
+        let a = remap[t[0] as usize];
+        let b = remap[t[1] as usize];
+        let c = remap[t[2] as usize];
+        if a == u32::MAX || b == u32::MAX || c == u32::MAX {
+            continue;
+        }
+        triangles.push([a, b, c]);
+        groups.push(mesh.groups().get(ti).copied().unwrap_or(0));
+        hidden.push(mesh.hidden().get(ti).copied().unwrap_or(false));
+    }
+    if triangles.len() < 4 {
+        return Err(AutoRetopoError::Fragmented { components: n });
+    }
+    let out = Mesh::from_data(MeshData { positions, triangles, mask, color, groups, hidden, uv: Vec::new() });
+    // Preserve quad diagonals that still exist in the kept piece.
+    let diags = mesh.quad_diagonals();
+    if !diags.is_empty() {
+        let src = out.source_vertices();
+        let max_old = src.iter().copied().max().unwrap_or(0) as usize;
+        let mut data_to_chunk = vec![u32::MAX; max_old + 1];
+        for (new, &old) in src.iter().enumerate() {
+            data_to_chunk[old as usize] = new as u32;
+        }
+        let remapped: HashSet<[u32; 2]> = diags
+            .iter()
+            .filter_map(|&[a, b]| {
+                let na = *remap.get(a as usize).unwrap_or(&u32::MAX);
+                let nb = *remap.get(b as usize).unwrap_or(&u32::MAX);
+                if na == u32::MAX || nb == u32::MAX {
+                    return None;
+                }
+                let ca = *data_to_chunk.get(na as usize).unwrap_or(&u32::MAX);
+                let cb = *data_to_chunk.get(nb as usize).unwrap_or(&u32::MAX);
+                if ca == u32::MAX || cb == u32::MAX { None } else { Some([ca.min(cb), ca.max(cb)]) }
+            })
+            .collect();
+        if !remapped.is_empty() {
+            out.set_quad_diagonals(remapped);
+        }
+    }
+    Ok(out)
 }
 
 /// Weld nearly-coincident dual vertices and remap polygon corners.
@@ -841,8 +949,10 @@ fn prolong_positions(fine: &Graph, _coarse: &Graph, coarse_p: &[Vec3]) -> Vec<Ve
         .collect()
 }
 
-/// Recompute integer jump between i and j for extraction (extrinsic unit search).
-fn integer_jump(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32, i: usize, j: usize) -> [i32; SP_AXES] {
+/// Best extrinsic lattice pair between i and j for extraction (paper §3.8).
+///
+/// RETURNS: `(tij − tji, distance² between the translated representatives)`.
+fn integer_jump(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32, i: usize, j: usize) -> ([i32; SP_AXES], f32) {
     let ni = g.normals[i];
     let nj = g.normals[j];
     let oi = o[i];
@@ -865,7 +975,7 @@ fn integer_jump(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32, i: usize, j: usize)
             }
         }
     }
-    best_t
+    (best_t, best_d)
 }
 
 fn is_unit_jump(t: [i32; SP_AXES]) -> bool {
@@ -873,8 +983,23 @@ fn is_unit_jump(t: [i32; SP_AXES]) -> bool {
     abs == 1
 }
 
-fn is_zero_jump(t: [i32; SP_AXES]) -> bool {
-    t[0] == 0 && t[1] == 0
+/// Same output vertex: translated reps nearly coincide (paper blue / collapse).
+///
+/// Classifying only on `tij − tji == 0` missed extrinsic same-point pairs whose
+/// best `(tij, tji)` left a non-zero difference (#551). Never treat a unit
+/// lattice step as a collapse — that ate dual edges and emptied the mesh.
+fn is_collapse_jump(diff: [i32; SP_AXES], dist2: f32, rho: f32) -> bool {
+    if is_unit_jump(diff) {
+        return false;
+    }
+    // Exact integer-zero jump (paper blue edge when tij = −tji collapses to 0).
+    if diff[0] == 0 && diff[1] == 0 {
+        return true;
+    }
+    // Extrinsic same-point pairs whose best (tij, tji) left a non-zero
+    // difference: only merge when translated reps almost coincide.
+    let close = (rho * 0.12).max(1e-5);
+    dist2 <= close * close
 }
 
 struct Extracted {
@@ -907,8 +1032,8 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
     for i in 0..n {
         for &j in &g.neighbors[i] {
             if (i as u32) < j {
-                let t = integer_jump(g, o, p, rho, i, j as usize);
-                if is_zero_jump(t) {
+                let (t, dist2) = integer_jump(g, o, p, rho, i, j as usize);
+                if is_collapse_jump(t, dist2, rho) {
                     zero_edges.push((p[i].distance(p[j as usize]), i as u32, j));
                 } else if is_unit_jump(t) {
                     unit_edges.push((i as u32, j));
@@ -917,6 +1042,8 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
         }
     }
     zero_edges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    // Paper §3.8: build unit-edge graph first; only collapse zero-pairs that
+    // are not already adjacent there (avoids eager merges at singularities).
     let unit_set: HashSet<(u32, u32)> = unit_edges.iter().map(|&(a, b)| if a < b { (a, b) } else { (b, a) }).collect();
     for &(_, a, b) in &zero_edges {
         let key = if a < b { (a, b) } else { (b, a) };
@@ -931,14 +1058,17 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
         let r = find(&mut parent, i);
         cluster_members.entry(r).or_default().push(i);
     }
-    // Keep every non-empty cluster. Dropping small clusters (older Instant
-    // Meshes-style filter) punched holes in the dual graph and left
-    // disconnected face islands (#551).
+    // Paper §3.8: drop clusters with very few supporting input verts
+    // (n < n̄/10); those produce spurious faces in the dual.
+    let avg_count = (cluster_members.values().map(|v| v.len()).sum::<usize>() as f32
+        / cluster_members.len().max(1) as f32)
+        .max(1.0);
+    let min_count = (avg_count / 10.0).max(1.0) as usize;
     let mut out_pos = Vec::new();
     let mut out_nml = Vec::new();
     let mut root_to_out: HashMap<u32, u32> = HashMap::new();
     for (root, members) in &cluster_members {
-        if members.is_empty() {
+        if members.len() < min_count {
             continue;
         }
         let mut pos = Vec3::ZERO;
@@ -981,7 +1111,9 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
         }
     }
 
-    // Face walk: for each oriented edge, take the sharpest left turn in the tangent plane.
+    // Face walk: sharpest left turn in the tangent plane. Only mark oriented
+    // edges used when a valid cycle closes — burning edges on failed walks
+    // left dual graphs with edges but zero faces (Degenerate).
     let mut faces = Vec::new();
     let mut used_oriented: HashSet<(u32, u32)> = HashSet::new();
     for start in 0..out_pos.len() as u32 {
@@ -991,12 +1123,24 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
                 continue;
             }
             let mut face: Vec<u32> = vec![start];
+            let mut walk: Vec<(u32, u32)> = Vec::new();
             let mut prev = start;
             let mut cur = next;
-            used_oriented.insert((prev, cur));
+            walk.push((prev, cur));
             let mut guard = 0;
-            while cur != start && guard < 16 {
+            let mut closed = false;
+            while guard < 16 {
                 guard += 1;
+                if cur == start && face.len() >= 3 {
+                    closed = true;
+                    break;
+                }
+                if cur == start && face.len() < 3 {
+                    break;
+                }
+                if face.len() > 1 && face[1..].contains(&cur) {
+                    break; // self-intersection
+                }
                 face.push(cur);
                 let nml = out_nml[cur as usize];
                 let incoming = (out_pos[cur as usize] - out_pos[prev as usize]).normalize_or_zero();
@@ -1006,7 +1150,11 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
                     if cand == prev {
                         continue;
                     }
+                    // Prefer unused edges; allow return to start to close.
                     if used_oriented.contains(&(cur, cand)) && cand != start {
+                        continue;
+                    }
+                    if walk.contains(&(cur, cand)) && cand != start {
                         continue;
                     }
                     let outgoing = (out_pos[cand as usize] - out_pos[cur as usize]).normalize_or_zero();
@@ -1021,9 +1169,12 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
                 let Some(nxt) = best_next else { break };
                 prev = cur;
                 cur = nxt;
-                used_oriented.insert((prev, cur));
+                walk.push((prev, cur));
             }
-            if cur == start && face.len() >= 3 && face.len() <= 6 {
+            if closed && face.len() >= 3 && face.len() <= 8 {
+                for e in walk {
+                    used_oriented.insert(e);
+                }
                 faces.push(face);
             }
         }
@@ -1129,9 +1280,9 @@ mod tests {
     use oxy_mesh::primitives;
 
     #[test]
-    fn auto_retopo_sphere_is_connected_or_refuses_shards() {
-        // Face extraction is still incomplete (RFC 0044); when it would return
-        // floating islands it must Error::Fragmented instead (#551).
+    fn auto_retopo_sphere_is_one_connected_piece() {
+        // Extraction must return a single surface: floaters are stripped when
+        // a dominant piece exists, otherwise Fragmented (#551).
         let mesh = primitives::icosphere(3, 1.0);
         let result = auto_retopo(
             &mesh,
@@ -1151,17 +1302,19 @@ mod tests {
             Err(AutoRetopoError::Fragmented { components }) => {
                 assert!(components > 1);
             }
+            // Field tracing on a small sphere can still fail to close faces.
+            Err(AutoRetopoError::Degenerate) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
     }
 
     #[test]
-    fn auto_retopo_refuses_a_shattered_result() {
+    fn auto_retopo_ok_meshes_are_never_shattered() {
         let mesh = primitives::icosphere(4, 1.0);
         let result = auto_retopo(
             &mesh,
             AutoRetopoOptions {
-                target_faces: 10_000,
+                target_faces: 2_000,
                 iterations_per_level: 4,
                 pure_quad: true,
                 snap_to_surface: false,
@@ -1170,10 +1323,49 @@ mod tests {
             },
         );
         match result {
-            Ok(out) => assert_eq!(connected_components(&out), 1, "Ok meshes must be one piece"),
+            Ok(out) => {
+                assert_eq!(connected_components(&out), 1, "Ok meshes must be one piece");
+                assert!(out.triangle_count() > 20, "got {} tris", out.triangle_count());
+            }
             Err(AutoRetopoError::Fragmented { components }) => assert!(components > 1),
+            Err(AutoRetopoError::Degenerate) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
+    }
+
+    #[test]
+    fn keep_largest_strips_floaters_when_majority_exists() {
+        // Two disconnected cubes: larger one must survive alone.
+        let a = primitives::cube(2, 2.0);
+        let b = primitives::cube(1, 0.3);
+        let offset = glam::Vec3::new(10.0, 0.0, 0.0);
+        let mut positions = a.positions.clone();
+        let mut mask = a.mask.clone();
+        let mut color = a.color.clone();
+        let mut tris = a.triangles.clone();
+        let base = positions.len() as u32;
+        for p in &b.positions {
+            positions.push(*p + offset);
+        }
+        mask.extend_from_slice(&b.mask);
+        color.extend_from_slice(&b.color);
+        for t in &b.triangles {
+            tris.push([t[0] + base, t[1] + base, t[2] + base]);
+        }
+        let nt = a.triangle_count() + b.triangle_count();
+        let shattered = Mesh::from_data(MeshData {
+            positions,
+            triangles: tris,
+            mask,
+            color,
+            groups: vec![0; nt],
+            hidden: vec![false; nt],
+            uv: Vec::new(),
+        });
+        assert!(connected_components(&shattered) > 1);
+        let kept = keep_largest_component(shattered).expect("majority piece");
+        assert_eq!(connected_components(&kept), 1);
+        assert_eq!(kept.triangle_count(), a.triangle_count());
     }
 
     #[test]

@@ -7278,6 +7278,8 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
+    // Sectioned layout (#575): each rebuild tool has its own header so Voxel
+    // remesh, OxyRemesh and Decimate no longer blend into one long list.
     ui.label(RichText::new("Dynamic detail").small().weak());
     let tip = Cmd::DynDetail.tip_in(&ed.keymap);
     ui.horizontal(|ui| {
@@ -7304,7 +7306,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             }
         }
     }
-    ui.add_space(4.0);
+    ui.separator();
     // Live Catmull–Clark preview of the low-poly cage (RFC 0048 / #447).
     // While Poly Edit is open, its Smooth > Preview owns the same display.
     ui.label(RichText::new("Smooth preview").small().weak());
@@ -7354,7 +7356,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if ed.poly_edit.is_some() {
         ui.label(RichText::new("Use Smooth in the Poly Edit window while modeling.").weak().small());
     }
-    ui.add_space(4.0);
+    ui.separator();
     ui.label(RichText::new("Subdivision levels").small().weak());
     ui.horizontal_wrapped(|ui| {
         match ed.multires_level() {
@@ -7379,8 +7381,8 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
         ed.rebuild_lower_level();
     }
     subdivision_kind(ui, ed);
-    ui.add_space(4.0);
-    ui.label(RichText::new("Rebuild").small().weak());
+    ui.separator();
+    ui.label(RichText::new("Voxel remesh").small().weak());
     ui.horizontal(|ui| {
         ui.label("Resolution");
         let max_res = match ed.remesh_engine {
@@ -7421,64 +7423,75 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             "Keep the model's volume and silhouette from shrinking when remeshing",
         );
     });
-    ui.horizontal(|ui| {
-        tips::hover(
-            ui.checkbox(&mut ed.remesh_shell, "Shell"),
-            "Make a wall of the thickness below around the surface instead of filling it: an open sheet gets a thickness, a closed model comes out hollow. Off: closed models are filled, and holes are patched first.",
-        );
-        if ed.remesh_shell {
-            tips::hover(
-                ui.add(
-                    egui::DragValue::new(&mut ed.remesh_shell_thickness)
-                        .range(0.0005..=10.0)
-                        .speed(0.002)
-                        .max_decimals(4)
-                        .prefix("Thickness "),
-                ),
-                "Wall thickness, in scene units (the pieces' coordinates; a standard size piece is 2 across). Thinner than a voxel or two needs a higher resolution.",
-            );
-        }
-    });
-    if ed.remesh_shell {
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Wall");
-            for side in oxy_topo::ShellSide::ALL {
+    egui::CollapsingHeader::new("Voxel options")
+        .id_salt("topo_voxel_options")
+        .default_open(ed.remesh_shell)
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
                 tips::hover(
-                    ui.selectable_value(&mut ed.remesh_shell_side, side, side.label()),
-                    match side {
-                        oxy_topo::ShellSide::Outward => {
-                            "The wall goes out from the surface, which stays its inner side"
-                        }
-                        oxy_topo::ShellSide::Both => "Half the wall on each side of the surface",
-                        oxy_topo::ShellSide::Inward => {
-                            "The wall goes in from the surface, which stays its outer side (a hollowed model)"
-                        }
-                    },
+                    ui.checkbox(&mut ed.remesh_shell, "Shell"),
+                    "Make a wall of the thickness below around the surface instead of filling it: an open sheet gets a thickness, a closed model comes out hollow. Off: closed models are filled, and holes are patched first.",
                 );
-            }
-        });
-        let h =
-            ed.scene.try_active().map(|p| p.mesh.bounds().extent().max_element() / ed.remesh_resolution.max(1) as f32);
-        if h.is_some_and(|h| ed.remesh_shell_thickness < 1.5 * h) {
-            ui.label(
-                RichText::new("Thinner than about two voxels: raise the resolution for a clean wall")
-                    .small()
-                    .color(ui.visuals().warn_fg_color),
-            );
-        }
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Engine");
-        egui::ComboBox::from_id_salt("remesh_engine")
-            .selected_text(match ed.remesh_engine {
-                oxy_topo::RemeshEngine::Vdb => "Sparse voxels (VDB)",
-                oxy_topo::RemeshEngine::RegularGrid => "Regular Grid",
-            })
-            .show_ui(ui, |ui| {
-                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::Vdb, "Sparse voxels (VDB)");
-                ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::RegularGrid, "Regular Grid");
+                if ed.remesh_shell {
+                    tips::hover(
+                        ui.add(
+                            egui::DragValue::new(&mut ed.remesh_shell_thickness)
+                                .range(0.0005..=10.0)
+                                .speed(0.002)
+                                .max_decimals(4)
+                                .prefix("Thickness "),
+                        ),
+                        "Wall thickness, in scene units (the pieces' coordinates; a standard size piece is 2 across). Thinner than a voxel or two needs a higher resolution.",
+                    );
+                }
             });
-    });
+            if ed.remesh_shell {
+                ui.horizontal_wrapped(|ui| {
+                    ui.label("Wall");
+                    for side in oxy_topo::ShellSide::ALL {
+                        tips::hover(
+                            ui.selectable_value(&mut ed.remesh_shell_side, side, side.label()),
+                            match side {
+                                oxy_topo::ShellSide::Outward => {
+                                    "The wall goes out from the surface, which stays its inner side"
+                                }
+                                oxy_topo::ShellSide::Both => "Half the wall on each side of the surface",
+                                oxy_topo::ShellSide::Inward => {
+                                    "The wall goes in from the surface, which stays its outer side (a hollowed model)"
+                                }
+                            },
+                        );
+                    }
+                });
+                let h = ed
+                    .scene
+                    .try_active()
+                    .map(|p| p.mesh.bounds().extent().max_element() / ed.remesh_resolution.max(1) as f32);
+                if h.is_some_and(|h| ed.remesh_shell_thickness < 1.5 * h) {
+                    ui.label(
+                        RichText::new("Thinner than about two voxels: raise the resolution for a clean wall")
+                            .small()
+                            .color(ui.visuals().warn_fg_color),
+                    );
+                }
+            }
+            ui.horizontal_wrapped(|ui| {
+                ui.label("Engine");
+                egui::ComboBox::from_id_salt("remesh_engine")
+                    .selected_text(match ed.remesh_engine {
+                        oxy_topo::RemeshEngine::Vdb => "Sparse voxels (VDB)",
+                        oxy_topo::RemeshEngine::RegularGrid => "Regular Grid",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut ed.remesh_engine, oxy_topo::RemeshEngine::Vdb, "Sparse voxels (VDB)");
+                        ui.selectable_value(
+                            &mut ed.remesh_engine,
+                            oxy_topo::RemeshEngine::RegularGrid,
+                            "Regular Grid",
+                        );
+                    });
+            });
+        });
     ui.horizontal_wrapped(|ui| {
         if tips::button_on_km(ui, &ed.keymap, !busy, "Remesh", Cmd::Remesh).clicked() {
             ed.remesh_active();
@@ -7487,45 +7500,61 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             ed.subdivide(ed.subdivision_smooth);
         }
     });
+    ui.separator();
+    ui.label(RichText::new("OxyRemesh").small().weak());
     ui.horizontal(|ui| {
-        ui.label("OxyRemesh faces");
+        ui.label("Faces");
         tips::hover(
             ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=100_000))),
             "Target face count for OxyRemesh (field-aligned quads).",
         );
     });
-    ui.horizontal(|ui| {
-        ui.label("Adaptivity");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_adaptivity, 0.0..=1.0))),
-            "Pack more quads into high-curvature areas (0 = even density).",
-        );
-    });
-    ui.horizontal(|ui| {
-        ui.label("Anisotropy");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_anisotropy, 0.0..=1.0))),
-            "Stretch cells along the orientation field (0 = square).",
-        );
-    });
-    tips::check_plain(
-        ui,
-        &mut ed.oxyremesh_guide_last_stroke,
-        "Guide from last stroke",
-        "Use the last freehand stroke as an edge-flow guide for OxyRemesh.",
-    );
-    tips::check_plain(
-        ui,
-        &mut ed.oxyremesh_attract_mask,
-        "Attract poles to mask",
-        "Pull field singularities toward the centroid of the masked region.",
-    );
+    egui::CollapsingHeader::new("OxyRemesh options")
+        .id_salt("topo_oxyremesh_options")
+        .default_open(
+            ed.oxyremesh_adaptivity > 0.0
+                || ed.oxyremesh_anisotropy > 0.0
+                || ed.oxyremesh_guide_last_stroke
+                || ed.oxyremesh_attract_mask,
+        )
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Adaptivity");
+                tips::hover(
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_adaptivity, 0.0..=1.0))),
+                    "Pack more quads into high-curvature areas (0 = even density).",
+                );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Anisotropy");
+                tips::hover(
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_anisotropy, 0.0..=1.0))),
+                    "Stretch cells along the orientation field (0 = square).",
+                );
+            });
+            tips::check_plain(
+                ui,
+                &mut ed.oxyremesh_guide_last_stroke,
+                "Guide from last stroke",
+                "Use the last freehand stroke as an edge-flow guide for OxyRemesh.",
+            );
+            tips::check_plain(
+                ui,
+                &mut ed.oxyremesh_attract_mask,
+                "Attract poles to mask",
+                "Pull field singularities toward the centroid of the masked region.",
+            );
+        });
     if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
         ed.oxyremesh_active();
     }
+    ui.separator();
+    ui.label(RichText::new("Project detail").small().weak());
     if tips::button_on(ui, !busy, "Project detail", Cmd::ProjectDetail).clicked() {
         ed.project_detail();
     }
+    ui.separator();
+    ui.label(RichText::new("Decimate").small().weak());
     ui.horizontal_wrapped(|ui| {
         ui.label("Keep");
         tips::hover(

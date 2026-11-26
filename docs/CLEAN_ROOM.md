@@ -60,6 +60,7 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-26 | Discord request [#552](https://github.com/crisprintsstuff/OxyBrush/issues/552) for a remesh density overlay “like Nomad”. Nomad’s UI, code and assets were not opened | The idea only: preview voxel / cell size on the model before remeshing | **Show remesh density** ([RFC 0050](rfcs/0050-remesh-density-preview.md)) |
 
 | 2026-11-26 | Chat ask: paint vertex color while sculpting like other apps’ RGB-on-any-brush mode. No proprietary documentation, UI or code was consulted | The idea only: optional color with a sculpt stroke | **Also paint** ([RFC 0052](rfcs/0052-also-paint.md)) |
+| 2026-11-26 | Jakob et al. Instant Field-Aligned Meshes PDF §3.8 (project page); public mesh-repair writeups on keeping the largest connected component. Instant Meshes / Autoremesher C++ was not opened for this fix | Paper extraction notes (spurious low-support dual verts; greedy face detect) and the generic keep-largest floater strip | OxyRemesh extraction hardening (#551) |
 
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can
