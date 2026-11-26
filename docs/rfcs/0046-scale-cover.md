@@ -1,6 +1,6 @@
 # RFC 0046 — Scale cover (“Dino mode”)
 
-- **Status:** Proposed (design for review; not scheduled for v4.0.0)
+- **Status:** Phase 1 implemented (window + plate library + instancer Apply); Phase 2–3 open
 - **Builds on:** [RFC 0022 — Surface instances](0022-surface-instances.md)
 - **Related:** [RFC 0045 — Surface Noise](0045-surface-noise.md), built-in
   **Scales** alpha (`BuiltinAlpha::Scales`)

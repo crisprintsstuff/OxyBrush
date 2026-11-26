@@ -4,6 +4,14 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Scale cover** (Dino mode). Tools > Scale cover… places overlapping scale plates on the active piece using surface instances: built-in teardrop, diamond, round, plate, ridge and spike meshes (procedural, original), scatter / mask / face-group placement, size, spacing, lift, variation, seed and orient. Apply creates or updates the cover; Edit source and Make real reuse the Instances ops. [RFC 0046](docs/rfcs/0046-scale-cover.md)
+
+### Fixed
+
+- **Poly Edit pick on undo.** Undoing (or redoing) a Poly Edit cage edit restores the face/edge/point pick that belonged to that mesh topology, so the selection no longer disappears after Undo.
+
 ## [4.0.0] - 2026-11-25
 
 First stable release (drops the `4.0.0-beta.*` suffix).

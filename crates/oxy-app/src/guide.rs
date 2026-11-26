@@ -199,6 +199,16 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
 - Every change is one undo step. Exports don't include the copies: Make real first.",
     },
     Topic {
+        title: "Scale cover",
+        keywords: "scale cover dino mode scales plates armor teardrop diamond spike ridge scatter mask face group instances",
+        body: "Scale cover (Tools > Scale cover…; Discord nickname “Dino mode”) places overlapping scale plates on the active piece using surface instances.\n\n\
+- Pick a built-in plate (teardrop, diamond, round, plate, ridge, spike) or Use active piece as plate for a custom sculpt.\n\
+- Placement: even Scatter across the visible surface, Mask (only masked faces), or one Face group.\n\
+- Size, Spacing, Lift, variation and Seed control density and look; Orient defaults to Longest edge so rows share a grain (flow along limbs comes later).\n\
+- Apply creates or updates the cover. Edit source sculpts one plate for every copy; Make real bakes ordinary mesh; Remove clears the cover.\n\
+- For underlay grit between plates, run Surface Noise on the host first.",
+    },
+    Topic {
         title: "Painting color",
         keywords: "vertex color colour paint fill cavity dirt filter hue saturation brightness contrast smooth import obj ply mrgb painted show hide toggle view",
         body: "The Paint brush (last in the shelf) colors the surface without changing its shape; Alt erases back to white. Pick a color or swatch in its settings. Alphas, spray and symmetry work as with other brushes.\n\n\

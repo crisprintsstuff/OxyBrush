@@ -230,6 +230,14 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         ),
         cmd(
             ed,
+            Cmd::ScaleCoverWindow,
+            "scale cover dino mode scales plates armor scatter instances teardrop spike ridge",
+            |e| {
+                e.scale_cover_open();
+            },
+        ),
+        cmd(
+            ed,
             Cmd::ColorFilterWindow,
             "vertex color filter hue saturation value brightness contrast smooth fill rgb paint",
             |e| e.show_color_filter = true,
