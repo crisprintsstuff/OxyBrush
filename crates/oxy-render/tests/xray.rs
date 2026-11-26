@@ -28,6 +28,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     });
     let view = texture.create_view(&Default::default());
     let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [4.0, 4.0, 56.0, 56.0], clear: true };
+    let next_view = std::cell::Cell::new(None);
     let mut viewport = ViewportRenderer::new(&device, &queue, format);
     let mut front = oxy_mesh::primitives::icosphere(3, 0.85);
     let mut back = front.to_data();
@@ -53,6 +54,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&Default::default());
+        let (target, camera) = next_view.take().unwrap_or((target, camera));
         viewport.render(&device, &queue, &mut encoder, &target, &camera, settings, items);
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
@@ -155,4 +157,14 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         let expected = srgb_to_linear(original) * (1.0 - alpha) + source;
         assert!((srgb_to_linear(out) - expected).abs() < 0.01);
     }
+    // A second pane preserves the first pane's output, but starts with
+    // empty X-ray scratch textures even when its geometry misses the pane.
+    let flat = ViewSettings { background_style: oxy_render::BackgroundStyle::Flat, ..faded };
+    let flat_bg = render(&flat, &[], None);
+    let seeded = render(&flat, &[item], None);
+    let offset_camera = Camera { target: Vec3::X * 20.0, ..camera };
+    next_view.set(Some((RenderTarget { viewport: [28.0, 4.0, 32.0, 56.0], clear: false, ..target }, offset_camera)));
+    let second = render(&flat, &[item], None);
+    assert_eq!(sample(&second, 25, 32), sample(&seeded, 25, 32));
+    assert_eq!(sample(&second, 32, 32), sample(&flat_bg, 32, 32));
 }

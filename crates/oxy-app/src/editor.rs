@@ -2028,6 +2028,12 @@ impl Editor {
         self.scene.try_active()?.mesh.raycast(o, d)
     }
 
+    /// Presses can start in either pane or on the divider.
+    pub fn pointer_in_full_canvas(&self) -> bool {
+        let [x, y, width, height] = self.canvas_full;
+        self.pointer.is_some_and(|p| p.x >= x && p.y >= y && p.x < x + width && p.y < y + height)
+    }
+
     pub fn pointer_in_canvas(&self) -> bool {
         self.pointer.is_some_and(|p| {
             let l = self.canvas_local(p);
@@ -7719,16 +7725,16 @@ impl Editor {
         )
     }
 
-    pub fn floor(&self) -> Option<oxy_render::FloorGrid> {
+    pub fn floor(&self, camera: &Camera) -> Option<oxy_render::FloorGrid> {
         let bounds = self.scene.bounds();
         let (min, max) = if bounds.is_empty() {
-            let h = self.camera.distance.max(1e-3) * 0.25;
+            let h = camera.distance.max(1e-3) * 0.25;
             ([-h, 0.0, -h], [h, 0.0, h])
         } else {
             (bounds.min.to_array(), bounds.max.to_array())
         };
-        if self.camera.orthographic {
-            oxy_render::FloorGrid::orthographic(min, max, self.camera.forward())
+        if camera.orthographic {
+            oxy_render::FloorGrid::orthographic(min, max, camera.forward())
         } else {
             oxy_render::FloorGrid::fit(min, max)
         }
@@ -10592,6 +10598,31 @@ mod tests {
         e.set_split(crate::split_view::SplitLayout::Off);
         assert!(!e.split.is_split());
         assert_eq!(e.canvas, e.canvas_full);
+    }
+
+    #[test]
+    fn split_view_press_reaches_inactive_pane_and_divider() {
+        use crate::split_view::{SplitLayout, pane_rects};
+
+        for layout in [SplitLayout::LeftRight, SplitLayout::TopBottom] {
+            let mut e = editor();
+            e.canvas_full = [20.0, 30.0, 800.0, 600.0];
+            e.set_split(layout);
+            let [x, y, w, h] = pane_rects(layout, e.canvas_full, e.split_ratio)[1];
+            e.pointer = Some(Vec2::new(x + w * 0.5, y + h * 0.5));
+            assert!(!e.pointer_in_canvas());
+            assert!(e.pointer_in_full_canvas());
+            e.pointer_down(PointerButton::Middle);
+            assert_eq!(e.active_pane, 1);
+            assert!(matches!(e.drag, Drag::Orbit));
+            e.pointer_up();
+
+            let [x, y, w, h] = e.canvas_full;
+            e.pointer = Some(Vec2::new(x + w * 0.5, y + h * 0.5));
+            assert!(e.pointer_in_full_canvas());
+            e.pointer_down(PointerButton::Primary);
+            assert!(e.split_dragging);
+        }
     }
 
     #[test]
@@ -17529,7 +17560,7 @@ mod tests {
     #[test]
     fn floor_grid_follows_the_visible_pieces() {
         let mut e = Editor::default();
-        let a = e.floor().expect("a floor under the sphere");
+        let a = e.floor(&e.camera).expect("a floor under the sphere");
         let b = e.scene.bounds();
         assert!(a.height < b.min.y && a.height > b.min.y - 0.05);
         // Moving the model up moves the floor with it.
@@ -17539,7 +17570,7 @@ mod tests {
             p.y += 3.0;
         }
         mesh.update_after_move(&moved);
-        let c = e.floor().unwrap();
+        let c = e.floor(&e.camera).unwrap();
         assert!((c.height - a.height - 3.0).abs() < 1e-3, "{a:?} -> {c:?}");
     }
 
@@ -18625,7 +18656,7 @@ mod tests {
     fn floor_grid_shows_in_an_empty_scene() {
         let mut e = editor();
         e.perform(Pending::New("empty"));
-        assert!(e.floor().is_some(), "the floor can be switched on with nothing in the scene");
+        assert!(e.floor(&e.camera).is_some(), "the floor can be switched on with nothing in the scene");
     }
 
     #[test]
