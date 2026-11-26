@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **OxySpheres quad Resolution and Blend** ([#477](https://github.com/crisprintsstuff/OxyBrush/issues/477), [RFC 0038](docs/rfcs/0038-oxyspheres-quad-base-mesh.md)). Quad base mesh gets the same **Resolution** and **Blend** sliders as voxel skin: Resolution densifies rings on long limbs (160 keeps one ring per sphere); Blend softens three-way joins. Subdivision is unchanged.
 - **MCP `set_geometry`** ([RFC 0053](docs/rfcs/0053-mcp-geometry-write.md), [#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Python / local agents can write vertex colors, positions (displacement) and mask from an `OXYG` file (same format as `get_geometry`), as one undo step.
 - **Also paint** ([RFC 0052](docs/rfcs/0052-also-paint.md)). On sculpt brushes (Draw, Clay, …), turn on **Also paint** in brush settings to lay the Paint color under each dab while you sculpt. Color Jitter and the color picker apply; Alt still carves. Grab, cutters and Scene Project are not included yet.
 - **Split view** ([RFC 0054](docs/rfcs/0054-split-view.md)). View > Split view: Off, Left / right, or Top / bottom. Each pane has its own camera; click a pane to sculpt or orbit there; drag the divider to resize.

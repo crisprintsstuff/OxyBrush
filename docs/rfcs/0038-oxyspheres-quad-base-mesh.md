@@ -1,6 +1,6 @@
 # RFC 0038 — OxySpheres quad base mesh
 
-**Status:** Draft, follow-up to [RFC 0034](0034-oxyspheres.md)
+**Status:** Accepted (Subdivision, Resolution ring density, and junction Blend shipped; higher-valence junctions still follow-up). Follow-up to [RFC 0034](0034-oxyspheres.md).
 
 ## Summary
 
@@ -67,12 +67,12 @@ the armature and mesh.
 This scales detail relative to the base cage, so a longer chain still has
 more total faces than a short one.
 
-Prototype a junction **Blend** control that redistributes the transitions
-where limbs meet. Keep the endpoints and limb radii stable. Compare acute,
-wide, and mirrored forks at both ends of the range and validate for
-intersections before replacing the generated piece. Compare mirrored
-shading with the same lighting and hard-edge settings on both sides,
-including before and after subdivision.
+**Resolution** (same slider as voxel skin) densifies rings along long links
+when above 160; at 160 and below the cage stays one ring per sphere.
+**Blend** (0..=1) softens three-way junctions by moving collar rings out
+from the joint; `0.5` matches the previous fixed collar. Endpoints and
+limb radii stay put. Acute, wide and mirrored forks are validated across
+the range.
 
 ## Acceptance criteria
 

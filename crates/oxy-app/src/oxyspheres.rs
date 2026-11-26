@@ -308,8 +308,15 @@ impl Editor {
         let spheres = Box::new(self.spheres_piece_of(&edit, false));
         if edit.quad_skin {
             self.start_job("OxySpheres: quad base mesh".into(), Vec::new(), move || {
-                let mesh =
-                    oxy_topo::quad_skin_mesh(&edit.armature, edit.quad_subdivision).map_err(|error| error.to_string());
+                let mesh = oxy_topo::quad_skin_mesh(
+                    &edit.armature,
+                    oxy_topo::QuadSkinOptions {
+                        subdivision: edit.quad_subdivision,
+                        blend: edit.blend.clamp(0.0, 1.0),
+                        resolution: edit.resolution,
+                    },
+                )
+                .map_err(|error| error.to_string());
                 Ok(match mesh {
                     Ok(mesh) => JobResult::Skin { spheres, replace, mesh },
                     Err(error) => JobResult::QuadSkinRetry(Box::new(edit), error),

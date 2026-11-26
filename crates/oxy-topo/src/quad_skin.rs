@@ -9,12 +9,33 @@ use std::collections::{BTreeSet, HashMap};
 const SIDES: usize = 8;
 pub const MAX_QUAD_SUBDIVISION: u8 = 2;
 const MAX_SUBDIVIDED_FACES: usize = 16_384;
+/// Default Resolution keeps one ring per sphere (historical cage density).
+pub const DEFAULT_QUAD_RESOLUTION: u32 = 160;
 type Ring = [u32; SIDES];
+
+/// Controls for [`quad_skin_armature`] / [`quad_skin_mesh`] ([RFC 0038](../../../docs/rfcs/0038-oxyspheres-quad-base-mesh.md)).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct QuadSkinOptions {
+    /// Catmull–Clark levels after the cage (0..=[`MAX_QUAD_SUBDIVISION`]).
+    pub subdivision: u8,
+    /// Junction softness in 0..=1. `0.5` matches the previous fixed collar.
+    pub blend: f32,
+    /// Extra rings along long links when above [`DEFAULT_QUAD_RESOLUTION`].
+    pub resolution: u32,
+}
+
+impl Default for QuadSkinOptions {
+    fn default() -> Self {
+        Self { subdivision: 0, blend: 0.5, resolution: DEFAULT_QUAD_RESOLUTION }
+    }
+}
 
 struct Section {
     ring: Ring,
     normal: Vec3,
     axis: Vec3,
+    center: Vec3,
+    radius: f32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,7 +66,9 @@ impl std::error::Error for QuadSkinError {}
 /// Build a closed polygon cage around a chain or a tree with one degree-three
 /// node. The armature stays unchanged. Use `Cage::build_mesh` to author a
 /// sculpt mesh with the polygon boundaries intact.
-pub fn quad_skin_armature(armature: &Armature) -> Result<Cage, QuadSkinError> {
+pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<Cage, QuadSkinError> {
+    let blend = if opts.blend.is_finite() { opts.blend.clamp(0.0, 1.0) } else { 0.5 };
+    let resolution = opts.resolution.max(32);
     use QuadSkinError::*;
     if !armature.is_valid() || armature.len() < 2 {
         return Err(InvalidArmature);
@@ -83,9 +106,18 @@ pub fn quad_skin_armature(armature: &Armature) -> Result<Cage, QuadSkinError> {
                 .map(|(_, &other)| direction.angle_between(other))
                 .fold(f32::INFINITY, f32::min);
             let length = origin.center.distance(spheres[next].center);
-            let offset = origin.radius * (0.35 + 1.15 / (angle * 0.5).tan());
-            if !offset.is_finite() || offset >= length * 0.65 {
+            // blend 0.5 keeps the historical collar; lower = sharper, higher = softer.
+            // Stay within ~0.75..=1.25 so junctions still pass the collar plane check.
+            let base = 0.35 + 1.15 / (angle * 0.5).tan();
+            let factor = 0.75 + blend * 0.5;
+            let mut offset = origin.radius * base * factor;
+            let max_offset = length * 0.64;
+            if !offset.is_finite() || max_offset <= 1e-6 {
                 return Err(CrowdedLinks);
+            }
+            // Soft Blend may ask for more than a short link allows; clamp instead of failing.
+            if offset >= max_offset {
+                offset = max_offset;
             }
             let center = origin.center + direction * offset;
             let radius = origin.radius + (spheres[next].radius - origin.radius) * (offset / length);
@@ -97,7 +129,7 @@ pub fn quad_skin_armature(armature: &Armature) -> Result<Cage, QuadSkinError> {
         }
         join_ports(&mut cage, &ports, origin.center)?;
         for (&next, port) in branches.iter().zip(ports) {
-            sweep_path(&mut cage, spheres, &neighbors, joint, next, port)?;
+            sweep_path(&mut cage, spheres, &neighbors, joint, next, port, resolution)?;
         }
     } else {
         let start = neighbors.iter().position(|n| n.len() == 1).ok_or(InvalidArmature)?;
@@ -107,18 +139,19 @@ pub fn quad_skin_armature(armature: &Armature) -> Result<Cage, QuadSkinError> {
         let axis = direction.any_orthonormal_vector();
         let ring = add_ring(&mut cage, sphere.center, sphere.radius, direction, axis);
         cap(&mut cage, ring.ring, sphere.center - direction * sphere.radius, true);
-        sweep_path(&mut cage, spheres, &neighbors, start, next, ring)?;
+        sweep_path(&mut cage, spheres, &neighbors, start, next, ring, resolution)?;
     }
     validate(&cage)?;
     Ok(cage)
 }
 
 /// Build the polygon mesh at the requested detail, preserving the cage's faces.
-pub fn quad_skin_mesh(armature: &Armature, levels: u8) -> Result<Mesh, QuadSkinError> {
+pub fn quad_skin_mesh(armature: &Armature, opts: QuadSkinOptions) -> Result<Mesh, QuadSkinError> {
+    let levels = opts.subdivision;
     if levels > MAX_QUAD_SUBDIVISION {
         return Err(QuadSkinError::SubdivisionBudget);
     }
-    let mut cage = quad_skin_armature(armature)?;
+    let mut cage = quad_skin_armature(armature, opts)?;
     if levels > 0 {
         if catmull_clark::face_count(&cage, u32::from(levels)) > MAX_SUBDIVIDED_FACES {
             return Err(QuadSkinError::SubdivisionBudget);
@@ -156,7 +189,17 @@ fn add_ring(cage: &mut Cage, center: Vec3, radius: f32, direction: Vec3, axis: V
         cage.positions.push(center + radius * (cos * axis + sin * tangent));
         id
     });
-    Section { ring, normal: direction, axis }
+    Section { ring, normal: direction, axis, center, radius }
+}
+
+/// How many ring steps along a link. At [`DEFAULT_QUAD_RESOLUTION`] and below,
+/// one ring per sphere (historical cages). Higher Resolution densifies long limbs.
+fn link_steps(length: f32, radius: f32, resolution: u32) -> usize {
+    if resolution <= DEFAULT_QUAD_RESOLUTION {
+        return 1;
+    }
+    let spacing = radius.max(1e-3) * 2.0 * (DEFAULT_QUAD_RESOLUTION as f32 / resolution as f32);
+    ((length / spacing.max(1e-3)).floor() as usize).clamp(1, 48)
 }
 
 fn cap(cage: &mut Cage, ring: Ring, tip: Vec3, reverse: bool) {
@@ -179,6 +222,7 @@ fn sweep_path(
     mut previous: usize,
     mut current: usize,
     mut section: Section,
+    resolution: u32,
 ) -> Result<(), QuadSkinError> {
     loop {
         let sphere = spheres[current];
@@ -189,17 +233,32 @@ fn sweep_path(
         if incoming.dot(outgoing) < -0.8 || section.normal.dot(direction) < -0.8 {
             return Err(QuadSkinError::CrowdedLinks);
         }
-        let axis = Quat::from_rotation_arc(section.normal, direction) * section.axis;
-        let end = add_ring(cage, sphere.center, sphere.radius, direction, axis);
-        for i in 0..SIDES {
-            let j = (i + 1) % SIDES;
-            cage.faces.push(Face::new(vec![section.ring[i], section.ring[j], end.ring[j], end.ring[i]]));
+        let target_axis = Quat::from_rotation_arc(section.normal, direction) * section.axis;
+        let length = section.center.distance(sphere.center);
+        let avg_radius = (section.radius + sphere.radius) * 0.5;
+        let steps = link_steps(length, avg_radius, resolution);
+        for step in 1..=steps {
+            let t = step as f32 / steps as f32;
+            let center = section.center.lerp(sphere.center, t);
+            let radius = section.radius + (sphere.radius - section.radius) * t;
+            let normal = (section.normal + (direction - section.normal) * t).normalize_or_zero();
+            if normal == Vec3::ZERO {
+                return Err(QuadSkinError::CrowdedLinks);
+            }
+            let axis = Quat::from_rotation_arc(section.normal, normal) * section.axis;
+            let axis = if step == steps { target_axis } else { axis };
+            let end = add_ring(cage, center, radius, if step == steps { direction } else { normal }, axis);
+            for i in 0..SIDES {
+                let j = (i + 1) % SIDES;
+                cage.faces.push(Face::new(vec![section.ring[i], section.ring[j], end.ring[j], end.ring[i]]));
+            }
+            section = end;
         }
         let Some(next) = next else {
-            cap(cage, end.ring, sphere.center + direction * sphere.radius, false);
+            cap(cage, section.ring, sphere.center + direction * sphere.radius, false);
             return Ok(());
         };
-        (previous, current, section) = (current, next, end);
+        (previous, current) = (current, next);
     }
 }
 
@@ -366,9 +425,9 @@ mod tests {
     #[test]
     fn subdivided_quad_skin_keeps_polygon_faces_and_bounds_the_work() {
         let arm = fork(2.5, 1.0);
-        let cage = quad_skin_armature(&arm).unwrap();
+        let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
         for level in 0..=MAX_QUAD_SUBDIVISION {
-            let mesh = quad_skin_mesh(&arm, level).unwrap();
+            let mesh = quad_skin_mesh(&arm, QuadSkinOptions { subdivision: level, ..Default::default() }).unwrap();
             assert!(crate::check_watertight(&mesh));
             let output = oxy_mesh::polyedit::cage_from_mesh(&mesh);
             assert_eq!(output.faces.len(), catmull_clark::face_count(&cage, u32::from(level)));
@@ -385,7 +444,10 @@ mod tests {
         for i in 1..=128 {
             end = long_chain.add_child(end, Vec3::Y * (i as f32 * 2.0), 0.3);
         }
-        assert!(matches!(quad_skin_mesh(&long_chain, 2), Err(QuadSkinError::SubdivisionBudget)));
+        assert!(matches!(
+            quad_skin_mesh(&long_chain, QuadSkinOptions { subdivision: 2, ..Default::default() }),
+            Err(QuadSkinError::SubdivisionBudget)
+        ));
     }
 
     #[test]
@@ -394,7 +456,7 @@ mod tests {
             let mut arm = Armature::new(Vec3::ZERO, 0.4, None);
             let middle = arm.add_child(0, Vec3::Y * 2.0, 0.3);
             arm.add_child(middle, Vec3::new(bend, 4.0, 0.0), 0.15);
-            let cage = quad_skin_armature(&arm).unwrap();
+            let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
             assert_eq!(cage.quad_count(), 3 * SIDES);
             assert_eq!(cage.triangle_count(), 0);
             assert_subdivides(&cage);
@@ -405,8 +467,8 @@ mod tests {
     fn acute_and_wide_forks_are_deterministic_and_mirrored() {
         for (width, height) in [(0.8, 3.0), (2.5, 1.0)] {
             let arm = fork(width, height);
-            let cage = quad_skin_armature(&arm).unwrap();
-            assert_eq!(cage, quad_skin_armature(&arm).unwrap());
+            let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
+            assert_eq!(cage, quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap());
             assert!(cage.quad_count() >= 3 * SIDES);
             assert!(cage.quad_count() > cage.triangle_count());
             let mirror_ids: Vec<_> = cage
@@ -438,7 +500,8 @@ mod tests {
     #[test]
     fn reflected_limb_triangles_use_the_same_diagonals() {
         for level in [0, 1, 2] {
-            let mesh = quad_skin_mesh(&fork(0.8, 3.0), level).unwrap();
+            let mesh =
+                quad_skin_mesh(&fork(0.8, 3.0), QuadSkinOptions { subdivision: level, ..Default::default() }).unwrap();
             let triangles: BTreeSet<_> = mesh
                 .triangles
                 .iter()
@@ -472,22 +535,36 @@ mod tests {
         let side = arm.add_child(joint, Vec3::new(2.1, 1.0, 0.8), 0.19);
         arm.add_child(side, Vec3::new(3.0, 2.3, 1.9), 0.08);
         arm.add_child(joint, Vec3::new(-1.4, 2.1, -0.45), 0.1);
-        let cage = quad_skin_armature(&arm).unwrap();
-        assert_eq!(cage, quad_skin_armature(&arm).unwrap());
+        let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
+        assert_eq!(cage, quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap());
         assert!(cage.quad_count() > cage.triangle_count());
         assert_subdivides(&cage);
     }
 
     #[test]
+    fn blend_and_resolution_change_the_cage() {
+        let arm = fork(2.5, 1.0);
+        let base = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
+        let sharp = quad_skin_armature(&arm, QuadSkinOptions { blend: 0.0, ..Default::default() }).unwrap();
+        let soft = quad_skin_armature(&arm, QuadSkinOptions { blend: 1.0, ..Default::default() }).unwrap();
+        assert_ne!(sharp.positions, soft.positions);
+        assert_eq!(base.faces.len(), sharp.faces.len());
+        let dense = quad_skin_armature(&arm, QuadSkinOptions { resolution: 320, ..Default::default() }).unwrap();
+        assert!(dense.quad_count() > base.quad_count(), "higher Resolution adds limb rings");
+        assert_subdivides(&dense);
+        assert_subdivides(&soft);
+    }
+
+    #[test]
     fn crowded_and_unsupported_inputs_fail() {
         let mut arm = fork(0.1, 0.4);
-        assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::CrowdedLinks));
+        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::CrowdedLinks));
         arm.add_child(1, Vec3::Z * 2.0, 0.1);
-        assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::UnsupportedBranching));
+        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::UnsupportedBranching));
 
         let mut arm = Armature::new(Vec3::ZERO, 0.3, None);
         arm.add_child(0, Vec3::ZERO, 0.3);
-        assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::InvalidArmature));
+        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::InvalidArmature));
     }
 
     #[test]
@@ -497,7 +574,7 @@ mod tests {
         for i in 1..=links {
             arm.add_child(i - 1, Vec3::Y * i as f32, 0.2);
         }
-        let cage = quad_skin_armature(&arm).unwrap();
+        let cage = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
         assert_eq!(cage.quad_count(), (links + 1) * SIDES);
         assert_eq!(cage.triangle_count(), 0);
     }
@@ -509,7 +586,7 @@ mod tests {
         let second = arm.add_child(first, Vec3::new(-2.0, 2.0, 0.0), 0.15);
         arm.add_child(second, Vec3::new(2.0, -2.0, 0.0), 0.15);
         for _ in 0..3 {
-            assert_eq!(quad_skin_armature(&arm), Err(QuadSkinError::InvalidSurface));
+            assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::InvalidSurface));
             for sphere in &mut arm.spheres {
                 let p = sphere.center;
                 sphere.center = Vec3::new(p.z, p.x, p.y);
