@@ -28,6 +28,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     });
     let view = texture.create_view(&Default::default());
     let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [4.0, 4.0, 56.0, 56.0], clear: true };
+    let next_view = std::cell::Cell::new(None);
     let mut viewport = ViewportRenderer::new(&device, &queue, format);
     let mut front = oxy_mesh::primitives::icosphere(3, 0.85);
     let mut back = front.to_data();
@@ -53,6 +54,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&Default::default());
+        let (target, camera) = next_view.take().unwrap_or((target, camera));
         viewport.render(&device, &queue, &mut encoder, &target, &camera, settings, items);
         encoder.copy_texture_to_buffer(
             texture.as_image_copy(),
@@ -76,7 +78,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     }
     let bg = render(&settings, &[], None);
     let solid = render(&settings, &[item], None);
-    let mut xray = ViewSettings { xray: true, ..settings };
+    let mut xray = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..settings };
     let ghost = render(&xray, &[item], None);
     let center = |frame: &[u8]| sample(frame, SIDE / 2, SIDE / 2).to_vec();
     assert_ne!(center(&solid), center(&ghost));
@@ -128,13 +130,13 @@ fn xray_composites_once_and_preserves_opaque_depth() {
     assert_eq!(center(&render(&settings, &[item], Some(reference(false)))), center(&solid));
     let image_only = render(&settings, &[], Some(reference(false)));
     assert_eq!(center(&image_only), [255, 0, 0, 255]);
-    let faded = ViewSettings { xray: true, ..settings };
+    let faded = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..settings };
     let through_mesh = render(&faded, &[item], Some(reference(false)));
     assert!(center(&through_mesh)[0] > center(&ghost)[0]);
     assert_eq!(center(&render(&settings, &[item], Some(reference(true)))), center(&image_only));
     for (ambient_occlusion, cavity) in [(1.0, 0.0), (0.0, 1.0), (1.0, 1.0)] {
         let shaded = ViewSettings { ambient_occlusion, cavity, ..settings };
-        let shaded_ghost = ViewSettings { xray: true, ..shaded };
+        let shaded_ghost = ViewSettings { xray: true, xray_scope: XrayScope::AllVisible, ..shaded };
         let through = render(&shaded_ghost, &[item], Some(reference(false)));
         assert_eq!(center(&through), center(&through_mesh));
         assert_eq!(sample(&through, 5, 5), sample(&through_mesh, 5, 5));
@@ -155,4 +157,14 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         let expected = srgb_to_linear(original) * (1.0 - alpha) + source;
         assert!((srgb_to_linear(out) - expected).abs() < 0.01);
     }
+    // A second pane preserves the first pane's output, but starts with
+    // empty X-ray scratch textures even when its geometry misses the pane.
+    let flat = ViewSettings { background_style: oxy_render::BackgroundStyle::Flat, ..faded };
+    let flat_bg = render(&flat, &[], None);
+    let seeded = render(&flat, &[item], None);
+    let offset_camera = Camera { target: Vec3::X * 20.0, ..camera };
+    next_view.set(Some((RenderTarget { viewport: [28.0, 4.0, 32.0, 56.0], clear: false, ..target }, offset_camera)));
+    let second = render(&flat, &[item], None);
+    assert_eq!(sample(&second, 25, 32), sample(&seeded, 25, 32));
+    assert_eq!(sample(&second, 32, 32), sample(&flat_bg, 32, 32));
 }

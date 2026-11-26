@@ -1128,6 +1128,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::oxyspheres_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
     crate::polyedit_ui::overlay(ui, ed, canvas);
+    draw_poly_area_outline(ui, ed, canvas);
     remesh_density_overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
@@ -8758,6 +8759,21 @@ fn draw_select_curve(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     }
 }
 
+fn draw_poly_area_outline(ui: &Ui, ed: &Editor, canvas: egui::Rect) {
+    let Drag::PolyAreaSelect { points, shape, .. } = &ed.drag else { return };
+    if points.len() < 2 {
+        return;
+    }
+    let outline = crate::select_shapes::select_outline(*shape, points);
+    let ppp = ed.pixels_per_point;
+    let [x, y, w, h] = ed.canvas;
+    let pane = egui::Rect::from_min_size(egui::pos2(x, y) / ppp, egui::vec2(w, h) / ppp);
+    ui.painter_at(canvas.intersect(pane)).add(egui::Shape::closed_line(
+        outline.into_iter().map(|p| egui::pos2(p.x, p.y) / ppp).collect(),
+        EStroke::new(1.5, Color32::from_rgb(80, 180, 255)),
+    ));
+}
+
 fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     if ed.retopo.is_some() || ed.poly_edit.is_some() || ed.select_curve.is_some() {
         return;
@@ -8798,7 +8814,6 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
     // `ed.drag` holds a borrow that the surface cursor cannot share.
     enum Mark {
         Select { points: Vec<Vec2>, shape: crate::editor::SelectShape, action: crate::editor::SelectAction },
-        PolyArea { points: Vec<Vec2>, shape: crate::editor::SelectShape },
         Deferred { mode: StrokeMode, start: Vec2 },
         MaskGesture { start: Vec2 },
         InsertPrimitive { start_pixel: Vec2 },
@@ -8812,7 +8827,6 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
         Drag::Select { points, shape, action, .. } => {
             Mark::Select { points: points.clone(), shape: *shape, action: *action }
         }
-        Drag::PolyAreaSelect { points, shape, .. } => Mark::PolyArea { points: points.clone(), shape: *shape },
         Drag::Deferred { mode, start, .. } => Mark::Deferred { mode: *mode, start: *start },
         Drag::MaskGesture { start } => Mark::MaskGesture { start: *start },
         Drag::InsertPrimitive { start_pixel, .. } => Mark::InsertPrimitive { start_pixel: *start_pixel },
@@ -8841,26 +8855,6 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                 painter.add(egui::Shape::closed_line(pts, stroke));
             } else {
                 let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
-                painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
-            }
-        }
-        Mark::PolyArea { points, shape } => {
-            let c = Color32::from_rgb(80, 180, 255);
-            let stroke = EStroke::new(1.5, c);
-            if shape == crate::editor::SelectShape::Lasso {
-                let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
-                pts.push(pos);
-                painter.add(egui::Shape::closed_line(pts, stroke));
-            } else if shape == crate::editor::SelectShape::Ellipse && !points.is_empty() {
-                // Live drag already stores a Shift-constrained end when needed.
-                let end = points.get(1).copied().unwrap_or_else(|| glam::Vec2::new(pos.x, pos.y) * ed.pixels_per_point);
-                let ends = [points[0], end];
-                let ring: Vec<egui::Pos2> =
-                    crate::select_shapes::select_outline(shape, &ends).into_iter().map(to_pt).collect();
-                painter.add(egui::Shape::convex_polygon(ring, c.linear_multiply(0.08), stroke));
-            } else {
-                let end = points.get(1).map(|&p| to_pt(p)).unwrap_or(pos);
-                let rect = egui::Rect::from_two_pos(to_pt(points[0]), end);
                 painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
             }
         }
@@ -10257,6 +10251,29 @@ mod tests {
                     assert!(v.window_fill.a() > 0);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn poly_area_drags_draw_a_closed_outline() {
+        use crate::editor::SelectShape;
+
+        let mut ed = Editor::default();
+        ed.canvas = [0.0, 0.0, 400.0, 300.0];
+        ed.pixels_per_point = 1.0;
+        let ctx = egui::Context::default();
+        for shape in [SelectShape::Rectangle, SelectShape::Lasso, SelectShape::Ellipse] {
+            ed.drag = Drag::PolyAreaSelect {
+                points: vec![Vec2::new(20.0, 30.0), Vec2::new(40.0, 60.0), Vec2::new(80.0, 35.0)],
+                shape,
+                add: false,
+                subtract: false,
+            };
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                draw_poly_area_outline(ui, &ed, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0)));
+            });
+            output.textures_delta.clear();
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Path(path) if path.closed)));
         }
     }
 

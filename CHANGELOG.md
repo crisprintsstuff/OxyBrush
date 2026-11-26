@@ -10,6 +10,11 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 - **OxyRemesh Swiss cheese** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551), [#586](https://github.com/crisprintsstuff/OxyBrush/pull/586)). Closed inputs no longer get replaced by open/holey extracts. Dual extract densifies unit edges, collapses short dual edges / 3-cycles, fills short polygon holes, and seals remaining gaps (with a closed voxel remesh fallback when the field shell cannot enclose). After seal, keep the largest island so a watertight-but-shattered result is never returned as Ok. Isoline extract stays gated until coverage is good; full Autoremesher-quality parameterization remains RFC 0044 Phase 4.
 
+### Fixed
+
+- **Split view.** Each pane redraws with its own camera, accepts sculpt and navigation input, and displays references for its own view.
+- **Poly Edit selection.** Box, Lasso, and Ellipse show an outline during the drag.
+
 ## [4.1.1] - 2026-11-26
 
 ### Changed

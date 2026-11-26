@@ -959,9 +959,7 @@ impl App {
             egui_wgpu::ScreenDescriptor { size_in_pixels: [g.config.width, g.config.height], pixels_per_point: ppp };
 
         let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        g.viewport.set_reference_planes(&g.device, &g.queue, crate::references::planes(&self.egui_ctx, ed));
-        let view_settings = oxy_render::ViewSettings {
-            floor: ed.floor_grid.then(|| ed.floor()).flatten(),
+        let mut view_settings = oxy_render::ViewSettings {
             scene_bounds: {
                 let b = ed.scene.bounds();
                 (!b.is_empty()).then(|| (b.min.to_array(), b.max.to_array()))
@@ -975,6 +973,19 @@ impl App {
             vec![ed.canvas]
         };
         for (i, rect) in pane_rects.iter().enumerate() {
+            if i > 0 {
+                // Submit before updating the shared viewport uniforms for the next camera.
+                g.queue.submit([encoder.finish()]);
+                encoder =
+                    g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("split pane") });
+            }
+            let camera = pane_cams[i];
+            view_settings.floor = ed.floor_grid.then(|| ed.floor(camera)).flatten();
+            g.viewport.set_reference_planes(
+                &g.device,
+                &g.queue,
+                crate::references::planes(&self.egui_ctx, ed, camera, *rect),
+            );
             g.viewport.render(
                 &g.device,
                 &g.queue,
@@ -985,7 +996,7 @@ impl App {
                     viewport: *rect,
                     clear: i == 0,
                 },
-                pane_cams[i],
+                camera,
                 &view_settings,
                 &items,
             );
@@ -2036,7 +2047,7 @@ impl ApplicationHandler for App {
                 }
                 if let Some(b) = b {
                     match state {
-                        ElementState::Pressed if !over_egui && self.editor.pointer_in_canvas() => {
+                        ElementState::Pressed if !over_egui && self.editor.pointer_in_full_canvas() => {
                             self.editor.pointer_down(b)
                         }
                         ElementState::Released
@@ -2060,7 +2071,7 @@ impl ApplicationHandler for App {
                         if self.touches.len() == 1 {
                             self.editor.pressure = force_pressure;
                             self.editor.pointer = Some(pos);
-                            if !over_egui && self.editor.pointer_in_canvas() {
+                            if !over_egui && self.editor.pointer_in_full_canvas() {
                                 self.editor.pointer_down(PointerButton::Primary);
                             }
                         } else if self.touches.len() == 2 {

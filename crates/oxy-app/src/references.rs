@@ -240,10 +240,13 @@ pub fn alignment_overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
     }
 }
 
-pub fn planes<'a>(ctx: &'a egui::Context, ed: &'a Editor) -> impl ExactSizeIterator<Item = ReferencePlane> + 'a {
+pub fn planes<'a>(
+    ctx: &'a egui::Context,
+    ed: &'a Editor,
+    camera: &Camera,
+    canvas: [f32; 4],
+) -> impl ExactSizeIterator<Item = ReferencePlane> + 'a {
     let document = &ed.documents[ed.active_document];
-    let camera = &document.camera;
-    let canvas = ed.canvas;
     let vp = camera.view_projection((canvas[2] / canvas[3].max(1.0)).max(0.001));
     let forward = camera.forward();
     let orthographic = camera.orthographic;
@@ -564,7 +567,7 @@ mod tests {
             error: None,
             replace: None,
         });
-        assert_eq!(planes(&ctx, &ed).next().unwrap().opacity, 1.0);
+        assert_eq!(planes(&ctx, &ed, &ed.camera, ed.canvas).next().unwrap().opacity, 1.0);
         let click = |ed: &mut Editor, at: Vec3| {
             ed.pointer = ed.camera.project(at, Vec2::new(800.0, 600.0));
             ed.pointer_down(crate::editor::PointerButton::Primary);
@@ -573,7 +576,7 @@ mod tests {
         };
         click(&mut ed, -0.5 * Vec3::X);
         click(&mut ed, 0.5 * Vec3::X);
-        assert_eq!(planes(&ctx, &ed).next().unwrap().opacity, 0.0);
+        assert_eq!(planes(&ctx, &ed, &ed.camera, ed.canvas).next().unwrap().opacity, 0.0);
         click(&mut ed, -0.25 * Vec3::Y);
         click(&mut ed, 0.25 * Vec3::Y);
         let revision = ed.history.revision();
@@ -636,27 +639,27 @@ mod tests {
         );
         let ctx = egui::Context::default();
         editor.canvas = [0.0, 0.0, 800.0, 600.0];
-        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.5);
+        assert_eq!(planes(&ctx, &editor, &editor.camera, editor.canvas).next().unwrap().opacity, 0.5);
 
         let image = &editor.scene.references[0];
         let draft = PlacementDraft {
             original: image.placement.clone(),
             edited: ReferencePlacement { opacity: 0.2, center: Vec3::X, ..image.placement.clone() },
         };
-        let before = planes(&ctx, &editor).next().unwrap().corners;
+        let before = planes(&ctx, &editor, &editor.camera, editor.canvas).next().unwrap().corners;
         let revision = editor.history.revision();
         ctx.data_mut(|data| data.insert_temp(draft_id(id, 0, image), draft));
         editor.show_references = true;
-        let preview = planes(&ctx, &editor).next().unwrap();
+        let preview = planes(&ctx, &editor, &editor.camera, editor.canvas).next().unwrap();
         assert_eq!(preview.opacity, 0.2);
         assert_ne!(preview.corners, before);
         assert_eq!(editor.scene.references[0].placement.opacity, 0.5);
         assert_eq!(editor.history.revision(), revision);
 
         editor.show_references = false;
-        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.5);
+        assert_eq!(planes(&ctx, &editor, &editor.camera, editor.canvas).next().unwrap().opacity, 0.5);
         editor.camera.yaw = std::f32::consts::FRAC_PI_2;
-        assert_eq!(planes(&ctx, &editor).next().unwrap().opacity, 0.0);
+        assert_eq!(planes(&ctx, &editor, &editor.camera, editor.canvas).next().unwrap().opacity, 0.0);
         let doc = &mut editor.documents[editor.active_document];
         doc.history.undo(&mut doc.scene);
         assert!(doc.scene.references.is_empty());

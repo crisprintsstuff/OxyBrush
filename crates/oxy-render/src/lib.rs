@@ -344,8 +344,8 @@ pub struct RenderTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub size: (u32, u32),
     pub viewport: [f32; 4],
-    /// Clear the color (and offscreen) targets before drawing. Split view
-    /// clears on the first pane and loads on the rest ([RFC 0054](../../docs/rfcs/0054-split-view.md)).
+    /// Clear the output color target. Later split panes load it to preserve
+    /// earlier panes. Offscreen targets are cleared per pass.
     pub clear: bool,
 }
 
@@ -1756,17 +1756,16 @@ impl ViewportRenderer {
         let [r, g, b] = settings.background;
         let bg = wgpu::Color { r, g, b, a: 1.0 };
         let depth = &self.depth.as_ref().expect("ensured").0;
-        let color_load = |c: wgpu::Color| {
-            if clear { wgpu::LoadOp::Clear(c) } else { wgpu::LoadOp::Load }
-        };
-        let attachment = |view, c: wgpu::Color| {
+        let attachment = |view, load| {
             Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: color_load(c), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
             })
         };
+        let output_load = if clear { wgpu::LoadOp::Clear(bg) } else { wgpu::LoadOp::Load };
+        let transparent = wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT);
         let ghosted = |item: &DrawItem| settings.xray && settings.xray_scope.includes(item);
         let opaque = || items.iter().filter(|item| !ghosted(item));
         let opacity = f64::from(settings.xray_opacity.clamp(0.0, 1.0));
@@ -1822,8 +1821,8 @@ impl ViewportRenderer {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy viewport pass"),
                 color_attachments: &[
-                    attachment(scene_color, bg),
-                    attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
+                    attachment(scene_color, if shaded { wgpu::LoadOp::Clear(bg) } else { output_load }),
+                    attachment(&t.normal_depth, transparent),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
@@ -1860,7 +1859,7 @@ impl ViewportRenderer {
             // 2. Ambient obscurance (skipped when switched off).
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy ambient occlusion pass"),
-                color_attachments: &[attachment(&t.ao, wgpu::Color::WHITE)],
+                color_attachments: &[attachment(&t.ao, wgpu::LoadOp::Clear(wgpu::Color::WHITE))],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -1875,7 +1874,7 @@ impl ViewportRenderer {
             // 3. Blur + cavity + composite into the window.
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("oxy composite pass"),
-                color_attachments: &[attachment(target, bg)],
+                color_attachments: &[attachment(target, output_load)],
                 depth_stencil_attachment: None,
                 timestamp_writes: None,
                 occlusion_query_set: None,
@@ -1892,10 +1891,7 @@ impl ViewportRenderer {
             {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("oxy X-ray surfaces"),
-                    color_attachments: &[
-                        attachment(&t.color, wgpu::Color::TRANSPARENT),
-                        attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
-                    ],
+                    color_attachments: &[attachment(&t.color, transparent), attachment(&t.normal_depth, transparent)],
                     depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                         view: depth,
                         depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Discard }),
@@ -1939,7 +1935,7 @@ impl ViewportRenderer {
                         resolve_target: None,
                         ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
                     }),
-                    attachment(&t.normal_depth, wgpu::Color::TRANSPARENT),
+                    attachment(&t.normal_depth, transparent),
                 ],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: depth,
