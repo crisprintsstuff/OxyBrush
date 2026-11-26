@@ -90,6 +90,7 @@ commands! {
     AddDisc => "Add disc piece", "", "Add a flat disc as a new piece: a round plate of quads, a ring with a hole, or a slice of one. A good start for hard-surface parts in Poly Edit.";
     LivingStrokes => "Strokes…", "", "Open the Strokes panel (Living strokes): the strokes made on this piece, to fade, delete or solo any of them without undoing what came after. Turn Living strokes on in Preferences > General.";
     DeformWindow => "Deform…", "", "Open the Deform window: bend, twist, taper, inflate, polish and more for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
+    SurfaceNoiseWindow => "Surface Noise…", "", "Open Surface Noise: displace the whole piece along its normals with procedural noise (scale, strength, octaves, seed, pattern). Preview live; Apply bakes one undo step. Masked parts stay put.";
     ColorFilterWindow => "Color Filter…", "", "Open the Color Filter window: fill, hue, saturation, value, brightness, contrast, smooth and RGB adjustments for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
     DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";
     DeformRepeat => "Repeat on this piece", "", "Apply the last deformer again, with the same amount and axes.";
@@ -693,8 +694,7 @@ pub mod plain {
     pub const PIECES: &str = "Add, copy, split and merge the meshes in the scene.";
     pub const MESH: &str =
         "Resolution and repair: subdivision levels, remesh, decimate, booleans, close holes, split and diagnostics.";
-    pub const TOOLS: &str =
-        "Tools that shape a piece: Deform, the transform gizmo, Symmetrize, Poly Edit, Retopology and vertex color.";
+    pub const TOOLS: &str = "Tools that shape a piece: Deform, Surface Noise, the transform gizmo, Symmetrize, Poly Edit, Retopology and vertex color.";
     pub const GROUPS: &str = "Face groups, and which faces are hidden.";
     pub const MASK: &str = "Protect parts of the surface from brushes.";
     pub const VIEW: &str = "Camera, shading and materials.";

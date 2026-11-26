@@ -387,6 +387,7 @@ fn tools_menu(ed: &Editor, busy: bool) -> Vec<Node> {
     }
     vec![
         cmd(Cmd::DeformWindow, "Deform…"),
+        cmd(Cmd::SurfaceNoiseWindow, "Surface Noise…"),
         sub("Transform", gizmo),
         sub("Symmetrize", symmetrize),
         Node::Separator,

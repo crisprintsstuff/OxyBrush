@@ -1042,6 +1042,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
     dialogs(ui, ed, &mut action);
     crate::deform_ui::deform_window(ui.ctx(), ed);
+    crate::surface_noise_ui::surface_noise_window(ui.ctx(), ed);
     crate::color_filter_ui::color_filter_window(ui.ctx(), ed);
     crate::living_ui::window(ui.ctx(), ed);
     wireframe_window(ui.ctx(), ed);
@@ -5017,6 +5018,9 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
 fn tool_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button(ui, "Deform…", Cmd::DeformWindow).clicked() {
         ed.show_deform = true;
+    }
+    if tips::button(ui, "Surface Noise…", Cmd::SurfaceNoiseWindow).clicked() {
+        ed.surface_noise_open();
     }
     tips::menu(ui, "Transform", plain::TRANSFORM_MENU, |ui| {
         for m in GizmoMode::ALL {
