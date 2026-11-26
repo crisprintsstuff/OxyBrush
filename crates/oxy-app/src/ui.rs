@@ -10269,9 +10269,10 @@ mod tests {
                 add: false,
                 subtract: false,
             };
-            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 draw_poly_area_outline(ui, &ed, egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0)));
             });
+            output.textures_delta.clear();
             assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Path(path) if path.closed)));
         }
     }
