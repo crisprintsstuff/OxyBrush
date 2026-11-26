@@ -3075,18 +3075,14 @@ impl Editor {
         // Detail first, then the dab, so the dab shapes the new triangles.
         self.dyntopo_step(Some(sample.position), true);
         let changed = matches!(&self.drag, Drag::Stroke { dyn_topo: Some(d), .. } if d.changed);
-        if kind == BrushKind::Paint {
+        let paints = kind == BrushKind::Paint || (kind.supports_also_paint() && self.brush_also_paints(kind));
+        if paints {
             self.reveal_vertex_color();
         }
         let doc = &mut self.documents[self.active_document];
         let piece = doc.scene.active_mut();
         if !changed {
-            doc.history.begin_with(
-                kind.label(),
-                piece.id,
-                &piece.mesh,
-                kind == BrushKind::Paint || piece.mesh.is_painted(),
-            );
+            doc.history.begin_with(kind.label(), piece.id, &piece.mesh, paints || piece.mesh.is_painted());
         }
         let history = &mut doc.history;
         if let Drag::Stroke { stroke, .. } = &mut self.drag {
@@ -3413,6 +3409,7 @@ impl Editor {
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(kind),
             smooth_paint: kind == BrushKind::Paint && self.brush_roles().shift,
+            also_paint: kind.supports_also_paint() && self.brush_also_paints(kind),
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(kind),
             spray: self.spray,
@@ -3531,6 +3528,7 @@ impl Editor {
             pressure_curves: self.brush_pressure_overrides(k),
             front_faces_only: self.front_faces_only,
             accumulate: self.brush_accumulates(k),
+            also_paint: self.brush_also_paints(k),
             paint_jitter: self.paint_jitter(k),
             auto_smooth: self.auto_smooth,
             gravity: self.gravity(k),
@@ -4821,17 +4819,13 @@ impl Editor {
         let mut stroke = self.new_stroke(kind, invert, self.world_radius(hit.point, radius_pt), angle);
         let sample =
             StrokeSample { position: hit.point, normal: facing(hit.normal, d), pressure: self.stroke_pressure() };
-        if kind == BrushKind::Paint {
+        let paints = kind == BrushKind::Paint || (kind.supports_also_paint() && self.brush_also_paints(kind));
+        if paints {
             self.reveal_vertex_color();
         }
         let doc = &mut self.documents[self.active_document];
         let piece = doc.scene.active_mut();
-        doc.history.begin_with(
-            kind.label(),
-            piece.id,
-            &piece.mesh,
-            kind == BrushKind::Paint || piece.mesh.is_painted(),
-        );
+        doc.history.begin_with(kind.label(), piece.id, &piece.mesh, paints || piece.mesh.is_painted());
         let history = &mut doc.history;
         stroke.stamp(&mut piece.mesh, sample, STAMP_REPEATS, &mut |m, c| history.touch(m, c));
         if commit {
@@ -4861,17 +4855,13 @@ impl Editor {
                 mesh.raycast(o, d).map(|h| StrokeSample { position: h.point, normal: facing(h.normal, d), pressure })
             })
             .collect();
-        if kind == BrushKind::Paint {
+        let paints = kind == BrushKind::Paint || (kind.supports_also_paint() && self.brush_also_paints(kind));
+        if paints {
             self.reveal_vertex_color();
         }
         let doc = &mut self.documents[self.active_document];
         let piece = doc.scene.active_mut();
-        doc.history.begin_with(
-            kind.label(),
-            piece.id,
-            &piece.mesh,
-            kind == BrushKind::Paint || piece.mesh.is_painted(),
-        );
+        doc.history.begin_with(kind.label(), piece.id, &piece.mesh, paints || piece.mesh.is_painted());
         let history = &mut doc.history;
         for s in samples {
             stroke.add_sample(&mut piece.mesh, s, &mut |m, c| history.touch(m, c));
@@ -6804,7 +6794,8 @@ impl Editor {
         let Some(last) = self.last_stroke.clone() else { return };
         let Some(recipe) = last.recipe.clone() else { return };
         let kind = last.kind;
-        if kind == BrushKind::Paint {
+        let paints = kind == BrushKind::Paint || recipe.settings.also_paint;
+        if paints {
             self.reveal_vertex_color();
         }
         let doc = &mut self.documents[self.active_document];
@@ -6813,7 +6804,7 @@ impl Editor {
             self.status = "The piece changed; that stroke can't be replayed".into();
             return;
         }
-        let paint = kind == BrushKind::Paint || piece.mesh.is_painted();
+        let paint = paints || piece.mesh.is_painted();
         doc.history.begin_with(format!("Replay {}", kind.label()), piece.id, &piece.mesh, paint);
         let history = &mut doc.history;
         recipe.replay(&mut piece.mesh, &mut |m, chunk| history.touch(m, chunk));

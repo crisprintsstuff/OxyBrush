@@ -59,6 +59,8 @@ When a feature is inspired by another product, the rule is:
 | 2026-11-26 | Issue [#516](https://github.com/crisprintsstuff/OxyBrush/issues/516): tester ask for Detail Reprojection on the shelf, with a screenshot of OxyBrush's own Retopology **Subdivide and project**. No other product's documentation, UI, icons or code were consulted | The idea only: whole-piece project of a clean mesh onto a high-detail sculpt outside Retopo | Mesh > **Project detail** / **Project onto…** ([RFC 0051](rfcs/0051-detail-reproject.md)), reusing OxyBrush's `SurfaceProjector` |
 | 2026-11-26 | Discord request [#552](https://github.com/crisprintsstuff/OxyBrush/issues/552) for a remesh density overlay “like Nomad”. Nomad’s UI, code and assets were not opened | The idea only: preview voxel / cell size on the model before remeshing | **Show remesh density** ([RFC 0050](rfcs/0050-remesh-density-preview.md)) |
 
+| 2026-11-26 | Chat ask: paint vertex color while sculpting like other apps’ RGB-on-any-brush mode. No proprietary documentation, UI or code was consulted | The idea only: optional color with a sculpt stroke | **Also paint** ([RFC 0052](rfcs/0052-also-paint.md)) |
+
 Not taken, by design: paid-membership prompts, community/online galleries,
 and cloud AI services. A local MCP server ([RFC 0003](rfcs/0003-mcp.md)) can
 let a program on this machine drive OxyBrush; it does not call out to a
