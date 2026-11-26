@@ -17,6 +17,43 @@ pub struct IsolineMesh {
     pub faces: Vec<Vec<u32>>,
 }
 
+/// Autoremesher-style polygon cleanup for Instant Meshes dual extracts.
+///
+/// Fills short boundary holes with quads, drops non-manifold faces, and keeps
+/// the largest island — the minimal Swiss-cheese repair set from Autoremesher's
+/// `QuadExtractor` (MIT), without needing UV isolines or Eigen.
+pub fn repair_polygon_mesh(positions: &[Vec3], mut faces: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
+    if faces.is_empty() || positions.len() < 3 {
+        return faces;
+    }
+    // Hole-fill only at the polygon stage. Instant Meshes dual extracts are
+    // often many weakly-connected patches; keep_largest here would discard
+    // most of the surface before holes can be closed. Island cleanup happens
+    // after triangulation via keep_largest_component.
+    for _ in 0..8 {
+        let mut half_edges = rebuild_half_edges(&faces);
+        let before = faces.len();
+        fix_short_holes(positions, &mut faces, &mut half_edges);
+        if faces.len() == before {
+            break;
+        }
+    }
+    let before_nm = faces.len();
+    let cleaned = remove_nonmanifold_faces(faces.clone());
+    if !cleaned.is_empty() && cleaned.len() * 2 >= before_nm {
+        faces = cleaned;
+        for _ in 0..4 {
+            let mut half_edges = rebuild_half_edges(&faces);
+            let before = faces.len();
+            fix_short_holes(positions, &mut faces, &mut half_edges);
+            if faces.len() == before {
+                break;
+            }
+        }
+    }
+    faces
+}
+
 /// Extract a quad-dominant mesh from vertex UVs via Autoremesher-style isolines.
 pub fn extract_isoline_mesh(
     positions: &[Vec3],
@@ -512,6 +549,32 @@ fn remove_nonmanifold_faces(faces: Vec<Vec<u32>>) -> Vec<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repair_fills_quad_hole_and_keeps_shell() {
+        // Unit cube shell with the +Z face missing → one 4-cycle boundary hole.
+        let positions = vec![
+            Vec3::new(0.0, 0.0, 0.0),
+            Vec3::new(1.0, 0.0, 0.0),
+            Vec3::new(1.0, 1.0, 0.0),
+            Vec3::new(0.0, 1.0, 0.0),
+            Vec3::new(0.0, 0.0, 1.0),
+            Vec3::new(1.0, 0.0, 1.0),
+            Vec3::new(1.0, 1.0, 1.0),
+            Vec3::new(0.0, 1.0, 1.0),
+        ];
+        let faces = vec![
+            vec![0, 3, 2, 1], // -Z
+            vec![0, 1, 5, 4], // -Y
+            vec![1, 2, 6, 5], // +X
+            vec![2, 3, 7, 6], // +Y
+            vec![3, 0, 4, 7], // -X
+                              // missing +Z: 4,5,6,7
+        ];
+        let repaired = repair_polygon_mesh(&positions, faces);
+        assert_eq!(repaired.len(), 6, "hole fill should add the missing +Z face");
+        assert!(repaired.iter().all(|f| f.len() == 4));
+    }
 
     #[test]
     fn isoline_on_flat_grid_makes_faces() {

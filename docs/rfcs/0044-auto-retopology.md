@@ -90,7 +90,7 @@ issue request or comparing features (same rule as ZBrush format mentions).
 | **2** | Pure-quad post-pass; attribute projection + surface snap; crease-weighted GS; `oxyremesh_timing` example |
 | **3** | Orientation stroke constraints (guide from last stroke); singularity attractor (mask centroid); adaptivity / anisotropy knobs under Topology > OxyRemesh |
 | **3b** | Extraction hardening (#551): face-walk edge commit, paper §3.8 low-support filter, keep-largest floater strip |
-| **4** | Autoremesher-standard path (MIT): isotropic resample, global UV/frame parameterization (pure-Rust MIQP, no Eigen), isoline quad extract with hole fill / manifold cleanup. Refuse open surfaces on closed inputs meanwhile. |
+| **4** | Autoremesher-standard path (MIT): isotropic resample (default on), dual-extract hole fill / non-manifold / short-edge cleanup + seal fallback, isoline quad extract (gated until coverage is good), global UV/frame parameterization (pure-Rust MIQP, no Eigen — still open). Refuse open surfaces on closed inputs when seal cannot close. |
 
 ## Verification
 

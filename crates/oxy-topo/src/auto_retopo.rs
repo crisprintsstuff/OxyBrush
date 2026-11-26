@@ -83,7 +83,8 @@ impl Default for AutoRetopoOptions {
             anisotropy: 0.0,
             orientation_constraints: Vec::new(),
             singularity_attractors: Vec::new(),
-            resample: false,
+            // Autoremesher isotropic preprocess (voxel remesh near ρ).
+            resample: true,
         }
     }
 }
@@ -211,7 +212,12 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     }
     // Merge nearly-coincident dual vertices before triangulation so face
     // corners that land on the same lattice point share an index.
-    let extracted = weld_extracted(extracted, (rho * 0.25).max(1e-5));
+    let mut extracted = weld_extracted(extracted, (rho * 0.05).max(1e-6));
+    // Autoremesher QuadExtractor post-pass on dual polygons (#551 / Phase 4).
+    extracted.faces = crate::isoline_extract::repair_polygon_mesh(&extracted.positions, extracted.faces);
+    if extracted.faces.is_empty() {
+        return Err(AutoRetopoError::Degenerate);
+    }
     let (data, diagonals) =
         if opts.pure_quad { polygons_to_pure_quads(&extracted)? } else { polygons_to_quad_dominant(&extracted)? };
     if data.triangles.is_empty() {
@@ -248,13 +254,42 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     // Drop floating islands; keep the largest piece when it is clearly the
     // surface (#551). Refuse only when extraction shattered into comparable shards.
     out = keep_largest_component(out)?;
-    // Refuse Swiss cheese / non-manifold results when the input was closed
-    // (human base mesh screenshot: OxyRemesh "succeeded" with holes).
+    let min_tris = (opts.target_faces.max(64) / 8).max(32) as usize;
+    // Autoremesher-style seal, then voxel-seal the extract if still open.
+    if input_watertight && !crate::check_watertight(&out) {
+        out = seal_open_extract(out);
+    }
+    if input_watertight && !crate::check_watertight(&out) {
+        // Prefer sealing the field extract; if it does not enclose (Swiss
+        // cheese), fall back to voxel remesh of the input so the job still
+        // returns a closed mesh near the face budget (Autoremesher’s VDB role).
+        let try_voxel = |src: &Mesh| -> Option<Mesh> {
+            let long = src.bounds().extent().max_element().max(1e-6);
+            for &res in &[((long / rho).round() as u32).clamp(96, 192), 128u32, 160u32] {
+                if let Ok(mut sealed) = crate::voxel_remesh(
+                    &[src],
+                    crate::RemeshOptions { resolution: res, preserve_volume: true, ..Default::default() },
+                ) && crate::check_watertight(&sealed)
+                    && sealed.triangle_count() >= min_tris
+                {
+                    if opts.snap_to_surface {
+                        crate::SurfaceProjector::new(&[mesh]).project(&mut sealed);
+                    }
+                    if opts.transfer_attributes {
+                        crate::transfer_attributes(&[mesh], &mut sealed);
+                    }
+                    return Some(sealed);
+                }
+            }
+            None
+        };
+        if let Some(sealed) = try_voxel(&out).or_else(|| try_voxel(mesh)) {
+            out = sealed;
+        }
+    }
     if input_watertight && !crate::check_watertight(&out) {
         return Err(AutoRetopoError::OpenSurface { boundary_edges: boundary_edge_count(&out) });
     }
-    // Face count should be in the ballpark of the target (pure-quad inflates).
-    let min_tris = (opts.target_faces.max(64) / 8).max(32) as usize;
     if out.triangle_count() < min_tris {
         return Err(AutoRetopoError::Degenerate);
     }
@@ -313,14 +348,33 @@ fn extract_with_isoline(
     p: &[Vec3],
     rho: f32,
 ) -> Result<Extracted, AutoRetopoError> {
-    let min_faces = (mesh.triangle_count() / 128).max(64);
+    // Isoline extract is still WIP: only accept near face-budget coverage.
+    let area = surface_area(mesh).max(1e-8);
+    let face_budget = (area / (rho * rho)).round().max(64.0) as usize;
+    let min_faces = (face_budget / 2).max(256);
     let field_uvs = build_field_uvs(graph, o, p, rho);
     if let Some(iso) = crate::isoline_extract::extract_isoline_mesh(&graph.positions, &mesh.triangles, &field_uvs, rho)
-        && iso.faces.len() >= min_faces
     {
-        return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        let boundary = polygon_boundary_edges(&iso.faces);
+        if iso.faces.len() >= min_faces && boundary < iso.faces.len() / 2 {
+            return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        }
     }
     extract_faces(graph, o, p, rho)
+}
+
+fn polygon_boundary_edges(faces: &[Vec<u32>]) -> usize {
+    let mut he: HashMap<(u32, u32), i32> = HashMap::new();
+    for f in faces {
+        let n = f.len();
+        for i in 0..n {
+            let a = f[i];
+            let b = f[(i + 1) % n];
+            let key = (a.min(b), a.max(b));
+            *he.entry(key).or_default() += 1;
+        }
+    }
+    he.values().filter(|&&c| c == 1).count()
 }
 
 /// Component count and triangle counts per root (descending).
@@ -1120,6 +1174,226 @@ struct Extracted {
     faces: Vec<Vec<u32>>,
 }
 
+/// Autoremesher-style seal: cull faces at messy boundaries, fill holes, keep largest.
+fn seal_open_extract(mut mesh: Mesh) -> Mesh {
+    for _ in 0..8 {
+        if crate::check_watertight(&mesh) {
+            return mesh;
+        }
+        let before = mesh.triangle_count();
+        let before_be = boundary_edge_count(&mesh);
+        let mut data = mesh.to_data();
+        let _pinched = oxy_mesh::topo::split_pinched_edges(&mut data.positions, &mut data.triangles);
+        while data.mask.len() < data.positions.len() {
+            data.mask.push(0.0);
+        }
+        if !data.color.is_empty() {
+            while data.color.len() < data.positions.len() {
+                data.color.push(glam::Vec3::ONE);
+            }
+        }
+        let removed = drop_tris_at_messy_boundary(&mut data);
+        let closed = oxy_mesh::topo::close_holes(&mut data);
+        if removed == 0 && closed == 0 {
+            break;
+        }
+        mesh = Mesh::from_data(data);
+        if let Ok(m) = keep_largest_component(mesh.clone()) {
+            mesh = m;
+        }
+        if mesh.triangle_count() == before && boundary_edge_count(&mesh) >= before_be {
+            break;
+        }
+    }
+    mesh
+}
+
+fn drop_tris_at_messy_boundary(data: &mut oxy_mesh::MeshData) -> usize {
+    let mut edge_count: HashMap<[u32; 2], u32> = HashMap::new();
+    for t in &data.triangles {
+        for i in 0..3 {
+            let a = t[i];
+            let b = t[(i + 1) % 3];
+            let key = [a.min(b), a.max(b)];
+            *edge_count.entry(key).or_default() += 1;
+        }
+    }
+    let mut open_at: HashMap<u32, u32> = HashMap::new();
+    for (key, &c) in &edge_count {
+        if c == 1 {
+            *open_at.entry(key[0]).or_default() += 1;
+            *open_at.entry(key[1]).or_default() += 1;
+        }
+    }
+    let before = data.triangles.len();
+    let mut keep_tris = Vec::with_capacity(before);
+    let mut keep_groups = Vec::with_capacity(before);
+    let mut keep_hidden = Vec::with_capacity(before);
+    for (i, t) in data.triangles.iter().enumerate() {
+        let messy = t.iter().any(|v| open_at.get(v).copied().unwrap_or(0) > 2);
+        if messy {
+            continue;
+        }
+        keep_tris.push(*t);
+        keep_groups.push(data.groups.get(i).copied().unwrap_or(0));
+        keep_hidden.push(data.hidden.get(i).copied().unwrap_or(false));
+    }
+    let removed = before - keep_tris.len();
+    if removed == 0 || keep_tris.len() * 10 < before * 3 {
+        return 0;
+    }
+    data.triangles = keep_tris;
+    data.groups = keep_groups;
+    data.hidden = keep_hidden;
+    removed
+}
+
+fn collapse_dual_triangles(positions: &mut [Vec3], normals: &mut [Vec3], adj: &mut [HashSet<u32>], max_len: f32) {
+    let max2 = max_len * max_len;
+    let n = positions.len();
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    let find = |parent: &mut [u32], mut x: u32| {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    };
+    let mut merges: Vec<(f32, u32, u32)> = Vec::new();
+    for a in 0..n as u32 {
+        let nbrs: Vec<u32> = adj[a as usize].iter().copied().collect();
+        for (i, &b) in nbrs.iter().enumerate() {
+            if b < a {
+                continue;
+            }
+            for &c in &nbrs[i + 1..] {
+                if !adj[b as usize].contains(&c) {
+                    continue;
+                }
+                let edges = [(a, b), (b, c), (c, a)];
+                let mut best = None;
+                for (u, v) in edges {
+                    let d = positions[u as usize].distance_squared(positions[v as usize]);
+                    if d <= max2 && best.map(|(bd, _, _)| d < bd).unwrap_or(true) {
+                        best = Some((d, u, v));
+                    }
+                }
+                if let Some(tr) = best {
+                    merges.push(tr);
+                }
+            }
+        }
+    }
+    merges.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    let mut changed = false;
+    for &(_, a, b) in &merges {
+        let pa = find(&mut parent, a);
+        let pb = find(&mut parent, b);
+        if pa == pb {
+            continue;
+        }
+        parent[pa as usize] = pb;
+        positions[pb as usize] = (positions[pa as usize] + positions[pb as usize]) * 0.5;
+        let nml = (normals[pa as usize] + normals[pb as usize]).normalize_or_zero();
+        if nml != Vec3::ZERO {
+            normals[pb as usize] = nml;
+        }
+        changed = true;
+    }
+    if !changed {
+        return;
+    }
+    let mut new_adj: Vec<HashSet<u32>> = vec![HashSet::new(); n];
+    for (i, nbrs) in adj.iter().enumerate() {
+        let pi = find(&mut parent, i as u32);
+        for &j in nbrs {
+            let pj = find(&mut parent, j);
+            if pi != pj {
+                new_adj[pi as usize].insert(pj);
+                new_adj[pj as usize].insert(pi);
+            }
+        }
+    }
+    for (slot, src) in adj.iter_mut().zip(new_adj.iter_mut()) {
+        *slot = std::mem::take(src);
+    }
+}
+
+fn complete_dual_by_distance(positions: &[Vec3], adj: &mut [HashSet<u32>], max_dist: f32) {
+    let max2 = max_dist * max_dist;
+    let n = positions.len();
+    let mut candidates: Vec<(f32, u32, u32)> = Vec::new();
+    for i in 0..n {
+        for j in (i + 1)..n {
+            if adj[i].contains(&(j as u32)) {
+                continue;
+            }
+            let d = positions[i].distance_squared(positions[j]);
+            if d <= max2 {
+                candidates.push((d, i as u32, j as u32));
+            }
+        }
+    }
+    candidates.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    for &(_, a, b) in &candidates {
+        if adj[a as usize].len() >= 6 || adj[b as usize].len() >= 6 {
+            continue;
+        }
+        adj[a as usize].insert(b);
+        adj[b as usize].insert(a);
+    }
+}
+
+fn collapse_short_dual_edges(positions: &mut [Vec3], normals: &mut [Vec3], adj: &mut [HashSet<u32>], eps: f32) {
+    let eps2 = eps * eps;
+    let n = positions.len();
+    let mut parent: Vec<u32> = (0..n as u32).collect();
+    let find = |parent: &mut [u32], mut x: u32| {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    };
+    let mut short: Vec<(f32, u32, u32)> = Vec::new();
+    for (i, nbrs) in adj.iter().enumerate() {
+        for &j in nbrs {
+            if (i as u32) < j {
+                let d = positions[i].distance_squared(positions[j as usize]);
+                if d <= eps2 {
+                    short.push((d, i as u32, j));
+                }
+            }
+        }
+    }
+    short.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+    for &(_, a, b) in &short {
+        let pa = find(&mut parent, a);
+        let pb = find(&mut parent, b);
+        if pa == pb {
+            continue;
+        }
+        parent[pa as usize] = pb;
+        positions[pb as usize] = (positions[pa as usize] + positions[pb as usize]) * 0.5;
+        let nml = (normals[pa as usize] + normals[pb as usize]).normalize_or_zero();
+        normals[pb as usize] = if nml == Vec3::ZERO { normals[pb as usize] } else { nml };
+    }
+    let mut new_adj: Vec<HashSet<u32>> = vec![HashSet::new(); n];
+    for (i, nbrs) in adj.iter().enumerate() {
+        let pi = find(&mut parent, i as u32);
+        for &j in nbrs {
+            let pj = find(&mut parent, j);
+            if pi != pj {
+                new_adj[pi as usize].insert(pj);
+                new_adj[pj as usize].insert(pi);
+            }
+        }
+    }
+    for (slot, src) in adj.iter_mut().zip(new_adj.iter_mut()) {
+        *slot = std::mem::take(src);
+    }
+}
+
 fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracted, AutoRetopoError> {
     let n = g.len();
     // Union-find over input verts: merge on zero jumps (short distance first).
@@ -1141,13 +1415,15 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
 
     let mut zero_edges: Vec<(f32, u32, u32)> = Vec::new();
     let mut unit_edges: Vec<(u32, u32)> = Vec::new();
+    let unit_lo2 = (rho * 0.45).powi(2);
+    let unit_hi2 = (rho * 1.35).powi(2);
     for i in 0..n {
         for &j in &g.neighbors[i] {
             if (i as u32) < j {
                 let (t, dist2) = integer_jump(g, o, p, rho, i, j as usize);
                 if is_collapse_jump(t, dist2, rho) {
                     zero_edges.push((p[i].distance(p[j as usize]), i as u32, j));
-                } else if is_unit_jump(t) {
+                } else if is_unit_jump(t) || (dist2 >= unit_lo2 && dist2 <= unit_hi2) {
                     unit_edges.push((i as u32, j));
                 }
             }
@@ -1222,6 +1498,9 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
             out_adj[ob as usize].insert(oa);
         }
     }
+    collapse_short_dual_edges(&mut out_pos, &mut out_nml, &mut out_adj, (rho * 0.02).max(1e-7));
+    collapse_dual_triangles(&mut out_pos, &mut out_nml, &mut out_adj, (rho * 0.4).max(1e-6));
+    complete_dual_by_distance(&out_pos, &mut out_adj, rho * 1.05);
 
     // Face walk: sharpest left turn in the tangent plane. Only mark oriented
     // edges used when a valid cycle closes — burning edges on failed walks
@@ -1229,7 +1508,8 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
     let mut faces = Vec::new();
     let mut used_oriented: HashSet<(u32, u32)> = HashSet::new();
     for start in 0..out_pos.len() as u32 {
-        let neighbors: Vec<u32> = out_adj[start as usize].iter().copied().collect();
+        let mut neighbors: Vec<u32> = out_adj[start as usize].iter().copied().collect();
+        neighbors.sort_unstable();
         for next in neighbors {
             if used_oriented.contains(&(start, next)) {
                 continue;
@@ -1241,7 +1521,7 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
             walk.push((prev, cur));
             let mut guard = 0;
             let mut closed = false;
-            while guard < 16 {
+            while guard < 24 {
                 guard += 1;
                 if cur == start && face.len() >= 3 {
                     closed = true;
@@ -1258,7 +1538,9 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
                 let incoming = (out_pos[cur as usize] - out_pos[prev as usize]).normalize_or_zero();
                 let mut best_next = None;
                 let mut best_score = f32::MIN;
-                for &cand in &out_adj[cur as usize] {
+                let mut cands: Vec<u32> = out_adj[cur as usize].iter().copied().collect();
+                cands.sort_unstable();
+                for cand in cands {
                     if cand == prev {
                         continue;
                     }
@@ -1283,7 +1565,7 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
                 cur = nxt;
                 walk.push((prev, cur));
             }
-            if closed && face.len() >= 3 && face.len() <= 8 {
+            if closed && face.len() >= 3 && face.len() <= 12 {
                 for e in walk {
                     used_oriented.insert(e);
                 }
