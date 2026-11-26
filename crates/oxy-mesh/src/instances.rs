@@ -27,11 +27,37 @@ pub enum Place {
     Mask(f32),
     /// Seeded samples over the visible surface, this far apart in scene units.
     Scatter(f32),
+    /// Scatter only on faces whose mean mask meets the threshold.
+    ScatterMask { spacing: f32, threshold: f32 },
+    /// Scatter only on polygons of one face group.
+    ScatterGroup { spacing: f32, group: u32 },
 }
 
 impl Place {
+    /// Mask / any scatter mode — needs the `INS2`/`INS3` section.
     pub fn extended(self) -> bool {
-        matches!(self, Self::Mask(_) | Self::Scatter(_))
+        matches!(self, Self::Mask(_) | Self::Scatter(_) | Self::ScatterMask { .. } | Self::ScatterGroup { .. })
+    }
+
+    /// Scatter restricted to mask or group — needs `INS3` (extra fields).
+    pub fn needs_ins3(self) -> bool {
+        matches!(self, Self::ScatterMask { .. } | Self::ScatterGroup { .. })
+    }
+
+    /// Spacing when this is any scatter mode.
+    pub fn scatter_spacing(self) -> Option<f32> {
+        match self {
+            Self::Scatter(s) | Self::ScatterMask { spacing: s, .. } | Self::ScatterGroup { spacing: s, .. } => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Mutable spacing for scatter modes (UI drag).
+    pub fn scatter_spacing_mut(&mut self) -> Option<&mut f32> {
+        match self {
+            Self::Scatter(s) | Self::ScatterMask { spacing: s, .. } | Self::ScatterGroup { spacing: s, .. } => Some(s),
+            _ => None,
+        }
     }
 }
 
@@ -50,6 +76,22 @@ pub enum Orient {
     FirstEdge,
     /// A different spin for every copy.
     Random,
+    /// Host body grain: same as [`World`], but callers set [`Settings::direction`]
+    /// from [`host_flow_direction`] so rows share a consistent direction on limbs.
+    Flow,
+}
+
+/// Longest axis of the host's axis-aligned bounds — a stable “along the body”
+/// direction for [`Orient::Flow`] (neck / tail / limb grain).
+pub fn host_flow_direction(host: &Mesh) -> Vec3 {
+    let e = host.bounds().extent();
+    if e.x >= e.y && e.x >= e.z {
+        Vec3::X
+    } else if e.z >= e.y {
+        Vec3::Z
+    } else {
+        Vec3::Y
+    }
 }
 
 /// How big each copy is.
@@ -67,7 +109,7 @@ pub enum SizeMode {
 pub struct Settings {
     pub place: Place,
     pub orient: Orient,
-    /// For [`Orient::World`]: the world direction forward follows.
+    /// For [`Orient::World`] and [`Orient::Flow`]: the world direction forward follows.
     pub direction: Vec3,
     pub size_mode: SizeMode,
     pub size: f32,
@@ -214,25 +256,63 @@ pub fn anchors(host: &Mesh, settings: &Settings) -> Vec<Anchor> {
                 &host.positions,
                 &host.triangles,
                 host.hidden(),
-                spacing,
-                settings.seed,
-                settings.orient,
+                ScatterOpts { spacing, seed: settings.seed, orient: settings.orient, ..Default::default() },
+            );
+        }
+        Place::ScatterMask { spacing, threshold } => {
+            return scatter_anchors(
+                &host.positions,
+                &host.triangles,
+                host.hidden(),
+                ScatterOpts {
+                    spacing,
+                    seed: settings.seed,
+                    orient: settings.orient,
+                    mask: Some((&host.mask, threshold)),
+                    ..Default::default()
+                },
+            );
+        }
+        Place::ScatterGroup { spacing, group } => {
+            return scatter_anchors(
+                &host.positions,
+                &host.triangles,
+                host.hidden(),
+                ScatterOpts {
+                    spacing,
+                    seed: settings.seed,
+                    orient: settings.orient,
+                    group: Some((host.groups(), group)),
+                    ..Default::default()
+                },
             );
         }
     }
     out
 }
 
+/// Options for [`scatter_anchors`]: spacing, seed, orient, and optional filters.
+#[derive(Clone, Copy, Default)]
+pub struct ScatterOpts<'a> {
+    pub spacing: f32,
+    pub seed: u32,
+    pub orient: Orient,
+    /// Vertex mask + mean threshold.
+    pub mask: Option<(&'a [f32], f32)>,
+    /// Per-triangle groups + wanted id.
+    pub group: Option<(&'a [u32], u32)>,
+}
+
 /// A bounded, area-weighted dart throw over visible triangles. A spatial
 /// grid rejects candidates closer than the requested scene-space spacing.
+/// When `opts.mask` or `opts.group` is set, only matching triangles are sampled.
 pub fn scatter_anchors(
     positions: &[Vec3],
     triangles: &[[u32; 3]],
     hidden: &[bool],
-    spacing: f32,
-    seed: u32,
-    orient: Orient,
+    opts: ScatterOpts<'_>,
 ) -> Vec<Anchor> {
+    let ScatterOpts { spacing, seed, orient, mask, group } = opts;
     if !spacing.is_finite() || spacing <= 0.0 {
         return Vec::new();
     }
@@ -240,9 +320,20 @@ pub fn scatter_anchors(
     const MAX_ATTEMPTS: u32 = 200_000;
     let mut area = 0.0_f64;
     let mut faces = Vec::new();
-    for (&tri, &hidden) in triangles.iter().zip(hidden) {
+    for (ti, (&tri, &hidden)) in triangles.iter().zip(hidden).enumerate() {
         if hidden {
             continue;
+        }
+        if let Some((groups, want)) = group
+            && groups.get(ti).copied().unwrap_or(0) != want
+        {
+            continue;
+        }
+        if let Some((masks, threshold)) = mask {
+            let mean = tri.iter().map(|&v| masks.get(v as usize).copied().unwrap_or(0.0)).sum::<f32>() / 3.0;
+            if mean < threshold {
+                continue;
+            }
         }
         let [a, b, c] = tri.map(|i| positions[i as usize]);
         let face_area = (b - a).cross(c - a).length() as f64 * 0.5;
@@ -350,7 +441,7 @@ pub fn transforms(host: &Mesh, source: &Mesh, anchors: &[Anchor], settings: &Set
             let up = n.normalize_or(Vec3::Y);
             // Forward, before laying it onto the surface.
             let along = match settings.orient {
-                Orient::World | Orient::Random => settings.direction,
+                Orient::World | Orient::Flow | Orient::Random => settings.direction,
                 Orient::LongestEdge | Orient::FirstEdge => {
                     host.positions[a.edge[1] as usize] - host.positions[a.edge[0] as usize]
                 }
@@ -449,7 +540,14 @@ mod tests {
     fn scatter_is_seeded_spaced_and_excludes_hidden_triangles() {
         let positions = [Vec3::ZERO, Vec3::X, Vec3::Z, Vec3::X + Vec3::Z];
         let tris = [[0, 1, 2], [1, 3, 2]];
-        let make = |seed| scatter_anchors(&positions, &tris, &[false, true], 0.16, seed, Orient::World);
+        let make = |seed| {
+            scatter_anchors(
+                &positions,
+                &tris,
+                &[false, true],
+                ScatterOpts { spacing: 0.16, seed, orient: Orient::World, ..Default::default() },
+            )
+        };
         let samples = make(7);
         assert!(samples.len() >= 8);
         assert_eq!(samples, make(7));
@@ -466,7 +564,69 @@ mod tests {
                 assert!(p.distance(*q) >= 0.16 - 1e-6);
             }
         }
-        assert!(scatter_anchors(&positions, &tris, &[true, true], 0.16, 7, Orient::World).is_empty());
+        assert!(
+            scatter_anchors(
+                &positions,
+                &tris,
+                &[true, true],
+                ScatterOpts { spacing: 0.16, seed: 7, orient: Orient::World, ..Default::default() },
+            )
+            .is_empty()
+        );
+    }
+
+    #[test]
+    fn scatter_mask_and_group_filters_drop_other_faces() {
+        // Two disjoint quads so mask/group filters don't share vertices.
+        let positions = [
+            Vec3::ZERO,
+            Vec3::X,
+            Vec3::Z,
+            Vec3::X + Vec3::Z,
+            Vec3::new(10.0, 0.0, 0.0),
+            Vec3::new(11.0, 0.0, 0.0),
+            Vec3::new(10.0, 0.0, 1.0),
+            Vec3::new(11.0, 0.0, 1.0),
+        ];
+        let tris = [[0, 1, 2], [1, 3, 2], [4, 5, 6], [5, 7, 6]];
+        let hidden = [false; 4];
+        let mask = [1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0];
+        let on_mask = scatter_anchors(
+            &positions,
+            &tris,
+            &hidden,
+            ScatterOpts {
+                spacing: 0.2,
+                seed: 3,
+                orient: Orient::World,
+                mask: Some((&mask, 0.5)),
+                ..Default::default()
+            },
+        );
+        assert!(!on_mask.is_empty());
+        assert!(on_mask.iter().all(|a| a.points[..3] == tris[0] || a.points[..3] == tris[1]));
+        let groups = [0u32, 0, 1, 1];
+        let on_g1 = scatter_anchors(
+            &positions,
+            &tris,
+            &hidden,
+            ScatterOpts {
+                spacing: 0.2,
+                seed: 3,
+                orient: Orient::World,
+                group: Some((&groups, 1)),
+                ..Default::default()
+            },
+        );
+        assert!(!on_g1.is_empty());
+        assert!(on_g1.iter().all(|a| a.points[..3] == tris[2] || a.points[..3] == tris[3]));
+    }
+
+    #[test]
+    fn host_flow_picks_longest_aabb_axis() {
+        let host = primitives::plane(4, 2.0); // XY plane, extent mostly in X/Z equal; Y thin
+        let d = host_flow_direction(&host);
+        assert!(d == Vec3::X || d == Vec3::Z, "{d}");
     }
 
     #[test]

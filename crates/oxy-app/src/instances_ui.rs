@@ -21,6 +21,7 @@ fn orient_label(o: Orient) -> &'static str {
         Orient::LongestEdge => "Longest edge",
         Orient::FirstEdge => "First edge",
         Orient::Random => "Random",
+        Orient::Flow => "Flow (body)",
     }
 }
 
@@ -110,7 +111,7 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
     };
     let mut s: Settings = ins.settings;
     let copies = ed.instance_count(ed.scene.active().id, index);
-    let calculating = matches!(s.place, Place::Scatter(_)) && ed.instance_scatter_pending();
+    let calculating = s.place.scatter_spacing().is_some() && ed.instance_scatter_pending();
     let triangles = ed.instance_triangles(index);
     ui.horizontal(|ui| {
         ui.strong(format!("Copies of {source}"));
@@ -133,12 +134,16 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
                 Place::Group(_) => "One face group",
                 Place::Mask(_) => "Masked surface",
                 Place::Scatter(_) => "Even scatter",
+                Place::ScatterMask { .. } => "Scatter on mask",
+                Place::ScatterGroup { .. } => "Scatter on group",
             };
+            let extent = ed.scene.active().mesh.bounds().extent().max_element();
+            let default_spacing = (extent / 12.0).max(0.001);
             egui::ComboBox::from_id_salt(("instance_place", index)).selected_text(label).show_ui(ui, |ui| {
                 ui.selectable_value(&mut s.place, Place::Faces, "Every face");
                 ui.selectable_value(&mut s.place, Place::Points, "Every point");
                 let g = match s.place {
-                    Place::Group(g) => g,
+                    Place::Group(g) | Place::ScatterGroup { group: g, .. } => g,
                     _ => groups.first().copied().unwrap_or(0),
                 };
                 if ui.selectable_label(matches!(s.place, Place::Group(_)), "One face group").clicked() {
@@ -152,38 +157,52 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
                 if ui.selectable_label(matches!(s.place, Place::Scatter(_)), "Even scatter").clicked()
                     && !matches!(s.place, Place::Scatter(_))
                 {
-                    let extent = ed.scene.active().mesh.bounds().extent().max_element();
-                    s.place = Place::Scatter((extent / 12.0).max(0.001));
+                    s.place = Place::Scatter(default_spacing);
+                }
+                if ui.selectable_label(matches!(s.place, Place::ScatterMask { .. }), "Scatter on mask").clicked()
+                    && !matches!(s.place, Place::ScatterMask { .. })
+                {
+                    s.place = Place::ScatterMask { spacing: default_spacing, threshold: 0.5 };
+                }
+                if ui.selectable_label(matches!(s.place, Place::ScatterGroup { .. }), "Scatter on group").clicked()
+                    && !matches!(s.place, Place::ScatterGroup { .. })
+                {
+                    s.place = Place::ScatterGroup { spacing: default_spacing, group: g };
                 }
             });
-            if let Place::Group(g) = &mut s.place {
-                egui::ComboBox::from_id_salt(("instance_group", index)).selected_text(format!("Group {g}")).show_ui(
-                    ui,
-                    |ui| {
-                        for &k in &groups {
-                            ui.selectable_value(g, k, format!("Group {k}"));
-                        }
-                    },
-                );
+            match &mut s.place {
+                Place::Group(g) | Place::ScatterGroup { group: g, .. } => {
+                    egui::ComboBox::from_id_salt(("instance_group", index))
+                        .selected_text(format!("Group {g}"))
+                        .show_ui(ui, |ui| {
+                            for &k in &groups {
+                                ui.selectable_value(g, k, format!("Group {k}"));
+                            }
+                        });
+                }
+                _ => {}
             }
         });
         ui.end_row();
 
         match &mut s.place {
-            Place::Mask(threshold) => {
+            Place::Mask(threshold) | Place::ScatterMask { threshold, .. } => {
                 ui.label("Mask threshold");
-                ui.add(crate::widgets::Bar(egui::Slider::new(threshold, 0.01..=1.0))).on_hover_text("Copy onto visible faces whose average mask meets this value.");
-            }
-            Place::Scatter(spacing) => {
-                ui.label("Spacing");
-                let speed = *spacing * 0.05;
-                ui.add(egui::DragValue::new(spacing).speed(speed).range(0.0001..=1.0e20))
-                    .on_hover_text("Minimum distance between copies in scene units when scattered. The copies follow later sculpt edits.");
+                ui.add(crate::widgets::Bar(egui::Slider::new(threshold, 0.01..=1.0)))
+                    .on_hover_text("Copy onto visible faces whose average mask meets this value.");
+                ui.end_row();
             }
             _ => {}
         }
-        if s.place.extended() {
+        if let Some(spacing) = s.place.scatter_spacing_mut() {
+            ui.label("Spacing");
+            let speed = *spacing * 0.05;
+            ui.add(egui::DragValue::new(spacing).speed(speed).range(0.0001..=1.0e20)).on_hover_text(
+                "Minimum distance between copies in scene units when scattered. The copies follow later sculpt edits.",
+            );
             ui.end_row();
+        } else if s.place.extended() {
+            // Mask-only already ended its row above.
         }
 
         tips::hover(ui.label("Facing"), plain::INSTANCE_ORIENT);
@@ -191,11 +210,14 @@ fn instancer_ui(ui: &mut Ui, ed: &mut Editor, index: usize, busy: bool) {
             egui::ComboBox::from_id_salt(("instance_orient", index)).selected_text(orient_label(s.orient)).show_ui(
                 ui,
                 |ui| {
-                    for o in [Orient::World, Orient::LongestEdge, Orient::FirstEdge, Orient::Random] {
+                    for o in [Orient::Flow, Orient::World, Orient::LongestEdge, Orient::FirstEdge, Orient::Random] {
                         ui.selectable_value(&mut s.orient, o, orient_label(o));
                     }
                 },
             );
+            if s.orient == Orient::Flow {
+                s.direction = oxy_mesh::instances::host_flow_direction(&ed.scene.active().mesh);
+            }
             if s.orient == Orient::World {
                 let current = DIRECTIONS
                     .iter()

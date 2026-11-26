@@ -91,7 +91,7 @@ commands! {
     LivingStrokes => "Strokes…", "", "Open the Strokes panel (Living strokes): the strokes made on this piece, to fade, delete or solo any of them without undoing what came after. Turn Living strokes on in Preferences > General.";
     DeformWindow => "Deform…", "", "Open the Deform window: bend, twist, taper, inflate, polish and more for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
     SurfaceNoiseWindow => "Surface Noise…", "", "Open Surface Noise: displace the whole piece along its normals with procedural noise (scale, strength, octaves, seed, pattern). Preview live; Apply bakes one undo step. Masked parts stay put.";
-    ScaleCoverWindow => "Scale cover…", "", "Open Scale cover (Dino mode): place overlapping scale plates on the active piece with surface instances. Pick a built-in plate, scatter/mask/group placement, then Apply. Edit source and Make real as with Instances.";
+    ScaleCoverWindow => "Scale cover…", "", "Open Scale cover (Dino mode): place overlapping scale plates on the active piece with surface instances. Pick a built-in plate (or types by face group), Flow / scatter-on-mask / scatter-on-group placement, then Apply. Edit source and Make real as with Instances.";
     ColorFilterWindow => "Color Filter…", "", "Open the Color Filter window: fill, hue, saturation, value, brightness, contrast, smooth and RGB adjustments for the whole piece (or its unmasked part). Drag a bar to see it, let go to apply.";
     DeformFit => "Fit to standard size", "", "Centre the piece on the origin and scale it so its longest side is 2 units, keeping its proportions.";
     DeformRepeat => "Repeat on this piece", "", "Apply the last deformer again, with the same amount and axes.";
