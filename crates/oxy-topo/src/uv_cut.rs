@@ -73,7 +73,7 @@ impl UvCutTopology {
         }
         pairs.sort_unstable_by_key(|&(edge, _)| edge);
         Some(Self {
-            triangles: corner_to_uv.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect(),
+            triangles: corner_to_uv.as_chunks::<3>().0.to_vec(),
             source_vertices,
             seams: pairs
                 .into_iter()
