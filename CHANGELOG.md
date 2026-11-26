@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **OxyRemesh.** Open surfaces can use isoline extraction from fitted orientation-field charts when the charts are unfolded and cover enough of the surface.
+
 ## [4.1.2] - 2026-11-26
 
 ### Fixed
