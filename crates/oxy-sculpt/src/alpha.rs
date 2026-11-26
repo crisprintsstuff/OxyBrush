@@ -34,6 +34,8 @@ pub enum BuiltinAlpha {
     DiamondScales,
     /// One teardrop plate — Stamp mode for placing a single scale.
     ScalePlate,
+    /// Tileable strip of U-scales along X — use with Roll along a limb.
+    ScaleStrip,
     Cracks,
     Stripes,
     Rings,
@@ -41,13 +43,14 @@ pub enum BuiltinAlpha {
 }
 
 impl BuiltinAlpha {
-    pub const ALL: [BuiltinAlpha; 10] = [
+    pub const ALL: [BuiltinAlpha; 11] = [
         BuiltinAlpha::Noise,
         BuiltinAlpha::Bumps,
         BuiltinAlpha::Scales,
         BuiltinAlpha::SnakeScales,
         BuiltinAlpha::DiamondScales,
         BuiltinAlpha::ScalePlate,
+        BuiltinAlpha::ScaleStrip,
         BuiltinAlpha::Cracks,
         BuiltinAlpha::Stripes,
         BuiltinAlpha::Rings,
@@ -62,6 +65,7 @@ impl BuiltinAlpha {
             BuiltinAlpha::SnakeScales => "Snake scales",
             BuiltinAlpha::DiamondScales => "Diamond scales",
             BuiltinAlpha::ScalePlate => "Scale plate",
+            BuiltinAlpha::ScaleStrip => "Scale strip",
             BuiltinAlpha::Cracks => "Cracks",
             BuiltinAlpha::Stripes => "Stripes",
             BuiltinAlpha::Rings => "Rings",
@@ -84,6 +88,8 @@ impl BuiltinAlpha {
                 BuiltinAlpha::SnakeScales => scale_field(x, y, ScaleKind::Snake) * edge,
                 BuiltinAlpha::DiamondScales => scale_field(x, y, ScaleKind::Diamond) * edge,
                 BuiltinAlpha::ScalePlate => single_scale_plate(x, y) * edge,
+                // Soft across-stroke falloff only; pattern tiles on X for Roll.
+                BuiltinAlpha::ScaleStrip => scale_strip(x, y) * smoothstep(1.0, 0.55, y.abs()),
                 BuiltinAlpha::Cracks => {
                     let (d1, d2) = worley(x * 3.0, y * 3.0);
                     // High along cell borders (where the two nearest seeds are equidistant).
@@ -203,6 +209,24 @@ fn single_scale_plate(x: f32, y: f32) -> f32 {
     (h * 1.15).clamp(0.0, 1.0)
 }
 
+/// One row of U-scales repeating along X (stroke direction when following /
+/// rolling). Authored so left/right edges match for Roll wrap.
+fn scale_strip(x: f32, y: f32) -> f32 {
+    // Three scales across −1..1; wrap-friendly period of 2/3 in x.
+    let period = 2.0 / 3.0;
+    let mut best = 0.0_f32;
+    for k in -1..=1 {
+        let cx = x - k as f32 * period;
+        // Tip toward +Y (across the stroke); root toward −Y.
+        let ly = (y + 1.0) * 0.55;
+        let h = u_scale(cx / (period * 0.5), ly, 0.95, 0.95);
+        if h > best {
+            best = h;
+        }
+    }
+    best
+}
+
 impl Alpha {
     /// The 16-bit value a project stores for one pixel (`65535` = full
     /// strength). This is the rounding `.oxb` uses, so a hash of these
@@ -236,6 +260,15 @@ impl Alpha {
         if uv.x.abs() > 1.0 || uv.y.abs() > 1.0 {
             return 0.0;
         }
+        self.sample_inside(uv)
+    }
+
+    /// Bilinear sample with UV wrapped into `-1..=1` (seamless tile / roll).
+    pub fn sample_wrapped(&self, uv: Vec2) -> f32 {
+        self.sample_inside(Vec2::new(wrap_pm1(uv.x), wrap_pm1(uv.y)))
+    }
+
+    fn sample_inside(&self, uv: Vec2) -> f32 {
         let n = self.size as f32;
         let fx = ((uv.x + 1.0) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
         let fy = ((1.0 - uv.y) * 0.5 * n - 0.5).clamp(0.0, n - 1.0);
@@ -359,6 +392,11 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Wrap any float into `-1..=1` (period 2).
+pub fn wrap_pm1(x: f32) -> f32 {
+    (x + 1.0).rem_euclid(2.0) - 1.0
+}
+
 fn hash2(x: i32, y: i32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841);
     h ^= h >> 13;
@@ -430,7 +468,7 @@ mod tests {
     #[test]
     fn builtins_are_valid_and_distinct() {
         let all: Vec<Alpha> = BuiltinAlpha::ALL.iter().map(|b| b.generate(64)).collect();
-        assert_eq!(all.len(), 10);
+        assert_eq!(all.len(), 11);
         for a in &all {
             assert_eq!(a.data.len(), 64 * 64);
             assert!(a.data.iter().all(|v| (0.0..=1.0).contains(v)), "{}", a.name);

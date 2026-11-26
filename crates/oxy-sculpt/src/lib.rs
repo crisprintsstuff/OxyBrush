@@ -14,7 +14,7 @@ pub mod preset;
 pub mod recipe;
 pub mod wire;
 
-pub use alpha::{Alpha, BuiltinAlpha};
+pub use alpha::{Alpha, BuiltinAlpha, wrap_pm1};
 pub use detail::{PartDetail, PartFrame};
 pub use falloff::{Falloff, shift_exponent};
 pub use paint_jitter::PaintJitter;
@@ -444,17 +444,77 @@ pub struct AlphaStamp {
     /// World "up" used to orient the alpha when not following the stroke
     /// (typically the camera's up vector, so the alpha appears upright).
     pub up: Vec3,
+    /// Wrap UV inside the dab (seamless pattern within one stamp).
+    pub tile: bool,
+    /// Periods of the alpha across the brush diameter when [`Self::tile`] is on.
+    pub tile_repeats: f32,
+    /// Scroll the alpha along path length (paint-roller); implies follow-stroke
+    /// orientation while rolling.
+    pub roll: bool,
+    /// Path length per alpha period, as a multiple of brush radius (default 1).
+    pub roll_distance: f32,
+    /// Extra random rotation magnitude, radians (0 = off).
+    pub rotate_jitter: f32,
+    /// Draw a new jitter sample every dab (false = once per stroke).
+    pub rotate_jitter_per_dab: bool,
 }
 
 impl AlphaStamp {
-    /// Bilinear sample at `uv` in `-1..=1`. 0 outside. If `invert` is true,
-    /// inside values are inverted (1 − v).
-    pub fn sample(&self, uv: Vec2) -> f32 {
-        if uv.x.abs() > 1.0 || uv.y.abs() > 1.0 {
-            return 0.0;
+    /// Defaults for tiling / roll / jitter on an existing alpha image.
+    pub fn new(alpha: Arc<Alpha>) -> Self {
+        Self {
+            alpha,
+            rotation: 0.0,
+            follow_stroke: false,
+            invert: false,
+            up: Vec3::Y,
+            tile: false,
+            tile_repeats: 1.0,
+            roll: false,
+            roll_distance: 1.0,
+            rotate_jitter: 0.0,
+            rotate_jitter_per_dab: false,
         }
-        let v = self.alpha.sample(uv);
+    }
+
+    /// Bilinear sample at `uv` in `-1..=1`. 0 outside unless tiling. If
+    /// `invert` is true, inside values are inverted (1 − v).
+    pub fn sample(&self, uv: Vec2) -> f32 {
+        let v = if self.tile {
+            self.alpha.sample_wrapped(uv)
+        } else if uv.x.abs() > 1.0 || uv.y.abs() > 1.0 {
+            return 0.0;
+        } else {
+            self.alpha.sample(uv)
+        };
         if self.invert { (1.0 - v).clamp(0.0, 1.0) } else { v }
+    }
+
+    /// Weight at a world-space offset from the dab centre.
+    ///
+    /// `path_dist` is arc length along the stroke to the dab (Roll).
+    pub fn weight_at(&self, offset: Vec3, tangent: Vec3, bitangent: Vec3, radius: f32, path_dist: f32) -> f32 {
+        let r = radius.max(1e-6);
+        let along = offset.dot(tangent);
+        let across = offset.dot(bitangent);
+        let (u, v) = if self.roll {
+            let dist = (self.roll_distance.max(0.05)) * r;
+            // One alpha period (−1..1) per `2 * radius * roll_distance` of path.
+            let u = wrap_pm1((path_dist + along) / dist);
+            let v = if self.tile { wrap_pm1(across / r * self.tile_repeats.max(0.05)) } else { across / r };
+            (u, v)
+        } else if self.tile {
+            let n = self.tile_repeats.max(0.05);
+            (wrap_pm1(along / r * n), wrap_pm1(across / r * n))
+        } else {
+            (along / r, across / r)
+        };
+        if self.roll || self.tile {
+            let sample = self.alpha.sample_wrapped(Vec2::new(u, v));
+            if self.invert { (1.0 - sample).clamp(0.0, 1.0) } else { sample }
+        } else {
+            self.sample(Vec2::new(u, v))
+        }
     }
 }
 
@@ -612,6 +672,8 @@ struct Dab {
     /// (zero when off). Added to the brush's own move, so it costs nothing
     /// extra per dab.
     sag: Vec3,
+    /// Arc length along the stroke to this dab centre (Roll).
+    path_dist: f32,
 }
 
 /// Pull `drag` (a movement in the view plane) onto `normal`: its length
@@ -650,6 +712,7 @@ impl Dab {
             // A mirror copy pulls along its image of down, so mirrored
             // strokes stay mirror images.
             sag: m * self.sag,
+            path_dist: self.path_dist,
             ..*self
         }
     }
@@ -836,6 +899,10 @@ pub struct Stroke {
     layer: LayerState,
     dab_count: u32,
     alpha: Option<AlphaStamp>,
+    /// Arc length of dabs placed so far (for Roll).
+    path_length: f32,
+    /// Seed for alpha rotate jitter (separate from spray RNG).
+    rotate_jitter_seed: u64,
     /// Camera forward direction, when the caller provides it.
     view: Vec3,
     /// Grab: capture everything under the brush circle on screen, through
@@ -881,6 +948,8 @@ impl Stroke {
             layer: LayerState::default(),
             dab_count: 0,
             alpha: None,
+            path_length: 0.0,
+            rotate_jitter_seed: 0,
             view: Vec3::ZERO,
             grab_through: false,
             paint: Vec3::ONE,
@@ -971,9 +1040,16 @@ impl Stroke {
             paint: self.paint,
             paint_jitter: self.paint_jitter,
             paint_seed: self.paint_seed,
+            rotate_jitter_seed: self.rotate_jitter_seed,
             alpha: self.alpha.clone(),
             events,
         })
+    }
+
+    /// Seed for alpha rotate jitter (independent of spray).
+    pub fn with_rotate_jitter_seed(mut self, seed: u64) -> Self {
+        self.rotate_jitter_seed = seed;
+        self
     }
 
     /// The camera's forward direction. Inverted Grab, Topological Move and
@@ -1176,7 +1252,7 @@ impl Stroke {
         self.carry = 0.0;
     }
 
-    fn make_dab(&self, s: StrokeSample) -> Dab {
+    fn make_dab(&self, s: StrokeSample, path_dist: f32) -> Dab {
         let p = s.pressure.clamp(0.0, 1.0);
         let [strength_curve, size_curve] = self.settings.pressure_curves;
         let radius = if self.settings.pressure_radius {
@@ -1194,8 +1270,9 @@ impl Stroke {
         // Direction in the tangent plane.
         let direction = (drag - s.normal * drag.dot(s.normal)).normalize_or_zero();
         let n = s.normal;
+        let follow = self.alpha.as_ref().is_some_and(|a| a.follow_stroke || a.roll);
         let (tangent, bitangent) = match &self.alpha {
-            Some(a) if a.follow_stroke && direction != Vec3::ZERO => (direction, n.cross(direction)),
+            Some(_) if follow && direction != Vec3::ZERO => (direction, n.cross(direction)),
             other => {
                 let up = other.as_ref().map_or(Vec3::Y, |a| a.up);
                 let mut b = up - n * up.dot(n);
@@ -1217,6 +1294,7 @@ impl Stroke {
             bitangent,
             view: self.view,
             sag: self.sag(radius, strength),
+            path_dist,
         };
         dab.rotated(self.alpha.as_ref().map_or(0.0, |a| a.rotation))
     }
@@ -1251,13 +1329,27 @@ impl Stroke {
     }
 
     fn apply_dab_inner(&mut self, mesh: &mut Mesh, s: StrokeSample, touch: &mut dyn FnMut(&Mesh, u32)) {
-        let mut base = self.make_dab(s);
+        let path_dist = match self.last_dab {
+            Some(prev) => {
+                self.path_length += s.position.distance(prev);
+                self.path_length
+            }
+            None => 0.0,
+        };
+        let mut base = self.make_dab(s, path_dist);
         base.strength *= self.strength_scale;
         self.last_dab = Some(s.position);
         self.dab_count += 1;
         let kind = self.settings.kind;
         if kind == BrushKind::SnakeHook && base.drag == Vec3::ZERO {
             return;
+        }
+        if let Some(a) = &self.alpha
+            && a.rotate_jitter > 0.0
+        {
+            let idx = if a.rotate_jitter_per_dab { self.dab_count.saturating_sub(1) } else { 0 };
+            let t = jitter_unit(self.rotate_jitter_seed, idx);
+            base = base.rotated((t * 2.0 - 1.0) * a.rotate_jitter);
         }
         if self.settings.spray > 0.0 && kind != BrushKind::SnakeHook {
             // Scatter within the tangent plane; vary strength and alpha rotation.
@@ -1384,7 +1476,7 @@ impl Stroke {
     ) {
         let Some(grab) = &self.grab else {
             // First sample: capture the vertices under each transformed brush.
-            let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s });
+            let dab = self.make_dab(StrokeSample { pressure: 1.0, ..s }, 0.0);
             let alpha = self.alpha.clone();
             let kind = self.settings.kind;
             let affine = matches!(kind, BrushKind::KelvinTwist | BrushKind::KelvinScale);
@@ -1801,12 +1893,21 @@ fn vertex_weight(mesh: &Mesh, settings: &BrushSettings, dab: &Dab, alpha: Option
         falloff_profile(settings, dab.radius, d2, alpha.is_some())
     };
     let f = match alpha {
-        Some(a) => f * a.sample(Vec2::new(offset.dot(dab.tangent), offset.dot(dab.bitangent)) / dab.radius),
+        Some(a) => f * a.weight_at(offset, dab.tangent, dab.bitangent, dab.radius, dab.path_dist),
         None => f,
     };
     let mask = if settings.kind == BrushKind::Mask { 0.0 } else { mesh.mask[v as usize] };
     let w = f * facing * (1.0 - mask);
     (w > 0.0).then_some(w)
+}
+
+/// Deterministic 0..1 sample for alpha rotate jitter (separate from spray RNG).
+fn jitter_unit(seed: u64, index: u32) -> f32 {
+    let mut h = seed ^ (u64::from(index).wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    h ^= h >> 33;
+    h = h.wrapping_mul(0xff51_afd7_ed55_8ccd);
+    h ^= h >> 33;
+    (h >> 40) as f32 / (1u64 << 24) as f32
 }
 
 /// Below this cosine between a vertex normal and the brush normal, "front
@@ -2513,19 +2614,57 @@ mod tests {
     }
 
     #[test]
+    fn roll_shifts_uv_with_path_distance() {
+        // Left half of the alpha is white. At path 0 the +tangent side is dark;
+        // after one period of travel the sample at the same offset flips.
+        let mut data = vec![0.0f32; 32 * 32];
+        for y in 0..32 {
+            for x in 0..16 {
+                data[y * 32 + x] = 1.0;
+            }
+        }
+        let stamp = AlphaStamp {
+            roll: true,
+            roll_distance: 1.0,
+            ..AlphaStamp::new(Arc::new(Alpha { name: "half".into(), size: 32, data }))
+        };
+        let tangent = Vec3::X;
+        let bitangent = Vec3::Z;
+        let radius = 0.25;
+        // Sample a point on the −tangent side (UV.x ≈ −0.25 → white half).
+        let offset = tangent * (-0.25 * radius);
+        let at_start = stamp.weight_at(offset, tangent, bitangent, radius, 0.0);
+        // Advance path by one radius → UV.x += 1, same offset lands in the black half.
+        let after_half = stamp.weight_at(offset, tangent, bitangent, radius, radius);
+        assert!(at_start > 0.9, "start of roll samples the white half: {at_start}");
+        assert!(after_half < 0.1, "after half a period samples the black half: {after_half}");
+    }
+
+    #[test]
+    fn tile_wraps_inside_the_dab() {
+        let a = BuiltinAlpha::Stripes.generate(64);
+        let stamp = AlphaStamp { tile: true, tile_repeats: 2.0, ..AlphaStamp::new(Arc::new(a)) };
+        // Outside the usual square still samples when tiling.
+        let edge = stamp.sample(Vec2::new(1.5, 0.0));
+        let wrapped = stamp.sample(Vec2::new(wrap_pm1(1.5), 0.0));
+        assert!((edge - wrapped).abs() < 1e-5);
+        assert!(edge > 0.0 || wrapped >= 0.0);
+    }
+
+    #[test]
     fn modulation_scales_dab_size_and_strength() {
         let base = BrushSettings { kind: BrushKind::Draw, radius: 0.3, strength: 0.5, ..Default::default() };
         let mut s = Stroke::new(base, Symmetry::default(), false);
         let sample = StrokeSample { position: Vec3::Y, normal: Vec3::Y, pressure: 1.0 };
-        let plain = s.make_dab(sample);
+        let plain = s.make_dab(sample, 0.0);
         s.set_modulation(2.0, 0.25);
-        let scaled = s.make_dab(sample);
+        let scaled = s.make_dab(sample, 0.0);
         assert!((scaled.radius - plain.radius * 2.0).abs() < 1e-6);
         assert!((scaled.strength - plain.strength * 0.25).abs() < 1e-6);
         // Applies even when pen pressure doesn't drive strength.
         let mut t = Stroke::new(BrushSettings { pressure_strength: false, ..base }, Symmetry::default(), false);
         t.set_modulation(1.0, 0.0);
-        assert_eq!(t.make_dab(sample).strength, 0.0);
+        assert_eq!(t.make_dab(sample, 0.0).strength, 0.0);
     }
     use oxy_mesh::primitives;
     use std::collections::HashMap;
@@ -3183,13 +3322,7 @@ mod tests {
         let settings = BrushSettings { radius: 0.5, strength: 1.0, falloff: Falloff::Constant, ..Default::default() };
         let sample = StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 };
         Stroke::new(settings, Symmetry::default(), false).add_sample(&mut plain, sample, &mut |_, _| {});
-        let stamp = AlphaStamp {
-            alpha: Arc::new(BuiltinAlpha::Stripes.generate(128)),
-            rotation: 0.0,
-            follow_stroke: false,
-            invert: false,
-            up: Vec3::Z,
-        };
+        let stamp = AlphaStamp { up: Vec3::Z, ..AlphaStamp::new(Arc::new(BuiltinAlpha::Stripes.generate(128))) };
         Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp)).add_sample(
             &mut striped,
             sample,
@@ -3216,9 +3349,8 @@ mod tests {
         let settings = BrushSettings { radius: 0.5, strength: 1.0, falloff: Falloff::Constant, ..Default::default() };
         let sample = StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 };
         let alpha = Arc::new(BuiltinAlpha::Bumps.generate(64));
-        let stamp_normal =
-            AlphaStamp { alpha: alpha.clone(), rotation: 0.0, follow_stroke: false, invert: false, up: Vec3::Z };
-        let stamp_inverted = AlphaStamp { alpha, rotation: 0.0, follow_stroke: false, invert: true, up: Vec3::Z };
+        let stamp_normal = AlphaStamp { up: Vec3::Z, ..AlphaStamp::new(alpha.clone()) };
+        let stamp_inverted = AlphaStamp { invert: true, up: Vec3::Z, ..AlphaStamp::new(alpha) };
         Stroke::new(settings, Symmetry::default(), false).with_alpha(Some(stamp_normal)).add_sample(
             &mut normal_plane,
             sample,

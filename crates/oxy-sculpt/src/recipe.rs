@@ -43,6 +43,8 @@ pub struct StrokeRecipe {
     pub paint: Vec3,
     pub paint_jitter: crate::PaintJitter,
     pub paint_seed: u64,
+    /// Seed for alpha rotate jitter (version 8+).
+    pub rotate_jitter_seed: u64,
     pub alpha: Option<AlphaStamp>,
     pub events: Vec<RecipeEvent>,
 }
@@ -80,7 +82,8 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// hash of every pixel as stored (16-bit), and does not use the name. 3
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
 /// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
-const VERSION: u8 = 7;
+/// 7 smooth paint. 8 alpha tile / roll / rotate jitter (+ seed).
+const VERSION: u8 = 8;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -92,8 +95,18 @@ impl StrokeRecipe {
             .with_grab_through(self.grab_through)
             .with_paint_color(self.paint)
             .with_paint_jitter(self.paint_jitter, self.paint_seed)
+            .with_rotate_jitter_seed(self.rotate_jitter_seed)
             .with_alpha(self.alpha.clone())
             .with_symmetry_center(self.center)
+    }
+
+    fn alpha_needs_v8(a: &AlphaStamp) -> bool {
+        a.tile
+            || a.roll
+            || (a.tile_repeats - 1.0).abs() > 1e-6
+            || (a.roll_distance - 1.0).abs() > 1e-6
+            || a.rotate_jitter != 0.0
+            || a.rotate_jitter_per_dab
     }
 
     /// Make the stroke again on `mesh`. `touch(mesh, chunk)` is called
@@ -142,8 +155,10 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let version = if self.settings.smooth_paint {
+        let version = if self.rotate_jitter_seed != 0 || self.alpha.as_ref().is_some_and(Self::alpha_needs_v8) {
             VERSION
+        } else if self.settings.smooth_paint {
+            7
         } else if self.paint_jitter != crate::PaintJitter::default() || self.paint_seed != 0 {
             6
         } else if self.settings.accumulate {
@@ -220,6 +235,17 @@ impl StrokeRecipe {
             if version >= 3 {
                 b.push(u8::from(a.invert));
             }
+            if version >= 8 {
+                b.push(u8::from(a.tile));
+                put_f32(&mut b, a.tile_repeats);
+                b.push(u8::from(a.roll));
+                put_f32(&mut b, a.roll_distance);
+                put_f32(&mut b, a.rotate_jitter);
+                b.push(u8::from(a.rotate_jitter_per_dab));
+            }
+        }
+        if version >= 8 {
+            b.extend_from_slice(&self.rotate_jitter_seed.to_le_bytes());
         }
         b.extend_from_slice(&(self.events.len() as u32).to_le_bytes());
         let put_sample = |b: &mut Vec<u8>, s: &StrokeSample| {
@@ -336,16 +362,41 @@ impl StrokeRecipe {
             let follow_stroke = r.u8()? != 0;
             let up = r.vec3()?;
             let invert = if version >= 3 { r.u8()? != 0 } else { false };
+            let (tile, tile_repeats, roll, roll_distance, rotate_jitter, rotate_jitter_per_dab) = if version >= 8 {
+                (
+                    r.u8()? != 0,
+                    r.f32()?.clamp(0.05, 32.0),
+                    r.u8()? != 0,
+                    r.f32()?.clamp(0.05, 32.0),
+                    r.f32()?.max(0.0),
+                    r.u8()? != 0,
+                )
+            } else {
+                (false, 1.0, false, 1.0, 0.0, false)
+            };
             let lookup = if version == 1 {
                 AlphaLookup::Legacy { name: &name, size, fingerprint }
             } else {
                 AlphaLookup::Content { size, id: fingerprint }
             };
             let alpha = find_alpha(lookup).ok_or_else(|| format!("alpha {name:?} not found"))?;
-            Some(AlphaStamp { alpha, rotation, follow_stroke, invert, up })
+            Some(AlphaStamp {
+                alpha,
+                rotation,
+                follow_stroke,
+                invert,
+                up,
+                tile,
+                tile_repeats,
+                roll,
+                roll_distance,
+                rotate_jitter,
+                rotate_jitter_per_dab,
+            })
         } else {
             None
         };
+        let rotate_jitter_seed = if version >= 8 { r.u64()? } else { 0 };
         let n = r.u32()? as usize;
         // The smallest event is 9 bytes.
         if n > MAX_EVENTS || n * 9 > bytes.len() {
@@ -381,6 +432,7 @@ impl StrokeRecipe {
             paint,
             paint_jitter,
             paint_seed,
+            rotate_jitter_seed,
             alpha,
             events,
         })
@@ -726,11 +778,9 @@ mod tests {
             };
             let symmetry = Symmetry { x: true, ..Default::default() };
             let alpha = AlphaStamp {
-                alpha: Arc::new(BuiltinAlpha::Scales.generate(64)),
                 rotation: 0.3,
                 follow_stroke: true,
-                invert: false,
-                up: Vec3::Y,
+                ..AlphaStamp::new(Arc::new(BuiltinAlpha::Scales.generate(64)))
             };
             let mut live = base.clone();
             // A budget, as the app uses: its plan depends on how fast the
@@ -804,6 +854,7 @@ mod tests {
             paint: Vec3::ONE,
             paint_jitter: Default::default(),
             paint_seed: 0,
+            rotate_jitter_seed: 0,
             alpha: None,
             events: vec![RecipeEvent::Modulation { size: 1.0, strength: 1.0 }],
         };
@@ -818,16 +869,8 @@ mod tests {
         junk[0] = b'X';
         assert!(StrokeRecipe::from_bytes(&junk, &none).is_err());
         // An alpha that can't be found: no recipe.
-        let with_alpha = StrokeRecipe {
-            alpha: Some(AlphaStamp {
-                alpha: Arc::new(BuiltinAlpha::Noise.generate(32)),
-                rotation: 0.0,
-                follow_stroke: false,
-                invert: false,
-                up: Vec3::Y,
-            }),
-            ..recipe
-        };
+        let with_alpha =
+            StrokeRecipe { alpha: Some(AlphaStamp::new(Arc::new(BuiltinAlpha::Noise.generate(32)))), ..recipe };
         assert!(StrokeRecipe::from_bytes(&with_alpha.to_bytes(), &none).is_err());
     }
 
@@ -1103,12 +1146,12 @@ mod tests {
             paint: Vec3::ONE,
             paint_jitter: Default::default(),
             paint_seed: 0,
+            rotate_jitter_seed: 0,
             alpha: Some(AlphaStamp {
-                alpha: Arc::new(original.clone()),
                 rotation: 0.2,
                 follow_stroke: true,
                 invert: true,
-                up: Vec3::Y,
+                ..AlphaStamp::new(Arc::new(original.clone()))
             }),
             events: vec![],
         };

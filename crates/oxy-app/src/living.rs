@@ -2366,6 +2366,12 @@ fn alpha_same(a: &Option<AlphaStamp>, b: &Option<AlphaStamp>) -> bool {
                 && a.follow_stroke == b.follow_stroke
                 && a.invert == b.invert
                 && a.up == b.up
+                && a.tile == b.tile
+                && a.tile_repeats == b.tile_repeats
+                && a.roll == b.roll
+                && a.roll_distance == b.roll_distance
+                && a.rotate_jitter == b.rotate_jitter
+                && a.rotate_jitter_per_dab == b.rotate_jitter_per_dab
         }
         _ => false,
     }
@@ -2383,12 +2389,20 @@ fn apply_setting(recipe: &mut StrokeRecipe, setting: StrokeSetting, alphas: &[Ar
         StrokeSetting::Alpha(None) => recipe.alpha = None,
         StrokeSetting::Alpha(Some(index)) => {
             if let Some(alpha) = alphas.get(index).cloned() {
-                let (rotation, follow, invert, up) = recipe
-                    .alpha
-                    .as_ref()
+                let prev = recipe.alpha.as_ref();
+                let (rotation, follow, invert, up) = prev
                     .map(|stamp| (stamp.rotation, stamp.follow_stroke, stamp.invert, stamp.up))
                     .unwrap_or((0.0, true, false, Vec3::Y));
-                recipe.alpha = Some(AlphaStamp { alpha, rotation, follow_stroke: follow, invert, up });
+                let mut stamp = AlphaStamp { rotation, follow_stroke: follow, invert, up, ..AlphaStamp::new(alpha) };
+                if let Some(p) = prev {
+                    stamp.tile = p.tile;
+                    stamp.tile_repeats = p.tile_repeats;
+                    stamp.roll = p.roll;
+                    stamp.roll_distance = p.roll_distance;
+                    stamp.rotate_jitter = p.rotate_jitter;
+                    stamp.rotate_jitter_per_dab = p.rotate_jitter_per_dab;
+                }
+                recipe.alpha = Some(stamp);
             }
         }
         StrokeSetting::AlphaInvert(invert) => {

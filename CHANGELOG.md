@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Added
+
+- **Alpha Roll, Tile and rotate jitter** ([RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)). **Roll** scrolls a tileable alpha along the stroke (paint-roller); **Roll distance** stretches or compresses it. **Tile** wraps the pattern inside each dab; **Repeats** sets density. **Rotate jitter** (per stroke or per dab) turns the alpha randomly without Spray. Built-in **Scale strip** is a tileable U-scale row for rolling along limbs.
+
 ### Changed
 
 - **Scale alphas.** Rebuilt the procedural **Scales** stamp as overlapping U-plates, and added **Snake scales**, **Diamond scales**, and a single **Scale plate** for Stamp strokes (all original CC0). [RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)

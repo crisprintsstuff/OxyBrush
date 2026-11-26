@@ -43,13 +43,7 @@ fn main() {
     ] {
         let settings =
             BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, accumulate, ..Default::default() };
-        let stamp = with_alpha.then(|| AlphaStamp {
-            alpha: alpha.clone(),
-            rotation: 0.0,
-            follow_stroke: true,
-            invert: false,
-            up: Vec3::Y,
-        });
+        let stamp = with_alpha.then(|| AlphaStamp { follow_stroke: true, ..AlphaStamp::new(alpha.clone()) });
         let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(stamp);
         let n = 60;
         let t = Instant::now();
@@ -83,13 +77,7 @@ fn main() {
     ] {
         let settings =
             BrushSettings { kind, radius, spacing: 0.1, focal_shift, gravity, accumulate, ..Default::default() };
-        let stamp = with_alpha.then(|| AlphaStamp {
-            alpha: alpha.clone(),
-            rotation: 0.0,
-            follow_stroke: true,
-            invert: false,
-            up: Vec3::Y,
-        });
+        let stamp = with_alpha.then(|| AlphaStamp { follow_stroke: true, ..AlphaStamp::new(alpha.clone()) });
         let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_alpha(stamp).with_recording();
         let n = 60;
         let t = Instant::now();

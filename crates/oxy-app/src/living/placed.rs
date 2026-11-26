@@ -892,6 +892,7 @@ mod tests {
             paint: Vec3::ONE,
             paint_jitter: Default::default(),
             paint_seed: 0,
+            rotate_jitter_seed: 0,
             alpha: None,
             events,
         };

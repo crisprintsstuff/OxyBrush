@@ -59,6 +59,12 @@ pub struct BrushPreset {
     pub alpha_rotation_deg: f32,
     pub alpha_follow_stroke: bool,
     pub alpha_invert: bool,
+    pub alpha_tile: bool,
+    pub alpha_tile_repeats: f32,
+    pub alpha_roll: bool,
+    pub alpha_roll_distance: f32,
+    pub alpha_rotate_jitter_deg: f32,
+    pub alpha_rotate_jitter_per_dab: bool,
     /// Shape used when kind is BrushKind::InsertPrimitive.
     pub insert_shape: crate::InsertShape,
 }
@@ -92,6 +98,12 @@ impl BrushPreset {
             alpha_rotation_deg: 0.0,
             alpha_follow_stroke: false,
             alpha_invert: false,
+            alpha_tile: false,
+            alpha_tile_repeats: 1.0,
+            alpha_roll: false,
+            alpha_roll_distance: 1.0,
+            alpha_rotate_jitter_deg: 0.0,
+            alpha_rotate_jitter_per_dab: false,
             insert_shape: crate::InsertShape::Sphere,
         }
     }
@@ -137,6 +149,18 @@ impl BrushPreset {
         kv("alpha_rotation_deg", self.alpha_rotation_deg.to_string());
         kv("alpha_follow_stroke", self.alpha_follow_stroke.to_string());
         kv("alpha_invert", self.alpha_invert.to_string());
+        if self.alpha_tile {
+            kv("alpha_tile", "true".into());
+            kv("alpha_tile_repeats", self.alpha_tile_repeats.to_string());
+        }
+        if self.alpha_roll {
+            kv("alpha_roll", "true".into());
+            kv("alpha_roll_distance", self.alpha_roll_distance.to_string());
+        }
+        if self.alpha_rotate_jitter_deg != 0.0 {
+            kv("alpha_rotate_jitter_deg", self.alpha_rotate_jitter_deg.to_string());
+            kv("alpha_rotate_jitter_per_dab", self.alpha_rotate_jitter_per_dab.to_string());
+        }
         kv("insert_shape", shape_key(self.insert_shape).into());
         s
     }
@@ -225,6 +249,24 @@ impl BrushPreset {
         }
         if let Some(b) = flag("alpha_invert") {
             p.alpha_invert = b;
+        }
+        if let Some(b) = flag("alpha_tile") {
+            p.alpha_tile = b;
+        }
+        if let Some(x) = num("alpha_tile_repeats", 0.05..=32.0) {
+            p.alpha_tile_repeats = x;
+        }
+        if let Some(b) = flag("alpha_roll") {
+            p.alpha_roll = b;
+        }
+        if let Some(x) = num("alpha_roll_distance", 0.05..=32.0) {
+            p.alpha_roll_distance = x;
+        }
+        if let Some(x) = num("alpha_rotate_jitter_deg", 0.0..=180.0) {
+            p.alpha_rotate_jitter_deg = x;
+        }
+        if let Some(b) = flag("alpha_rotate_jitter_per_dab") {
+            p.alpha_rotate_jitter_per_dab = b;
         }
         if let Some(s) = get("insert_shape").and_then(shape_from_key) {
             p.insert_shape = s;

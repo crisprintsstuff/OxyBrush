@@ -3310,11 +3310,17 @@ impl Editor {
         // Shift/Ctrl stand-ins (Smooth, Mask) don't use the alpha.
         let stamp =
             self.alpha.filter(|_| kind == self.brush_kind).and_then(|i| self.alphas.get(i)).map(|a| AlphaStamp {
-                alpha: a.clone(),
                 rotation: self.alpha_rotation_deg.to_radians() + extra_rotation,
                 follow_stroke: self.alpha_follow_stroke,
                 invert: self.alpha_invert,
                 up: self.camera.up(),
+                tile: self.alpha_tile,
+                tile_repeats: self.alpha_tile_repeats,
+                roll: self.alpha_roll,
+                roll_distance: self.alpha_roll_distance,
+                rotate_jitter: self.alpha_rotate_jitter_deg.to_radians(),
+                rotate_jitter_per_dab: self.alpha_rotate_jitter_per_dab,
+                ..AlphaStamp::new(a.clone())
             });
         let scene_targets = if kind == BrushKind::SceneProject {
             let active = self.scene.active_index();
@@ -3328,9 +3334,11 @@ impl Editor {
         } else {
             Vec::new()
         };
+        let rotate_seed = if self.alpha_rotate_jitter_deg > 0.0 { oxy_sculpt::PaintJitter::fresh_seed() } else { 0 };
         let stroke = Stroke::new(settings, self.symmetry, invert)
             .with_symmetry_center(self.symmetry_center())
             .with_alpha(stamp)
+            .with_rotate_jitter_seed(rotate_seed)
             .with_view(self.camera.forward())
             .with_grab_through(self.grab_through && (kind == BrushKind::Grab || kind == BrushKind::KelvinGrab))
             .with_paint_color(self.paint_color)
@@ -3422,6 +3430,12 @@ impl Editor {
             alpha_rotation_deg: self.alpha_rotation_deg,
             alpha_follow_stroke: self.alpha_follow_stroke,
             alpha_invert: self.alpha_invert,
+            alpha_tile: self.alpha_tile,
+            alpha_tile_repeats: self.alpha_tile_repeats,
+            alpha_roll: self.alpha_roll,
+            alpha_roll_distance: self.alpha_roll_distance,
+            alpha_rotate_jitter_deg: self.alpha_rotate_jitter_deg,
+            alpha_rotate_jitter_per_dab: self.alpha_rotate_jitter_per_dab,
             insert_shape: self.insert_shape,
         }
     }
@@ -3454,6 +3468,12 @@ impl Editor {
         self.alpha_rotation_deg = p.alpha_rotation_deg;
         self.alpha_follow_stroke = p.alpha_follow_stroke;
         self.alpha_invert = p.alpha_invert;
+        self.alpha_tile = p.alpha_tile;
+        self.alpha_tile_repeats = p.alpha_tile_repeats;
+        self.alpha_roll = p.alpha_roll;
+        self.alpha_roll_distance = p.alpha_roll_distance;
+        self.alpha_rotate_jitter_deg = p.alpha_rotate_jitter_deg;
+        self.alpha_rotate_jitter_per_dab = p.alpha_rotate_jitter_per_dab;
         self.status = format!("Brush preset: {}", p.name);
         self.alpha = match &p.alpha {
             None => None,

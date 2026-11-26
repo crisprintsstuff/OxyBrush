@@ -1,7 +1,8 @@
 # RFC 0047 — Better alphas: pack, tile, roll, rotate
 
-- **Status:** Phase 3 (scale pack) in progress — Scales rebuilt; Snake scales,
-  Diamond scales, Scale plate added. Phase 1–2 and **Roll** still open
+- **Status:** Phases 1–4 implemented — rotate jitter, dab Tile, scale pack
+  (including Scale strip), and **Roll** + Roll distance. Further pack fillers
+  optional.
 - **Builds on:** [RFC 0030 — Alpha library](0030-alpha-library.md),
   alphas in Phase 3.3 ([ROADMAP](../ROADMAP.md))
 - **Related:** [RFC 0041 — Paint color jitter](0041-paint-color-jitter.md)
