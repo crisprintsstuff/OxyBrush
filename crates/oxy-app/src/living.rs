@@ -2691,7 +2691,7 @@ impl Editor {
             .save_part(&dir, detail, category)
             .map_err(|e| format!("Failed to save the recipe: {e}"))?;
 
-        self.parts_bin_open = true;
+        self.show_parts_bin = true;
         self.status = format!("Saved {name} to the Recipe Box");
         Ok(path)
     }

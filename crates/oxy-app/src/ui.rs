@@ -907,7 +907,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.toggle_settings_panel();
                 }
                 ui.checkbox(&mut ed.show_parts_bin, "Recipe Box")
-                    .on_hover_text("Show the pull-out Recipe Box drawer beside the brush shelf.");
+                    .on_hover_text("Show the Recipe Box window (movable; close with ×). Drag a recipe onto the model to place it.");
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -10427,115 +10427,41 @@ mod tests {
     }
 
     #[test]
-    fn windows_cover_the_recipe_box_handle() {
-        // The drawer used to be on the foreground layer, drawn over every
-        // window: a window over its handle showed the handle on top and
-        // let it take the window's clicks.
+    fn recipe_box_window_is_shown_and_remembered() {
         let mut ed = Editor::default();
         ed.show_welcome = false;
-        ed.shelf = ShelfPosition::Left;
+        assert!(!ed.show_parts_bin, "Recipe Box starts hidden; open from View > Recipe Box");
         let ctx = egui::Context::default();
         test_apply_theme(&ctx, false, 1.0, ed.layout);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
-        let run = |ed: &mut Editor, events: Vec<egui::Event>, cover: Option<egui::Pos2>| {
-            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-            let mut out = ctx.run_ui(raw, |ui| {
-                draw(ui, ed);
-                if let Some(at) = cover {
-                    egui::Window::new("Cover")
-                        .fixed_pos(at - egui::vec2(40.0, 40.0))
-                        .fixed_size([160.0, 120.0])
-                        .show(ui.ctx(), |ui| ui.label("A window over the handle"));
-                }
-            });
-            out.textures_delta.clear();
-        };
-        for _ in 0..4 {
-            run(&mut ed, vec![], None);
-        }
-        let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle").center();
-        for _ in 0..3 {
-            run(&mut ed, vec![egui::Event::PointerMoved(handle)], Some(handle));
-        }
-        assert_eq!(
-            ctx.layer_id_at(handle).map(|l| l.order),
-            Some(egui::Order::Middle),
-            "the window is on top of the handle"
-        );
-        let button = |pressed| egui::Event::PointerButton {
-            pos: handle,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: Default::default(),
-        };
-        run(&mut ed, vec![button(true)], Some(handle));
-        run(&mut ed, vec![button(false)], Some(handle));
-        run(&mut ed, vec![], Some(handle));
-        assert!(!ed.parts_bin_open, "a click on the window doesn't reach the handle under it");
-    }
-
-    #[test]
-    fn parts_bin_drawer_follows_brush_shelf_and_toggles() {
-        let mut ed = Editor::default();
-        ed.show_welcome = false;
-        assert!(!ed.parts_bin_open);
-        let ctx = egui::Context::default();
-        test_apply_theme(&ctx, false, 1.0, ed.layout);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
-
-        let step = |ed: &mut Editor, frames: usize, time_start: f64| -> egui::Rect {
-            let mut canvas = egui::Rect::NOTHING;
+        let step = |ed: &mut Editor, frames: usize, t0: f64| {
             for k in 0..frames {
                 let raw = egui::RawInput {
                     screen_rect: Some(screen),
-                    time: Some(time_start + k as f64 * 0.05),
+                    time: Some(t0 + k as f64 * 0.05),
                     ..Default::default()
                 };
                 let mut out = ctx.run_ui(raw, |ui| {
-                    canvas = draw(ui, ed).1;
+                    let _ = draw(ui, ed);
                 });
                 out.textures_delta.clear();
             }
-            canvas
         };
+        step(&mut ed, 3, 1.0);
+        assert!(crate::parts_ui::last_window_rect(&ctx).is_none(), "hidden: no window");
 
-        // 1. Shelf Left: handle sits at left edge of canvas; clicking toggles drawer open.
-        ed.shelf = ShelfPosition::Left;
-        let canvas = step(&mut ed, 4, 1.0);
-        let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on left");
-        assert!((handle.min.x - canvas.min.x).abs() < 2.0, "handle={handle:?} canvas={canvas:?}");
-        click_at(&mut ed, &ctx, handle.center());
-        assert!(ed.parts_bin_open, "clicking handle pulls out the Recipe Box drawer");
+        ed.show_parts_bin = true;
+        step(&mut ed, 4, 2.0);
+        let win = crate::parts_ui::last_window_rect(&ctx).expect("Recipe Box window when shown");
+        assert!(win.width() > 100.0 && win.height() > 80.0, "window={win:?}");
 
-        step(&mut ed, 10, 2.0);
-        let drawer = crate::parts_ui::last_drawer_rect(&ctx).expect("drawer rect when open");
-        let open_handle = crate::parts_ui::last_handle_rect(&ctx).unwrap();
-        assert!(drawer.width() > 100.0, "drawer did not expand: {drawer:?}");
-        assert!(open_handle.min.x > canvas.min.x + 100.0);
-
-        click_at(&mut ed, &ctx, open_handle.center());
-        assert!(!ed.parts_bin_open, "clicking open handle collapses the Recipe Box drawer");
-
-        // 2. Shelf Right: settle closed and check right-edge alignment.
-        ed.shelf = ShelfPosition::Right;
-        let canvas = step(&mut ed, 12, 4.0);
-        let right_handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on right");
-        assert!((right_handle.max.x - canvas.max.x).abs() < 2.0, "handle={right_handle:?} canvas={canvas:?}");
-        click_at(&mut ed, &ctx, right_handle.center());
-        assert!(ed.parts_bin_open, "right-edge handle opens drawer");
-
-        // 3. Shelf Bottom: reset closed and check bottom-edge alignment.
-        ed.parts_bin_open = false;
-        ed.shelf = ShelfPosition::Bottom;
-        ed.quick_bar = QuickBar::Toolbar;
-        let canvas = step(&mut ed, 12, 8.0);
-        let bottom_handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on bottom");
-        assert!(
-            (bottom_handle.max.y - canvas.max.y).abs() < 2.0
-                && (bottom_handle.center().x - canvas.center().x).abs() < 2.0,
-            "handle={bottom_handle:?} canvas={canvas:?}"
-        );
-        click_at(&mut ed, &ctx, bottom_handle.center());
-        assert!(ed.parts_bin_open, "bottom-edge handle opens drawer");
+        let settings = ed.settings();
+        assert!(settings.recipe_box);
+        assert!(settings.to_text().contains("recipe_box = true"));
+        let back = crate::settings::Settings::from_text(&settings.to_text());
+        assert!(back.recipe_box);
+        let mut loaded = Editor::default();
+        loaded.apply_settings(&back);
+        assert!(loaded.show_parts_bin, "showing the Recipe Box survives a restart");
     }
 }

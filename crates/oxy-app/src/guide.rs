@@ -132,7 +132,7 @@ The Spray slider scatters dabs around the stroke. The Stabilizer slider makes th
     Topic {
         title: "Recipe Box",
         keywords: "recipe recipes box kitbash detail details reuse place drop move turn scale mirror pair linked unlink save back new library",
-        body: "The Recipe Box is a library of reusable sculpted details: an eye, a scar, a row of scales. Pull it out from the edge of the brush shelf (View > Recipe Box). Living strokes must be on.\n\n\
+        body: "The Recipe Box is a library of reusable sculpted details: an eye, a scar, a row of scales. Open it from View > Recipe Box (a movable window; close with ×, and the choice is remembered). Living strokes must be on.\n\n\
 - To make a recipe, sculpt the detail, select its strokes in the Strokes window and choose Save as recipe….\n\
 - Drag a recipe onto a model to sculpt it there: Place one, or Mirror pair for both sides. It's sculpted again on that surface, so any model works.\n\
 - Click a recipe slot to rename it, change its category, move it earlier or later, or delete it from the box. Recipes in the same category appear under Variations. Click a variation to place it or drag it in the row to reorder it.\n\

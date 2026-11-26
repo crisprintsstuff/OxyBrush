@@ -1337,7 +1337,7 @@ pub struct Editor {
     pub parts_library: crate::parts::PartsLibrary,
     /// Where parts are saved; None in automated runs and tests.
     pub parts_dir: Option<std::path::PathBuf>,
-    /// Show the pull-out Recipe Box drawer beside the brush shelf.
+    /// Show the movable Recipe Box window (View > Recipe Box).
     pub show_parts_bin: bool,
     /// The Shading window: ambient occlusion, cavity, hard edges and the
     /// inactive pieces look, for the macOS menu bar, which can't hold
@@ -1346,8 +1346,6 @@ pub struct Editor {
     pub show_references: bool,
     pub reference_alignment: Option<crate::references::Alignment>,
     reference_pick_pressed: bool,
-    /// Whether the Recipe Box drawer is currently slid open.
-    pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
     #[allow(dead_code)]
     pub request_export_part: Option<oxy_sculpt::PartDetail>,
@@ -1707,12 +1705,11 @@ impl Default for Editor {
             request_import_preset: false,
             parts_library: crate::parts::PartsLibrary::default(),
             parts_dir: None,
-            show_parts_bin: true,
+            show_parts_bin: false, // remembered in settings as `recipe_box`; open from View > Recipe Box
             show_shading: false,
             show_references: false,
             reference_alignment: None,
             reference_pick_pressed: false,
-            parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,
             shelf: Default::default(),
@@ -2171,6 +2168,7 @@ impl Editor {
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
             narrow_shelf: self.narrow_shelf,
+            recipe_box: self.show_parts_bin,
             settings_panel: self.show_inspector,
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
@@ -2484,6 +2482,7 @@ impl Editor {
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
         self.narrow_shelf = s.narrow_shelf;
+        self.show_parts_bin = s.recipe_box;
         self.show_inspector = s.settings_panel;
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
