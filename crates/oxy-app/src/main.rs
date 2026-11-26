@@ -48,6 +48,7 @@ mod select_shapes;
 mod settings;
 mod snapshot;
 mod support;
+mod surface_noise_ui;
 mod tips;
 mod title_bar;
 mod tube;

@@ -222,6 +222,14 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
         ),
         cmd(
             ed,
+            Cmd::SurfaceNoiseWindow,
+            "surface noise noisemaker displace procedural pores grit turbulent cellular octaves seed",
+            |e| {
+                e.surface_noise_open();
+            },
+        ),
+        cmd(
+            ed,
             Cmd::ColorFilterWindow,
             "vertex color filter hue saturation value brightness contrast smooth fill rgb paint",
             |e| e.show_color_filter = true,
