@@ -32,6 +32,8 @@ pub enum MenuId {
     RedoScene,
     /// Boolean of the active piece with piece `.0`.
     Boolean(u64, oxy_topo::BooleanOp),
+    /// Project the active piece onto piece `.0` (RFC 0050 Phase 1).
+    ProjectOnto(u64),
     /// Symmetrize along axis `.0` (0 X, 1 Y, 2 Z), keeping the positive side when `.1`.
     Symmetrize(usize, bool),
     Gizmo(crate::pose::GizmoMode),
@@ -325,8 +327,21 @@ fn mesh_menu(ed: &Editor, busy: bool) -> Vec<Node> {
         cmd_on(Cmd::Remesh, "Voxel remesh", !busy),
         cmd_on(Cmd::OxyRemesh, "OxyRemesh", !busy),
         cmd_on(Cmd::Decimate, "Decimate", !busy),
+        cmd_on(Cmd::ProjectDetail, "Project detail", !busy),
     ]);
     let active = ed.scene.try_active().map(|p| p.id);
+    let project_onto: Vec<Node> = ed
+        .scene
+        .pieces
+        .iter()
+        .filter(|p| Some(p.id) != active)
+        .map(|p| item(MenuId::ProjectOnto(p.id), p.name.clone()))
+        .collect();
+    v.push(Node::Sub {
+        label: "Project onto…".into(),
+        enabled: active.is_some() && !busy && !project_onto.is_empty(),
+        items: project_onto,
+    });
     let others: Vec<Node> = ed
         .scene
         .pieces
@@ -604,6 +619,7 @@ pub fn activate(ed: &mut Editor, ctx: &egui::Context, id: MenuId) -> Option<UiAc
         MenuId::UndoScene => ed.undo_scene(),
         MenuId::RedoScene => ed.redo_scene(),
         MenuId::Boolean(piece, op) => ed.boolean_operation(piece, op),
+        MenuId::ProjectOnto(piece) => ed.project_detail_onto(Some(piece)),
         MenuId::Symmetrize(axis, keep_positive) => ed.symmetrize(axis, keep_positive),
         MenuId::Gizmo(m) => ed.toggle_gizmo(m),
         MenuId::SubdivisionQuads => ed.subdivision_scheme = oxy_mesh::multires::Scheme::CatmullClark,

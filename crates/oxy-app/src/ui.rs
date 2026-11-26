@@ -4998,6 +4998,27 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
         ed.decimate_active();
     }
+    if tips::button_on(ui, !busy, "Project detail", Cmd::ProjectDetail).clicked() {
+        ed.project_detail();
+    }
+    tips::menu(ui, "Project onto…", plain::PROJECT_ONTO, |ui| {
+        let Some(active_id) = ed.scene.try_active().map(|p| p.id) else {
+            ui.label(RichText::new("Needs a piece").weak());
+            return;
+        };
+        let other_pieces: Vec<(u64, String)> =
+            ed.scene.pieces.iter().filter(|p| p.id != active_id).map(|p| (p.id, p.name.clone())).collect();
+        if other_pieces.is_empty() {
+            ui.label(RichText::new("Needs a second piece").weak());
+        } else {
+            for (id, name) in other_pieces {
+                if tips::hover(ui.add_enabled(!busy, egui::Button::new(&name)), plain::PROJECT_ONTO).clicked() {
+                    ed.project_detail_onto(Some(id));
+                    ui.close();
+                }
+            }
+        }
+    });
     tips::menu(ui, "Boolean", plain::BOOLEAN_MENU, |ui| {
         let Some(active_id) = ed.scene.try_active().map(|p| p.id) else {
             ui.label(RichText::new("Needs a piece").weak());
@@ -7424,6 +7445,9 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     );
     if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
         ed.oxyremesh_active();
+    }
+    if tips::button_on(ui, !busy, "Project detail", Cmd::ProjectDetail).clicked() {
+        ed.project_detail();
     }
     ui.horizontal_wrapped(|ui| {
         ui.label("Keep");
