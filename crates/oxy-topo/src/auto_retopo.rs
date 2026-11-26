@@ -317,8 +317,9 @@ fn boundary_edge_count(m: &Mesh) -> usize {
 /// Lattice UVs for isoline extract: BFS accumulating Instant Meshes integer jumps.
 /// Fit UV differences to the combed orientation field on each connected
 /// component. Shared vertex coordinates keep the relaxed charts continuous;
-/// integer rebasing leaves the grid unchanged. Singularities are not cut yet.
-fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Vec<[Vec2; 3]> {
+/// integer rebasing leaves the grid unchanged. Return None when a residual
+/// quarter turn requires a seam that this continuous fit cannot represent.
+fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Option<Vec<[Vec2; 3]>> {
     let normals: Vec<_> = g.normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
     let mut frames: Vec<_> = normals
         .iter()
@@ -360,6 +361,20 @@ fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rh
         }
     }
 
+    // The spanning tree fixes representatives locally. An edge outside
+    // the tree can still prefer another quarter turn when it closes a loop.
+    if neighbors.iter().enumerate().any(|(i, row)| {
+        row.iter().map(|&j| j as usize).filter(|&j| i < j).any(|j| {
+            let transported = Quat::from_rotation_arc(normals[i], normals[j]) * frames[i];
+            let current = transported.dot(frames[j]);
+            let perpendicular = transported.dot(normals[j].cross(frames[j]));
+            // At a tie either frame is valid. Allow for transport rounding.
+            current.abs().max(perpendicular.abs()) > current + 1e-5
+        })
+    }) {
+        return None;
+    }
+
     // The normal equation for each free vertex is the average of its
     // neighbors minus the field's desired outgoing edge differences.
     let bias: Vec<Vec2> = neighbors
@@ -377,14 +392,16 @@ fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rh
         }
     }
 
-    triangles
-        .iter()
-        .map(|triangle| {
-            let chart = triangle.map(|v| coordinates[v as usize]);
-            let offset = chart[0].floor();
-            chart.map(|uv| uv - offset)
-        })
-        .collect()
+    Some(
+        triangles
+            .iter()
+            .map(|triangle| {
+                let chart = triangle.map(|v| coordinates[v as usize]);
+                let offset = chart[0].floor();
+                chart.map(|uv| uv - offset)
+            })
+            .collect(),
+    )
 }
 
 fn build_field_uvs(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Vec<glam::Vec2> {
@@ -432,8 +449,7 @@ fn extract_with_isoline(
     let min_faces = (face_budget / 2).max(256);
     // A single continuous chart cannot cover a closed surface without
     // folds. Until we cut at singularities, only try the fit on open inputs.
-    if !input_watertight {
-        let charts = fit_field_charts(graph, o, &mesh.triangles, rho);
+    if !input_watertight && let Some(charts) = fit_field_charts(graph, o, &mesh.triangles, rho) {
         let unfolded = charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 1e-6);
         if unfolded
             && let Some(iso) =
@@ -1771,7 +1787,7 @@ mod tests {
         let graph = Graph::from_mesh(&mesh, 40.0);
         let orientations: Vec<_> =
             graph.normals.iter().enumerate().map(|(i, &normal)| rosy(Vec3::X, normal, i % SO)).collect();
-        let charts = fit_field_charts(&graph, &orientations, &mesh.triangles, 0.5);
+        let charts = fit_field_charts(&graph, &orientations, &mesh.triangles, 0.5).expect("consistent frames");
         for (&triangle, chart) in mesh.triangles.iter().zip(&charts) {
             for i in 1..3 {
                 let edge = graph.positions[triangle[i] as usize] - graph.positions[triangle[0] as usize];
@@ -1781,6 +1797,17 @@ mod tests {
         let out = crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, 0.5)
             .expect("field charts must connect across the triangle seams");
         assert!(out.faces.iter().any(|face| face.len() == 4));
+    }
+
+    #[test]
+    fn fitted_charts_reject_a_loop_with_quarter_turn_mismatch() {
+        let mesh = Mesh::new(vec![Vec3::ZERO, Vec3::X, Vec3::Y], vec![[0, 1, 2]]);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        // Each edge prefers a 30-degree change, but following all three
+        // changes around the triangle accumulates a quarter turn.
+        let orientations: Vec<_> =
+            (0..3).map(|i| rot_about(Vec3::Z, i as f32 * std::f32::consts::FRAC_PI_6, Vec3::X)).collect();
+        assert!(fit_field_charts(&graph, &orientations, &mesh.triangles, 1.0).is_none());
     }
 
     #[test]

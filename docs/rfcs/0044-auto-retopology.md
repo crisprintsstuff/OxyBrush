@@ -97,7 +97,8 @@ interior integer crossings before welding the graph. For independent charts,
 both endpoints of every shared edge must agree under a single quarter turn
 and integer translation. That gives future solvers an extraction contract
 to test on open and closed fixtures. The first field fit combs equivalent
-quarter turns along the vertex graph and relaxes a least-squares fit of UV
+quarter turns along the vertex graph. It rejects any edge that still needs a
+different quarter turn after combing and relaxes a least-squares fit of UV
 edge differences. Triangle charts use integer offsets of those shared
 coordinates. Open inputs can use the fitted charts when they are unfolded and pass the
 face-count and boundary checks. Closed inputs still use the existing lattice
