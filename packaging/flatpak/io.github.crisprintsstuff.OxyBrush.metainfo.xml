@@ -52,6 +52,11 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.1.2" date="2026-11-26" type="stable">
+      <description>
+        <p>OxyRemesh no longer replaces closed sculpts with Swiss-cheese meshes: dual cleanup, hole fill, and a closed voxel remesh fallback when the field shell cannot enclose.</p>
+      </description>
+    </release>
     <release version="4.1.1" date="2026-11-26" type="stable">
       <description>
         <p>Inspector declutter with Focus layout and mode-aware panels; Topology section headers for remesh tools.</p>
