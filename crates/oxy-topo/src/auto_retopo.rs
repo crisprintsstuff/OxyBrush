@@ -14,7 +14,7 @@
 //! Phase 3 adds orientation stroke constraints, singularity attractors,
 //! and adaptivity / anisotropy knobs (paper §3.7).
 
-use glam::Vec3;
+use glam::{Quat, Vec2, Vec3};
 use oxy_mesh::{Mesh, MeshData, WHITE};
 use std::collections::{HashMap, HashSet};
 
@@ -206,7 +206,7 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
         smooth_position(&graph, &o, &mut p, rho, opts.extrinsic, adaptivity, anisotropy);
     }
 
-    let extracted = extract_with_isoline(mesh, &graph, &o, &p, rho)?;
+    let extracted = extract_with_isoline(mesh, &graph, &o, &p, rho, input_watertight)?;
     if extracted.faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
@@ -315,6 +315,78 @@ fn boundary_edge_count(m: &Mesh) -> usize {
 }
 
 /// Lattice UVs for isoline extract: BFS accumulating Instant Meshes integer jumps.
+/// Fit UV differences to the combed orientation field on each connected
+/// component. Shared vertex coordinates keep the relaxed charts continuous;
+/// integer rebasing leaves the grid unchanged. Singularities are not cut yet.
+fn fit_field_charts(g: &Graph, orientations: &[Vec3], triangles: &[[u32; 3]], rho: f32) -> Vec<[Vec2; 3]> {
+    let normals: Vec<_> = g.normals.iter().map(|n| n.normalize_or(Vec3::Y)).collect();
+    let mut frames: Vec<_> = normals
+        .iter()
+        .zip(orientations)
+        .map(|(&normal, &orientation)| project_tangent(orientation, normal).normalize_or(tangent_basis(normal).0))
+        .collect();
+    let mut neighbors = g.neighbors.clone();
+    neighbors.iter_mut().for_each(|row| row.sort_unstable());
+    let edge_step = |i: usize, j: usize, frames: &[Vec3]| {
+        let edge = (g.positions[j] - g.positions[i]) / rho;
+        let along = (frames[i] + frames[j]) * 0.5;
+        let across = (normals[i].cross(frames[i]) + normals[j].cross(frames[j])) * 0.5;
+        Vec2::new(edge.dot(along), edge.dot(across))
+    };
+
+    let mut coordinates = vec![Vec2::ZERO; g.len()];
+    let mut seen = vec![false; g.len()];
+    let mut anchored = vec![false; g.len()];
+    let mut queue = std::collections::VecDeque::new();
+    for root in 0..g.len() {
+        if seen[root] {
+            continue;
+        }
+        seen[root] = true;
+        anchored[root] = true;
+        queue.push_back(root);
+        while let Some(i) = queue.pop_front() {
+            for &j in &neighbors[i] {
+                let j = j as usize;
+                if seen[j] {
+                    continue;
+                }
+                let transported = Quat::from_rotation_arc(normals[i], normals[j]) * frames[i];
+                frames[j] = best_rosy_match(frames[j], normals[j], transported);
+                coordinates[j] = coordinates[i] + edge_step(i, j, &frames);
+                seen[j] = true;
+                queue.push_back(j);
+            }
+        }
+    }
+
+    // The normal equation for each free vertex is the average of its
+    // neighbors minus the field's desired outgoing edge differences.
+    let bias: Vec<Vec2> = neighbors
+        .iter()
+        .enumerate()
+        .map(|(i, row)| row.iter().map(|&j| edge_step(i, j as usize, &frames)).sum())
+        .collect();
+    for _ in 0..24 {
+        for (i, row) in neighbors.iter().enumerate() {
+            if anchored[i] {
+                continue;
+            }
+            let sum: Vec2 = row.iter().map(|&j| coordinates[j as usize]).sum();
+            coordinates[i] = (sum - bias[i]) / row.len() as f32;
+        }
+    }
+
+    triangles
+        .iter()
+        .map(|triangle| {
+            let chart = triangle.map(|v| coordinates[v as usize]);
+            let offset = chart[0].floor();
+            chart.map(|uv| uv - offset)
+        })
+        .collect()
+}
+
 fn build_field_uvs(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Vec<glam::Vec2> {
     use glam::Vec2;
     let n = g.len();
@@ -352,11 +424,26 @@ fn extract_with_isoline(
     o: &[Vec3],
     p: &[Vec3],
     rho: f32,
+    input_watertight: bool,
 ) -> Result<Extracted, AutoRetopoError> {
     // Isoline extract is still WIP: only accept near face-budget coverage.
     let area = surface_area(mesh).max(1e-8);
     let face_budget = (area / (rho * rho)).round().max(64.0) as usize;
     let min_faces = (face_budget / 2).max(256);
+    // A single continuous chart cannot cover a closed surface without
+    // folds. Until we cut at singularities, only try the fit on open inputs.
+    if !input_watertight {
+        let charts = fit_field_charts(graph, o, &mesh.triangles, rho);
+        let unfolded = charts.iter().all(|&[a, b, c]| (b - a).perp_dot(c - a) > 1e-6);
+        if unfolded
+            && let Some(iso) =
+                crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, rho)
+            && iso.faces.len() >= min_faces
+            && polygon_boundary_edges(&iso.faces) < iso.faces.len() / 2
+        {
+            return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+        }
+    }
     let field_uvs = build_field_uvs(graph, o, p, rho);
     if let Some(iso) = crate::isoline_extract::extract_isoline_mesh(&graph.positions, &mesh.triangles, &field_uvs, rho)
     {
@@ -1677,6 +1764,34 @@ fn polygons_to_quad_dominant(ex: &Extracted) -> Result<(MeshData, HashSet<[u32; 
 mod tests {
     use super::*;
     use oxy_mesh::primitives;
+
+    #[test]
+    fn fitted_charts_integrate_equivalent_quarter_turns_on_a_plane() {
+        let mesh = primitives::plane(4, 4.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let orientations: Vec<_> =
+            graph.normals.iter().enumerate().map(|(i, &normal)| rosy(Vec3::X, normal, i % SO)).collect();
+        let charts = fit_field_charts(&graph, &orientations, &mesh.triangles, 0.5);
+        for (&triangle, chart) in mesh.triangles.iter().zip(&charts) {
+            for i in 1..3 {
+                let edge = graph.positions[triangle[i] as usize] - graph.positions[triangle[0] as usize];
+                assert!(((chart[i] - chart[0]).length() - edge.length() * 2.0).abs() < 1e-4);
+            }
+        }
+        let out = crate::isoline_extract::extract_corner_isolines(&graph.positions, &mesh.triangles, &charts, 0.5)
+            .expect("field charts must connect across the triangle seams");
+        assert!(out.faces.iter().any(|face| face.len() == 4));
+    }
+
+    #[test]
+    fn open_plane_can_reach_the_isoline_coverage_gate_from_two_triangles() {
+        let mesh = primitives::plane(1, 32.0);
+        let graph = Graph::from_mesh(&mesh, 40.0);
+        let orientations = vec![Vec3::X; graph.len()];
+        let out = extract_with_isoline(&mesh, &graph, &orientations, &graph.positions, 1.0, false)
+            .expect("fitted charts should supply the grid on a sparse plane");
+        assert!(out.faces.len() >= 512, "got {} faces", out.faces.len());
+    }
 
     #[test]
     fn auto_retopo_sphere_is_one_connected_piece() {
