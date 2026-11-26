@@ -1284,6 +1284,8 @@ pub struct Editor {
     /// The settings panel on its own (Shift+Tab, the view strip's button,
     /// #260). Tab still hides every panel at once.
     pub show_inspector: bool,
+    /// Remembered settings-panel width (0 = use the layout default).
+    pub inspector_width: f32,
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub show_theme: bool,
@@ -1686,6 +1688,7 @@ impl Default for Editor {
             save_error: None,
             show_panels: true,
             show_inspector: true,
+            inspector_width: 0.0,
             show_shortcuts: false,
             show_about: false,
             show_theme: false,
@@ -2247,6 +2250,7 @@ impl Editor {
             narrow_shelf: self.narrow_shelf,
             recipe_box: self.show_parts_bin,
             settings_panel: self.show_inspector,
+            inspector_width: self.inspector_width,
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
             pieces_box_height: self.pieces_box_height,
@@ -2577,6 +2581,7 @@ impl Editor {
         self.narrow_shelf = s.narrow_shelf;
         self.show_parts_bin = s.recipe_box;
         self.show_inspector = s.settings_panel;
+        self.inspector_width = s.inspector_width;
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
         self.pieces_box_height = s.pieces_box_height;

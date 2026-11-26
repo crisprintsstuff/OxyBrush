@@ -204,7 +204,7 @@ commands! {
     OrbitAroundCentre => "Orbit around the centre of the view", "", "Orbiting turns around the middle of the view, as framing (F) sets it.";
     StrokeFromEmpty => "Strokes from empty space on / off", "", "A drag that starts off the model sculpts once it reaches the surface. Orbit with the middle mouse button or the view strip.";
     Panels => "Show / hide panels", "Tab", "Show or hide the side panels.";
-    SettingsPanel => "Show / hide settings panel", "Shift+Tab", "Show or hide just the settings panel, for more room around the model. The brush shelf and view strip stay.";
+    SettingsPanel => "Show / hide settings panel", "Shift+Tab", "Show or hide just the settings panel, for more room around the model. The brush shelf and view strip stay. Width is remembered; Focus layout keeps only Pieces and Brush in the panel.";
     Palette => "Command palette", "Ctrl+K", "Type part of any command, brush, file or guide topic and run it.";
     FindBrush => "Find brush", "Space", "Type part of a brush name and pick it.";
     Shortcuts => "Shortcuts", "F1", "Show every keyboard and mouse shortcut.";

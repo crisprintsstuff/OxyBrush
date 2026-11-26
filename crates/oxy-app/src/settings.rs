@@ -94,10 +94,13 @@ pub enum UiLayout {
     Touch,
     /// Dense workstation layout: two-column brush shelf and the main controls in the top bar.
     Workstation,
+    /// Sculpt focus: Pieces + Brush in the settings panel; other sections stay in menus / palette.
+    Focus,
 }
 
 impl UiLayout {
-    pub const ALL: [UiLayout; 4] = [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch, UiLayout::Workstation];
+    pub const ALL: [UiLayout; 5] =
+        [UiLayout::Standard, UiLayout::Compact, UiLayout::Touch, UiLayout::Workstation, UiLayout::Focus];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -105,6 +108,7 @@ impl UiLayout {
             UiLayout::Compact => "Compact",
             UiLayout::Touch => "Touch friendly",
             UiLayout::Workstation => "Workstation",
+            UiLayout::Focus => "Focus",
         }
     }
 
@@ -116,6 +120,9 @@ impl UiLayout {
             UiLayout::Workstation => {
                 "Dense workstation layout: two-column brush shelf and the main controls in the top bar."
             }
+            UiLayout::Focus => {
+                "Sculpt focus: Pieces and Brush in the settings panel; Topology and the rest stay in menus and the command palette."
+            }
         }
     }
 
@@ -125,6 +132,7 @@ impl UiLayout {
             UiLayout::Compact => "compact",
             UiLayout::Touch => "touch",
             UiLayout::Workstation => "workstation",
+            UiLayout::Focus => "focus",
         }
     }
 }
@@ -520,6 +528,8 @@ pub struct Settings {
     /// The settings panel (inspector) is shown; Shift+Tab or the view
     /// strip's button hides it on its own (#260).
     pub settings_panel: bool,
+    /// Remembered settings-panel width in points (0 = use the layout default).
+    pub inspector_width: f32,
     /// Show the movable Recipe Box window (View > Recipe Box).
     pub recipe_box: bool,
     /// Side of a captured alpha in pixels (Capture from view).
@@ -1231,6 +1241,7 @@ impl Default for Settings {
             show_brush_names: true,
             narrow_shelf: false,
             settings_panel: true,
+            inspector_width: 0.0,
             recipe_box: false,
             alpha_capture_size: 1024,
             panel_drag_scroll: PanelDragScroll::Pen,
@@ -1437,6 +1448,7 @@ impl Settings {
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &format!("settings_panel = {}\n", self.settings_panel)
+            + &format!("inspector_width = {:.0}\n", self.inspector_width)
             + &format!("recipe_box = {}\n", self.recipe_box)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
@@ -1822,6 +1834,13 @@ impl Settings {
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
                 "settings_panel" => s.settings_panel = v.parse().unwrap_or(s.settings_panel),
+                "inspector_width" => {
+                    if let Ok(x) = v.parse::<f32>()
+                        && (0.0..=800.0).contains(&x)
+                    {
+                        s.inspector_width = x;
+                    }
+                }
                 "recipe_box" => s.recipe_box = v.parse().unwrap_or(s.recipe_box),
                 "panel_drag_scroll" => {
                     s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
@@ -2156,6 +2175,7 @@ mod tests {
             show_brush_names: false,
             narrow_shelf: true,
             settings_panel: false,
+            inspector_width: 312.0,
             recipe_box: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
@@ -2236,5 +2256,16 @@ mod tests {
         assert_eq!(Settings::load(&path), Some(s2));
         assert!(!path.with_extension("txt.tmp").exists());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn focus_layout_and_inspector_width_round_trip() {
+        assert_eq!(UiLayout::Focus.key(), "focus");
+        assert!(UiLayout::ALL.contains(&UiLayout::Focus));
+        let s = Settings { layout: UiLayout::Focus, inspector_width: 301.0, ..Default::default() };
+        let back = Settings::from_text(&s.to_text());
+        assert_eq!(back.layout, UiLayout::Focus);
+        assert!((back.inspector_width - 301.0).abs() < 1e-3);
+        assert_eq!(Settings::from_text("inspector_width = 900\n").inspector_width, 0.0);
     }
 }

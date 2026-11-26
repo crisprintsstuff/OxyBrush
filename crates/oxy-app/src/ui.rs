@@ -109,6 +109,18 @@ pub fn metrics(layout: UiLayout) -> Metrics {
             inspector_width: 275.0,
             strip_width: 40.0,
         },
+        UiLayout::Focus => Metrics {
+            item_spacing: egui::vec2(6.0, 4.0),
+            button_padding: egui::vec2(6.0, 3.0),
+            interact_height: 22.0,
+            slider_width: 120.0,
+            body: 13.0,
+            small: 10.5,
+            heading: 14.0,
+            shelf_width: 168.0,
+            inspector_width: 260.0,
+            strip_width: 42.0,
+        },
     }
 }
 
@@ -1007,16 +1019,22 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
         };
         if ed.show_inspector {
             let max_w = (ui.ctx().input(|i| i.viewport_rect()).width() * 0.45).clamp(m.inspector_width, 500.0);
-            inspector_panel.resizable(true).min_size(180.0).max_size(max_w).default_size(m.inspector_width).show(
+            let remembered = ed.inspector_width;
+            let default_w = if (180.0..=max_w).contains(&remembered) { remembered } else { m.inspector_width };
+            let panel_r = inspector_panel.resizable(true).min_size(180.0).max_size(max_w).default_size(default_w).show(
                 ui,
                 |ui| {
                     // Fill the panel's width whatever is open: a scroll area that
                     // shrinks to its content made the panel grow and shrink as
                     // sections opened and closed (#80). Dragging its edge still
-                    // resizes it.
+                    // resizes it; the width is remembered in settings.
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| inspector(ui, ed, busy));
                 },
             );
+            let w = panel_r.response.rect.width();
+            if (180.0..=500.0).contains(&w) && (w - ed.inspector_width).abs() > 0.5 {
+                ed.inspector_width = w;
+            }
         }
         view_strip(ui, ed);
     }
@@ -5040,9 +5058,16 @@ fn mesh_actions(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
         ed.oxyremesh_active();
     }
-    if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
-        ed.decimate_active();
-    }
+    ui.horizontal(|ui| {
+        ui.label("Keep");
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))),
+            plain::KEEP,
+        );
+        if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
+            ed.decimate_active();
+        }
+    });
     if tips::button_on(ui, !busy, "Project detail", Cmd::ProjectDetail).clicked() {
         ed.project_detail();
     }
@@ -5568,27 +5593,58 @@ fn mask_actions(ui: &mut Ui, ed: &mut Editor) {
     ui.label(RichText::new(empty).weak().small());
 }
 
+/// Active cage / armature tools that own their own windows.
+fn modeling_mode(ed: &Editor) -> bool {
+    ed.poly_edit.is_some() || ed.retopo.is_some() || ed.spheres.is_some() || ed.tube.is_some()
+}
+
 fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.add_space(4.0);
+    let focus = ed.layout == UiLayout::Focus;
+    let modeling = modeling_mode(ed);
+    // Mode-aware defaults: keep the panel short while sculpting; hide brush
+    // stacks during Poly Edit / Retopo / OxySpheres / Tube.
     widgets::section(ui, "Pieces", plain::SECTION_PIECES, true, |ui| pieces_section(ui, ed, busy));
-    let layers_open = ed.living.enabled;
-    widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| crate::living_ui::layers_section(ui, ed));
-    let has_copies = ed.scene.try_active().is_some_and(|p| !p.instancers.is_empty()) || ed.editing_source.is_some();
-    widgets::section(ui, "Instances", plain::SECTION_INSTANCES, has_copies, |ui| {
-        crate::instances_ui::section(ui, ed, busy)
-    });
-    let brush_title = format!("{} brush", ed.brush_kind.label());
-    widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
-    widgets::section(ui, "Stroke", plain::SECTION_STROKE, false, |ui| stroke_section(ui, ed));
-    let alpha_title = match ed.alpha.and_then(|i| ed.alphas.get(i)) {
-        Some(a) => format!("Alpha: {}", a.name),
-        None => "Alpha".into(),
-    };
-    widgets::section(ui, &alpha_title, plain::SECTION_ALPHA, false, |ui| alpha_section(ui, ed));
-    widgets::section(ui, "Symmetry", plain::SECTION_SYMMETRY, false, |ui| symmetry_section(ui, ed));
-    widgets::section(ui, "Topology", plain::SECTION_TOPOLOGY, true, |ui| topology_section(ui, ed, busy));
-    widgets::section(ui, "Groups & mask", plain::SECTION_GROUPS, false, |ui| groups_section(ui, ed));
-    widgets::section(ui, "History", plain::SECTION_HISTORY, false, |ui| history_section(ui, ed));
+    if !focus {
+        let layers_open = ed.living.enabled;
+        widgets::section(ui, "Layers", plain::SECTION_LAYERS, layers_open, |ui| {
+            crate::living_ui::layers_section(ui, ed)
+        });
+        let has_copies = ed.scene.try_active().is_some_and(|p| !p.instancers.is_empty()) || ed.editing_source.is_some();
+        widgets::section(ui, "Instances", plain::SECTION_INSTANCES, has_copies, |ui| {
+            crate::instances_ui::section(ui, ed, busy)
+        });
+    }
+    if !modeling {
+        let brush_title = format!("{} brush", ed.brush_kind.label());
+        widgets::section(ui, &brush_title, plain::SECTION_BRUSH, true, |ui| brush_section(ui, ed));
+        if !focus {
+            widgets::section(ui, "Stroke", plain::SECTION_STROKE, false, |ui| stroke_section(ui, ed));
+            let alpha_title = match ed.alpha.and_then(|i| ed.alphas.get(i)) {
+                Some(a) => format!("Alpha: {}", a.name),
+                None => "Alpha".into(),
+            };
+            widgets::section(ui, &alpha_title, plain::SECTION_ALPHA, false, |ui| alpha_section(ui, ed));
+        }
+        widgets::section(ui, "Symmetry", plain::SECTION_SYMMETRY, false, |ui| symmetry_section(ui, ed));
+    } else {
+        ui.label(RichText::new("Brush, Stroke and Alpha return when you leave this tool.").weak().small());
+        ui.add_space(4.0);
+    }
+    if !focus {
+        // Topology starts collapsed while sculpting so the panel stays short;
+        // open by default in modeling modes only when Smooth / rebuild are useful.
+        let topo_open = modeling && ed.poly_edit.is_none();
+        widgets::section(ui, "Topology", plain::SECTION_TOPOLOGY, topo_open, |ui| topology_section(ui, ed, busy));
+        widgets::section(ui, "Groups & mask", plain::SECTION_GROUPS, modeling, |ui| groups_section(ui, ed));
+        widgets::section(ui, "History", plain::SECTION_HISTORY, false, |ui| history_section(ui, ed));
+    } else {
+        ui.label(
+            RichText::new("Focus layout: Topology, Stroke, Alpha and more stay in the menus and Ctrl+K.")
+                .weak()
+                .small(),
+        );
+    }
 }
 
 /// Capture from view with its size, and Export alpha… for the selected one.
@@ -6837,6 +6893,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
         .show(|ui| presets_popup(ui, ed));
     ui.label(RichText::new(widgets::brush_description(ed.brush_kind)).weak().small());
     ui.add_space(2.0);
+    // Always-on essentials; the rest sits under Brush options.
     egui::Grid::new("brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
         ui.label("Radius");
         let suffix = if ed.radius_on_model { " u" } else { " pt" };
@@ -6875,49 +6932,6 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
                     .response,
                 plain::FALLOFF,
             );
-            ui.end_row();
-            ui.label("Focal shift");
-            tips::hover(
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2))),
-                plain::FOCAL_SHIFT,
-            );
-            ui.end_row();
-            ui.label("Spacing");
-            tips::hover(
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0).max_decimals(2))),
-                plain::SPACING,
-            );
-            ui.end_row();
-            ui.label("Auto smooth");
-            tips::hover(
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0).max_decimals(2))),
-                plain::AUTO_SMOOTH,
-            );
-            ui.end_row();
-        }
-        if ed.brush_kind.supports_accumulate() {
-            ui.label("");
-            let mut accumulate = ed.brush_accumulates(ed.brush_kind);
-            if ui.checkbox(&mut accumulate, "Accumulate")
-                .on_hover_text("Let overlapping dabs build on each other. Turn off to limit each point to the strongest dab in this stroke.")
-                .changed()
-            {
-                ed.set_brush_accumulate(accumulate);
-            }
-            ui.end_row();
-        }
-        if ed.brush_kind.supports_also_paint() {
-            ui.label("");
-            let mut also = ed.brush_also_paints(ed.brush_kind);
-            if ui
-                .checkbox(&mut also, "Also paint")
-                .on_hover_text(
-                    "Lay the Paint color under each dab while you sculpt. Same falloff as the brush; Alt still carves (use the Paint brush to erase color). Color shows in the viewport automatically.",
-                )
-                .changed()
-            {
-                ed.set_brush_also_paint(also);
-            }
             ui.end_row();
         }
         if ed.brush_kind.uses_gravity() {
@@ -6965,11 +6979,61 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             ui.end_row();
         }
     });
-    if ed.brush_kind != BrushKind::PaintGroups {
-        tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
-    }
-    tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
-    tips::check_plain(ui, &mut ed.front_faces_only, "Front faces only", plain::FRONT_FACES);
+    // Stay closed by default — Accumulate is on for clay brushes, so tying
+    // open-state to that would leave Advanced expanded every session.
+    egui::CollapsingHeader::new("Brush options").id_salt("brush_options").default_open(false).show(ui, |ui| {
+            if ed.brush_kind != BrushKind::PaintGroups {
+                egui::Grid::new("brush_advanced").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                    ui.label("Focal shift");
+                    tips::hover(
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.focal_shift, -1.0..=1.0).max_decimals(2))),
+                        plain::FOCAL_SHIFT,
+                    );
+                    ui.end_row();
+                    ui.label("Spacing");
+                    tips::hover(
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.spacing, 0.02..=1.0).max_decimals(2))),
+                        plain::SPACING,
+                    );
+                    ui.end_row();
+                    ui.label("Auto smooth");
+                    tips::hover(
+                        ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.auto_smooth, 0.0..=1.0).max_decimals(2))),
+                        plain::AUTO_SMOOTH,
+                    );
+                    ui.end_row();
+                });
+            }
+            if ed.brush_kind.supports_accumulate() {
+                let mut accumulate = ed.brush_accumulates(ed.brush_kind);
+                if ui
+                    .checkbox(&mut accumulate, "Accumulate")
+                    .on_hover_text(
+                        "Let overlapping dabs build on each other. Turn off to limit each point to the strongest dab in this stroke.",
+                    )
+                    .changed()
+                {
+                    ed.set_brush_accumulate(accumulate);
+                }
+            }
+            if ed.brush_kind.supports_also_paint() {
+                let mut also = ed.brush_also_paints(ed.brush_kind);
+                if ui
+                    .checkbox(&mut also, "Also paint")
+                    .on_hover_text(
+                        "Lay the Paint color under each dab while you sculpt. Same falloff as the brush; Alt still carves (use the Paint brush to erase color). Color shows in the viewport automatically.",
+                    )
+                    .changed()
+                {
+                    ed.set_brush_also_paint(also);
+                }
+            }
+            if ed.brush_kind != BrushKind::PaintGroups {
+                tips::check_plain(ui, &mut ed.pressure_strength, "Pen pressure sets strength", plain::PRESSURE_STRENGTH);
+            }
+            tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
+            tips::check_plain(ui, &mut ed.front_faces_only, "Front faces only", plain::FRONT_FACES);
+        });
     if ed.brush_kind == BrushKind::Paint || ed.brush_also_paints(ed.brush_kind) {
         ui.separator();
         paint_controls(ui, ed);
@@ -7186,45 +7250,52 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
                     );
                     tips::check_plain(ui, &mut ed.alpha_follow_stroke, "Follow stroke direction", plain::ALPHA_FOLLOW);
                     tips::check_plain(ui, &mut ed.alpha_invert, "Invert alpha", plain::ALPHA_INVERT);
-                    tips::check_plain(ui, &mut ed.alpha_tile, "Tile", plain::ALPHA_TILE_WRAP);
-                    if ed.alpha_tile {
-                        tips::hover(
-                            ui.add(crate::widgets::Bar(
-                                egui::Slider::new(&mut ed.alpha_tile_repeats, 0.5..=8.0).text("repeats"),
-                            )),
-                            plain::ALPHA_TILE_REPEATS,
-                        );
-                    }
-                    tips::check_plain(ui, &mut ed.alpha_roll, "Roll", plain::ALPHA_ROLL);
-                    if ed.alpha_roll {
-                        tips::hover(
-                            ui.add(crate::widgets::Bar(
-                                egui::Slider::new(&mut ed.alpha_roll_distance, 0.25..=8.0).text("roll distance"),
-                            )),
-                            plain::ALPHA_ROLL_DISTANCE,
-                        );
-                    }
-                    tips::hover(
-                        ui.add(crate::widgets::Bar(
-                            egui::Slider::new(&mut ed.alpha_rotate_jitter_deg, 0.0..=180.0)
-                                .suffix("°")
-                                .text("rotate jitter"),
-                        )),
-                        plain::ALPHA_ROTATE_JITTER,
-                    );
-                    if ed.alpha_rotate_jitter_deg > 0.0 {
-                        tips::check_plain(
-                            ui,
-                            &mut ed.alpha_rotate_jitter_per_dab,
-                            "Jitter per dab",
-                            plain::ALPHA_ROTATE_JITTER_PER_DAB,
-                        );
-                    }
-                    ui.label(
-                        RichText::new("Tip: Stamp mode + Constant falloff; Roll + Scale strip for limbs")
-                            .weak()
-                            .small(),
-                    );
+                    let alpha_opts_open = ed.alpha_tile || ed.alpha_roll || ed.alpha_rotate_jitter_deg > 0.0;
+                    egui::CollapsingHeader::new("Alpha options")
+                        .id_salt("alpha_options")
+                        .default_open(alpha_opts_open)
+                        .show(ui, |ui| {
+                            tips::check_plain(ui, &mut ed.alpha_tile, "Tile", plain::ALPHA_TILE_WRAP);
+                            if ed.alpha_tile {
+                                tips::hover(
+                                    ui.add(crate::widgets::Bar(
+                                        egui::Slider::new(&mut ed.alpha_tile_repeats, 0.5..=8.0).text("repeats"),
+                                    )),
+                                    plain::ALPHA_TILE_REPEATS,
+                                );
+                            }
+                            tips::check_plain(ui, &mut ed.alpha_roll, "Roll", plain::ALPHA_ROLL);
+                            if ed.alpha_roll {
+                                tips::hover(
+                                    ui.add(crate::widgets::Bar(
+                                        egui::Slider::new(&mut ed.alpha_roll_distance, 0.25..=8.0)
+                                            .text("roll distance"),
+                                    )),
+                                    plain::ALPHA_ROLL_DISTANCE,
+                                );
+                            }
+                            tips::hover(
+                                ui.add(crate::widgets::Bar(
+                                    egui::Slider::new(&mut ed.alpha_rotate_jitter_deg, 0.0..=180.0)
+                                        .suffix("°")
+                                        .text("rotate jitter"),
+                                )),
+                                plain::ALPHA_ROTATE_JITTER,
+                            );
+                            if ed.alpha_rotate_jitter_deg > 0.0 {
+                                tips::check_plain(
+                                    ui,
+                                    &mut ed.alpha_rotate_jitter_per_dab,
+                                    "Jitter per dab",
+                                    plain::ALPHA_ROTATE_JITTER_PER_DAB,
+                                );
+                            }
+                            ui.label(
+                                RichText::new("Tip: Stamp mode + Constant falloff; Roll + Scale strip for limbs")
+                                    .weak()
+                                    .small(),
+                            );
+                        });
                 });
             });
         }
@@ -7278,8 +7349,8 @@ fn symmetry_section(ui: &mut Ui, ed: &mut Editor) {
 }
 
 fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
-    // Sectioned layout (#575): each rebuild tool has its own header so Voxel
-    // remesh, OxyRemesh and Decimate no longer blend into one long list.
+    // Sectioned layout (#575): Voxel remesh and OxyRemesh each have a header.
+    // Project detail / Decimate live under Mesh (and the palette) to keep this short.
     ui.label(RichText::new("Dynamic detail").small().weak());
     let tip = Cmd::DynDetail.tip_in(&ed.keymap);
     ui.horizontal(|ui| {
@@ -7548,23 +7619,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
         ed.oxyremesh_active();
     }
-    ui.separator();
-    ui.label(RichText::new("Project detail").small().weak());
-    if tips::button_on(ui, !busy, "Project detail", Cmd::ProjectDetail).clicked() {
-        ed.project_detail();
-    }
-    ui.separator();
-    ui.label(RichText::new("Decimate").small().weak());
-    ui.horizontal_wrapped(|ui| {
-        ui.label("Keep");
-        tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.decimate_percent, 1.0..=90.0).suffix(" %"))),
-            plain::KEEP,
-        );
-        if tips::button_on(ui, !busy, "Decimate", Cmd::Decimate).clicked() {
-            ed.decimate_active();
-        }
-    });
+    ui.label(RichText::new("Project detail and Decimate stay under Mesh and the command palette.").weak().small());
 }
 
 fn groups_section(ui: &mut Ui, ed: &mut Editor) {
