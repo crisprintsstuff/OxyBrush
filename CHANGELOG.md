@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.1.1] - 2026-11-26
+
 ### Changed
 
 - **Inspector declutter.** Mode-aware settings panel (hides Brush/Stroke/Alpha during Poly Edit, Retopo, OxySpheres and Tube); Brush options and Alpha options collapse by default; Topology starts collapsed while sculpting; Project detail and Decimate live under Mesh (Keep % sits next to Decimate there). New **Focus** layout (Pieces + Brush only). Settings panel width is remembered. Builds on the Topology section headers from [#575](https://github.com/crisprintsstuff/OxyBrush/issues/575).

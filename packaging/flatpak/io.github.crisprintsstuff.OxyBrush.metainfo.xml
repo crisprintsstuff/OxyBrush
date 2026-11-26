@@ -52,6 +52,12 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.1.1" date="2026-11-26" type="stable">
+      <description>
+        <p>Inspector declutter with Focus layout and mode-aware panels; Topology section headers for remesh tools.</p>
+        <p>OxyRemesh extraction keeps a majority surface and strips floaters instead of failing on fragmented extracts.</p>
+      </description>
+    </release>
     <release version="4.1.0" date="2026-11-26" type="stable">
       <description>
         <p>Scale cover Phase 2, Split view, Also paint, MCP set_geometry, continuous orbit pitch, OxySpheres Resolution/Blend, and Poly Edit Select with Ellipse (Shift for circle).</p>
