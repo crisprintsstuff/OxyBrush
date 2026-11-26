@@ -1,6 +1,6 @@
 # RFC 0044 — OxyRemesh (field-aligned automatic retopology)
 
-- **Status:** Phase 3 implemented
+- **Status:** Phase 3 implemented; Phase 4 (Autoremesher-standard extract) in progress
 - **Issue:** [#529](https://github.com/crisprintsstuff/OxyBrush/issues/529) (Autoremesher request)
 - **Name in UI:** **OxyRemesh** (OxyBrush product name for field-aligned remesh)
 
@@ -90,6 +90,7 @@ issue request or comparing features (same rule as ZBrush format mentions).
 | **2** | Pure-quad post-pass; attribute projection + surface snap; crease-weighted GS; `oxyremesh_timing` example |
 | **3** | Orientation stroke constraints (guide from last stroke); singularity attractor (mask centroid); adaptivity / anisotropy knobs under Topology > OxyRemesh |
 | **3b** | Extraction hardening (#551): face-walk edge commit, paper §3.8 low-support filter, keep-largest floater strip |
+| **4** | Autoremesher-standard path (MIT): isotropic resample, global UV/frame parameterization (pure-Rust MIQP, no Eigen), isoline quad extract with hole fill / manifold cleanup. Refuse open surfaces on closed inputs meanwhile. |
 
 ## Verification
 
@@ -103,6 +104,9 @@ issue request or comparing features (same rule as ZBrush format mentions).
 - Jakob et al., *Instant Field-Aligned Meshes*, SIGGRAPH Asia 2015
   ([project page / PDF](https://igl.ethz.ch/projects/instant-meshes/))
 - Issue [#529](https://github.com/crisprintsstuff/OxyBrush/issues/529) and
-  Autoremesher’s public README (MIT tool identity and CLI knobs only —
-  no C++ algorithm source consulted for this port)
-- QuadriFlow remains a Phase 2+ research option; Phase 1 follows Instant Meshes
+  Autoremesher ([huxingyi/autoremesher](https://github.com/huxingyi/autoremesher),
+  MIT since 1.0.0). Phase 1–3 used the README only; Phase 4 studies the MIT
+  algorithm sources (isoline extract, hole fill, cleanup). Instant Meshes
+  reference C++ remains GPL and is not opened. Eigen is not linked (pure Rust
+  solvers for any MIQP port).
+- QuadriFlow remains a research option alongside Phase 4

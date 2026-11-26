@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **OxyRemesh quality gate.** On a closed input, OxyRemesh refuses results that are still open or non-manifold instead of replacing the sculpt with a Swiss-cheese mesh. Starts an Autoremesher-inspired UV-isoline extract path (MIT study of [huxingyi/autoremesher](https://github.com/huxingyi/autoremesher)); full parameterization remains RFC 0044 Phase 4.
+
 ## [4.1.1] - 2026-11-26
 
 ### Changed

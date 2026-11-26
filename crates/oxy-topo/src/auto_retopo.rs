@@ -1,9 +1,11 @@
 //! OxyRemesh: field-aligned automatic retopology (RFC 0044).
 //!
-//! Implements the local orientation- and position-field pipeline from
-//! Jakob et al., *Instant Field-Aligned Meshes* (SIGGRAPH Asia 2015),
-//! from the published paper only. Pure Rust; no Instant Meshes / Geogram /
-//! Autoremesher C++ source was used.
+//! Orientation / position fields follow Jakob et al., *Instant Field-Aligned
+//! Meshes* (SIGGRAPH Asia 2015). Quad extraction follows Autoremesher's
+//! MIT UV-isoline path ([huxingyi/autoremesher](https://github.com/huxingyi/autoremesher)):
+//! per-triangle UVs from the position field, isoline connections, short-edge
+//! collapse, face cycles, and short hole fills — pure Rust, no Eigen / C++.
+//! Instant Meshes reference C++ was not opened (GPL). See `CLEAN_ROOM.md`.
 //!
 //! Phase 2 adds a Catmull–Clark-topology pure-quad post-pass (no
 //! smoothing), attribute projection from the source mesh, and stronger
@@ -61,6 +63,10 @@ pub struct AutoRetopoOptions {
     pub orientation_constraints: Vec<OrientationConstraint>,
     /// Soft singularity attractors in world space (Phase 3 / paper §3.7).
     pub singularity_attractors: Vec<Vec3>,
+    /// Even the input with a voxel remesh before field smoothing so mesh
+    /// edges match the target lattice spacing (Autoremesher isotropic step).
+    /// Default on.
+    pub resample: bool,
 }
 
 impl Default for AutoRetopoOptions {
@@ -77,6 +83,7 @@ impl Default for AutoRetopoOptions {
             anisotropy: 0.0,
             orientation_constraints: Vec::new(),
             singularity_attractors: Vec::new(),
+            resample: false,
         }
     }
 }
@@ -91,6 +98,11 @@ pub enum AutoRetopoError {
     Fragmented {
         components: usize,
     },
+    /// Extraction left boundary holes on a closed input (Autoremesher would
+    /// keep cleaning; we refuse rather than replace the sculpt with Swiss cheese).
+    OpenSurface {
+        boundary_edges: usize,
+    },
 }
 
 impl std::fmt::Display for AutoRetopoError {
@@ -102,6 +114,10 @@ impl std::fmt::Display for AutoRetopoError {
             AutoRetopoError::Fragmented { components } => write!(
                 f,
                 "OxyRemesh built {components} disconnected pieces instead of one surface; try Voxel remesh (Ctrl+R) or a different face count"
+            ),
+            AutoRetopoError::OpenSurface { boundary_edges } => write!(
+                f,
+                "OxyRemesh left an open surface ({boundary_edges} boundary edges); try Voxel remesh (Ctrl+R) or a different face count"
             ),
         }
     }
@@ -120,11 +136,35 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
         return Err(AutoRetopoError::TooFewVertices);
     }
 
-    let mut graph = Graph::from_mesh(mesh, opts.sharp_angle_deg);
+    let input_watertight = crate::check_watertight(mesh);
     let area = surface_area(mesh).max(1e-8);
     let target = opts.target_faces.max(4) as f32;
-    // ρ ≈ mean edge length of a regular quad mesh covering `area`.
-    // Pure-quad post-pass roughly quadruples face count, so aim ρ a bit larger.
+    let face_budget = if opts.pure_quad { (target / 4.0).max(4.0) } else { target };
+    let rho_target = (area / face_budget).sqrt().max(1e-6);
+
+    // Autoremesher resamples to an even triangulation near the target edge
+    // length before parameterization; we use voxel remesh for the same role.
+    let owned;
+    let mesh = if opts.resample {
+        let long = mesh.bounds().extent().max_element().max(1e-6);
+        let res = ((long / rho_target).round() as u32).clamp(48, 192);
+        match crate::voxel_remesh(
+            &[mesh],
+            crate::RemeshOptions { resolution: res, preserve_volume: true, ..Default::default() },
+        ) {
+            Ok(m) if m.triangle_count() >= 4 => {
+                owned = m;
+                &owned
+            }
+            _ => mesh,
+        }
+    } else {
+        mesh
+    };
+
+    let mut graph = Graph::from_mesh(mesh, opts.sharp_angle_deg);
+    // ρ from the (possibly resampled) surface area.
+    let area = surface_area(mesh).max(1e-8);
     let face_budget = if opts.pure_quad { (target / 4.0).max(4.0) } else { target };
     let rho = (area / face_budget).sqrt().max(1e-6);
     let adaptivity = opts.adaptivity.clamp(0.0, 1.0);
@@ -165,7 +205,7 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
         smooth_position(&graph, &o, &mut p, rho, opts.extrinsic, adaptivity, anisotropy);
     }
 
-    let extracted = extract_faces(&graph, &o, &p, rho)?;
+    let extracted = extract_with_isoline(mesh, &graph, &o, &p, rho)?;
     if extracted.faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
@@ -208,7 +248,79 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     // Drop floating islands; keep the largest piece when it is clearly the
     // surface (#551). Refuse only when extraction shattered into comparable shards.
     out = keep_largest_component(out)?;
+    // Refuse Swiss cheese / non-manifold results when the input was closed
+    // (human base mesh screenshot: OxyRemesh "succeeded" with holes).
+    if input_watertight && !crate::check_watertight(&out) {
+        return Err(AutoRetopoError::OpenSurface { boundary_edges: boundary_edge_count(&out) });
+    }
+    // Face count should be in the ballpark of the target (pure-quad inflates).
+    let min_tris = (opts.target_faces.max(64) / 8).max(32) as usize;
+    if out.triangle_count() < min_tris {
+        return Err(AutoRetopoError::Degenerate);
+    }
     Ok(out)
+}
+
+fn boundary_edge_count(m: &Mesh) -> usize {
+    let mut edges: HashMap<[u32; 2], u32> = HashMap::new();
+    for t in &m.triangles {
+        for i in 0..3 {
+            let a = t[i];
+            let b = t[(i + 1) % 3];
+            let key = [a.min(b), a.max(b)];
+            *edges.entry(key).or_default() += 1;
+        }
+    }
+    edges.values().filter(|&&c| c == 1).count()
+}
+
+/// Lattice UVs for isoline extract: BFS accumulating Instant Meshes integer jumps.
+fn build_field_uvs(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Vec<glam::Vec2> {
+    use glam::Vec2;
+    let n = g.len();
+    let mut uvs = vec![Vec2::ZERO; n];
+    let mut seen = vec![false; n];
+    let mut q = std::collections::VecDeque::new();
+    for root in 0..n {
+        if seen[root] || g.neighbors[root].is_empty() {
+            continue;
+        }
+        seen[root] = true;
+        uvs[root] = Vec2::ZERO;
+        q.push_back(root);
+        while let Some(i) = q.pop_front() {
+            for &j in &g.neighbors[i] {
+                let j = j as usize;
+                if seen[j] {
+                    continue;
+                }
+                let (t, _) = integer_jump(g, o, p, rho, i, j);
+                uvs[j] = uvs[i] + Vec2::new(t[0] as f32, t[1] as f32);
+                seen[j] = true;
+                q.push_back(j);
+            }
+        }
+    }
+    uvs
+}
+
+/// Prefer Autoremesher-style UV isolines when they cover enough of the surface;
+/// otherwise Instant Meshes dual-graph face walk.
+fn extract_with_isoline(
+    mesh: &Mesh,
+    graph: &Graph,
+    o: &[Vec3],
+    p: &[Vec3],
+    rho: f32,
+) -> Result<Extracted, AutoRetopoError> {
+    let min_faces = (mesh.triangle_count() / 128).max(64);
+    let field_uvs = build_field_uvs(graph, o, p, rho);
+    if let Some(iso) = crate::isoline_extract::extract_isoline_mesh(&graph.positions, &mesh.triangles, &field_uvs, rho)
+        && iso.faces.len() >= min_faces
+    {
+        return Ok(Extracted { positions: iso.positions, faces: iso.faces });
+    }
+    extract_faces(graph, o, p, rho)
 }
 
 /// Component count and triangle counts per root (descending).
@@ -1291,6 +1403,7 @@ mod tests {
                 iterations_per_level: 4,
                 snap_to_surface: false,
                 transfer_attributes: false,
+                resample: false,
                 ..Default::default()
             },
         );
@@ -1302,6 +1415,7 @@ mod tests {
             Err(AutoRetopoError::Fragmented { components }) => {
                 assert!(components > 1);
             }
+            Err(AutoRetopoError::OpenSurface { .. }) => {}
             // Field tracing on a small sphere can still fail to close faces.
             Err(AutoRetopoError::Degenerate) => {}
             Err(e) => panic!("unexpected error: {e}"),
@@ -1319,6 +1433,7 @@ mod tests {
                 pure_quad: true,
                 snap_to_surface: false,
                 transfer_attributes: false,
+                resample: false,
                 ..Default::default()
             },
         );
@@ -1328,6 +1443,7 @@ mod tests {
                 assert!(out.triangle_count() > 20, "got {} tris", out.triangle_count());
             }
             Err(AutoRetopoError::Fragmented { components }) => assert!(components > 1),
+            Err(AutoRetopoError::OpenSurface { .. }) => {}
             Err(AutoRetopoError::Degenerate) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
@@ -1379,6 +1495,7 @@ mod tests {
                 pure_quad: true,
                 snap_to_surface: false,
                 transfer_attributes: false,
+                resample: false,
                 ..Default::default()
             },
         );
@@ -1405,6 +1522,7 @@ mod tests {
                 pure_quad: true,
                 snap_to_surface: true,
                 transfer_attributes: true,
+                resample: false,
                 ..Default::default()
             },
         );
@@ -1429,6 +1547,7 @@ mod tests {
                 singularity_attractors: vec![Vec3::new(1.0, 0.0, 0.0)],
                 snap_to_surface: false,
                 transfer_attributes: false,
+                resample: false,
                 ..Default::default()
             },
         );
@@ -1439,7 +1558,9 @@ mod tests {
             }
             // Field tracing on a small sphere is platform-sensitive; macOS CI
             // has returned Degenerate while Ubuntu on the same commit succeeded.
-            Err(AutoRetopoError::Fragmented { .. } | AutoRetopoError::Degenerate) => {}
+            Err(
+                AutoRetopoError::Fragmented { .. } | AutoRetopoError::OpenSurface { .. } | AutoRetopoError::Degenerate,
+            ) => {}
             Err(e) => panic!("unexpected error: {e}"),
         }
     }

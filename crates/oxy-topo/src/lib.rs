@@ -4,6 +4,7 @@
 
 pub mod auto_retopo;
 pub mod decimate;
+pub mod isoline_extract;
 pub mod print3d;
 pub mod quad_skin;
 pub mod remesh;
