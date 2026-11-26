@@ -28,6 +28,12 @@ pub enum BuiltinAlpha {
     Noise,
     Bumps,
     Scales,
+    /// Tighter overlapping ovals for snakes, fish and small reptiles.
+    SnakeScales,
+    /// Diamond / rhombus plates for armor and stylized hard-surface scales.
+    DiamondScales,
+    /// One teardrop plate — Stamp mode for placing a single scale.
+    ScalePlate,
     Cracks,
     Stripes,
     Rings,
@@ -35,10 +41,13 @@ pub enum BuiltinAlpha {
 }
 
 impl BuiltinAlpha {
-    pub const ALL: [BuiltinAlpha; 7] = [
+    pub const ALL: [BuiltinAlpha; 10] = [
         BuiltinAlpha::Noise,
         BuiltinAlpha::Bumps,
         BuiltinAlpha::Scales,
+        BuiltinAlpha::SnakeScales,
+        BuiltinAlpha::DiamondScales,
+        BuiltinAlpha::ScalePlate,
         BuiltinAlpha::Cracks,
         BuiltinAlpha::Stripes,
         BuiltinAlpha::Rings,
@@ -50,6 +59,9 @@ impl BuiltinAlpha {
             BuiltinAlpha::Noise => "Noise",
             BuiltinAlpha::Bumps => "Bumps",
             BuiltinAlpha::Scales => "Scales",
+            BuiltinAlpha::SnakeScales => "Snake scales",
+            BuiltinAlpha::DiamondScales => "Diamond scales",
+            BuiltinAlpha::ScalePlate => "Scale plate",
             BuiltinAlpha::Cracks => "Cracks",
             BuiltinAlpha::Stripes => "Stripes",
             BuiltinAlpha::Rings => "Rings",
@@ -68,16 +80,10 @@ impl BuiltinAlpha {
                     let d = worley(x * 5.0, y * 5.0).0;
                     smoothstep(0.45, 0.0, d) * edge
                 }
-                BuiltinAlpha::Scales => {
-                    // Overlapping half-discs in offset rows, highest at each scale's tip.
-                    let (sx, sy) = (x * 4.0, y * 4.0 + 0.5);
-                    let row = sy.floor();
-                    let shift = if (row as i32).rem_euclid(2) == 1 { 0.5 } else { 0.0 };
-                    let cx = (sx + shift).fract() - 0.5;
-                    let cy = sy.fract();
-                    let d = (cx * cx + cy * cy).sqrt();
-                    (smoothstep(0.62, 0.48, d) * (0.35 + 0.65 * cy)) * edge
-                }
+                BuiltinAlpha::Scales => scale_field(x, y, ScaleKind::Reptile) * edge,
+                BuiltinAlpha::SnakeScales => scale_field(x, y, ScaleKind::Snake) * edge,
+                BuiltinAlpha::DiamondScales => scale_field(x, y, ScaleKind::Diamond) * edge,
+                BuiltinAlpha::ScalePlate => single_scale_plate(x, y) * edge,
                 BuiltinAlpha::Cracks => {
                     let (d1, d2) = worley(x * 3.0, y * 3.0);
                     // High along cell borders (where the two nearest seeds are equidistant).
@@ -101,6 +107,100 @@ impl BuiltinAlpha {
         }
         Alpha { name: self.label().into(), size, data }
     }
+}
+
+#[derive(Clone, Copy)]
+enum ScaleKind {
+    Reptile,
+    Snake,
+    Diamond,
+}
+
+/// Overlapping scale rows. Samples neighbouring cells so seams stay sharp
+/// where plates overlap (max of candidates), not soft half-discs.
+fn scale_field(x: f32, y: f32, kind: ScaleKind) -> f32 {
+    let (cols, rows) = match kind {
+        // Classic reptile: larger U-plates; row pitch < rise so tips cover roots.
+        ScaleKind::Reptile => (3.0_f32, 2.6_f32),
+        // Snake / fish: denser staggered U-scales.
+        ScaleKind::Snake => (4.8, 4.0),
+        // Armor: diamond plates on a brick grid.
+        ScaleKind::Diamond => (3.8, 4.2),
+    };
+    let sx = x * cols;
+    let sy = y * rows + 0.2;
+    let row0 = sy.floor() as i32;
+    let col0 = sx.floor() as i32;
+    let mut best = 0.0_f32;
+    // Check this cell and neighbours — overlap needs the max, not one fract cell.
+    for dro in -1..=1 {
+        for dco in -1..=1 {
+            let row = row0 + dro;
+            let shift = if row.rem_euclid(2) == 1 { 0.5 } else { 0.0 };
+            let col = col0 + dco;
+            let lx = sx - (col as f32 + shift);
+            let ly = sy - row as f32;
+            let h = match kind {
+                ScaleKind::Diamond => diamond_scale(lx, ly),
+                // Rise > 1 so each plate spills into the cell above (overlap).
+                ScaleKind::Reptile => u_scale(lx, ly, 0.98, 1.35),
+                ScaleKind::Snake => u_scale(lx, ly, 1.15, 1.25),
+            };
+            if h > best {
+                best = h;
+            }
+        }
+    }
+    best
+}
+
+/// Classic U / fish-scale plate: semicircle with a flat root chord.
+/// `half_w` is half-width in cell units; `rise` is tip height above the root
+/// (values > 1 make plates overlap the next row).
+fn u_scale(lx: f32, ly: f32, half_w: f32, rise: f32) -> f32 {
+    // Local: root near y=0, tip toward +y.
+    let px = lx / half_w;
+    let root = 0.02;
+    let py = (ly - root) / rise;
+    if py < 0.0 || py > 1.12 {
+        return 0.0;
+    }
+    // Semicircle of radius 1 centred at the root; tip at py=1.
+    let arc = (px * px + py * py).sqrt();
+    let rim = smoothstep(1.05, 0.90, arc);
+    if rim <= 0.0 {
+        return 0.0;
+    }
+    // Raised tip, shallow near the root; crisp groove at the rim.
+    let dome = py.sqrt() * (0.18 + 0.82 * py);
+    let groove = smoothstep(1.05, 0.96, arc);
+    rim * dome * groove
+}
+
+/// Rhombus plate with a soft bevel and tip bias (+Y).
+fn diamond_scale(lx: f32, ly: f32) -> f32 {
+    // Cell local: diamond centred near (0, 0.5); tip toward +Y.
+    let px = lx;
+    let py = ly - 0.5;
+    let manhattan = px.abs() + py.abs();
+    let rim = smoothstep(0.58, 0.40, manhattan);
+    if rim <= 0.0 {
+        return 0.0;
+    }
+    let along = ((py + 0.5) / 1.0).clamp(0.0, 1.0);
+    let dome = 0.28 + 0.72 * along;
+    let bevel = smoothstep(0.58, 0.46, manhattan);
+    rim * dome * bevel
+}
+
+/// One large U-plate for Stamp strokes (place a single scale).
+fn single_scale_plate(x: f32, y: f32) -> f32 {
+    // Map stamp space so the root sits near the bottom and the tip near the top.
+    let lx = x * 0.88;
+    let ly = (y + 0.95) * 0.52;
+    let h = u_scale(lx, ly, 0.88, 0.98);
+    // Slightly harder rim than the field stamps so a single Stamp reads clearly.
+    (h * 1.15).clamp(0.0, 1.0)
 }
 
 impl Alpha {
@@ -330,6 +430,7 @@ mod tests {
     #[test]
     fn builtins_are_valid_and_distinct() {
         let all: Vec<Alpha> = BuiltinAlpha::ALL.iter().map(|b| b.generate(64)).collect();
+        assert_eq!(all.len(), 10);
         for a in &all {
             assert_eq!(a.data.len(), 64 * 64);
             assert!(a.data.iter().all(|v| (0.0..=1.0).contains(v)), "{}", a.name);
@@ -341,6 +442,41 @@ mod tests {
                 assert_ne!(all[i].data, all[j].data);
             }
         }
+    }
+
+    #[test]
+    fn scale_variants_have_grain_and_a_strong_tip() {
+        let scales = BuiltinAlpha::Scales.generate(128);
+        let snake = BuiltinAlpha::SnakeScales.generate(128);
+        let diamond = BuiltinAlpha::DiamondScales.generate(128);
+        let plate = BuiltinAlpha::ScalePlate.generate(128);
+        // Tip-biased: upper half of the stamp should be brighter on average than the lower.
+        let mean = |a: &Alpha, y0: u32, y1: u32| {
+            let mut s = 0.0;
+            let mut n = 0.0;
+            for y in y0..y1 {
+                for x in 0..a.size {
+                    s += a.data[(y * a.size + x) as usize];
+                    n += 1.0;
+                }
+            }
+            s / n
+        };
+        let half = scales.size / 2;
+        assert!(mean(&scales, 0, half) > mean(&scales, half, scales.size) * 0.9, "Scales tip bias");
+        assert!(mean(&snake, 0, half) > mean(&snake, half, snake.size) * 0.85, "Snake tip bias");
+        // Plate is one big scale — centre should be strong.
+        assert!(plate.sample(Vec2::new(0.0, 0.15)) > 0.45);
+        assert!(diamond.sample(Vec2::ZERO) > 0.2);
+        // Densities differ: snake has more cycles than reptile.
+        let contrast = |a: &Alpha| {
+            let max = a.data.iter().cloned().fold(0.0_f32, f32::max);
+            let min = a.data.iter().cloned().fold(1.0_f32, f32::min);
+            max - min
+        };
+        assert!(contrast(&scales) > 0.5);
+        assert!(contrast(&snake) > 0.5);
+        assert!(contrast(&diamond) > 0.5);
     }
 
     #[test]

@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **Scale alphas.** Rebuilt the procedural **Scales** stamp as overlapping U-plates, and added **Snake scales**, **Diamond scales**, and a single **Scale plate** for Stamp strokes (all original CC0). [RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)
+
 ## [4.0.0] - 2026-11-25
 
 First stable release (drops the `4.0.0-beta.*` suffix).

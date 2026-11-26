@@ -1,6 +1,6 @@
 # RFC 0047 — Better alphas: pack, tile, rotate
 
-- **Status:** Proposed
+- **Status:** Phase 3 (scale pack) in progress — Scales rebuilt; Snake scales, Diamond scales, Scale plate added. Phase 1–2 (rotate jitter, tile) still open
 - **Builds on:** [RFC 0030 — Alpha library](0030-alpha-library.md),
   alphas in Phase 3.3 ([ROADMAP](../ROADMAP.md))
 - **Related:** [RFC 0041 — Paint color jitter](0041-paint-color-jitter.md)
@@ -131,7 +131,7 @@ base rotation (manual rotation + follow-stroke).
 |---|---|
 | **1** | Rotate jitter (Per Stroke / Per Dab) + guide/tooltip; tests on dab rotation determinism |
 | **2** | Tile wrap + Repeats; headless probe that a tileable procedural alpha paints without edge drop-off inside the dab |
-| **3** | Expanded built-in set (procedural first); optional small CC0 PNG pack with credits if needed |
+| **3** | Expanded built-in set (procedural first); optional small CC0 PNG pack with credits if needed. **Started:** overlapping U **Scales**, **Snake scales**, **Diamond scales**, **Scale plate** |
 
 ## Acceptance criteria
 
