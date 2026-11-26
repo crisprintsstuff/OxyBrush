@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-26
+
 ### Added
 
 - **Poly Edit Select: Ellipse and rename.** The area row is labeled **Select** (was Pick) and offers **Ellipse** beside Click, Box and Lasso. Drag shows the outline; hold **Shift** on Ellipse for a circle. [RFC 0035](docs/rfcs/0035-poly-edit-area-selection.md)
