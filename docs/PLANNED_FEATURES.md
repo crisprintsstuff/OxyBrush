@@ -67,7 +67,8 @@ The full design is in [RFC 0017](rfcs/0017-living-strokes.md).
 
 ### Sculpting
 - **Stencils:** an image laid over the view that you sculpt through.
-- **A brush editor and custom shelves** of your favourite brushes and presets.
+- **A dedicated brush editor window and multiple named shelves** (Phase 1 shipped: Favorites strip, starred presets, rename/duplicate, palette presets — [RFC 0049](rfcs/0049-custom-brush-shelves.md)).
+- **Smooth preview persistence and brush-on-cage feedback** beyond Topology's live Catmull–Clark preview ([RFC 0048](rfcs/0048-dynamic-smooth.md), #447).
 
 ### Models and topology
 - **Rebuild lower subdivision levels** for a dense model imported from

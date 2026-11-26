@@ -42,6 +42,8 @@ pub enum Act {
     Ui(UiAction),
     Run(fn(&mut Editor)),
     Brush(BrushKind),
+    /// Apply a named brush preset from the library (RFC 0049).
+    Preset(String),
     Recent(PathBuf),
     Guide(usize),
     /// Run command `.1` of in-app plugin `.0` (RFC 0011).
@@ -672,13 +674,35 @@ fn brush_entries(ed: &Editor, prefix: &str) -> Vec<Entry> {
         .collect()
 }
 
+fn preset_entries(ed: &Editor) -> Vec<Entry> {
+    let mut names: Vec<(String, BrushKind, bool)> =
+        ed.presets.iter().map(|p| (p.name.clone(), p.kind, ed.is_favorite_preset(&p.name))).collect();
+    names.sort_by(|a, b| b.2.cmp(&a.2).then_with(|| a.0.to_lowercase().cmp(&b.0.to_lowercase())));
+    names
+        .into_iter()
+        .map(|(name, kind, fav)| Entry {
+            label: format!("Preset: {name}"),
+            detail: if fav { "★".into() } else { String::new() },
+            keywords: "preset brush favourite favorite saved",
+            tooltip: format!("Apply the saved “{name}” brush preset ({}).", kind.label()),
+            act: Act::Preset(name),
+            cmd: None,
+        })
+        .collect()
+}
+
 /// All entries for a mode, in their unfiltered order.
 pub fn entries(ed: &Editor, mode: PaletteMode) -> Vec<Entry> {
     match mode {
-        PaletteMode::Brushes => brush_entries(ed, ""),
+        PaletteMode::Brushes => {
+            let mut v = brush_entries(ed, "");
+            v.extend(preset_entries(ed));
+            v
+        }
         PaletteMode::Everything => {
             let mut v = commands(ed);
             v.extend(brush_entries(ed, "Brush: "));
+            v.extend(preset_entries(ed));
             v.extend(ed.recent_files.iter().map(|p| Entry {
                 label: format!(
                     "Open recent: {}",
@@ -796,6 +820,13 @@ pub fn run(ed: &mut Editor, act: Act) -> Option<UiAction> {
         Act::Brush(k) => {
             ed.brush_kind = k;
             ed.status = format!("{} brush", k.label());
+        }
+        Act::Preset(name) => {
+            if let Some(p) = ed.presets.iter().find(|p| p.name == name).cloned() {
+                ed.apply_preset(&p);
+            } else {
+                ed.status = format!("No preset named \"{name}\"");
+            }
         }
         Act::Recent(p) => ed.open_recent(&p),
         Act::Guide(i) => {
@@ -1028,11 +1059,11 @@ mod tests {
                         );
                     }
                 }
-                Act::Recent(_) | Act::Guide(_) | Act::Plugin(..) => {}
+                Act::Preset(_) | Act::Recent(_) | Act::Guide(_) | Act::Plugin(..) => {}
             }
         }
         let brushes = entries(&ed, PaletteMode::Brushes);
-        assert_eq!(brushes.len(), BrushKind::ALL.len());
+        assert!(brushes.len() >= BrushKind::ALL.len());
         assert!(brushes.iter().all(|e| !e.tooltip.is_empty()));
     }
 }

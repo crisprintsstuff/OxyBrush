@@ -132,6 +132,16 @@ pub struct Document {
 
     // In-progress tool states & previews
     pub poly_edit: Option<PolyEdit>,
+    /// Smooth preview levels outside Poly Edit (0 = off). Same Catmull–Clark
+    /// display as Poly Edit's Smooth > Preview (RFC 0048).
+    pub dyn_smooth_preview: u32,
+    /// Cached smooth mesh for [`Self::dyn_smooth_preview`]: piece id, cage
+    /// snapshot and subdivided mesh.
+    pub dyn_smooth: Option<(u64, oxy_mesh::retopo::Cage, oxy_mesh::Mesh)>,
+    /// Levels actually shown (may be less than `dyn_smooth_preview` on large cages).
+    pub dyn_smooth_shown: u32,
+    /// Levels for Topology > Subdivide (smooth) when Poly Edit is closed.
+    pub dyn_smooth_apply_levels: u32,
     pub tube: Option<TubeEdit>,
     /// An open OxySpheres armature (RFC 0034).
     pub spheres: Option<crate::oxyspheres::SphereEdit>,
@@ -272,6 +282,10 @@ impl Document {
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: true,
             poly_edit: None,
+            dyn_smooth_preview: 0,
+            dyn_smooth: None,
+            dyn_smooth_shown: 0,
+            dyn_smooth_apply_levels: 1,
             tube: None,
             spheres: None,
             tube_armed: false,

@@ -244,6 +244,16 @@ Smooth (on by default) rounds each new level off. Turn it off to only split the 
 Remesh and decimate rebuild the mesh, so they remove the levels (undo brings them back).",
     },
     Topic {
+        title: "Smooth preview",
+        keywords: "smooth preview dynamic subdivision catmull clark cage low poly creases subdivide smooth topology",
+        body: "Smooth preview shows what Catmull–Clark subdivision would make of a low-polygon piece, without changing the mesh yet. In Topology, set Preview to 1, 2 or 3 levels (or use Smooth > Preview in Poly Edit). You keep editing the cage; the viewport draws the smooth surface. Creases from Poly Edit stay sharp. Subdivide (smooth) replaces the cage with that surface in one undo step. It needs a low-polygon piece without subdivision levels.",
+    },
+    Topic {
+        title: "Brush favorites and presets",
+        keywords: "favorites favourites star shelf preset rename duplicate palette brush editor custom shelves",
+        body: "Right-click a brush on the shelf and choose Add to Favorites to pin it on the Favorites strip above the full list. Presets… lets you star saved presets (they sort to the top), rename or duplicate them, and share codes or files. Ctrl+K or Space finds Preset: entries by name.",
+    },
+    Topic {
         title: "Dynamic detail",
         keywords: "dynamic topology detail triangles adaptive refine sphere sketch",
         body: "Turn on Dynamic detail in the Topology section (or from the command palette) and sculpting brushes add triangles where they need more detail, and remove ones that have become too small. Start from a plain sphere and pull out shapes with Snake Hook, build up with Clay, without remeshing.\n\n\

@@ -1360,6 +1360,10 @@ pub struct Editor {
     pub quick_bar: crate::settings::QuickBar,
     /// Brush order in the shelf (user-arranged); number keys follow it.
     pub brush_order: Vec<BrushKind>,
+    /// Favourite brush kinds for the Favorites strip (RFC 0049).
+    pub favorite_brushes: Vec<BrushKind>,
+    /// Favourite preset names (starred in Presets…); order is display order.
+    pub favorite_presets: Vec<String>,
     /// Shading strengths to restore when the shading toggle turns it back on.
     shading_restore: (f32, f32),
     pub high_contrast: bool,
@@ -1713,6 +1717,8 @@ impl Default for Editor {
             panels: Default::default(),
             quick_bar: Default::default(),
             brush_order: BrushKind::ALL.to_vec(),
+            favorite_brushes: Vec::new(),
+            favorite_presets: Vec::new(),
             shading_restore: (0.7, 0.6),
             high_contrast: false,
             pixels_per_point: 1.0,
@@ -2065,6 +2071,8 @@ impl Editor {
             panels: self.panels,
             quick_bar: self.quick_bar,
             brush_order: self.brush_order.clone(),
+            favorite_brushes: self.favorite_brushes.clone(),
+            favorite_presets: self.favorite_presets.clone(),
             ambient_occlusion: self.view.ambient_occlusion,
             cavity: self.view.cavity,
             updates: self.updater.mode,
@@ -2386,6 +2394,8 @@ impl Editor {
         self.panels = s.panels;
         self.quick_bar = s.quick_bar;
         self.brush_order = s.brush_order.clone();
+        self.favorite_brushes = s.favorite_brushes.clone();
+        self.favorite_presets = s.favorite_presets.clone();
         self.view.ambient_occlusion = s.ambient_occlusion;
         self.view.cavity = s.cavity;
         self.updater.mode = s.updates;
@@ -3531,7 +3541,86 @@ impl Editor {
             return;
         }
         self.presets.retain(|p| p.name != name);
+        self.favorite_presets.retain(|n| n != name);
         self.status = format!("Deleted brush preset \"{name}\"");
+    }
+
+    /// Rename a user preset (file + library entry + favorite list).
+    pub fn rename_preset(&mut self, old: &str, new: &str) {
+        let new = new.trim();
+        if new.is_empty() {
+            self.status = "Give the preset a name first".into();
+            return;
+        }
+        if old == new {
+            return;
+        }
+        if self.presets.iter().any(|p| p.name == new) {
+            self.status = format!("A preset named \"{new}\" already exists");
+            return;
+        }
+        let Some(i) = self.presets.iter().position(|p| p.name == old) else {
+            self.status = format!("No preset named \"{old}\"");
+            return;
+        };
+        if let Some(dir) = &self.preset_dir
+            && let Err(e) = crate::presets::rename(dir, old, new)
+        {
+            self.status = format!("Could not rename the preset: {e}");
+            return;
+        }
+        self.presets[i].name = new.to_string();
+        for n in &mut self.favorite_presets {
+            if n == old {
+                *n = new.to_string();
+            }
+        }
+        self.presets.sort_by_key(|p| p.name.to_lowercase());
+        self.status = format!("Renamed brush preset to \"{new}\"");
+    }
+
+    /// Duplicate a user preset under a new name.
+    pub fn duplicate_preset(&mut self, name: &str, new_name: &str) {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            self.status = "Give the copy a name first".into();
+            return;
+        }
+        let Some(p) = self.presets.iter().find(|p| p.name == name).cloned() else {
+            self.status = format!("No preset named \"{name}\"");
+            return;
+        };
+        let mut copy = p;
+        copy.name = new_name.to_string();
+        self.add_preset(copy);
+    }
+
+    pub fn toggle_favorite_brush(&mut self, k: BrushKind) {
+        if let Some(i) = self.favorite_brushes.iter().position(|b| *b == k) {
+            self.favorite_brushes.remove(i);
+            self.status = format!("{} removed from Favorites", k.label());
+        } else {
+            self.favorite_brushes.push(k);
+            self.status = format!("{} added to Favorites", k.label());
+        }
+    }
+
+    pub fn is_favorite_brush(&self, k: BrushKind) -> bool {
+        self.favorite_brushes.contains(&k)
+    }
+
+    pub fn toggle_favorite_preset(&mut self, name: &str) {
+        if let Some(i) = self.favorite_presets.iter().position(|n| n == name) {
+            self.favorite_presets.remove(i);
+            self.status = format!("Preset \"{name}\" removed from Favorites");
+        } else {
+            self.favorite_presets.push(name.to_string());
+            self.status = format!("Preset \"{name}\" added to Favorites");
+        }
+    }
+
+    pub fn is_favorite_preset(&self, name: &str) -> bool {
+        self.favorite_presets.iter().any(|n| n == name)
     }
 
     /// Add a preset from a pasted brush code.
@@ -15626,6 +15715,8 @@ mod tests {
             panels: crate::settings::PanelSide::Left,
             quick_bar: crate::settings::QuickBar::Toolbar,
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
+            favorite_brushes: vec![BrushKind::Mask, BrushKind::Smooth],
+            favorite_presets: vec!["Soft clay".into()],
             ambient_occlusion: 0.3,
             cavity: 0.9,
             updates: crate::settings::UpdateMode::Download,
@@ -16416,6 +16507,33 @@ mod tests {
         f.save_preset("   ");
         assert!(f.status.contains("name"), "{}", f.status);
     }
+
+    #[test]
+    fn favorite_brushes_and_preset_rename_duplicate() {
+        let mut e = Editor::default();
+        e.toggle_favorite_brush(BrushKind::Clay);
+        assert!(e.is_favorite_brush(BrushKind::Clay));
+        e.toggle_favorite_brush(BrushKind::Clay);
+        assert!(!e.is_favorite_brush(BrushKind::Clay));
+        e.brush_kind = BrushKind::Draw;
+        e.save_preset("Soft draw");
+        e.toggle_favorite_preset("Soft draw");
+        assert!(e.is_favorite_preset("Soft draw"));
+        e.duplicate_preset("Soft draw", "Soft draw copy");
+        assert_eq!(e.presets.len(), 2);
+        e.rename_preset("Soft draw copy", "Renamed draw");
+        assert!(e.presets.iter().any(|p| p.name == "Renamed draw"));
+        assert!(!e.presets.iter().any(|p| p.name == "Soft draw copy"));
+        e.delete_preset("Soft draw");
+        assert!(!e.is_favorite_preset("Soft draw"), "delete clears the favorite");
+        let mut snap = e.settings();
+        snap.favorite_brushes = vec![BrushKind::Clay, BrushKind::Smooth];
+        snap.favorite_presets = vec!["Renamed draw".into()];
+        let back = crate::settings::Settings::from_text(&snap.to_text());
+        assert_eq!(back.favorite_brushes, vec![BrushKind::Clay, BrushKind::Smooth]);
+        assert_eq!(back.favorite_presets, vec!["Renamed draw".to_string()]);
+    }
+
     #[test]
     fn strokes_can_start_on_empty_space_when_enabled() {
         let mut e = editor();
