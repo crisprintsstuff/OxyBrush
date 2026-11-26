@@ -803,6 +803,10 @@ pub mod plain {
     pub const PRESET_COPY: &str = "Copy this brush as one line of text you can paste somewhere else.";
     pub const PRESET_EXPORT: &str = "Save this preset to an .oxbrush file.";
     pub const PRESET_DELETE: &str = "Delete this preset from your library.";
+    pub const PRESET_RENAME: &str = "Rename this preset in your library.";
+    pub const PRESET_DUPLICATE: &str = "Save a copy of this preset under a new name.";
+    pub const FAVORITE_BRUSH: &str = "Add or remove this brush from the Favorites strip above the shelf.";
+    pub const FAVORITE_PRESET: &str = "Star this preset so it sorts to the top of My presets.";
     pub const SPACING: &str = "Distance between dabs, as a fraction of the radius. Lower is smoother.";
     pub const AUTO_SMOOTH: &str = "Smooth a little after every dab.";
     pub const GRAVITY: &str = "Let the surface sag downward as you sculpt, for drapery, hanging folds and drooping flesh. The slider is how strong: at 1 one pass sags about a brush radius, so a few passes drape a whole area; 0.1–0.3 for a gentle droop. Each brush keeps its own setting. It pulls toward the world's down (the floor), not the screen's, and follows pen pressure and the mask.";
@@ -1104,6 +1108,10 @@ pub mod plain {
         PRESET_COPY,
         PRESET_EXPORT,
         PRESET_DELETE,
+        PRESET_RENAME,
+        PRESET_DUPLICATE,
+        FAVORITE_BRUSH,
+        FAVORITE_PRESET,
         SPACING,
         AUTO_SMOOTH,
         GRAB_THROUGH,

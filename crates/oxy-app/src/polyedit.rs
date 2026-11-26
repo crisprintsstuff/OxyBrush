@@ -2729,8 +2729,18 @@ pub const MAX_PREVIEW_FACES: usize = 100_000;
 
 impl Editor {
     /// Keep the smooth preview in step with the cage (rebuilt only when the
-    /// cage changed). Called once per frame.
+    /// cage changed). Called once per frame. While Poly Edit is open, uses
+    /// its Preview control; otherwise Topology's Smooth preview (RFC 0048).
     pub fn update_poly_smooth(&mut self) {
+        if self.poly_edit.is_some() {
+            self.dyn_smooth = None;
+            self.update_poly_edit_smooth();
+            return;
+        }
+        self.update_dyn_smooth();
+    }
+
+    fn update_poly_edit_smooth(&mut self) {
         let Some(pe) = self.poly_edit.as_ref() else { return };
         let cage = if pe.smooth_preview == 0 { None } else { self.poly_cage() };
         // Fewer levels on bigger cages: the preview is rebuilt on every
@@ -2762,6 +2772,98 @@ impl Editor {
         }
     }
 
+    /// Smooth preview for the active piece when Poly Edit is closed (RFC 0048).
+    fn update_dyn_smooth(&mut self) {
+        let wanted = self.dyn_smooth_preview;
+        if wanted == 0 {
+            self.dyn_smooth = None;
+            self.dyn_smooth_shown = 0;
+            return;
+        }
+        if !self.ensure_dyn_smooth_cage() {
+            self.dyn_smooth = None;
+            self.dyn_smooth_shown = 0;
+            return;
+        }
+        let piece = self.scene.active();
+        let id = piece.id;
+        let Some(cage) = piece.cage.as_ref() else {
+            self.dyn_smooth = None;
+            return;
+        };
+        let levels = (1..=wanted)
+            .rev()
+            .find(|&l| oxy_mesh::catmull_clark::face_count(cage, l) <= MAX_PREVIEW_FACES)
+            .unwrap_or(0);
+        if levels == 0 {
+            self.dyn_smooth = None;
+            self.dyn_smooth_shown = 0;
+            return;
+        }
+        let fresh = self.dyn_smooth.as_ref().is_some_and(|(pid, c, _)| {
+            *pid == id
+                && c.positions == cage.positions
+                && c.faces == cage.faces
+                && c.creases == cage.creases
+                && self.dyn_smooth_shown == levels
+        });
+        if fresh {
+            return;
+        }
+        let snapshot = cage.clone();
+        if let Some(mesh) = oxy_mesh::catmull_clark::subdivide_levels(&snapshot, levels).build_mesh() {
+            self.dyn_smooth = Some((id, snapshot, mesh));
+            self.dyn_smooth_shown = levels;
+        } else {
+            self.dyn_smooth = None;
+            self.dyn_smooth_shown = 0;
+        }
+    }
+
+    /// Make sure the active piece has a linked low-poly cage for smooth preview.
+    /// RETURNS: false when the piece can't use Smooth preview.
+    pub fn ensure_dyn_smooth_cage(&mut self) -> bool {
+        if !self.need_piece() {
+            return false;
+        }
+        let piece = self.scene.active();
+        if piece.multires.is_some() {
+            if self.dyn_smooth_preview > 0 {
+                self.status =
+                    "Smooth preview needs a piece without subdivision levels (or use Keep this level only first)"
+                        .into();
+                self.dyn_smooth_preview = 0;
+            }
+            return false;
+        }
+        let tris = piece.mesh.triangle_count();
+        if tris == 0 || tris > MAX_TRIANGLES {
+            if self.dyn_smooth_preview > 0 {
+                self.status = if tris == 0 {
+                    "Smooth preview needs a piece with faces".into()
+                } else {
+                    format!(
+                        "Smooth preview is for low-polygon pieces (up to {} triangles); this one has {tris}",
+                        MAX_TRIANGLES
+                    )
+                };
+                self.dyn_smooth_preview = 0;
+            }
+            return false;
+        }
+        let linked = piece.cage.as_ref().is_some_and(|c| c.is_linked_to(&piece.mesh));
+        if !linked {
+            let cage = cage_from_mesh(&piece.mesh);
+            self.scene.active_mut().cage = Some(cage);
+        }
+        let p = self.scene.active_mut();
+        if let Some(c) = p.cage.as_mut() {
+            let _ = c.sync_from(&p.mesh);
+            c.sync_groups_from(&p.mesh);
+        }
+        true
+    }
+
     /// The piece whose polygon edges the viewport draws as a depth-tested
     /// wireframe: the edited piece, unless the smooth preview is shown
     /// (then the cage floats off the smoothed surface and is drawn on top).
@@ -2770,14 +2872,19 @@ impl Editor {
         pe.smooth.is_none().then_some(pe.piece)
     }
 
-    /// The piece shown smoothed, while the preview is on.
+    /// The piece shown smoothed, while the preview is on (Poly Edit or Topology).
     pub fn poly_smooth_piece(&self) -> Option<u64> {
-        let pe = self.poly_edit.as_ref()?;
-        pe.smooth.as_ref().map(|_| pe.piece)
+        if let Some(pe) = self.poly_edit.as_ref() {
+            return pe.smooth.as_ref().map(|_| pe.piece);
+        }
+        self.dyn_smooth.as_ref().map(|(id, _, _)| *id)
     }
 
     pub fn poly_smooth_mesh_mut(&mut self) -> Option<&mut Mesh> {
-        self.poly_edit.as_mut()?.smooth.as_mut().map(|(_, m)| m)
+        if self.poly_edit.as_ref().is_some_and(|pe| pe.smooth.is_some()) {
+            return self.poly_edit.as_mut()?.smooth.as_mut().map(|(_, m)| m);
+        }
+        self.dyn_smooth.as_mut().map(|(_, _, m)| m)
     }
 
     /// Replace the piece's polygons with `levels` levels of smooth
@@ -2804,6 +2911,41 @@ impl Editor {
         } else {
             self.status = format!("Subdivided {levels} level(s): {faces} faces");
         }
+    }
+
+    /// Apply smooth subdivision to the active piece from Topology (no Poly Edit).
+    pub fn dyn_smooth_apply(&mut self, levels: u32) {
+        if self.poly_edit.is_some() {
+            self.poly_subdivide(levels, false);
+            return;
+        }
+        if !self.ensure_dyn_smooth_cage() {
+            return;
+        }
+        let piece = self.scene.active();
+        let id = piece.id;
+        let Some(i) = self.scene.index_of(id) else { return };
+        let Some(cage) = piece.cage.clone() else { return };
+        let faces = oxy_mesh::catmull_clark::face_count(&cage, levels);
+        if faces > MAX_SMOOTH_FACES {
+            self.status = format!("Subdivide: {levels} level(s) would make {faces} faces; use fewer levels");
+            return;
+        }
+        let before_mesh = piece.mesh.clone();
+        let before_cage = Some(cage.clone());
+        let mut smooth = oxy_mesh::catmull_clark::subdivide_levels(&cage, levels);
+        let Some((mesh, _)) = smooth.build_mesh_with_order() else {
+            self.status = "Subdivide (smooth) failed to build the mesh".into();
+            return;
+        };
+        let p = &mut self.scene.pieces[i];
+        p.mesh = mesh;
+        p.cage = Some(smooth);
+        p.multires = None;
+        self.history.record_cage("Subdivide (smooth)", id, before_mesh, before_cage);
+        self.dyn_smooth = None;
+        self.dyn_smooth_preview = 0;
+        self.status = format!("Subdivided {levels} level(s): {faces} faces");
     }
 }
 
@@ -3817,6 +3959,30 @@ mod tests {
         e.poly_subdivide(2, true);
         assert!(e.poly_edit.is_none());
         assert_eq!(e.scene.active().mesh.triangle_count(), 6 * 16 * 2);
+        assert!(e.preview_in_place().is_none());
+    }
+
+    #[test]
+    fn topology_smooth_preview_outside_poly_edit() {
+        let mut e = editor();
+        // A fresh cube has no Poly Edit session; Topology Smooth preview still works.
+        assert!(e.poly_edit.is_none());
+        e.dyn_smooth_preview = 2;
+        e.update_poly_smooth();
+        assert_eq!(e.preview_in_place(), Some(e.scene.active().id), "{}", e.status);
+        assert!(e.scene.active().cage.is_some());
+        let tris = e.preview_mesh_mut().unwrap().triangle_count();
+        assert!(tris > e.scene.active().mesh.triangle_count());
+        e.dyn_smooth_apply(1);
+        assert!(e.dyn_smooth.is_none());
+        assert_eq!(e.dyn_smooth_preview, 0);
+        assert!(e.history.can_undo(), "Apply is one undo step");
+        e.undo();
+        e.dyn_smooth_preview = 1;
+        e.update_poly_smooth();
+        assert_eq!(e.preview_in_place(), Some(e.scene.active().id));
+        e.dyn_smooth_preview = 0;
+        e.update_poly_smooth();
         assert!(e.preview_in_place().is_none());
     }
 

@@ -56,6 +56,22 @@ pub fn delete(dir: &Path, name: &str) -> std::io::Result<()> {
     std::fs::remove_file(dir.join(file_name(name)))
 }
 
+/// Rename a preset file; fails if the new name already exists on disk.
+pub fn rename(dir: &Path, old: &str, new: &str) -> std::io::Result<()> {
+    let from = dir.join(file_name(old));
+    let to = dir.join(file_name(new));
+    if to.exists() && to != from {
+        return Err(std::io::Error::new(std::io::ErrorKind::AlreadyExists, "a preset with that name already exists"));
+    }
+    let mut preset = read_file(&from).map_err(std::io::Error::other)?;
+    preset.name = new.to_string();
+    write_file(&preset, &to)?;
+    if to != from {
+        let _ = std::fs::remove_file(from);
+    }
+    Ok(())
+}
+
 /// Read a preset file chosen by the user (`.oxbrush`).
 pub fn read_file(path: &Path) -> Result<BrushPreset, String> {
     let text = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -90,6 +106,11 @@ mod tests {
         delete(&dir, "Zeta clay").unwrap();
         assert_eq!(load_all(&dir).len(), 1);
         assert!(!dir.join("Zeta clay.oxbrush.tmp").exists());
+        rename(&dir, "alpha/../../escape", "Safe name").unwrap();
+        let all = load_all(&dir);
+        assert_eq!(all.len(), 1);
+        assert_eq!(all[0].name, "Safe name");
+        assert!(!dir.join(file_name("alpha/../../escape")).exists());
         std::fs::remove_dir_all(dir).ok();
     }
 }

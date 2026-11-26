@@ -2868,12 +2868,14 @@ const NAMELESS_BRUSH: f32 = 46.0;
 /// The brush list, in the form that suits the layout.
 fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     let ctx = ui.ctx().clone();
+    let favorites = ed.favorite_brushes.clone();
     let order = ed.brush_order.clone();
     let mut picked = None;
     let mut moved = None;
+    let mut fav_toggle: Option<BrushKind> = None;
     // (brush, true to remove its key) from the right-click menu (#259).
     let mut hotkey: Option<(BrushKind, bool)> = None;
-    let mut item = |ui: &mut Ui, i: usize, k: BrushKind, ed: &Editor| {
+    let mut item = |ui: &mut Ui, i: Option<usize>, k: BrushKind, ed: &Editor, favoritable: bool| {
         let selected = ed.brush_kind == k;
         let key_owned = ed.number_key(k);
         let key = key_owned.as_deref();
@@ -2908,11 +2910,21 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
         if r.clicked() {
             picked = Some(k);
         }
-        if let Some(m) = reorder(ui, &r, i, horizontal) {
+        if let Some(i) = i
+            && let Some(m) = reorder(ui, &r, i, horizontal)
+        {
             moved = Some(m);
         }
         r.context_menu(|ui| {
             ui.label(RichText::new(format!("{} brush", k.label())).strong());
+            if favoritable {
+                let starred = ed.is_favorite_brush(k);
+                let label = if starred { "Remove from Favorites" } else { "Add to Favorites" };
+                if tips::hover(ui.button(label), plain::FAVORITE_BRUSH).clicked() {
+                    fav_toggle = Some(k);
+                    ui.close();
+                }
+            }
             let own = ed.keymap.brush_key(k);
             let set = match own {
                 Some(c) => format!("Change hotkey ({})…", c.label()),
@@ -2930,12 +2942,32 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
             arrange_menu(ui, ed_layout_snapshot(ed));
         });
     };
+    if !favorites.is_empty() {
+        ui.label(RichText::new("Favorites").strong().small());
+        if horizontal {
+            ui.horizontal_top(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                for k in &favorites {
+                    item(ui, None, *k, ed, true);
+                }
+            });
+        } else {
+            ui.horizontal_wrapped(|ui| {
+                for k in &favorites {
+                    item(ui, None, *k, ed, true);
+                }
+            });
+        }
+        ui.add_space(4.0);
+        ui.separator();
+        ui.label(RichText::new("All brushes").strong().small());
+    }
     if horizontal {
         // Top-aligned, so the thumbnails line up with the tiles beside them.
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             for (i, k) in order.iter().enumerate() {
-                item(ui, i, *k, ed);
+                item(ui, Some(i), *k, ed, true);
             }
             ui.add_space(8.0);
             ui.label(RichText::new("Drag to rearrange.\nRight-click for placement.").weak().small());
@@ -2946,14 +2978,14 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
                 ui.vertical_centered(|ui| {
                     ui.spacing_mut().item_spacing.y = 6.0;
                     for (i, k) in order.iter().enumerate() {
-                        item(ui, i, *k, ed);
+                        item(ui, Some(i), *k, ed, true);
                     }
                 });
             }
             UiLayout::Standard if ed.show_brush_names => {
                 ui.spacing_mut().item_spacing.y = 2.0;
                 for (i, k) in order.iter().enumerate() {
-                    item(ui, i, *k, ed);
+                    item(ui, Some(i), *k, ed, true);
                 }
             }
             layout => {
@@ -2969,7 +3001,7 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
                 };
                 egui::Grid::new("brush_grid").spacing([gap, gap]).show(ui, |ui| {
                     for (i, k) in order.iter().enumerate() {
-                        item(ui, i, *k, ed);
+                        item(ui, Some(i), *k, ed, true);
                         if i % cols == cols - 1 {
                             ui.end_row();
                         }
@@ -2980,6 +3012,9 @@ fn brush_shelf(ui: &mut Ui, ed: &mut Editor, horizontal: bool) {
     }
     if let Some(k) = picked {
         ed.brush_kind = k;
+    }
+    if let Some(k) = fav_toggle {
+        ed.toggle_favorite_brush(k);
     }
     match hotkey {
         Some((k, false)) => {
@@ -6536,50 +6571,131 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
     let mut apply = None;
     let mut delete = None;
     let mut copy = None;
+    let mut fav_toggle = None;
+    let mut rename: Option<(String, String)> = None;
+    let mut duplicate: Option<(String, String)> = None;
+    let rename_id = egui::Id::unique("preset_rename_field");
+    let dup_id = egui::Id::unique("preset_dup_field");
+    let mut rename_buf: String = ui.data_mut(|d| d.get_temp(rename_id)).unwrap_or_default();
+    let mut dup_buf: String = ui.data_mut(|d| d.get_temp(dup_id)).unwrap_or_default();
     let row = |ui: &mut Ui,
                p: &oxy_sculpt::BrushPreset,
                user: bool,
                apply: &mut Option<oxy_sculpt::BrushPreset>,
                delete: &mut Option<String>,
                copy: &mut Option<String>,
+               fav_toggle: &mut Option<String>,
+               rename: &mut Option<(String, String)>,
+               duplicate: &mut Option<(String, String)>,
+               rename_buf: &mut String,
+               dup_buf: &mut String,
                ed: &mut Editor| {
         ui.horizontal(|ui| {
             let t = widgets::brush_texture(&ctx, p.kind);
             ui.add(egui::Image::new((t.id(), egui::vec2(24.0, 24.0))));
+            let starred = ed.is_favorite_preset(&p.name);
+            let label = if starred { format!("★ {}", p.name) } else { p.name.clone() };
             let tip = tips::preset_tip(p.kind.label(), p.radius_pt, p.strength, p.alpha.as_deref());
-            let r = tips::hover(ui.add(egui::Button::selectable(false, &p.name)), tip);
+            let r = tips::hover(ui.add(egui::Button::selectable(false, label)), tip);
             if r.clicked() {
                 *apply = Some(p.clone());
             }
             r.context_menu(|ui| {
+                let star = if starred { "Remove from Favorites" } else { "Add to Favorites" };
+                if tips::hover(ui.button(star), plain::FAVORITE_PRESET).clicked() {
+                    *fav_toggle = Some(p.name.clone());
+                    ui.close();
+                }
                 if tips::hover(ui.button("Copy brush code"), plain::PRESET_COPY).clicked() {
                     *copy = Some(p.to_code());
                 }
                 if tips::hover(ui.button("Export to a file…"), plain::PRESET_EXPORT).clicked() {
                     ed.request_export_preset = Some(p.clone());
                 }
-                if user && tips::hover(ui.button("Delete"), plain::PRESET_DELETE).clicked() {
-                    *delete = Some(p.name.clone());
+                if user {
+                    ui.separator();
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(rename_buf).hint_text("New name").desired_width(120.0));
+                        if tips::hover(
+                            ui.add_enabled(!rename_buf.trim().is_empty(), egui::Button::new("Rename")),
+                            plain::PRESET_RENAME,
+                        )
+                        .clicked()
+                        {
+                            *rename = Some((p.name.clone(), rename_buf.clone()));
+                            ui.close();
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.add(egui::TextEdit::singleline(dup_buf).hint_text("Copy as…").desired_width(120.0));
+                        if tips::hover(
+                            ui.add_enabled(!dup_buf.trim().is_empty(), egui::Button::new("Duplicate")),
+                            plain::PRESET_DUPLICATE,
+                        )
+                        .clicked()
+                        {
+                            *duplicate = Some((p.name.clone(), dup_buf.clone()));
+                            ui.close();
+                        }
+                    });
+                    if tips::hover(ui.button("Delete"), plain::PRESET_DELETE).clicked() {
+                        *delete = Some(p.name.clone());
+                    }
                 }
             });
         });
     };
     ui.label(RichText::new("Starter presets").strong());
     for p in &starters {
-        row(ui, p, false, &mut apply, &mut delete, &mut copy, ed);
+        row(
+            ui,
+            p,
+            false,
+            &mut apply,
+            &mut delete,
+            &mut copy,
+            &mut fav_toggle,
+            &mut rename,
+            &mut duplicate,
+            &mut rename_buf,
+            &mut dup_buf,
+            ed,
+        );
     }
     ui.separator();
     ui.label(RichText::new("My presets").strong());
     if ed.presets.is_empty() {
         ui.label(RichText::new("None yet: save the current brush below.").weak().small());
     }
-    let mine = ed.presets.clone();
+    let mut mine = ed.presets.clone();
+    mine.sort_by(|a, b| {
+        let af = ed.is_favorite_preset(&a.name);
+        let bf = ed.is_favorite_preset(&b.name);
+        bf.cmp(&af).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+    });
     egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
         for p in &mine {
-            row(ui, p, true, &mut apply, &mut delete, &mut copy, ed);
+            row(
+                ui,
+                p,
+                true,
+                &mut apply,
+                &mut delete,
+                &mut copy,
+                &mut fav_toggle,
+                &mut rename,
+                &mut duplicate,
+                &mut rename_buf,
+                &mut dup_buf,
+                ed,
+            );
         }
     });
-    ui.label(RichText::new("Click to use. Right-click to copy its code, export or delete.").weak().small());
+    ui.label(
+        RichText::new("Click to use. Right-click to favorite, rename, duplicate, copy, export or delete.")
+            .weak()
+            .small(),
+    );
     ui.separator();
     let name_id = egui::Id::unique("preset_name_field");
     let code_id = egui::Id::unique("preset_code_field");
@@ -6624,12 +6740,23 @@ fn presets_popup(ui: &mut Ui, ed: &mut Editor) {
     ui.data_mut(|d| {
         d.insert_temp(name_id, name);
         d.insert_temp(code_id, code);
+        d.insert_temp(rename_id, rename_buf);
+        d.insert_temp(dup_id, dup_buf);
     });
     if let Some(p) = apply {
         ed.apply_preset(&p);
     }
     if let Some(n) = delete {
         ed.delete_preset(&n);
+    }
+    if let Some(n) = fav_toggle {
+        ed.toggle_favorite_preset(&n);
+    }
+    if let Some((old, new)) = rename {
+        ed.rename_preset(&old, &new);
+    }
+    if let Some((src, new)) = duplicate {
+        ed.duplicate_preset(&src, &new);
     }
     if let Some(c) = copy {
         ctx.copy_text(c);
@@ -7084,6 +7211,56 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 ed.keep_level_only();
             }
         }
+    }
+    ui.add_space(4.0);
+    // Live Catmull–Clark preview of the low-poly cage (RFC 0048 / #447).
+    // While Poly Edit is open, its Smooth > Preview owns the same display.
+    ui.label(RichText::new("Smooth preview").small().weak());
+    ui.add_enabled_ui(ed.poly_edit.is_none() && !busy, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("Preview");
+            for (n, label) in [(0u32, "Off"), (1, "1"), (2, "2"), (3, "3")] {
+                if ui
+                    .selectable_value(&mut ed.dyn_smooth_preview, n, label)
+                    .on_hover_text(if n == 0 {
+                        "Show the model as it is"
+                    } else {
+                        "Show the surface smooth subdivision would make, this many levels, while you keep editing the low-polygon cage"
+                    })
+                    .changed()
+                    && n > 0
+                {
+                    let _ = ed.ensure_dyn_smooth_cage();
+                }
+            }
+        });
+        if ed.dyn_smooth_preview > 0 && ed.dyn_smooth_shown != ed.dyn_smooth_preview && ed.dyn_smooth.is_some() {
+            ui.label(
+                RichText::new(format!(
+                    "Showing {} level(s): more would be slow on this many faces",
+                    ed.dyn_smooth_shown
+                ))
+                .weak()
+                .small(),
+            );
+        }
+        ui.horizontal(|ui| {
+            ui.label("Levels");
+            ui.add(egui::DragValue::new(&mut ed.dyn_smooth_apply_levels).range(1..=4));
+            let apply_levels = ed.dyn_smooth_apply_levels;
+            if ui
+                .button("Subdivide (smooth)")
+                .on_hover_text(
+                    "Replace the low-polygon cage with its smooth subdivision (each face becomes quads; creases stay sharp)",
+                )
+                .clicked()
+            {
+                ed.dyn_smooth_apply(apply_levels);
+            }
+        });
+    });
+    if ed.poly_edit.is_some() {
+        ui.label(RichText::new("Use Smooth in the Poly Edit window while modeling.").weak().small());
     }
     ui.add_space(4.0);
     ui.label(RichText::new("Subdivision levels").small().weak());

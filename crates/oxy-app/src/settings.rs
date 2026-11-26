@@ -304,17 +304,27 @@ pub fn brush_key(k: BrushKind) -> &'static str {
 /// duplicates dropped, and brushes missing from the list (e.g. added in a
 /// newer version) are appended in their default order.
 pub fn parse_brush_order(v: &str) -> Vec<BrushKind> {
+    let mut order = parse_brush_subset(v);
+    for k in BrushKind::ALL {
+        if !order.contains(&k) {
+            order.push(k);
+        }
+    }
+    order
+}
+
+/// Parse a comma-separated list of brush kinds; unknown and duplicates skipped.
+/// Unlike [`parse_brush_order`], missing kinds are not appended.
+pub fn parse_brush_subset(v: &str) -> Vec<BrushKind> {
     let mut order: Vec<BrushKind> = Vec::new();
     for name in v.split(',').map(str::trim) {
+        if name.is_empty() {
+            continue;
+        }
         let name = oxy_sculpt::preset::legacy_kind_key(name);
         if let Some(k) = BrushKind::ALL.into_iter().find(|k| brush_key(*k) == name)
             && !order.contains(&k)
         {
-            order.push(k);
-        }
-    }
-    for k in BrushKind::ALL {
-        if !order.contains(&k) {
             order.push(k);
         }
     }
@@ -336,6 +346,10 @@ pub struct Settings {
     pub quick_bar: QuickBar,
     /// Brush order in the shelf; number keys 1–9, 0 follow it.
     pub brush_order: Vec<BrushKind>,
+    /// Favourite brush kinds for the Favorites strip (RFC 0049).
+    pub favorite_brushes: Vec<BrushKind>,
+    /// Favourite preset names (starred in Presets…).
+    pub favorite_presets: Vec<String>,
     /// Viewport ambient occlusion and cavity strengths, 0 (off) to 1.
     pub ambient_occlusion: f32,
     pub cavity: f32,
@@ -1126,6 +1140,8 @@ impl Default for Settings {
             panels: PanelSide::Right,
             quick_bar: QuickBar::ViewportTop,
             brush_order: BrushKind::ALL.to_vec(),
+            favorite_brushes: Vec::new(),
+            favorite_presets: Vec::new(),
             ambient_occlusion: 0.7,
             cavity: 0.6,
             updates: UpdateMode::Off,
@@ -1357,6 +1373,20 @@ impl Settings {
                 self.lighting.to_line()
             )
             + &format!("remember_brushes = {}\n", self.remember_brushes)
+            + &if self.favorite_brushes.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    "favorite_brushes = {}\n",
+                    self.favorite_brushes.iter().map(|k| brush_key(*k)).collect::<Vec<_>>().join(", ")
+                )
+            }
+            + &self
+                .favorite_presets
+                .iter()
+                .filter(|n| !n.is_empty() && !n.contains(['\n', '\r']))
+                .map(|n| format!("favorite_preset = {n}\n"))
+                .collect::<String>()
             + &format!("settings_per_brush = {}\nsize_per_brush = {}\n", self.settings_per_brush, self.size_per_brush)
             + &format!("lighter_inactive = {}\n", self.lighter_inactive)
             + &self.brush_looks.iter().map(|l| format!("brush_look = {}\n", l.to_code())).collect::<String>()
@@ -1503,6 +1533,12 @@ impl Settings {
                 "panels" => s.panels = PanelSide::from_key(v).unwrap_or(s.panels),
                 "quick_bar" => s.quick_bar = QuickBar::from_key(v).unwrap_or(s.quick_bar),
                 "brush_order" => s.brush_order = parse_brush_order(v),
+                "favorite_brushes" => s.favorite_brushes = parse_brush_subset(v),
+                "favorite_preset" => {
+                    if !v.is_empty() && !s.favorite_presets.iter().any(|n| n == v) {
+                        s.favorite_presets.push(v.to_string());
+                    }
+                }
                 "ambient_occlusion" => {
                     if let Ok(x) = v.parse::<f32>()
                         && (0.0..=1.0).contains(&x)
@@ -2002,6 +2038,8 @@ mod tests {
             panels: PanelSide::Left,
             quick_bar: QuickBar::ViewportBottom,
             brush_order: BrushKind::ALL.into_iter().rev().collect(),
+            favorite_brushes: vec![BrushKind::Clay, BrushKind::Draw],
+            favorite_presets: vec!["Soft clay".into(), "Deep cracks".into()],
             ambient_occlusion: 0.25,
             cavity: 0.0,
             updates: UpdateMode::Notify,
