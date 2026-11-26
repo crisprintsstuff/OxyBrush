@@ -103,7 +103,7 @@ commands! {
     AddSpheres => "Add OxySpheres", "", "Block out a shape with spheres: drag from a sphere to pull out a new one, Shift+drag to move one, Ctrl+drag to resize it, and click a link to add a sphere on it. Make mesh turns the spheres into one smooth piece to sculpt.";
     EditSpheres => "Edit OxySpheres", "", "Open the active OxySpheres piece to change its spheres, then make another mesh from them (Make mesh) or keep them (Done). The meshes made before stay as they are.";
     CopyPiece => "Copy piece", "Ctrl+C", "Copy the selected piece or pieces to the clipboard so you can paste them into this or another tab.";
-    PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project tab as one undo step.";
+    PastePiece => "Paste piece", "Ctrl+V", "Paste the copied pieces into the active project as one undo step.";
     Duplicate => "Duplicate piece", "", "Make a copy of the active piece.";
     MirrorDuplicate => "Mirror duplicate (X)", "", "Copy the active piece, flipped across X.";
     MirrorDuplicateY => "Mirror duplicate (Y)", "", "Copy the active piece, flipped across Y.";
@@ -252,20 +252,20 @@ commands! {
     Keymap => "Keymap", "", "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
     Preferences => "Preferences…", "Ctrl+,", "Open preferences to customize layout, appearance, plugins, keymap and updates.";
     RunScript => "Run Python script…", "", "Execute a Python script using the OxyBrush API.";
-    NewTab => "New tab", "Ctrl+T", "Open a new project tab in this window.";
-    CloseTab => "Close tab", "Ctrl+W", "Close the active tab. You are asked before unsaved changes are discarded.";
-    NextTab => "Next tab", "Ctrl+Tab", "Switch to the next open project tab.";
-    PrevTab => "Previous tab", "Ctrl+Shift+Tab", "Switch to the previous open project tab.";
-    ReopenClosedTab => "Reopen closed tab", "Ctrl+Shift+T", "Reopen the most recently closed project tab that had a saved file.";
-    Tab1 => "Switch to tab 1", "Ctrl+1", "Switch directly to the first project tab.";
-    Tab2 => "Switch to tab 2", "Ctrl+2", "Switch directly to the second project tab.";
-    Tab3 => "Switch to tab 3", "Ctrl+3", "Switch directly to the third project tab.";
-    Tab4 => "Switch to tab 4", "Ctrl+4", "Switch directly to the fourth project tab.";
-    Tab5 => "Switch to tab 5", "Ctrl+5", "Switch directly to the fifth project tab.";
-    Tab6 => "Switch to tab 6", "Ctrl+6", "Switch directly to the sixth project tab.";
-    Tab7 => "Switch to tab 7", "Ctrl+7", "Switch directly to the seventh project tab.";
-    Tab8 => "Switch to tab 8", "Ctrl+8", "Switch directly to the eighth project tab.";
-    Tab9 => "Switch to tab 9", "Ctrl+9", "Switch directly to the ninth project tab.";
+    NewTab => "New project", "Ctrl+T", "Open a new project in this window.";
+    CloseTab => "Close this project", "Ctrl+W", "Close the active project. You are asked before unsaved changes are discarded.";
+    NextTab => "Next project", "Ctrl+Tab", "Switch to the next open project.";
+    PrevTab => "Previous project", "Ctrl+Shift+Tab", "Switch to the previous open project.";
+    ReopenClosedTab => "Reopen closed project", "Ctrl+Shift+T", "Reopen the most recently closed project that had a saved file.";
+    Tab1 => "Switch to project 1", "Ctrl+1", "Switch directly to the first project.";
+    Tab2 => "Switch to project 2", "Ctrl+2", "Switch directly to the second project.";
+    Tab3 => "Switch to project 3", "Ctrl+3", "Switch directly to the third project.";
+    Tab4 => "Switch to project 4", "Ctrl+4", "Switch directly to the fourth project.";
+    Tab5 => "Switch to project 5", "Ctrl+5", "Switch directly to the fifth project.";
+    Tab6 => "Switch to project 6", "Ctrl+6", "Switch directly to the sixth project.";
+    Tab7 => "Switch to project 7", "Ctrl+7", "Switch directly to the seventh project.";
+    Tab8 => "Switch to project 8", "Ctrl+8", "Switch directly to the eighth project.";
+    Tab9 => "Switch to project 9", "Ctrl+9", "Switch directly to the ninth project.";
 }
 
 use crate::keymap::CommandId;
@@ -996,7 +996,7 @@ pub mod plain {
     pub const RECOVER: &str = "Open the autosaved work.";
     pub const RECOVER_ALL: &str = "Open every recovered autosave as its own tab.";
     pub const DISCARD_ONE_RECOVERY: &str = "Delete this recovered autosave permanently.";
-    pub const RESTORE_SESSION: &str = "Reopen the saved project tabs that were open when OxyBrush last closed.";
+    pub const RESTORE_SESSION: &str = "Reopen the saved projects that were open when OxyBrush last closed.";
     pub const KEYMAP_SETTINGS: &str = "Change keyboard shortcuts, mouse navigation and sculpt modifiers.";
     pub const SURFACE_CURSOR: &str = "Draw the brush ring flat on the surface under the pointer, at the brush size. Off the model it stays flat to the screen.";
     pub const FOCAL_LENGTH_MENU: &str = "Perspective lens in millimeters (35mm equivalent).";

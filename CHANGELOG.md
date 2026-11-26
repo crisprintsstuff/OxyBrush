@@ -6,19 +6,23 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Show remesh density** ([RFC 0050](docs/rfcs/0050-remesh-density-preview.md), [#552](https://github.com/crisprintsstuff/OxyBrush/issues/552)). Topology checkbox draws a grid of the current Remesh voxel / OxyRemesh cell size on the active piece before you rebuild.
 - **Smooth preview outside Poly Edit** ([RFC 0048](docs/rfcs/0048-dynamic-smooth.md), [#447](https://github.com/crisprintsstuff/OxyBrush/issues/447)). Topology shows the same Catmull–Clark smooth surface as Poly Edit's Smooth > Preview (Off / 1 / 2 / 3) while you keep editing the low-polygon cage; **Subdivide (smooth)** applies it. Creases still shape the result.
 - **Favorites and preset editor** ([RFC 0049](docs/rfcs/0049-custom-brush-shelves.md)). Star brushes for a Favorites strip on the shelf; star presets so they sort first; rename and duplicate saved presets; Ctrl+K / Space find `Preset: …` entries.
 - **Alpha Roll, Tile and rotate jitter** ([RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)). **Roll** scrolls a tileable alpha along the stroke (paint-roller); **Roll distance** stretches or compresses it. **Tile** wraps the pattern inside each dab; **Repeats** sets density. **Rotate jitter** (per stroke or per dab) turns the alpha randomly without Spray. Built-in **Scale strip** is a tileable U-scale row for rolling along limbs.
+- **Scale cover** (Dino mode). Tools > Scale cover… places overlapping scale plates on the active piece using surface instances: built-in teardrop, diamond, round, plate, ridge and spike meshes (procedural, original), scatter / mask / face-group placement, size, spacing, lift, variation, seed and orient. Apply creates or updates the cover; Edit source and Make real reuse the Instances ops. [RFC 0046](docs/rfcs/0046-scale-cover.md)
 
 ### Changed
 
+- **Accumulate defaults.** Draw, Clay, Inflate and Clay Strips start with Accumulate **on** again so overlapping dabs build like clay ([#553](https://github.com/crisprintsstuff/OxyBrush/issues/553), [#554](https://github.com/crisprintsstuff/OxyBrush/issues/554)). Turn it off for a flat cap within one stroke.
+- **Document tabs are labeled Projects.** Menus, keymap group (**Projects**), shortcuts help and dialogs say **project** instead of **tab** (e.g. New project, Close this project). Keyboard Tab and Preferences category tabs are unchanged.
+- **Recipe Box is a movable window.** Open from View > Recipe Box; drag it anywhere; close with ×. Starts hidden; visibility is remembered (`recipe_box` in settings). The fixed edge **RECIPES** tab is gone.
+- **OxyRemesh faces** slider goes to **100 000** (was capped at 50 000 in the UI while the job already allowed more).
 - **Scale alphas.** Rebuilt the procedural **Scales** stamp as overlapping U-plates, and added **Snake scales**, **Diamond scales**, and a single **Scale plate** for Stamp strokes (all original CC0). [RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)
-### Added
-
-- **Scale cover** (Dino mode). Tools > Scale cover… places overlapping scale plates on the active piece using surface instances: built-in teardrop, diamond, round, plate, ridge and spike meshes (procedural, original), scatter / mask / face-group placement, size, spacing, lift, variation, seed and orient. Apply creates or updates the cover; Edit source and Make real reuse the Instances ops. [RFC 0046](docs/rfcs/0046-scale-cover.md)
 
 ### Fixed
 
+- **OxyRemesh no longer replaces the mesh with floating shards** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551)). When face extraction would produce disconnected islands, the job fails with a clear status and the piece stays as it was (use Voxel remesh / Ctrl+R meanwhile). Full field-extraction hardening remains on the RFC 0044 track.
 - **Poly Edit pick on undo.** Undoing (or redoing) a Poly Edit cage edit restores the face/edge/point pick that belonged to that mesh topology, so the selection no longer disappears after Undo.
 
 ## [4.0.0] - 2026-11-25

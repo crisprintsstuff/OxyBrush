@@ -1,12 +1,12 @@
 # RFC 0039 — Per-brush Accumulate
 
-**Status:** Proposed
+**Status:** Implemented (defaults revised 2026-11-26)
 
 ## Summary
 
 Add **Accumulate** next to the dab controls for Draw, Inflate, Clay, and
-Clay Strips. Default to off for Draw, Inflate, and Clay, and to on for
-Clay Strips and the Soft clay buildup preset.
+Clay Strips. Default to **on** for all four (and for Soft clay buildup).
+Turn it off for a flat cap within one stroke.
 
 ## Motivation
 

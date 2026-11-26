@@ -516,6 +516,8 @@ pub struct Settings {
     /// The settings panel (inspector) is shown; Shift+Tab or the view
     /// strip's button hides it on its own (#260).
     pub settings_panel: bool,
+    /// Show the movable Recipe Box window (View > Recipe Box).
+    pub recipe_box: bool,
     /// Side of a captured alpha in pixels (Capture from view).
     pub alpha_capture_size: u32,
     /// When dragging empty space in a panel scrolls it (RFC 0015).
@@ -1223,6 +1225,7 @@ impl Default for Settings {
             show_brush_names: true,
             narrow_shelf: false,
             settings_panel: true,
+            recipe_box: false,
             alpha_capture_size: 1024,
             panel_drag_scroll: PanelDragScroll::Pen,
             pieces_box_height: 240.0,
@@ -1425,6 +1428,7 @@ impl Settings {
             + &format!("brush_names = {}\n", self.show_brush_names)
             + &format!("narrow_shelf = {}\n", self.narrow_shelf)
             + &format!("settings_panel = {}\n", self.settings_panel)
+            + &format!("recipe_box = {}\n", self.recipe_box)
             + &format!("alpha_capture_size = {}\n", self.alpha_capture_size)
             + &format!("panel_drag_scroll = {}\n", self.panel_drag_scroll.key())
             + &format!("pieces_box_height = {}\n", self.pieces_box_height)
@@ -1797,6 +1801,7 @@ impl Settings {
                 "brush_names" => s.show_brush_names = v.parse().unwrap_or(s.show_brush_names),
                 "narrow_shelf" => s.narrow_shelf = v.parse().unwrap_or(s.narrow_shelf),
                 "settings_panel" => s.settings_panel = v.parse().unwrap_or(s.settings_panel),
+                "recipe_box" => s.recipe_box = v.parse().unwrap_or(s.recipe_box),
                 "panel_drag_scroll" => {
                     s.panel_drag_scroll = PanelDragScroll::from_key(v).unwrap_or(s.panel_drag_scroll)
                 }
@@ -2128,6 +2133,7 @@ mod tests {
             show_brush_names: false,
             narrow_shelf: true,
             settings_panel: false,
+            recipe_box: false,
             alpha_capture_size: 2048,
             panel_drag_scroll: crate::settings::PanelDragScroll::Always,
             pieces_box_height: 280.0,
