@@ -1421,6 +1421,8 @@ pub struct Editor {
     pub surface_cursor: bool,
     /// Draw a grid on the floor under the model.
     pub floor_grid: bool,
+    /// Draw a remesh density preview grid on the active piece (#552).
+    pub show_remesh_density: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
     /// Tab is held (retopology: Tab+drag extends a border edge).
@@ -1751,6 +1753,7 @@ impl Default for Editor {
             hold_to_curve_ask: false,
             surface_cursor: false,
             floor_grid: true,
+            show_remesh_density: false,
             hide_cursor_during_stroke: true,
             tab_held: false,
             cursor_smooth: None,
@@ -17340,10 +17343,22 @@ mod tests {
         assert!(e.job.is_some(), "OxyRemesh starts a background job");
         wait_job(&mut e);
         let after = e.scene.active().mesh.triangle_count();
-        assert!(after > 0, "status={}", e.status);
-        assert_ne!(after, before, "mesh should change; status={}", e.status);
-        e.undo();
-        assert_eq!(e.scene.active().mesh.triangle_count(), before);
+        // Extraction may refuse a fragmented result (#551); the piece must
+        // stay intact when that happens.
+        if e.status.contains("disconnected") {
+            assert_eq!(after, before, "shattered result must not replace the mesh; status={}", e.status);
+        } else {
+            assert!(after > 0, "status={}", e.status);
+            assert_ne!(after, before, "mesh should change; status={}", e.status);
+            e.undo();
+            assert_eq!(e.scene.active().mesh.triangle_count(), before);
+        }
+    }
+
+    #[test]
+    fn remesh_density_preview_defaults_off() {
+        let e = editor();
+        assert!(!e.show_remesh_density, "Show remesh density starts off (#552)");
     }
 
     #[test]

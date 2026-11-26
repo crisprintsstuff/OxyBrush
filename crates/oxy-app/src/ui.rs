@@ -1101,6 +1101,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::oxyspheres_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
     crate::polyedit_ui::overlay(ui, ed, canvas);
+    remesh_density_overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -7300,6 +7301,12 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             plain::REMESH_RES,
         );
     });
+    tips::check_plain(
+        ui,
+        &mut ed.show_remesh_density,
+        "Show remesh density",
+        "Draw a grid of the current Remesh voxel size (and OxyRemesh cell size) on the active piece, so you can see how dense the rebuild will be before you run it.",
+    );
     let estimate = ed.remesh_estimate();
     let text = format!("Makes about {} triangles", fmt_count(estimate));
     let text = if estimate > 8_000_000 {
@@ -8128,6 +8135,54 @@ fn surface_circle(center: Vec3, normal: Vec3, radius: f32, up_hint: Vec3, segmen
             center + (t * a.cos() + b * a.sin()) * radius
         })
         .collect()
+}
+
+/// Remesh / OxyRemesh density preview (#552): a wire grid of the current
+/// voxel (or field-cell) size drawn on the active piece's bounds.
+fn remesh_density_overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
+    if !ed.show_remesh_density || ed.show_welcome {
+        return;
+    }
+    let Some(piece) = ed.scene.try_active() else { return };
+    if !piece.visible {
+        return;
+    }
+    let bounds = piece.mesh.bounds();
+    let extent = bounds.extent();
+    let max_e = extent.max_element().max(1e-6);
+    // Voxel remesh cell size; OxyRemesh ρ from area / face budget (same formula as auto_retopo).
+    let voxel = max_e / ed.remesh_resolution.max(1) as f32;
+    let area = {
+        // Cheap surface-area stand-in from AABB faces (preview only).
+        2.0 * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x)
+    }
+    .max(1e-8);
+    let face_budget = (ed.oxyremesh_target_faces.max(4) as f32 / 4.0).max(4.0);
+    let oxy_rho = (area / face_budget).sqrt().max(1e-6);
+    let cell = voxel.min(oxy_rho).max(max_e / 64.0);
+    let divisions = ((max_e / cell).ceil() as i32).clamp(2, 48);
+    let min = bounds.min;
+    let painter = ui.painter().with_clip_rect(canvas);
+    let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(120, 200, 255, 90));
+    let line = |a: Vec3, b: Vec3| {
+        if let (Some(pa), Some(pb)) = (project_point(ed, a), project_point(ed, b)) {
+            painter.line_segment([pa, pb], stroke);
+        }
+    };
+    // Three face-aligned grids through the AABB (xy / xz / yz slices at mid).
+    let mid = bounds.center();
+    for i in 0..=divisions {
+        let t = i as f32 / divisions as f32;
+        let x = min.x + extent.x * t;
+        let y = min.y + extent.y * t;
+        let z = min.z + extent.z * t;
+        line(Vec3::new(x, min.y, mid.z), Vec3::new(x, min.y + extent.y, mid.z));
+        line(Vec3::new(min.x, y, mid.z), Vec3::new(min.x + extent.x, y, mid.z));
+        line(Vec3::new(x, mid.y, min.z), Vec3::new(x, mid.y, min.z + extent.z));
+        line(Vec3::new(min.x, mid.y, z), Vec3::new(min.x + extent.x, mid.y, z));
+        line(Vec3::new(mid.x, y, min.z), Vec3::new(mid.x, y, min.z + extent.z));
+        line(Vec3::new(mid.x, min.y, z), Vec3::new(mid.x, min.y + extent.y, z));
+    }
 }
 
 pub(crate) fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {

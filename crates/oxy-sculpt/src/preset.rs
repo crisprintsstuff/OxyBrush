@@ -473,12 +473,14 @@ mod tests {
 
     #[test]
     fn new_presets_use_brush_defaults_and_old_presets_keep_buildup() {
-        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate] {
+        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate, BrushKind::ClayStrips] {
             let preset = BrushPreset::new("New", kind);
-            assert!(!preset.accumulate);
-            assert!(!BrushPreset::from_text(&preset.to_text()).unwrap().accumulate);
+            assert!(preset.accumulate, "{} should accumulate by default", kind.label());
+            assert!(BrushPreset::from_text(&preset.to_text()).unwrap().accumulate);
             let old = format!("brush = {}", kind_key(kind));
             assert!(BrushPreset::from_text(&old).unwrap().accumulate);
+            let off = format!("brush = {}\naccumulate = false\n", kind_key(kind));
+            assert!(!BrushPreset::from_text(&off).unwrap().accumulate);
         }
         let buildup = &starter_presets()[0];
         assert!(BrushPreset::from_text(&buildup.to_text()).unwrap().accumulate);
@@ -494,7 +496,11 @@ mod tests {
         // Unknown keys and bad values are ignored; missing values take defaults.
         let t = "brush = pinch\nstrength = 7\nfuture_key = 1\nfalloff = wobbly\nstroke_mode = rm -rf\n";
         let q = BrushPreset::from_text(t).unwrap();
-        assert_eq!(q, BrushPreset::new("Untitled brush", BrushKind::Pinch));
+        // Missing `accumulate` keeps legacy buildup (true), even for brushes that
+        // default off when created fresh via `BrushPreset::new`.
+        let mut expected = BrushPreset::new("Untitled brush", BrushKind::Pinch);
+        expected.accumulate = true;
+        assert_eq!(q, expected);
         assert!(BrushPreset::from_text("strength = 0.5").is_err(), "a preset needs a brush");
         assert!(BrushPreset::from_text("brush = laser").is_err());
         // Invalid, extra or nonfinite coordinates leave the global default in effect.

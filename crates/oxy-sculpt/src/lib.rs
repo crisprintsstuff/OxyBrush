@@ -243,8 +243,10 @@ impl BrushKind {
     }
 
     /// Initial buildup setting for a brush in the editor and new presets.
+    /// Draw, Clay, Inflate and Clay Strips start with Accumulate on so strokes
+    /// build like clay; turn it off for a flat cap within one stroke.
     pub fn default_accumulate(self) -> bool {
-        !matches!(self, Self::Draw | Self::Clay | Self::Inflate)
+        self.supports_accumulate()
     }
 
     /// Brushes that move a captured region with the pointer instead of dabbing.
