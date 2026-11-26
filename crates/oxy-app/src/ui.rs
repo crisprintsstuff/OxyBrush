@@ -6906,6 +6906,20 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
             }
             ui.end_row();
         }
+        if ed.brush_kind.supports_also_paint() {
+            ui.label("");
+            let mut also = ed.brush_also_paints(ed.brush_kind);
+            if ui
+                .checkbox(&mut also, "Also paint")
+                .on_hover_text(
+                    "Lay the Paint color under each dab while you sculpt. Same falloff as the brush; Alt still carves (use the Paint brush to erase color). Color shows in the viewport automatically.",
+                )
+                .changed()
+            {
+                ed.set_brush_also_paint(also);
+            }
+            ui.end_row();
+        }
         if ed.brush_kind.uses_gravity() {
             ui.label("Gravity");
             let k = ed.brush_kind;
@@ -6956,7 +6970,7 @@ fn brush_section(ui: &mut Ui, ed: &mut Editor) {
     }
     tips::check_plain(ui, &mut ed.pressure_radius, "Pen pressure sets radius", plain::PRESSURE_RADIUS);
     tips::check_plain(ui, &mut ed.front_faces_only, "Front faces only", plain::FRONT_FACES);
-    if ed.brush_kind == BrushKind::Paint {
+    if ed.brush_kind == BrushKind::Paint || ed.brush_also_paints(ed.brush_kind) {
         ui.separator();
         paint_controls(ui, ed);
     }
@@ -7000,7 +7014,19 @@ fn paint_controls(ui: &mut Ui, ed: &mut Editor) {
             }
         }
     });
-    ui.label(RichText::new("Alt erases paint. Use the Pearl or Grey Clay material to see true colors.").weak().small());
+    if ed.brush_kind == BrushKind::Paint {
+        ui.label(
+            RichText::new("Alt erases paint. Use the Pearl or Grey Clay material to see true colors.").weak().small(),
+        );
+    } else {
+        ui.label(
+            RichText::new(
+                "Also paint uses this color with the sculpt stroke. Use Pearl or Grey Clay to see true colors.",
+            )
+            .weak()
+            .small(),
+        );
+    }
     egui::CollapsingHeader::new("Color Jitter").show(ui, |ui| {
         let mut jitter = ed.paint_jitter(BrushKind::Paint);
         let before = jitter;

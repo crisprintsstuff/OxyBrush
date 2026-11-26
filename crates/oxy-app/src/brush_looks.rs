@@ -41,6 +41,7 @@ impl Editor {
             let mut look = self.capture_preset(kind.label());
             look.kind = kind;
             look.accumulate = self.brush_accumulates(kind);
+            look.also_paint = self.brush_also_paints(kind);
             look.paint_jitter = self.paint_jitter(kind);
             look.pressure_curves = self.brush_pressure_overrides(kind);
             self.brush_looks.insert(kind, look);
@@ -57,9 +58,23 @@ impl Editor {
         self.brush_looks.entry(kind).or_insert(current).accumulate = accumulate;
     }
 
+    pub(crate) fn brush_also_paints(&self, kind: BrushKind) -> bool {
+        kind.supports_also_paint() && self.brush_looks.get(&kind).is_some_and(|look| look.also_paint)
+    }
+
+    pub(crate) fn set_brush_also_paint(&mut self, also_paint: bool) {
+        let kind = self.brush_kind;
+        if !kind.supports_also_paint() {
+            return;
+        }
+        let current = self.capture_preset(kind.label());
+        self.brush_looks.entry(kind).or_insert(current).also_paint = also_paint;
+    }
+
     pub(crate) fn paint_jitter(&self, kind: BrushKind) -> PaintJitter {
-        if kind == BrushKind::Paint {
-            self.brush_looks.get(&kind).map_or_else(PaintJitter::default, |look| look.paint_jitter)
+        // Color Jitter lives on the Paint brush look; Also paint reuses it.
+        if kind == BrushKind::Paint || self.brush_also_paints(kind) {
+            self.brush_looks.get(&BrushKind::Paint).map_or_else(PaintJitter::default, |look| look.paint_jitter)
         } else {
             PaintJitter::default()
         }
@@ -97,6 +112,15 @@ impl Editor {
         self.pressure_strength = p.pressure_strength;
         self.pressure_radius = p.pressure_radius;
         self.front_faces_only = p.front_faces_only;
+        if k.supports_also_paint() {
+            if let Some(look) = self.brush_looks.get_mut(&k) {
+                look.also_paint = p.also_paint;
+            } else {
+                let mut look = p.clone();
+                look.kind = k;
+                self.brush_looks.insert(k, look);
+            }
+        }
         self.auto_smooth = p.auto_smooth;
         self.spray = p.spray;
         self.noise_scale = p.noise_scale;

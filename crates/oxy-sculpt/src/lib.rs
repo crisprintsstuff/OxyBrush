@@ -242,6 +242,23 @@ impl BrushKind {
         matches!(self, Self::Draw | Self::Inflate | Self::Clay | Self::ClayStrips)
     }
 
+    /// Dab brushes that can lay vertex color while they sculpt (Also paint).
+    /// Paint already colors; Mask / groups / grab / cutters / insert / tube do not.
+    pub fn supports_also_paint(self) -> bool {
+        !(self.is_grab_like()
+            || self.is_curve_cut()
+            || matches!(
+                self,
+                BrushKind::Mask
+                    | BrushKind::Paint
+                    | BrushKind::PaintGroups
+                    | BrushKind::CurveMove
+                    | BrushKind::InsertPrimitive
+                    | BrushKind::Tube
+                    | BrushKind::SceneProject
+            ))
+    }
+
     /// Initial buildup setting for a brush in the editor and new presets.
     /// Draw, Clay, Inflate and Clay Strips start with Accumulate on so strokes
     /// build like clay; turn it off for a flat cap within one stroke.
@@ -362,6 +379,8 @@ pub struct BrushSettings {
     pub accumulate: bool,
     /// Average neighboring vertex colors for the Paint brush.
     pub smooth_paint: bool,
+    /// Also lay vertex color with this sculpt stroke (same falloff as the dab).
+    pub also_paint: bool,
     /// Extra smoothing applied after each dab, 0..=1.
     pub auto_smooth: f32,
     /// Gravity: the surface under the brush also sags downward (world -Y)
@@ -422,6 +441,7 @@ impl Default for BrushSettings {
             front_faces_only: false,
             accumulate: true,
             smooth_paint: false,
+            also_paint: false,
             auto_smooth: 0.0,
             gravity: 0.0,
             spray: 0.0,
@@ -1380,9 +1400,9 @@ impl Stroke {
                 touch,
             );
         } else {
-            let paint = if kind == BrushKind::Paint
+            let paint = if (kind == BrushKind::Paint || self.settings.also_paint)
                 && !self.settings.smooth_paint
-                && !self.invert
+                && !(kind == BrushKind::Paint && self.invert)
                 && self.paint_jitter.enabled()
             {
                 self.paint_jitter.sample(self.paint, self.paint_seed, self.dab_count - 1)
@@ -2313,46 +2333,7 @@ fn apply_kernel(
     }
 
     if kind == BrushKind::Paint {
-        if settings.smooth_paint {
-            // Read all neighboring colors before writing so the average
-            // does not depend on the order of vertices in the mesh.
-            // Blur keeps compounding per dab: repeated passes soften further.
-            let colors: Vec<_> = affected
-                .iter()
-                .map(|&(v, w)| {
-                    let mut sum = Vec3::ZERO;
-                    let mut count = 0;
-                    for &n in &mesh.neighbors(v) {
-                        if !mesh.is_vertex_hidden(n) {
-                            sum += mesh.color[n as usize];
-                            count += 1;
-                        }
-                    }
-                    let color = mesh.color[v as usize];
-                    if count == 0 { color } else { color.lerp(sum / count as f32, (w * dab.strength).clamp(0.0, 1.0)) }
-                })
-                .collect();
-            for (&(v, _), color) in affected.iter().zip(colors) {
-                mesh.color[v as usize] = color;
-            }
-        } else {
-            // Alt (invert) erases paint back to white. Cap the blend at the
-            // highest weight×strength this stroke has reached on the vertex,
-            // measured from the color at first contact, so Strength 0.25 stays
-            // about a quarter opaque after many overlapping dabs.
-            let target = if invert { Vec3::ONE } else { paint };
-            for &(v, w) in &affected {
-                let blend = (w * dab.strength).clamp(0.0, 1.0);
-                let entry = layer.paint.entry(v).or_insert((mesh.color[v as usize], 0.0));
-                // Raise or match the stroke's peak blend from the first-touch
-                // color. Equal blends refresh the target so Color Jitter can
-                // update along a constant-strength stroke.
-                if blend >= entry.1 {
-                    entry.1 = blend;
-                    mesh.color[v as usize] = entry.0.lerp(target, blend);
-                }
-            }
-        }
+        paint_affected(mesh, &affected, dab, paint, invert, settings.smooth_paint, layer);
         for c in chunks {
             mesh.mark_dirty(c);
         }
@@ -2397,15 +2378,16 @@ fn apply_kernel(
         dab
     };
     let new_positions = target_positions(mesh, &settings, invert, kernel_dab, &affected);
+    let also_paint = settings.also_paint && kind.supports_also_paint();
 
     let mut moved = Vec::with_capacity(new_positions.len());
     if capped {
-        for ((v, candidate), (_, weight)) in new_positions.into_iter().zip(affected) {
+        for ((v, candidate), (_, weight)) in new_positions.into_iter().zip(&affected) {
             let position = &mut mesh.positions[v as usize];
             let delta = candidate - *position;
             let length = delta.length();
             let maximum = layer.buildup.entry(v).or_default();
-            let mut step = dab.sag * weight;
+            let mut step = dab.sag * *weight;
             if length > *maximum {
                 step += delta * ((length - *maximum) / length);
                 *maximum = length;
@@ -2422,6 +2404,59 @@ fn apply_kernel(
         }
     }
     mesh.update_after_move(&moved);
+    if also_paint {
+        // Alt still inverts the sculpt; color always goes toward `paint`.
+        paint_affected(mesh, &affected, dab, paint, false, false, layer);
+        for c in chunks {
+            mesh.mark_dirty(c);
+        }
+    }
+}
+
+/// Lay vertex color on the dab's affected vertices (Paint brush, or Also paint).
+fn paint_affected(
+    mesh: &mut Mesh,
+    affected: &[(u32, f32)],
+    dab: &Dab,
+    paint: Vec3,
+    invert: bool,
+    smooth_paint: bool,
+    layer: &mut LayerState,
+) {
+    if smooth_paint {
+        // Read all neighboring colors before writing so the average
+        // does not depend on the order of vertices in the mesh.
+        let colors: Vec<_> = affected
+            .iter()
+            .map(|&(v, w)| {
+                let mut sum = Vec3::ZERO;
+                let mut count = 0;
+                for &n in &mesh.neighbors(v) {
+                    if !mesh.is_vertex_hidden(n) {
+                        sum += mesh.color[n as usize];
+                        count += 1;
+                    }
+                }
+                let color = mesh.color[v as usize];
+                if count == 0 { color } else { color.lerp(sum / count as f32, (w * dab.strength).clamp(0.0, 1.0)) }
+            })
+            .collect();
+        for (&(v, _), color) in affected.iter().zip(colors) {
+            mesh.color[v as usize] = color;
+        }
+    } else {
+        // Alt (invert) erases paint back to white. Cap the blend at the
+        // highest weight×strength this stroke has reached on the vertex.
+        let target = if invert { Vec3::ONE } else { paint };
+        for &(v, w) in affected {
+            let blend = (w * dab.strength).clamp(0.0, 1.0);
+            let entry = layer.paint.entry(v).or_insert((mesh.color[v as usize], 0.0));
+            if blend >= entry.1 {
+                entry.1 = blend;
+                mesh.color[v as usize] = entry.0.lerp(target, blend);
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2475,6 +2510,34 @@ mod tests {
             second.apply_dab(&mut mesh, sample, &mut touch);
         }
         assert!(opacity(&mesh, i) > after_first + 0.15);
+    }
+
+    #[test]
+    fn also_paint_colors_while_draw_moves_the_surface() {
+        let mut mesh = primitives::icosphere(3, 1.0);
+        let i = mesh.positions.iter().position(|p| (p.y - 1.0).abs() < 0.05).unwrap();
+        let before = mesh.positions[i];
+        let sample = StrokeSample { position: mesh.positions[i], normal: mesh.normals[i], pressure: 1.0 };
+        let settings = BrushSettings {
+            kind: BrushKind::Draw,
+            also_paint: true,
+            radius: 0.4,
+            strength: 0.8,
+            pressure_strength: false,
+            spacing: 0.2,
+            ..Default::default()
+        };
+        let paint = Vec3::new(1.0, 0.0, 0.0);
+        let mut stroke = Stroke::new(settings, Symmetry::default(), false).with_paint_color(paint).with_recording();
+        let mut touch = |_: &Mesh, _: u32| {};
+        for _ in 0..6 {
+            stroke.apply_dab(&mut mesh, sample, &mut touch);
+        }
+        assert!((mesh.positions[i] - before).length() > 0.01, "Draw still moves");
+        assert!(mesh.color[i].x > 0.5 && mesh.color[i].y < 0.5, "and lays color: {:?}", mesh.color[i]);
+        let recipe = stroke.take_recipe().expect("recipe");
+        assert!(recipe.settings.also_paint);
+        assert!(StrokeRecipe::from_bytes(&recipe.to_bytes(), &|_| None).unwrap().settings.also_paint);
     }
 
     #[test]

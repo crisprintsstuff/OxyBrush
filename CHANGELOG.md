@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Also paint** ([RFC 0052](docs/rfcs/0052-also-paint.md)). On sculpt brushes (Draw, Clay, …), turn on **Also paint** in brush settings to lay the Paint color under each dab while you sculpt. Color Jitter and the color picker apply; Alt still carves. Grab, cutters and Scene Project are not included yet.
 - **Split view** ([RFC 0054](docs/rfcs/0054-split-view.md)). View > Split view: Off, Left / right, or Top / bottom. Each pane has its own camera; click a pane to sculpt or orbit there; drag the divider to resize.
 - **Project detail** ([RFC 0051](docs/rfcs/0051-detail-reproject.md), [#516](https://github.com/crisprintsstuff/OxyBrush/issues/516)). Mesh > Project detail (also Rebuild and the command palette) snaps the active piece onto the other visible pieces by closest point, so a remesh or cage recovers a sculpt's surface without changing triangles. Mesh > Project onto… picks one source. Background job; one undo; subdivision levels are removed.
 - **Show remesh density** ([RFC 0050](docs/rfcs/0050-remesh-density-preview.md), [#552](https://github.com/crisprintsstuff/OxyBrush/issues/552)). Topology checkbox draws a grid of the current Remesh voxel / OxyRemesh cell size on the active piece before you rebuild.

@@ -40,6 +40,8 @@ pub struct BrushPreset {
     pub pressure_curves: [Option<[f32; 4]>; 2],
     pub front_faces_only: bool,
     pub accumulate: bool,
+    /// Lay vertex color while sculpting (Also paint).
+    pub also_paint: bool,
     pub paint_jitter: PaintJitter,
     pub auto_smooth: f32,
     /// Gravity, 0..=1 (see `BrushSettings::gravity`).
@@ -85,6 +87,7 @@ impl BrushPreset {
             pressure_curves: [None; 2],
             front_faces_only: false,
             accumulate: kind.default_accumulate(),
+            also_paint: false,
             paint_jitter: PaintJitter::default(),
             auto_smooth: 0.0,
             gravity: 0.0,
@@ -136,6 +139,9 @@ impl BrushPreset {
         }
         if !self.accumulate {
             kv("accumulate", "false".into());
+        }
+        if self.also_paint {
+            kv("also_paint", "true".into());
         }
         kv("auto_smooth", self.auto_smooth.to_string());
         kv("gravity", self.gravity.to_string());
@@ -208,6 +214,7 @@ impl BrushPreset {
         }
         // Older presets omitted the key when accumulation was on.
         p.accumulate = flag("accumulate").unwrap_or(true);
+        p.also_paint = flag("also_paint").unwrap_or(false);
         if kind == BrushKind::Paint {
             p.paint_jitter = PaintJitter {
                 hue: num("jitter_hue", 0.0..=180.0).unwrap_or_default(),

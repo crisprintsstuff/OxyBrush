@@ -83,7 +83,7 @@ const MAGIC: &[u8; 4] = b"OXSR";
 /// adds the alpha's invert flag; 4 the pressure curves (#305); 5 uses
 /// flag bit 6 to disable buildup. 6 adds Paint jitter and its seed.
 /// 7 smooth paint. 8 alpha tile / roll / rotate jitter (+ seed).
-const VERSION: u8 = 8;
+const VERSION: u8 = 9;
 /// Most events a saved recipe may claim (a sanity bound for damaged files).
 const MAX_EVENTS: usize = 4_000_000;
 
@@ -139,6 +139,7 @@ impl StrokeRecipe {
     ///   noise_scale crease_pinch : f32 each
     /// flags:u8      1 pressure_strength, 2 pressure_radius, 4 front_faces_only,
     ///               8 invert, 16 grab_through, 32 has alpha, 64 no accumulation (version 5), 128 smooth paint (version 7)
+    /// [version 9+: also_paint:u8]
     /// symmetry:u8   1 x, 2 y, 4 z;  radial:u32  radial_axis:u8 (0 x, 1 y, 2 z)
     /// center:f32*3  view:f32*3  paint:f32*3
     /// [version 4+: strength_curve:f32*4 size_curve:f32*4]
@@ -155,8 +156,10 @@ impl StrokeRecipe {
     /// Version 1's `id` is a sample of the raw sample bits, matched with
     /// the name ([`AlphaLookup::Legacy`]).
     pub fn to_bytes(&self) -> Vec<u8> {
-        let version = if self.rotate_jitter_seed != 0 || self.alpha.as_ref().is_some_and(Self::alpha_needs_v8) {
+        let version = if self.settings.also_paint {
             VERSION
+        } else if self.rotate_jitter_seed != 0 || self.alpha.as_ref().is_some_and(Self::alpha_needs_v8) {
+            8
         } else if self.settings.smooth_paint {
             7
         } else if self.paint_jitter != crate::PaintJitter::default() || self.paint_seed != 0 {
@@ -201,6 +204,9 @@ impl StrokeRecipe {
                 | u8::from(version >= 5 && !s.accumulate) << 6
                 | u8::from(version >= 7 && s.smooth_paint) << 7,
         );
+        if version >= 9 {
+            b.push(u8::from(s.also_paint));
+        }
         let y = &self.symmetry;
         b.push(u8::from(y.x) | u8::from(y.y) << 1 | u8::from(y.z) << 2);
         b.extend_from_slice(&y.radial.to_le_bytes());
@@ -304,6 +310,7 @@ impl StrokeRecipe {
             return Err("invalid brush size or spacing".into());
         }
         let flags = r.u8()?;
+        let also_paint = version >= 9 && r.u8()? != 0;
         let settings = BrushSettings {
             kind,
             radius,
@@ -316,6 +323,7 @@ impl StrokeRecipe {
             front_faces_only: flags & 4 != 0,
             accumulate: version < 5 || flags & 64 == 0,
             smooth_paint: version >= 7 && flags & 128 != 0,
+            also_paint,
             auto_smooth,
             gravity,
             spray,

@@ -723,6 +723,7 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
             front_faces_only: ed.front_faces_only,
             accumulate: ed.brush_accumulates(kind),
             smooth_paint: false,
+            also_paint: kind.supports_also_paint() && ed.brush_also_paints(kind),
             auto_smooth: ed.auto_smooth,
             gravity: ed.gravity(kind),
             spray: ed.spray,
