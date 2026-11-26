@@ -332,8 +332,10 @@ impl Editor {
     }
 
     /// Reopen the unsaved edit when a quad mesh cannot be built.
+    /// Existing mesh pieces are left unchanged; the armature stays open.
     pub(crate) fn retry_quad_skin(&mut self, mut edit: SphereEdit, error: String) {
-        edit.build_error = Some(format!("{error}. Adjust the spheres or choose Voxel skin."));
+        edit.build_error =
+            Some(format!("{error}. Existing meshes were not changed. Adjust the spheres or choose Voxel skin."));
         edit.replace = edit.replace.and_then(|(id, _)| {
             let piece = self.scene.get_mut(id).filter(|p| p.is_spheres())?;
             let before = piece.mesh.hidden().to_vec();
@@ -341,6 +343,29 @@ impl Editor {
             Some((id, before))
         });
         self.spheres = Some(edit);
+    }
+
+    /// Why Make mesh did not replace the armature's last mesh piece.
+    fn generated_mesh_skip_reason(piece: &Piece, recipe: &oxy_doc::ArmatureRecipe) -> &'static str {
+        if piece.is_spheres() {
+            "it is still the OxySpheres piece"
+        } else if piece.link.is_some() {
+            "it is a linked copy"
+        } else if piece.multires.is_some() {
+            "it has subdivision levels"
+        } else if piece.mesh.has_uvs() {
+            "it has UVs"
+        } else if piece.mesh.is_painted() {
+            "it has vertex color"
+        } else if piece.mesh.mask.iter().any(|&m| m != 0.0) {
+            "it has a mask"
+        } else if piece.mesh.hidden().iter().any(|&hidden| hidden) {
+            "it has hidden faces"
+        } else if !recipe.matches(&piece.mesh) {
+            "it was sculpted or its topology changed"
+        } else {
+            "it could not be updated"
+        }
     }
 
     /// Put a finished mesh in the scene as a new piece, with its spheres
@@ -352,18 +377,24 @@ impl Editor {
         // Check only the piece this armature generated. Matching geometry
         // elsewhere in the scene may be an independent copy.
         let last = replace.and_then(|id| self.scene.get(id)).and_then(|source| source.spheres.as_deref());
+        let mut skip_reason: Option<&'static str> = None;
         let target = last.and_then(|recipe| {
             let index = self.scene.index_of(recipe.generated_mesh?)?;
             let p = &self.scene.pieces[index];
-            (!p.is_spheres()
+            if !p.is_spheres()
                 && p.link.is_none()
                 && p.multires.is_none()
                 && !p.mesh.has_uvs()
                 && !p.mesh.is_painted()
                 && p.mesh.mask.iter().all(|&m| m == 0.0)
                 && p.mesh.hidden().iter().all(|&hidden| !hidden)
-                && recipe.matches(&p.mesh))
-            .then_some(index)
+                && recipe.matches(&p.mesh)
+            {
+                Some(index)
+            } else {
+                skip_reason = Some(Self::generated_mesh_skip_reason(p, recipe));
+                None
+            }
         });
         let recipe = spheres.spheres.as_deref_mut().expect("skin has an OxySpheres piece");
         (recipe.triangles, recipe.fingerprint) = oxy_doc::group_fingerprint(&mesh, 0);
@@ -394,7 +425,14 @@ impl Editor {
         steps.push(Step::Inserted { index: at });
         self.scene.set_active(at);
         self.history.record_compound(format!("OxySpheres: make {name}"), steps);
-        format!("Made {name}: {tris} triangles in {secs:.1} s. {spheres_name} is kept (hidden) to make another")
+        match skip_reason {
+            Some(reason) => format!(
+                "Made {name}: {tris} triangles in {secs:.1} s. Previous mesh was not replaced ({reason}). {spheres_name} is kept (hidden) to make another"
+            ),
+            None => {
+                format!("Made {name}: {tris} triangles in {secs:.1} s. {spheres_name} is kept (hidden) to make another")
+            }
+        }
     }
 
     /// Record a step of the open armature's history once its gesture is
