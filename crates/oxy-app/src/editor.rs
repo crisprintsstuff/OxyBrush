@@ -8252,6 +8252,73 @@ impl Editor {
         });
     }
 
+    /// Project the active piece onto other pieces (RFC 0051 Phase 1).
+    ///
+    /// When `source` is `None`, every other **visible** piece is a source
+    /// (same default as the Scene Project brush). When `Some(id)`, only that
+    /// piece is used, whether or not it is visible. Closest-point projection
+    /// via [`oxy_topo::SurfaceProjector`]; topology stays; subdivision levels
+    /// are dropped. Background job; one undo step.
+    pub fn project_detail_onto(&mut self, source: Option<u64>) {
+        if !self.need_piece() {
+            return;
+        }
+        if self.job_blocks_active() {
+            self.status = "Wait for the running operation to finish first".into();
+            return;
+        }
+        let active_id = self.scene.active().id;
+        let sources: Vec<Mesh> = match source {
+            Some(id) => {
+                if id == active_id {
+                    self.status = "Pick a different piece to project onto".into();
+                    return;
+                }
+                let Some(i) = self.scene.index_of(id) else {
+                    self.status = "That piece is gone".into();
+                    return;
+                };
+                if self.scene.pieces[i].mesh.triangle_count() == 0 {
+                    self.status = "That piece has no triangles to project onto".into();
+                    return;
+                }
+                vec![self.scene.pieces[i].mesh.clone()]
+            }
+            None => {
+                let v: Vec<Mesh> = self
+                    .scene
+                    .pieces
+                    .iter()
+                    .filter(|p| p.id != active_id && p.visible && p.mesh.triangle_count() > 0)
+                    .map(|p| p.mesh.clone())
+                    .collect();
+                if v.is_empty() {
+                    self.status = "Show another piece to project onto, or use Mesh > Project onto… to pick one".into();
+                    return;
+                }
+                v
+            }
+        };
+        let mut mesh = self.scene.active().mesh.clone();
+        let label = match source {
+            Some(id) => {
+                let name = self.scene.get(id).map(|p| p.name.as_str()).unwrap_or("piece");
+                format!("Project detail onto {name}")
+            }
+            None => "Project detail".into(),
+        };
+        self.start_job(label, Vec::new(), move || {
+            let refs: Vec<&Mesh> = sources.iter().collect();
+            oxy_topo::SurfaceProjector::new(&refs).project(&mut mesh);
+            Ok(JobResult::Mesh(mesh))
+        });
+    }
+
+    /// Project the active piece onto all other visible pieces.
+    pub fn project_detail(&mut self) {
+        self.project_detail_onto(None);
+    }
+
     /// Remesh all visible pieces into one, replacing the active piece.
     pub fn merge_visible(&mut self) {
         if !self.need_piece() {
@@ -11314,6 +11381,38 @@ mod tests {
         e.symmetrize(0, true);
         assert!(e.job.is_none());
         assert!(e.status.starts_with("Nothing to keep"), "{}", e.status);
+    }
+
+    #[test]
+    fn project_detail_snaps_the_active_piece_onto_another_visible_piece() {
+        let mut e = editor();
+        // High-detail sphere stays as the source; a smaller cube is the target.
+        let source_id = e.scene.active().id;
+        e.add_piece(Piece::new("Cage", primitives::cube(2, 0.6)), "Add Cage");
+        let cage_i = e.scene.pieces.iter().position(|p| p.name == "Cage").unwrap();
+        e.scene.set_active(cage_i);
+        let before = e.scene.active().mesh.positions.clone();
+        let tris = e.scene.active().mesh.triangle_count();
+        e.project_detail();
+        wait_job(&mut e);
+        assert_eq!(e.scene.active().mesh.triangle_count(), tris, "topology stays");
+        let after = &e.scene.active().mesh.positions;
+        assert!(after.iter().zip(&before).any(|(a, b)| (*a - *b).length() > 0.05), "vertices moved");
+        for v in after {
+            assert!((v.length() - 1.0).abs() < 0.08, "on the unit sphere: {}", v.length());
+        }
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, before, "one undo step");
+        // Hidden sources are skipped for Project detail; Project onto still works.
+        e.scene.get_mut(source_id).unwrap().visible = false;
+        e.project_detail();
+        assert!(e.job.is_none());
+        assert!(e.status.starts_with("Show another piece"), "{}", e.status);
+        e.project_detail_onto(Some(source_id));
+        wait_job(&mut e);
+        for v in &e.scene.active().mesh.positions {
+            assert!((v.length() - 1.0).abs() < 0.08, "{}", v.length());
+        }
     }
 
     #[test]

@@ -132,6 +132,7 @@ commands! {
     RebuildLowerLevel => "Rebuild lower level", "", "Recover one Catmull–Clark coarse level under an all-quad mesh that has no subdivision stack (for example after Keep this level only, or an import with recorded quads). The dense surface stays as the high level.";
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
     OxyRemesh => "OxyRemesh", "", "Rebuild the active piece as a lighter pure-quad mesh aligned to its shape (field-aligned remesh). Keeps paint, mask and face groups. Adaptivity, anisotropy, last-stroke guide and mask pole attractor are in the Rebuild panel. Removes subdivision levels. Runs in the background.";
+    ProjectDetail => "Project detail", "", "Move every vertex of the active piece onto the closest point of the other visible pieces, so a clean remesh or retopo cage picks up the sculpt's surface. Topology stays the same; subdivision levels are removed. Runs in the background; one undo step. For one source, use Mesh > Project onto…";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
     CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white, at the size chosen next to it (up to 4096 px). It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
@@ -897,6 +898,7 @@ pub mod plain {
     pub const REVERT_CONFIRM: &str =
         "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
     pub const BOOLEAN_MENU: &str = "Combine the active piece with another one through a voxel remesh: subtract it, add it, or keep only where they overlap. Also in the Pieces panel.";
+    pub const PROJECT_ONTO: &str = "Project the active piece onto this piece only: every vertex moves to the closest point on its surface. The source piece stays; the active piece's topology stays; subdivision levels are removed. One undo step. Project detail uses every other visible piece instead.";
     pub const BOOLEAN_WITH: &str = "What to do with this piece and the active one. The result replaces the active piece and this piece is used up; Undo brings both back.";
     pub const BOOLEAN_PICK: &str =
         "The piece to combine with the active one. It is used up by the Boolean; Undo brings it back.";

@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Project detail** ([RFC 0051](docs/rfcs/0051-detail-reproject.md), [#516](https://github.com/crisprintsstuff/OxyBrush/issues/516)). Mesh > Project detail (also Rebuild and the command palette) snaps the active piece onto the other visible pieces by closest point, so a remesh or cage recovers a sculpt's surface without changing triangles. Mesh > Project onto… picks one source. Background job; one undo; subdivision levels are removed.
 - **Show remesh density** ([RFC 0050](docs/rfcs/0050-remesh-density-preview.md), [#552](https://github.com/crisprintsstuff/OxyBrush/issues/552)). Topology checkbox draws a grid of the current Remesh voxel / OxyRemesh cell size on the active piece before you rebuild.
 - **Smooth preview outside Poly Edit** ([RFC 0048](docs/rfcs/0048-dynamic-smooth.md), [#447](https://github.com/crisprintsstuff/OxyBrush/issues/447)). Topology shows the same Catmull–Clark smooth surface as Poly Edit's Smooth > Preview (Off / 1 / 2 / 3) while you keep editing the low-polygon cage; **Subdivide (smooth)** applies it. Creases still shape the result.
 - **Favorites and preset editor** ([RFC 0049](docs/rfcs/0049-custom-brush-shelves.md)). Star brushes for a Favorites strip on the shelf; star presets so they sort first; rename and duplicate saved presets; Ctrl+K / Space find `Preset: …` entries.

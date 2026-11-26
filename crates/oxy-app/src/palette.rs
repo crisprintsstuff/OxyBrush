@@ -206,6 +206,12 @@ fn commands_always(ed: &Editor) -> Vec<Entry> {
             "oxyremesh oxy remesh auto retopology remesh quads field aligned instant meshes clean topology",
             Editor::oxyremesh_active,
         ),
+        cmd(
+            ed,
+            Cmd::ProjectDetail,
+            "project detail reproject shrinkwrap wrap onto surface remesh retopo recovery",
+            Editor::project_detail,
+        ),
         cmd(ed, Cmd::Retopology, "retopo topology quads low poly manual draw game", Editor::start_retopo),
         cmd(
             ed,
