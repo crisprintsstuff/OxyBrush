@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.1.0] - 2026-11-26
+
 ### Added
 
 - **Scale cover Phase 2** ([RFC 0046](docs/rfcs/0046-scale-cover.md)). **Flow** orientation follows the piece's longest bounds axis so scale rows share body grain; scatter can stay inside a **mask** or **face group**; **Types by face group** applies several plate kinds in one step. Surface instances gain the same placement/orient options (`INS3` for scatter-on-mask/group).
