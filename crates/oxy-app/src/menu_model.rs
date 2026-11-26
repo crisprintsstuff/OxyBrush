@@ -32,7 +32,7 @@ pub enum MenuId {
     RedoScene,
     /// Boolean of the active piece with piece `.0`.
     Boolean(u64, oxy_topo::BooleanOp),
-    /// Project the active piece onto piece `.0` (RFC 0050 Phase 1).
+    /// Project the active piece onto piece `.0` (RFC 0051 Phase 1).
     ProjectOnto(u64),
     /// Symmetrize along axis `.0` (0 X, 1 Y, 2 Z), keeping the positive side when `.1`.
     Symmetrize(usize, bool),
@@ -160,7 +160,7 @@ fn file_menu(ed: &Editor) -> Vec<Node> {
                 cmd(Cmd::NewEmpty, "Empty scene"),
             ],
         ),
-        cmd(Cmd::NewTab, "New tab"),
+        cmd(Cmd::NewTab, "New project"),
         cmd(Cmd::Open, "Open…"),
     ];
     let mut recent: Vec<Node> = ed
@@ -181,7 +181,7 @@ fn file_menu(ed: &Editor) -> Vec<Node> {
         cmd(Cmd::Save, "Save"),
         cmd(Cmd::SaveAs, "Save as…"),
         cmd_on(Cmd::Revert, "Revert", ed.can_revert()),
-        cmd(Cmd::CloseTab, "Close tab"),
+        cmd(Cmd::CloseTab, "Close this project"),
     ]);
     if ed.send_back_available() {
         v.push(cmd(Cmd::SendBack, "Send back to OxyCharacter"));

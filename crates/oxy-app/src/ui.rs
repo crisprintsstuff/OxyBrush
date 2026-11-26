@@ -669,7 +669,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         }
                     }
                 });
-                if tips::button_km(ui, &ed.keymap, "New tab", Cmd::NewTab).clicked() {
+                if tips::button_km(ui, &ed.keymap, "New project", Cmd::NewTab).clicked() {
                     ed.add_tab("sphere");
                 }
                 if tips::button_km(ui, &ed.keymap, "Open…", Cmd::Open).clicked() {
@@ -691,7 +691,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_on(ui, ed.can_revert(), "Revert", Cmd::Revert).clicked() {
                     ed.revert();
                 }
-                if tips::button_km(ui, &ed.keymap, "Close tab", Cmd::CloseTab).clicked() {
+                if tips::button_km(ui, &ed.keymap, "Close this project", Cmd::CloseTab).clicked() {
                     ed.request_close_tab(ed.active_document);
                 }
                 if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
@@ -907,7 +907,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                     ed.toggle_settings_panel();
                 }
                 ui.checkbox(&mut ed.show_parts_bin, "Recipe Box")
-                    .on_hover_text("Show the pull-out Recipe Box drawer beside the brush shelf.");
+                    .on_hover_text("Show the Recipe Box window (movable; close with ×). Drag a recipe onto the model to place it.");
             });
             tips::menu(ui, "Plugins", plain::PLUGINS_MENU, |ui| crate::wasm_plugins::plugins_menu(ui, ed));
             tips::menu(ui, "Help", plain::HELP, |ui| help_menu(ui, ed));
@@ -1101,6 +1101,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     crate::oxyspheres_ui::overlay(ui, ed, canvas);
     crate::retopo_ui::overlay(ui, ed, canvas);
     crate::polyedit_ui::overlay(ui, ed, canvas);
+    remesh_density_overlay(ui, ed, canvas);
     tips::show_pinned(ui.ctx());
     (action, canvas)
 }
@@ -1423,8 +1424,8 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
 fn new_tab_material_row(ui: &mut Ui, ed: &mut Editor) {
     use crate::settings::NewTabMaterial;
     ui.horizontal(|ui| {
-        ui.label("New tabs start with").on_hover_text(
-            "The material (matcap) a new tab starts with: the one of the tab you were in, the default material, or one you pick here.",
+        ui.label("New projects start with").on_hover_text(
+            "The material (matcap) a new project starts with: the one of the project you were in, the default material, or one you pick here.",
         );
         egui::ComboBox::from_id_salt("new_tab_material")
             .selected_text(ed.new_tab_material.label())
@@ -1472,7 +1473,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
 
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
-    tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's tabs at startup", plain::RESTORE_SESSION);
+    tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's projects at startup", plain::RESTORE_SESSION);
     new_tab_material_row(ui, ed);
     if cfg!(not(target_os = "macos")) {
         tips::check_plain(
@@ -2650,7 +2651,7 @@ fn tab_strip(ui: &mut Ui, ed: &mut Editor, scroll_max_w: f32) {
                                 }
                                 ui.add(egui::Label::new(rt));
 
-                                let close_resp = ui.small_button("×").on_hover_text("Close tab");
+                                let close_resp = ui.small_button("×").on_hover_text("Close this project");
                                 if close_resp.clicked() || close_resp.middle_clicked() {
                                     close_tab = Some(i);
                                 }
@@ -2723,11 +2724,11 @@ fn tab_strip(ui: &mut Ui, ed: &mut Editor, scroll_max_w: f32) {
             }
         })
         .response
-        .on_hover_text("Open tabs list");
+        .on_hover_text("Open projects list");
     }
 
     // "+" New Tab button, pinned outside the scroll area
-    let add_btn = ui.button("+").on_hover_text("New tab (Ctrl+T)");
+    let add_btn = ui.button("+").on_hover_text("New project (Ctrl+T)");
     if add_btn.clicked() {
         ed.add_tab("sphere");
     }
@@ -7321,6 +7322,12 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             plain::REMESH_RES,
         );
     });
+    tips::check_plain(
+        ui,
+        &mut ed.show_remesh_density,
+        "Show remesh density",
+        "Draw a grid of the current Remesh voxel size (and OxyRemesh cell size) on the active piece, so you can see how dense the rebuild will be before you run it.",
+    );
     let estimate = ed.remesh_estimate();
     let text = format!("Makes about {} triangles", fmt_count(estimate));
     let text = if estimate > 8_000_000 {
@@ -7413,7 +7420,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.horizontal(|ui| {
         ui.label("OxyRemesh faces");
         tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=50_000))),
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=100_000))),
             "Target face count for OxyRemesh (field-aligned quads).",
         );
     });
@@ -7755,19 +7762,19 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         egui::Modal::new(egui::Id::unique("bridge_open_tab")).show(&ctx, |ui| {
             ui.heading("Open incoming bridge link");
             if dirty {
-                ui.label("The active tab has unsaved changes.");
-                if ui.button("Save and open in this tab").clicked() {
+                ui.label("The active project has unsaved changes.");
+                if ui.button("Save and open in this project").clicked() {
                     *action = Some(UiAction::SaveThenContinue);
                 }
             } else {
                 ui.label("Choose where to open the incoming model.");
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Open in new tab").clicked() {
+                if ui.button("Open in new project").clicked() {
                     ed.pending = None;
                     ed.open_link(&path);
                 }
-                if ui.button(if dirty { "Replace without saving" } else { "Open in this tab" }).clicked() {
+                if ui.button(if dirty { "Replace without saving" } else { "Open in this project" }).clicked() {
                     ed.perform(Pending::OpenLink(path.clone()));
                 }
                 if ui.button("Cancel").clicked() {
@@ -7781,7 +7788,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             Pending::New(_) => "starting a new document".to_string(),
             Pending::Close => "closing the project".to_string(),
             Pending::CloseTab(idx) => {
-                let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "tab".into());
+                let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "project".into());
                 format!("closing {name}")
             }
             Pending::OpenProject(_) | Pending::OpenLink(_) => "opening another project".to_string(),
@@ -7833,7 +7840,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         egui::Modal::new(egui::Id::unique("recover_multi")).show(&ctx, |ui| {
             ui.set_max_width(480.0);
             ui.heading("Recover unsaved projects?");
-            ui.label(format!("OxyBrush found {} unsaved tabs from when it last closed:", items.len()));
+            ui.label(format!("OxyBrush found {} unsaved projects from when it last closed:", items.len()));
             ui.add_space(6.0);
             let mut recover_one = None;
             let mut discard_one = None;
@@ -8152,6 +8159,54 @@ fn surface_circle(center: Vec3, normal: Vec3, radius: f32, up_hint: Vec3, segmen
             center + (t * a.cos() + b * a.sin()) * radius
         })
         .collect()
+}
+
+/// Remesh / OxyRemesh density preview (#552): a wire grid of the current
+/// voxel (or field-cell) size drawn on the active piece's bounds.
+fn remesh_density_overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
+    if !ed.show_remesh_density || ed.show_welcome {
+        return;
+    }
+    let Some(piece) = ed.scene.try_active() else { return };
+    if !piece.visible {
+        return;
+    }
+    let bounds = piece.mesh.bounds();
+    let extent = bounds.extent();
+    let max_e = extent.max_element().max(1e-6);
+    // Voxel remesh cell size; OxyRemesh ρ from area / face budget (same formula as auto_retopo).
+    let voxel = max_e / ed.remesh_resolution.max(1) as f32;
+    let area = {
+        // Cheap surface-area stand-in from AABB faces (preview only).
+        2.0 * (extent.x * extent.y + extent.y * extent.z + extent.z * extent.x)
+    }
+    .max(1e-8);
+    let face_budget = (ed.oxyremesh_target_faces.max(4) as f32 / 4.0).max(4.0);
+    let oxy_rho = (area / face_budget).sqrt().max(1e-6);
+    let cell = voxel.min(oxy_rho).max(max_e / 64.0);
+    let divisions = ((max_e / cell).ceil() as i32).clamp(2, 48);
+    let min = bounds.min;
+    let painter = ui.painter().with_clip_rect(canvas);
+    let stroke = egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(120, 200, 255, 90));
+    let line = |a: Vec3, b: Vec3| {
+        if let (Some(pa), Some(pb)) = (project_point(ed, a), project_point(ed, b)) {
+            painter.line_segment([pa, pb], stroke);
+        }
+    };
+    // Three face-aligned grids through the AABB (xy / xz / yz slices at mid).
+    let mid = bounds.center();
+    for i in 0..=divisions {
+        let t = i as f32 / divisions as f32;
+        let x = min.x + extent.x * t;
+        let y = min.y + extent.y * t;
+        let z = min.z + extent.z * t;
+        line(Vec3::new(x, min.y, mid.z), Vec3::new(x, min.y + extent.y, mid.z));
+        line(Vec3::new(min.x, y, mid.z), Vec3::new(min.x + extent.x, y, mid.z));
+        line(Vec3::new(x, mid.y, min.z), Vec3::new(x, mid.y, min.z + extent.z));
+        line(Vec3::new(min.x, mid.y, z), Vec3::new(min.x + extent.x, mid.y, z));
+        line(Vec3::new(mid.x, y, min.z), Vec3::new(mid.x, y, min.z + extent.z));
+        line(Vec3::new(mid.x, min.y, z), Vec3::new(mid.x, min.y + extent.y, z));
+    }
 }
 
 pub(crate) fn project_point(ed: &Editor, p: Vec3) -> Option<egui::Pos2> {
@@ -10396,115 +10451,41 @@ mod tests {
     }
 
     #[test]
-    fn windows_cover_the_recipe_box_handle() {
-        // The drawer used to be on the foreground layer, drawn over every
-        // window: a window over its handle showed the handle on top and
-        // let it take the window's clicks.
+    fn recipe_box_window_is_shown_and_remembered() {
         let mut ed = Editor::default();
         ed.show_welcome = false;
-        ed.shelf = ShelfPosition::Left;
+        assert!(!ed.show_parts_bin, "Recipe Box starts hidden; open from View > Recipe Box");
         let ctx = egui::Context::default();
         test_apply_theme(&ctx, false, 1.0, ed.layout);
         let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
-        let run = |ed: &mut Editor, events: Vec<egui::Event>, cover: Option<egui::Pos2>| {
-            let raw = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
-            let mut out = ctx.run_ui(raw, |ui| {
-                draw(ui, ed);
-                if let Some(at) = cover {
-                    egui::Window::new("Cover")
-                        .fixed_pos(at - egui::vec2(40.0, 40.0))
-                        .fixed_size([160.0, 120.0])
-                        .show(ui.ctx(), |ui| ui.label("A window over the handle"));
-                }
-            });
-            out.textures_delta.clear();
-        };
-        for _ in 0..4 {
-            run(&mut ed, vec![], None);
-        }
-        let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle").center();
-        for _ in 0..3 {
-            run(&mut ed, vec![egui::Event::PointerMoved(handle)], Some(handle));
-        }
-        assert_eq!(
-            ctx.layer_id_at(handle).map(|l| l.order),
-            Some(egui::Order::Middle),
-            "the window is on top of the handle"
-        );
-        let button = |pressed| egui::Event::PointerButton {
-            pos: handle,
-            button: egui::PointerButton::Primary,
-            pressed,
-            modifiers: Default::default(),
-        };
-        run(&mut ed, vec![button(true)], Some(handle));
-        run(&mut ed, vec![button(false)], Some(handle));
-        run(&mut ed, vec![], Some(handle));
-        assert!(!ed.parts_bin_open, "a click on the window doesn't reach the handle under it");
-    }
-
-    #[test]
-    fn parts_bin_drawer_follows_brush_shelf_and_toggles() {
-        let mut ed = Editor::default();
-        ed.show_welcome = false;
-        assert!(!ed.parts_bin_open);
-        let ctx = egui::Context::default();
-        test_apply_theme(&ctx, false, 1.0, ed.layout);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0));
-
-        let step = |ed: &mut Editor, frames: usize, time_start: f64| -> egui::Rect {
-            let mut canvas = egui::Rect::NOTHING;
+        let step = |ed: &mut Editor, frames: usize, t0: f64| {
             for k in 0..frames {
                 let raw = egui::RawInput {
                     screen_rect: Some(screen),
-                    time: Some(time_start + k as f64 * 0.05),
+                    time: Some(t0 + k as f64 * 0.05),
                     ..Default::default()
                 };
                 let mut out = ctx.run_ui(raw, |ui| {
-                    canvas = draw(ui, ed).1;
+                    let _ = draw(ui, ed);
                 });
                 out.textures_delta.clear();
             }
-            canvas
         };
+        step(&mut ed, 3, 1.0);
+        assert!(crate::parts_ui::last_window_rect(&ctx).is_none(), "hidden: no window");
 
-        // 1. Shelf Left: handle sits at left edge of canvas; clicking toggles drawer open.
-        ed.shelf = ShelfPosition::Left;
-        let canvas = step(&mut ed, 4, 1.0);
-        let handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on left");
-        assert!((handle.min.x - canvas.min.x).abs() < 2.0, "handle={handle:?} canvas={canvas:?}");
-        click_at(&mut ed, &ctx, handle.center());
-        assert!(ed.parts_bin_open, "clicking handle pulls out the Recipe Box drawer");
+        ed.show_parts_bin = true;
+        step(&mut ed, 4, 2.0);
+        let win = crate::parts_ui::last_window_rect(&ctx).expect("Recipe Box window when shown");
+        assert!(win.width() > 100.0 && win.height() > 80.0, "window={win:?}");
 
-        step(&mut ed, 10, 2.0);
-        let drawer = crate::parts_ui::last_drawer_rect(&ctx).expect("drawer rect when open");
-        let open_handle = crate::parts_ui::last_handle_rect(&ctx).unwrap();
-        assert!(drawer.width() > 100.0, "drawer did not expand: {drawer:?}");
-        assert!(open_handle.min.x > canvas.min.x + 100.0);
-
-        click_at(&mut ed, &ctx, open_handle.center());
-        assert!(!ed.parts_bin_open, "clicking open handle collapses the Recipe Box drawer");
-
-        // 2. Shelf Right: settle closed and check right-edge alignment.
-        ed.shelf = ShelfPosition::Right;
-        let canvas = step(&mut ed, 12, 4.0);
-        let right_handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on right");
-        assert!((right_handle.max.x - canvas.max.x).abs() < 2.0, "handle={right_handle:?} canvas={canvas:?}");
-        click_at(&mut ed, &ctx, right_handle.center());
-        assert!(ed.parts_bin_open, "right-edge handle opens drawer");
-
-        // 3. Shelf Bottom: reset closed and check bottom-edge alignment.
-        ed.parts_bin_open = false;
-        ed.shelf = ShelfPosition::Bottom;
-        ed.quick_bar = QuickBar::Toolbar;
-        let canvas = step(&mut ed, 12, 8.0);
-        let bottom_handle = crate::parts_ui::last_handle_rect(&ctx).expect("handle rect on bottom");
-        assert!(
-            (bottom_handle.max.y - canvas.max.y).abs() < 2.0
-                && (bottom_handle.center().x - canvas.center().x).abs() < 2.0,
-            "handle={bottom_handle:?} canvas={canvas:?}"
-        );
-        click_at(&mut ed, &ctx, bottom_handle.center());
-        assert!(ed.parts_bin_open, "bottom-edge handle opens drawer");
+        let settings = ed.settings();
+        assert!(settings.recipe_box);
+        assert!(settings.to_text().contains("recipe_box = true"));
+        let back = crate::settings::Settings::from_text(&settings.to_text());
+        assert!(back.recipe_box);
+        let mut loaded = Editor::default();
+        loaded.apply_settings(&back);
+        assert!(loaded.show_parts_bin, "showing the Recipe Box survives a restart");
     }
 }

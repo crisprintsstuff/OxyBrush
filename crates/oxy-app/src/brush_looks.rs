@@ -162,15 +162,18 @@ mod tests {
     #[test]
     fn accumulate_defaults_match_the_brush_and_buildup_preset() {
         let mut editor = Editor::default();
-        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate] {
-            assert!(!editor.brush_accumulates(kind));
+        for kind in [BrushKind::Draw, BrushKind::Clay, BrushKind::Inflate, BrushKind::ClayStrips] {
+            assert!(editor.brush_accumulates(kind), "{} should accumulate by default", kind.label());
         }
-        assert!(editor.brush_accumulates(BrushKind::ClayStrips));
+        editor.brush_kind = BrushKind::ClayStrips;
+        editor.set_brush_accumulate(false);
+        assert!(!editor.brush_accumulates(BrushKind::ClayStrips));
         let buildup =
             oxy_sculpt::preset::starter_presets().into_iter().find(|p| p.name == "Soft clay buildup").unwrap();
         editor.apply_preset(&buildup);
         assert!(editor.brush_accumulates(BrushKind::Clay));
-        assert!(!editor.brush_accumulates(BrushKind::Draw));
+        // Soft clay buildup only changes Clay; Draw keeps its own look (still on by default).
+        assert!(editor.brush_accumulates(BrushKind::Draw));
     }
 
     #[test]
@@ -179,7 +182,7 @@ mod tests {
         editor.remember_brushes = true;
         editor.settings_per_brush = false;
         editor.brush_kind = BrushKind::Draw;
-        editor.set_brush_accumulate(true);
+        editor.set_brush_accumulate(false);
         editor.brush_kind = BrushKind::ClayStrips;
         editor.set_brush_accumulate(false);
         editor.brush_kind = BrushKind::Clay;
@@ -187,9 +190,10 @@ mod tests {
         let settings = crate::settings::Settings::from_text(&editor.settings().to_text());
         let mut loaded = Editor::default();
         loaded.apply_settings(&settings);
-        assert!(loaded.brush_accumulates(BrushKind::Draw));
+        assert!(!loaded.brush_accumulates(BrushKind::Draw));
         assert!(!loaded.brush_accumulates(BrushKind::ClayStrips));
-        assert!(!loaded.brush_accumulates(BrushKind::Clay));
+        // Clay never had an override written; default Accumulate on.
+        assert!(loaded.brush_accumulates(BrushKind::Clay));
         loaded.apply_preset(&oxy_sculpt::BrushPreset::from_text("brush = clay").unwrap());
         assert!(loaded.brush_accumulates(BrushKind::Clay));
     }

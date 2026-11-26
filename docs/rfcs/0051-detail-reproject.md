@@ -1,4 +1,4 @@
-# RFC 0050 — Detail reproject (Project detail)
+# RFC 0051 — Detail reproject (Project detail)
 
 - **Status:** Phase 1 implemented (Mesh / Rebuild / palette closest-point
   project onto other pieces); Phase 2–3 open

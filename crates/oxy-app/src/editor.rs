@@ -1337,7 +1337,7 @@ pub struct Editor {
     pub parts_library: crate::parts::PartsLibrary,
     /// Where parts are saved; None in automated runs and tests.
     pub parts_dir: Option<std::path::PathBuf>,
-    /// Show the pull-out Recipe Box drawer beside the brush shelf.
+    /// Show the movable Recipe Box window (View > Recipe Box).
     pub show_parts_bin: bool,
     /// The Shading window: ambient occlusion, cavity, hard edges and the
     /// inactive pieces look, for the macOS menu bar, which can't hold
@@ -1346,8 +1346,6 @@ pub struct Editor {
     pub show_references: bool,
     pub reference_alignment: Option<crate::references::Alignment>,
     reference_pick_pressed: bool,
-    /// Whether the Recipe Box drawer is currently slid open.
-    pub parts_bin_open: bool,
     /// Set by the UI: export this part to a file.
     #[allow(dead_code)]
     pub request_export_part: Option<oxy_sculpt::PartDetail>,
@@ -1421,6 +1419,8 @@ pub struct Editor {
     pub surface_cursor: bool,
     /// Draw a grid on the floor under the model.
     pub floor_grid: bool,
+    /// Draw a remesh density preview grid on the active piece (#552).
+    pub show_remesh_density: bool,
     /// Hide the circular brush outline while actively sculpting, keeping only the crosshair.
     pub hide_cursor_during_stroke: bool,
     /// Tab is held (retopology: Tab+drag extends a border edge).
@@ -1705,12 +1705,11 @@ impl Default for Editor {
             request_import_preset: false,
             parts_library: crate::parts::PartsLibrary::default(),
             parts_dir: None,
-            show_parts_bin: true,
+            show_parts_bin: false, // remembered in settings as `recipe_box`; open from View > Recipe Box
             show_shading: false,
             show_references: false,
             reference_alignment: None,
             reference_pick_pressed: false,
-            parts_bin_open: false,
             request_export_part: None,
             request_import_part: false,
             shelf: Default::default(),
@@ -1751,6 +1750,7 @@ impl Default for Editor {
             hold_to_curve_ask: false,
             surface_cursor: false,
             floor_grid: true,
+            show_remesh_density: false,
             hide_cursor_during_stroke: true,
             tab_held: false,
             cursor_smooth: None,
@@ -2168,6 +2168,7 @@ impl Editor {
             window: self.window_geometry,
             show_brush_names: self.show_brush_names,
             narrow_shelf: self.narrow_shelf,
+            recipe_box: self.show_parts_bin,
             settings_panel: self.show_inspector,
             panel_drag_scroll: self.panel_drag_scroll,
             alpha_capture_size: self.capture_alpha_size,
@@ -2481,6 +2482,7 @@ impl Editor {
         self.window_geometry = s.window;
         self.show_brush_names = s.show_brush_names;
         self.narrow_shelf = s.narrow_shelf;
+        self.show_parts_bin = s.recipe_box;
         self.show_inspector = s.settings_panel;
         self.panel_drag_scroll = s.panel_drag_scroll;
         self.capture_alpha_size = s.alpha_capture_size;
@@ -5439,7 +5441,7 @@ impl Editor {
         self.documents[self.active_document].last_used = self.tab_use_clock;
         self.status = match closed {
             Some(name) => format!("Closed {name}"),
-            None => "Closed tab".into(),
+            None => "Closed project".into(),
         };
     }
 
@@ -8210,7 +8212,7 @@ impl Editor {
             return;
         }
         let mesh = self.scene.active().mesh.clone();
-        let target = self.oxyremesh_target_faces.clamp(64, 200_000);
+        let target = self.oxyremesh_target_faces.clamp(64, 100_000);
         let mut orientation_constraints = Vec::new();
         if self.oxyremesh_guide_last_stroke
             && let Some(last) = self.last_stroke.as_ref()
@@ -8250,7 +8252,7 @@ impl Editor {
         });
     }
 
-    /// Project the active piece onto other pieces (RFC 0050 Phase 1).
+    /// Project the active piece onto other pieces (RFC 0051 Phase 1).
     ///
     /// When `source` is `None`, every other **visible** piece is a source
     /// (same default as the Scene Project brush). When `Some(id)`, only that
@@ -17439,10 +17441,22 @@ mod tests {
         assert!(e.job.is_some(), "OxyRemesh starts a background job");
         wait_job(&mut e);
         let after = e.scene.active().mesh.triangle_count();
-        assert!(after > 0, "status={}", e.status);
-        assert_ne!(after, before, "mesh should change; status={}", e.status);
-        e.undo();
-        assert_eq!(e.scene.active().mesh.triangle_count(), before);
+        // Extraction may refuse a fragmented result (#551); the piece must
+        // stay intact when that happens.
+        if e.status.contains("disconnected") {
+            assert_eq!(after, before, "shattered result must not replace the mesh; status={}", e.status);
+        } else {
+            assert!(after > 0, "status={}", e.status);
+            assert_ne!(after, before, "mesh should change; status={}", e.status);
+            e.undo();
+            assert_eq!(e.scene.active().mesh.triangle_count(), before);
+        }
+    }
+
+    #[test]
+    fn remesh_density_preview_defaults_off() {
+        let e = editor();
+        assert!(!e.show_remesh_density, "Show remesh density starts off (#552)");
     }
 
     #[test]

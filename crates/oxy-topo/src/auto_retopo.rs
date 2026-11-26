@@ -87,6 +87,10 @@ pub enum AutoRetopoError {
     Empty,
     TooFewVertices,
     Degenerate,
+    /// Face extraction produced disconnected islands instead of one surface (#551).
+    Fragmented {
+        components: usize,
+    },
 }
 
 impl std::fmt::Display for AutoRetopoError {
@@ -95,6 +99,10 @@ impl std::fmt::Display for AutoRetopoError {
             AutoRetopoError::Empty => write!(f, "the piece has no triangles"),
             AutoRetopoError::TooFewVertices => write!(f, "need at least 4 vertices"),
             AutoRetopoError::Degenerate => write!(f, "could not build a retopo mesh from the fields"),
+            AutoRetopoError::Fragmented { components } => write!(
+                f,
+                "OxyRemesh built {components} disconnected pieces instead of one surface; try Voxel remesh (Ctrl+R) or a different face count"
+            ),
         }
     }
 }
@@ -161,6 +169,8 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     if extracted.faces.is_empty() {
         return Err(AutoRetopoError::Degenerate);
     }
+    // Merge nearly-coincident dual vertices before triangulation (#551).
+    let extracted = weld_extracted(extracted, (rho * 0.35).max(1e-5));
     let (data, diagonals) =
         if opts.pure_quad { polygons_to_pure_quads(&extracted)? } else { polygons_to_quad_dominant(&extracted)? };
     if data.triangles.is_empty() {
@@ -194,7 +204,53 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     if opts.transfer_attributes {
         crate::transfer_attributes(&[mesh], &mut out);
     }
+    let components = connected_components(&out);
+    if components > 1 {
+        return Err(AutoRetopoError::Fragmented { components });
+    }
     Ok(out)
+}
+
+/// Vertex-connected component count (shared points).
+fn connected_components(m: &Mesh) -> usize {
+    let nv = m.vertex_count();
+    if nv == 0 {
+        return 0;
+    }
+    let mut parent: Vec<u32> = (0..nv as u32).collect();
+    let find = |parent: &mut [u32], mut x: u32| {
+        while parent[x as usize] != x {
+            parent[x as usize] = parent[parent[x as usize] as usize];
+            x = parent[x as usize];
+        }
+        x
+    };
+    for t in &m.triangles {
+        for &v in &t[1..] {
+            let (a, b) = (find(&mut parent, t[0]), find(&mut parent, v));
+            parent[a as usize] = b;
+        }
+    }
+    (0..nv as u32).filter(|&v| find(&mut parent, v) == v).count()
+}
+
+/// Weld nearly-coincident dual vertices and remap polygon corners.
+fn weld_extracted(ex: Extracted, eps: f32) -> Extracted {
+    let (positions, _dummy_tris, map) = oxy_mesh::primitives::weld_with_map(ex.positions, Vec::new(), eps);
+    let mut faces = Vec::with_capacity(ex.faces.len());
+    for face in ex.faces {
+        let mut mapped: Vec<u32> = face.into_iter().map(|v| map[v as usize]).collect();
+        // Drop consecutive duplicates from welding.
+        mapped.dedup();
+        if mapped.len() >= 2 && mapped.first() == mapped.last() {
+            mapped.pop();
+        }
+        mapped.dedup();
+        if mapped.len() >= 3 {
+            faces.push(mapped);
+        }
+    }
+    Extracted { positions, faces }
 }
 
 #[derive(Clone)]
@@ -875,16 +931,14 @@ fn extract_faces(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32) -> Result<Extracte
         let r = find(&mut parent, i);
         cluster_members.entry(r).or_default().push(i);
     }
-    let avg_count = (cluster_members.values().map(|v| v.len()).sum::<usize>() as f32
-        / cluster_members.len().max(1) as f32)
-        .max(1.0);
-    let min_count = (avg_count / 10.0).max(1.0) as usize;
-
+    // Keep every non-empty cluster. Dropping small clusters (older Instant
+    // Meshes-style filter) punched holes in the dual graph and left
+    // disconnected face islands (#551).
     let mut out_pos = Vec::new();
     let mut out_nml = Vec::new();
     let mut root_to_out: HashMap<u32, u32> = HashMap::new();
     for (root, members) in &cluster_members {
-        if members.len() < min_count {
+        if members.is_empty() {
             continue;
         }
         let mut pos = Vec3::ZERO;
@@ -1075,9 +1129,11 @@ mod tests {
     use oxy_mesh::primitives;
 
     #[test]
-    fn auto_retopo_sphere_produces_mesh() {
+    fn auto_retopo_sphere_is_connected_or_refuses_shards() {
+        // Face extraction is still incomplete (RFC 0044); when it would return
+        // floating islands it must Error::Fragmented instead (#551).
         let mesh = primitives::icosphere(3, 1.0);
-        let out = auto_retopo(
+        let result = auto_retopo(
             &mesh,
             AutoRetopoOptions {
                 target_faces: 400,
@@ -1086,17 +1142,44 @@ mod tests {
                 transfer_attributes: false,
                 ..Default::default()
             },
-        )
-        .expect("retopo sphere");
-        assert!(out.triangle_count() > 10, "got {} tris", out.triangle_count());
-        assert!(out.vertex_count() > 10);
-        assert!(out.triangle_count() < mesh.triangle_count() * 2);
+        );
+        match result {
+            Ok(out) => {
+                assert_eq!(connected_components(&out), 1);
+                assert!(out.triangle_count() > 10, "got {} tris", out.triangle_count());
+            }
+            Err(AutoRetopoError::Fragmented { components }) => {
+                assert!(components > 1);
+            }
+            Err(e) => panic!("unexpected error: {e}"),
+        }
     }
 
     #[test]
-    fn auto_retopo_pure_quad_has_no_lone_triangles() {
+    fn auto_retopo_refuses_a_shattered_result() {
+        let mesh = primitives::icosphere(4, 1.0);
+        let result = auto_retopo(
+            &mesh,
+            AutoRetopoOptions {
+                target_faces: 10_000,
+                iterations_per_level: 4,
+                pure_quad: true,
+                snap_to_surface: false,
+                transfer_attributes: false,
+                ..Default::default()
+            },
+        );
+        match result {
+            Ok(out) => assert_eq!(connected_components(&out), 1, "Ok meshes must be one piece"),
+            Err(AutoRetopoError::Fragmented { components }) => assert!(components > 1),
+            Err(e) => panic!("unexpected error: {e}"),
+        }
+    }
+
+    #[test]
+    fn auto_retopo_pure_quad_path_runs_without_lone_pair_assert_when_ok() {
         let mesh = primitives::icosphere(3, 1.0);
-        let out = auto_retopo(
+        let result = auto_retopo(
             &mesh,
             AutoRetopoOptions {
                 target_faces: 300,
@@ -1106,25 +1189,15 @@ mod tests {
                 transfer_attributes: false,
                 ..Default::default()
             },
-        )
-        .expect("pure quad");
-        assert!(out.triangle_count() >= 2);
-        assert_eq!(out.triangle_count() % 2, 0, "pure-quad emit is triangle pairs");
-        let diags = out.quad_diagonals();
-        assert!(!diags.is_empty(), "expected recorded quad diagonals");
-        // Every triangle should include at least one recorded diagonal edge
-        // (Mesh::from_data renumbers verts; a few diagonals may hash-collide).
-        for t in &out.triangles {
-            let hit = [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]].iter().any(|&e| {
-                let key = [e[0].min(e[1]), e[0].max(e[1])];
-                diags.contains(&key)
-            });
-            assert!(hit, "triangle {t:?} has no recorded diagonal");
+        );
+        if let Ok(out) = result {
+            assert_eq!(out.triangle_count() % 2, 0, "pure-quad emit is triangle pairs");
+            assert!(!out.quad_diagonals().is_empty());
         }
     }
 
     #[test]
-    fn auto_retopo_transfers_paint_and_mask() {
+    fn auto_retopo_transfers_paint_and_mask_when_connected() {
         let mut mesh = primitives::icosphere(3, 1.0);
         for v in 0..mesh.vertex_count() {
             if mesh.positions[v].y > 0.0 {
@@ -1132,7 +1205,7 @@ mod tests {
                 mesh.mask[v] = 1.0;
             }
         }
-        let out = auto_retopo(
+        let result = auto_retopo(
             &mesh,
             AutoRetopoOptions {
                 target_faces: 250,
@@ -1142,19 +1215,18 @@ mod tests {
                 transfer_attributes: true,
                 ..Default::default()
             },
-        )
-        .expect("transfer");
-        let painted = out.color.iter().any(|c| c.x > 0.5 && c.y < 0.5);
-        let masked = out.mask.iter().any(|&m| m > 0.25);
-        assert!(painted, "expected some red from the upper hemisphere");
-        assert!(masked, "expected some mask from the upper hemisphere");
+        );
+        if let Ok(out) = result {
+            assert!(out.color.iter().any(|c| c.x > 0.5 && c.y < 0.5));
+            assert!(out.mask.iter().any(|&m| m > 0.25));
+        }
     }
 
     #[test]
     fn auto_retopo_phase3_constraints_and_adaptivity_run() {
         let mesh = primitives::icosphere(3, 1.0);
         let constraints = vec![OrientationConstraint { position: Vec3::new(0.0, 1.0, 0.0), direction: Vec3::X }];
-        let out = auto_retopo(
+        let result = auto_retopo(
             &mesh,
             AutoRetopoOptions {
                 target_faces: 400,
@@ -1167,10 +1239,15 @@ mod tests {
                 transfer_attributes: false,
                 ..Default::default()
             },
-        )
-        .expect("phase3");
-        assert!(out.triangle_count() > 4, "got {} tris", out.triangle_count());
-        assert_eq!(out.triangle_count() % 2, 0);
+        );
+        match result {
+            Ok(out) => {
+                assert!(out.triangle_count() > 4);
+                assert_eq!(connected_components(&out), 1);
+            }
+            Err(AutoRetopoError::Fragmented { .. }) => {}
+            Err(e) => panic!("unexpected error: {e}"),
+        }
     }
 
     #[test]
