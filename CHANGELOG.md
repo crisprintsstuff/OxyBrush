@@ -8,7 +8,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
-- **OxyRemesh Swiss cheese** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551), [#586](https://github.com/crisprintsstuff/OxyBrush/pull/586)). Closed inputs no longer get replaced by open/holey extracts. Dual extract densifies unit edges, collapses short dual edges / 3-cycles, fills short polygon holes, and seals remaining gaps (with a closed voxel remesh fallback when the field shell cannot enclose). Isoline extract stays gated until coverage is good; full Autoremesher-quality parameterization remains RFC 0044 Phase 4.
+- **OxyRemesh Swiss cheese** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551), [#586](https://github.com/crisprintsstuff/OxyBrush/pull/586)). Closed inputs no longer get replaced by open/holey extracts. Dual extract densifies unit edges, collapses short dual edges / 3-cycles, fills short polygon holes, and seals remaining gaps (with a closed voxel remesh fallback when the field shell cannot enclose). After seal, keep the largest island so a watertight-but-shattered result is never returned as Ok. Isoline extract stays gated until coverage is good; full Autoremesher-quality parameterization remains RFC 0044 Phase 4.
 
 ## [4.1.1] - 2026-11-26
 

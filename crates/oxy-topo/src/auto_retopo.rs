@@ -258,6 +258,9 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     // Autoremesher-style seal, then voxel-seal the extract if still open.
     if input_watertight && !crate::check_watertight(&out) {
         out = seal_open_extract(out);
+        // Hole fill can close several islands; watertight alone does not imply
+        // one piece — strip floaters again before accepting Ok.
+        out = keep_largest_component(out)?;
     }
     if input_watertight && !crate::check_watertight(&out) {
         // Prefer sealing the field extract; if it does not enclose (Swiss
@@ -284,12 +287,14 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
             None
         };
         if let Some(sealed) = try_voxel(&out).or_else(|| try_voxel(mesh)) {
-            out = sealed;
+            out = keep_largest_component(sealed)?;
         }
     }
     if input_watertight && !crate::check_watertight(&out) {
         return Err(AutoRetopoError::OpenSurface { boundary_edges: boundary_edge_count(&out) });
     }
+    // Even a closed result must be one surface (#551); refuse comparable shards.
+    out = keep_largest_component(out)?;
     if out.triangle_count() < min_tris {
         return Err(AutoRetopoError::Degenerate);
     }
