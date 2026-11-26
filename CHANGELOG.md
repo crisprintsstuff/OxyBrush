@@ -6,6 +6,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Poly Edit Select: Ellipse and rename.** The area row is labeled **Select** (was Pick) and offers **Ellipse** beside Click, Box and Lasso. Drag shows the outline; hold **Shift** on Ellipse for a circle. [RFC 0035](docs/rfcs/0035-poly-edit-area-selection.md)
 - **Scale cover Phase 2** ([RFC 0046](docs/rfcs/0046-scale-cover.md)). **Flow** orientation follows the piece's longest bounds axis so scale rows share body grain; scatter can stay inside a **mask** or **face group**; **Types by face group** applies several plate kinds in one step. Surface instances gain the same placement/orient options (`INS3` for scatter-on-mask/group).
 - **OxySpheres quad Resolution and Blend** ([#477](https://github.com/crisprintsstuff/OxyBrush/issues/477), [RFC 0038](docs/rfcs/0038-oxyspheres-quad-base-mesh.md)). Quad base mesh gets the same **Resolution** and **Blend** sliders as voxel skin: Resolution densifies rings on long limbs (160 keeps one ring per sphere); Blend softens three-way joins. Subdivision is unchanged.
 - **MCP `set_geometry`** ([RFC 0053](docs/rfcs/0053-mcp-geometry-write.md), [#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)). Python / local agents can write vertex colors, positions (displacement) and mask from an `OXYG` file (same format as `get_geometry`), as one undo step.

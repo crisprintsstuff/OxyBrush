@@ -870,9 +870,10 @@ pub enum Drag {
     PolyPaintPick {
         adding: bool,
     },
-    /// Box or lasso area pick in Poly Edit (RFC 0035). `points` are
-    /// physical px (rect uses first and last); `add` / `subtract` come
-    /// from Ctrl/Cmd and Alt at press time.
+    /// Box, lasso or ellipse area select in Poly Edit (RFC 0035). `points`
+    /// are physical px (rect/ellipse use first and last; Shift on ellipse
+    /// snaps to a circle); `add` / `subtract` come from Ctrl/Cmd and Alt at
+    /// press time.
     PolyAreaSelect {
         shape: SelectShape,
         points: Vec<Vec2>,
@@ -4092,10 +4093,17 @@ impl Editor {
                     if points.last().is_none_or(|l| l.distance(pos) > 3.0) {
                         points.push(pos);
                     }
-                } else if points.len() < 2 {
-                    points.push(pos);
                 } else {
-                    points[1] = pos;
+                    let end = if *shape == SelectShape::Ellipse && self.modifiers.shift && !points.is_empty() {
+                        crate::select_shapes::constrain_ellipse_to_circle(points[0], pos)
+                    } else {
+                        pos
+                    };
+                    if points.len() < 2 {
+                        points.push(end);
+                    } else {
+                        points[1] = end;
+                    }
                 }
                 true
             }
