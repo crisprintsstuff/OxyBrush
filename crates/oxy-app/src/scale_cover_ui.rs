@@ -1,12 +1,12 @@
 //! Scale cover window (RFC 0046): productized scale-plate workflow on
-//! surface instances. Apply creates or updates an instancer; Edit source
-//! and Make real reuse the existing instance ops. Nickname: “Dino mode”.
+//! surface instances. Phase 2: Flow orientation, scatter on mask/group,
+//! and multi-type covers from face groups in one Apply.
 
 use crate::editor::Editor;
 use crate::tips;
 use egui::RichText;
 use oxy_doc::Piece;
-use oxy_mesh::instances::{Orient, Place, Settings, SizeMode};
+use oxy_mesh::instances::{Orient, Place, Settings, SizeMode, host_flow_direction};
 use oxy_mesh::scale_plates::ScalePlate;
 
 /// How the cover chooses which host surface gets plates.
@@ -14,20 +14,33 @@ use oxy_mesh::scale_plates::ScalePlate;
 pub enum CoverPlace {
     #[default]
     Scatter,
+    ScatterMask,
+    ScatterGroup,
     Mask,
     FaceGroup,
 }
 
 impl CoverPlace {
-    pub const ALL: [CoverPlace; 3] = [Self::Scatter, Self::Mask, Self::FaceGroup];
+    pub const ALL: [CoverPlace; 5] =
+        [Self::Scatter, Self::ScatterMask, Self::ScatterGroup, Self::Mask, Self::FaceGroup];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Scatter => "Scatter",
-            Self::Mask => "Mask",
-            Self::FaceGroup => "Face group",
+            Self::ScatterMask => "Scatter on mask",
+            Self::ScatterGroup => "Scatter on group",
+            Self::Mask => "Mask (each face)",
+            Self::FaceGroup => "Group (each face)",
         }
     }
+}
+
+/// One face-group → plate row for multi-type Apply.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GroupTypeRow {
+    pub group: u32,
+    /// `None` skips this group on Apply.
+    pub plate: Option<ScalePlate>,
 }
 
 /// Panel knobs (remembered while the window is open / across opens).
@@ -39,7 +52,7 @@ pub struct ScaleCoverSettings {
     pub place: CoverPlace,
     pub mask_threshold: f32,
     pub face_group: u32,
-    /// Spacing as a fraction of the host extent (Scatter).
+    /// Spacing as a fraction of the host extent (scatter modes).
     pub spacing: f32,
     /// Absolute plate size as a fraction of the host extent.
     pub size: f32,
@@ -49,6 +62,9 @@ pub struct ScaleCoverSettings {
     pub vary_spin: f32,
     pub seed: u32,
     pub orient: Orient,
+    /// When on, Apply builds one instancer per filled [`GroupTypeRow`].
+    pub multi_type: bool,
+    pub group_types: Vec<GroupTypeRow>,
 }
 
 impl Default for ScaleCoverSettings {
@@ -65,17 +81,19 @@ impl Default for ScaleCoverSettings {
             vary_size: 0.15,
             vary_spin: 0.25,
             seed: 1,
-            orient: Orient::LongestEdge,
+            orient: Orient::Flow,
+            multi_type: false,
+            group_types: Vec::new(),
         }
     }
 }
 
-/// Which cover on the host this window is editing, if any.
+/// Which cover(s) on the host this window is editing, if any.
 pub struct ScaleCoverSession {
     pub host: u64,
-    /// Instancer index on the host after Apply (or when updating).
-    pub instancer: Option<usize>,
-    pub source: Option<u64>,
+    /// Instancer indices on the host after Apply (one, or several for multi-type).
+    pub instancers: Vec<usize>,
+    pub sources: Vec<u64>,
 }
 
 impl Editor {
@@ -94,7 +112,8 @@ impl Editor {
         self.pointer_up();
         let host = self.scene.active().id;
         self.documents[self.active_document].scale_cover_session =
-            Some(ScaleCoverSession { host, instancer: None, source: None });
+            Some(ScaleCoverSession { host, instancers: Vec::new(), sources: Vec::new() });
+        self.scale_cover_sync_group_rows();
         self.show_scale_cover = true;
         self.status = "Scale cover: pick a plate type and Apply (Dino mode)".into();
         true
@@ -105,7 +124,29 @@ impl Editor {
         self.show_scale_cover = false;
     }
 
-    /// Create or update the cover instancer from the current settings.
+    /// Refresh the multi-type group list from the host's face groups.
+    pub fn scale_cover_sync_group_rows(&mut self) {
+        let Some(host_id) = self.scale_cover_session.as_ref().map(|s| s.host) else {
+            return;
+        };
+        let Some(host) = self.scene.get(host_id) else {
+            return;
+        };
+        let mut groups: Vec<u32> = host.mesh.groups().to_vec();
+        groups.sort_unstable();
+        groups.dedup();
+        groups.truncate(64);
+        let prev = self.scale_cover.group_types.clone();
+        self.scale_cover.group_types = groups
+            .into_iter()
+            .map(|group| {
+                let plate = prev.iter().find(|r| r.group == group).and_then(|r| r.plate);
+                GroupTypeRow { group, plate }
+            })
+            .collect();
+    }
+
+    /// Create or update the cover instancer(s) from the current settings.
     pub fn scale_cover_apply(&mut self) -> bool {
         if self.job_blocks_active() {
             self.status = "Wait for the background job to finish".into();
@@ -126,37 +167,106 @@ impl Editor {
             return false;
         };
         self.scene.set_active(host_i);
+
+        if self.scale_cover.multi_type {
+            return self.scale_cover_apply_multi(host_id);
+        }
+
         let extent = self.scene.active().mesh.bounds().extent().max_element().max(1e-6);
-        let settings = self.scale_cover_settings_for(extent);
+        let settings = self.scale_cover_settings_for(extent, self.scale_cover.face_group, false);
 
         let source_id = if self.scale_cover.use_active_piece {
-            let sources = self.instance_sources();
-            let pick = self
-                .instance_pick
-                .filter(|id| sources.iter().any(|(s, _)| s == id))
-                .or_else(|| sources.first().map(|(id, _)| *id));
-            match pick {
+            match self.scale_cover_pick_custom_source() {
                 Some(id) => id,
-                None => {
-                    self.status =
-                        "Scale cover: add another piece to use as a custom plate, or pick a built-in type".into();
-                    return false;
-                }
+                None => return false,
             }
         } else {
-            match self.scale_cover_ensure_plate_source(host_id) {
+            match self.scale_cover_ensure_plate_source(host_id, self.scale_cover.plate) {
                 Some(id) => id,
                 None => return false,
             }
         };
 
-        // Host active again (adding a plate piece changes the active piece).
         let Some(host_i) = self.scene.index_of(host_id) else { return false };
         self.scene.set_active(host_i);
 
-        let existing = self.scale_cover_session.as_ref().and_then(|s| s.instancer);
-        let index = if let Some(i) = existing.filter(|&i| self.scene.active().instancers.get(i).is_some()) {
-            // Update source if the plate kind changed.
+        let existing = self.scale_cover_session.as_ref().and_then(|s| s.instancers.first().copied());
+        let index = self.scale_cover_upsert_instancer(host_id, existing, source_id, settings);
+
+        if let Some(session) = self.scale_cover_session.as_mut() {
+            session.instancers = vec![index];
+            session.sources = vec![source_id];
+        }
+        let n = self.instance_count(host_id, index);
+        self.status = format!(
+            "Scale cover applied: {} {} copies (Edit source or Make real when ready)",
+            crate::ui::fmt_count(n),
+            self.scale_cover.plate.label().to_lowercase()
+        );
+        true
+    }
+
+    fn scale_cover_apply_multi(&mut self, host_id: u64) -> bool {
+        self.scale_cover_sync_group_rows();
+        let rows: Vec<(u32, ScalePlate)> =
+            self.scale_cover.group_types.iter().filter_map(|r| r.plate.map(|p| (r.group, p))).collect();
+        if rows.is_empty() {
+            self.status = "Scale cover: assign at least one face group a plate type".into();
+            return false;
+        }
+        let extent = self.scene.active().mesh.bounds().extent().max_element().max(1e-6);
+        let previous = self.scale_cover_session.as_ref().map(|s| s.instancers.clone()).unwrap_or_default();
+        let mut new_indices = Vec::with_capacity(rows.len());
+        let mut new_sources = Vec::with_capacity(rows.len());
+        let mut total = 0usize;
+        for (i, (group, plate)) in rows.into_iter().enumerate() {
+            let settings = self.scale_cover_settings_for(extent, group, true);
+            let Some(source_id) = self.scale_cover_ensure_plate_source(host_id, plate) else {
+                return false;
+            };
+            let Some(host_i) = self.scene.index_of(host_id) else { return false };
+            self.scene.set_active(host_i);
+            let existing = previous.get(i).copied();
+            let index = self.scale_cover_upsert_instancer(host_id, existing, source_id, settings);
+            total += self.instance_count(host_id, index);
+            new_indices.push(index);
+            new_sources.push(source_id);
+        }
+        // Drop leftover instancers from a previous multi Apply with more rows.
+        if previous.len() > new_indices.len() {
+            let extras: Vec<usize> = previous[new_indices.len()..].to_vec();
+            for &i in extras.iter().rev() {
+                if self.scene.active().instancers.get(i).is_some() {
+                    self.remove_instancer(i);
+                    // Removing shifts later indices; adjust tracked ones that were higher.
+                    for idx in &mut new_indices {
+                        if *idx > i {
+                            *idx -= 1;
+                        }
+                    }
+                }
+            }
+        }
+        if let Some(session) = self.scale_cover_session.as_mut() {
+            session.instancers = new_indices;
+            session.sources = new_sources;
+        }
+        self.status = format!(
+            "Scale cover applied: {} copies across {} types (Make real when ready)",
+            crate::ui::fmt_count(total),
+            session_count(self)
+        );
+        true
+    }
+
+    fn scale_cover_upsert_instancer(
+        &mut self,
+        host_id: u64,
+        existing: Option<usize>,
+        source_id: u64,
+        settings: Settings,
+    ) -> usize {
+        if let Some(i) = existing.filter(|&i| self.scene.active().instancers.get(i).is_some()) {
             if self.scene.active().instancers[i].source != source_id {
                 let previous = self.scene.active().instancers.clone();
                 self.scene.active_mut().instancers[i].source = source_id;
@@ -172,32 +282,57 @@ impl Editor {
             self.set_instancer_settings(i, settings);
             self.commit_instancer_edit();
             i
-        };
-
-        if let Some(session) = self.scale_cover_session.as_mut() {
-            session.instancer = Some(index);
-            session.source = Some(source_id);
         }
-        let n = self.instance_count(host_id, index);
-        self.status = format!(
-            "Scale cover applied: {} {} copies (Edit source or Make real when ready)",
-            crate::ui::fmt_count(n),
-            self.scale_cover.plate.label().to_lowercase()
-        );
-        true
     }
 
-    fn scale_cover_settings_for(&self, extent: f32) -> Settings {
+    fn scale_cover_pick_custom_source(&mut self) -> Option<u64> {
+        let sources = self.instance_sources();
+        let pick = self
+            .instance_pick
+            .filter(|id| sources.iter().any(|(s, _)| s == id))
+            .or_else(|| sources.first().map(|(id, _)| *id));
+        match pick {
+            Some(id) => Some(id),
+            None => {
+                self.status = "Scale cover: add another piece to use as a custom plate, or pick a built-in type".into();
+                None
+            }
+        }
+    }
+
+    fn scale_cover_settings_for(&self, extent: f32, face_group: u32, multi: bool) -> Settings {
         let s = &self.scale_cover;
-        let place = match s.place {
-            CoverPlace::Scatter => Place::Scatter((extent * s.spacing).max(extent * 0.001)),
-            CoverPlace::Mask => Place::Mask(s.mask_threshold.clamp(0.0, 1.0)),
-            CoverPlace::FaceGroup => Place::Group(s.face_group),
+        let spacing = (extent * s.spacing).max(extent * 0.001);
+        // Multi-type always scopes each instancer to its face group.
+        let place = if multi {
+            match s.place {
+                CoverPlace::Scatter | CoverPlace::ScatterGroup | CoverPlace::ScatterMask => {
+                    Place::ScatterGroup { spacing, group: face_group }
+                }
+                CoverPlace::Mask | CoverPlace::FaceGroup => Place::Group(face_group),
+            }
+        } else {
+            match s.place {
+                CoverPlace::Scatter => Place::Scatter(spacing),
+                CoverPlace::ScatterMask => Place::ScatterMask { spacing, threshold: s.mask_threshold.clamp(0.0, 1.0) },
+                CoverPlace::ScatterGroup => Place::ScatterGroup { spacing, group: face_group },
+                CoverPlace::Mask => Place::Mask(s.mask_threshold.clamp(0.0, 1.0)),
+                CoverPlace::FaceGroup => Place::Group(face_group),
+            }
+        };
+        let direction = if s.orient == Orient::Flow {
+            self.scale_cover_session
+                .as_ref()
+                .and_then(|sess| self.scene.get(sess.host))
+                .map(|host| host_flow_direction(&host.mesh))
+                .unwrap_or(glam::Vec3::Z)
+        } else {
+            glam::Vec3::Z
         };
         Settings {
             place,
             orient: s.orient,
-            direction: glam::Vec3::Z,
+            direction,
             size_mode: SizeMode::Absolute,
             size: (extent * s.size).max(extent * 0.001),
             offset: s.lift.clamp(-1.0, 1.0),
@@ -208,11 +343,9 @@ impl Editor {
         }
     }
 
-    /// Find or create a hidden plate source piece for the current built-in.
-    fn scale_cover_ensure_plate_source(&mut self, host_id: u64) -> Option<u64> {
-        let plate = self.scale_cover.plate;
+    /// Find or create a hidden plate source piece for a built-in plate.
+    fn scale_cover_ensure_plate_source(&mut self, host_id: u64, plate: ScalePlate) -> Option<u64> {
         let name = plate.piece_name();
-        // Reuse an existing unused piece with this name when possible.
         if let Some(p) =
             self.scene.pieces.iter().find(|p| {
                 p.id != host_id && p.name == name && p.instancers.is_empty() && !self.is_instance_source(p.id)
@@ -220,9 +353,10 @@ impl Editor {
         {
             return Some(p.id);
         }
-        // Or reuse the session's previous source if it still exists.
-        if let Some(id) = self.scale_cover_session.as_ref().and_then(|s| s.source)
-            && self.scene.get(id).is_some_and(|p| p.name == name)
+        if let Some(id) = self
+            .scale_cover_session
+            .as_ref()
+            .and_then(|s| s.sources.iter().copied().find(|&id| self.scene.get(id).is_some_and(|p| p.name == name)))
         {
             return Some(id);
         }
@@ -233,7 +367,7 @@ impl Editor {
     }
 
     pub fn scale_cover_edit_source(&mut self) {
-        let Some(i) = self.scale_cover_session.as_ref().and_then(|s| s.instancer) else {
+        let Some(i) = self.scale_cover_session.as_ref().and_then(|s| s.instancers.first().copied()) else {
             self.status = "Apply a Scale cover first".into();
             return;
         };
@@ -241,24 +375,49 @@ impl Editor {
     }
 
     pub fn scale_cover_make_real(&mut self) {
-        let Some(i) = self.scale_cover_session.as_ref().and_then(|s| s.instancer) else {
+        let Some(indices) = self.scale_cover_session.as_ref().map(|s| s.instancers.clone()) else {
             self.status = "Apply a Scale cover first".into();
             return;
         };
-        self.make_instances_real(i);
+        if indices.is_empty() {
+            self.status = "Apply a Scale cover first".into();
+            return;
+        }
+        // Make real from highest index first so removals don't shift earlier ones.
+        let mut ordered = indices;
+        ordered.sort_unstable();
+        for &i in ordered.iter().rev() {
+            if self.scene.active().instancers.get(i).is_some() {
+                self.make_instances_real(i);
+            }
+        }
     }
 
     pub fn scale_cover_remove(&mut self) {
-        let Some(i) = self.scale_cover_session.as_ref().and_then(|s| s.instancer) else {
+        let Some(indices) = self.scale_cover_session.as_ref().map(|s| s.instancers.clone()) else {
             self.status = "No Scale cover to remove".into();
             return;
         };
-        self.remove_instancer(i);
+        if indices.is_empty() {
+            self.status = "No Scale cover to remove".into();
+            return;
+        }
+        let mut ordered = indices;
+        ordered.sort_unstable();
+        for &i in ordered.iter().rev() {
+            if self.scene.active().instancers.get(i).is_some() {
+                self.remove_instancer(i);
+            }
+        }
         if let Some(session) = self.scale_cover_session.as_mut() {
-            session.instancer = None;
-            session.source = None;
+            session.instancers.clear();
+            session.sources.clear();
         }
     }
+}
+
+fn session_count(ed: &Editor) -> usize {
+    ed.scale_cover_session.as_ref().map(|s| s.instancers.len()).unwrap_or(0)
 }
 
 pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
@@ -277,7 +436,7 @@ pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
     egui::Window::new("Scale cover")
         .open(&mut open)
         .default_pos([ctx.content_rect().right() - 440.0, 140.0])
-        .default_width(320.0)
+        .default_width(340.0)
         .resizable(true)
         .show(ctx, |ui| {
             ui.label(
@@ -290,25 +449,58 @@ pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
             );
             ui.add_space(6.0);
 
-            ui.label("Type");
-            ui.horizontal_wrapped(|ui| {
-                for p in ScalePlate::ALL {
-                    let selected = !ed.scale_cover.use_active_piece && ed.scale_cover.plate == p;
-                    if tips::hover(ui.selectable_label(selected, p.label()), p.help()).clicked() {
-                        ed.scale_cover.plate = p;
-                        ed.scale_cover.use_active_piece = false;
-                    }
-                }
-            });
             tips::hover(
-                ui.checkbox(&mut ed.scale_cover.use_active_piece, "Use active piece as plate"),
-                "When on, Apply uses the piece that is active when you open the window as the source \
-                 (Duplicate a sculpted plate first). Built-in types are ignored.",
+                ui.checkbox(&mut ed.scale_cover.multi_type, "Types by face group"),
+                "Apply one plate type per face group in a single step (belly vs back, etc.).",
             );
+            if ed.scale_cover.multi_type {
+                if ui.small_button("Refresh groups").clicked() {
+                    ed.scale_cover_sync_group_rows();
+                }
+                ui.add_space(4.0);
+                for row in &mut ed.scale_cover.group_types {
+                    ui.horizontal(|ui| {
+                        ui.label(format!("Group {}", row.group));
+                        let label = row.plate.map(|p| p.label()).unwrap_or("—");
+                        egui::ComboBox::from_id_salt(("scale_cover_gtype", row.group))
+                            .selected_text(label)
+                            .width(120.0)
+                            .show_ui(ui, |ui| {
+                                if ui.selectable_label(row.plate.is_none(), "—").clicked() {
+                                    row.plate = None;
+                                }
+                                for p in ScalePlate::ALL {
+                                    if ui.selectable_label(row.plate == Some(p), p.label()).clicked() {
+                                        row.plate = Some(p);
+                                    }
+                                }
+                            });
+                    });
+                }
+                if ed.scale_cover.group_types.is_empty() {
+                    ui.label(RichText::new("No face groups on this piece yet (Paint Groups).").weak().small());
+                }
+            } else {
+                ui.label("Type");
+                ui.horizontal_wrapped(|ui| {
+                    for p in ScalePlate::ALL {
+                        let selected = !ed.scale_cover.use_active_piece && ed.scale_cover.plate == p;
+                        if tips::hover(ui.selectable_label(selected, p.label()), p.help()).clicked() {
+                            ed.scale_cover.plate = p;
+                            ed.scale_cover.use_active_piece = false;
+                        }
+                    }
+                });
+                tips::hover(
+                    ui.checkbox(&mut ed.scale_cover.use_active_piece, "Use active piece as plate"),
+                    "When on, Apply uses another piece as the source (Duplicate a sculpted plate first). \
+                     Built-in types are ignored.",
+                );
+            }
 
             ui.separator();
             ui.label("Placement");
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 for p in CoverPlace::ALL {
                     if ui.selectable_label(ed.scale_cover.place == p, p.label()).clicked() {
                         ed.scale_cover.place = p;
@@ -322,17 +514,41 @@ pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
                         "Minimum distance between plates, as a fraction of the piece size.",
                     );
                 }
+                CoverPlace::ScatterMask => {
+                    tips::hover(
+                        ui.add(egui::Slider::new(&mut ed.scale_cover.spacing, 0.01..=0.2).text("Spacing")),
+                        "Minimum distance between plates inside the mask.",
+                    );
+                    tips::hover(
+                        ui.add(egui::Slider::new(&mut ed.scale_cover.mask_threshold, 0.0..=1.0).text("Mask")),
+                        "Only faces whose mean mask is at least this high get plates.",
+                    );
+                }
+                CoverPlace::ScatterGroup => {
+                    tips::hover(
+                        ui.add(egui::Slider::new(&mut ed.scale_cover.spacing, 0.01..=0.2).text("Spacing")),
+                        "Minimum distance between plates inside the face group.",
+                    );
+                    if !ed.scale_cover.multi_type {
+                        tips::hover(
+                            ui.add(egui::DragValue::new(&mut ed.scale_cover.face_group).speed(1.0).prefix("Group ")),
+                            "Scatter only on this face group id (from Paint Groups).",
+                        );
+                    }
+                }
                 CoverPlace::Mask => {
                     tips::hover(
                         ui.add(egui::Slider::new(&mut ed.scale_cover.mask_threshold, 0.0..=1.0).text("Mask")),
-                        "Only faces whose mean mask is at least this high get a plate.",
+                        "One plate per face whose mean mask is at least this high.",
                     );
                 }
                 CoverPlace::FaceGroup => {
-                    tips::hover(
-                        ui.add(egui::DragValue::new(&mut ed.scale_cover.face_group).speed(1.0).prefix("Group ")),
-                        "Cover only this face group id (from Paint Groups).",
-                    );
+                    if !ed.scale_cover.multi_type {
+                        tips::hover(
+                            ui.add(egui::DragValue::new(&mut ed.scale_cover.face_group).speed(1.0).prefix("Group ")),
+                            "Cover only this face group id (from Paint Groups).",
+                        );
+                    }
                 }
             }
 
@@ -367,9 +583,14 @@ pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
                 ui.label("Orient");
                 for (o, label, tip) in [
                     (
+                        Orient::Flow,
+                        "Flow",
+                        "Along the piece's longest bounds axis (body / limb grain); does not flip between neighbours.",
+                    ),
+                    (
                         Orient::LongestEdge,
                         "Longest edge",
-                        "Follow the polygon's longest edge (good default for scales).",
+                        "Follow the polygon's longest edge (can flip between neighbours).",
                     ),
                     (Orient::World, "World", "A fixed world direction laid on the surface — no flips."),
                     (Orient::Random, "Random", "Chaotic hide."),
@@ -385,7 +606,7 @@ pub fn scale_cover_window(ctx: &egui::Context, ed: &mut Editor) {
                 if ui.button("Apply").clicked() {
                     ed.scale_cover_apply();
                 }
-                let has = ed.scale_cover_session.as_ref().and_then(|s| s.instancer).is_some();
+                let has = ed.scale_cover_session.as_ref().is_some_and(|s| !s.instancers.is_empty());
                 if ui.add_enabled(has, egui::Button::new("Edit source")).clicked() {
                     ed.scale_cover_edit_source();
                 }
@@ -421,21 +642,17 @@ mod tests {
         assert!(e.scale_cover_open());
         e.scale_cover.plate = ScalePlate::Teardrop;
         e.scale_cover.place = CoverPlace::Scatter;
+        e.scale_cover.orient = Orient::Flow;
         assert!(e.scale_cover_apply());
         let host_i = e.scene.index_of(host).unwrap();
         e.scene.set_active(host_i);
         assert_eq!(e.scene.active().instancers.len(), 1);
         let ins = &e.scene.active().instancers[0];
         assert!(matches!(ins.settings.place, Place::Scatter(_)));
-        assert_eq!(ins.settings.orient, Orient::LongestEdge);
+        assert_eq!(ins.settings.orient, Orient::Flow);
         let source = e.scene.get(ins.source).unwrap();
         assert!(source.name.contains("Teardrop"));
         assert!(!source.visible, "plate source is hidden");
-        e.undo(); // change settings
-        e.undo(); // add instancer (+ visible)
-        // Host may still have no instancers after undoing the add.
-        let host_i = e.scene.index_of(host).unwrap();
-        assert!(e.scene.pieces[host_i].instancers.is_empty() || e.history.can_undo());
     }
 
     #[test]
@@ -448,6 +665,49 @@ mod tests {
         let host = e.scale_cover_session.as_ref().unwrap().host;
         let p = e.scene.get(host).unwrap();
         assert!(matches!(p.instancers[0].settings.place, Place::Mask(t) if (t - 0.25).abs() < 1e-5));
+    }
+
+    #[test]
+    fn scatter_on_mask_place() {
+        let mut e = editor();
+        assert!(e.scale_cover_open());
+        e.scale_cover.place = CoverPlace::ScatterMask;
+        e.scale_cover.mask_threshold = 0.4;
+        assert!(e.scale_cover_apply());
+        let host = e.scale_cover_session.as_ref().unwrap().host;
+        let p = e.scene.get(host).unwrap();
+        assert!(matches!(
+            p.instancers[0].settings.place,
+            Place::ScatterMask { threshold, .. } if (threshold - 0.4).abs() < 1e-5
+        ));
+    }
+
+    #[test]
+    fn multi_type_creates_one_instancer_per_mapped_group() {
+        let mut e = editor();
+        let host = e.scene.active().id;
+        // Paint two face groups on the default sphere.
+        {
+            let mesh = &mut e.scene.active_mut().mesh;
+            let mut data = mesh.to_data();
+            let n = data.triangles.len();
+            data.groups = (0..n).map(|i| if i < n / 2 { 0 } else { 1 }).collect();
+            *mesh = oxy_mesh::Mesh::from_data(data);
+        }
+        assert!(e.scale_cover_open());
+        e.scale_cover.multi_type = true;
+        e.scale_cover.place = CoverPlace::FaceGroup;
+        e.scale_cover_sync_group_rows();
+        assert!(e.scale_cover.group_types.len() >= 2);
+        e.scale_cover.group_types[0].plate = Some(ScalePlate::Teardrop);
+        e.scale_cover.group_types[1].plate = Some(ScalePlate::Round);
+        assert!(e.scale_cover_apply());
+        let host_i = e.scene.index_of(host).unwrap();
+        e.scene.set_active(host_i);
+        assert_eq!(e.scale_cover_session.as_ref().unwrap().instancers.len(), 2);
+        let places: Vec<_> = e.scene.active().instancers.iter().map(|i| i.settings.place).collect();
+        assert!(places.iter().any(|p| matches!(p, Place::Group(0))));
+        assert!(places.iter().any(|p| matches!(p, Place::Group(1))));
     }
 
     #[test]

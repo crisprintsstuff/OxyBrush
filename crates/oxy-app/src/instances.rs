@@ -263,12 +263,13 @@ impl Editor {
             return Some(cache.transforms.clone());
         }
         let s = &ins.settings;
-        let scatter = if let instances::Place::Scatter(spacing) = s.place { Some(spacing) } else { None };
+        let scatter = s.place.scatter_spacing();
         let anchors_for = AnchorInputs {
             topology: inputs.host_topology,
             faces: inputs.host_faces,
-            // The current mask is sampled in transforms, so a threshold
-            // change can reuse the same polygon anchors.
+            // The current mask is sampled in transforms for Place::Mask, so a
+            // threshold change can reuse the same polygon anchors. ScatterMask
+            // bakes the filter into anchors and must key on the full place.
             place: if matches!(s.place, instances::Place::Mask(_)) { instances::Place::Faces } else { s.place },
             orient: s.orient,
             scatter_seed: scatter.map(|_| s.seed),
@@ -291,8 +292,27 @@ impl Editor {
                 let triangles = hp.mesh.triangles.clone();
                 let hidden = hp.mesh.hidden().to_vec();
                 let (seed, orient) = (s.seed, s.orient);
+                let mask = match s.place {
+                    instances::Place::ScatterMask { threshold, .. } => Some((hp.mesh.mask.clone(), threshold)),
+                    _ => None,
+                };
+                let group = match s.place {
+                    instances::Place::ScatterGroup { group, .. } => Some((hp.mesh.groups().to_vec(), group)),
+                    _ => None,
+                };
                 rayon::spawn(move || {
-                    let anchors = instances::scatter_anchors(&positions, &triangles, &hidden, spacing, seed, orient);
+                    let anchors = instances::scatter_anchors(
+                        &positions,
+                        &triangles,
+                        &hidden,
+                        instances::ScatterOpts {
+                            spacing,
+                            seed,
+                            orient,
+                            mask: mask.as_ref().map(|(m, t)| (m.as_slice(), *t)),
+                            group: group.as_ref().map(|(g, id)| (g.as_slice(), *id)),
+                        },
+                    );
                     let _ = sender.send(anchors);
                 });
                 cache.pending = Some((anchors_for, result));

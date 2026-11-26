@@ -1,6 +1,8 @@
 # RFC 0046 — Scale cover (“Dino mode”)
 
-- **Status:** Phase 1 implemented (window + plate library + instancer Apply); Phase 2–3 open
+- **Status:** Phase 1–2 implemented (window + plate library + Flow orient +
+  scatter on mask/group + multi-type from face groups); Phase 3 open
+  (fitted plates, type from vertex color, Noise underlay button)
 - **Builds on:** [RFC 0022 — Surface instances](0022-surface-instances.md)
 - **Related:** [RFC 0045 — Surface Noise](0045-surface-noise.md), built-in
   **Scales** alpha (`BuiltinAlpha::Scales`)
@@ -152,12 +154,11 @@ Unchanged instance workflow:
 | Phase | Ships |
 |---|---|
 | **1** | Scale cover window/panel; built-in plate library; configure one or more instancers (type, mask/group/scatter, size, spacing, seed, orient); Edit source / Make real via existing instance ops; docs + CLEAN_ROOM |
-| **2** | Multi-type from face groups in one Apply; flow orientation; tighter scatter-on-mask/group; hand exclusions when RFC 0022 exposes them |
+| **2** | ✅ Multi-type from face groups in one Apply; Flow orientation (host AABB grain); scatter on mask/group (`INS3`); hand exclusions still wait on RFC 0022 |
 | **3** | Fitted plates (depends on RFC 0022 fitted copies); optional type from vertex color; underlay Noise preset button |
 
-Phase 1 is blocked only on finishing the remaining RFC 0022 placement
-polish the cover UI needs (scatter on group/mask if not already enough).
-Fitted “chainmail bend” waits on RFC 0022 phase 3.
+Fitted “chainmail bend” waits on RFC 0022 phase 3. Hand exclusions wait on
+RFC 0022 exposing them.
 
 ## UI sketch (not a layout copy)
 

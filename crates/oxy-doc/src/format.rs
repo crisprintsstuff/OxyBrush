@@ -47,8 +47,16 @@
 //!   and the (hidden) source open as ordinary pieces, without the copies.
 //! - `INS2` (optional): the full surface-instance list when it uses mask or
 //!   scatter placement. Layout as `INST`, with place 3 (mask threshold) or
-//!   4 (scatter spacing), reusing `group` as f32 bits. Replaces `INST` on
-//!   read; earlier readers still get legacy modes through `INST`.
+//!   4 (scatter spacing), reusing `group` as f32 bits; orient 4 is Flow
+//!   (body grain, same transform math as world direction). Replaces `INST`
+//!   on read; earlier readers still get legacy modes through `INST`.
+//! - `INS3` (optional): like `INS2`, but each record is 51 bytes — the usual
+//!   47 plus a trailing `spacing:f32` — for place 5 (scatter on mask:
+//!   `group` holds the threshold bits, spacing in the trailer) and place 6
+//!   (scatter on face group: `group` is the group id, spacing in the
+//!   trailer). Written when any instancer needs those modes; replaces
+//!   `INS2`/`INST` on read. Older readers skip `INS3` and still get
+//!   legacy modes through `INST`.
 //! - `PARN` (optional, since 4.0.0-beta.20): parent piece index of the
 //!   **preceding** `PIEC`: `parent:u32`, the parent piece's place among the
 //!   file's pieces (from 0; not this piece). Transforming the parent transforms
@@ -357,7 +365,13 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
         if let Some(m) = &p.material {
             sections.push((*b"MATL", m.as_bytes().to_vec()));
         }
-        if p.instancers.iter().any(|ins| ins.settings.place.extended()) {
+        if p.instancers.iter().any(|ins| ins.settings.place.needs_ins3()) {
+            let legacy: Vec<_> = p.instancers.iter().filter(|ins| !ins.settings.place.extended()).cloned().collect();
+            if !legacy.is_empty() {
+                sections.push((*b"INST", encode_instancers(&legacy)));
+            }
+            sections.push((*b"INS3", encode_instancers_v3(&p.instancers)));
+        } else if p.instancers.iter().any(|ins| ins.settings.place.extended()) {
             let legacy: Vec<_> = p.instancers.iter().filter(|ins| !ins.settings.place.extended()).cloned().collect();
             if !legacy.is_empty() {
                 sections.push((*b"INST", encode_instancers(&legacy)));
@@ -914,9 +928,11 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     _ => log::warn!("ignoring a damaged material on piece {:?}", piece.name),
                 }
             }
-            b"INST" | b"INS2" => {
+            b"INST" | b"INS2" | b"INS3" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("INST before any piece".into()))?;
-                match decode_instancers(&raw, &tag == b"INS2") {
+                let decoded =
+                    if &tag == b"INS3" { decode_instancers_v3(&raw) } else { decode_instancers(&raw, &tag == b"INS2") };
+                match decoded {
                     Ok(list) => piece.instancers = list,
                     Err(e) => log::warn!("ignoring damaged surface instances on piece {:?}: {e}", piece.name),
                 }
@@ -1614,101 +1630,158 @@ fn decode_tube_shapes(raw: &[u8]) -> Result<Vec<(oxy_mesh::primitives::TubeShape
         .collect()
 }
 
-/// One instancer's bytes in `INST` (see the header).
+/// One instancer's bytes in `INST` / `INS2` (see the header).
 const INSTANCER_BYTES: usize = 47;
+/// `INS3` adds a trailing spacing float for scatter-on-mask / scatter-on-group.
+const INSTANCER_BYTES_V3: usize = 51;
+
+fn encode_orient(orient: oxy_mesh::instances::Orient) -> u8 {
+    use oxy_mesh::instances::Orient;
+    match orient {
+        Orient::World => 0,
+        Orient::LongestEdge => 1,
+        Orient::FirstEdge => 2,
+        Orient::Random => 3,
+        Orient::Flow => 4,
+    }
+}
+
+fn decode_orient(v: u8) -> Result<oxy_mesh::instances::Orient> {
+    use oxy_mesh::instances::Orient;
+    match v {
+        0 => Ok(Orient::World),
+        1 => Ok(Orient::LongestEdge),
+        2 => Ok(Orient::FirstEdge),
+        3 => Ok(Orient::Random),
+        4 => Ok(Orient::Flow),
+        _ => Err(Error::Corrupt("unknown instance orientation".into())),
+    }
+}
+
+fn encode_instancer_body(b: &mut Vec<u8>, ins: &crate::SavedInstancer, v3: bool) {
+    use oxy_mesh::instances::{Place, SizeMode};
+    let s = &ins.settings;
+    b.extend_from_slice(&ins.source.to_le_bytes());
+    let (place, group, spacing) = match s.place {
+        Place::Faces => (0u8, 0u32, 0.0f32),
+        Place::Points => (1, 0, 0.0),
+        Place::Group(g) => (2, g, 0.0),
+        Place::Mask(threshold) => (3, threshold.to_bits(), 0.0),
+        Place::Scatter(spacing) => (4, spacing.to_bits(), 0.0),
+        Place::ScatterMask { spacing, threshold } => (5, threshold.to_bits(), spacing),
+        Place::ScatterGroup { spacing, group } => (6, group, spacing),
+    };
+    b.push(place);
+    b.extend_from_slice(&group.to_le_bytes());
+    b.push(encode_orient(s.orient));
+    for x in s.direction.to_array() {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    b.push(match s.size_mode {
+        SizeMode::Absolute => 0,
+        SizeMode::Face => 1,
+    });
+    for x in [s.size, s.offset, s.spin, s.vary_size, s.vary_spin] {
+        b.extend_from_slice(&x.to_le_bytes());
+    }
+    b.extend_from_slice(&s.seed.to_le_bytes());
+    if v3 {
+        b.extend_from_slice(&spacing.to_bits().to_le_bytes());
+    }
+}
 
 fn encode_instancers(list: &[crate::SavedInstancer]) -> Vec<u8> {
-    use oxy_mesh::instances::{Orient, Place, SizeMode};
     let mut b = Vec::with_capacity(4 + list.len() * INSTANCER_BYTES);
     b.extend_from_slice(&(list.len() as u32).to_le_bytes());
     for ins in list {
-        let s = &ins.settings;
-        b.extend_from_slice(&ins.source.to_le_bytes());
-        let (place, group) = match s.place {
-            Place::Faces => (0u8, 0u32),
-            Place::Points => (1, 0),
-            Place::Group(g) => (2, g),
-            Place::Mask(threshold) => (3, threshold.to_bits()),
-            Place::Scatter(spacing) => (4, spacing.to_bits()),
-        };
-        b.push(place);
-        b.extend_from_slice(&group.to_le_bytes());
-        b.push(match s.orient {
-            Orient::World => 0,
-            Orient::LongestEdge => 1,
-            Orient::FirstEdge => 2,
-            Orient::Random => 3,
-        });
-        for x in s.direction.to_array() {
-            b.extend_from_slice(&x.to_le_bytes());
-        }
-        b.push(match s.size_mode {
-            SizeMode::Absolute => 0,
-            SizeMode::Face => 1,
-        });
-        for x in [s.size, s.offset, s.spin, s.vary_size, s.vary_spin] {
-            b.extend_from_slice(&x.to_le_bytes());
-        }
-        b.extend_from_slice(&s.seed.to_le_bytes());
+        // INS2 must not emit place 5/6; callers only pass lists without them.
+        encode_instancer_body(&mut b, ins, false);
     }
     b
 }
 
+fn encode_instancers_v3(list: &[crate::SavedInstancer]) -> Vec<u8> {
+    let mut b = Vec::with_capacity(4 + list.len() * INSTANCER_BYTES_V3);
+    b.extend_from_slice(&(list.len() as u32).to_le_bytes());
+    for ins in list {
+        encode_instancer_body(&mut b, ins, true);
+    }
+    b
+}
+
+fn decode_instancer_record(r: &mut Reader<'_>, extended: bool, v3: bool) -> Result<crate::SavedInstancer> {
+    use oxy_mesh::instances::{Place, Settings, SizeMode};
+    let source = r.u32()?;
+    let place_byte = r.u8()?;
+    let group_bits = r.u32()?;
+    let orient = decode_orient(r.u8()?)?;
+    let direction = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
+    let size_mode = match r.u8()? {
+        0 => SizeMode::Absolute,
+        1 => SizeMode::Face,
+        _ => return Err(Error::Corrupt("unknown instance size".into())),
+    };
+    let [size, offset, spin, vary_size, vary_spin] = [r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?];
+    let seed = r.u32()?;
+    let trailer_spacing = if v3 {
+        let bits = r.u32()?;
+        f32::from_bits(bits)
+    } else {
+        0.0
+    };
+    let place = match place_byte {
+        0 => Place::Faces,
+        1 => Place::Points,
+        2 => Place::Group(group_bits),
+        3 if extended && (0.01..=1.0).contains(&f32::from_bits(group_bits)) => Place::Mask(f32::from_bits(group_bits)),
+        4 if extended && f32::from_bits(group_bits).is_finite() && f32::from_bits(group_bits) > 0.0 => {
+            Place::Scatter(f32::from_bits(group_bits))
+        }
+        5 if v3
+            && trailer_spacing.is_finite()
+            && trailer_spacing > 0.0
+            && (0.01..=1.0).contains(&f32::from_bits(group_bits)) =>
+        {
+            Place::ScatterMask { spacing: trailer_spacing, threshold: f32::from_bits(group_bits) }
+        }
+        6 if v3 && trailer_spacing.is_finite() && trailer_spacing > 0.0 => {
+            Place::ScatterGroup { spacing: trailer_spacing, group: group_bits }
+        }
+        _ => return Err(Error::Corrupt("unknown or invalid instance placement".into())),
+    };
+    let finite = direction.is_finite() && [size, offset, spin, vary_size, vary_spin].iter().all(|x| x.is_finite());
+    if !finite || size <= 0.0 {
+        return Err(Error::Corrupt("invalid instance settings".into()));
+    }
+    Ok(crate::SavedInstancer {
+        source,
+        settings: Settings {
+            place,
+            orient,
+            direction,
+            size_mode,
+            size,
+            offset,
+            spin,
+            vary_size: vary_size.clamp(0.0, 1.0),
+            vary_spin: vary_spin.clamp(0.0, 1.0),
+            seed,
+        },
+    })
+}
+
 fn decode_instancers(raw: &[u8], extended: bool) -> Result<Vec<crate::SavedInstancer>> {
-    use oxy_mesh::instances::{Orient, Place, Settings, SizeMode};
     let mut r = Reader { data: raw, pos: 0 };
     let count = r.u32()? as usize;
     r.check(count, INSTANCER_BYTES)?;
-    (0..count)
-        .map(|_| {
-            let source = r.u32()?;
-            let place = match (r.u8()?, r.u32()?) {
-                (0, _) => Place::Faces,
-                (1, _) => Place::Points,
-                (2, g) => Place::Group(g),
-                (3, bits) if extended && (0.01..=1.0).contains(&f32::from_bits(bits)) => {
-                    Place::Mask(f32::from_bits(bits))
-                }
-                (4, bits) if extended && f32::from_bits(bits).is_finite() && f32::from_bits(bits) > 0.0 => {
-                    Place::Scatter(f32::from_bits(bits))
-                }
-                _ => return Err(Error::Corrupt("unknown or invalid instance placement".into())),
-            };
-            let orient = match r.u8()? {
-                0 => Orient::World,
-                1 => Orient::LongestEdge,
-                2 => Orient::FirstEdge,
-                3 => Orient::Random,
-                _ => return Err(Error::Corrupt("unknown instance orientation".into())),
-            };
-            let direction = Vec3::new(r.f32()?, r.f32()?, r.f32()?);
-            let size_mode = match r.u8()? {
-                0 => SizeMode::Absolute,
-                1 => SizeMode::Face,
-                _ => return Err(Error::Corrupt("unknown instance size".into())),
-            };
-            let [size, offset, spin, vary_size, vary_spin] = [r.f32()?, r.f32()?, r.f32()?, r.f32()?, r.f32()?];
-            let seed = r.u32()?;
-            let finite =
-                direction.is_finite() && [size, offset, spin, vary_size, vary_spin].iter().all(|x| x.is_finite());
-            if !finite || size <= 0.0 {
-                return Err(Error::Corrupt("invalid instance settings".into()));
-            }
-            let settings = Settings {
-                place,
-                orient,
-                direction,
-                size_mode,
-                size,
-                offset,
-                spin,
-                vary_size: vary_size.clamp(0.0, 1.0),
-                vary_spin: vary_spin.clamp(0.0, 1.0),
-                seed,
-            };
-            Ok(crate::SavedInstancer { source, settings })
-        })
-        .collect()
+    (0..count).map(|_| decode_instancer_record(&mut r, extended, false)).collect()
+}
+
+fn decode_instancers_v3(raw: &[u8]) -> Result<Vec<crate::SavedInstancer>> {
+    let mut r = Reader { data: raw, pos: 0 };
+    let count = r.u32()? as usize;
+    r.check(count, INSTANCER_BYTES_V3)?;
+    (0..count).map(|_| decode_instancer_record(&mut r, true, true)).collect()
 }
 
 /// Bound on a tube's twist, coil and braid numbers in a file: far past
@@ -3332,6 +3405,47 @@ mod tests {
         bytes[tag..tag + 4].copy_from_slice(b"ZZZZ");
         let legacy = decode(&bytes).unwrap();
         assert_eq!(legacy.pieces[0].instancers, s.pieces[0].instancers[1..2]);
+    }
+
+    #[test]
+    fn ins3_scatter_mask_and_group_round_trip() {
+        use oxy_mesh::instances::{Orient, Place, Settings};
+        let mut s = sample();
+        s.pieces[0].instancers = vec![
+            crate::SavedInstancer {
+                source: 1,
+                settings: Settings {
+                    place: Place::ScatterMask { spacing: 0.2, threshold: 0.4 },
+                    orient: Orient::Flow,
+                    seed: 9,
+                    ..Settings::default()
+                },
+            },
+            crate::SavedInstancer {
+                source: 1,
+                settings: Settings {
+                    place: Place::ScatterGroup { spacing: 0.15, group: 2 },
+                    orient: Orient::Flow,
+                    seed: 9,
+                    ..Settings::default()
+                },
+            },
+            crate::SavedInstancer {
+                source: 1,
+                settings: Settings { place: Place::Group(1), seed: 9, ..Settings::default() },
+            },
+        ];
+        let mut bytes = encode(&s);
+        assert!(bytes.windows(4).any(|w| w == b"INS3"));
+        assert!(!bytes.windows(4).any(|w| w == b"INS2"));
+        let back = decode(&bytes).unwrap();
+        assert_eq!(back.pieces[0].instancers, s.pieces[0].instancers);
+        // Without INS3, only the legacy Group mode remains via INST.
+        let tag = bytes.windows(4).position(|w| w == b"INS3").unwrap();
+        bytes[tag..tag + 4].copy_from_slice(b"ZZZZ");
+        let legacy = decode(&bytes).unwrap();
+        assert_eq!(legacy.pieces[0].instancers.len(), 1);
+        assert!(matches!(legacy.pieces[0].instancers[0].settings.place, Place::Group(1)));
     }
 
     #[test]

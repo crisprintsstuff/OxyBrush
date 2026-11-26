@@ -1,6 +1,6 @@
 # RFC 0022: Surface instances (plan)
 
-Status: Partial — phase 1 implemented in 4.0.0-beta.12 (rigid copies on faces, points and face groups, Edit source, Make real, `INST` section). Phase 2 adds masked placement and even scatter on visible faces. Remaining: scatter on a group or mask, edges, tiling, hand exclusions, fitted copies and glTF instancing export.
+Status: Partial — phase 1 implemented in 4.0.0-beta.12 (rigid copies on faces, points and face groups, Edit source, Make real, `INST` section). Phase 2 adds masked placement, even scatter on visible faces, scatter on mask/group (`INS3`), and Flow orientation. Remaining: edges, tiling, hand exclusions, fitted copies and glTF instancing export.
 
 ## Summary
 
