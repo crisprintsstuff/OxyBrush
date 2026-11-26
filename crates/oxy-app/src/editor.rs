@@ -1367,7 +1367,18 @@ pub struct Editor {
     pub high_contrast: bool,
     pub pixels_per_point: f32,
     /// Canvas rectangle in physical pixels: x, y, w, h.
+    /// When split view is on, this is the **active** pane only.
     pub canvas: [f32; 4],
+    /// Full sculpt canvas (union of panes) in physical pixels.
+    pub canvas_full: [f32; 4],
+    /// Split view layout ([RFC 0054](../../../docs/rfcs/0054-split-view.md)).
+    pub split: crate::split_view::SplitLayout,
+    /// Active pane index (0 = left/top, 1 = right/bottom).
+    pub active_pane: u8,
+    /// Fraction of the split axis given to pane 0 (0.15..=0.85).
+    pub split_ratio: f32,
+    /// Dragging the split divider.
+    pub(crate) split_dragging: bool,
     /// Pointer position in physical pixels.
     pub pointer: Option<Vec2>,
     pub modifiers: Modifiers,
@@ -1722,6 +1733,11 @@ impl Default for Editor {
             high_contrast: false,
             pixels_per_point: 1.0,
             canvas: [0.0, 0.0, 1.0, 1.0],
+            canvas_full: [0.0, 0.0, 1.0, 1.0],
+            split: crate::split_view::SplitLayout::Off,
+            active_pane: 0,
+            split_ratio: 0.5,
+            split_dragging: false,
             pointer: None,
             modifiers: Modifiers::default(),
             space_held: false,
@@ -1944,6 +1960,64 @@ impl Editor {
         p - Vec2::new(self.canvas[0], self.canvas[1])
     }
 
+    /// Cameras for pane 0 and pane 1 in layout order (left/top, right/bottom).
+    pub fn pane_cameras(&self) -> [&Camera; 2] {
+        if self.active_pane == 0 { [&self.camera, &self.camera_other] } else { [&self.camera_other, &self.camera] }
+    }
+
+    /// Apply a split layout. Enabling split seeds the other pane from the
+    /// current camera when it still matches (first time).
+    pub fn set_split(&mut self, layout: crate::split_view::SplitLayout) {
+        if layout.is_split() && !self.split.is_split() {
+            // Fresh split: other pane starts as a useful orthographic front.
+            let doc = &mut self.documents[self.active_document];
+            let mut other = doc.camera;
+            other.orthographic = true;
+            other.snap(0.0, 0.0);
+            doc.camera_other = other;
+            doc.snap_orbit_other = None;
+            self.active_pane = 0;
+        }
+        if !layout.is_split() {
+            self.active_pane = 0;
+            self.split_dragging = false;
+        }
+        self.split = layout;
+        self.apply_pane_canvas();
+        self.status = format!("Split view: {}", layout.label());
+    }
+
+    /// Keep [`Self::canvas`] equal to the active pane inside [`Self::canvas_full`].
+    pub fn apply_pane_canvas(&mut self) {
+        if !self.split.is_split() {
+            self.canvas = self.canvas_full;
+            return;
+        }
+        let panes = crate::split_view::pane_rects(self.split, self.canvas_full, self.split_ratio);
+        self.canvas = panes[self.active_pane as usize];
+    }
+
+    /// Make `pane` active, swapping cameras so `self.camera` is that pane's.
+    pub fn activate_pane(&mut self, pane: u8) {
+        let pane = if self.split.is_split() { pane.min(1) } else { 0 };
+        if pane == self.active_pane {
+            self.apply_pane_canvas();
+            return;
+        }
+        let doc = &mut self.documents[self.active_document];
+        std::mem::swap(&mut doc.camera, &mut doc.camera_other);
+        std::mem::swap(&mut doc.snap_orbit, &mut doc.snap_orbit_other);
+        self.active_pane = pane;
+        self.apply_pane_canvas();
+    }
+
+    /// Pick the pane under `pos` (and activate it) before a press begins.
+    pub fn activate_pane_at(&mut self, pos: Vec2) {
+        if let Some(pane) = crate::split_view::pane_at(self.split, self.canvas_full, self.split_ratio, pos) {
+            self.activate_pane(pane);
+        }
+    }
+
     /// Surface raycast hit on the active mesh under a physical pixel position.
     pub fn surface_hit_at(&self, pixel: Vec2) -> Option<oxy_mesh::RayHit> {
         let (o, d) = self.camera.ray(self.canvas_local(pixel), self.canvas_size());
@@ -2104,6 +2178,8 @@ impl Editor {
             floor_grid: self.floor_grid,
             hide_cursor_during_stroke: self.hide_cursor_during_stroke,
             agent_mcp: self.agent_enabled,
+            split_view: self.split.key().into(),
+            split_ratio: self.split_ratio,
             custom_matcap: self
                 .custom_matcap
                 .and_then(|i| self.custom_matcaps.get(i))
@@ -2432,6 +2508,22 @@ impl Editor {
         self.floor_grid = s.floor_grid;
         self.hide_cursor_during_stroke = s.hide_cursor_during_stroke;
         self.agent_enabled = s.agent_mcp;
+        self.split_ratio = s.split_ratio.clamp(0.15, 0.85);
+        if let Some(layout) = crate::split_view::SplitLayout::parse(&s.split_view) {
+            if layout.is_split() && !self.split.is_split() {
+                let mut other = self.camera;
+                other.orthographic = true;
+                other.snap(0.0, 0.0);
+                self.camera_other = other;
+                self.snap_orbit_other = None;
+            }
+            if !layout.is_split() {
+                self.active_pane = 0;
+                self.split_dragging = false;
+            }
+            self.split = layout;
+            self.apply_pane_canvas();
+        }
         // The library is loaded first, so the remembered matcap can be found by name.
         self.custom_matcap =
             self.custom_matcaps.iter().position(|m| !s.custom_matcap.is_empty() && m.name == s.custom_matcap);
@@ -2652,6 +2744,16 @@ impl Editor {
 
     pub fn pointer_down(&mut self, button: PointerButton) {
         let Some(p) = self.pointer else { return };
+        if self.split.is_split() {
+            if button == PointerButton::Primary
+                && crate::split_view::on_divider(self.split, self.canvas_full, self.split_ratio, p)
+            {
+                self.split_dragging = true;
+                self.drag = Drag::None;
+                return;
+            }
+            self.activate_pane_at(p);
+        }
         self.reference_pick_pressed = button == PointerButton::Primary && crate::references::pick_alignment(self, p);
         if self.reference_pick_pressed {
             return;
@@ -3791,6 +3893,11 @@ impl Editor {
     /// Returns true if anything changed that needs a redraw.
     pub fn pointer_moved(&mut self, pos: Vec2) -> bool {
         let prev = self.pointer.replace(pos);
+        if self.split_dragging {
+            self.split_ratio = crate::split_view::drag_ratio(self.split, self.canvas_full, pos);
+            self.apply_pane_canvas();
+            return true;
+        }
         if let Some(placement) = &self.part_placement
             && !placement.choice_open
             && placement.moving.is_none()
@@ -4212,6 +4319,9 @@ impl Editor {
     }
 
     pub fn pointer_up(&mut self) {
+        if std::mem::take(&mut self.split_dragging) {
+            return;
+        }
         if std::mem::take(&mut self.reference_pick_pressed) {
             return;
         }
@@ -10453,6 +10563,26 @@ fn base_mesh(bytes: &[u8]) -> Mesh {
 #[allow(clippy::field_reassign_with_default)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn split_view_swaps_cameras_per_active_pane() {
+        let mut e = editor();
+        e.canvas_full = [0.0, 0.0, 800.0, 400.0];
+        e.set_split(crate::split_view::SplitLayout::LeftRight);
+        assert!(e.split.is_split());
+        e.camera.yaw = 1.0;
+        e.camera_other.yaw = -1.0;
+        e.activate_pane(1);
+        assert_eq!(e.active_pane, 1);
+        assert!((e.camera.yaw - (-1.0)).abs() < 1e-5);
+        assert!((e.camera_other.yaw - 1.0).abs() < 1e-5);
+        assert!((e.canvas[0] - 402.0).abs() < 2.0, "right pane x {:?}", e.canvas);
+        e.activate_pane(0);
+        assert!((e.camera.yaw - 1.0).abs() < 1e-5);
+        e.set_split(crate::split_view::SplitLayout::Off);
+        assert!(!e.split.is_split());
+        assert_eq!(e.canvas, e.canvas_full);
+    }
 
     #[test]
     fn hierarchy_commands_select_join_and_merge_a_branch() {

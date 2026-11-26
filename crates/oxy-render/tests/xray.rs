@@ -27,7 +27,7 @@ fn xray_composites_once_and_preserves_opaque_depth() {
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
-    let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [4.0, 4.0, 56.0, 56.0] };
+    let target = RenderTarget { view: &view, size: (SIDE, SIDE), viewport: [4.0, 4.0, 56.0, 56.0], clear: true };
     let mut viewport = ViewportRenderer::new(&device, &queue, format);
     let mut front = oxy_mesh::primitives::icosphere(3, 0.85);
     let mut back = front.to_data();

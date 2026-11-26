@@ -344,6 +344,9 @@ pub struct RenderTarget<'a> {
     pub view: &'a wgpu::TextureView,
     pub size: (u32, u32),
     pub viewport: [f32; 4],
+    /// Clear the color (and offscreen) targets before drawing. Split view
+    /// clears on the first pane and loads on the rest ([RFC 0054](../../docs/rfcs/0054-split-view.md)).
+    pub clear: bool,
 }
 
 /// Which meshes are composited translucently when viewport X-ray is enabled.
@@ -1641,7 +1644,7 @@ impl ViewportRenderer {
         settings: &ViewSettings,
         items: &[DrawItem],
     ) {
-        let RenderTarget { view: target, size: target_size, viewport } = *target;
+        let RenderTarget { view: target, size: target_size, viewport, clear } = *target;
         self.ensure_depth(device, target_size.0.max(1), target_size.1.max(1));
         let aspect = (viewport[2] / viewport[3].max(1.0)).max(1e-3);
         // Lights: resolved against the scene and camera, plus the shadow
@@ -1753,12 +1756,15 @@ impl ViewportRenderer {
         let [r, g, b] = settings.background;
         let bg = wgpu::Color { r, g, b, a: 1.0 };
         let depth = &self.depth.as_ref().expect("ensured").0;
-        let attachment = |view, clear| {
+        let color_load = |c: wgpu::Color| {
+            if clear { wgpu::LoadOp::Clear(c) } else { wgpu::LoadOp::Load }
+        };
+        let attachment = |view, c: wgpu::Color| {
             Some(wgpu::RenderPassColorAttachment {
                 view,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(clear), store: wgpu::StoreOp::Store },
+                ops: wgpu::Operations { load: color_load(c), store: wgpu::StoreOp::Store },
             })
         };
         let ghosted = |item: &DrawItem| settings.xray && settings.xray_scope.includes(item);

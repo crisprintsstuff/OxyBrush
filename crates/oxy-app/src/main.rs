@@ -48,6 +48,7 @@ mod scale_cover_ui;
 mod select_shapes;
 mod settings;
 mod snapshot;
+mod split_view;
 mod support;
 mod surface_noise_ui;
 mod tips;

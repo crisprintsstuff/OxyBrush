@@ -49,7 +49,7 @@ fn main() {
     camera.frame(mesh.bounds());
     let items = [DrawItem { id: 1, active: true, preview: false, material: 0, instances: None, wireframe: false }];
     // The viewport between the default panels.
-    let rt = RenderTarget { view: &view, size: (w, h), viewport: [206.0, 70.0, 844.0, 800.0] };
+    let rt = RenderTarget { view: &view, size: (w, h), viewport: [206.0, 70.0, 844.0, 800.0], clear: true };
     println!("{} triangles, viewport {}x{}", mesh.triangle_count(), 844, 800);
 
     let frames = 60;

@@ -57,6 +57,11 @@ pub struct Document {
     // Camera & View
     pub camera: Camera,
     pub(crate) snap_orbit: Option<(f32, f32)>,
+    /// Camera for the inactive split-view pane ([RFC 0054](../../../docs/rfcs/0054-split-view.md)).
+    /// Swapped with [`Self::camera`] when the active pane changes so existing
+    /// sculpt/orbit code always uses `camera`.
+    pub camera_other: Camera,
+    pub(crate) snap_orbit_other: Option<(f32, f32)>,
 
     // The picker combines built-ins, project alphas and shared imports.
     pub alphas: Vec<Arc<Alpha>>,
@@ -219,6 +224,8 @@ impl Document {
             proxies: Default::default(),
             camera,
             snap_orbit: None,
+            camera_other: camera,
+            snap_orbit_other: None,
             alphas: BuiltinAlpha::ALL.iter().map(|b| Arc::new(b.generate(256))).collect(),
             library_only_alphas: Default::default(),
             alpha: None,
