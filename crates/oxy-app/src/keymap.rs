@@ -672,33 +672,38 @@ const COMMANDS: &[CommandMeta] = &[
         group: "Edit",
         defaults: &["y"],
     },
-    CommandMeta { id: CommandId::NewTab, name: "New tab", group: "Tabs", defaults: &["ctrl+t"] },
-    CommandMeta { id: CommandId::CloseTab, name: "Close tab", group: "Tabs", defaults: &["ctrl+w"] },
-    CommandMeta { id: CommandId::NextTab, name: "Next tab", group: "Tabs", defaults: &["ctrl+tab", "ctrl+pagedown"] },
+    CommandMeta { id: CommandId::NewTab, name: "New project", group: "Projects", defaults: &["ctrl+t"] },
+    CommandMeta { id: CommandId::CloseTab, name: "Close this project", group: "Projects", defaults: &["ctrl+w"] },
+    CommandMeta {
+        id: CommandId::NextTab,
+        name: "Next project",
+        group: "Projects",
+        defaults: &["ctrl+tab", "ctrl+pagedown"],
+    },
     CommandMeta {
         id: CommandId::PrevTab,
-        name: "Previous tab",
-        group: "Tabs",
+        name: "Previous project",
+        group: "Projects",
         defaults: &["ctrl+shift+tab", "ctrl+pageup"],
     },
     CommandMeta {
         id: CommandId::ReopenClosedTab,
-        name: "Reopen closed tab",
-        group: "Tabs",
+        name: "Reopen closed project",
+        group: "Projects",
         defaults: &["ctrl+shift+t"],
     },
-    CommandMeta { id: CommandId::Tab1, name: "Switch to tab 1", group: "Tabs", defaults: &["ctrl+1"] },
-    CommandMeta { id: CommandId::Tab2, name: "Switch to tab 2", group: "Tabs", defaults: &["ctrl+2"] },
-    CommandMeta { id: CommandId::Tab3, name: "Switch to tab 3", group: "Tabs", defaults: &["ctrl+3"] },
-    CommandMeta { id: CommandId::Tab4, name: "Switch to tab 4", group: "Tabs", defaults: &["ctrl+4"] },
-    CommandMeta { id: CommandId::Tab5, name: "Switch to tab 5", group: "Tabs", defaults: &["ctrl+5"] },
-    CommandMeta { id: CommandId::Tab6, name: "Switch to tab 6", group: "Tabs", defaults: &["ctrl+6"] },
-    CommandMeta { id: CommandId::Tab7, name: "Switch to tab 7", group: "Tabs", defaults: &["ctrl+7"] },
-    CommandMeta { id: CommandId::Tab8, name: "Switch to tab 8", group: "Tabs", defaults: &["ctrl+8"] },
-    CommandMeta { id: CommandId::Tab9, name: "Switch to tab 9", group: "Tabs", defaults: &["ctrl+9"] },
+    CommandMeta { id: CommandId::Tab1, name: "Switch to project 1", group: "Projects", defaults: &["ctrl+1"] },
+    CommandMeta { id: CommandId::Tab2, name: "Switch to project 2", group: "Projects", defaults: &["ctrl+2"] },
+    CommandMeta { id: CommandId::Tab3, name: "Switch to project 3", group: "Projects", defaults: &["ctrl+3"] },
+    CommandMeta { id: CommandId::Tab4, name: "Switch to project 4", group: "Projects", defaults: &["ctrl+4"] },
+    CommandMeta { id: CommandId::Tab5, name: "Switch to project 5", group: "Projects", defaults: &["ctrl+5"] },
+    CommandMeta { id: CommandId::Tab6, name: "Switch to project 6", group: "Projects", defaults: &["ctrl+6"] },
+    CommandMeta { id: CommandId::Tab7, name: "Switch to project 7", group: "Projects", defaults: &["ctrl+7"] },
+    CommandMeta { id: CommandId::Tab8, name: "Switch to project 8", group: "Projects", defaults: &["ctrl+8"] },
+    CommandMeta { id: CommandId::Tab9, name: "Switch to project 9", group: "Projects", defaults: &["ctrl+9"] },
 ];
 
-const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Tabs", "Help"];
+const GROUPS: &[&str] = &["File", "Edit", "Brushes", "View", "Mask and mesh", "Projects", "Help"];
 
 fn command_meta(id: CommandId) -> &'static CommandMeta {
     COMMANDS.iter().find(|c| c.id == id).expect("every command has metadata")

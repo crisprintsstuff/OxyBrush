@@ -5442,7 +5442,7 @@ impl Editor {
         self.documents[self.active_document].last_used = self.tab_use_clock;
         self.status = match closed {
             Some(name) => format!("Closed {name}"),
-            None => "Closed tab".into(),
+            None => "Closed project".into(),
         };
     }
 
@@ -8213,7 +8213,7 @@ impl Editor {
             return;
         }
         let mesh = self.scene.active().mesh.clone();
-        let target = self.oxyremesh_target_faces.clamp(64, 200_000);
+        let target = self.oxyremesh_target_faces.clamp(64, 100_000);
         let mut orientation_constraints = Vec::new();
         if self.oxyremesh_guide_last_stroke
             && let Some(last) = self.last_stroke.as_ref()

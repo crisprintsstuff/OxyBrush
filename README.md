@@ -238,7 +238,7 @@ Testers are the most useful contribution right now, especially with **pen tablet
 | `T` | Transform gizmo (move, turn and scale in one) on / off |
 | `Shift`+drag a gizmo handle | Snap to steps (0.1, 15°, 10 %) |
 | Ctrl+S / Ctrl+O | Save / open project |
-| Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+1–9 | New tab / close tab / switch tabs (Ctrl+Shift+T: reopen closed tab) |
+| Ctrl+T / Ctrl+W / Ctrl+Tab / Ctrl+1–9 | New project / close this project / switch projects (Ctrl+Shift+T: reopen closed project) |
 | Ctrl+C / Ctrl+V | Copy piece / paste piece (across tabs, preserving hierarchy and living strokes) |
 | Ctrl+Z, Ctrl+Shift+Z | Undo, redo |
 | Ctrl+Alt+Z, Ctrl+Alt+Shift+Z | Undo, redo on the active piece only |

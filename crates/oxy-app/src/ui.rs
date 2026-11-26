@@ -669,7 +669,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                         }
                     }
                 });
-                if tips::button_km(ui, &ed.keymap, "New tab", Cmd::NewTab).clicked() {
+                if tips::button_km(ui, &ed.keymap, "New project", Cmd::NewTab).clicked() {
                     ed.add_tab("sphere");
                 }
                 if tips::button_km(ui, &ed.keymap, "Open…", Cmd::Open).clicked() {
@@ -691,7 +691,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
                 if tips::button_on(ui, ed.can_revert(), "Revert", Cmd::Revert).clicked() {
                     ed.revert();
                 }
-                if tips::button_km(ui, &ed.keymap, "Close tab", Cmd::CloseTab).clicked() {
+                if tips::button_km(ui, &ed.keymap, "Close this project", Cmd::CloseTab).clicked() {
                     ed.request_close_tab(ed.active_document);
                 }
                 if ed.send_back_available() && tips::button(ui, "Send back to OxyCharacter", Cmd::SendBack).clicked() {
@@ -1424,8 +1424,8 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
 fn new_tab_material_row(ui: &mut Ui, ed: &mut Editor) {
     use crate::settings::NewTabMaterial;
     ui.horizontal(|ui| {
-        ui.label("New tabs start with").on_hover_text(
-            "The material (matcap) a new tab starts with: the one of the tab you were in, the default material, or one you pick here.",
+        ui.label("New projects start with").on_hover_text(
+            "The material (matcap) a new project starts with: the one of the project you were in, the default material, or one you pick here.",
         );
         egui::ComboBox::from_id_salt("new_tab_material")
             .selected_text(ed.new_tab_material.label())
@@ -1473,7 +1473,7 @@ fn settings_general_tab(ui: &mut Ui, ed: &mut Editor) {
 
     ui.label(RichText::new("Startup & Sculpting").strong());
     tips::check_plain(ui, &mut ed.welcome_at_startup, "Show welcome window at startup", plain::WELCOME_STARTUP);
-    tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's tabs at startup", plain::RESTORE_SESSION);
+    tips::check_plain(ui, &mut ed.restore_session, "Reopen last session's projects at startup", plain::RESTORE_SESSION);
     new_tab_material_row(ui, ed);
     if cfg!(not(target_os = "macos")) {
         tips::check_plain(
@@ -2651,7 +2651,7 @@ fn tab_strip(ui: &mut Ui, ed: &mut Editor, scroll_max_w: f32) {
                                 }
                                 ui.add(egui::Label::new(rt));
 
-                                let close_resp = ui.small_button("×").on_hover_text("Close tab");
+                                let close_resp = ui.small_button("×").on_hover_text("Close this project");
                                 if close_resp.clicked() || close_resp.middle_clicked() {
                                     close_tab = Some(i);
                                 }
@@ -2724,11 +2724,11 @@ fn tab_strip(ui: &mut Ui, ed: &mut Editor, scroll_max_w: f32) {
             }
         })
         .response
-        .on_hover_text("Open tabs list");
+        .on_hover_text("Open projects list");
     }
 
     // "+" New Tab button, pinned outside the scroll area
-    let add_btn = ui.button("+").on_hover_text("New tab (Ctrl+T)");
+    let add_btn = ui.button("+").on_hover_text("New project (Ctrl+T)");
     if add_btn.clicked() {
         ed.add_tab("sphere");
     }
@@ -7399,7 +7399,7 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
     ui.horizontal(|ui| {
         ui.label("OxyRemesh faces");
         tips::hover(
-            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=50_000))),
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_target_faces, 256..=100_000))),
             "Target face count for OxyRemesh (field-aligned quads).",
         );
     });
@@ -7738,19 +7738,19 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         egui::Modal::new(egui::Id::unique("bridge_open_tab")).show(&ctx, |ui| {
             ui.heading("Open incoming bridge link");
             if dirty {
-                ui.label("The active tab has unsaved changes.");
-                if ui.button("Save and open in this tab").clicked() {
+                ui.label("The active project has unsaved changes.");
+                if ui.button("Save and open in this project").clicked() {
                     *action = Some(UiAction::SaveThenContinue);
                 }
             } else {
                 ui.label("Choose where to open the incoming model.");
             }
             ui.horizontal_wrapped(|ui| {
-                if ui.button("Open in new tab").clicked() {
+                if ui.button("Open in new project").clicked() {
                     ed.pending = None;
                     ed.open_link(&path);
                 }
-                if ui.button(if dirty { "Replace without saving" } else { "Open in this tab" }).clicked() {
+                if ui.button(if dirty { "Replace without saving" } else { "Open in this project" }).clicked() {
                     ed.perform(Pending::OpenLink(path.clone()));
                 }
                 if ui.button("Cancel").clicked() {
@@ -7764,7 +7764,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
             Pending::New(_) => "starting a new document".to_string(),
             Pending::Close => "closing the project".to_string(),
             Pending::CloseTab(idx) => {
-                let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "tab".into());
+                let name = ed.documents.get(*idx).map(|d| d.title()).unwrap_or_else(|| "project".into());
                 format!("closing {name}")
             }
             Pending::OpenProject(_) | Pending::OpenLink(_) => "opening another project".to_string(),
@@ -7816,7 +7816,7 @@ fn dialogs(ui: &mut Ui, ed: &mut Editor, action: &mut Option<UiAction>) {
         egui::Modal::new(egui::Id::unique("recover_multi")).show(&ctx, |ui| {
             ui.set_max_width(480.0);
             ui.heading("Recover unsaved projects?");
-            ui.label(format!("OxyBrush found {} unsaved tabs from when it last closed:", items.len()));
+            ui.label(format!("OxyBrush found {} unsaved projects from when it last closed:", items.len()));
             ui.add_space(6.0);
             let mut recover_one = None;
             let mut discard_one = None;
