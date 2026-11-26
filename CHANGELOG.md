@@ -19,6 +19,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Changed
 
+- **App icon.** Window, taskbar, installer and Flatpak icons use the new cyan/magenta circuit-brush mark (`packaging/icons`, regenerated with `make_icons.py`).
 - **Orbit past ±90°.** Dragging the view up or down no longer stops just short of straight above or below; the camera tumbles through and can go upside down.
 - **Accumulate defaults.** Draw, Clay, Inflate and Clay Strips start with Accumulate **on** again so overlapping dabs build like clay ([#553](https://github.com/crisprintsstuff/OxyBrush/issues/553), [#554](https://github.com/crisprintsstuff/OxyBrush/issues/554)). Turn it off for a flat cap within one stroke.
 - **Document tabs are labeled Projects.** Menus, keymap group (**Projects**), shortcuts help and dialogs say **project** instead of **tab** (e.g. New project, Close this project). Keyboard Tab and Preferences category tabs are unchanged.

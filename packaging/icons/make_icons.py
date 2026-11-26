@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Generate the OxyBrush application icon (PNG sizes + Windows .ico).
 
-The mark is `logo_mark.png` (cyan/magenta circuit-brush emblem from the
-project banner). Each size composites it onto a dark rounded square so the
+The mark is `logo_mark.png` (cyan/magenta circuit-brush emblem). Each size composites it onto a dark rounded square so the
 window, taskbar and installer icons match the README branding. Pillow is
 required: `pip install Pillow`.
 
