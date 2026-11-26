@@ -23,6 +23,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **OxySpheres Make mesh feedback** ([#477](https://github.com/crisprintsstuff/OxyBrush/issues/477)). When Make mesh adds a new piece instead of updating the last one, the status bar says why (sculpted, painted, masked, levels, …). Keep spheres tooltips make clear it does not change meshes. A failed Quad skin build says existing meshes were not changed.
 - **OxyRemesh no longer replaces the mesh with floating shards** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551)). When face extraction would produce disconnected islands, the job fails with a clear status and the piece stays as it was (use Voxel remesh / Ctrl+R meanwhile). Full field-extraction hardening remains on the RFC 0044 track.
 - **Poly Edit pick on undo.** Undoing (or redoing) a Poly Edit cage edit restores the face/edge/point pick that belonged to that mesh topology, so the selection no longer disappears after Undo.
 

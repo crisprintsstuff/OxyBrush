@@ -120,12 +120,14 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 accept |= ui
                     .button("Make mesh")
                     .on_hover_text(
-                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted, otherwise it adds a new piece. The spheres stay, to make another any time.",
+                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted; if that mesh was sculpted (or painted, masked, given levels, …), it adds a new piece and says why. The spheres stay. Quad skin needs a simple chain or one 3-way join — otherwise the build fails and existing meshes stay as they are.",
                     )
                     .clicked();
                 done |= ui
                     .button("Keep spheres")
-                    .on_hover_text("Keep the spheres as they are now, as a piece of their own, without making a mesh")
+                    .on_hover_text(
+                        "Keep the spheres as they are now, as a piece of their own, without making or updating a mesh. Meshes made earlier stay as they are.",
+                    )
                     .clicked();
                 let keep = if e.replace.is_some() {
                     "Keep the spheres as they were (Esc)"

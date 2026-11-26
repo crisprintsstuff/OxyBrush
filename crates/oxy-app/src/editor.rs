@@ -8913,7 +8913,7 @@ impl Editor {
                 self.active_document = doc_idx;
                 self.retry_quad_skin(*edit, error.clone());
                 self.active_document = prev_active;
-                format!("{error}. Adjust the spheres or choose Voxel skin.")
+                format!("{error}. Existing meshes were not changed. Adjust the spheres or choose Voxel skin.")
             }
             Ok(JobResult::Primitive(name, mesh)) => {
                 let doc = &mut self.documents[doc_idx];
@@ -12356,6 +12356,11 @@ mod tests {
         e.accept_spheres();
         wait_job(&mut e);
         assert_eq!(e.scene.pieces.len(), 4, "the sculpted mesh stays");
+        assert!(
+            e.status.contains("Previous mesh was not replaced") && e.status.contains("sculpted"),
+            "status explains the skip: {}",
+            e.status
+        );
     }
 
     #[test]
@@ -12521,7 +12526,11 @@ mod tests {
         assert_eq!(e.scene.pieces.len(), pieces);
         assert_eq!(e.spheres.as_ref().unwrap().armature, armature);
         assert!(e.status.contains("choose Voxel skin"));
+        assert!(e.status.contains("Existing meshes were not changed"), "{}", e.status);
         assert!(e.spheres.as_ref().unwrap().build_error.as_deref().unwrap().contains("distinct joints"));
+        assert!(
+            e.spheres.as_ref().unwrap().build_error.as_deref().unwrap().contains("Existing meshes were not changed")
+        );
     }
 
     #[test]
