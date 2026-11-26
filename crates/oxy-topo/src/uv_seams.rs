@@ -45,6 +45,22 @@ impl Transform {
 }
 
 impl UvCutTopology {
+    /// Choose the closest grid transition on each seam and fit the cut UVs
+    /// jointly. Independently rounded transitions may conflict around a
+    /// cycle; those candidates are rejected by the joint fit.
+    pub fn fit_automatic_seam_uvs(&self, initial: &[Vec2]) -> Option<Vec<Vec2>> {
+        let transitions = self
+            .seams
+            .iter()
+            .map(|&[first, second]| {
+                let a = [initial.get(first[0])?.as_dvec2(), initial.get(first[1])?.as_dvec2()];
+                let b = [initial.get(second[0])?.as_dvec2(), initial.get(second[1])?.as_dvec2()];
+                closest_transition(a, b)
+            })
+            .collect::<Option<Vec<_>>>()?;
+        self.fit_seam_uvs(initial, &transitions)
+    }
+
     /// Find the closest cut coordinates to the initial fit in squared UV
     /// distance, subject to one fixed integer-grid transition per seam.
     /// Return `None` if the transitions conflict or cannot be represented
@@ -127,9 +143,62 @@ impl UvCutTopology {
     }
 }
 
+fn closest_transition(first: [DVec2; 2], second: [DVec2; 2]) -> Option<UvSeamTransition> {
+    (0..4)
+        .filter_map(|quarter_turns| {
+            let [a, b] = first.map(|p| Transform::rotate(p, quarter_turns));
+            let da = second[0] - a;
+            let db = second[1] - b;
+            // For a fixed rotation, the closest integer translation is
+            // the rounded mean of the two endpoint offsets.
+            let shift = ((da + db) * 0.5).round();
+            if !shift.is_finite()
+                || shift.min_element() < f64::from(i32::MIN)
+                || shift.max_element() > f64::from(i32::MAX)
+            {
+                return None;
+            }
+            let error = (da - shift).length_squared() + (db - shift).length_squared();
+            Some((UvSeamTransition { quarter_turns, translation: shift.as_ivec2() }, error))
+        })
+        .min_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(transition, _)| transition)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automatic_fit_recovers_a_noisy_quarter_turn_and_integer_offset() {
+        let cut = UvCutTopology::from_seams(&[[0, 1, 2], [1, 0, 3]], &[[0, 1]]).unwrap();
+        let initial = [
+            Vec2::new(0.1, 0.2),
+            Vec2::new(2.1, 0.2),
+            Vec2::Y,
+            Vec2::new(2.85, 0.05),
+            Vec2::new(2.75, -1.8),
+            Vec2::ONE,
+        ];
+        let output = cut.fit_automatic_seam_uvs(&initial).unwrap();
+        let [first, second] = cut.seams[0];
+        for (a, b) in first.into_iter().zip(second) {
+            let mapped = Vec2::new(-output[a].y + 3.0, output[a].x - 2.0);
+            assert!((output[b] - mapped).length() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn automatic_fit_rejects_incompatible_rounded_offsets_around_a_loop() {
+        let cut = UvCutTopology {
+            triangles: Vec::new(),
+            source_vertices: vec![0, 0, 0, 1, 1, 1],
+            seams: vec![[[0, 3], [1, 4]], [[1, 4], [2, 5]], [[2, 5], [0, 3]]],
+        };
+        let initial =
+            [Vec2::ZERO, Vec2::X * 0.4, Vec2::X * 0.8, Vec2::Y * 2.0, Vec2::new(0.4, 2.0), Vec2::new(0.8, 2.0)];
+        assert!(cut.fit_automatic_seam_uvs(&initial).is_none());
+    }
 
     #[test]
     fn seam_fit_rotates_and_translates_both_endpoints() {

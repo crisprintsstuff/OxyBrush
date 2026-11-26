@@ -113,8 +113,10 @@ sculpt mesh. The preparation stage seeds these cuts from residual quarter turns 
 interior edges after combing. A spanning forest of the remaining face adjacencies keeps each chart a
 disk. This can add more cuts than a shortest-cut method. A seam fit now enforces supplied integer translations and quarter turns
 on the cut vertices. It projects an initial UV estimate onto the shared
-constraints and rejects inconsistent cycles. Computing the transitions
-and integrating this fit with the orientation-field solve remain open.
+constraints and rejects inconsistent cycles. An automatic first pass now chooses the quarter turn and rounded offset
+with the least squared error at the two seam endpoints. The joint fit
+rejects incompatible choices. A field-derived initial fit for cut charts,
+joint integer optimization, and integration with extraction remain open.
 
 ## Verification
 
