@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+### Changed
+
+- **OxyRemesh quality gate + Autoremesher cleanup.** On a closed input, OxyRemesh no longer ships Swiss-cheese extracts. Dual-graph extract densifies unit edges, collapses short dual edges / 3-cycles, fills short polygon holes, and seals remaining gaps (hole fill + optional voxel seal, falling back to a closed voxel remesh of the input when the field shell cannot enclose). Isoline extract path remains gated until it covers the face budget; full MIQP parameterization is still RFC 0044 Phase 4 ([huxingyi/autoremesher](https://github.com/huxingyi/autoremesher) MIT).
+
 ## [4.1.1] - 2026-11-26
 
 ### Changed
