@@ -4,6 +4,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.1] - 2026-11-26
+
 ### Added
 
 - **OxySpheres quad Resolution and Blend** ([#477](https://github.com/crisprintsstuff/OxyBrush/issues/477), [RFC 0038](docs/rfcs/0038-oxyspheres-quad-base-mesh.md)). Quad base mesh gets the same **Resolution** and **Blend** sliders as voxel skin: Resolution densifies rings on long limbs (160 keeps one ring per sphere); Blend softens three-way joins. Subdivision is unchanged.
@@ -31,6 +33,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **OxySpheres Make mesh feedback** ([#477](https://github.com/crisprintsstuff/OxyBrush/issues/477)). When Make mesh adds a new piece instead of updating the last one, the status bar says why (sculpted, painted, masked, levels, …). Keep spheres tooltips make clear it does not change meshes. A failed Quad skin build says existing meshes were not changed.
 - **OxyRemesh no longer replaces the mesh with floating shards** ([#551](https://github.com/crisprintsstuff/OxyBrush/issues/551)). When face extraction would produce disconnected islands, the job fails with a clear status and the piece stays as it was (use Voxel remesh / Ctrl+R meanwhile). Full field-extraction hardening remains on the RFC 0044 track.
 - **Poly Edit pick on undo.** Undoing (or redoing) a Poly Edit cage edit restores the face/edge/point pick that belonged to that mesh topology, so the selection no longer disappears after Undo.
+
 
 ## [4.0.0] - 2026-11-25
 
@@ -1260,7 +1263,9 @@ First public alpha.
 - Settings are not remembered between sessions.
 - The Windows installer is not code-signed (SmartScreen warning).
 
-[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.5...HEAD
+[Unreleased]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.1...HEAD
+[4.0.1]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0...v4.0.1
+[4.0.0]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.7...v4.0.0
 [4.0.0-beta.24.5]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.4...v4.0.0-beta.24.5
 [4.0.0-beta.24.4]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.3...v4.0.0-beta.24.4
 [4.0.0-beta.24.3]: https://github.com/crisprintsstuff/OxyBrush/compare/v4.0.0-beta.24.2...v4.0.0-beta.24.3

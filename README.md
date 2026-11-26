@@ -15,7 +15,7 @@
 
 
 <p align="center">
-  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0"><b>Download</b></a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.1"><b>Download</b></a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
   <a href="https://discord.gg/Vfm7Km7xvG"><b>Discord</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
@@ -29,7 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Stable:** OxyBrush **4.0.0** is the first non-beta release. It includes Surface Noise, OxyRemesh (field-aligned pure-quad remesh), Amplify and Scene Project brushes, cutter shapes, Color Filter, Poly Edit Box/Lasso pick, 3MF export, reference Back/Left/Bottom planes, and the rest of the beta.24 line. [4.0.0 release notes](docs/releases/v4.0.0.md)
+> **Stable:** OxyBrush **4.0.1** — Split view, Also paint, MCP `set_geometry`, continuous orbit pitch, OxySpheres quad Resolution/Blend, Project detail, Smooth preview, Favorites, Scale cover, and the rest since 4.0.0. [4.0.1 release notes](docs/releases/v4.0.1.md)
 
 **Highlights**
 
@@ -45,7 +45,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 ## Download and install
 
-Get **[OxyBrush v4.0.0](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
+Get **[OxyBrush v4.0.1](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.1)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
 
 | Platform | File | How |
 |---|---|---|
@@ -264,7 +264,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.1 |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, rebuild lower level ✅, touch layout ✅, performance first pass ✅ · 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, deform window ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅ · layers ⏳ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |

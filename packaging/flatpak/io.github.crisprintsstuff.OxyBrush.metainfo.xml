@@ -52,6 +52,12 @@
   </supports>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="4.0.1" date="2026-11-26" type="stable">
+      <description>
+        <p>Split view, Also paint on sculpt brushes, MCP set_geometry for agents, continuous orbit pitch, and OxySpheres quad Resolution/Blend.</p>
+        <p>Also: Project detail, remesh density preview, Smooth preview outside Poly Edit, Favorites, Scale cover, Accumulate defaults on for clay brushes, and OxyRemesh shard safety.</p>
+      </description>
+    </release>
     <release version="4.0.0" date="2026-11-25" type="stable">
       <description>
         <p>First stable release. Surface Noise, OxyRemesh, Amplify and Scene Project brushes, cutter shapes, Color Filter, 3MF export, and the beta.24 workflow features.</p>
