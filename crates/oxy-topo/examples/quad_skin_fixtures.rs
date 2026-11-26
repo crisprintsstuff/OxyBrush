@@ -37,7 +37,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     bent.add_child(middle, Vec3::new(1.2, 4.0, 0.0), 0.15);
 
     for (name, armature) in [("bent", bent), ("acute", fork(0.8, 3.0)), ("wide", fork(2.5, 1.0))] {
-        let cage = quad_skin_armature(&armature)?;
+        let cage = quad_skin_armature(&armature, Default::default())?;
         let smooth = subdivide_levels(&cage, 2);
         println!(
             "{name}: {} quads, {} triangles, {} faces after two levels",

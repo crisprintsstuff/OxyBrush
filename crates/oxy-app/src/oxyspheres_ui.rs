@@ -89,8 +89,33 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 });
                 ui.end_row();
                 if e.quad_skin {
-                    ui.label("Subdivision").on_hover_text("0 keeps the coarse cage. Higher levels smooth the mesh when you click Make mesh.");
-                    if ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.quad_subdivision, 0..=oxy_topo::MAX_QUAD_SUBDIVISION))).changed() {
+                    ui.label("Resolution").on_hover_text(
+                        "Ring density along limbs. At 160 (default) there is one ring per sphere; higher values add rings on long links so simple and complex armatures stay more consistent",
+                    );
+                    if ui
+                        .add(crate::widgets::Bar(egui::Slider::new(&mut e.resolution, 32..=oxy_topo::MAX_RESOLUTION)))
+                        .changed()
+                    {
+                        e.build_error = None;
+                    }
+                    ui.end_row();
+                    ui.label("Blend").on_hover_text(
+                        "How soft three-way joins are. Lower keeps collars closer to the joint; higher spreads the transition. Endpoints and limb radii stay put",
+                    );
+                    if ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.blend, 0.0..=1.0))).changed() {
+                        e.build_error = None;
+                    }
+                    ui.end_row();
+                    ui.label("Subdivision").on_hover_text(
+                        "0 keeps the coarse cage. Higher levels smooth the mesh when you click Make mesh",
+                    );
+                    if ui
+                        .add(crate::widgets::Bar(egui::Slider::new(
+                            &mut e.quad_subdivision,
+                            0..=oxy_topo::MAX_QUAD_SUBDIVISION,
+                        )))
+                        .changed()
+                    {
                         e.build_error = None;
                     }
                     ui.end_row();
@@ -98,16 +123,16 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     ui.weak("Preview shows the spheres");
                     ui.end_row();
                 } else {
-                ui.label("Resolution").on_hover_text("Voxels along the longest side: more for finer detail. Thin parts are always made finer, a few voxels across their thinnest sphere, so they come out round (the quick view while editing is coarser)");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.resolution, 32..=oxy_topo::MAX_RESOLUTION)));
-                ui.end_row();
-                ui.label("Blend").on_hover_text("How round the joins between links are");
-                ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.blend, 0.0..=1.0)));
-                ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut e.show_skin, "Show the mesh")
-                    .on_hover_text("Show a quick, coarser version of the mesh instead of the spheres");
-                ui.end_row();
+                    ui.label("Resolution").on_hover_text("Voxels along the longest side: more for finer detail. Thin parts are always made finer, a few voxels across their thinnest sphere, so they come out round (the quick view while editing is coarser)");
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.resolution, 32..=oxy_topo::MAX_RESOLUTION)));
+                    ui.end_row();
+                    ui.label("Blend").on_hover_text("How round the joins between links are");
+                    ui.add(crate::widgets::Bar(egui::Slider::new(&mut e.blend, 0.0..=1.0)));
+                    ui.end_row();
+                    ui.label("");
+                    ui.checkbox(&mut e.show_skin, "Show the mesh")
+                        .on_hover_text("Show a quick, coarser version of the mesh instead of the spheres");
+                    ui.end_row();
                 }
             });
             ui.add_space(2.0);
