@@ -7552,6 +7552,12 @@ impl Editor {
         }
     }
 
+    /// Whether the current preview should show polygon edges even when the
+    /// global wireframe is off (Add Primitive / Insert Primitive — [#568]).
+    pub fn preview_forces_wireframe(&self) -> bool {
+        self.primitive_edit.is_some() || self.insert_preview.is_some()
+    }
+
     /// The mesh to draw as a preview (an inserted primitive, a mask extract
     /// or a curve stroke), if any.
     pub fn preview_mesh_mut(&mut self) -> Option<&mut Mesh> {
@@ -13499,6 +13505,18 @@ mod tests {
         // Redo moves child_a to parent_b
         e.redo();
         assert_eq!(e.scene.parent_of(child_a), Some(parent_b));
+    }
+
+    #[test]
+    fn add_primitive_preview_forces_wireframe_edges() {
+        // #568: divisions must be visible on the Add preview without turning
+        // on the global wireframe.
+        let mut e = editor();
+        assert!(!e.preview_forces_wireframe());
+        e.open_primitive("plane");
+        assert!(e.preview_forces_wireframe());
+        e.cancel_primitive();
+        assert!(!e.preview_forces_wireframe());
     }
 
     #[test]

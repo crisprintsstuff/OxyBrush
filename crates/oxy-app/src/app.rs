@@ -912,8 +912,14 @@ impl App {
         }
         self.instance_uploaded.retain(|k, _| draws.iter().any(|d| d.key == *k));
         g.viewport.retain_instances(|k| draws.iter().any(|d| d.key == k));
+        // Add Primitive / Insert Primitive previews always show edges so
+        // divisions are visible while adjusting (#568). Other previews follow
+        // the global wireframe toggle. Compute before borrowing the mesh.
+        let force_preview_wire = ed.preview_forces_wireframe();
         if let Some(preview) = ed.preview_mesh_mut() {
-            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle, false);
+            let preview_wire =
+                (all_wires || force_preview_wire) && preview.triangle_count() <= oxy_render::MAX_WIREFRAME_TRIANGLES;
+            g.viewport.sync(&g.device, &g.queue, PREVIEW_ID, preview, hard_edge_angle, preview_wire);
             // A piece shown in place (a curve stroke) keeps its material.
             let material = curve_piece.map_or(0, slot_of);
             items.push(oxy_render::DrawItem {
@@ -922,7 +928,7 @@ impl App {
                 preview: curve_piece.is_none(),
                 material,
                 instances: None,
-                wireframe: false,
+                wireframe: force_preview_wire,
             });
         }
 
