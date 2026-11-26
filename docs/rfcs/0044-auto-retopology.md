@@ -1,6 +1,6 @@
 # RFC 0044 — OxyRemesh (field-aligned automatic retopology)
 
-- **Status:** Phase 2 implemented (Phase 3 open)
+- **Status:** Phase 3 implemented
 - **Issue:** [#529](https://github.com/crisprintsstuff/OxyBrush/issues/529) (Autoremesher request)
 - **Name in UI:** **OxyRemesh** (OxyBrush product name for field-aligned remesh)
 
@@ -55,6 +55,10 @@ Controls:
 | Pure quad | Split every extracted polygon into quads (default on) |
 | Transfer attributes | Carry paint, mask and face groups (default on) |
 | Snap to surface | Project result onto the source mesh (default on) |
+| Adaptivity | 0..1 denser quads in high-curvature regions (Phase 3) |
+| Anisotropy | 0..1 stretch cells along the orientation field (Phase 3) |
+| Guide from last stroke | Soft orientation constraints from the last freehand stroke |
+| Attract poles to mask | Soft singularity attractor at the mask centroid |
 
 ### Placement
 
@@ -70,12 +74,13 @@ UI and docs say **OxyRemesh**. The algorithm module is `oxy_topo::auto_retopo`
 (Instant Meshes paper). Autoremesher may be named only when identifying the
 issue request or comparing features (same rule as ZBrush format mentions).
 
-## Non-goals (through Phase 2)
+## Non-goals (through Phase 3)
 
-- Interactive orientation / position brushes and singularity editing (§3.7)
+- Full interactive field-paint brush tool (Phase 3 uses last-stroke guide + mask attractor)
 - Point-cloud input
 - Matching Autoremesher’s CLI flag set 1:1
 - Full Catmull–Clark *smoothing* (Phase 2 only uses CC connectivity)
+- QuadriFlow solver (still a research option)
 
 ## Phases
 
@@ -83,7 +88,7 @@ issue request or comparing features (same rule as ZBrush format mentions).
 |---|---|
 | **1** | Background OxyRemesh job; field pipeline; quad-dominant extraction; unit tests; CLEAN_ROOM + ROADMAP |
 | **2** | Pure-quad post-pass; attribute projection + surface snap; crease-weighted GS; `oxyremesh_timing` example |
-| **3** | Optional orientation stroke constraints; singularity attractor; adaptivity / anisotropy knobs |
+| **3** | Orientation stroke constraints (guide from last stroke); singularity attractor (mask centroid); adaptivity / anisotropy knobs in Rebuild |
 
 ## Verification
 

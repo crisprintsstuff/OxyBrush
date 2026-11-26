@@ -8,6 +8,9 @@
 //! Phase 2 adds a Catmull–Clark-topology pure-quad post-pass (no
 //! smoothing), attribute projection from the source mesh, and stronger
 //! crease alignment during field smoothing.
+//!
+//! Phase 3 adds orientation stroke constraints, singularity attractors,
+//! and adaptivity / anisotropy knobs (paper §3.7).
 
 use glam::Vec3;
 use oxy_mesh::{Mesh, MeshData, WHITE};
@@ -19,9 +22,20 @@ const SO: usize = 4;
 const SP_AXES: usize = SO / 2;
 /// Extra weight on crease edges during orientation / position GS.
 const CREASE_WEIGHT: f32 = 8.0;
+/// Soft weight for orientation stroke constraints.
+const CONSTRAINT_WEIGHT: f32 = 12.0;
+/// Soft weight for singularity-attractor circumferential bias.
+const ATTRACTOR_WEIGHT: f32 = 10.0;
+
+/// Soft orientation pin: prefer `direction` (tangent) near `position`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OrientationConstraint {
+    pub position: Vec3,
+    pub direction: Vec3,
+}
 
 /// Options for [`auto_retopo`] (OxyRemesh).
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AutoRetopoOptions {
     /// Approximate number of faces in the result (sets the lattice spacing).
     pub target_faces: u32,
@@ -39,6 +53,14 @@ pub struct AutoRetopoOptions {
     pub transfer_attributes: bool,
     /// Snap result vertices onto the source surface after extraction.
     pub snap_to_surface: bool,
+    /// 0 = uniform density; 1 = much denser where curvature is high (Phase 3).
+    pub adaptivity: f32,
+    /// 0 = square cells; 1 = stretch along the orientation field (Phase 3).
+    pub anisotropy: f32,
+    /// Soft orientation stroke constraints (Phase 3 / paper §3.7).
+    pub orientation_constraints: Vec<OrientationConstraint>,
+    /// Soft singularity attractors in world space (Phase 3 / paper §3.7).
+    pub singularity_attractors: Vec<Vec3>,
 }
 
 impl Default for AutoRetopoOptions {
@@ -51,6 +73,10 @@ impl Default for AutoRetopoOptions {
             pure_quad: true,
             transfer_attributes: true,
             snap_to_surface: true,
+            adaptivity: 0.0,
+            anisotropy: 0.0,
+            orientation_constraints: Vec::new(),
+            singularity_attractors: Vec::new(),
         }
     }
 }
@@ -93,6 +119,8 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
     // Pure-quad post-pass roughly quadruples face count, so aim ρ a bit larger.
     let face_budget = if opts.pure_quad { (target / 4.0).max(4.0) } else { target };
     let rho = (area / face_budget).sqrt().max(1e-6);
+    let adaptivity = opts.adaptivity.clamp(0.0, 1.0);
+    let anisotropy = opts.anisotropy.clamp(0.0, 1.0);
 
     let hierarchy = build_hierarchy(&graph);
     let mut o = random_tangents(&graph);
@@ -108,18 +136,25 @@ pub fn auto_retopo(mesh: &Mesh, opts: AutoRetopoOptions) -> Result<Mesh, AutoRet
             o = random_tangents(g);
             p = g.positions.clone();
         }
+        // Stroke / attractor guidance only on the finest level (paper §3.7).
+        let guided = level == 0;
+        let constraints =
+            if guided { assign_constraints(g, &opts.orientation_constraints, rho) } else { HashMap::new() };
+        let attractors = if guided { assign_attractors(g, &opts.singularity_attractors, rho) } else { HashMap::new() };
         for _ in 0..opts.iterations_per_level.max(1) {
-            smooth_orientation(g, &mut o, opts.extrinsic);
-            smooth_position(g, &o, &mut p, rho, opts.extrinsic);
+            smooth_orientation(g, &mut o, opts.extrinsic, &constraints, &attractors);
+            smooth_position(g, &o, &mut p, rho, opts.extrinsic, adaptivity, anisotropy);
         }
         if level == 0 {
             graph = g.clone();
         }
     }
 
+    let constraints = assign_constraints(&graph, &opts.orientation_constraints, rho);
+    let attractors = assign_attractors(&graph, &opts.singularity_attractors, rho);
     for _ in 0..opts.iterations_per_level.max(1) {
-        smooth_orientation(&graph, &mut o, opts.extrinsic);
-        smooth_position(&graph, &o, &mut p, rho, opts.extrinsic);
+        smooth_orientation(&graph, &mut o, opts.extrinsic, &constraints, &attractors);
+        smooth_position(&graph, &o, &mut p, rho, opts.extrinsic, adaptivity, anisotropy);
     }
 
     let extracted = extract_faces(&graph, &o, &p, rho)?;
@@ -176,6 +211,8 @@ struct Graph {
     crease: Vec<bool>,
     /// Sharp crease edges as `[low, high]`.
     crease_edges: HashSet<[u32; 2]>,
+    /// Absolute mean-curvature proxy in 0..1 (for adaptivity).
+    curvature: Vec<f32>,
 }
 
 impl Graph {
@@ -249,6 +286,9 @@ impl Graph {
         }
 
         let neighbors: Vec<Vec<u32>> = neighbors.into_iter().map(|s| s.into_iter().collect()).collect();
+        let peak = mesh.curvature(false);
+        let cav = mesh.curvature(true);
+        let curvature: Vec<f32> = peak.iter().zip(cav.iter()).map(|(a, b)| (*a).max(*b)).collect();
         Self {
             positions: mesh.positions.clone(),
             normals,
@@ -257,6 +297,7 @@ impl Graph {
             parent: vec![None; n],
             crease: crease_vert,
             crease_edges,
+            curvature,
         }
     }
 
@@ -313,11 +354,29 @@ fn random_tangents(g: &Graph) -> Vec<Vec3> {
         .collect()
 }
 
-fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
+fn best_rosy_match(o: Vec3, n: Vec3, target: Vec3) -> Vec3 {
+    let mut best = o;
+    let mut best_d = f32::MAX;
+    for k in 0..SO {
+        let r = rosy(o, n, k);
+        let d = r.angle_between(target);
+        if d < best_d {
+            best_d = d;
+            best = r;
+        }
+    }
+    best
+}
+
+fn smooth_orientation(
+    g: &Graph,
+    o: &mut [Vec3],
+    extrinsic: bool,
+    constraints: &HashMap<usize, Vec3>,
+    attractors: &HashMap<usize, Vec3>,
+) {
     let n = g.len();
-    let order: Vec<usize> = (0..n).collect();
-    // Mild shuffle via deterministic swap based on iteration-free hash of index.
-    let mut order = order;
+    let mut order: Vec<usize> = (0..n).collect();
     for i in 0..n {
         let j = i.wrapping_mul(2654435761) % n;
         order.swap(i, j);
@@ -332,7 +391,6 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
             let edge = [i.min(j) as u32, i.max(j) as u32];
             let w = if g.crease_edges.contains(&edge) { CREASE_WEIGHT } else { 1.0 };
             if extrinsic {
-                // Search (k,l) minimizing angle between rotated reps.
                 let mut best = (f32::MAX, 0usize, 0usize);
                 for k in 0..SO {
                     for l in 0..SO {
@@ -346,7 +404,6 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
                 }
                 acc += rosy(o[j], nj, best.2) * w;
             } else {
-                // Intrinsic: rotate oj into i's tangent plane.
                 let axis = nj.cross(ni);
                 let ang = nj.angle_between(ni);
                 let oj_i = if axis.length_squared() > 1e-10 { rot_about(axis.normalize(), ang, o[j]) } else { o[j] };
@@ -363,7 +420,6 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
             }
             wsum += w;
         }
-        // Crease verts also pull toward the crease edge direction in the tangent plane.
         if g.crease[i] {
             for &j in &g.neighbors[i] {
                 let j = j as usize;
@@ -378,6 +434,18 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
                 }
             }
         }
+        // Phase 3: soft orientation stroke constraint.
+        if let Some(&dir) = constraints.get(&i) {
+            let pinned = best_rosy_match(o[i], ni, dir);
+            acc += pinned * CONSTRAINT_WEIGHT;
+            wsum += CONSTRAINT_WEIGHT;
+        }
+        // Phase 3: singularity attractor — prefer circumferential field.
+        if let Some(&circ) = attractors.get(&i) {
+            let pinned = best_rosy_match(o[i], ni, circ);
+            acc += pinned * ATTRACTOR_WEIGHT;
+            wsum += ATTRACTOR_WEIGHT;
+        }
         if wsum > 0.0 && acc.length_squared() > 1e-12 {
             o[i] = project_tangent(acc / wsum, ni);
             if o[i] == Vec3::ZERO {
@@ -387,18 +455,88 @@ fn smooth_orientation(g: &Graph, o: &mut [Vec3], extrinsic: bool) {
     }
 }
 
-/// Integer translation of `p` along the position lattice of (n, o).
-fn translate_pos(p: Vec3, n: Vec3, o: Vec3, t: [i32; SP_AXES], rho: f32) -> Vec3 {
-    let mut out = p;
-    for (k, &tk) in t.iter().enumerate() {
-        if tk != 0 {
-            out += rosy(o, n, k) * (rho * tk as f32);
+/// Map stroke constraints onto nearby graph vertices.
+fn assign_constraints(g: &Graph, constraints: &[OrientationConstraint], rho: f32) -> HashMap<usize, Vec3> {
+    let mut out = HashMap::new();
+    let radius = (rho * 2.5).max(1e-4);
+    let radius2 = radius * radius;
+    for c in constraints {
+        let dir0 = c.direction;
+        if dir0.length_squared() < 1e-12 {
+            continue;
+        }
+        let mut best: Option<(f32, usize)> = None;
+        for i in 0..g.len() {
+            let d2 = g.positions[i].distance_squared(c.position);
+            if d2 <= radius2 && best.is_none_or(|(bd, _)| d2 < bd) {
+                best = Some((d2, i));
+            }
+        }
+        if let Some((_, i)) = best {
+            let dir = project_tangent(dir0, g.normals[i]);
+            if dir != Vec3::ZERO {
+                out.insert(i, dir);
+            }
         }
     }
     out
 }
 
-fn round_to_lattice(n: Vec3, o: Vec3, p: Vec3, v: Vec3, rho: f32) -> Vec3 {
+/// Map singularity attractors to a circumferential preferred tangent per nearby vert.
+fn assign_attractors(g: &Graph, attractors: &[Vec3], rho: f32) -> HashMap<usize, Vec3> {
+    let mut out = HashMap::new();
+    let radius = (rho * 4.0).max(1e-4);
+    let radius2 = radius * radius;
+    for &a in attractors {
+        for i in 0..g.len() {
+            let d2 = g.positions[i].distance_squared(a);
+            if d2 > radius2 || d2 < 1e-12 {
+                continue;
+            }
+            let ni = g.normals[i];
+            let radial = project_tangent(g.positions[i] - a, ni);
+            let circ = ni.cross(radial).normalize_or_zero();
+            if circ == Vec3::ZERO {
+                continue;
+            }
+            // Keep the strongest (nearest) attractor influence.
+            let w = 1.0 / d2.sqrt();
+            match out.get(&i) {
+                Some(_) if w < 1.0 => {}
+                _ => {
+                    out.insert(i, circ);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Integer translation of `p` along the position lattice of (n, o).
+fn local_rho(base: f32, curv: f32, adaptivity: f32) -> f32 {
+    (base / (1.0 + adaptivity * 4.0 * curv.clamp(0.0, 1.0))).max(base * 0.15)
+}
+
+fn aniso_scales(rho: f32, anisotropy: f32) -> (f32, f32) {
+    // Stretch along orientation (axis 0), compress across (axis 1).
+    let a = anisotropy.clamp(0.0, 1.0);
+    let stretch = 1.0 + a;
+    let compress = 1.0 / stretch;
+    (rho * stretch, rho * compress)
+}
+
+fn translate_pos(p: Vec3, n: Vec3, o: Vec3, t: [i32; SP_AXES], rho_u: f32, rho_v: f32) -> Vec3 {
+    let mut out = p;
+    let scales = [rho_u, rho_v];
+    for (k, &tk) in t.iter().enumerate() {
+        if tk != 0 {
+            out += rosy(o, n, k) * (scales[k] * tk as f32);
+        }
+    }
+    out
+}
+
+fn round_to_lattice(n: Vec3, o: Vec3, p: Vec3, v: Vec3, rho_u: f32, rho_v: f32) -> Vec3 {
     // Find t minimizing || translate(p,t) - v || among small integers, then
     // project onto the tangent plane at v (paper Eq. 7).
     let n = n.normalize_or_zero();
@@ -406,7 +544,7 @@ fn round_to_lattice(n: Vec3, o: Vec3, p: Vec3, v: Vec3, rho: f32) -> Vec3 {
     let mut best_d = best.distance_squared(v);
     for t0 in -2..=2 {
         for t1 in -2..=2 {
-            let q = translate_pos(p, n, o, [t0, t1], rho);
+            let q = translate_pos(p, n, o, [t0, t1], rho_u, rho_v);
             let q_plane = v + (q - v - n * (q - v).dot(n));
             let d = q_plane.distance_squared(v);
             if d < best_d {
@@ -418,7 +556,7 @@ fn round_to_lattice(n: Vec3, o: Vec3, p: Vec3, v: Vec3, rho: f32) -> Vec3 {
     best
 }
 
-fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: bool) {
+fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: bool, adaptivity: f32, anisotropy: f32) {
     let n = g.len();
     let mut order: Vec<usize> = (0..n).collect();
     for i in 0..n {
@@ -428,6 +566,9 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
     for &i in &order {
         let ni = g.normals[i];
         let oi = o[i];
+        let curv = g.curvature.get(i).copied().unwrap_or(0.0);
+        let rho_i = local_rho(rho, curv, adaptivity);
+        let (rho_u, rho_v) = aniso_scales(rho_i, anisotropy);
         let mut acc = Vec3::ZERO;
         let mut wsum = 0.0f32;
         for &j in &g.neighbors[i] {
@@ -436,7 +577,9 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
             let oj = o[j];
             let edge = [i.min(j) as u32, i.max(j) as u32];
             let w = if g.crease_edges.contains(&edge) { CREASE_WEIGHT } else { 1.0 };
-            // Midpoint between tangent planes (approx q_ij).
+            let curv_j = g.curvature.get(j).copied().unwrap_or(0.0);
+            let rho_j = local_rho(rho, curv_j, adaptivity);
+            let (rho_ju, rho_jv) = aniso_scales(rho_j, anisotropy);
             let q = {
                 let mid = (g.positions[i] + g.positions[j]) * 0.5;
                 let n_avg = (ni + nj).normalize_or_zero();
@@ -446,7 +589,6 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
                     mid - n_avg * ((mid - g.positions[i]).dot(ni) + (mid - g.positions[j]).dot(nj)) * 0.5
                 }
             };
-            // Search small integer jumps near q.
             let mut best_pair = ([0i32; SP_AXES], [0i32; SP_AXES]);
             let mut best_d = f32::MAX;
             for t0 in -1..=1i32 {
@@ -455,16 +597,14 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
                         for m1 in -1..=1 {
                             let ti = [t0, t1];
                             let tj = [m0, m1];
-                            let pi_t = translate_pos(p[i], ni, oi, ti, rho);
-                            let pj_t = translate_pos(p[j], nj, oj, tj, rho);
+                            let pi_t = translate_pos(p[i], ni, oi, ti, rho_u, rho_v);
+                            let pj_t = translate_pos(p[j], nj, oj, tj, rho_ju, rho_jv);
                             let d = if extrinsic {
                                 pi_t.distance_squared(pj_t)
                             } else {
-                                // Pull pj into i's plane then compare.
                                 let pj_i = q + project_tangent(pj_t - q, ni);
                                 pi_t.distance_squared(pj_i)
                             };
-                            // Prefer pairs close to q as well.
                             let near = pi_t.distance_squared(q) + pj_t.distance_squared(q);
                             let score = d + 0.05 * near;
                             if score < best_d {
@@ -475,14 +615,14 @@ fn smooth_position(g: &Graph, o: &[Vec3], p: &mut [Vec3], rho: f32, extrinsic: b
                     }
                 }
             }
-            let contrib = translate_pos(p[j], nj, oj, best_pair.1, rho);
+            let contrib = translate_pos(p[j], nj, oj, best_pair.1, rho_ju, rho_jv);
             acc += contrib * w;
             wsum += w;
-            let _ = best_pair.0; // tij used during extraction via recompute
+            let _ = best_pair.0;
         }
         if wsum > 0.0 {
             let avg = acc / wsum;
-            p[i] = round_to_lattice(ni, oi, avg, g.positions[i], rho);
+            p[i] = round_to_lattice(ni, oi, avg, g.positions[i], rho_u, rho_v);
         }
     }
 }
@@ -508,6 +648,7 @@ fn coarsen(g: &Graph) -> Graph {
     let mut new_normals = Vec::new();
     let mut new_area = Vec::new();
     let mut new_crease = Vec::new();
+    let mut new_curvature = Vec::new();
     let mut fine_to_coarse = vec![u32::MAX; n];
 
     for &(_, i, j) in &scores {
@@ -532,6 +673,7 @@ fn coarsen(g: &Graph) -> Graph {
         new_normals.push(if nml == Vec3::ZERO { g.normals[i] } else { nml });
         new_area.push(a);
         new_crease.push(g.crease[i] || g.crease[j]);
+        new_curvature.push((g.curvature[i] * ai + g.curvature[j] * aj) / a.max(1e-8));
         fine_to_coarse[i] = idx;
         fine_to_coarse[j] = idx;
         parent_of[i] = Some(idx);
@@ -544,6 +686,7 @@ fn coarsen(g: &Graph) -> Graph {
             new_normals.push(g.normals[i]);
             new_area.push(g.area[i]);
             new_crease.push(g.crease[i]);
+            new_curvature.push(g.curvature[i]);
             fine_to_coarse[i] = idx;
             parent_of[i] = Some(idx);
         }
@@ -574,6 +717,7 @@ fn coarsen(g: &Graph) -> Graph {
         parent: vec![None; cn],
         crease: new_crease,
         crease_edges,
+        curvature: new_curvature,
     }
 }
 
@@ -653,8 +797,8 @@ fn integer_jump(g: &Graph, o: &[Vec3], p: &[Vec3], rho: f32, i: usize, j: usize)
         for t1 in -2..=2 {
             for m0 in -2..=2 {
                 for m1 in -2..=2 {
-                    let pi_t = translate_pos(p[i], ni, oi, [t0, t1], rho);
-                    let pj_t = translate_pos(p[j], nj, oj, [m0, m1], rho);
+                    let pi_t = translate_pos(p[i], ni, oi, [t0, t1], rho, rho);
+                    let pj_t = translate_pos(p[j], nj, oj, [m0, m1], rho, rho);
                     let d = pi_t.distance_squared(pj_t);
                     if d < best_d {
                         best_d = d;
@@ -1004,6 +1148,29 @@ mod tests {
         let masked = out.mask.iter().any(|&m| m > 0.25);
         assert!(painted, "expected some red from the upper hemisphere");
         assert!(masked, "expected some mask from the upper hemisphere");
+    }
+
+    #[test]
+    fn auto_retopo_phase3_constraints_and_adaptivity_run() {
+        let mesh = primitives::icosphere(3, 1.0);
+        let constraints = vec![OrientationConstraint { position: Vec3::new(0.0, 1.0, 0.0), direction: Vec3::X }];
+        let out = auto_retopo(
+            &mesh,
+            AutoRetopoOptions {
+                target_faces: 400,
+                iterations_per_level: 3,
+                adaptivity: 0.35,
+                anisotropy: 0.25,
+                orientation_constraints: constraints,
+                singularity_attractors: vec![Vec3::new(1.0, 0.0, 0.0)],
+                snap_to_surface: false,
+                transfer_attributes: false,
+                ..Default::default()
+            },
+        )
+        .expect("phase3");
+        assert!(out.triangle_count() > 4, "got {} tris", out.triangle_count());
+        assert_eq!(out.triangle_count() % 2, 0);
     }
 
     #[test]

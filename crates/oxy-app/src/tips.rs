@@ -129,7 +129,7 @@ commands! {
     KeepLevel => "Keep this level only", "", "Keep the level you see as the piece's mesh and remove the other subdivision levels, so dynamic detail can work on it.";
     RebuildLowerLevel => "Rebuild lower level", "", "Recover one Catmull–Clark coarse level under an all-quad mesh that has no subdivision stack (for example after Keep this level only, or an import with recorded quads). The dense surface stays as the high level.";
     Remesh => "Voxel remesh", "Ctrl+R", "Rebuild the active piece with clean, even triangles. Removes subdivision levels.";
-    OxyRemesh => "OxyRemesh", "", "Rebuild the active piece as a lighter pure-quad mesh aligned to its shape (field-aligned remesh). Keeps paint, mask and face groups. Removes subdivision levels. Runs in the background.";
+    OxyRemesh => "OxyRemesh", "", "Rebuild the active piece as a lighter pure-quad mesh aligned to its shape (field-aligned remesh). Keeps paint, mask and face groups. Adaptivity, anisotropy, last-stroke guide and mask pole attractor are in the Rebuild panel. Removes subdivision levels. Runs in the background.";
     Decimate => "Decimate", "", "Reduce the triangle count while keeping the shape.";
     DeleteHidden => "Delete hidden faces", "", "Remove hidden faces from the mesh.";
     CaptureAlpha => "Capture alpha from view", "", "Make an alpha from what the viewport shows: the depth of the model in the middle of the view, nearest parts white, at the size chosen next to it (up to 4096 px). It is added to the alphas and selected; use it with Stamp strokes to copy that shape onto a surface.";
