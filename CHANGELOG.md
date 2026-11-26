@@ -4,6 +4,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ## [Unreleased]
 
+## [4.0.0] - 2026-11-25
+
+First stable release (drops the `4.0.0-beta.*` suffix).
+
 ### Added
 
 - **Surface Noise.** Tools > Surface Noise… (also the command palette) opens a window that displaces the active piece along its normals with procedural noise: Scale, Strength, Octaves, Seed, and Smooth / Turbulent / Cellular patterns. Preview updates as you change the controls; Apply bakes one undo step. Closing without Apply restores the piece. Masked parts stay put unless Use mask is off. [#541](https://github.com/crisprintsstuff/OxyBrush/issues/541), [RFC 0045](docs/rfcs/0045-surface-noise.md)

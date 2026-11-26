@@ -6,7 +6,7 @@
 <p align="center">
   <a href="https://github.com/crisprintsstuff/OxyBrush/releases"><img alt="release" src="https://img.shields.io/github/v/release/crisprintsstuff/OxyBrush?include_prereleases&logo=github&label=release"></a>
   <a href="https://github.com/crisprintsstuff/OxyBrush/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/crisprintsstuff/OxyBrush/ci.yml?branch=main&label=CI&logo=githubactions&logoColor=white"></a>
-  <img alt="stage" src="https://img.shields.io/badge/stage-beta-blue">
+  <img alt="stage" src="https://img.shields.io/badge/stage-stable-brightgreen">
   <a href="rust-toolchain.toml"><img alt="language" src="https://img.shields.io/badge/language-Rust%201.99-dea584?logo=rust"></a>
   <img alt="platform" src="https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-0078d4">
   <a href="#license"><img alt="license" src="https://img.shields.io/badge/license-MIT%2FApache--2.0-4c1"></a>
@@ -15,7 +15,7 @@
 
 
 <p align="center">
-  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.7"><b>Download</b></a> ·
+  <a href="https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0"><b>Download</b></a> ·
   <a href="https://github.com/crisprintsstuff/OxyBrush/wiki"><b>Wiki & Docs</b></a> ·
   <a href="https://discord.gg/Vfm7Km7xvG"><b>Discord</b></a> ·
   <a href="docs/TESTING_GUIDE.md">Testing guide</a> ·
@@ -29,9 +29,7 @@
 
 OxyBrush is a free, open-source sculpting app for concept artists, character artists, miniature and 3D-print makers, and students. You shape 3D models like digital clay. The model fills the screen, tools show up when you call for them, and brushes respond immediately, even on dense meshes.
 
-> **Beta:** OxyBrush 4.0.0-beta.24.7 runs on Windows, Linux, and macOS. This beta adds live reference placement, rotation and flips, two-point landmark alignment, a viewport X-ray toggle with active-piece scope, and grids in snapped orthographic views. It also improves Pieces navigation and isolation, Shift-to-smooth Paint, and mirrored OxySpheres quad rebuilds. [Beta.24.7 release notes](docs/releases/v4.0.0-beta.24.7.md)
->
-> Beta.24.6 introduced project-embedded reference images, selection shape buttons, tuned Kelvin brushes, quad subdivision for OxySpheres, and editing existing low-poly meshes in Retopology. It also fixed brush strength when switching brushes and the custom color picker in Materials. [Beta.24.6 release notes](docs/releases/v4.0.0-beta.24.6.md)
+> **Stable:** OxyBrush **4.0.0** is the first non-beta release. It includes Surface Noise, OxyRemesh (field-aligned pure-quad remesh), Amplify and Scene Project brushes, cutter shapes, Color Filter, Poly Edit Box/Lasso pick, 3MF export, reference Back/Left/Bottom planes, and the rest of the beta.24 line. [4.0.0 release notes](docs/releases/v4.0.0.md)
 
 **Highlights**
 
@@ -47,7 +45,7 @@ OxyBrush is a free, open-source sculpting app for concept artists, character art
 
 ## Download and install
 
-Get **[OxyBrush v4.0.0-beta.24.7](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0-beta.24.7)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
+Get **[OxyBrush v4.0.0](https://github.com/crisprintsstuff/OxyBrush/releases/tag/v4.0.0)** or browse [all releases](https://github.com/crisprintsstuff/OxyBrush/releases).
 
 | Platform | File | How |
 |---|---|---|
@@ -261,7 +259,7 @@ Full plan and status: **[docs/ROADMAP.md](docs/ROADMAP.md)**.
 | 0 | Foundations: workspace, CI, renderer, mesh core | ✅ |
 | 1 | Sculpt core: brushes, symmetry, undo, pressure | ✅ (tablet pressure still being verified) |
 | 2 | Pieces, voxel remesh, decimation, face groups, `.oxb` projects, autosave | ✅ first pass |
-| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0-beta.19.2 |
+| — | Release packaging: Windows installer, Flatpak, macOS universal app | ✅ v0.0.1-alpha – v4.0.0 |
 | 3 | **Sculpting depth and iPad:** stabilizer & stroke types ✅, masking/selection ✅, alphas ✅, more brushes & Kelvinlets ✅, subdivision levels ✅, rebuild lower level ✅, touch layout ✅, performance first pass ✅ · 10M-triangle performance, iPad app with Apple Pencil ⏳ | 🚧 |
 | 4 | Workflow: dynamic topology (first version ✅), vertex color ✅, symmetrize ✅, retopology ✅, posing ✅, deform window ✅, wireframe & lights ✅, themes ✅, command palette ✅, keymap editor ✅, plugins ✅, local AI agent (MCP) ✅ · layers ⏳ | 🚧 |
 | 5 | Hardening → **1.0** | ⏳ |
