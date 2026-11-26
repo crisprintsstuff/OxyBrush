@@ -8081,7 +8081,40 @@ impl Editor {
         }
         let mesh = self.scene.active().mesh.clone();
         let target = self.oxyremesh_target_faces.clamp(64, 200_000);
-        let opts = oxy_topo::AutoRetopoOptions { target_faces: target, ..Default::default() };
+        let mut orientation_constraints = Vec::new();
+        if self.oxyremesh_guide_last_stroke
+            && let Some(last) = self.last_stroke.as_ref()
+            && last.piece == self.scene.active().id
+            && let Some(recipe) = last.recipe.as_ref()
+        {
+            let pts = stroke_path_points(recipe);
+            for w in pts.windows(2) {
+                let (a, _) = w[0];
+                let (b, _) = w[1];
+                let dir = b - a;
+                if dir.length_squared() > 1e-10 {
+                    orientation_constraints.push(oxy_topo::OrientationConstraint { position: a, direction: dir });
+                }
+            }
+        }
+        let mut singularity_attractors = Vec::new();
+        if self.oxyremesh_attract_mask {
+            let masked: Vec<Vec3> =
+                mesh.positions.iter().zip(mesh.mask.iter()).filter(|(_, m)| **m > 0.5).map(|(p, _)| *p).collect();
+            if !masked.is_empty() {
+                // One attractor at the centroid of the mask (simple Phase 3 MVP).
+                let c = masked.iter().copied().sum::<Vec3>() / masked.len() as f32;
+                singularity_attractors.push(c);
+            }
+        }
+        let opts = oxy_topo::AutoRetopoOptions {
+            target_faces: target,
+            adaptivity: self.oxyremesh_adaptivity.clamp(0.0, 1.0),
+            anisotropy: self.oxyremesh_anisotropy.clamp(0.0, 1.0),
+            orientation_constraints,
+            singularity_attractors,
+            ..Default::default()
+        };
         self.start_job(format!("OxyRemesh (~{target} faces)"), Vec::new(), move || {
             oxy_topo::auto_retopo(&mesh, opts).map(JobResult::Mesh).map_err(|e| e.to_string())
         });

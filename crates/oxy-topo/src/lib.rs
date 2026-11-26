@@ -11,7 +11,7 @@ pub mod skin;
 pub mod transfer;
 pub mod winding;
 
-pub use auto_retopo::{AutoRetopoError, AutoRetopoOptions, auto_retopo};
+pub use auto_retopo::{AutoRetopoError, AutoRetopoOptions, OrientationConstraint, auto_retopo};
 pub use decimate::decimate;
 pub use oxy_vdb::BooleanOp;
 pub use print3d::{

@@ -113,6 +113,14 @@ pub struct Document {
     pub remesh_engine: oxy_topo::RemeshEngine,
     /// Target face count for Mesh > OxyRemesh (RFC 0044).
     pub oxyremesh_target_faces: u32,
+    /// OxyRemesh adaptivity 0..1 (denser in high curvature).
+    pub oxyremesh_adaptivity: f32,
+    /// OxyRemesh anisotropy 0..1 (stretch along field).
+    pub oxyremesh_anisotropy: f32,
+    /// Use the last freehand stroke as an orientation guide.
+    pub oxyremesh_guide_last_stroke: bool,
+    /// Attract singularities toward masked regions.
+    pub oxyremesh_attract_mask: bool,
     pub subdivision_scheme: oxy_mesh::multires::Scheme,
     pub subdivision_smooth: bool,
 
@@ -243,6 +251,10 @@ impl Document {
             remesh_shell_side: oxy_topo::ShellSide::default(),
             remesh_engine: oxy_topo::RemeshEngine::Vdb,
             oxyremesh_target_faces: 5_000,
+            oxyremesh_adaptivity: 0.0,
+            oxyremesh_anisotropy: 0.0,
+            oxyremesh_guide_last_stroke: false,
+            oxyremesh_attract_mask: false,
             subdivision_scheme: oxy_mesh::multires::Scheme::CatmullClark,
             subdivision_smooth: true,
             poly_edit: None,

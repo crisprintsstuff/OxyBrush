@@ -7173,6 +7173,32 @@ fn topology_section(ui: &mut Ui, ed: &mut Editor, busy: bool) {
             "Target face count for OxyRemesh (field-aligned quads).",
         );
     });
+    ui.horizontal(|ui| {
+        ui.label("Adaptivity");
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_adaptivity, 0.0..=1.0))),
+            "Pack more quads into high-curvature areas (0 = even density).",
+        );
+    });
+    ui.horizontal(|ui| {
+        ui.label("Anisotropy");
+        tips::hover(
+            ui.add(crate::widgets::Bar(egui::Slider::new(&mut ed.oxyremesh_anisotropy, 0.0..=1.0))),
+            "Stretch cells along the orientation field (0 = square).",
+        );
+    });
+    tips::check_plain(
+        ui,
+        &mut ed.oxyremesh_guide_last_stroke,
+        "Guide from last stroke",
+        "Use the last freehand stroke as an edge-flow guide for OxyRemesh.",
+    );
+    tips::check_plain(
+        ui,
+        &mut ed.oxyremesh_attract_mask,
+        "Attract poles to mask",
+        "Pull field singularities toward the centroid of the masked region.",
+    );
     if tips::button_on(ui, !busy, "OxyRemesh", Cmd::OxyRemesh).clicked() {
         ed.oxyremesh_active();
     }
