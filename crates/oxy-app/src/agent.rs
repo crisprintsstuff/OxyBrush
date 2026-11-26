@@ -698,11 +698,17 @@ fn stroke(ed: &mut Editor, space: Space, points: &[glam::Vec3], invert: bool, pr
         Err(e) => return ToolResult::error(e),
     };
     let alpha = ed.alpha.and_then(|i| ed.alphas.get(i)).map(|alpha| AlphaStamp {
-        alpha: Arc::clone(alpha),
         rotation: ed.alpha_rotation_deg.to_radians(),
         follow_stroke: ed.alpha_follow_stroke,
         invert: ed.alpha_invert,
         up: ed.camera.up(),
+        tile: ed.alpha_tile,
+        tile_repeats: ed.alpha_tile_repeats,
+        roll: ed.alpha_roll,
+        roll_distance: ed.alpha_roll_distance,
+        rotate_jitter: ed.alpha_rotate_jitter_deg.to_radians(),
+        rotate_jitter_per_dab: ed.alpha_rotate_jitter_per_dab,
+        ..AlphaStamp::new(Arc::clone(alpha))
     });
     let params = StrokeParams {
         settings: BrushSettings {

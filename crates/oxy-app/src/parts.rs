@@ -397,6 +397,7 @@ mod tests {
             paint: Vec3::ONE,
             paint_jitter: Default::default(),
             paint_seed: 0,
+            rotate_jitter_seed: 0,
             alpha: None,
             events: vec![RecipeEvent::Sample {
                 sample: oxy_sculpt::StrokeSample { position: Vec3::ZERO, normal: Vec3::Y, pressure: 1.0 },

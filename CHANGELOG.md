@@ -6,6 +6,13 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Added
 
+- **Alpha Roll, Tile and rotate jitter** ([RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)). **Roll** scrolls a tileable alpha along the stroke (paint-roller); **Roll distance** stretches or compresses it. **Tile** wraps the pattern inside each dab; **Repeats** sets density. **Rotate jitter** (per stroke or per dab) turns the alpha randomly without Spray. Built-in **Scale strip** is a tileable U-scale row for rolling along limbs.
+
+### Changed
+
+- **Scale alphas.** Rebuilt the procedural **Scales** stamp as overlapping U-plates, and added **Snake scales**, **Diamond scales**, and a single **Scale plate** for Stamp strokes (all original CC0). [RFC 0047](docs/rfcs/0047-alpha-pack-tile-rotate.md)
+### Added
+
 - **Scale cover** (Dino mode). Tools > Scale cover… places overlapping scale plates on the active piece using surface instances: built-in teardrop, diamond, round, plate, ridge and spike meshes (procedural, original), scatter / mask / face-group placement, size, spacing, lift, variation, seed and orient. Apply creates or updates the cover; Edit source and Make real reuse the Instances ops. [RFC 0046](docs/rfcs/0046-scale-cover.md)
 
 ### Fixed

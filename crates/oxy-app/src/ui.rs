@@ -6967,7 +6967,45 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
                     );
                     tips::check_plain(ui, &mut ed.alpha_follow_stroke, "Follow stroke direction", plain::ALPHA_FOLLOW);
                     tips::check_plain(ui, &mut ed.alpha_invert, "Invert alpha", plain::ALPHA_INVERT);
-                    ui.label(RichText::new("Tip: Stamp mode + Constant falloff").weak().small());
+                    tips::check_plain(ui, &mut ed.alpha_tile, "Tile", plain::ALPHA_TILE_WRAP);
+                    if ed.alpha_tile {
+                        tips::hover(
+                            ui.add(crate::widgets::Bar(
+                                egui::Slider::new(&mut ed.alpha_tile_repeats, 0.5..=8.0).text("repeats"),
+                            )),
+                            plain::ALPHA_TILE_REPEATS,
+                        );
+                    }
+                    tips::check_plain(ui, &mut ed.alpha_roll, "Roll", plain::ALPHA_ROLL);
+                    if ed.alpha_roll {
+                        tips::hover(
+                            ui.add(crate::widgets::Bar(
+                                egui::Slider::new(&mut ed.alpha_roll_distance, 0.25..=8.0).text("roll distance"),
+                            )),
+                            plain::ALPHA_ROLL_DISTANCE,
+                        );
+                    }
+                    tips::hover(
+                        ui.add(crate::widgets::Bar(
+                            egui::Slider::new(&mut ed.alpha_rotate_jitter_deg, 0.0..=180.0)
+                                .suffix("°")
+                                .text("rotate jitter"),
+                        )),
+                        plain::ALPHA_ROTATE_JITTER,
+                    );
+                    if ed.alpha_rotate_jitter_deg > 0.0 {
+                        tips::check_plain(
+                            ui,
+                            &mut ed.alpha_rotate_jitter_per_dab,
+                            "Jitter per dab",
+                            plain::ALPHA_ROTATE_JITTER_PER_DAB,
+                        );
+                    }
+                    ui.label(
+                        RichText::new("Tip: Stamp mode + Constant falloff; Roll + Scale strip for limbs")
+                            .weak()
+                            .small(),
+                    );
                 });
             });
         }

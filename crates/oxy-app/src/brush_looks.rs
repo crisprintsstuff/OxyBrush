@@ -107,6 +107,12 @@ impl Editor {
         self.alpha_rotation_deg = p.alpha_rotation_deg;
         self.alpha_follow_stroke = p.alpha_follow_stroke;
         self.alpha_invert = p.alpha_invert;
+        self.alpha_tile = p.alpha_tile;
+        self.alpha_tile_repeats = p.alpha_tile_repeats;
+        self.alpha_roll = p.alpha_roll;
+        self.alpha_roll_distance = p.alpha_roll_distance;
+        self.alpha_rotate_jitter_deg = p.alpha_rotate_jitter_deg;
+        self.alpha_rotate_jitter_per_dab = p.alpha_rotate_jitter_per_dab;
         // An alpha this project hasn't loaded leaves the brush without one.
         self.alpha =
             p.alpha.as_ref().and_then(|name| self.alphas.iter().position(|a| a.name.eq_ignore_ascii_case(name)));

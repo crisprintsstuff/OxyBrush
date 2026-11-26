@@ -881,6 +881,14 @@ pub mod plain {
     pub const ALPHA_ROTATION: &str = "Turn the alpha image, in degrees.";
     pub const ALPHA_FOLLOW: &str = "Rotate the alpha to follow the direction of the stroke.";
     pub const ALPHA_INVERT: &str = "Invert the alpha image: white becomes black and black becomes white.";
+    pub const ALPHA_TILE_WRAP: &str =
+        "Wrap the alpha inside each dab so a seamless pattern repeats across the brush (use a tileable image).";
+    pub const ALPHA_TILE_REPEATS: &str = "How many periods of the alpha fit across the brush diameter when Tile is on.";
+    pub const ALPHA_ROLL: &str = "Scroll the alpha along the stroke like a paint roller, so a tileable strip (rope, chain, Scale strip) continues unbroken. Follows the stroke direction while on.";
+    pub const ALPHA_ROLL_DISTANCE: &str = "How far along the surface one alpha period covers, as a multiple of brush size. Higher stretches; lower compresses.";
+    pub const ALPHA_ROTATE_JITTER: &str = "Randomly turn the alpha up to this many degrees. 0 keeps the set rotation.";
+    pub const ALPHA_ROTATE_JITTER_PER_DAB: &str =
+        "On: a new random turn every dab. Off: one random turn for the whole stroke.";
     pub const DYN_DETAIL: &str = "How small the triangles get under the brush, relative to the brush size. A smaller brush also gives finer detail.";
     pub const REVERT_CONFIRM: &str =
         "Reload the saved file now. The changes since you saved are dropped, and Undo can't bring them back.";
@@ -1109,6 +1117,12 @@ pub mod plain {
         ALPHA_ROTATION,
         ALPHA_FOLLOW,
         ALPHA_INVERT,
+        ALPHA_TILE_WRAP,
+        ALPHA_TILE_REPEATS,
+        ALPHA_ROLL,
+        ALPHA_ROLL_DISTANCE,
+        ALPHA_ROTATE_JITTER,
+        ALPHA_ROTATE_JITTER_PER_DAB,
         RADIAL,
         RADIAL_AXIS,
         SYM_RECENTER,
