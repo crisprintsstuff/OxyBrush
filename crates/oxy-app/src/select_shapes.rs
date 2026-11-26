@@ -73,6 +73,19 @@ pub(crate) fn curve_path(points: &[Vec2], smooth: &[bool]) -> Vec<Vec2> {
 /// Points on a circle or ellipse outline.
 const OUTLINE_POINTS: usize = 72;
 
+/// With Shift held on an ellipse corner-drag, snap `b` so the box is square
+/// (the outline becomes a circle). Keeps the quadrant of the drag from `a`.
+pub(crate) fn constrain_ellipse_to_circle(a: Vec2, b: Vec2) -> Vec2 {
+    let d = b - a;
+    let side = d.x.abs().max(d.y.abs());
+    if side < 1e-6 {
+        return b;
+    }
+    let sx = if d.x < 0.0 { -side } else { side };
+    let sy = if d.y < 0.0 { -side } else { side };
+    a + Vec2::new(sx, sy)
+}
+
 /// The outline a box/lasso selection tests, in canvas pixels, from the
 /// points it was drawn with (the first and last for shapes dragged out).
 pub(crate) fn select_outline(shape: SelectShape, points: &[Vec2]) -> Vec<Vec2> {
@@ -271,6 +284,19 @@ mod tests {
             .filter(|(_, k)| **k > 0.5)
             .filter_map(|(p, _)| e.camera.project(*p, e.canvas_size()))
             .collect()
+    }
+
+    #[test]
+    fn shift_snaps_ellipse_corner_to_a_square() {
+        let a = Vec2::new(10.0, 20.0);
+        let b = constrain_ellipse_to_circle(a, a + Vec2::new(40.0, 10.0));
+        assert!((b - a).abs().abs_diff_eq(Vec2::splat(40.0), 1e-5), "{b}");
+        let c = constrain_ellipse_to_circle(a, a + Vec2::new(-8.0, -30.0));
+        assert!((c - a).abs().abs_diff_eq(Vec2::splat(30.0), 1e-5), "{c}");
+        let ring = select_outline(SelectShape::Ellipse, &[a, b]);
+        let centre = (a + b) * 0.5;
+        let r = 20.0;
+        assert!(ring.iter().all(|p| (p.distance(centre) - r).abs() < 1e-3));
     }
 
     #[test]

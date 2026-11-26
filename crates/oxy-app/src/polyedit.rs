@@ -218,7 +218,7 @@ impl ElementMode {
         }
     }
 
-    /// Whether Box/Lasso area pick is offered (RFC 0035 leaves Auto for later).
+    /// Whether Box/Lasso/Ellipse area select is offered (RFC 0035 leaves Auto for later).
     pub fn area_pick(self) -> bool {
         matches!(self, ElementMode::Faces | ElementMode::Edges | ElementMode::Points)
     }
@@ -250,14 +250,15 @@ impl ElementMode {
     }
 }
 
-/// Box or Lasso area pick in the Poly Edit window (RFC 0035). Off while
-/// click/paint pick is used; Auto mode leaves this off.
+/// Box, Lasso or Ellipse area select in the Poly Edit window (RFC 0035).
+/// Off while click/paint select is used; Auto mode leaves this off.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PolyAreaTool {
     #[default]
     Off,
     Box,
     Lasso,
+    Ellipse,
 }
 
 impl PolyAreaTool {
@@ -266,17 +267,21 @@ impl PolyAreaTool {
             PolyAreaTool::Off => "Click",
             PolyAreaTool::Box => "Box",
             PolyAreaTool::Lasso => "Lasso",
+            PolyAreaTool::Ellipse => "Ellipse",
         }
     }
 
     pub fn help(self) -> &'static str {
         match self {
-            PolyAreaTool::Off => "Click or Ctrl/Cmd+drag to pick faces, edges or points one at a time.",
+            PolyAreaTool::Off => "Click or Ctrl/Cmd+drag to select faces, edges or points one at a time.",
             PolyAreaTool::Box => {
-                "Drag a rectangle to pick. Plain drag replaces the pick; Ctrl/Cmd adds; Alt subtracts."
+                "Drag a rectangle to select. Plain drag replaces the selection; Ctrl/Cmd adds; Alt subtracts."
             }
             PolyAreaTool::Lasso => {
-                "Drag a freehand outline to pick. Plain drag replaces the pick; Ctrl/Cmd adds; Alt subtracts."
+                "Drag a freehand outline to select. Plain drag replaces the selection; Ctrl/Cmd adds; Alt subtracts."
+            }
+            PolyAreaTool::Ellipse => {
+                "Drag a corner-to-corner ellipse to select. Hold Shift for a circle. Plain drag replaces the selection; Ctrl/Cmd adds; Alt subtracts."
             }
         }
     }
@@ -286,6 +291,7 @@ impl PolyAreaTool {
             PolyAreaTool::Off => None,
             PolyAreaTool::Box => Some(crate::editor::SelectShape::Rectangle),
             PolyAreaTool::Lasso => Some(crate::editor::SelectShape::Lasso),
+            PolyAreaTool::Ellipse => Some(crate::editor::SelectShape::Ellipse),
         }
     }
 }
@@ -299,7 +305,7 @@ pub struct PolyEdit {
     pub edge_action: EdgeAction,
     pub edge_reach: EdgeReach,
     pub point_action: PointAction,
-    /// Box or Lasso area pick (RFC 0035); Off uses click/paint pick.
+    /// Box, Lasso or Ellipse area select (RFC 0035); Off uses click/paint.
     pub area_tool: PolyAreaTool,
     /// Extrude and inset each face on its own instead of as one region.
     pub each: bool,
@@ -632,11 +638,11 @@ impl Editor {
         self.status = format!("Poly Edit: {} ({})", mode.label(), mode.help());
     }
 
-    /// Choose Box or Lasso area pick, or Off for click/paint (RFC 0035).
+    /// Choose Box, Lasso or Ellipse area select, or Off for click/paint (RFC 0035).
     pub fn set_poly_area_tool(&mut self, tool: PolyAreaTool) {
         let Some(pe) = self.poly_edit.as_mut() else { return };
         if tool != PolyAreaTool::Off && !pe.mode.area_pick() {
-            self.status = "Box and Lasso pick need Faces, Edges or Points mode".into();
+            self.status = "Box, Lasso and Ellipse select need Faces, Edges or Points mode".into();
             return;
         }
         if tool != PolyAreaTool::Off {
@@ -1269,7 +1275,7 @@ impl Editor {
         if self.poly_knife_down(p) {
             return true;
         }
-        // Box / Lasso area pick (RFC 0035): drag draws the outline.
+        // Box / Lasso / Ellipse area select (RFC 0035): drag draws the outline.
         if let Some(shape) = self.poly_edit.as_ref().and_then(|pe| pe.area_tool.shape()) {
             self.drag = Drag::PolyAreaSelect {
                 shape,
@@ -1309,11 +1315,17 @@ impl Editor {
         true
     }
 
-    /// Apply a finished Box/Lasso area pick (RFC 0035). No undo step.
-    fn poly_apply_area(&mut self, shape: crate::editor::SelectShape, points: Vec<Vec2>, add: bool, subtract: bool) {
+    /// Apply a finished Box/Lasso/Ellipse area select (RFC 0035). No undo step.
+    fn poly_apply_area(&mut self, shape: crate::editor::SelectShape, mut points: Vec<Vec2>, add: bool, subtract: bool) {
+        // Shift on an ellipse drag snaps the box to a circle.
+        if shape == crate::editor::SelectShape::Ellipse && self.modifiers.shift && points.len() >= 2 {
+            let n = points.len();
+            let a = points[0];
+            points[n - 1] = crate::select_shapes::constrain_ellipse_to_circle(a, points[n - 1]);
+        }
         let is_click = points.len() < 2 || points.iter().all(|q| q.distance(points[0]) < 4.0);
         if is_click {
-            self.status = "Poly Edit: drag a box or lasso to pick".into();
+            self.status = "Poly Edit: drag a box, lasso or ellipse to select".into();
             return;
         }
         let mode = self.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
@@ -2145,7 +2157,7 @@ impl Editor {
     pub(crate) fn poly_cancel_drag(&mut self) {
         if matches!(self.drag, Drag::PolyAreaSelect { .. }) {
             self.drag = Drag::None;
-            self.status = "Poly Edit: area pick cancelled".into();
+            self.status = "Poly Edit: area select cancelled".into();
             return;
         }
         if matches!(self.drag, Drag::PolyGizmo(_)) {
@@ -4410,5 +4422,33 @@ mod tests {
             "lasso: front corners {corners:?} in pick {picked:?}; {}",
             e.status
         );
+    }
+
+    #[test]
+    fn ellipse_area_selects_the_front_face_and_shift_snaps_to_circle() {
+        let mut e = editor();
+        e.start_poly_edit();
+        e.set_poly_mode(ElementMode::Faces);
+        e.set_poly_area_tool(PolyAreaTool::Ellipse);
+        // Wide ellipse covering the front face.
+        drag(&mut e, centre() - Vec2::new(80.0, 40.0), centre() + Vec2::new(80.0, 40.0));
+        assert_eq!(e.poly_pick_count(), (1, "faces"), "{}", e.status);
+        assert_eq!(e.poly_selection(), &[face_towards(&e, Vec3::Z)]);
+        e.poly_toggle_pick(None);
+        // Shift while dragging stores a square box (circle outline).
+        e.modifiers.shift = true;
+        e.pointer = Some(centre() - Vec2::new(50.0, 10.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(centre() + Vec2::new(50.0, 10.0));
+        let Drag::PolyAreaSelect { points, shape, .. } = &e.drag else {
+            panic!("expected ellipse drag");
+        };
+        assert_eq!(*shape, crate::editor::SelectShape::Ellipse);
+        assert!(points.len() >= 2);
+        let d = (points[1] - points[0]).abs();
+        assert!((d.x - d.y).abs() < 1e-3, "Shift makes a square box: {d}");
+        e.pointer_up();
+        e.modifiers.shift = false;
+        assert!(e.poly_pick_count().0 >= 1, "{}", e.status);
     }
 }

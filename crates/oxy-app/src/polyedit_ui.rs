@@ -86,15 +86,15 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
 
 /// Actions, options and tips inside the Poly Edit scroll area.
 fn poly_edit_body(ui: &mut egui::Ui, ed: &mut Editor, subdivide: &mut Option<(u32, bool)>, repeat_key: &str) {
-    // Box / Lasso area pick (RFC 0035), then the Knife (#370).
+    // Box / Lasso / Ellipse area select (RFC 0035), then the Knife (#370).
     let mode = ed.poly_edit.as_ref().map_or(ElementMode::Faces, |pe| pe.mode);
     let area = ed.poly_edit.as_ref().map_or(PolyAreaTool::Off, |pe| pe.area_tool);
     if mode.area_pick() {
         ui.horizontal_wrapped(|ui| {
-            ui.label("Pick").on_hover_text(
-                "How to pick several faces, edges or points: click one at a time, or drag a box or lasso.",
+            ui.label("Select").on_hover_text(
+                "How to select several faces, edges or points: click one at a time, or drag a box, lasso or ellipse (Shift for a circle).",
             );
-            for tool in [PolyAreaTool::Off, PolyAreaTool::Box, PolyAreaTool::Lasso] {
+            for tool in [PolyAreaTool::Off, PolyAreaTool::Box, PolyAreaTool::Lasso, PolyAreaTool::Ellipse] {
                 let r = ui.selectable_label(area == tool, tool.label()).on_hover_text(tool.help());
                 if r.clicked() {
                     ed.set_poly_area_tool(tool);

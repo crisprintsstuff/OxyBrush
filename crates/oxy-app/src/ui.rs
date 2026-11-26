@@ -8767,8 +8767,16 @@ fn draw_brush_cursor(ui: &Ui, ed: &mut Editor, canvas: egui::Rect) {
                 let mut pts: Vec<egui::Pos2> = points.iter().map(|&v| to_pt(v)).collect();
                 pts.push(pos);
                 painter.add(egui::Shape::closed_line(pts, stroke));
+            } else if shape == crate::editor::SelectShape::Ellipse && !points.is_empty() {
+                // Live drag already stores a Shift-constrained end when needed.
+                let end = points.get(1).copied().unwrap_or_else(|| glam::Vec2::new(pos.x, pos.y) * ed.pixels_per_point);
+                let ends = [points[0], end];
+                let ring: Vec<egui::Pos2> =
+                    crate::select_shapes::select_outline(shape, &ends).into_iter().map(to_pt).collect();
+                painter.add(egui::Shape::convex_polygon(ring, c.linear_multiply(0.08), stroke));
             } else {
-                let rect = egui::Rect::from_two_pos(to_pt(points[0]), pos);
+                let end = points.get(1).map(|&p| to_pt(p)).unwrap_or(pos);
+                let rect = egui::Rect::from_two_pos(to_pt(points[0]), end);
                 painter.rect(rect, 0.0, c.linear_multiply(0.08), stroke, egui::StrokeKind::Middle);
             }
         }
