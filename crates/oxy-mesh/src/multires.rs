@@ -644,7 +644,7 @@ impl Multires {
                 cc_positions(positions, self.levels[k - 1].polys.as_ref().expect("quad level"), r)
             }
             Refinement::Cc(r) => {
-                linear_cc_positions(positions, self.levels[k - 1].polys.as_ref().expect("quad level"), r)
+                linear_cc_points(positions.to_vec(), self.levels[k - 1].polys.as_ref().expect("quad level"), r)
             }
         }
     }
@@ -665,6 +665,25 @@ impl Multires {
         }
         for level in from + 1..=to {
             deltas = self.refine_positions(level, &deltas);
+        }
+        Some(deltas)
+    }
+
+    /// Carry signed paint deltas between levels in subdivision order.
+    /// Inherited vertices keep their values and new vertices take the
+    /// average of their edge endpoints or face corners. Paint transfer
+    /// does not use geometric smoothing, even on a smoothed level.
+    pub fn transfer_color_deltas(&self, from: usize, to: usize, mut deltas: Vec<Vec3>) -> Option<Vec<Vec3>> {
+        let source = self.levels.get(from)?;
+        let target = self.levels.get(to)?;
+        if deltas.len() != source.positions.len() || deltas.iter().any(|delta| !delta.is_finite()) {
+            return None;
+        }
+        if to < from {
+            deltas.truncate(target.positions.len());
+        }
+        for level in from + 1..=to {
+            deltas = self.refine_colors(level, deltas);
         }
         Some(deltas)
     }
@@ -851,7 +870,7 @@ impl Multires {
                 .chain(r.edges.iter().map(|e| (prev[e.a as usize] + prev[e.b as usize]) * 0.5))
                 .collect(),
             Refinement::Cc(r) if smooth => cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
-            Refinement::Cc(r) => linear_cc_positions(prev, lvl.polys.as_ref().expect("quad level"), r),
+            Refinement::Cc(r) => linear_cc_points(prev.to_vec(), lvl.polys.as_ref().expect("quad level"), r),
         };
         level.details = Vec::new();
         level
@@ -1046,8 +1065,25 @@ impl Multires {
         up
     }
 
+    /// Carry paint with the same stencil for both absolute color and signed deltas.
+    fn refine_colors(&self, k: usize, mut colors: Vec<Vec3>) -> Vec<Vec3> {
+        if colors.is_empty() {
+            return colors;
+        }
+        match self.levels[k].refinement.as_ref().expect("refined level") {
+            Refinement::Loop(r) => {
+                let edges: Vec<_> =
+                    r.edges.iter().map(|e| (colors[e.a as usize] + colors[e.b as usize]) * 0.5).collect();
+                colors.extend(edges);
+                colors
+            }
+            Refinement::Cc(r) => linear_cc_points(colors, self.levels[k - 1].polys.as_ref().expect("quad level"), r),
+        }
+    }
+
     /// Attributes of level `k − 1` carried up to level `k` (interpolated).
-    fn attributes_up_carried(&self, k: usize, a: Attributes) -> Attributes {
+    fn attributes_up_carried(&self, k: usize, mut a: Attributes) -> Attributes {
+        a.color = self.refine_colors(k, a.color);
         let r = match self.levels[k].refinement.as_ref().expect("refined level") {
             Refinement::Loop(r) => r,
             Refinement::Cc(r) => return cc_attributes_up(self.levels[k - 1].polys.as_ref().expect("quad level"), r, a),
@@ -1055,16 +1091,10 @@ impl Multires {
         let mut mask = a.mask;
         let edge_mask: Vec<f32> = r.edges.iter().map(|e| (mask[e.a as usize] + mask[e.b as usize]) * 0.5).collect();
         mask.extend(edge_mask);
-        let mut color = a.color;
-        if !color.is_empty() {
-            let edge_color: Vec<Vec3> =
-                r.edges.iter().map(|e| (color[e.a as usize] + color[e.b as usize]) * 0.5).collect();
-            color.extend(edge_color);
-        }
         // Each coarse triangle becomes four consecutive children.
         let groups = a.groups.iter().flat_map(|&g| [g; 4]).collect();
         let hidden = a.hidden.iter().flat_map(|&h| [h; 4]).collect();
-        Attributes { mask, color, groups, hidden }
+        Attributes { mask, color: a.color, groups, hidden }
     }
 
     /// Attributes of level `k` carried down to level `k − 1`.
@@ -1780,22 +1810,25 @@ fn cc_positions(prev: &[Vec3], polys: &Polys, r: &CcRefinement) -> Vec<Vec3> {
     out
 }
 
-/// Catmull–Clark topology without smoothing: old points stay, edge points
-/// at edge middles, face points at face centres.
-fn linear_cc_positions(prev: &[Vec3], polys: &Polys, r: &CcRefinement) -> Vec<Vec3> {
-    let mut out = prev.to_vec();
-    out.extend(r.edges.iter().map(|e| (prev[e.a as usize] + prev[e.b as usize]) * 0.5));
-    out.extend((0..polys.len()).map(|f| {
-        let k = polys.corners(f);
-        k.iter().map(|&v| prev[v as usize]).sum::<Vec3>() / k.len() as f32
-    }));
-    out
+/// Linear Catmull–Clark stencil for positions or colors: old values stay,
+/// edge values average their endpoints, and face values average their corners.
+fn linear_cc_points(mut points: Vec<Vec3>, polys: &Polys, r: &CcRefinement) -> Vec<Vec3> {
+    points.reserve(r.edges.len() + polys.len());
+    for e in &r.edges {
+        points.push((points[e.a as usize] + points[e.b as usize]) * 0.5);
+    }
+    for f in 0..polys.len() {
+        let corners = polys.corners(f);
+        let center: Vec3 = corners.iter().map(|&v| points[v as usize]).sum();
+        points.push(center / corners.len() as f32);
+    }
+    points
 }
 
-/// Mask, color, groups and visibility of a coarse Catmull–Clark level
-/// carried up one level: new points take the average of the points they
-/// come from; each quad takes its coarse face's group, and is hidden when
-/// the whole face was.
+/// Carry the mask, groups and visibility of a coarse Catmull–Clark level
+/// up one level. The caller already carried the color. New points average
+/// their source masks. Each quad inherits its coarse face's group, and is
+/// hidden when the whole face was.
 fn cc_attributes_up(polys: &Polys, r: &CcRefinement, a: Attributes) -> Attributes {
     let spread = |vals: Vec<f32>| -> Vec<f32> {
         let mut out = vals;
@@ -1811,21 +1844,6 @@ fn cc_attributes_up(polys: &Polys, r: &CcRefinement, a: Attributes) -> Attribute
         out
     };
     let mask = spread(a.mask);
-    let color = if a.color.is_empty() {
-        Vec::new()
-    } else {
-        let mut out = a.color;
-        let edge: Vec<Vec3> = r.edges.iter().map(|e| (out[e.a as usize] + out[e.b as usize]) * 0.5).collect();
-        let face: Vec<Vec3> = (0..polys.len())
-            .map(|f| {
-                let k = polys.corners(f);
-                k.iter().map(|&v| out[v as usize]).sum::<Vec3>() / k.len() as f32
-            })
-            .collect();
-        out.extend(edge);
-        out.extend(face);
-        out
-    };
     let mut groups = Vec::with_capacity(2 * polys.corner_total());
     let mut hidden = Vec::with_capacity(2 * polys.corner_total());
     for f in 0..polys.len() {
@@ -1835,7 +1853,7 @@ fn cc_attributes_up(polys: &Polys, r: &CcRefinement, a: Attributes) -> Attribute
         groups.extend(std::iter::repeat_n(g, n));
         hidden.extend(std::iter::repeat_n(h, n));
     }
-    Attributes { mask, color, groups, hidden }
+    Attributes { mask, color: a.color, groups, hidden }
 }
 
 /// Attributes of a Catmull–Clark level carried down to the coarse level
@@ -2048,6 +2066,44 @@ mod tests {
             out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
         }
         (out, edges)
+    }
+
+    #[test]
+    fn color_deltas_match_paint_carry_in_both_subdivision_schemes() {
+        for catmull_clark in [false, true] {
+            let mut base = primitives::cube(1, 2.0);
+            base.color = vec![Vec3::splat(0.5); base.vertex_count()];
+            let mut painted = base.clone();
+            let mut deltas = vec![Vec3::ZERO; base.vertex_count()];
+            deltas[0] = Vec3::new(-0.25, 0.125, -0.0625);
+            deltas[1] = Vec3::new(0.125, -0.125, 0.25);
+            for (color, &delta) in painted.color.iter_mut().zip(&deltas) {
+                *color += delta;
+            }
+            let make_stack = |mesh: &Mesh| {
+                if catmull_clark { Multires::new_catmull_clark(mesh, None) } else { Multires::new(mesh) }
+            };
+            let mut stack = make_stack(&base);
+            let mut painted_stack = make_stack(&painted);
+            let data = stack.add_level(&base);
+            let painted_data = painted_stack.add_level(&painted);
+            let fine = rebuild(&mut stack, data);
+            let painted_fine = rebuild(&mut painted_stack, painted_data);
+            let data = stack.add_level(&fine);
+            let painted_data = painted_stack.add_level(&painted_fine);
+            let carried = stack.transfer_color_deltas(0, 2, deltas.clone()).unwrap();
+            assert_eq!(carried.len(), data.positions.len());
+            assert_ne!(carried, stack.transfer_displacements(0, 2, deltas.clone()).unwrap());
+            for ((after, before), delta) in painted_data.color.iter().zip(&data.color).zip(&carried) {
+                assert!((*after - *before - *delta).abs().max_element() < 1e-6);
+            }
+            assert_eq!(stack.transfer_color_deltas(2, 0, carried).unwrap(), deltas);
+            assert!(stack.transfer_color_deltas(0, 2, Vec::new()).is_none());
+            let mut fine_only = vec![Vec3::ZERO; data.positions.len()];
+            *fine_only.last_mut().unwrap() = Vec3::splat(-1.0);
+            assert_eq!(stack.transfer_color_deltas(2, 0, fine_only.clone()).unwrap(), vec![Vec3::ZERO; deltas.len()]);
+            assert_eq!(stack.transfer_color_deltas(2, 2, fine_only.clone()).unwrap(), fine_only);
+        }
     }
 
     #[test]
