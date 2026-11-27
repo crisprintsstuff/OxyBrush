@@ -122,9 +122,25 @@ Join, Symmetrize, retopology, and importing over the piece. These already go
 through `record_topology`; that call bakes the piece's strokes and the panel
 shows a one-line note ("Strokes baked by Voxel remesh").
 
-**Subdivision levels:** strokes are recorded on the level they were made
-on. Switching levels bakes the strokes of the level you leave, since detail
-moves between levels when you switch.
+**Subdivision levels** ([#599](https://github.com/crisprintsstuff/OxyBrush/issues/599)):
+strokes keep signed position and RGB deltas in the order of their source
+level. Switching or adding levels projects the deltas into the displayed
+mesh. A strength change also updates fine geometry and paint stored in
+the stack.
+
+Color deltas use the same linear interpolation as vertex colors.
+Inherited points keep their deltas, edge points average their endpoints,
+and Catmull–Clark face points average their corners. Moving down retains
+the inherited prefix on screen. The native stroke still owns the deltas
+for fine-only points. Fine levels store the difference between their
+color and the color already inherited from the level below.
+
+The viewport clamps the composed RGB to its display range. The stack can
+save unclamped channels so an additive stroke can be faded and restored
+even when paint overlaps at full strength. Project files store native
+geometry in `STLV`, native color in `STCL`, and unclamped active color in
+`MRPC`. The visible colors and active stroke data remain in `VCOL` and
+`STRK`.
 
 Whole-piece edits (the Deform window, the transform gizmo, Fit to standard
 size) are recorded as strokes too, named after the tool, so they can be

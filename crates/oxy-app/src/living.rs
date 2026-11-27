@@ -45,6 +45,10 @@ mod placed;
 use crate::parts::PlaceChoice;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
+use oxy_mesh::{
+    Mesh,
+    multires::{LevelDisplacements, Multires},
+};
 use oxy_sculpt::recipe::AlphaLookup;
 use oxy_sculpt::{AlphaStamp, BrushKind, Falloff, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 pub use placed::FLAG_SOURCE;
@@ -172,6 +176,7 @@ pub struct LivingStroke {
     /// The points the stroke changed, sorted, and what it did to each.
     pub vertices: Vec<u32>,
     deltas: Vec<Vec3>,
+    native: Option<NativeStroke>,
     /// Color change per point; empty when the stroke didn't paint.
     colors: Vec<Vec3>,
     /// The stroke's own strength: 1 as made, 0 hidden.
@@ -196,10 +201,15 @@ pub struct LivingStroke {
 }
 
 impl LivingStroke {
+    pub(crate) fn has_native_level(&self) -> bool {
+        self.native.is_some()
+    }
+
     /// Bytes of memory the record uses.
     pub fn bytes(&self) -> usize {
         self.vertices.len() * 4
             + self.deltas.len() * 12
+            + self.native.as_ref().map_or(0, NativeStroke::bytes)
             + self.colors.len() * 12
             + 112
             + self.recipe.as_ref().map_or(0, |r| r.approx_bytes())
@@ -245,6 +255,65 @@ impl Snap {
     fn put(self, s: &mut LivingStroke) {
         (s.strength, s.deleted, s.group, s.applied) = (self.strength, self.deleted, self.group, self.applied);
     }
+}
+
+pub(crate) type LevelStrokeRecords = Vec<(u64, NativeStroke)>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct NativeStroke {
+    positions: LevelDisplacements,
+    colors: Option<LevelDisplacements>,
+}
+
+impl NativeStroke {
+    fn bytes(&self) -> usize {
+        (self.positions.parts().2.len() + self.colors.as_ref().map_or(0, |c| c.parts().2.len())) * 16
+    }
+
+    fn apply(&self, stack: &mut Multires, mesh: &mut Mesh, change: f32) {
+        stack.apply_level_displacements(mesh, &self.positions, change).expect("stroke belongs to the bound stack");
+        if let Some(colors) = &self.colors {
+            stack.apply_level_color_deltas(mesh, colors, change).expect("paint belongs to the bound stack");
+        }
+    }
+}
+
+struct LevelStrokeEdit {
+    entry: u64,
+    records: Vec<(u64, StrokeProjection)>,
+}
+
+struct StrokeProjection {
+    topology: u64,
+    points: usize,
+    vertices: Vec<u32>,
+    deltas: Vec<Vec3>,
+    colors: Vec<Vec3>,
+    native: Option<NativeStroke>,
+}
+
+impl StrokeProjection {
+    fn swap(&mut self, stroke: &mut LivingStroke) {
+        std::mem::swap(&mut self.topology, &mut stroke.topology);
+        std::mem::swap(&mut self.points, &mut stroke.points);
+        std::mem::swap(&mut self.vertices, &mut stroke.vertices);
+        std::mem::swap(&mut self.deltas, &mut stroke.deltas);
+        std::mem::swap(&mut self.colors, &mut stroke.colors);
+        std::mem::swap(&mut self.native, &mut stroke.native);
+    }
+}
+
+/// Align independently projected position and paint rows by mesh vertex.
+fn merge_projection(positions: Vec<(u32, Vec3)>, colors: Vec<(u32, Vec3)>) -> (Vec<u32>, Vec<Vec3>, Vec<Vec3>) {
+    let mut positions = positions.into_iter().peekable();
+    let mut colors = colors.into_iter().peekable();
+    let (mut vertices, mut deltas, mut rgb) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some(vertex) = positions.peek().into_iter().chain(colors.peek()).map(|&(vertex, _)| vertex).min() {
+        vertices.push(vertex);
+        deltas.push(positions.next_if(|&(v, _)| v == vertex).map_or(Vec3::ZERO, |(_, delta)| delta));
+        rgb.push(colors.next_if(|&(v, _)| v == vertex).map_or(Vec3::ZERO, |(_, delta)| delta));
+    }
+    (vertices, deltas, rgb)
 }
 
 /// A stroke's deltas and color changes.
@@ -339,6 +408,7 @@ pub struct Living {
     pub strokes: Vec<LivingStroke>,
     pub groups: Vec<StrokeGroup>,
     edits: Vec<PanelEdit>,
+    level_edits: Vec<LevelStrokeEdit>,
     next_id: u64,
     next_group: u32,
     /// Selected rows of the panel, by stroke id.
@@ -488,6 +558,7 @@ impl Living {
             entry: 0,
             vertices,
             deltas,
+            native: None,
             colors,
             deleted: false,
             undone: false,
@@ -499,11 +570,68 @@ impl Living {
         }
     }
 
+    pub(crate) fn capture_for_subdivision(&self, piece: &Piece, stack: &Multires) -> Option<LevelStrokeRecords> {
+        self.strokes
+            .iter()
+            .filter(|s| s.piece == piece.id && s.listed())
+            .map(|s| {
+                if s.topology != piece.mesh.topology_version() {
+                    return None;
+                }
+                if let Some(native) = &s.native {
+                    return Some((s.id, native.clone()));
+                }
+                let sparse = |values: &[Vec3]| -> Vec<_> {
+                    s.vertices.iter().copied().zip(values.iter().copied()).filter(|&(_, d)| d != Vec3::ZERO).collect()
+                };
+                let positions = stack.capture_displacements(&piece.mesh, &sparse(&s.deltas))?;
+                let colors = if s.colors.is_empty() {
+                    None
+                } else {
+                    Some(stack.capture_displacements(&piece.mesh, &sparse(&s.colors))?)
+                };
+                Some((s.id, NativeStroke { positions, colors }))
+            })
+            .collect()
+    }
+
+    pub(crate) fn project_level_strokes(&mut self, entry: u64, piece: &Piece, records: LevelStrokeRecords) {
+        let Some(stack) = &piece.multires else { return };
+        let mut previous = Vec::with_capacity(records.len());
+        for (id, native) in records {
+            let Some(stroke) = self.find_mut(id) else { continue };
+            let positions = stack
+                .project_displacements(&piece.mesh, &native.positions)
+                .expect("adding a level preserves the source subdivision hierarchy");
+            let (vertices, deltas, colors) = if let Some(rgb) = &native.colors {
+                let colors = stack.project_color_deltas(&piece.mesh, rgb).expect("paint belongs to the bound stack");
+                merge_projection(positions, colors)
+            } else {
+                let (vertices, deltas) = positions.into_iter().unzip();
+                (vertices, deltas, Vec::new())
+            };
+            let mut projection = StrokeProjection {
+                topology: piece.mesh.topology_version(),
+                points: piece.mesh.vertex_count(),
+                vertices,
+                deltas,
+                colors,
+                native: Some(native),
+            };
+            projection.swap(stroke);
+            previous.push((id, projection));
+        }
+        if !previous.is_empty() {
+            self.level_edits.push(LevelStrokeEdit { entry, records: previous });
+        }
+    }
+
     /// Forget every record (nothing on the surface changes).
     fn clear(&mut self) {
         self.strokes.clear();
         self.groups.clear();
         self.edits.clear();
+        self.level_edits.clear();
         self.selected.clear();
         self.solo = None;
         self.drag_from = None;
@@ -543,6 +671,8 @@ impl Living {
                 .collect();
             rows.sort_unstable_by_key(|r| r.0);
             strokes.push(SavedStroke {
+                native: s.native.as_ref().map(|native| native.positions.clone()),
+                native_color: s.native.as_ref().and_then(|native| native.colors.clone()),
                 brush: crate::settings::brush_key(s.brush).to_string(),
                 made: s.made.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
                 strength: s.strength,
@@ -740,6 +870,7 @@ impl Editor {
             points,
             vertices: moved.iter().map(|m| m.0).collect(),
             deltas: moved.iter().map(|m| m.1).collect(),
+            native: None,
             colors: if any_color { moved.iter().map(|m| m.2).collect() } else { Vec::new() },
             strength: 1.0,
             deleted: false,
@@ -837,6 +968,13 @@ impl Editor {
         for s in living.strokes.iter_mut().filter(|s| s.entry == entry) {
             s.undone = undone;
         }
+        if let Some(edit) = living.level_edits.iter_mut().find(|edit| edit.entry == entry) {
+            for (id, projection) in &mut edit.records {
+                if let Some(stroke) = living.strokes.iter_mut().find(|s| s.id == *id) {
+                    projection.swap(stroke);
+                }
+            }
+        }
         let Some(e) = living.edits.iter().position(|e| e.entry == entry) else { return };
         let Living { edits, strokes, groups, placed_parts, .. } = living;
         let e = &edits[e];
@@ -885,7 +1023,11 @@ impl Editor {
     /// longer fit their piece (baked), undone strokes that can't come back,
     /// and groups nothing is in.
     pub fn living_sync(&mut self) {
-        if self.living.strokes.is_empty() && self.living.edits.is_empty() && self.living.groups.is_empty() {
+        if self.living.strokes.is_empty()
+            && self.living.edits.is_empty()
+            && self.living.level_edits.is_empty()
+            && self.living.groups.is_empty()
+        {
             return;
         }
         let mut baked: Vec<String> = Vec::new();
@@ -904,6 +1046,10 @@ impl Editor {
             !s.undone || history.can_redo_id(s.entry)
         });
         doc.living.edits.retain(|e| history.can_undo_id(e.entry) || history.can_redo_id(e.entry));
+        doc.living.level_edits.retain_mut(|edit| {
+            edit.records.retain(|(id, _)| doc.living.strokes.iter().any(|s| s.id == *id));
+            !edit.records.is_empty() && (history.can_undo_id(edit.entry) || history.can_redo_id(edit.entry))
+        });
         let strokes = &doc.living.strokes;
         doc.living.groups.retain(|g| strokes.iter().any(|s| s.group == Some(g.id)));
         doc.living.sync_parts();
@@ -975,15 +1121,20 @@ impl Editor {
             return;
         }
         let doc = &mut self.documents[self.active_document];
-        let mesh = &mut doc.scene.pieces[i].mesh;
+        let piece = &mut doc.scene.pieces[i];
+        let mesh = &mut piece.mesh;
         let mut moved: Vec<u32> = Vec::new();
         let mut colors = false;
         for (k, t) in targets {
             let s = &mut doc.living.strokes[k];
-            add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
+            if let (Some(stack), Some(native)) = (&mut piece.multires, &s.native) {
+                native.apply(stack, mesh, t - s.applied);
+            } else {
+                add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
+                moved.extend_from_slice(&s.vertices);
+                colors |= !s.colors.is_empty();
+            }
             s.applied = t;
-            moved.extend_from_slice(&s.vertices);
-            colors |= !s.colors.is_empty();
         }
         moved.sort_unstable();
         moved.dedup();
@@ -1007,6 +1158,10 @@ impl Editor {
         self.living_end_drag();
         self.living_sync();
         let Some(index) = self.scene.index_of(pid) else { return false };
+        if data.iter().any(|(id, ..)| self.living.strokes.iter().any(|s| s.id == *id && s.native.is_some())) {
+            self.status = "This operation cannot rewrite a stroke stored across subdivision levels".into();
+            return false;
+        }
         let before: HashMap<u64, Snap> =
             self.living.strokes.iter().filter(|s| s.piece == pid && !s.undone).map(|s| (s.id, Snap::of(s))).collect();
         let groups_before = self.living.groups_of_piece(pid);
@@ -1041,7 +1196,14 @@ impl Editor {
         let doc = &mut self.documents[self.active_document];
         // Snapshot the chunks whose points will move (at least one, so a
         // change that moves nothing, like a rename, is still an undo step).
-        let mesh = &doc.scene.pieces[index].mesh;
+        let piece = &mut doc.scene.pieces[index];
+        let mesh = &piece.mesh;
+        let level_snapshot = changed
+            .iter()
+            .any(|(id, before, after)| {
+                before.applied != after.applied && doc.living.strokes.iter().any(|s| s.id == *id && s.native.is_some())
+            })
+            .then(|| (mesh.clone(), piece.multires.clone()));
         let mut chunks: BTreeSet<u32> = BTreeSet::new();
         let mut painted = false;
         let mut any_chunk = None;
@@ -1058,13 +1220,16 @@ impl Editor {
         if chunks.is_empty() {
             chunks.insert(any_chunk.unwrap_or(0));
         }
-        doc.history.begin_with(label, pid, mesh, painted);
-        for &c in &chunks {
-            doc.history.touch(mesh, c);
+        if level_snapshot.is_none() {
+            doc.history.begin_with(label, pid, mesh, painted);
+            for &c in &chunks {
+                doc.history.touch(mesh, c);
+            }
         }
-        let mesh = &mut doc.scene.pieces[index].mesh;
+        let mesh = &mut piece.mesh;
         let mut moved: Vec<u32> = Vec::new();
         let mut colors = false;
+        let mut native_moved = false;
         let mut data_log: Vec<(u64, Data, Data)> = Vec::new();
         for &(id, b, a) in &changed {
             let Some(s) = doc.living.strokes.iter_mut().find(|s| s.id == id) else { continue };
@@ -1076,7 +1241,14 @@ impl Editor {
                 let old = (std::mem::replace(&mut s.deltas, nd), std::mem::replace(&mut s.colors, nc));
                 data_log.push((id, old, (s.deltas.clone(), s.colors.clone())));
             } else if a.applied != b.applied {
-                add_change(mesh, &s.vertices, &s.deltas, &s.colors, a.applied - b.applied);
+                if let (Some(stack), Some(native)) = (&mut piece.multires, &s.native) {
+                    native.apply(stack, mesh, a.applied - b.applied);
+                    native_moved |= !native.positions.parts().2.is_empty();
+                    s.applied = a.applied;
+                    continue;
+                } else {
+                    add_change(mesh, &s.vertices, &s.deltas, &s.colors, a.applied - b.applied);
+                }
             } else {
                 s.applied = a.applied;
                 continue;
@@ -1089,12 +1261,18 @@ impl Editor {
         moved.dedup();
         if !moved.is_empty() {
             mesh.update_after_move(&moved);
+        }
+        if !moved.is_empty() || native_moved {
             mesh.tighten_bounds();
         }
         if colors {
             mesh.mark_all_dirty();
         }
-        self.history.commit();
+        if let Some((old_mesh, old_stack)) = level_snapshot {
+            self.history.record_topology(label, pid, old_mesh, old_stack);
+        } else {
+            self.history.commit();
+        }
         if let Some(entry) = self.history.newest_id() {
             for s in self.living.strokes.iter_mut().filter(|s| added.contains(&s.id)) {
                 s.entry = entry;
@@ -1113,7 +1291,7 @@ impl Editor {
     }
 
     /// Put back the strengths a slider drag started from (no undo step).
-    fn living_end_drag(&mut self) {
+    pub(crate) fn living_end_drag(&mut self) {
         let Some(from) = self.living.drag_from.take() else { return };
         for (id, t) in from.strokes {
             if let Some(s) = self.living.find_mut(id) {
@@ -1620,6 +1798,23 @@ impl Editor {
                         }
                     }
                 };
+                let native = s.native.and_then(|positions| {
+                    let stack = p.multires.as_ref()?;
+                    stack.project_displacements(&p.mesh, &positions)?;
+                    if !s.colors.is_empty() && s.native_color.is_none() {
+                        return None;
+                    }
+                    if let Some(colors) = &s.native_color {
+                        let (level, points, _) = positions.parts();
+                        let (color_level, color_points, rgb) = colors.parts();
+                        if (level, points) != (color_level, color_points)
+                            || rgb.iter().any(|&(_, c)| c.abs().max_element() > 1.0)
+                        {
+                            return None;
+                        }
+                    }
+                    Some(NativeStroke { positions, colors: s.native_color })
+                });
                 doc.living.strokes.push(LivingStroke {
                     id,
                     piece: p.id,
@@ -1629,6 +1824,7 @@ impl Editor {
                     topology: p.mesh.topology_version(),
                     points: p.mesh.vertex_count(),
                     vertices: s.vertices,
+                    native,
                     deltas: s.deltas,
                     colors: s.colors,
                     strength: s.strength,
@@ -1869,6 +2065,9 @@ impl Editor {
         let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id && s.listed()) else {
             return Err("That stroke isn't in the list.".into());
         };
+        if stroke.native.is_some() {
+            return Err("This stroke is stored across subdivision levels and cannot be re-sculpted".into());
+        }
         if let Some(why) = stroke.no_recipe.filter(|_| stroke.recipe.is_none()) {
             self.living.editing = Some(StrokeEdit {
                 id,
@@ -2140,6 +2339,10 @@ impl Editor {
     }
 
     fn start_resculpt_job(&mut self, id: u64, from: EditBody, recipe: StrokeRecipe) {
+        if self.living.strokes.iter().any(|s| s.id == id && s.native.is_some()) {
+            self.status = "This stroke is stored across subdivision levels and cannot be re-sculpted".into();
+            return;
+        }
         let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id) else { return };
         let pid = stroke.piece;
         let applied = stroke.applied;
@@ -2174,6 +2377,10 @@ impl Editor {
     /// is set, the change is one undo step from the surface as it is now
     /// (the caller has put back the pre-edit stroke).
     fn resculpt_now(&mut self, id: u64, recipe: &StrokeRecipe, record: bool) {
+        if self.living.strokes.iter().any(|s| s.id == id && s.native.is_some()) {
+            self.status = "This stroke is stored across subdivision levels and cannot be re-sculpted".into();
+            return;
+        }
         let from = record.then(|| self.edit_body(id)).flatten();
         let Some(stroke) = self.living.strokes.iter().find(|s| s.id == id) else { return };
         let pid = stroke.piece;
@@ -2830,7 +3037,8 @@ mod tests {
         stroke(&mut e, 300.0);
         stroke(&mut e, 320.0);
         let sculpted = positions(&e);
-        e.subdivide(true);
+        let rebuilt = oxy_mesh::topo::subdivide(&e.scene.active().mesh, 1);
+        e.replace_active_mesh("Topology rebuild", rebuilt);
         e.living_sync();
         assert!(e.living.strokes.is_empty());
         assert!(e.living.note.as_deref().is_some_and(|n| n.contains("baked")));
