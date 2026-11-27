@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sculpt Variants · OxyBrush</title>
+<style>
+:root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; background: #111613; color: #f1eee6; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(1376px, 100%); margin: auto; padding: 34px max(20px, 4vw) 36px; }
+header { display: flex; flex-wrap: wrap; align-items: end; gap: 20px; justify-content: space-between; margin-bottom: 25px; }
+h1 { font: 500 clamp(2.1rem, 5vw, 3.7rem)/1.03 Georgia, serif; letter-spacing: -.045em; margin: 0 0 8px; }
+p { color: #aeb9ae; margin: 0; }
+.actions, .tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+button { border: 1px solid #405045; border-radius: 8px; background: #212c25; color: inherit; padding: 8px 13px; font: inherit; cursor: pointer; }
+button:hover { background: #314337; }
+button:disabled { opacity: .48; cursor: default; }
+button.primary, button[aria-pressed="true"] { color: #152419; background: #bde0ad; border-color: #bde0ad; }
+:focus-visible { outline: 2px solid #eab69a; outline-offset: 4px; }
+.views { display: grid; grid-template-columns: 1fr 1.25fr 1fr; gap: 12px; }
+figure { min-width: 0; margin: 0; border: 1px solid #344139; border-radius: 14px; overflow: hidden; background: #1c2620; }
+figure.result { border-color: #83ad77; }
+figcaption { padding: 11px 14px; display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+figcaption span { color: #aeb9ae; font-size: .83rem; }
+canvas { display: block; width: 100%; height: clamp(210px, 34vw, 398px); background: radial-gradient(ellipse at 47% 42%, #3b493f, #1c2620 77%); touch-action: none; cursor: crosshair; }
+.controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 17px 24px; padding: 18px; margin-top: 13px; border: 1px solid #344139; border-radius: 14px; background: #19221c; }
+.group { min-width: 0; }
+.control-label { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; font-weight: 600; }
+output { color: #bde0ad; font-variant-numeric: tabular-nums; }
+input[type="range"] { width: 100%; margin: 5px 0 0; accent-color: #bde0ad; }
+.check { display: inline-flex; align-items: center; gap: 5px; color: #c9d0c4; white-space: nowrap; font-size: .85rem; }
+.check input { accent-color: #bde0ad; }
+[data-brush="a"]::before, [data-brush="b"]::before { content: ""; display: inline-block; width: .64em; height: .64em; border-radius: 50%; margin-right: .4em; border: 1px solid #19221c; }
+[data-brush="a"]::before { background: #66c4e0; }
+[data-brush="b"]::before { background: #ee885d; }
+.sculpt-settings { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; border-top: 1px solid #344139; padding-top: 12px; }
+.sculpt-settings label { display: inline-flex; align-items: center; gap: 8px; }
+select { font: inherit; color: inherit; border: 1px solid #405045; border-radius: 6px; padding: 5px 7px; background: #212c25; }
+#orbit { width: 112px; margin: 0; }
+footer { margin-top: 14px; color: #aeb9ae; min-height: 23px; }
+@media (max-width: 760px) {
+  main { padding-inline: 12px; }
+  .views { gap: 5px; }
+  figcaption { display: block; padding: 7px; font-size: .91rem; }
+  figcaption span { display: block; }
+  canvas { height: clamp(125px, 35vw, 230px); }
+  .controls { grid-template-columns: 1fr 1fr; gap: 12px; padding: 11px; }
+  .paint { grid-column: 1 / -1; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <h1>Sculpt Variants</h1>
+    <p>Sculpt two versions. Paint the parts you want to keep in the mix.</p>
+  </div>
+  <div class="actions">
+    <button id="undo" disabled>Undo stroke</button>
+    <button id="reset">Reset sample</button>
+    <button id="export" class="primary">Export mix as OBJ</button>
+  </div>
+</header>
+<section class="views" aria-label="Linked sculpt views">
+  <figure>
+    <figcaption><strong>A · Broad</strong><span>Sculpt</span></figcaption>
+    <canvas id="a" aria-label="Sculpt variant A"></canvas>
+  </figure>
+  <figure class="result">
+    <figcaption><strong>Live mix</strong><span>Paint A or B</span></figcaption>
+    <canvas id="mix" aria-label="Paint the local mix"></canvas>
+  </figure>
+  <figure>
+    <figcaption><strong>B · Crested</strong><span>Sculpt</span></figcaption>
+    <canvas id="b" aria-label="Sculpt variant B"></canvas>
+  </figure>
+</section>
+<section class="controls" aria-label="Sculpt and mix controls">
+  <div class="group paint">
+    <div class="control-label">Paint the mix</div>
+    <div class="tools" role="group" aria-label="Mix brush">
+      <button data-brush="a" aria-pressed="false">Keep A</button>
+      <button data-brush="b" aria-pressed="true">Keep B</button>
+      <button data-brush="erase" aria-pressed="false">Erase</button>
+      <label class="check"><input type="checkbox" id="show-map"> Show mix map</label>
+    </div>
+  </div>
+  <div class="group">
+    <label class="control-label" for="blend">Global mix <output id="blend-value" for="blend">50% B</output></label>
+    <input type="range" id="blend" min="0" max="100" value="50">
+  </div>
+  <div class="group">
+    <label class="control-label" for="radius">Brush size <output id="radius-value" for="radius">36%</output></label>
+    <input type="range" id="radius" min="14" max="65" value="36">
+  </div>
+  <div class="sculpt-settings">
+    <label>Side views <select id="sculpt-mode"><option value="1">Raise</option><option value="-1">Carve</option></select></label>
+    <label>Orbit <input type="range" id="orbit" min="-180" max="180" value="-17" aria-label="Orbit angle"></label>
+    <p>Drag the clay to edit. Right-drag to orbit all three views.</p>
+  </div>
+</section>
+<footer id="status" role="status" aria-live="polite"></footer>
+</main>
+<script src="model.js"></script>
+<script src="preview.js"></script>
+</body>
+</html>
