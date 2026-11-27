@@ -830,8 +830,13 @@ impl Editor {
     /// After a stroke of `brush` was committed as the newest undo entry:
     /// record it, when Living strokes is on.
     pub(crate) fn living_record(&mut self, brush: BrushKind, recipe: Option<StrokeRecipe>) {
+        if let Some(piece) = self.scene.try_active() {
+            self.living_record_for(piece.id, brush, recipe);
+        }
+    }
+
+    pub(crate) fn living_record_for(&mut self, piece: u64, brush: BrushKind, recipe: Option<StrokeRecipe>) {
         if self.living.enabled && brush != BrushKind::Mask {
-            let piece = self.scene.active().id;
             let reason = recipe.is_none().then_some(NoRecipe::DynamicDetail);
             self.living_record_change(piece, brush, recipe, reason);
         }

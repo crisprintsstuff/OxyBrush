@@ -1,6 +1,6 @@
 # RFC 0053 — MCP geometry write (colors + displacement)
 
-**Status:** Accepted (Phase 1)
+**Status:** Dense and sparse writes and desktop viewport images implemented
 **Issue:** [#555](https://github.com/crisprintsstuff/OxyBrush/issues/555)
 
 ## Summary
@@ -15,7 +15,7 @@ undo step, labeled `Agent:` / `Plugin: <name>:`. Same binary format as
 In-app WASM plugins already have `write_positions` / `write_colors` (API 2).
 Python and other MCP clients could only **read** geometry. Artists asked for
 polypaint and mesh displacement from plugins and agents without going through
-strokes. Path tracing, lights and viewport effects stay out of scope here.
+strokes. Plugins can now supply the rendered pixels from their own renderer as a temporary image in the desktop viewport.
 
 ## Design
 
@@ -37,11 +37,36 @@ Desktop reveals vertex color when colors are written.
 Python SDK: `Session.set_geometry(path=…)` or
 `set_geometry(arrays={…})` (builds a temp OXYG from `get_geometry` counts).
 
-## Out of scope (later)
+## Sparse writes
 
-- Partial / sparse vertex writes without a full array
-- Topology replacement over MCP
-- Plugin access to the sculpt viewport for path tracing, lights, effects
+`patch_geometry` takes a required `topology_version` from
+`get_geometry` and a `patch` object containing `indices` and at
+least one of `positions`, `colors` or `mask`. Arrays use one
+triple or scalar per index in the specified order. Indices must be
+unique and in range. Validate the complete request first and take
+a snapshot of each modified chunk in one undo step. No-op values do
+not create history. Python exposes `Session.patch_geometry`.
+
+## Desktop viewport images
+
+`get_viewport_state` reports the physical pixel dimensions, camera
+matrix in column-major order, and a view token for the current scene.
+Render off the UI thread, then call `set_viewport_image(path, view_token)`
+with a local file containing exactly width × height × 4 bytes of
+straight-alpha RGBA8 (sRGB channels, rows from top to bottom, no header).
+The file limit is 64 MiB. The app loads it on a worker and checks the
+token again before showing it. The image disappears when the camera,
+viewport dimensions, visible mesh state, or project changes.
+`clear_viewport_image` also removes it. These methods are exposed
+through the Python SDK and local MCP in single-viewport mode.
+
+## Follow-up
+
+- Group several live writes in one undo operation and report their origin
+  in change events.
+- Expose viewport image writes to in-app WASM and add structured light
+  data for external renderers.
+- Topology replacement over MCP.
 
 ## Acceptance
 

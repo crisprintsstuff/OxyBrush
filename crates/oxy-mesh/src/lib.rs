@@ -12,6 +12,7 @@ pub use adjacency::Neighbors;
 pub mod armature;
 pub mod catmull_clark;
 pub mod color_filter;
+pub mod contour;
 pub mod deform;
 pub mod dyntopo;
 pub mod instances;

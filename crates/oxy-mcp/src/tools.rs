@@ -137,6 +137,22 @@ pub enum Action {
         /// When set, must match the piece's current topology version.
         topology_version: Option<u64>,
     },
+    /// The camera and pixel dimensions a viewport overlay must match.
+    GetViewportState,
+    /// Display local raw RGBA8 pixels while the view still matches.
+    SetViewportImage {
+        path: std::path::PathBuf,
+        view_token: String,
+    },
+    ClearViewportImage,
+    /// Apply absolute values to a subset of the current piece's vertices.
+    PatchGeometry {
+        id: Option<u64>,
+        index: Option<usize>,
+        name: Option<String>,
+        topology_version: u64,
+        patch: crate::state::GeometryPatch,
+    },
 }
 
 /// Camera fields a `set_camera` call may change. Omitted JSON fields stay `None`.
@@ -162,6 +178,7 @@ pub fn is_read_only(name: &str) -> bool {
             | "scene_state"
             | "changes"
             | "get_geometry"
+            | "get_viewport_state"
             | "list_strokes"
     )
 }
@@ -282,6 +299,20 @@ pub fn parse_action(name: &str, args: &Value) -> Result<Action, String> {
             index: opt_usize(args, "index")?,
             name: opt_string(args, "name")?,
             topology_version: opt_u64(args, "topology_version")?,
+        }),
+        "get_viewport_state" => Ok(Action::GetViewportState),
+        "set_viewport_image" => Ok(Action::SetViewportImage {
+            path: required_path(args, "path")?,
+            view_token: required_string(args, "view_token")?.to_string(),
+        }),
+        "clear_viewport_image" => Ok(Action::ClearViewportImage),
+        "patch_geometry" => Ok(Action::PatchGeometry {
+            id: opt_u64(args, "id")?,
+            index: opt_usize(args, "index")?,
+            name: opt_string(args, "name")?,
+            topology_version: opt_u64(args, "topology_version")?.ok_or("missing topology_version")?,
+            patch: serde_json::from_value(args.get("patch").ok_or("missing patch")?.clone())
+                .map_err(|e| format!("invalid geometry patch: {e}"))?,
         }),
         other => Err(format!("unknown tool `{other}`")),
     }
@@ -589,6 +620,37 @@ pub fn tool_defs() -> Vec<Value> {
             "Apply positions, vertex colors and/or mask from an OXYG file onto a piece (same format as get_geometry). One undo step. Vertex and triangle counts must match; normals, indices, groups and hidden in the file are ignored. Pass topology_version from get_geometry/scene_state to refuse a stale write. Omit id/index/name for the active piece.",
             &json!({"path": {"type": "string"}, "id": {"type": "integer"}, "index": {"type": "integer"}, "name": {"type": "string"}, "topology_version": {"type": "integer"}}),
             &["path"],
+        ),
+        tool(
+            "get_viewport_state",
+            "Read the camera matrix, physical dimensions and view_token for a desktop viewport image. The matrix is column-major.",
+            &json!({}),
+            &[],
+        ),
+        tool(
+            "set_viewport_image",
+            "Display a local file of top-to-bottom RGBA8 pixels (no header, non-premultiplied, sRGB RGB values), at the dimensions and view_token from get_viewport_state. It clears when the view or scene changes. Desktop, single viewport only.",
+            &json!({"path": {"type": "string"}, "view_token": {"type": "string"}}),
+            &["path", "view_token"],
+        ),
+        tool("clear_viewport_image", "Remove the temporary desktop viewport image.", &json!({}), &[]),
+        tool(
+            "patch_geometry",
+            "Set sparse absolute positions, colors or mask values as one undo step. Get indices and topology_version from get_geometry. Omitted arrays and unlisted vertices are untouched. Omit id/index/name for the active piece.",
+            &json!({
+                "id": {"type": "integer"}, "index": {"type": "integer"},
+                "name": {"type": "string"}, "topology_version": {"type": "integer"},
+                "patch": {
+                    "type": "object", "required": ["indices"], "additionalProperties": false,
+                    "properties": {
+                        "indices": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+                        "positions": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+                        "colors": {"type": "array", "items": {"type": "array", "items": {"type": "number"}, "minItems": 3, "maxItems": 3}},
+                        "mask": {"type": "array", "items": {"type": "number"}}
+                    }
+                }
+            }),
+            &["topology_version", "patch"],
         ),
     ]
 }

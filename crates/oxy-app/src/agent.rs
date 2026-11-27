@@ -384,8 +384,56 @@ fn apply(ed: &mut Editor, name: &str, args: &serde_json::Value) -> Apply {
                 Err(e) => ToolResult::error(e),
             }))
         }
+        Action::GetViewportState => Apply::Done(match crate::viewport_image::state(ed) {
+            Some(view) => ToolResult::ok(view.to_string()),
+            None => ToolResult::error("viewport images require a single viewport"),
+        }),
+        Action::ClearViewportImage => {
+            if ed.viewport_image.as_ref().is_some_and(|image| image.doc_id == ed.id) {
+                ed.viewport_image = None;
+            }
+            Apply::Done(ToolResult::ok("Viewport image cleared"))
+        }
+        Action::SetViewportImage { path, view_token } => {
+            let Some(view) = crate::viewport_image::current(ed) else {
+                return Apply::Done(ToolResult::error("viewport images require a single viewport"));
+            };
+            if view.token != view_token {
+                return Apply::Done(ToolResult::error("viewport changed; get current viewport state before rendering"));
+            }
+            let doc_id = ed.id;
+            ed.start_job("Load viewport image".into(), Vec::new(), move || {
+                let image = crate::viewport_image::ViewportImage::read(&path, doc_id, view)?;
+                Ok(crate::editor::JobResult::ViewportImage(Box::new(image)))
+            });
+            if ed.job.is_some() { Apply::PendingJob } else { Apply::Done(ToolResult::error(ed.status.clone())) }
+        }
         Action::SetGeometry { path, id, index, name, topology_version } => {
             Apply::Done(set_geometry(ed, &path, id, index, name.as_deref(), topology_version))
+        }
+        Action::PatchGeometry { id, index, name, topology_version, patch } => {
+            let index = match oxy_mcp::state::find_piece(&ed.scene, id, index, name.as_deref()) {
+                Ok(index) => index,
+                Err(error) => return Apply::Done(ToolResult::error(error)),
+            };
+            let piece = &ed.scene.pieces[index];
+            if ed.job_blocks_piece(piece.id) {
+                return Apply::Done(ToolResult::error("wait for the running job before editing this piece"));
+            }
+            let paints = patch.colors.is_some();
+            let prefix = ed.agent_label.clone();
+            let doc = &mut ed.documents[ed.active_document];
+            Apply::Done(match patch.apply(&mut doc.scene.pieces[index], &mut doc.history, topology_version, &prefix) {
+                Ok(vertices) => {
+                    if paints && vertices > 0 {
+                        ed.view.show_vertex_color = true;
+                    }
+                    let message = format!("Patched {vertices} vertices");
+                    ed.status = message.clone();
+                    ToolResult::ok(message)
+                }
+                Err(error) => ToolResult::error(error),
+            })
         }
     }
 }

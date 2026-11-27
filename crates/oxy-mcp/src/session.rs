@@ -163,6 +163,19 @@ impl HeadlessSession {
             Action::Screenshot => {
                 ToolResult::error("viewport screenshots need the OxyBrush desktop app (this session is headless)")
             }
+            Action::GetViewportState | Action::SetViewportImage { .. } | Action::ClearViewportImage => {
+                ToolResult::error("viewport images require the OxyBrush desktop app")
+            }
+            Action::PatchGeometry { id, index, name, topology_version, patch } => {
+                let index = match self.find_piece(id, index, name.as_deref()) {
+                    Ok(index) => index,
+                    Err(error) => return ToolResult::error(error),
+                };
+                match patch.apply(&mut self.scene.pieces[index], &mut self.history, topology_version, AGENT_LABEL) {
+                    Ok(vertices) => ToolResult::ok(format!("Patched {vertices} vertices")),
+                    Err(error) => ToolResult::error(error),
+                }
+            }
         }
     }
 
@@ -715,6 +728,34 @@ mod tests {
         let r = session.call_tool(tool, &args);
         assert!(!r.is_error, "{tool}: {}", r.text);
         serde_json::from_str(&r.text).unwrap_or_else(|e| panic!("{tool} reply is not JSON ({e}): {}", r.text))
+    }
+
+    #[test]
+    fn geometry_patch_validates_indices_and_undoes_the_whole_write() {
+        let mut session = small();
+        let original = session.scene.active().mesh.to_data();
+        let version = session.scene.active().mesh.topology_version();
+        let request = |version, indices| {
+            serde_json::json!({
+                "topology_version": version,
+                "patch": {"indices": indices, "positions": [[0.0, 0.2, 2.0], [0.0, 0.4, 2.0]],
+                    "colors": [[0.2, 0.8, 1.5], [0.7, 0.8, 0.9]], "mask": [1.0, 0.25]}
+            })
+        };
+        for invalid in [request(version + 1, [0, 3]), request(version, [0, u32::MAX]), request(version, [0, 0])] {
+            assert!(session.call_tool("patch_geometry", &invalid).is_error);
+            assert_eq!(session.scene.active().mesh.to_data(), original);
+        }
+        let result = session.call_tool("patch_geometry", &request(version, [0, 3]));
+        assert!(!result.is_error, "{}", result.text);
+        let mesh = &session.scene.active().mesh;
+        assert_eq!(mesh.positions[0], glam::Vec3::new(0.0, 0.2, 2.0));
+        assert_eq!(mesh.color[0], glam::Vec3::new(0.2, 0.8, 1.0));
+        assert_eq!(mesh.mask[3], 0.25);
+        assert_eq!(mesh.positions[1], original.positions[1]);
+        assert_eq!(session.history.undo_labels().count(), 1);
+        session.history.undo(&mut session.scene).unwrap();
+        assert_eq!(session.scene.active().mesh.to_data(), original);
     }
 
     #[test]

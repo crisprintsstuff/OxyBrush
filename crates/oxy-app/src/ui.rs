@@ -1095,6 +1095,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     }
 
     let canvas = ui.available_rect_before_wrap();
+    crate::viewport_image::paint(ui, ed, canvas);
     split_view_overlay(ui, ed, canvas);
     // Overlays: keep them out of the way of the welcome window.
     if !ed.show_welcome {
@@ -4728,6 +4729,9 @@ pub fn context_hint(ed: &Editor) -> String {
             (true, false) => "Retopology: click an edge to insert an edge loop",
             (false, true) => "Retopology: click to make the quad shown · drag to relax",
             _ if ed.tab_held => "Retopology: drag a border edge to pull out a quad",
+            _ if ed.retopo.as_ref().is_some_and(|r| r.contour_mode) => {
+                "Retopology: drag across a limb to cut a contour"
+            }
             _ => "Retopology: click to place a point · drag to move · drag empty space: orbit",
         }
         .into();

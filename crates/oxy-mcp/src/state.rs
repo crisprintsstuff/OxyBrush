@@ -630,6 +630,101 @@ impl GeometryWrite {
     }
 }
 
+/// Sparse absolute positions, RGB colors and mask values, in indices order.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GeometryPatch {
+    pub indices: Vec<u32>,
+    pub positions: Option<Vec<[f32; 3]>>,
+    pub colors: Option<Vec<[f32; 3]>>,
+    pub mask: Option<Vec<f32>>,
+}
+
+impl GeometryPatch {
+    /// Validate the entire patch before taking any snapshot or changing
+    /// the mesh. Vertex indices refer to the order returned by get_geometry.
+    pub fn apply(
+        self,
+        piece: &mut Piece,
+        history: &mut oxy_history::History,
+        topology_version: u64,
+        label_prefix: &str,
+    ) -> Result<usize, String> {
+        let mesh = &mut piece.mesh;
+        if topology_version != mesh.topology_version() {
+            return Err("topology_version does not match the piece; get fresh geometry indices".into());
+        }
+        let count = self.indices.len();
+        if count == 0 || (self.positions.is_none() && self.colors.is_none() && self.mask.is_none()) {
+            return Err("patch needs vertex indices and at least one of positions, colors or mask".into());
+        }
+        let finite_vecs = |rows: &[[f32; 3]]| rows.len() == count && rows.iter().flatten().all(|v| v.is_finite());
+        if self.positions.as_deref().is_some_and(|p| !finite_vecs(p))
+            || self.colors.as_deref().is_some_and(|c| !finite_vecs(c))
+            || self.mask.as_ref().is_some_and(|m| m.len() != count || m.iter().any(|m| !m.is_finite()))
+        {
+            return Err("each supplied field needs one finite value or triple per vertex index".into());
+        }
+        let mut seen = std::collections::HashSet::with_capacity(count);
+        for &v in &self.indices {
+            if v as usize >= mesh.vertex_count() || !seen.insert(v) {
+                return Err("vertex indices must be in range and unique".into());
+            }
+        }
+
+        let mut changes = Vec::new();
+        for (i, &vertex) in self.indices.iter().enumerate() {
+            let v = vertex as usize;
+            let position = self.positions.as_ref().map(|p| Vec3::from(p[i])).filter(|p| *p != mesh.positions[v]);
+            let color = self
+                .colors
+                .as_ref()
+                .map(|c| Vec3::from(c[i]).clamp(Vec3::ZERO, Vec3::ONE))
+                .filter(|c| *c != mesh.color[v]);
+            let mask = self.mask.as_ref().map(|m| m[i].clamp(0.0, 1.0)).filter(|m| *m != mesh.mask[v]);
+            if position.is_some() || color.is_some() || mask.is_some() {
+                changes.push((vertex, position, color, mask));
+            }
+        }
+        if changes.is_empty() {
+            return Ok(0);
+        }
+
+        let mut moved = Vec::new();
+        let mut dirty = Vec::new();
+        let paint = self.colors.is_some() || mesh.is_painted();
+        history.begin_with(format!("{label_prefix}patch geometry"), piece.id, mesh, paint);
+        for (vertex, position, color, mask) in &changes {
+            let v = *vertex as usize;
+            let chunk = mesh.vertex_chunk(*vertex);
+            history.touch(mesh, chunk);
+            if let Some(p) = position {
+                mesh.positions[v] = *p;
+                moved.push(*vertex);
+            }
+            if let Some(c) = color {
+                mesh.color[v] = *c;
+            }
+            if let Some(m) = mask {
+                mesh.mask[v] = *m;
+            }
+            if color.is_some() || mask.is_some() {
+                dirty.push(chunk);
+            }
+        }
+        if !moved.is_empty() {
+            mesh.update_after_move(&moved);
+        }
+        dirty.sort_unstable();
+        dirty.dedup();
+        for chunk in dirty {
+            mesh.mark_dirty(chunk);
+        }
+        history.commit();
+        Ok(changes.len())
+    }
+}
+
 /// Decode an `OXYG` file into writable vertex arrays. `vertex_count` and
 /// `triangle_count` in the header must match `want_v` / `want_t` (the live
 /// piece). Normals, indices, groups and hidden sections are skipped.

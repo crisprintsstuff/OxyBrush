@@ -2705,6 +2705,7 @@ dependencies = [
  "oxy-mesh",
  "oxy-sculpt",
  "oxy-topo",
+ "serde",
  "serde_json",
 ]
 

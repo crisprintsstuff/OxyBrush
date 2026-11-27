@@ -8,7 +8,7 @@ import re
 import urllib.request
 import urllib.error
 from dataclasses import dataclass
-from typing import Optional, List, Dict, Any, Union, Tuple
+from typing import Optional, List, Dict, Any, Union, Tuple, Sequence
 
 
 @dataclass
@@ -443,6 +443,48 @@ class Session:
             arrays[field] = a
         reply["arrays"] = arrays
         return reply
+
+    def get_viewport_state(self) -> Dict[str, Any]:
+        """Read the camera, physical pixel size and token for a render."""
+        return json.loads(self.call_tool("get_viewport_state")["content"][0]["text"])
+
+    def set_viewport_image(self, path: str, *, view_token: str) -> str:
+        """Show local raw RGBA8 pixels while the viewport still matches."""
+        return self.call_tool("set_viewport_image", path=path, view_token=view_token)["content"][0]["text"]
+
+    def clear_viewport_image(self) -> str:
+        """Remove the temporary render image from the desktop viewport."""
+        return self.call_tool("clear_viewport_image")["content"][0]["text"]
+
+    def patch_geometry(
+        self,
+        indices: Sequence[int],
+        *,
+        topology_version: int,
+        positions: Optional[Sequence[Sequence[float]]] = None,
+        colors: Optional[Sequence[Sequence[float]]] = None,
+        mask: Optional[Sequence[float]] = None,
+        id: Optional[int] = None,
+        index: Optional[int] = None,
+        name: Optional[str] = None,
+    ) -> str:
+        """Set sparse absolute values in the vertex order from get_geometry.
+
+        Each supplied array has one entry per index. Position and RGB
+        entries are triples. One call creates one undo step.
+        """
+        patch: Dict[str, Any] = {"indices": [int(v) for v in indices]}
+        if positions is not None:
+            patch["positions"] = [[float(v) for v in point] for point in positions]
+        if colors is not None:
+            patch["colors"] = [[float(v) for v in point] for point in colors]
+        if mask is not None:
+            patch["mask"] = [float(v) for v in mask]
+        args: Dict[str, Any] = {"patch": patch, "topology_version": topology_version}
+        for key, value in (("id", id), ("index", index), ("name", name)):
+            if value is not None:
+                args[key] = value
+        return self.call_tool("patch_geometry", **args)["content"][0]["text"]
 
     def set_geometry(
         self,
