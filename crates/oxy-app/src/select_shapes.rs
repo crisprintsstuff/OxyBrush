@@ -110,29 +110,39 @@ pub(crate) fn select_outline(shape: SelectShape, points: &[Vec2]) -> Vec<Vec2> {
 /// (the right as you draw, in screen space with y down), its ends carried
 /// on straight. PRECONDITION: two or more points, not all in one place.
 pub(crate) fn curve_side(points: &[Vec2], p: Vec2) -> bool {
-    let n = points.len();
-    let far = 1.0e6;
-    let mut best: Option<(f32, f32)> = None;
-    for i in 0..n - 1 {
-        let (mut a, mut b) = (points[i], points[i + 1]);
-        let d = (b - a).normalize_or_zero();
-        if d == Vec2::ZERO {
-            continue;
-        }
-        if i == 0 {
-            a -= d * far;
-        }
-        if i + 2 == n {
-            b += d * far;
-        }
-        let t = ((p - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
-        let dist = (a + (b - a) * t).distance(p);
-        let side = d.perp_dot(p - a);
-        if best.is_none_or(|(bd, _)| dist < bd) {
-            best = Some((dist, side));
-        }
-    }
-    best.is_some_and(|(_, side)| side > 0.0)
+    nearest_on_curve(points, p).is_some_and(|(_, inside)| inside)
+}
+
+/// Closest point on the open path, and whether it selects `p`.
+pub(crate) fn nearest_on_curve(points: &[Vec2], p: Vec2) -> Option<(Vec2, bool)> {
+    points
+        .windows(2)
+        .enumerate()
+        .filter_map(|(i, pair)| {
+            let (a, b) = (pair[0], pair[1]);
+            let d = b - a;
+            if d.length_squared() <= f32::EPSILON {
+                return None;
+            }
+            let t = (p - a).dot(d) / d.length_squared();
+            let lo = if i == 0 { f32::NEG_INFINITY } else { 0.0 };
+            let hi = if i + 2 == points.len() { f32::INFINITY } else { 1.0 };
+            Some((a + d * t.clamp(lo, hi), d.perp_dot(p - a) > 0.0))
+        })
+        .min_by(|(a, _), (b, _)| a.distance_squared(p).total_cmp(&b.distance_squared(p)))
+}
+
+/// Closest point on a closed outline, including the closing edge.
+pub(crate) fn nearest_on_outline(outline: &[Vec2], p: Vec2) -> Vec2 {
+    outline
+        .iter()
+        .zip(outline.iter().cycle().skip(1))
+        .map(|(&a, &b)| {
+            let d = b - a;
+            a + d * ((p - a).dot(d) / d.length_squared().max(f32::EPSILON)).clamp(0.0, 1.0)
+        })
+        .min_by(|a, b| a.distance_squared(p).total_cmp(&b.distance_squared(p)))
+        .unwrap_or(p)
 }
 
 impl Editor {
@@ -252,7 +262,7 @@ impl Editor {
             }
             CurveSelectionTarget::Cutter { kind, piece } => {
                 if self.scene.try_active().is_some_and(|active| active.id == piece) {
-                    self.finish_region_cut(kind, |s| curve_side(&points, s), other_side, true);
+                    self.finish_region_cut(kind, &points, other_side, true);
                 }
             }
         }

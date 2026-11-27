@@ -1,6 +1,6 @@
 # RFC 0035 — Poly Edit area selection
 
-**Status:** Implemented ([#299](https://github.com/crisprintsstuff/OxyBrush/issues/299)); Ellipse + Shift→circle and Select label follow-up shipped
+**Status:** Implemented ([#299](https://github.com/crisprintsstuff/OxyBrush/issues/299)). Ellipse and select-through follow-ups ([#636](https://github.com/crisprintsstuff/OxyBrush/issues/636)).
 
 ## Summary
 
@@ -24,19 +24,19 @@ gestures if the artist can outline the patch in the viewport.
   qualifies when a representative interior point projects into the area.
   For concave faces use the centroid of the largest triangle in the
   existing triangulation. Use midpoints for edges and positions for points.
-- Select visible elements only. Check occlusion against the active piece
-  using the same cage and viewport projection as ordinary picks. A back
-  face behind a visible face should stay out of the pick. Edges and points
-  on an exposed silhouette should remain selectable.
+- By default, pick through the active piece, including occluded elements
+  that project inside the outline. Turn on **Front only** to check occlusion
+  against the active piece using the same cage and viewport projection as
+  ordinary picks. A back face behind a visible face stays out of the pick.
+  Edges and points on an exposed silhouette remain selectable.
 - Area selection replaces, adds to, or subtracts from the existing
   Poly Edit pick. The gizmo and all actions consume that pick as usual.
   Selecting changes transient tool state without adding an undo step.
-- Leave Auto mode, whole-piece picking, and picking through the surface
-  for follow-up feedback.
+- Leave Auto mode and whole-piece picking for follow-up feedback.
 
 ## Validation
 
 Check all three element modes on a cube and a concave cage. Cover
-occlusion, cancellation, modifiers, and a lasso crossing the viewport
+both depth modes, cancellation, modifiers, and a lasso crossing the viewport
 edge. Existing click, paint, loop, and gizmo gestures should still work.
 Measure release latency on a cage near the Poly Edit triangle limit.
