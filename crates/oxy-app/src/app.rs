@@ -71,8 +71,8 @@ pub struct App {
     instance_uploaded: std::collections::HashMap<u64, u64>,
     /// Middle button held over a panel: last pointer position, for drag-scrolling.
     mmb_scroll: Option<Vec2>,
-    /// When the last pen pressure reading arrived (a pen is in use).
-    last_pressure: Option<Instant>,
+    /// Latest pressure event from platforms that deliver the pen as a mouse.
+    last_pressure: Option<(Instant, f32)>,
     /// A pen press on a panel (RFC 0015): it scrolls the panel once it moves,
     /// or opens the control's menu once held still.
     pen_press: Option<PenPress>,
@@ -148,6 +148,27 @@ struct TouchPoint {
     start_pos: Vec2,
     pos: Vec2,
     _start_time: Instant,
+    force: Option<f32>,
+}
+
+impl TouchPoint {
+    /// Some pen drivers omit force in individual movement events. Keep
+    /// the last measured force for this contact, including a valid zero.
+    fn pressure(&mut self, force: Option<f32>) -> f32 {
+        self.force = force.or(self.force);
+        self.force.unwrap_or(1.0)
+    }
+}
+
+/// A paired pressure event arrives shortly before the button press. A
+/// regular mouse press after the pen is put away starts at full opacity.
+fn pointer_start_pressure(last: Option<(Instant, f32)>, now: Instant) -> f32 {
+    last.filter(|(at, _)| now.saturating_duration_since(*at) <= Duration::from_millis(150))
+        .map_or(1.0, |(_, pressure)| pressure)
+}
+
+fn valid_pressure(pressure: f32) -> Option<f32> {
+    pressure.is_finite().then(|| pressure.clamp(0.0, 1.0))
 }
 
 impl App {
@@ -1938,6 +1959,7 @@ impl ApplicationHandler for App {
                         self.editor.pointer_up();
                     }
                     self.editor.force_autosave();
+                    self.last_pressure = None;
                     self.editor.pointer = None;
                     self.editor.quick_menu = None;
                     self.editor.quick_menu_key = None;
@@ -1981,21 +2003,21 @@ impl ApplicationHandler for App {
                         });
                     }
                 }
-                if !self.editor.is_stroking() || self.editor.pressure <= 0.0 {
-                    self.editor.pressure = 1.0;
-                }
                 self.editor.pointer_moved(Vec2::new(position.x as f32, position.y as f32));
                 redraw = true;
             }
             WindowEvent::TouchpadPressure { pressure, .. } => {
+                let Some(pressure) = valid_pressure(*pressure) else { return };
                 if !self.editor.pen_seen {
                     // Once per session, so a bug report's log shows whether
                     // pen pressure reaches OxyBrush at all.
                     log::info!("pen pressure is coming in (first reading {pressure:.3})");
                 }
-                self.editor.pressure = *pressure;
+                if self.touches.is_empty() {
+                    self.editor.pressure = pressure;
+                }
                 self.editor.pen_seen = true;
-                self.last_pressure = Some(Instant::now());
+                self.last_pressure = Some((Instant::now(), pressure));
                 redraw = true;
             }
             WindowEvent::PinchGesture { delta, .. } if !over_egui => {
@@ -2036,7 +2058,7 @@ impl ApplicationHandler for App {
                 // panel unless a control (a slider, a brush tile) takes the
                 // drag, and holding it still opens the control's menu.
                 if *button == MouseButton::Left {
-                    let since = self.last_pressure.map(|t| t.elapsed());
+                    let since = self.last_pressure.map(|(at, _)| at.elapsed());
                     match state {
                         ElementState::Pressed if over_egui && self.editor.press_counts_as_touch(since) => {
                             self.pen_press = self.editor.pointer.map(PenPress::new);
@@ -2048,6 +2070,9 @@ impl ApplicationHandler for App {
                 if let Some(b) = b {
                     match state {
                         ElementState::Pressed if !over_egui && self.editor.pointer_in_full_canvas() => {
+                            if b == PointerButton::Primary && self.touches.is_empty() {
+                                self.editor.pressure = pointer_start_pressure(self.last_pressure, Instant::now());
+                            }
                             self.editor.pointer_down(b)
                         }
                         ElementState::Released
@@ -2061,15 +2086,17 @@ impl ApplicationHandler for App {
             }
             WindowEvent::Touch(t) => {
                 let pos = Vec2::new(t.location.x as f32, t.location.y as f32);
-                let force_pressure = t.force.map_or(1.0, |f| f.normalized() as f32);
-                if t.force.is_some() {
+                let force_pressure = t.force.and_then(|f| valid_pressure(f.normalized() as f32));
+                if force_pressure.is_some() {
                     self.editor.pen_seen = true;
                 }
                 match t.phase {
                     TouchPhase::Started => {
-                        self.touches.insert(t.id, TouchPoint { start_pos: pos, pos, _start_time: Instant::now() });
+                        let mut contact = TouchPoint { start_pos: pos, pos, _start_time: Instant::now(), force: None };
+                        let pressure = contact.pressure(force_pressure);
+                        self.touches.insert(t.id, contact);
                         if self.touches.len() == 1 {
-                            self.editor.pressure = force_pressure;
+                            self.editor.pressure = pressure;
                             self.editor.pointer = Some(pos);
                             if !over_egui && self.editor.pointer_in_full_canvas() {
                                 self.editor.pointer_down(PointerButton::Primary);
@@ -2087,9 +2114,10 @@ impl ApplicationHandler for App {
                         }
                     }
                     TouchPhase::Moved => {
-                        if let Some(tp) = self.touches.get_mut(&t.id) {
-                            tp.pos = pos;
-                        }
+                        let pressure = self.touches.get_mut(&t.id).map(|contact| {
+                            contact.pos = pos;
+                            contact.pressure(force_pressure)
+                        });
                         if self.touches.is_empty() {
                             // A pen hovering above the tablet: on Windows,
                             // winit reports it as touch moves with no touch
@@ -2098,8 +2126,10 @@ impl ApplicationHandler for App {
                             // pen last touched.
                             self.editor.pointer_moved(pos);
                         } else if self.touches.len() == 1 {
-                            self.editor.pressure = force_pressure;
-                            self.editor.pointer_moved(pos);
+                            if let Some(pressure) = pressure {
+                                self.editor.pressure = pressure;
+                                self.editor.pointer_moved(pos);
+                            }
                         } else if self.touches.len() == 2 {
                             let pts: Vec<Vec2> = self.touches.values().map(|tp| tp.pos).collect();
                             if pts.len() >= 2 {
@@ -2435,11 +2465,35 @@ fn remember_window(ed: &mut crate::editor::Editor, window: &Window) {
 
 #[cfg(test)]
 mod tests {
-    use super::{PEN_HOLD, PenPress, frame_dimensions, note_held_key};
+    use super::{
+        PEN_HOLD, PenPress, TouchPoint, frame_dimensions, note_held_key, pointer_start_pressure, valid_pressure,
+    };
     use glam::Vec2;
+    use std::time::{Duration, Instant};
     use winit::dpi::PhysicalSize;
     use winit::event::ElementState::{Pressed, Released};
     use winit::keyboard::{KeyCode, PhysicalKey};
+
+    #[test]
+    fn pen_press_starts_at_the_fresh_pressure_and_regular_mouse_at_full() {
+        let at = Instant::now();
+        assert_eq!(pointer_start_pressure(Some((at, 0.04)), at), 0.04);
+        assert_eq!(pointer_start_pressure(Some((at, 0.0)), at + Duration::from_millis(5)), 0.0);
+        assert_eq!(pointer_start_pressure(Some((at, 0.04)), at + Duration::from_secs(2)), 1.0);
+        assert_eq!(pointer_start_pressure(None, at), 1.0);
+    }
+
+    #[test]
+    fn a_contact_keeps_its_force_when_a_pen_packet_drops_it() {
+        let mut contact =
+            TouchPoint { start_pos: Vec2::ZERO, pos: Vec2::ZERO, _start_time: Instant::now(), force: None };
+        assert_eq!(contact.pressure(None), 1.0, "an unpressured contact can draw");
+        assert_eq!(contact.pressure(valid_pressure(0.08)), 0.08);
+        assert_eq!(contact.pressure(None), 0.08);
+        assert_eq!(contact.pressure(valid_pressure(f32::NAN)), 0.08);
+        assert_eq!(contact.pressure(valid_pressure(0.0)), 0.0);
+        assert_eq!(contact.pressure(None), 0.0);
+    }
 
     #[test]
     fn frame_dimensions_keep_layout_in_step_with_surface() {

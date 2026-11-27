@@ -24,6 +24,10 @@ the request into a `CloseRequested` for each winit window and cancels the
 termination, so OxyBrush can ask to save and then exit its event loop. Once the
 event loop is exiting, or when there is no window, macOS terminates as before.
 
+**Windows Ink pressure** (`src/platform_impl/windows/event_loop.rs`):
+a reported zero is a valid pen pressure. Pass it through so the application
+can distinguish a light pen reading from a touch event without force (#581).
+
 **macOS tablet pressure** (`src/platform_impl/macos/view.rs`): winit 0.30
 reports pressure on macOS only for Force Touch trackpads. Drawing tablets
 deliver pen pressure inside mouse events with the tablet-point subtype (or as

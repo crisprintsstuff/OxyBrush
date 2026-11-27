@@ -2139,9 +2139,13 @@ unsafe fn public_window_callback_inner(
                                     GetPointerPenInfo(pointer_info.pointerId, pen_info.as_mut_ptr())
                                 } {
                                     0 => None,
-                                    _ => normalize_pointer_pressure(unsafe {
-                                        pen_info.assume_init().pressure
-                                    }),
+                                    _ => {
+                                        // Zero is the lightest pen reading. Keep it on a
+                                        // pen event so the app won't treat it as a finger.
+                                        let pressure = unsafe { pen_info.assume_init().pressure };
+                                        (pressure <= 1024)
+                                            .then_some(Force::Normalized(pressure as f64 / 1024.0))
+                                    }
                                 }
                             })
                         },

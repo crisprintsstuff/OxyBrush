@@ -893,7 +893,7 @@ pub enum Drag {
         kind: BrushKind,
         invert: bool,
         start: Vec2,
-        scene_targets: Option<Arc<[Mesh]>>,
+        scene_targets: Option<Arc<oxy_sculpt::SceneProjectTargets>>,
     },
     /// Dragging a transform gizmo handle.
     Gizmo(Box<GizmoDrag>),
@@ -3440,15 +3440,17 @@ impl Editor {
         self.new_stroke_seeded(kind, invert, radius, extra_rotation, None, None)
     }
 
-    fn scene_project_targets(&self) -> Arc<[Mesh]> {
+    fn scene_project_targets(&self) -> Arc<oxy_sculpt::SceneProjectTargets> {
         let active = self.scene.active_index();
-        self.scene
+        let meshes: Vec<_> = self
+            .scene
             .pieces
             .iter()
             .enumerate()
             .filter(|(i, p)| *i != active && p.visible && p.mesh.triangle_count() > 0)
             .map(|(_, p)| p.mesh.clone())
-            .collect()
+            .collect();
+        Arc::new(oxy_sculpt::SceneProjectTargets::new(meshes))
     }
 
     fn new_stroke_seeded(
@@ -3458,7 +3460,7 @@ impl Editor {
         radius: f32,
         extra_rotation: f32,
         paint_seed: Option<u64>,
-        scene_targets: Option<Arc<[Mesh]>>,
+        scene_targets: Option<Arc<oxy_sculpt::SceneProjectTargets>>,
     ) -> Stroke {
         let settings = BrushSettings {
             kind,
@@ -3507,7 +3509,7 @@ impl Editor {
             .with_paint_color(self.paint_color)
             .with_budget(self.dab_budget_ms);
         let stroke = if kind == BrushKind::SceneProject {
-            stroke.with_scene_targets(scene_targets.unwrap_or_else(|| self.scene_project_targets()))
+            stroke.with_shared_scene_targets(scene_targets.unwrap_or_else(|| self.scene_project_targets()))
         } else {
             stroke
         };
@@ -4887,7 +4889,7 @@ impl Editor {
         start: Vec2,
         end: Vec2,
         commit: bool,
-        scene_targets: Option<Arc<[Mesh]>>,
+        scene_targets: Option<Arc<oxy_sculpt::SceneProjectTargets>>,
     ) {
         let doc = &mut self.documents[self.active_document];
         doc.history.revert_pending(&mut doc.scene);
@@ -15104,6 +15106,34 @@ mod tests {
         e.set_brush_pressure_curve(0, None);
         assert_eq!(e.pressure_curves(BrushKind::Draw)[0], LINEAR_PRESSURE_SHAPE);
         assert_eq!(draw.settings().pressure_curves[0], draw_strength, "a stroke keeps the shape it began with");
+    }
+
+    #[test]
+    fn a_light_pen_stroke_keeps_low_pressure_in_its_recorded_dabs() {
+        let mut e = with_living();
+        e.pen_seen = true;
+        e.pressure_radius = true;
+        e.pressure_strength = true;
+        e.pressure_min = 0.05;
+        e.pressure = 0.03;
+        e.pointer = Some(Vec2::new(370.0, 300.0));
+        e.pointer_down(PointerButton::Primary);
+        e.pointer_moved(Vec2::new(390.0, 300.0));
+        e.pressure = 0.0;
+        e.pointer_moved(Vec2::new(410.0, 300.0));
+        e.pointer_up();
+        let recipe = e.living.strokes.last().unwrap().recipe.as_ref().unwrap();
+        let pressures: Vec<_> = recipe
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                oxy_sculpt::RecipeEvent::Sample { sample, .. } => Some(sample.pressure),
+                _ => None,
+            })
+            .collect();
+        assert!(pressures.len() >= 3, "{pressures:?}");
+        assert!(pressures.iter().all(|&p| p < 0.15), "{pressures:?}");
+        assert_eq!(pressures.last().copied(), Some(0.05));
     }
 
     #[test]
