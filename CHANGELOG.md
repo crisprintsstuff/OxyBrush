@@ -8,6 +8,10 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 - **OxyRemesh.** Open surfaces can use isoline extraction from fitted orientation-field charts when the charts are unfolded and cover enough of the surface.
 
+### Fixed
+
+- **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
+
 ## [4.1.2] - 2026-11-26
 
 ### Fixed

@@ -5625,7 +5625,9 @@ fn inspector(ui: &mut Ui, ed: &mut Editor, busy: bool) {
                 Some(a) => format!("Alpha: {}", a.name),
                 None => "Alpha".into(),
             };
-            widgets::section(ui, &alpha_title, plain::SECTION_ALPHA, false, |ui| alpha_section(ui, ed));
+            widgets::section_with_id(ui, "Alpha", &alpha_title, plain::SECTION_ALPHA, false, |ui| {
+                alpha_section(ui, ed)
+            });
         }
         widgets::section(ui, "Symmetry", plain::SECTION_SYMMETRY, false, |ui| symmetry_section(ui, ed));
     } else {
@@ -7270,6 +7272,7 @@ fn alpha_section(ui: &mut Ui, ed: &mut Editor) {
                                 tips::hover(
                                     ui.add(crate::widgets::Bar(
                                         egui::Slider::new(&mut ed.alpha_roll_distance, 0.25..=8.0)
+                                            .update_while_editing(false)
                                             .text("roll distance"),
                                     )),
                                     plain::ALPHA_ROLL_DISTANCE,
@@ -8603,7 +8606,8 @@ fn curve_window(ctx: &egui::Context, ed: &mut Editor) {
     egui::Window::new(if moving { "Curve Move" } else { "Curve stroke" })
         .collapsible(false)
         .resizable(false)
-        .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -48.0))
+        .pivot(egui::Align2::CENTER_BOTTOM)
+        .default_pos(ctx.content_rect().center_bottom() - egui::vec2(0.0, 48.0))
         .show(ctx, |ui| {
             ui.label(RichText::new(if moving { plain::MOVE_HELP } else { plain::CURVE_HELP }).weak().small());
             ui.add_space(4.0);
