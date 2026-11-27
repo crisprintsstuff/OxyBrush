@@ -4,7 +4,7 @@ use glam::{Quat, Vec3};
 use oxy_mesh::armature::{Armature, Sphere};
 use oxy_mesh::retopo::{Cage, Face, edge_key};
 use oxy_mesh::{Mesh, catmull_clark};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 const SIDES: usize = 8;
 pub const MAX_QUAD_SUBDIVISION: u8 = 2;
@@ -30,6 +30,7 @@ impl Default for QuadSkinOptions {
     }
 }
 
+#[derive(Clone, Copy)]
 struct Section {
     ring: Ring,
     normal: Vec3,
@@ -51,7 +52,7 @@ impl std::fmt::Display for QuadSkinError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::InvalidArmature => "The armature needs at least two valid, distinct joints",
-            Self::UnsupportedBranching => "Quad skin supports a chain or one three-way junction",
+            Self::UnsupportedBranching => "Quad skin supports up to three links at each joint",
             Self::CrowdedLinks => "The links are too short or close together for the quad skin",
             Self::InvalidSurface => "The quad skin would overlap or produce invalid faces",
             Self::SubdivisionBudget => {
@@ -63,9 +64,8 @@ impl std::fmt::Display for QuadSkinError {
 
 impl std::error::Error for QuadSkinError {}
 
-/// Build a closed polygon cage around a chain or a tree with one degree-three
-/// node. The armature stays unchanged. Use `Cage::build_mesh` to author a
-/// sculpt mesh with the polygon boundaries intact.
+/// Build a closed polygon cage around chains and connected three-way junctions.
+/// Use `Cage::build_mesh` to keep the polygon boundaries in the sculpt mesh.
 pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<Cage, QuadSkinError> {
     let blend = if opts.blend.is_finite() { opts.blend.clamp(0.0, 1.0) } else { 0.5 };
     let resolution = opts.resolution.max(32);
@@ -83,53 +83,27 @@ pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<
         neighbors[child].push(parent);
         neighbors[parent].push(child);
     }
-    let mut junctions = neighbors.iter().enumerate().filter(|(_, adjacent)| adjacent.len() > 2);
-    let junction = junctions.next();
-    if junction.is_some_and(|(_, near)| near.len() != 3) || junctions.next().is_some() {
+    if neighbors.iter().any(|adjacent| adjacent.len() > 3) {
         return Err(UnsupportedBranching);
     }
 
     let mut cage = Cage::default();
-    if let Some((joint, branches)) = junction {
-        let origin = spheres[joint];
-        let directions: Vec<_> = branches.iter().map(|&i| (spheres[i].center - origin.center).normalize()).collect();
-        let basis = (directions[1] - directions[0]).cross(directions[2] - directions[0]).normalize_or_zero();
-        if basis == Vec3::ZERO {
-            return Err(CrowdedLinks);
-        }
-        let mut ports = Vec::with_capacity(3);
-        for (branch, (&next, &direction)) in branches.iter().zip(&directions).enumerate() {
-            let angle = directions
-                .iter()
-                .enumerate()
-                .filter(|&(other, _)| other != branch)
-                .map(|(_, &other)| direction.angle_between(other))
-                .fold(f32::INFINITY, f32::min);
-            let length = origin.center.distance(spheres[next].center);
-            // blend 0.5 keeps the historical collar; lower = sharper, higher = softer.
-            // Stay within ~0.75..=1.25 so junctions still pass the collar plane check.
-            let base = 0.35 + 1.15 / (angle * 0.5).tan();
-            let factor = 0.75 + blend * 0.5;
-            let mut offset = origin.radius * base * factor;
-            let max_offset = length * 0.64;
-            if !offset.is_finite() || max_offset <= 1e-6 {
-                return Err(CrowdedLinks);
+    let mut ports = vec![Vec::new(); spheres.len()];
+    for (joint, adjacent) in neighbors.iter().enumerate().filter(|(_, n)| n.len() == 3) {
+        ports[joint] = junction_ports(&mut cage, spheres, spheres[joint], adjacent, blend)?;
+    }
+    let tree = SweepTree { spheres, neighbors: &neighbors, ports: &ports, resolution };
+    if ports.iter().any(|rings| !rings.is_empty()) {
+        // Mark the far collar so a path shared by two junctions is swept once.
+        let mut used = HashSet::new();
+        for (joint, rings) in ports.iter().enumerate() {
+            for (&next, &port) in neighbors[joint].iter().zip(rings) {
+                if !used.contains(&(joint, next))
+                    && let Some(end) = sweep_path(&mut cage, &tree, joint, next, port)?
+                {
+                    used.insert(end);
+                }
             }
-            // Soft Blend may ask for more than a short link allows; clamp instead of failing.
-            if offset >= max_offset {
-                offset = max_offset;
-            }
-            let center = origin.center + direction * offset;
-            let radius = origin.radius + (spheres[next].radius - origin.radius) * (offset / length);
-            let axis = (basis - direction * basis.dot(direction)).normalize_or_zero();
-            if axis == Vec3::ZERO {
-                return Err(CrowdedLinks);
-            }
-            ports.push(add_ring(&mut cage, center, radius, direction, axis));
-        }
-        join_ports(&mut cage, &ports, origin.center)?;
-        for (&next, port) in branches.iter().zip(ports) {
-            sweep_path(&mut cage, spheres, &neighbors, joint, next, port, resolution)?;
         }
     } else {
         let start = neighbors.iter().position(|n| n.len() == 1).ok_or(InvalidArmature)?;
@@ -139,7 +113,7 @@ pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<
         let axis = direction.any_orthonormal_vector();
         let ring = add_ring(&mut cage, sphere.center, sphere.radius, direction, axis);
         cap(&mut cage, ring.ring, sphere.center - direction * sphere.radius, true);
-        sweep_path(&mut cage, spheres, &neighbors, start, next, ring, resolution)?;
+        sweep_path(&mut cage, &tree, start, next, ring)?;
     }
     validate(&cage)?;
     Ok(cage)
@@ -181,6 +155,48 @@ pub fn quad_skin_mesh(armature: &Armature, opts: QuadSkinOptions) -> Result<Mesh
     cage.build_mesh().ok_or(QuadSkinError::InvalidSurface)
 }
 
+fn junction_ports(
+    cage: &mut Cage,
+    spheres: &[Sphere],
+    origin: Sphere,
+    branches: &[usize],
+    blend: f32,
+) -> Result<Vec<Section>, QuadSkinError> {
+    use QuadSkinError::CrowdedLinks;
+    let directions: Vec<_> = branches.iter().map(|&i| (spheres[i].center - origin.center).normalize()).collect();
+    let basis = (directions[1] - directions[0]).cross(directions[2] - directions[0]).normalize_or_zero();
+    if basis == Vec3::ZERO {
+        return Err(CrowdedLinks);
+    }
+    let mut ports = Vec::with_capacity(3);
+    for (branch, (&next, &direction)) in branches.iter().zip(&directions).enumerate() {
+        let angle = directions
+            .iter()
+            .enumerate()
+            .filter(|&(other, _)| other != branch)
+            .map(|(_, &other)| direction.angle_between(other))
+            .fold(f32::INFINITY, f32::min);
+        let length = origin.center.distance(spheres[next].center);
+        // Blend spreads the collar along the link, up to the room available.
+        let base = 0.35 + 1.15 / (angle * 0.5).tan();
+        let offset = origin.radius * base * (0.75 + blend * 0.5);
+        let max_offset = length * 0.64;
+        if !offset.is_finite() || max_offset <= 1e-6 {
+            return Err(CrowdedLinks);
+        }
+        let offset = offset.min(max_offset);
+        let center = origin.center + direction * offset;
+        let radius = origin.radius + (spheres[next].radius - origin.radius) * (offset / length);
+        let axis = (basis - direction * basis.dot(direction)).normalize_or_zero();
+        if axis == Vec3::ZERO {
+            return Err(CrowdedLinks);
+        }
+        ports.push(add_ring(cage, center, radius, direction, axis));
+    }
+    join_ports(cage, &ports, origin.center)?;
+    Ok(ports)
+}
+
 fn add_ring(cage: &mut Cage, center: Vec3, radius: f32, direction: Vec3, axis: Vec3) -> Section {
     let tangent = direction.cross(axis);
     let ring = std::array::from_fn(|i| {
@@ -215,20 +231,36 @@ fn cap(cage: &mut Cage, ring: Ring, tip: Vec3, reverse: bool) {
     }
 }
 
+struct SweepTree<'a> {
+    spheres: &'a [Sphere],
+    neighbors: &'a [Vec<usize>],
+    ports: &'a [Vec<Section>],
+    resolution: u32,
+}
+
+/// Sweep along a branch and return the far collar if the path joins two patches.
 fn sweep_path(
     cage: &mut Cage,
-    spheres: &[Sphere],
-    neighbors: &[Vec<usize>],
+    tree: &SweepTree<'_>,
     mut previous: usize,
     mut current: usize,
     mut section: Section,
-    resolution: u32,
-) -> Result<(), QuadSkinError> {
+) -> Result<Option<(usize, usize)>, QuadSkinError> {
     loop {
-        let sphere = spheres[current];
-        let incoming = (sphere.center - spheres[previous].center).normalize();
-        let next = neighbors[current].iter().copied().find(|&index| index != previous);
-        let outgoing = next.map_or(incoming, |i| (spheres[i].center - sphere.center).normalize());
+        let sphere = tree.spheres[current];
+        let incoming = (sphere.center - tree.spheres[previous].center).normalize();
+        if !tree.ports[current].is_empty() {
+            let index = tree.neighbors[current].iter().position(|&n| n == previous).expect("adjacent joint");
+            let end = tree.ports[current][index];
+            // Each collar can fit its own junction and still overlap the other.
+            if (end.center - section.center).dot(incoming) <= 1e-6 {
+                return Err(QuadSkinError::CrowdedLinks);
+            }
+            join_collars(cage, section, end, tree.resolution);
+            return Ok(Some((current, previous)));
+        }
+        let next = tree.neighbors[current].iter().copied().find(|&index| index != previous);
+        let outgoing = next.map_or(incoming, |i| (tree.spheres[i].center - sphere.center).normalize());
         let direction = (incoming + outgoing).normalize_or_zero();
         if incoming.dot(outgoing) < -0.8 || section.normal.dot(direction) < -0.8 {
             return Err(QuadSkinError::CrowdedLinks);
@@ -236,7 +268,7 @@ fn sweep_path(
         let target_axis = Quat::from_rotation_arc(section.normal, direction) * section.axis;
         let length = section.center.distance(sphere.center);
         let avg_radius = (section.radius + sphere.radius) * 0.5;
-        let steps = link_steps(length, avg_radius, resolution);
+        let steps = link_steps(length, avg_radius, tree.resolution);
         for step in 1..=steps {
             let t = step as f32 / steps as f32;
             let center = section.center.lerp(sphere.center, t);
@@ -248,17 +280,48 @@ fn sweep_path(
             let axis = Quat::from_rotation_arc(section.normal, normal) * section.axis;
             let axis = if step == steps { target_axis } else { axis };
             let end = add_ring(cage, center, radius, if step == steps { direction } else { normal }, axis);
-            for i in 0..SIDES {
-                let j = (i + 1) % SIDES;
-                cage.faces.push(Face::new(vec![section.ring[i], section.ring[j], end.ring[j], end.ring[i]]));
-            }
+            bridge_rings(cage, section.ring, end.ring);
             section = end;
         }
         let Some(next) = next else {
             cap(cage, section.ring, sphere.center + direction * sphere.radius, false);
-            return Ok(());
+            return Ok(None);
         };
         (previous, current) = (current, next);
+    }
+}
+
+fn join_collars(cage: &mut Cage, start: Section, end: Section, resolution: u32) {
+    let transported = Quat::from_rotation_arc(start.normal, -end.normal) * start.axis;
+    let offset = (0..SIDES)
+        .max_by(|&a, &b| {
+            let alignment = |i| (cage.positions[end.ring[i] as usize] - end.center).dot(transported);
+            alignment(a).total_cmp(&alignment(b))
+        })
+        .unwrap();
+    // The far collar faces the path. Reverse its winding and match the
+    // nearest phase before bridging the existing rings.
+    let aligned: Ring = std::array::from_fn(|i| end.ring[(offset + SIDES - i) % SIDES]);
+    let steps = link_steps(start.center.distance(end.center), (start.radius + end.radius) * 0.5, resolution);
+    let mut ring = start.ring;
+    for step in 1..steps {
+        let t = step as f32 / steps as f32;
+        let next = std::array::from_fn(|i| {
+            let p = cage.positions[start.ring[i] as usize].lerp(cage.positions[aligned[i] as usize], t);
+            let id = cage.positions.len() as u32;
+            cage.positions.push(p);
+            id
+        });
+        bridge_rings(cage, ring, next);
+        ring = next;
+    }
+    bridge_rings(cage, ring, aligned);
+}
+
+fn bridge_rings(cage: &mut Cage, start: Ring, end: Ring) {
+    for i in 0..SIDES {
+        let j = (i + 1) % SIDES;
+        cage.faces.push(Face::new(vec![start[i], start[j], end[j], end[i]]));
     }
 }
 
@@ -266,11 +329,12 @@ fn sweep_path(
 /// collar faces can be removed, leaving matching boundaries for the limbs.
 /// The hull is small and fixed-size, so enumerate its supporting planes.
 fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), QuadSkinError> {
-    let points: Vec<_> = cage.positions.iter().map(|&p| p - origin).collect();
+    let indices: Vec<_> = ports.iter().flat_map(|p| p.ring).collect();
+    let points: Vec<_> = indices.iter().map(|&i| cage.positions[i as usize] - origin).collect();
     let tolerance = points.iter().map(|p| p.length()).fold(0.0, f32::max) * 1e-5;
     for Section { ring, normal, .. } in ports {
-        let offset = normal.dot(points[ring[0] as usize]);
-        if points.iter().enumerate().any(|(i, p)| !ring.contains(&(i as u32)) && p.dot(*normal) >= offset - tolerance) {
+        let offset = normal.dot(cage.positions[ring[0] as usize] - origin);
+        if points.iter().enumerate().any(|(i, p)| !ring.contains(&indices[i]) && p.dot(*normal) >= offset - tolerance) {
             return Err(QuadSkinError::CrowdedLinks);
         }
     }
@@ -293,7 +357,7 @@ fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), Qu
                     distances.iter_mut().for_each(|d| *d = -*d);
                 }
                 let mut face: Vec<_> = (0..points.len()).filter(|&i| distances[i].abs() <= tolerance).collect();
-                if ports.iter().any(|port| face.iter().all(|&i| port.ring.contains(&(i as u32))))
+                if ports.iter().any(|port| face.iter().all(|&i| port.ring.contains(&indices[i])))
                     || !seen.insert(face.clone())
                 {
                     continue;
@@ -309,12 +373,12 @@ fn join_ports(cage: &mut Cage, ports: &[Section], origin: Vec3) -> Result<(), Qu
                 // A center fan for larger facets avoids choosing a preferred
                 // diagonal in a mirror-symmetric junction.
                 if face.len() <= 4 {
-                    cage.faces.push(Face::new(face.into_iter().map(|i| i as u32).collect()));
+                    cage.faces.push(Face::new(face.into_iter().map(|i| indices[i]).collect()));
                 } else {
                     let tip = cage.positions.len() as u32;
                     cage.positions.push(origin + center);
                     for i in 0..face.len() {
-                        cage.faces.push(Face::new(vec![face[i] as u32, face[(i + 1) % face.len()] as u32, tip]));
+                        cage.faces.push(Face::new(vec![indices[face[i]], indices[face[(i + 1) % face.len()]], tip]));
                     }
                 }
             }
@@ -553,6 +617,45 @@ mod tests {
         assert!(dense.quad_count() > base.quad_count(), "higher Resolution adds limb rings");
         assert_subdivides(&dense);
         assert_subdivides(&soft);
+    }
+
+    fn two_forks(distance: f32, bent: bool) -> Armature {
+        let mut arm = Armature::new(Vec3::ZERO, 0.4, Some(0.0));
+        arm.add_child(0, Vec3::new(2.0, -0.8, 0.0), 0.18);
+        let parent = if bent { arm.add_child(0, Vec3::new(0.0, distance * 0.5, 0.35), 0.36) } else { 0 };
+        let upper = arm.add_child(parent, Vec3::Y * distance, 0.4);
+        arm.add_child(upper, Vec3::new(2.0, distance + 0.8, 0.0), 0.18);
+        arm
+    }
+
+    #[test]
+    fn two_junctions_share_one_quad_strip() {
+        let opts = QuadSkinOptions::default();
+        for bent in [false, true] {
+            let arm = two_forks(3.0, bent);
+            let cage = quad_skin_armature(&arm, opts).unwrap();
+            assert_eq!(cage, quad_skin_armature(&arm, opts).unwrap());
+            assert_eq!(cage.quad_count(), 64 + usize::from(bent) * SIDES);
+            assert_subdivides(&cage);
+        }
+    }
+
+    #[test]
+    fn resolution_adds_rings_between_junction_collars() {
+        let arm = two_forks(3.0, false);
+        let base = quad_skin_armature(&arm, QuadSkinOptions::default()).unwrap();
+        let dense = quad_skin_armature(&arm, QuadSkinOptions { resolution: 320, ..Default::default() }).unwrap();
+        assert!(!base.positions.iter().any(|p| (1.0..2.0).contains(&p.y)));
+        assert!(dense.positions.iter().any(|p| (1.0..2.0).contains(&p.y)));
+        assert_subdivides(&dense);
+    }
+
+    #[test]
+    fn overlapping_junction_collars_are_rejected() {
+        assert_eq!(
+            quad_skin_armature(&two_forks(0.9, false), QuadSkinOptions::default()),
+            Err(QuadSkinError::CrowdedLinks)
+        );
     }
 
     #[test]

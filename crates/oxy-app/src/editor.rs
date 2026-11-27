@@ -13035,6 +13035,35 @@ mod tests {
     }
 
     #[test]
+    fn oxyspheres_make_mesh_connects_three_way_junctions() {
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.quad_skin = true;
+        edit.quad_subdivision = 1;
+        edit.armature = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.4, Some(0.0));
+        edit.armature.add_child(0, Vec3::new(2.0, -0.8, 0.0), 0.18);
+        let upper = edit.armature.add_child(0, Vec3::Y * 3.0, 0.4);
+        edit.armature.add_child(upper, Vec3::new(2.0, 3.8, 0.0), 0.18);
+        let armature = edit.armature.clone();
+
+        e.accept_spheres();
+        wait_job(&mut e);
+        assert!(e.spheres.is_none(), "{}", e.status);
+        let output = e.scene.active();
+        let id = output.id;
+        assert!(oxy_topo::check_watertight(&output.mesh));
+        let (quads, triangles) = output.mesh.quad_and_triangle_counts();
+        assert!(quads > 0);
+        assert_eq!(triangles, 0);
+        assert!(e.scene.pieces.iter().any(|p| p.spheres.as_ref().is_some_and(|s| s.armature == armature)));
+        e.undo();
+        assert!(e.scene.get(id).is_none());
+        e.redo();
+        assert_eq!(e.scene.active().id, id);
+    }
+
+    #[test]
     fn rebuilding_an_unedited_quad_skin_updates_the_same_piece() {
         let mut e = editor();
         e.start_spheres();

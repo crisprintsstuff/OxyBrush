@@ -85,7 +85,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                         e.build_error = None;
                     }
                     ui.selectable_value(&mut e.quad_skin, true, "Quad base mesh")
-                        .on_hover_text("Experimental. Builds edge loops around a chain or one three-way junction.");
+                        .on_hover_text("Experimental. Builds edge loops along chains and connected three-way junctions.");
                 });
                 ui.end_row();
                 if e.quad_skin {
