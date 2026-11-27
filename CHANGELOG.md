@@ -10,6 +10,8 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 
 ### Fixed
 
+- **Scene Project Stamp.** Dragging to resize the stamp reuses the target meshes for the gesture, reducing preview work on dense scenes.
+
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
 
 ## [4.1.2] - 2026-11-26
