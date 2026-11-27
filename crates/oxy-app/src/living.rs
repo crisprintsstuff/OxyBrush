@@ -958,7 +958,11 @@ impl Editor {
     /// longer fit their piece (baked), undone strokes that can't come back,
     /// and groups nothing is in.
     pub fn living_sync(&mut self) {
-        if self.living.strokes.is_empty() && self.living.edits.is_empty() && self.living.groups.is_empty() {
+        if self.living.strokes.is_empty()
+            && self.living.edits.is_empty()
+            && self.living.level_edits.is_empty()
+            && self.living.groups.is_empty()
+        {
             return;
         }
         let mut baked: Vec<String> = Vec::new();
