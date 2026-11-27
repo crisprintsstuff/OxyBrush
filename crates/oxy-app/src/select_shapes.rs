@@ -14,7 +14,7 @@
 //! Alt tap while drawing adds a smooth point where the pointer is, and a
 //! second quick tap turns it into a sharp corner.
 
-use crate::editor::{Editor, SelectShape};
+use crate::editor::{CurveSelectionTarget, Editor, SelectCurve, SelectShape};
 use glam::Vec2;
 use std::time::{Duration, Instant};
 
@@ -136,6 +136,12 @@ pub(crate) fn curve_side(points: &[Vec2], p: Vec2) -> bool {
 }
 
 impl Editor {
+    pub(crate) fn start_select_curve(&mut self, target: CurveSelectionTarget, p: Vec2) {
+        self.select_curve =
+            Some(SelectCurve { target, points: vec![p], smooth: vec![false], held: true, ..Default::default() });
+        self.status = "Curve: drag or click points. Tap Alt for a curve point, twice for a corner. Release or Enter to apply. Hold Alt for the other side.".into();
+    }
+
     /// A click while a curve selection is being clicked out: one more
     /// point, or (on the last point again) apply it. RETURNS: whether the
     /// click was taken.
@@ -240,7 +246,16 @@ impl Editor {
             self.status = "Curve: draw or click at least two points".into();
             return;
         }
-        self.select_region(curve.action, move |s| curve_side(&points, s) != other_side, false, false);
+        match curve.target {
+            CurveSelectionTarget::Selection(action) => {
+                self.select_region(action, |s| curve_side(&points, s) != other_side, false, false);
+            }
+            CurveSelectionTarget::Cutter { kind, piece } => {
+                if self.scene.try_active().is_some_and(|active| active.id == piece) {
+                    self.finish_region_cut(kind, |s| curve_side(&points, s), other_side, true);
+                }
+            }
+        }
     }
 }
 
@@ -356,7 +371,7 @@ mod tests {
         click(&mut e, Vec2::new(400.0, 310.0));
         click(&mut e, Vec2::new(500.0, 290.0));
         let curve = e.select_curve.clone().expect("being clicked out");
-        assert_eq!((curve.action, curve.points.len()), (SelectAction::Mask, 3));
+        assert_eq!((curve.target, curve.points.len()), (CurveSelectionTarget::Selection(SelectAction::Mask), 3));
         assert!(e.scene.active().mesh.mask.iter().all(|&k| k == 0.0), "nothing until it's applied");
         e.select_curve_apply(false);
         let masked = masked_on_screen(&e);
