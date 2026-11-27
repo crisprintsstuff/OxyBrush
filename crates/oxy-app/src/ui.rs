@@ -1083,6 +1083,7 @@ pub fn draw(ui: &mut Ui, ed: &mut Editor) -> (Option<UiAction>, egui::Rect) {
     settings_window(ui.ctx(), ed);
     print_tools_dialog(ui.ctx(), ed);
     mesh_diagnostics_dialog(ui.ctx(), ed);
+    import_inspection_dialog(ui.ctx(), ed);
     crate::guide::window(ui.ctx(), ed);
     focal_length_window(ui.ctx(), ed);
     shading_window(ui.ctx(), ed);
@@ -1482,6 +1483,48 @@ fn mesh_diagnostics_dialog(ctx: &egui::Context, ed: &mut Editor) {
         }
     });
     ed.show_diagnostics = open;
+}
+
+fn import_inspection_dialog(ctx: &egui::Context, ed: &mut Editor) {
+    if !ed.show_import_inspection {
+        return;
+    }
+    let mut open = true;
+    let mut selected = None;
+    egui::Window::new("Import inspection").open(&mut open).default_width(400.0).show(ctx, |ui| {
+        ui.label("Topology findings from the latest import. Open edges can be intentional on a sheet.");
+        let mut findings = ed.imported_topology_findings().peekable();
+        if findings.peek().is_none() {
+            ui.weak("No imported pieces with findings in this scene.");
+            return;
+        }
+        egui::ScrollArea::vertical().max_height(375.0).show(ui, |ui| {
+            for (index, piece, report) in findings {
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong(&piece.name);
+                    if ui.small_button("Frame piece").on_hover_text("Select and frame this piece").clicked() {
+                        selected = Some(index);
+                    }
+                });
+                let rows = [
+                    ("Open edges", report.topology.boundary_edge_count),
+                    ("Non-manifold edges", report.topology.non_manifold_edge_count),
+                    ("Edges with inconsistent winding", report.inconsistent_winding_edges),
+                    ("Duplicate triangles", report.duplicate_triangles),
+                    ("Degenerate triangles", report.topology.degenerate_triangle_count + report.zero_area_triangles),
+                ];
+                for (label, count) in rows.into_iter().filter(|(_, count)| *count > 0) {
+                    ui.label(format!("{label}  {count}"));
+                }
+            }
+        });
+    });
+    ed.show_import_inspection = open;
+    if let Some(index) = selected {
+        ed.scene.set_active(index);
+        ed.frame_active();
+    }
 }
 
 /// Preferences > General: the material a new tab starts with.
@@ -4873,6 +4916,11 @@ fn status_bar(ui: &mut Ui, ed: &mut Editor) {
                 if tips::hover(ui.add(b), plain::UPDATE_BUTTON).clicked() {
                     ed.updater.show_window = true;
                 }
+            }
+            if ed.imported_topology_findings().next().is_some()
+                && ui.button(RichText::new("Inspect import").color(ui.visuals().warn_fg_color)).clicked()
+            {
+                ed.show_import_inspection = true;
             }
             // Hint on the right; the status message gets the space left over
             // and is shortened with "…" rather than running into the hint.

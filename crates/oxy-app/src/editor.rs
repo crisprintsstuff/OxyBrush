@@ -1106,7 +1106,20 @@ pub struct Job {
 /// Meshes read from files, ready to add as pieces.
 struct LoadedImport {
     path: PathBuf,
-    parts: Vec<(String, Mesh)>,
+    parts: Vec<ImportedPart>,
+}
+
+struct ImportedPart {
+    name: String,
+    mesh: Mesh,
+    inspection: oxy_mesh::topo::ImportTopologyReport,
+}
+
+pub(crate) struct ImportFinding {
+    /// The fit-to-scene undo step swaps the original and scaled pieces.
+    original: u64,
+    fitted: u64,
+    report: oxy_mesh::topo::ImportTopologyReport,
 }
 
 /// The outcome of reading a batch of mesh files. Failures are skipped;
@@ -5543,6 +5556,8 @@ impl Editor {
         self.pointer_up();
         self.job = None;
         self.scene = scene;
+        self.import_findings.clear();
+        self.show_import_inspection = false;
         // Pieces from older files have no symmetry centre yet: pick one
         // from their shape now, once, so it doesn't drift as they're sculpted.
         self.scene.pieces.iter_mut().for_each(ensure_symmetry_center);
@@ -6327,19 +6342,23 @@ impl Editor {
         let mut piece_count = 0usize;
         let first = self.scene.pieces.len();
         let mut steps = Vec::new();
+        let mut findings = Vec::new();
         for LoadedImport { path, parts } in loaded {
             if file_count == 1 {
                 only_path = Some(path.clone());
             }
             self.protect_path(&path);
             self.remember_recent(&path);
-            for (name, mesh) in parts {
+            for ImportedPart { name, mesh, inspection } in parts {
                 tris += mesh.triangle_count();
                 piece_count += 1;
                 let index = self.scene.pieces.len();
                 let name = self.scene.unique_name(&name);
                 let mut piece = Piece::new(name, mesh);
                 ensure_symmetry_center(&mut piece);
+                if inspection.has_findings() {
+                    findings.push((index, piece.id, inspection));
+                }
                 self.scene.pieces.push(piece);
                 steps.push(Step::Inserted { index });
             }
@@ -6366,10 +6385,28 @@ impl Editor {
             self.import_scale = Some(factor);
             self.scale_pieces(first, factor);
         }
+        self.import_findings = findings
+            .into_iter()
+            .map(|(index, original, report)| ImportFinding { original, fitted: self.scene.pieces[index].id, report })
+            .collect();
         let bounds = self.scene.bounds();
         self.camera.frame(bounds);
         self.status = import_status(file_count, only_path.as_deref(), tris, piece_count, &failed, factor);
+        let findings = self.import_findings.len();
+        if findings > 0 {
+            let pieces = if findings == 1 { "piece has" } else { "pieces have" };
+            self.status.push_str(&format!(". {findings} {pieces} topology warnings. See Inspect import."));
+        }
         (self.history.revision().wrapping_sub(before)) as usize
+    }
+
+    pub(crate) fn imported_topology_findings(
+        &self,
+    ) -> impl Iterator<Item = (usize, &Piece, &oxy_mesh::topo::ImportTopologyReport)> {
+        self.import_findings.iter().filter_map(|finding| {
+            let index = self.scene.index_of(finding.fitted).or_else(|| self.scene.index_of(finding.original))?;
+            Some((index, &self.scene.pieces[index], &finding.report))
+        })
     }
 
     /// End a drag before the document changes. `pointer_up` tightens the
@@ -10799,6 +10836,10 @@ fn capture_alpha_values(
 const IMPORT_BACKGROUND_BYTES: u64 = 1024 * 1024;
 
 fn import_runs_on_worker(paths: &[PathBuf]) -> bool {
+    // A small glTF descriptor can reference a much larger external buffer.
+    if paths.iter().any(|p| p.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("gltf"))) {
+        return true;
+    }
     let bytes = paths.iter().filter_map(|p| std::fs::metadata(p).ok()).map(|m| m.len()).sum::<u64>();
     bytes >= IMPORT_BACKGROUND_BYTES
 }
@@ -10820,7 +10861,16 @@ fn read_imports(paths: &[PathBuf]) -> ImportRead {
     let mut failed = Vec::new();
     for path in paths {
         match oxy_io::import_pieces(path) {
-            Ok(parts) if !parts.is_empty() => loaded.push(LoadedImport { path: path.clone(), parts }),
+            Ok(parts) if !parts.is_empty() => {
+                let parts = parts
+                    .into_iter()
+                    .map(|(name, mesh)| {
+                        let inspection = oxy_mesh::topo::inspect_import(&mesh);
+                        ImportedPart { name, mesh, inspection }
+                    })
+                    .collect();
+                loaded.push(LoadedImport { path: path.clone(), parts });
+            }
             Ok(_) => failed.push((path.clone(), "contains no pieces".into())),
             Err(e) => failed.push((path.clone(), e.to_string())),
         }
@@ -17558,6 +17608,54 @@ mod tests {
     }
 
     #[test]
+    fn import_inspection_tracks_findings_through_fit_undo_and_tab_switches() {
+        let dir = import_dir("inspection");
+        let sheet = dir.join("b-sheet.obj");
+        std::fs::write(&sheet, tri_obj("Sheet", 0, 60)).unwrap();
+        let closed = dir.join("a-closed.obj");
+        let mut file = std::fs::File::create(&closed).unwrap();
+        oxy_io::write_obj(&primitives::cube(2, 0.65), &mut file).unwrap();
+        drop(file);
+
+        let mut ed = editor();
+        ed.import_paths(&[sheet, closed.clone()]);
+        assert!(ed.status.contains("See Inspect import"), "{}", ed.status);
+        let active = ed.scene.active().id;
+        let snapshot = |ed: &Editor| {
+            ed.imported_topology_findings()
+                .map(|(_, piece, report)| (piece.name.clone(), report.topology.boundary_edge_count))
+                .collect::<Vec<_>>()
+        };
+        let expected = vec![("Sheet".to_string(), 3)];
+        assert_eq!(snapshot(&ed), expected);
+        assert_eq!(ed.scene.active().id, active, "inspection does not change selection");
+        let fitted_id = ed.imported_topology_findings().next().unwrap().1.id;
+        ed.undo();
+        assert_eq!(snapshot(&ed), expected);
+        assert_ne!(ed.imported_topology_findings().next().unwrap().1.id, fitted_id);
+        ed.undo();
+        assert!(snapshot(&ed).is_empty());
+
+        ed.redo();
+        ed.redo();
+        assert_eq!(snapshot(&ed), expected);
+        let first_tab = ed.active_document;
+        ed.new_tab("empty");
+        assert!(snapshot(&ed).is_empty());
+        ed.import(&closed);
+        assert!(snapshot(&ed).is_empty());
+        assert!(!ed.status.contains("See Inspect import"));
+        ed.switch_tab(first_tab);
+        assert_eq!(snapshot(&ed), expected);
+        ed.show_import_inspection = true;
+        let reloaded = Scene::from_data(ed.scene.to_data()).unwrap();
+        ed.replace_document(reloaded, None);
+        assert!(snapshot(&ed).is_empty());
+        assert!(!ed.show_import_inspection);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
     fn an_import_far_out_of_scale_is_scaled_by_a_power_of_ten() {
         assert_eq!(import_unit_scale(3.0, 2.0), None, "close enough: kept as it is");
         assert_eq!(import_unit_scale(15.0, 2.0), None, "within 8x");
@@ -17854,6 +17952,12 @@ Connections: {
         let names: Vec<&str> = e.scene.pieces.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["Sphere", "Big", "Small"]);
         assert!(e.status.contains("bad.obj"), "{}", e.status);
+        assert_eq!(
+            e.imported_topology_findings()
+                .map(|(_, piece, report)| (piece.name.as_str(), report.topology.boundary_edge_count))
+                .collect::<Vec<_>>(),
+            [("Big", 3), ("Small", 3)]
+        );
         assert_eq!(e.history.undo_labels().collect::<Vec<_>>(), ["Import"]);
         e.undo();
         assert_eq!(e.scene.pieces.len(), 1);

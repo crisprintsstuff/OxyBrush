@@ -16,7 +16,7 @@ use oxy_render::{Camera, MatcapPreset};
 use oxy_sculpt::{Alpha, BrushKind, BuiltinAlpha, Falloff, InsertShape, Symmetry};
 
 use crate::bridge::Bridge;
-use crate::editor::{CurveEdit, ExtractPreview, HoldWatch, Job, LastStroke, Link, MeshKey, StrokeMode};
+use crate::editor::{CurveEdit, ExtractPreview, HoldWatch, ImportFinding, Job, LastStroke, Link, MeshKey, StrokeMode};
 use crate::instances::InstanceCache;
 use crate::living::Living;
 use crate::parts::PartPlacement;
@@ -43,6 +43,8 @@ pub struct Document {
     // Scene & History
     pub scene: Scene,
     pub history: History,
+    pub(crate) import_findings: Vec<ImportFinding>,
+    pub(crate) show_import_inspection: bool,
     pub living: Living,
     /// What each linked copy was last synced from (#327), by copy id.
     pub(crate) link_seen: std::collections::HashMap<u64, crate::links::LinkSeen>,
@@ -217,6 +219,8 @@ impl Document {
             autosave_path: None,
             scene,
             history: History::default(),
+            import_findings: Vec::new(),
+            show_import_inspection: false,
             living: Living::new(),
             link_seen: Default::default(),
             light: Default::default(),
