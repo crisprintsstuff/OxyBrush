@@ -334,6 +334,16 @@ struct Attributes {
     hidden: Vec<bool>,
 }
 
+/// Sparse position deltas in the subdivision order of the source level.
+/// Keep this record when switching levels and project it through the same
+/// subdivision stack whenever the displayed mesh changes.
+#[derive(Clone, Debug)]
+pub struct LevelDisplacements {
+    level: usize,
+    points: usize,
+    deltas: Vec<(u32, Vec3)>,
+}
+
 #[derive(Debug, Clone)]
 pub struct Multires {
     scheme: Scheme,
@@ -642,6 +652,50 @@ impl Multires {
             deltas = self.refine_positions(level, &deltas);
         }
         Some(deltas)
+    }
+
+    /// Capture sparse mesh-order deltas at the active subdivision level.
+    /// Reject duplicate or invalid vertices and meshes outside this binding.
+    pub fn capture_displacements(&self, mesh: &Mesh, edits: &[(u32, Vec3)]) -> Option<LevelDisplacements> {
+        if !self.is_bound_to(mesh) {
+            return None;
+        }
+        let order = self.level_indices(mesh);
+        let mut deltas = Vec::with_capacity(edits.len());
+        for &(vertex, delta) in edits {
+            if !delta.is_finite() {
+                return None;
+            }
+            deltas.push((*order.get(vertex as usize)?, delta));
+        }
+        deltas.sort_unstable_by_key(|&(vertex, _)| vertex);
+        if deltas.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return None;
+        }
+        Some(LevelDisplacements { level: self.active, points: order.len(), deltas })
+    }
+
+    /// Project a record from this stack into the current mesh's vertex order.
+    /// The native record stays intact, including edits on fine-only vertices.
+    pub fn project_displacements(&self, mesh: &Mesh, record: &LevelDisplacements) -> Option<Vec<(u32, Vec3)>> {
+        if !self.is_bound_to(mesh) {
+            return None;
+        }
+        let mut native = vec![Vec3::ZERO; record.points];
+        for &(i, delta) in &record.deltas {
+            native[i as usize] = delta;
+        }
+        let projected = self.transfer_displacements(record.level, self.active, native)?;
+        Some(
+            self.level_indices(mesh)
+                .into_iter()
+                .enumerate()
+                .filter_map(|(vertex, i)| {
+                    let delta = projected[i as usize];
+                    (delta != Vec3::ZERO).then_some((vertex as u32, delta))
+                })
+                .collect(),
+        )
     }
 
     /// Whether each level was made with smoothing (level 0: true).
@@ -1921,6 +1975,31 @@ mod tests {
             out.extend([[a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]]);
         }
         (out, edges)
+    }
+
+    #[test]
+    fn native_displacements_recover_fine_only_detail_after_switching_levels() {
+        let coarse = primitives::cube(1, 2.0);
+        let mut stack = Multires::new_catmull_clark(&coarse, None);
+        let data = stack.add_level(&coarse);
+        let fine = rebuild(&mut stack, data);
+        let order = stack.level_indices(&fine);
+        let vertex = order.iter().position(|&i| i as usize >= coarse.vertex_count()).unwrap() as u32;
+        let native_index = order[vertex as usize];
+        let delta = Vec3::new(0.125, -0.25, 0.0);
+        let record = stack.capture_displacements(&fine, &[(vertex, delta)]).unwrap();
+        assert!(stack.capture_displacements(&fine, &[(vertex, delta), (vertex, delta)]).is_none());
+
+        let data = stack.set_level(&fine, 0);
+        let coarse = rebuild(&mut stack, data);
+        assert_eq!(stack.project_displacements(&coarse, &record), Some(Vec::new()));
+        assert!(stack.project_displacements(&fine, &record).is_none());
+
+        let data = stack.set_level(&coarse, 1);
+        let fine = rebuild(&mut stack, data);
+        let order = stack.level_indices(&fine);
+        let restored = order.iter().position(|&i| i == native_index).unwrap() as u32;
+        assert_eq!(stack.project_displacements(&fine, &record), Some(vec![(restored, delta)]));
     }
 
     #[test]
