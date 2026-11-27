@@ -844,6 +844,12 @@ pub enum Drag {
         index: usize,
         offset: Vec3,
     },
+    /// OxySpheres, Rotate: a horizontal drag sets the angle from the original pose.
+    SphereRotate {
+        index: usize,
+        start_x: f32,
+        rotation: oxy_mesh::armature::BranchRotation,
+    },
     /// OxySpheres, Size: dragging up or down from `start_y`.
     SphereSize {
         index: usize,
@@ -4043,6 +4049,7 @@ impl Editor {
             | Drag::TubeRadius { .. }
             | Drag::SphereAdd { .. }
             | Drag::SphereMove { .. }
+            | Drag::SphereRotate { .. }
             | Drag::SphereSize { .. }
             | Drag::Retopo(_)
             | Drag::PolyEdit(_)
@@ -12801,6 +12808,50 @@ mod tests {
         assert!((e.camera.yaw - yaw).abs() > 1e-3);
         assert_eq!(e.scene.pieces.len(), 1, "nothing in the scene yet");
         assert_eq!(e.history.undo_labels().count(), 0);
+    }
+
+    #[test]
+    fn oxyspheres_rotate_from_spheres_and_links_with_undo_and_save() {
+        use crate::oxyspheres::{SphereAxis, SphereMode};
+        let mut e = editor();
+        e.start_spheres();
+        let edit = e.spheres.as_mut().unwrap();
+        edit.mode = SphereMode::Rotate;
+        edit.rotation_axis = SphereAxis::Z;
+        edit.armature = oxy_mesh::armature::Armature::new(Vec3::ZERO, 0.12, None);
+        let child = edit.armature.add_child(0, Vec3::X * 0.65, 0.1);
+        let tip = edit.armature.add_child(child, Vec3::new(1.1, 0.3, 0.0), 0.08);
+        let original = edit.armature.clone();
+        assert!(!edit.follow);
+
+        let from = sphere_screen(&e, child);
+        let quarter_turn = Vec2::X * 120.0 * e.pixels_per_point;
+        drag_on(&mut e, from, from + quarter_turn);
+        let posed = e.spheres.as_ref().unwrap().armature.clone();
+        assert_eq!(posed.spheres[0], original.spheres[0]);
+        assert!(posed.spheres[child].center.distance(Vec3::Y * 0.65) < 1e-5);
+        assert!(posed.spheres[tip].center.distance(Vec3::new(-0.3, 1.1, 0.0)) < 1e-5);
+        e.undo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, original);
+        e.redo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, posed);
+
+        e.spheres.as_mut().unwrap().rotation_axis = SphereAxis::Link;
+        let from = sphere_screen(&e, 0).lerp(sphere_screen(&e, child), 0.5);
+        drag_on(&mut e, from, from + quarter_turn);
+        let twisted = e.spheres.as_ref().unwrap().armature.clone();
+        assert_eq!(twisted.len(), posed.len());
+        assert!(twisted.spheres[child].center.distance(posed.spheres[child].center) < 1e-5);
+        assert!(twisted.spheres[tip].center.distance(Vec3::new(0.0, 1.1, 0.3)) < 1e-5);
+        e.undo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, posed);
+        e.redo();
+        assert_eq!(e.spheres.as_ref().unwrap().armature, twisted);
+
+        e.finish_spheres();
+        let bytes = oxy_doc::format::encode(&e.scene.to_data());
+        let scene = Scene::from_data(oxy_doc::format::decode(&bytes).unwrap()).unwrap();
+        assert_eq!(scene.active().spheres.as_ref().unwrap().armature, twisted);
     }
 
     #[test]

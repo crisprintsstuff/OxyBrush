@@ -68,6 +68,8 @@ default), 253k in 714 ms at 320.
   **Ctrl+drag** resizes it in any mode; the window's Move and Size modes
   make that the plain drag. **Spheres below follow** moves a branch.
 - **Click a link** to put a sphere on it (on both sides when mirrored).
+- **Rotate** ([#626](https://github.com/crisprintsstuff/OxyBrush/issues/626)) poses a branch. Drag left or right from a sphere or its incoming link. The sphere and all its descendants rotate as a unit around the parent, or around the root's own center when rotating the whole armature. **Axis** selects View, X, Y, Z, or Link. Link twists descendants around the parent-to-child direction and uses View on the root. Mirror pairs turn together. A centerline branch uses X while mirroring is on, keeping its centerline joints on the mirror plane.
+- Rotation previews as you drag and records one armature Undo step on release. The pose is stored in the existing sphere centers, so it can be saved and used by Make mesh with either output.
 - **Alt+click** or **Delete** removes a sphere with everything below it;
   the root stays.
 - Dragging away from the spheres orbits.
@@ -130,7 +132,7 @@ mesh directly because the recipe is saved on the generated piece.
   A Fast Modeling System for Base Meshes of 3D Articulated Shapes*
   (Pacific Graphics 2010).
   See [RFC 0038](0038-oxyspheres-quad-base-mesh.md) for the prototype proposal.
-- Rotating a branch around its parent (posing), scaling a branch.
+- Scaling a branch.
 - Spheres that only shape the link they sit on, without adding a joint.
 - Snapping a new armature to the surface of another piece, and binding an
   existing mesh to an armature to pose it.
