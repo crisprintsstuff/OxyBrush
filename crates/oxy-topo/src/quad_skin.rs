@@ -93,13 +93,8 @@ pub fn quad_skin_armature(armature: &Armature, opts: QuadSkinOptions) -> Result<
 
     let mut cage = Cage::default();
     let mut ports = vec![Vec::new(); spheres.len()];
-    for (joint, adjacent) in neighbors.iter().enumerate().filter(|(_, n)| n.len() >= 3) {
-        let origin = spheres[joint];
-        ports[joint] = if adjacent.len() == 3 {
-            fork_ports(&mut cage, spheres, origin, adjacent, blend)?
-        } else {
-            fan_ports(&mut cage, spheres, &neighbors, origin, adjacent, blend)?
-        };
+    for (joint, _) in neighbors.iter().enumerate().filter(|(_, n)| n.len() >= 3) {
+        ports[joint] = fit_ports(&mut cage, spheres, &neighbors, joint, blend)?;
     }
     let tree = SweepTree { spheres, neighbors: &neighbors, ports: &ports, resolution };
     if ports.iter().any(|rings| !rings.is_empty()) {
@@ -162,6 +157,31 @@ pub fn quad_skin_mesh(armature: &Armature, opts: QuadSkinOptions) -> Result<Mesh
         }
     }
     cage.build_mesh().ok_or(QuadSkinError::InvalidSurface)
+}
+
+fn fit_ports(
+    cage: &mut Cage,
+    spheres: &[Sphere],
+    neighbors: &[Vec<usize>],
+    joint: usize,
+    blend: f32,
+) -> Result<Vec<Section>, QuadSkinError> {
+    let origin = spheres[joint];
+    let branches = &neighbors[joint];
+    if branches.len() == 3 {
+        let (vertices, faces) = (cage.positions.len(), cage.faces.len());
+        match fork_ports(cage, spheres, origin, branches, blend) {
+            Ok(ports) => return Ok(ports),
+            Err(QuadSkinError::CrowdedLinks) => {
+                // The wider collars can intersect even when narrower
+                // sockets fit. Discard this attempt before fitting the fan.
+                cage.positions.truncate(vertices);
+                cage.faces.truncate(faces);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    fan_ports(cage, spheres, neighbors, origin, branches, blend)
 }
 
 fn fork_ports(
@@ -829,6 +849,33 @@ mod tests {
         );
     }
 
+    #[test]
+    fn crowded_three_way_fork_retries_with_narrower_sockets() {
+        let mut arm = Armature::new(Vec3::new(0.0, -1.6, 0.0), 0.24, Some(0.0));
+        let joint = arm.add_child(0, Vec3::ZERO, 0.28);
+        arm.add_child(joint, Vec3::new(0.18, 0.55, 0.0), 0.11);
+        let opts = QuadSkinOptions { resolution: 320, blend: 0.26, subdivision: 2 };
+        let mut rejected = Cage::default();
+        assert_eq!(
+            fork_ports(&mut rejected, &arm.spheres, arm.spheres[joint], &[0, 2, 3], opts.blend).err(),
+            Some(QuadSkinError::CrowdedLinks)
+        );
+
+        let before = arm.clone();
+        let cage = quad_skin_armature(&arm, opts).unwrap();
+        assert!(cage.used().into_iter().all(|used| used), "failed collars were discarded");
+        assert_eq!(cage, quad_skin_armature(&arm, opts).unwrap());
+        let mesh = quad_skin_mesh(&arm, opts).unwrap();
+        assert!(crate::check_watertight(&mesh));
+        let smooth = oxy_mesh::polyedit::cage_from_mesh(&mesh);
+        assert_eq!(smooth.faces.len(), smooth.quad_count());
+        for p in &mesh.positions {
+            let reflected = Vec3::new(-p.x, p.y, p.z);
+            assert!(mesh.positions.iter().any(|q| q.distance(reflected) < 2e-5));
+        }
+        assert_eq!(arm, before);
+    }
+
     fn add_digits(arm: &mut Armature, palm: usize, count: usize) {
         let center = arm.spheres[palm].center;
         for &(x, y, z, radius) in &[
@@ -916,7 +963,8 @@ mod tests {
     #[test]
     fn crowded_and_unsupported_inputs_fail() {
         let arm = fork(0.1, 0.4);
-        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::CrowdedLinks));
+        // The narrower collars fit here, but the swept surface still overlaps.
+        assert_eq!(quad_skin_armature(&arm, QuadSkinOptions::default()), Err(QuadSkinError::InvalidSurface));
 
         let mut crowded = Armature::new(Vec3::NEG_Y, 0.22, None);
         let wrist = crowded.add_child(0, Vec3::ZERO, 0.25);
