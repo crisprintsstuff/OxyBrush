@@ -2,11 +2,12 @@
 //! (RFC 0034).
 
 use crate::editor::{Drag, Editor};
-use crate::oxyspheres::SphereMode;
+use crate::oxyspheres::{SphereAxis, SphereMode};
 use egui::{Color32, Stroke};
 use glam::Vec2;
 
-const HINT: &str = "Drag from a sphere to pull out a new one. Shift+drag a sphere to move it, Ctrl+drag it up or down to resize it, Alt+click it (or Delete) to remove it with the spheres below. Click a link to add a sphere on it. Drag away from the spheres to orbit.";
+const HINT: &str = "Drag from a sphere to pull out a new one. Shift+drag to move, Ctrl+drag to resize, and Alt+click or Delete to remove it. Click a link to insert a sphere. Drag away from the spheres to orbit.";
+const ROTATE_HINT: &str = "Drag left or right from a sphere or link to rotate its branch around the parent. Drag away from the spheres to orbit.";
 
 /// Settings for the open spheres, with Make mesh (Enter), Done and Cancel (Esc).
 pub fn window(ctx: &egui::Context, ed: &mut Editor) {
@@ -62,16 +63,32 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                     }
                 }
                 ui.end_row();
-                ui.label("");
-                ui.checkbox(&mut e.follow, "Spheres below follow")
-                    .on_hover_text("Moving a sphere moves the spheres hanging from it too");
+                if e.mode == SphereMode::Rotate {
+                    ui.label("Axis").on_hover_text("Turn around the view direction, a scene axis, or the link to the parent");
+                    if e.selected.is_some_and(|i| i < e.armature.len() && e.armature.on_plane(i)) {
+                        ui.label("X (mirror plane)").on_hover_text("Centerline spheres rotate around X to preserve symmetry");
+                    } else {
+                        ui.horizontal(|ui| {
+                            for axis in SphereAxis::ALL {
+                                let response = ui.selectable_value(&mut e.rotation_axis, axis, axis.label());
+                                if axis == SphereAxis::Link {
+                                    response.on_hover_text("Twist the branch around the link to its parent");
+                                }
+                            }
+                        });
+                    }
+                } else {
+                    ui.label("");
+                    ui.checkbox(&mut e.follow, "Spheres below follow")
+                        .on_hover_text("Moving a sphere moves the spheres hanging from it too");
+                }
                 ui.end_row();
                 ui.label("");
                 let mut on = e.armature.mirror.is_some();
                 if ui
                     .checkbox(&mut on, "Mirror across X")
                     .on_hover_text(
-                        "Add, move, resize and delete spheres on both sides, across the plane through the first sphere",
+                        "Add, move, rotate, resize and delete spheres on both sides, across the plane through the first sphere",
                     )
                     .changed()
                 {
@@ -136,7 +153,8 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 }
             });
             ui.add_space(2.0);
-            ui.label(egui::RichText::new(HINT).small().weak());
+            let hint = if e.mode == SphereMode::Rotate { ROTATE_HINT } else { HINT };
+            ui.label(egui::RichText::new(hint).small().weak());
             ui.add_space(4.0);
             if let Some(error) = &e.build_error {
                 ui.colored_label(ui.visuals().warn_fg_color, error);
@@ -145,7 +163,7 @@ pub fn window(ctx: &egui::Context, ed: &mut Editor) {
                 accept |= ui
                     .button("Make mesh")
                     .on_hover_text(
-                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted; if that mesh was sculpted (or painted, masked, given levels, …), it adds a new piece and says why. The spheres stay. Quad skin needs a simple chain or one 3-way join — otherwise the build fails and existing meshes stay as they are.",
+                        "Make a mesh from the spheres (Enter). It updates the last mesh they made while that is unsculpted; if that mesh was sculpted (or painted, masked, given levels, …), it adds a new piece and says why. The spheres stay. Quad skin supports up to three links at each joint.",
                     )
                     .clicked();
                 done |= ui
@@ -187,7 +205,9 @@ pub fn overlay(ui: &egui::Ui, ed: &Editor, canvas: egui::Rect) {
     let accent = ed.accent_color();
     let up = ed.camera.up();
     let held = match ed.drag {
-        Drag::SphereMove { index, .. } | Drag::SphereSize { index, .. } => Some(index),
+        Drag::SphereMove { index, .. } | Drag::SphereRotate { index, .. } | Drag::SphereSize { index, .. } => {
+            Some(index)
+        }
         Drag::SphereAdd { child, .. } => child,
         _ => None,
     };

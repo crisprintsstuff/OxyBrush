@@ -13,6 +13,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Also paint RGB Strength** ([#585](https://github.com/crisprintsstuff/OxyBrush/issues/585)). Set color opacity independently of sculpt strength. The value is kept per brush and travels with presets and stroke recipes.
 - **Gizmo pose layers** ([#600](https://github.com/crisprintsstuff/OxyBrush/issues/600)). Move, rotate, or scale unmasked geometry with Living strokes on to record a transform. Use Sculpt into to put it directly into a layer and fade between the neutral pose and the transform.
 - **OxySpheres quad base mesh** ([#467](https://github.com/crisprintsstuff/OxyBrush/pull/467)). Connect several three-way junctions in a single quad skin, including along bent links.
+- **OxySpheres branch posing** ([#626](https://github.com/crisprintsstuff/OxyBrush/issues/626)). Drag in Rotate mode to turn a sphere and its descendants around their parent. Use the Link axis to twist the branch. Mirrored limbs turn together.
 
 ### Changed
 

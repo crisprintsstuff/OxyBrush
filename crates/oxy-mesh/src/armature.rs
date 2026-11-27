@@ -6,7 +6,7 @@
 //!
 //! Mirroring: with [`Armature::mirror`] set, spheres come in pairs across
 //! the plane `x = mirror` (each knows its partner as `twin`) or sit on the
-//! plane (no twin). Adding, moving, resizing or deleting one also does the
+//! plane (no twin). Adding, moving, rotating, resizing or deleting one also does the
 //! mirrored edit on its twin, so the armature stays symmetric.
 //!
 //! INVARIANT: index 0 is the root (no parent); every other sphere has a
@@ -14,7 +14,7 @@
 //! cycles). [`Armature::is_valid`] checks this for loaded data.
 
 use crate::{Aabb, Mesh, MeshData};
-use glam::Vec3;
+use glam::{Quat, Vec3};
 
 /// A sphere of the tree: a joint of the shape.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -33,6 +33,43 @@ pub struct Armature {
     pub spheres: Vec<Sphere>,
     /// The X of the mirror plane; None: no mirroring.
     pub mirror: Option<f32>,
+}
+
+/// The original positions and pivots for a branch rotation gesture.
+pub struct BranchRotation {
+    axis: Vec3,
+    branch: RotationBranch,
+    twin: Option<RotationBranch>,
+    sphere_count: usize,
+}
+
+struct RotationBranch {
+    pivot: Vec3,
+    centers: Vec<(usize, Vec3)>,
+}
+
+impl BranchRotation {
+    /// Apply the full angle in radians from the original pose. The caller
+    /// keeps the armature topology fixed for the lifetime of the gesture.
+    pub fn apply(&self, armature: &mut Armature, angle: f32) {
+        if armature.len() != self.sphere_count || !angle.is_finite() {
+            return;
+        }
+        let rotation = Quat::from_axis_angle(self.axis, angle);
+        let apply = |armature: &mut Armature, branch: &RotationBranch, rotation: Quat| {
+            for &(i, original) in &branch.centers {
+                armature.spheres[i].center =
+                    if angle == 0.0 { original } else { branch.pivot + rotation * (original - branch.pivot) };
+            }
+        };
+        apply(armature, &self.branch, rotation);
+        if let Some(twin) = &self.twin {
+            // Reflection across X conjugates the rotation, reversing the
+            // Y and Z components of its axial vector.
+            let mirrored = Quat::from_xyzw(rotation.x, -rotation.y, -rotation.z, rotation.w);
+            apply(armature, twin, mirrored);
+        }
+    }
 }
 
 /// Smallest radius a sphere can have.
@@ -202,6 +239,26 @@ impl Armature {
         for &j in theirs.iter().filter(|j| !mine.contains(j)) {
             self.spheres[j].center += mirrored;
         }
+    }
+
+    /// Capture a rotation around the branch's parent, or the root itself.
+    /// A centerline branch rotates about X to preserve mirror symmetry.
+    pub fn branch_rotation(&self, index: usize, axis: Vec3) -> Option<BranchRotation> {
+        let sphere = self.spheres.get(index)?;
+        let axis = if self.on_plane(index) { Vec3::X } else { axis.try_normalize()? };
+        let pivot = |i: usize| {
+            let s = self.spheres[i];
+            s.parent.map_or(s.center, |p| self.spheres[p as usize].center)
+        };
+        let indices = self.branch(index);
+        let capture = |i: usize| (i, self.spheres[i].center);
+        let branch = RotationBranch { pivot: pivot(index), centers: indices.iter().copied().map(capture).collect() };
+        let twin = self.mirror.and(sphere.twin).map(|twin| {
+            let twin = twin as usize;
+            let centers = self.branch(twin).into_iter().filter(|i| !indices.contains(i)).map(capture).collect();
+            RotationBranch { pivot: pivot(twin), centers }
+        });
+        Some(BranchRotation { axis, branch, twin, sphere_count: self.len() })
     }
 
     /// Set sphere `i`'s radius (and its twin's).
@@ -495,6 +552,46 @@ mod tests {
         assert_eq!(a.len(), 1);
         assert!(a.is_valid());
         assert!(!a.remove_branch(0), "the root stays");
+    }
+
+    #[test]
+    fn branch_rotation_is_rigid_and_reflected_about_each_parent() {
+        let mut a = Armature::new(Vec3::new(3.0, 0.0, 0.0), 0.5, Some(3.0));
+        let shoulder = a.add_child(0, Vec3::new(4.0, 0.0, 0.0), 0.3);
+        let elbow = a.add_child(shoulder, Vec3::new(5.0, 0.0, 0.0), 0.2);
+        let hand = a.add_child(elbow, Vec3::new(6.0, 1.0, 0.0), 0.1);
+        let before = a.clone();
+        let rotation = a.branch_rotation(elbow, Vec3::Z).unwrap();
+        rotation.apply(&mut a, 0.3);
+        rotation.apply(&mut a, std::f32::consts::FRAC_PI_2);
+        assert_eq!(a.spheres[0], before.spheres[0]);
+        assert_eq!(a.spheres[shoulder], before.spheres[shoulder]);
+        assert!(a.spheres[elbow].center.distance(Vec3::new(4.0, 1.0, 0.0)) < 1e-6);
+        assert!(a.spheres[hand].center.distance(Vec3::new(3.0, 2.0, 0.0)) < 1e-6);
+        for i in [elbow, hand] {
+            let joint = a.spheres[i];
+            let twin = joint.twin.unwrap() as usize;
+            assert!(a.spheres[twin].center.distance(a.mirrored(joint.center)) < 1e-6);
+            assert_eq!(joint.radius, before.spheres[i].radius);
+            assert_eq!(joint.parent, before.spheres[i].parent);
+        }
+        rotation.apply(&mut a, 0.0);
+        assert_eq!(a, before);
+    }
+
+    #[test]
+    fn rotating_the_mirrored_root_keeps_centerline_spheres_on_the_plane() {
+        let mut a = mirrored();
+        let spine = a.add_child(0, Vec3::new(0.0, 2.0, 0.0), 0.3);
+        let shoulder = a.add_child(spine, Vec3::new(1.0, 2.0, 0.0), 0.2);
+        let root = a.spheres[0];
+        let rotation = a.branch_rotation(0, Vec3::Z).unwrap();
+        rotation.apply(&mut a, std::f32::consts::FRAC_PI_2);
+        assert_eq!(a.spheres[0], root);
+        assert!(a.on_plane(spine));
+        assert!(a.spheres[spine].center.distance(Vec3::new(0.0, 1.0, 1.0)) < 1e-6);
+        let twin = a.spheres[shoulder].twin.unwrap() as usize;
+        assert!(a.spheres[twin].center.distance(a.mirrored(a.spheres[shoulder].center)) < 1e-6);
     }
 
     #[test]

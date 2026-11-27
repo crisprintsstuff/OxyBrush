@@ -23,6 +23,8 @@ const PICK_PT: f32 = 8.0;
 /// A press on a sphere in Add mode adds a child once the pointer has
 /// moved this far (logical points); a press without moving only picks it.
 const ADD_AFTER_PT: f32 = 4.0;
+/// Horizontal drag distance for a half turn (logical points).
+const ROTATE_HALF_TURN_PT: f32 = 240.0;
 /// A new child's radius, from its parent's.
 const CHILD_SCALE: f32 = 0.75;
 /// Most steps the open armature remembers.
@@ -41,17 +43,20 @@ pub enum SphereMode {
     Add,
     /// Move the sphere pressed.
     Move,
+    /// Rotate the sphere and everything below it around its parent.
+    Rotate,
     /// Make the sphere pressed bigger (drag up) or smaller (down).
     Size,
 }
 
 impl SphereMode {
-    pub const ALL: [SphereMode; 3] = [SphereMode::Add, SphereMode::Move, SphereMode::Size];
+    pub const ALL: [SphereMode; 4] = [SphereMode::Add, SphereMode::Move, SphereMode::Rotate, SphereMode::Size];
 
     pub fn label(self) -> &'static str {
         match self {
             SphereMode::Add => "Add",
             SphereMode::Move => "Move",
+            SphereMode::Rotate => "Rotate",
             SphereMode::Size => "Size",
         }
     }
@@ -60,7 +65,48 @@ impl SphereMode {
         match self {
             SphereMode::Add => "Drag from a sphere to pull out a new one",
             SphereMode::Move => "Drag a sphere to move it (also Shift+drag in any mode)",
+            SphereMode::Rotate => "Drag left or right from a sphere or link to turn its branch around the parent",
             SphereMode::Size => "Drag a sphere up or down to resize it (also Ctrl+drag in any mode)",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SphereAxis {
+    #[default]
+    View,
+    X,
+    Y,
+    Z,
+    Link,
+}
+
+impl SphereAxis {
+    pub const ALL: [Self; 5] = [Self::View, Self::X, Self::Y, Self::Z, Self::Link];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::View => "View",
+            Self::X => "X",
+            Self::Y => "Y",
+            Self::Z => "Z",
+            Self::Link => "Link",
+        }
+    }
+
+    fn direction(self, armature: &Armature, index: usize, view_axis: Vec3) -> Vec3 {
+        match self {
+            Self::View => view_axis,
+            Self::X => Vec3::X,
+            Self::Y => Vec3::Y,
+            Self::Z => Vec3::Z,
+            Self::Link => {
+                let joint = armature.spheres[index];
+                joint
+                    .parent
+                    .and_then(|p| (joint.center - armature.spheres[p as usize].center).try_normalize())
+                    .unwrap_or(view_axis)
+            }
         }
     }
 }
@@ -71,6 +117,7 @@ pub struct SphereEdit {
     /// The sphere the window's Radius edits.
     pub selected: Option<usize>,
     pub mode: SphereMode,
+    pub rotation_axis: SphereAxis,
     /// Moving a sphere moves everything below it too.
     pub follow: bool,
     /// The skin's voxels along the armature's longest side.
@@ -113,6 +160,7 @@ impl SphereEdit {
             armature,
             selected: None,
             mode: SphereMode::Add,
+            rotation_axis: SphereAxis::View,
             follow: false,
             resolution,
             blend,
@@ -134,6 +182,15 @@ impl SphereEdit {
         let mut r: Vec<f32> = self.armature.spheres.iter().map(|s| s.radius).collect();
         r.sort_by(f32::total_cmp);
         self.blend * r.get(r.len() / 2).copied().unwrap_or(0.0)
+    }
+
+    fn rotate_drag(&self, index: usize, start_x: f32, view_axis: Vec3) -> Drag {
+        let axis = self.rotation_axis.direction(&self.armature, index, view_axis);
+        self.armature.branch_rotation(index, axis).map_or(Drag::None, |rotation| Drag::SphereRotate {
+            index,
+            start_x,
+            rotation,
+        })
     }
 
     /// Rebuild the preview if anything it shows changed; coarser while
@@ -194,7 +251,10 @@ impl Editor {
     pub fn cancel_spheres(&mut self) {
         let Some(edit) = self.spheres.take() else { return };
         self.restore_spheres_hidden(&edit);
-        if matches!(self.drag, Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereSize { .. }) {
+        if matches!(
+            self.drag,
+            Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereRotate { .. } | Drag::SphereSize { .. }
+        ) {
             self.drag = Drag::None;
         }
         self.status = "OxySpheres closed without changes".into();
@@ -463,6 +523,9 @@ impl Editor {
     /// Undo the open armature's last step. With none left, close it (as
     /// before it was opened) and return false.
     pub fn spheres_undo(&mut self) -> bool {
+        if matches!(self.drag, Drag::SphereRotate { .. }) {
+            self.spheres_pointer_up();
+        }
         self.spheres_settle(false);
         let Some(e) = &mut self.spheres else { return false };
         let Some(before) = e.history.undo.pop() else {
@@ -479,6 +542,9 @@ impl Editor {
 
     /// Redo the open armature's last undone step. False when there's none.
     pub fn spheres_redo(&mut self) -> bool {
+        if matches!(self.drag, Drag::SphereRotate { .. }) {
+            self.spheres_pointer_up();
+        }
         let Some(e) = &mut self.spheres else { return false };
         let Some(after) = e.history.redo.pop() else {
             self.status = "Nothing to redo in OxySpheres".into();
@@ -492,7 +558,10 @@ impl Editor {
     }
 
     pub fn update_spheres(&mut self) {
-        let dragging = matches!(self.drag, Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereSize { .. });
+        let dragging = matches!(
+            self.drag,
+            Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereRotate { .. } | Drag::SphereSize { .. }
+        );
         if let Some(e) = &mut self.spheres {
             e.update(dragging);
         }
@@ -601,6 +670,17 @@ impl Editor {
             return false;
         }
         let m = self.active_modifiers();
+        let mode = if m.shift {
+            SphereMode::Move
+        } else if m.ctrl {
+            SphereMode::Size
+        } else {
+            self.spheres.as_ref().expect("checked").mode
+        };
+        let view_axis = -self.camera.forward();
+        if mode == SphereMode::Rotate {
+            self.spheres_settle(false);
+        }
         if let Some((i, hit)) = self.sphere_at(p) {
             let e = self.spheres.as_mut().expect("checked");
             if m.alt {
@@ -613,13 +693,6 @@ impl Editor {
                 return true;
             }
             e.selected = Some(i);
-            let mode = if m.shift {
-                SphereMode::Move
-            } else if m.ctrl {
-                SphereMode::Size
-            } else {
-                e.mode
-            };
             let s = e.armature.spheres[i];
             self.drag = match mode {
                 SphereMode::Add => Drag::SphereAdd { parent: i, at: hit, start: p, child: None },
@@ -627,13 +700,17 @@ impl Editor {
                     let grab = self.tube_on_plane(p, s.center).unwrap_or(s.center);
                     Drag::SphereMove { index: i, offset: s.center - grab }
                 }
+                SphereMode::Rotate => e.rotate_drag(i, p.x, view_axis),
                 SphereMode::Size => Drag::SphereSize { index: i, start_y: p.y, start: s.radius },
             };
             return true;
         }
         if let Some((child, f)) = self.sphere_link_at(p) {
             let e = self.spheres.as_mut().expect("checked");
-            if let Some(i) = e.armature.insert_between(child, f) {
+            if mode == SphereMode::Rotate {
+                e.selected = Some(child);
+                self.drag = e.rotate_drag(child, p.x, view_axis);
+            } else if let Some(i) = e.armature.insert_between(child, f) {
                 e.selected = Some(i);
                 self.drag = Drag::SphereMove { index: i, offset: Vec3::ZERO };
                 self.status = "Sphere added on the link".into();
@@ -690,14 +767,26 @@ impl Editor {
                 }
                 true
             }
+            Drag::SphereRotate { start_x, ref rotation, .. } => {
+                let width = ROTATE_HALF_TURN_PT * self.pixels_per_point.max(0.5);
+                let angle = std::f32::consts::PI * (pos.x - start_x) / width;
+                if let Some(e) = &mut self.documents[self.active_document].spheres {
+                    rotation.apply(&mut e.armature, angle);
+                }
+                true
+            }
             _ => false,
         }
     }
 
     /// Finish an OxySpheres drag. True if one was active.
     pub(crate) fn spheres_pointer_up(&mut self) -> bool {
-        if matches!(self.drag, Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereSize { .. }) {
+        if matches!(
+            self.drag,
+            Drag::SphereAdd { .. } | Drag::SphereMove { .. } | Drag::SphereRotate { .. } | Drag::SphereSize { .. }
+        ) {
             self.drag = Drag::None;
+            self.spheres_settle(false);
             return true;
         }
         false
