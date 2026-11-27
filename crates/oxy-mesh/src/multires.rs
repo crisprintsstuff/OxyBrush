@@ -334,7 +334,7 @@ struct Attributes {
     hidden: Vec<bool>,
 }
 
-/// Sparse position deltas in the subdivision order of the source level.
+/// Sparse signed position or RGB deltas in the source level’s subdivision order.
 /// Keep this record when switching levels and project it through the same
 /// subdivision stack whenever the displayed mesh changes.
 #[derive(Clone, Debug, PartialEq)]
@@ -357,6 +357,14 @@ impl LevelDisplacements {
         }
         Some(Self { level, points, deltas })
     }
+
+    fn dense(&self, scale: f32) -> Vec<Vec3> {
+        let mut dense = vec![Vec3::ZERO; self.points];
+        for &(vertex, delta) in &self.deltas {
+            dense[vertex as usize] = delta * scale;
+        }
+        dense
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -367,6 +375,10 @@ pub struct Multires {
     /// `[min, max]` point pairs (Catmull–Clark stacks only).
     creases: Vec<([u32; 2], f32)>,
     active: usize,
+    /// Unclamped active-level colors, only kept when some channels clip.
+    /// The displayed mesh is always clamped. Retaining these values makes
+    /// overlapping additive paint layers reversible.
+    unclamped_paint: Vec<(u32, Vec3)>,
     /// Topology version of the mesh currently showing the active level.
     bound_topology: u64,
     /// That mesh's vertex/triangle order equals level order (true right
@@ -380,6 +392,7 @@ impl PartialEq for Multires {
     fn eq(&self, other: &Self) -> bool {
         self.scheme == other.scheme
             && self.active == other.active
+            && self.unclamped_paint == other.unclamped_paint
             && self.levels == other.levels
             && self.creases == other.creases
     }
@@ -407,6 +420,7 @@ impl Multires {
             }],
             creases: Vec::new(),
             active: 0,
+            unclamped_paint: Vec::new(),
             bound_topology: mesh.topology_version(),
             identity: true,
         }
@@ -712,14 +726,27 @@ impl Multires {
     /// Project a record from this stack into the current mesh's vertex order.
     /// The native record stays intact, including edits on fine-only vertices.
     pub fn project_displacements(&self, mesh: &Mesh, record: &LevelDisplacements) -> Option<Vec<(u32, Vec3)>> {
+        self.project_record(mesh, record, Self::transfer_displacements)
+    }
+
+    /// Project a native layer's signed RGB deltas into the active mesh order.
+    pub fn project_color_deltas(&self, mesh: &Mesh, record: &LevelDisplacements) -> Option<Vec<(u32, Vec3)>> {
+        self.project_record(mesh, record, Self::transfer_color_deltas)
+    }
+
+    fn project_record(
+        &self,
+        mesh: &Mesh,
+        record: &LevelDisplacements,
+        transfer: impl FnOnce(&Self, usize, usize, Vec<Vec3>) -> Option<Vec<Vec3>>,
+    ) -> Option<Vec<(u32, Vec3)>> {
         if !self.is_bound_to(mesh) || self.levels.get(record.level)?.positions.len() != record.points {
             return None;
         }
-        let mut native = vec![Vec3::ZERO; record.points];
-        for &(i, delta) in &record.deltas {
-            native[i as usize] = delta;
+        if record.deltas.is_empty() {
+            return Some(Vec::new());
         }
-        let projected = self.transfer_displacements(record.level, self.active, native)?;
+        let projected = transfer(self, record.level, self.active, record.dense(1.0))?;
         Some(
             self.level_indices(mesh)
                 .into_iter()
@@ -753,10 +780,7 @@ impl Multires {
         }
 
         let order = self.level_indices(mesh);
-        let mut deltas = vec![Vec3::ZERO; record.points];
-        for &(vertex, delta) in &record.deltas {
-            deltas[vertex as usize] = delta * strength_delta;
-        }
+        let mut deltas = record.dense(strength_delta);
         self.sync_from(mesh);
         for level in 0..self.levels.len() {
             if level > record.level {
@@ -786,6 +810,71 @@ impl Multires {
         }
         if !moved.is_empty() {
             mesh.update_after_move(&moved);
+        }
+        Some(())
+    }
+
+    /// Change a layer's paint on the active mesh and in the hidden fine
+    /// paint. Each fine level retains only the part of the change that is
+    /// missing after interpolating the preceding level's change.
+    pub fn apply_level_color_deltas(
+        &mut self,
+        mesh: &mut Mesh,
+        record: &LevelDisplacements,
+        strength_delta: f32,
+    ) -> Option<()> {
+        if !self.is_bound_to(mesh)
+            || self.levels.get(record.level)?.positions.len() != record.points
+            || !strength_delta.is_finite()
+        {
+            return None;
+        }
+        if strength_delta == 0.0 || record.deltas.is_empty() {
+            return Some(());
+        }
+        let native = record.dense(strength_delta);
+        if native.iter().any(|delta| !delta.is_finite()) {
+            return None;
+        }
+        for k in self.active + 1..=record.level {
+            let coarse = self.levels[k - 1].positions.len();
+            let inherited = self.refine_colors(k, native[..coarse].to_vec());
+            let detail = &mut self.levels[k].paint;
+            if detail.is_empty() {
+                detail.resize(inherited.len(), Vec3::ZERO);
+            }
+            for ((d, &n), up) in detail.iter_mut().zip(&native).zip(inherited) {
+                *d += n - up;
+            }
+        }
+
+        let deltas = self.transfer_color_deltas(record.level, self.active, native)?;
+        if deltas.iter().all(|&delta| delta == Vec3::ZERO) {
+            return Some(());
+        }
+        let order = self.level_indices(mesh);
+        let mut colors = vec![crate::WHITE; deltas.len()];
+        for (v, &i) in order.iter().enumerate() {
+            colors[i as usize] = mesh.color[v];
+        }
+        self.restore_unclamped_paint(&mut colors);
+        for (color, delta) in colors.iter_mut().zip(deltas) {
+            *color += delta;
+        }
+        self.clamp_active_paint(&mut colors);
+        let mut dirty = None;
+        for (v, i) in order.into_iter().enumerate() {
+            let color = colors[i as usize];
+            if mesh.color[v] != color {
+                mesh.color[v] = color;
+                let chunk = mesh.vertex_chunk_of(v as u32).copied();
+                if chunk != dirty
+                    && let Some(chunk) = chunk
+                {
+                    mesh.mark_dirty(chunk);
+                    dirty = Some(chunk);
+                }
+            }
         }
         Some(())
     }
@@ -889,14 +978,16 @@ impl Multires {
     /// then run on another thread without the mesh.
     pub fn prepare(&mut self, mesh: &Mesh) -> Prepared {
         self.sync_from(mesh);
-        Prepared(self.attributes_from(mesh))
+        self.prepare_attributes(mesh)
     }
 
     /// Like [`Self::prepare`] but without syncing positions from `mesh`:
     /// for when the active level was set with [`Self::set_active_positions`]
     /// and the levels below must stay as they are.
     pub fn prepare_attributes(&self, mesh: &Mesh) -> Prepared {
-        Prepared(self.attributes_from(mesh))
+        let mut attrs = self.attributes_from(mesh);
+        self.restore_unclamped_paint(&mut attrs.color);
+        Prepared(attrs)
     }
 
     /// `add_level` from a `prepare`d state.
@@ -919,8 +1010,9 @@ impl Multires {
         let attrs = prepared.0;
         let level = self.refine_level(self.levels.len() - 1, smooth);
         self.levels.push(level);
-        let attrs = self.attributes_up(self.levels.len() - 1, attrs);
+        let mut attrs = self.attributes_up(self.levels.len() - 1, attrs);
         self.active = self.levels.len() - 1;
+        self.clamp_active_paint(&mut attrs.color);
         self.level_data(attrs)
     }
 
@@ -944,6 +1036,7 @@ impl Multires {
             self.keep_paint(self.active, &fine, &attrs);
             self.active -= 1;
         }
+        self.clamp_active_paint(&mut attrs.color);
         self.level_data(attrs)
     }
 
@@ -1057,12 +1150,42 @@ impl Multires {
     fn attributes_up(&self, k: usize, a: Attributes) -> Attributes {
         let mut up = self.attributes_up_carried(k, a);
         let paint = &self.levels[k].paint;
-        if !up.color.is_empty() && paint.len() == up.color.len() {
+        if !paint.is_empty() {
+            if up.color.is_empty() {
+                up.color.resize(paint.len(), crate::WHITE);
+            }
             for (c, d) in up.color.iter_mut().zip(paint) {
-                *c = (*c + *d).clamp(Vec3::ZERO, Vec3::ONE);
+                *c += *d;
             }
         }
         up
+    }
+
+    fn restore_unclamped_paint(&self, colors: &mut Vec<Vec3>) {
+        if self.unclamped_paint.is_empty() {
+            return;
+        }
+        if colors.is_empty() {
+            colors.resize(self.levels[self.active].positions.len(), crate::WHITE);
+        }
+        for &(vertex, raw) in &self.unclamped_paint {
+            let visible = &mut colors[vertex as usize];
+            // Paint tools can change the active mesh outside the layer UI.
+            // Keep the unclamped value only where it still matches the mesh.
+            let matching = visible.cmpeq(raw.clamp(Vec3::ZERO, Vec3::ONE));
+            *visible = Vec3::select(matching, raw, *visible);
+        }
+    }
+
+    fn clamp_active_paint(&mut self, colors: &mut [Vec3]) {
+        self.unclamped_paint.clear();
+        for (vertex, color) in colors.iter_mut().enumerate() {
+            let visible = color.clamp(Vec3::ZERO, Vec3::ONE);
+            if visible != *color {
+                self.unclamped_paint.push((vertex as u32, *color));
+                *color = visible;
+            }
+        }
     }
 
     /// Carry paint with the same stencil for both absolute color and signed deltas.
@@ -1132,6 +1255,11 @@ impl Multires {
             self.sync_from(mesh);
         }
         let attrs = self.attributes_from(mesh);
+        if !self.unclamped_paint.is_empty() {
+            let mut paint = attrs.color.clone();
+            self.restore_unclamped_paint(&mut paint);
+            self.clamp_active_paint(&mut paint);
+        }
         let mut data = self.level_data(attrs);
         // Older projects may have UVCO on the active mesh alone.
         if data.uv.is_empty() && !mesh.uvs().is_empty() {
@@ -1156,17 +1284,20 @@ impl Multires {
 
     /// Approximate memory use in bytes (for the undo budget).
     pub fn approx_bytes(&self) -> usize {
-        self.levels
+        let levels: usize = self
+            .levels
             .iter()
             .map(|l| {
                 l.positions.len() * 12
+                    + l.paint.len() * 12
                     + l.details.len() * 12
                     + l.triangles.len() * 12
                     + l.uv.len() * 24
                     + l.positions.len() * 16
                     + l.polys.as_ref().map_or(0, Polys::bytes)
             })
-            .sum()
+            .sum();
+        levels + self.unclamped_paint.capacity() * 16
     }
 
     // ---- persistence ----
@@ -1233,6 +1364,22 @@ impl Multires {
             }
         }
         self.identity = false;
+    }
+
+    /// Clipped vertices and their raw RGB, in active-level order, for saves.
+    pub fn unclamped_paint(&self) -> &[(u32, Vec3)] {
+        &self.unclamped_paint
+    }
+
+    /// Restore unclamped paint only for distinct, sorted active-level vertices.
+    pub fn restore_unclamped_paint_data(&mut self, paint: Vec<(u32, Vec3)>) -> bool {
+        let points = self.levels[self.active].positions.len();
+        let valid = paint.iter().all(|&(v, c)| (v as usize) < points && c.is_finite())
+            && paint.windows(2).all(|pair| pair[0].0 < pair[1].0);
+        if valid {
+            self.unclamped_paint = paint;
+        }
+        valid
     }
 
     /// Each level's own paint (see `Level::paint`), in level point order,
@@ -1316,7 +1463,15 @@ impl Multires {
                 smooth: true,
             });
         }
-        Some(Self { scheme: Scheme::Loop, levels, creases: Vec::new(), active, bound_topology: 0, identity: false })
+        Some(Self {
+            scheme: Scheme::Loop,
+            levels,
+            creases: Vec::new(),
+            active,
+            unclamped_paint: Vec::new(),
+            bound_topology: 0,
+            identity: false,
+        })
     }
 
     /// The base polygons of a Catmull–Clark stack, for saving: per face its
@@ -1395,6 +1550,7 @@ impl Multires {
             }],
             creases,
             active,
+            unclamped_paint: Vec::new(),
             bound_topology: 0,
             identity: false,
         };
@@ -2104,6 +2260,68 @@ mod tests {
             assert_eq!(stack.transfer_color_deltas(2, 0, fine_only.clone()).unwrap(), vec![Vec3::ZERO; deltas.len()]);
             assert_eq!(stack.transfer_color_deltas(2, 2, fine_only.clone()).unwrap(), fine_only);
         }
+    }
+
+    #[test]
+    fn fine_layer_paint_can_be_adjusted_from_the_base_through_clipping() {
+        for scheme in [Scheme::Loop, Scheme::CatmullClark] {
+            let base = primitives::cube(1, 2.0);
+            let mut stack = Multires::new_with(&base, scheme, None);
+            let data = stack.add_level(&base);
+            let middle = rebuild(&mut stack, data);
+            let data = stack.add_level(&middle);
+            let mut fine = rebuild(&mut stack, data);
+            let middle_count = middle.vertex_count();
+            let order = stack.level_indices(&fine);
+            let inherited = order.iter().position(|&i| i == 0).unwrap();
+            let created = order.iter().position(|&i| i as usize == middle_count).unwrap();
+            let delta = Vec3::new(-0.75, 0.0, 0.0);
+            let layer =
+                stack.capture_displacements(&fine, &[(inherited as u32, delta), (created as u32, delta)]).unwrap();
+            stack.apply_level_color_deltas(&mut fine, &layer, 1.0).unwrap();
+            let mut expected = vec![Vec3::ONE; order.len()];
+            for v in [inherited, created] {
+                expected[order[v] as usize] = Vec3::ONE + delta;
+            }
+            let data = stack.set_level(&fine, 0);
+            let mut coarse = rebuild(&mut stack, data);
+            stack.apply_level_color_deltas(&mut coarse, &layer, 1.0).unwrap();
+            assert_eq!(stack.unclamped_paint()[0].1.x, -0.5);
+            let data = stack.set_level(&coarse, 2);
+            assert_eq!(data.color[order[created] as usize].x, 0.0);
+            assert_eq!(data.color[0].x, 0.0);
+            let fine = rebuild(&mut stack, data);
+            let data = stack.set_level(&fine, 0);
+            let mut coarse = rebuild(&mut stack, data);
+            stack.apply_level_color_deltas(&mut coarse, &layer, -1.0).unwrap();
+            let data = stack.set_level(&coarse, 2);
+            assert_eq!(data.color, expected, "{scheme:?}");
+        }
+    }
+
+    #[test]
+    fn fine_only_layer_paint_restores_from_a_white_base() {
+        let base = primitives::cube(1, 2.0);
+        let mut stack = Multires::new(&base);
+        let data = stack.add_level(&base);
+        let mut fine = rebuild(&mut stack, data);
+        let order = stack.level_indices(&fine);
+        let v = order.iter().position(|&i| i as usize == base.vertex_count()).unwrap();
+        let delta = Vec3::new(0.0, 0.0, -0.5);
+        let layer = stack.capture_displacements(&fine, &[(v as u32, delta)]).unwrap();
+        stack.apply_level_color_deltas(&mut fine, &layer, 1.0).unwrap();
+        let data = stack.set_level(&fine, 0);
+        let mut coarse = rebuild(&mut stack, data);
+        assert!(!coarse.is_painted());
+        let data = stack.set_level(&coarse, 1);
+        assert_eq!(data.color[order[v] as usize], Vec3::ONE + delta);
+        let fine = rebuild(&mut stack, data);
+        let data = stack.set_level(&fine, 0);
+        coarse = rebuild(&mut stack, data);
+        stack.apply_level_color_deltas(&mut coarse, &layer, -0.5).unwrap();
+        assert!(!coarse.is_painted());
+        let data = stack.set_level(&coarse, 1);
+        assert_eq!(data.color[order[v] as usize], Vec3::ONE + delta * 0.5);
     }
 
     #[test]

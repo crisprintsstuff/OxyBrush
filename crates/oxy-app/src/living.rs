@@ -45,6 +45,10 @@ mod placed;
 use crate::parts::PlaceChoice;
 use glam::Vec3;
 use oxy_doc::{Piece, SavedStroke, SavedStrokeGroup, SavedStrokes};
+use oxy_mesh::{
+    Mesh,
+    multires::{LevelDisplacements, Multires},
+};
 use oxy_sculpt::recipe::AlphaLookup;
 use oxy_sculpt::{AlphaStamp, BrushKind, Falloff, StrokeRecipe, SurfaceChange, replay_estimate_ms, resculpt};
 pub use placed::FLAG_SOURCE;
@@ -172,7 +176,7 @@ pub struct LivingStroke {
     /// The points the stroke changed, sorted, and what it did to each.
     pub vertices: Vec<u32>,
     deltas: Vec<Vec3>,
-    native: Option<oxy_mesh::multires::LevelDisplacements>,
+    native: Option<NativeStroke>,
     /// Color change per point; empty when the stroke didn't paint.
     colors: Vec<Vec3>,
     /// The stroke's own strength: 1 as made, 0 hidden.
@@ -205,7 +209,7 @@ impl LivingStroke {
     pub fn bytes(&self) -> usize {
         self.vertices.len() * 4
             + self.deltas.len() * 12
-            + self.native.as_ref().map_or(0, |native| native.parts().2.len() * 16)
+            + self.native.as_ref().map_or(0, NativeStroke::bytes)
             + self.colors.len() * 12
             + 112
             + self.recipe.as_ref().map_or(0, |r| r.approx_bytes())
@@ -253,7 +257,26 @@ impl Snap {
     }
 }
 
-pub(crate) type LevelStrokeRecords = Vec<(u64, oxy_mesh::multires::LevelDisplacements)>;
+pub(crate) type LevelStrokeRecords = Vec<(u64, NativeStroke)>;
+
+#[derive(Clone, Debug)]
+pub(crate) struct NativeStroke {
+    positions: LevelDisplacements,
+    colors: Option<LevelDisplacements>,
+}
+
+impl NativeStroke {
+    fn bytes(&self) -> usize {
+        (self.positions.parts().2.len() + self.colors.as_ref().map_or(0, |c| c.parts().2.len())) * 16
+    }
+
+    fn apply(&self, stack: &mut Multires, mesh: &mut Mesh, change: f32) {
+        stack.apply_level_displacements(mesh, &self.positions, change).expect("stroke belongs to the bound stack");
+        if let Some(colors) = &self.colors {
+            stack.apply_level_color_deltas(mesh, colors, change).expect("paint belongs to the bound stack");
+        }
+    }
+}
 
 struct LevelStrokeEdit {
     entry: u64,
@@ -265,7 +288,8 @@ struct StrokeProjection {
     points: usize,
     vertices: Vec<u32>,
     deltas: Vec<Vec3>,
-    native: Option<oxy_mesh::multires::LevelDisplacements>,
+    colors: Vec<Vec3>,
+    native: Option<NativeStroke>,
 }
 
 impl StrokeProjection {
@@ -274,8 +298,22 @@ impl StrokeProjection {
         std::mem::swap(&mut self.points, &mut stroke.points);
         std::mem::swap(&mut self.vertices, &mut stroke.vertices);
         std::mem::swap(&mut self.deltas, &mut stroke.deltas);
+        std::mem::swap(&mut self.colors, &mut stroke.colors);
         std::mem::swap(&mut self.native, &mut stroke.native);
     }
+}
+
+/// Align independently projected position and paint rows by mesh vertex.
+fn merge_projection(positions: Vec<(u32, Vec3)>, colors: Vec<(u32, Vec3)>) -> (Vec<u32>, Vec<Vec3>, Vec<Vec3>) {
+    let mut positions = positions.into_iter().peekable();
+    let mut colors = colors.into_iter().peekable();
+    let (mut vertices, mut deltas, mut rgb) = (Vec::new(), Vec::new(), Vec::new());
+    while let Some(vertex) = positions.peek().into_iter().chain(colors.peek()).map(|&(vertex, _)| vertex).min() {
+        vertices.push(vertex);
+        deltas.push(positions.next_if(|&(v, _)| v == vertex).map_or(Vec3::ZERO, |(_, delta)| delta));
+        rgb.push(colors.next_if(|&(v, _)| v == vertex).map_or(Vec3::ZERO, |(_, delta)| delta));
+    }
+    (vertices, deltas, rgb)
 }
 
 /// A stroke's deltas and color changes.
@@ -532,20 +570,27 @@ impl Living {
         }
     }
 
-    pub(crate) fn capture_for_subdivision(
-        &self,
-        piece: &Piece,
-        stack: &oxy_mesh::multires::Multires,
-    ) -> Option<LevelStrokeRecords> {
+    pub(crate) fn capture_for_subdivision(&self, piece: &Piece, stack: &Multires) -> Option<LevelStrokeRecords> {
         self.strokes
             .iter()
             .filter(|s| s.piece == piece.id && s.listed())
             .map(|s| {
-                if !s.colors.is_empty() || s.topology != piece.mesh.topology_version() {
+                if s.topology != piece.mesh.topology_version() {
                     return None;
                 }
-                let deltas: Vec<_> = s.vertices.iter().copied().zip(s.deltas.iter().copied()).collect();
-                Some((s.id, s.native.clone().or_else(|| stack.capture_displacements(&piece.mesh, &deltas))?))
+                if let Some(native) = &s.native {
+                    return Some((s.id, native.clone()));
+                }
+                let sparse = |values: &[Vec3]| -> Vec<_> {
+                    s.vertices.iter().copied().zip(values.iter().copied()).filter(|&(_, d)| d != Vec3::ZERO).collect()
+                };
+                let positions = stack.capture_displacements(&piece.mesh, &sparse(&s.deltas))?;
+                let colors = if s.colors.is_empty() {
+                    None
+                } else {
+                    Some(stack.capture_displacements(&piece.mesh, &sparse(&s.colors))?)
+                };
+                Some((s.id, NativeStroke { positions, colors }))
             })
             .collect()
     }
@@ -555,15 +600,22 @@ impl Living {
         let mut previous = Vec::with_capacity(records.len());
         for (id, native) in records {
             let Some(stroke) = self.find_mut(id) else { continue };
-            let deltas = stack
-                .project_displacements(&piece.mesh, &native)
+            let positions = stack
+                .project_displacements(&piece.mesh, &native.positions)
                 .expect("adding a level preserves the source subdivision hierarchy");
-            let (vertices, deltas) = deltas.into_iter().unzip();
+            let (vertices, deltas, colors) = if let Some(rgb) = &native.colors {
+                let colors = stack.project_color_deltas(&piece.mesh, rgb).expect("paint belongs to the bound stack");
+                merge_projection(positions, colors)
+            } else {
+                let (vertices, deltas) = positions.into_iter().unzip();
+                (vertices, deltas, Vec::new())
+            };
             let mut projection = StrokeProjection {
                 topology: piece.mesh.topology_version(),
                 points: piece.mesh.vertex_count(),
                 vertices,
                 deltas,
+                colors,
                 native: Some(native),
             };
             projection.swap(stroke);
@@ -619,7 +671,8 @@ impl Living {
                 .collect();
             rows.sort_unstable_by_key(|r| r.0);
             strokes.push(SavedStroke {
-                native: s.native.clone(),
+                native: s.native.as_ref().map(|native| native.positions.clone()),
+                native_color: s.native.as_ref().and_then(|native| native.colors.clone()),
                 brush: crate::settings::brush_key(s.brush).to_string(),
                 made: s.made.duration_since(SystemTime::UNIX_EPOCH).map_or(0, |d| d.as_secs()),
                 strength: s.strength,
@@ -1075,15 +1128,13 @@ impl Editor {
         for (k, t) in targets {
             let s = &mut doc.living.strokes[k];
             if let (Some(stack), Some(native)) = (&mut piece.multires, &s.native) {
-                stack
-                    .apply_level_displacements(mesh, native, t - s.applied)
-                    .expect("stroke belongs to the bound stack");
+                native.apply(stack, mesh, t - s.applied);
             } else {
                 add_change(mesh, &s.vertices, &s.deltas, &s.colors, t - s.applied);
+                moved.extend_from_slice(&s.vertices);
+                colors |= !s.colors.is_empty();
             }
             s.applied = t;
-            moved.extend_from_slice(&s.vertices);
-            colors |= !s.colors.is_empty();
         }
         moved.sort_unstable();
         moved.dedup();
@@ -1178,6 +1229,7 @@ impl Editor {
         let mesh = &mut piece.mesh;
         let mut moved: Vec<u32> = Vec::new();
         let mut colors = false;
+        let mut native_moved = false;
         let mut data_log: Vec<(u64, Data, Data)> = Vec::new();
         for &(id, b, a) in &changed {
             let Some(s) = doc.living.strokes.iter_mut().find(|s| s.id == id) else { continue };
@@ -1190,9 +1242,10 @@ impl Editor {
                 data_log.push((id, old, (s.deltas.clone(), s.colors.clone())));
             } else if a.applied != b.applied {
                 if let (Some(stack), Some(native)) = (&mut piece.multires, &s.native) {
-                    stack
-                        .apply_level_displacements(mesh, native, a.applied - b.applied)
-                        .expect("stroke belongs to the bound stack");
+                    native.apply(stack, mesh, a.applied - b.applied);
+                    native_moved |= !native.positions.parts().2.is_empty();
+                    s.applied = a.applied;
+                    continue;
                 } else {
                     add_change(mesh, &s.vertices, &s.deltas, &s.colors, a.applied - b.applied);
                 }
@@ -1208,6 +1261,8 @@ impl Editor {
         moved.dedup();
         if !moved.is_empty() {
             mesh.update_after_move(&moved);
+        }
+        if !moved.is_empty() || native_moved {
             mesh.tighten_bounds();
         }
         if colors {
@@ -1743,6 +1798,23 @@ impl Editor {
                         }
                     }
                 };
+                let native = s.native.and_then(|positions| {
+                    let stack = p.multires.as_ref()?;
+                    stack.project_displacements(&p.mesh, &positions)?;
+                    if !s.colors.is_empty() && s.native_color.is_none() {
+                        return None;
+                    }
+                    if let Some(colors) = &s.native_color {
+                        let (level, points, _) = positions.parts();
+                        let (color_level, color_points, rgb) = colors.parts();
+                        if (level, points) != (color_level, color_points)
+                            || rgb.iter().any(|&(_, c)| c.abs().max_element() > 1.0)
+                        {
+                            return None;
+                        }
+                    }
+                    Some(NativeStroke { positions, colors: s.native_color })
+                });
                 doc.living.strokes.push(LivingStroke {
                     id,
                     piece: p.id,
@@ -1752,9 +1824,7 @@ impl Editor {
                     topology: p.mesh.topology_version(),
                     points: p.mesh.vertex_count(),
                     vertices: s.vertices,
-                    native: s.native.filter(|native| {
-                        p.multires.as_ref().is_some_and(|stack| stack.project_displacements(&p.mesh, native).is_some())
-                    }),
+                    native,
                     deltas: s.deltas,
                     colors: s.colors,
                     strength: s.strength,

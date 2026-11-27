@@ -13,7 +13,7 @@ All notable changes to OxyBrush. The format is based on [Keep a Changelog](https
 - **Scene Project Stamp.** Dragging to resize the stamp reuses the target meshes for the gesture, reducing preview work on dense scenes.
 
 - **Alpha Roll and curve strokes.** The Alpha section stays open when its selected alpha changes. Roll distance applies a typed value when editing finishes. Drag the Curve stroke or Curve Move title bar to see the curve before accepting.
-- **Sculpt Layers.** Position-only strokes stay editable when switching or adding subdivision levels. Strength changes affect fine detail even from a lower level and survive Undo, Redo, and saving. Painted strokes and subdivision that replaces the mesh still require an explicit bake.
+- **Sculpt Layers.** Sculpt and paint strokes stay editable when switching or adding subdivision levels. Strength changes affect fine geometry and color even from a lower level and survive Undo, Redo, and saving.
 
 ## [4.1.2] - 2026-11-26
 

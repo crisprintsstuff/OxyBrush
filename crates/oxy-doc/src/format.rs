@@ -116,6 +116,10 @@
 //!   uv:f32*6t` (u, v for each of a triangle's three corners, in the
 //!   `PIEC`'s triangle order; v points up, UDIM tiles count up from 0..1).
 //!   Older readers skip it and open the piece without UVs.
+//! - `MRPC` (optional): unclamped active-level RGB for additive painted
+//!   layers, `count:u32 (vertex:u32 rgb:f32*3)*count`, for clipped vertices
+//!   in active-level order.
+//!   The visible colors are also stored in `VCOL` for older readers.
 //! - `MRUV` (optional): base-level UVs of the preceding `MRCC` or `MRES`,
 //!   using the `UVCO` layout in base triangle order. Higher levels are
 //!   derived from the base. Older readers still show the active UVs in `UVCO`.
@@ -202,6 +206,9 @@
 //!   in stroke order. Each record is `level:u32` (MAX means absent), then
 //!   `points:u32 count:u32 (vertex:u32 delta:f32*3)*count` in native-level
 //!   order. Earlier readers use the active-level projection in `STRK`.
+//! - `STCL` (optional): native signed RGB deltas for the preceding
+//!   `STRK`, with the same sparse layout as `STLV`. Earlier readers can
+//!   still display the visible paint and read the active-level projection.
 //! - `STRI` (optional, since 4.0.0-beta.16): what was drawn for the strokes
 //!   of the **preceding** `STRK` (their recipes, RFC 0025), in the same
 //!   order: `count:u32` then per stroke `len:u32 bytes:u8*len`, `len` 0 for
@@ -302,6 +309,17 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
                     }
                 }
                 sections.push((*b"MRPT", b));
+            }
+            let unclamped = mr.unclamped_paint();
+            if !unclamped.is_empty() {
+                let mut b = (unclamped.len() as u32).to_le_bytes().to_vec();
+                for &(vertex, color) in unclamped {
+                    b.extend_from_slice(&vertex.to_le_bytes());
+                    for c in color.to_array() {
+                        b.extend_from_slice(&c.to_le_bytes());
+                    }
+                }
+                sections.push((*b"MRPC", b));
             }
             let smooth = mr.level_smooth();
             if smooth.iter().any(|s| !s) {
@@ -410,7 +428,11 @@ pub fn encode(scene: &SceneData) -> Vec<u8> {
             if !st.strokes.is_empty() {
                 sections.push((*b"STRK", encode_strokes(st)));
                 if st.strokes.iter().any(|s| s.native.is_some()) {
-                    sections.push((*b"STLV", encode_native_strokes(st)));
+                    sections.push((*b"STLV", encode_native_strokes(st.strokes.iter().map(|s| s.native.as_ref()))));
+                }
+                if st.strokes.iter().any(|s| s.native_color.is_some()) {
+                    sections
+                        .push((*b"STCL", encode_native_strokes(st.strokes.iter().map(|s| s.native_color.as_ref()))));
                 }
                 if st.strokes.iter().any(|s| !s.recipe.is_empty()) {
                     sections.push((*b"STRI", encode_stroke_recipes(st)));
@@ -759,6 +781,24 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     log::warn!("ignoring level paint that doesn't match subdivision levels on piece {:?}", piece.name);
                 }
             }
+            b"MRPC" => {
+                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRPC before any piece".into()))?;
+                let mut r = Reader { data: &raw, pos: 0 };
+                let mut read = || -> Result<Vec<(u32, Vec3)>> {
+                    let count = r.u32()? as usize;
+                    r.check(count, 16)?;
+                    (0..count).map(|_| Ok((r.u32()?, Vec3::new(r.f32()?, r.f32()?, r.f32()?)))).collect()
+                };
+                let restored = read().ok().is_some_and(|paint| {
+                    piece.multires.as_mut().is_some_and(|mr| mr.restore_unclamped_paint_data(paint))
+                });
+                if !restored {
+                    log::warn!(
+                        "ignoring unclamped paint that doesn't match the active level on piece {:?}",
+                        piece.name
+                    );
+                }
+            }
             b"MRUV" => {
                 let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("MRUV before any piece".into()))?;
                 let restored = piece.multires.as_mut().is_some_and(|mr| {
@@ -998,13 +1038,20 @@ pub fn decode(data: &[u8]) -> Result<SceneData> {
                     Err(e) => log::warn!("ignoring damaged strokes on piece {:?}: {e}", piece.name),
                 }
             }
-            b"STLV" => {
-                let piece = scene.pieces.last_mut().ok_or_else(|| Error::Corrupt("STLV before any piece".into()))?;
+            b"STLV" | b"STCL" => {
+                let piece = scene
+                    .pieces
+                    .last_mut()
+                    .ok_or_else(|| Error::Corrupt("native stroke deltas before any piece".into()))?;
                 if let Some(strokes) = &mut piece.strokes {
                     match decode_native_strokes(&raw, strokes.strokes.len()) {
                         Ok(records) => {
                             for (stroke, native) in strokes.strokes.iter_mut().zip(records) {
-                                stroke.native = native;
+                                if &tag == b"STCL" {
+                                    stroke.native_color = native;
+                                } else {
+                                    stroke.native = native;
+                                }
                             }
                         }
                         Err(err) => log::warn!("ignoring damaged subdivision stroke deltas: {err}"),
@@ -1119,10 +1166,12 @@ fn encode_strokes(st: &crate::SavedStrokes) -> Vec<u8> {
 
 /// `STLV`: optional native-level records in STRK order. Older readers use
 /// the active-level projection already stored in STRK.
-fn encode_native_strokes(strokes: &crate::SavedStrokes) -> Vec<u8> {
+fn encode_native_strokes<'a>(
+    records: impl Iterator<Item = Option<&'a oxy_mesh::multires::LevelDisplacements>>,
+) -> Vec<u8> {
     let mut bytes = Vec::new();
-    for stroke in &strokes.strokes {
-        let Some(record) = &stroke.native else {
+    for record in records {
+        let Some(record) = record else {
             bytes.extend_from_slice(&u32::MAX.to_le_bytes());
             continue;
         };
@@ -1339,6 +1388,7 @@ fn decode_strokes(raw: &[u8], vertex_count: usize) -> Result<crate::SavedStrokes
             colors,
             recipe: Vec::new(),
             native: None,
+            native_color: None,
         });
     }
     Ok(crate::SavedStrokes { vertices, groups, strokes, parts: Vec::new() })
@@ -2595,6 +2645,7 @@ mod tests {
             // Any bytes: this crate keeps a recipe as it is.
             recipe: vec![1, 2, 3, 250],
             native: None,
+            native_color: None,
         };
         let painted = SavedStroke {
             brush: "paint".into(),
@@ -3215,6 +3266,34 @@ mod tests {
         plain.pieces[0].multires = None;
         let old = decode(&encode(&plain)).unwrap();
         assert_eq!(old.pieces[0].mesh.triangles.len(), mr.triangle_count(1));
+    }
+
+    #[test]
+    fn unclamped_active_paint_survives_save_and_reopen() {
+        use crate::Piece;
+        use oxy_mesh::Mesh;
+
+        let mut mesh = primitives::cube(1, 2.0);
+        let mut stack = Multires::new(&mesh);
+        let data = stack.add_level(&mesh);
+        mesh = Mesh::from_data(data);
+        stack.bind(&mesh);
+        let layer = stack.capture_displacements(&mesh, &[(0, Vec3::new(-0.75, 0.0, 0.0))]).unwrap();
+        stack.apply_level_color_deltas(&mut mesh, &layer, 2.0).unwrap();
+        let active = stack.export_active(&mesh);
+        assert_eq!(active.color[mesh.source_vertices()[0] as usize].x, 0.0);
+        let bytes = encode(&SceneData {
+            pieces: vec![Piece { multires: Some(stack), ..Piece::new("Paint", mesh) }.to_data()],
+            active: 0,
+            alphas: Vec::new(),
+            references: Vec::new(),
+        });
+        let mut reopened = decode(&bytes).unwrap().pieces.remove(0).into_piece();
+        let stack = reopened.multires.as_mut().unwrap();
+        assert_eq!(stack.unclamped_paint(), &[(layer.parts().2[0].0, Vec3::new(-0.5, 1.0, 1.0))]);
+        stack.apply_level_color_deltas(&mut reopened.mesh, &layer, -1.0).unwrap();
+        let active = stack.export_active(&reopened.mesh);
+        assert_eq!(active.color[layer.parts().2[0].0 as usize].x, 0.25);
     }
 
     #[test]

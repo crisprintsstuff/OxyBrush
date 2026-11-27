@@ -18644,6 +18644,105 @@ mod tests {
         assert!(got.iter().zip(&expected).all(|(a, b)| a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 1)));
     }
 
+    #[test]
+    fn painted_layer_strength_survives_coarse_view_preview_undo_and_reopen() {
+        let mut e = with_living();
+        e.add_level();
+        e.brush_kind = BrushKind::Paint;
+        e.paint_color = Vec3::new(0.15, 0.4, 0.65);
+        *e.strength_mut(BrushKind::Paint) = 1.0;
+        drag(&mut e, Vec2::new(345.0, 300.0), Vec2::new(455.0, 305.0));
+        let piece = e.scene.active();
+        let pid = piece.id;
+        let id = e.living.listed(pid)[0].id;
+        assert!(piece.mesh.is_painted());
+        let fine = piece.mesh.clone();
+        let expected: Vec<_> = fine.color.iter().map(|&c| Vec3::ONE.lerp(c, 0.5)).collect();
+        let indices = piece.multires.as_ref().unwrap().level_indices(&fine);
+        let mut expected_by_level = vec![Vec3::ONE; expected.len()];
+        for (v, i) in indices.into_iter().enumerate() {
+            expected_by_level[i as usize] = expected[v];
+        }
+
+        e.step_level(-1);
+        assert_eq!(e.multires_level(), Some((0, 2)));
+        assert_eq!(e.living.listed(pid)[0].id, id);
+        let coarse = e.scene.active().mesh.color.clone();
+        let coarse_error = |mesh: &Mesh| {
+            mesh.color.iter().zip(&coarse).map(|(a, b)| (*a - *b).abs().max_element()).fold(0.0, f32::max)
+        };
+        e.living.selected = [id].into();
+        e.living_preview_strength(0.0);
+        assert!(!e.scene.active().mesh.is_painted());
+        e.living_end_drag();
+        let error = coarse_error(&e.scene.active().mesh);
+        assert!(error < 1e-6, "coarse paint changed by {error}");
+        e.living_set_strength(0.0);
+        e.undo();
+        assert_eq!(e.living.listed(pid)[0].strength, 1.0);
+        let error = coarse_error(&e.scene.active().mesh);
+        assert!(error < 1e-6, "coarse paint changed by {error}");
+        e.redo();
+        assert_eq!(e.living.listed(pid)[0].strength, 0.0);
+        assert!(!e.scene.active().mesh.is_painted());
+
+        let bytes = format::encode(&e.scene_data());
+        let mut reopened = with_living();
+        reopened.replace_document(Scene::from_data(format::decode(&bytes).unwrap()).unwrap(), None);
+        let id = reopened.living.listed(reopened.scene.active().id)[0].id;
+        reopened.living.selected = [id].into();
+        reopened.living_set_strength(0.5);
+        reopened.step_level(1);
+        assert_eq!(reopened.multires_level(), Some((1, 2)));
+        let piece = reopened.scene.active();
+        let indices = piece.multires.as_ref().unwrap().level_indices(&piece.mesh);
+        assert_eq!(indices.len(), expected_by_level.len());
+        for (v, i) in indices.into_iter().enumerate() {
+            assert!((piece.mesh.color[v] - expected_by_level[i as usize]).abs().max_element() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn subdividing_a_stroke_with_also_paint_keeps_both_channels_editable() {
+        // Inferred quad pairings can depend on geometry. Use Loop in both
+        // editors to compare the same subdivision topology.
+        let mut baseline = with_living();
+        baseline.subdivision_scheme = oxy_mesh::multires::Scheme::Loop;
+        baseline.add_level();
+        let baseline = &baseline.scene.active().mesh;
+
+        let mut e = with_living();
+        e.subdivision_scheme = oxy_mesh::multires::Scheme::Loop;
+        e.set_brush_also_paint(true);
+        e.paint_color = Vec3::new(0.25, 0.55, 0.75);
+        drag(&mut e, Vec2::new(345.0, 300.0), Vec2::new(455.0, 305.0));
+        let pid = e.scene.active().id;
+        let id = e.living.listed(pid)[0].id;
+        e.add_level();
+        let piece = e.scene.active();
+        assert_eq!(e.multires_level(), Some((1, 2)));
+        assert!(piece.mesh.is_painted());
+        assert_ne!(piece.mesh.positions, baseline.positions);
+        let full = piece.mesh.clone();
+        e.living.selected = [id].into();
+        e.living_set_strength(0.0);
+
+        let piece = e.scene.active();
+        let color_error = piece.mesh.color.iter().map(|&c| (c - Vec3::ONE).abs().max_element()).fold(0.0, f32::max);
+        assert!(color_error < 1e-6, "subdivided paint changed by {color_error}");
+        let by_level = |mesh: &Mesh| {
+            let mut positions = vec![Vec3::ZERO; mesh.vertex_count()];
+            for (&p, &i) in mesh.positions.iter().zip(mesh.source_vertices()) {
+                positions[i as usize] = p;
+            }
+            positions
+        };
+        assert!(by_level(&piece.mesh).iter().zip(by_level(baseline)).all(|(&p, expected)| p.distance(expected) < 1e-5));
+        e.undo();
+        assert_eq!(e.scene.active().mesh.positions, full.positions);
+        assert_eq!(e.scene.active().mesh.color, full.color);
+    }
+
     /// The newest recipe, replayed on `base`, matches the piece now.
     fn replay_matches(e: &Editor, base: &Mesh) {
         let recipe = e.living.strokes.iter().rev().find_map(|s| s.recipe.clone()).expect("a recipe");
